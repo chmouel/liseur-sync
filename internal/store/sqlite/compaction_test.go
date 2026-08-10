@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/store/storetest"
 )
 
 // TestCompaction verifies the plan's compaction contract: daily
@@ -13,10 +14,11 @@ import (
 // never renumbered, and clients below the horizon get resync_required
 // while /v1/heads still returns complete state.
 func TestCompaction(t *testing.T) {
-	s := open(t)
+	st := openStore(t)
+	s := st.(*Store)
 	ctx := context.Background()
-	u := mkUser(t, s, "henry")
-	w := mkWork(t, s, u)
+	u := storetest.MkUser(t, st, "henry")
+	w := storetest.MkWork(t, st, u, "w1", "abc123")
 
 	// Two devices, three days of ops (received_at is server-side; we
 	// cheat by inserting directly to control it).
@@ -25,9 +27,8 @@ func TestCompaction(t *testing.T) {
 		_, err := s.db.ExecContext(ctx,
 			`INSERT INTO ops (user_id, seq, op_id, work_id, edition_sha, device_id,
 			                  client_ts, progression, origin, received_at)
-			 VALUES (?, ?, ?, ?, NULL, ?, ?, 0.5, 'kosync', ?)`,
-			u.ID, seq, opID, w.ID, dev, formatTime(at), formatTime(at))
-		_ = prog
+			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'kosync', ?)`,
+			u.ID, seq, opID, w.ID, dev, formatTime(at), prog, formatTime(at))
 		if err != nil {
 			t.Fatal(err)
 		}

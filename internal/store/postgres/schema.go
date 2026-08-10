@@ -175,7 +175,7 @@ CREATE TABLE compaction_state (
     horizon BIGINT NOT NULL DEFAULT 0
 );
 
-CREATE TABLE schema_migrations (
+CREATE TABLE IF NOT EXISTS schema_migrations (
     version    BIGINT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL
 );

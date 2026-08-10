@@ -103,3 +103,9 @@ func isUniqueErr(err error) bool {
 }
 
 var _ = store.ErrConflict
+
+// tsEqual compares timestamps at timestamptz precision (microseconds),
+// since PG truncates nanoseconds on write.
+func tsEqual(a, b time.Time) bool {
+	return a.UTC().Truncate(time.Microsecond).Equal(b.UTC().Truncate(time.Microsecond))
+}

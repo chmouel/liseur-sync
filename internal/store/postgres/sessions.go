@@ -66,7 +66,7 @@ func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Sessi
 		return false, err
 	}
 	return workID == ses.WorkID && devID == ses.DeviceID &&
-		started.Equal(ses.StartedAt.UTC()) && ended.Equal(ses.EndedAt.UTC()) &&
+		tsEqual(started, ses.StartedAt) && tsEqual(ended, ses.EndedAt) &&
 		sp == ses.StartProg && ep == ses.EndProg && idle == ses.IdleMs &&
 		origin == string(ses.Origin) &&
 		(edSHA == nil) == (ses.EditionSHA == nil) && (edSHA == nil || *edSHA == *ses.EditionSHA) &&

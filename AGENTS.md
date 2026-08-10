@@ -21,6 +21,13 @@ go test -race ./...     # full suite, always run with -race
 ~/go/bin/templ generate ./internal/webui/   # regenerate after editing .templ files
 ```
 
+CI (`.github/workflows/`): `test.yaml` runs vet + the full race-enabled
+suite on PRs and pushes, against SQLite and a Postgres 17 service
+container, checks templ output is committed-fresh, and lints
+`docs/openapi.yaml` with redocly. `build.yaml` builds static
+linux/amd64+arm64 binaries and a multi-arch image on push, with a
+container smoke test.
+
 The store test suite runs against SQLite by default. Set
 `LISEUR_PG_TEST_DSN=postgres://...` to also exercise the PostgreSQL
 backend (throwaway database).
@@ -35,6 +42,15 @@ full-fidelity surface; legacy protocols are edge adapters
 (`internal/adapter/kosync`, `internal/adapter/koplugin`) that write
 native records only. The web UI (`internal/webui`) is templ + vendored
 htmx, no CDN, no build pipeline beyond `templ generate`.
+
+The API contract is [docs/openapi.yaml](docs/openapi.yaml) — update it
+in the same commit as any route/shape change, and keep
+[docs/integrating.md](docs/integrating.md) consistent with it.
+
+The store test suite is shared across backends in
+`internal/store/storetest`. PostgreSQL tests run when
+`LISEUR_PG_TEST_DSN` is set (a dev database lives on civuole; DSN is in
+the gitignored `.env`).
 
 ## Rules that must not be broken
 

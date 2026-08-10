@@ -1,0 +1,611 @@
+openapi: 3.1.0
+info:
+  title: liseur-sync native API
+  version: "1.0"
+  description: |
+    Reading-position sync and reading-statistics API.
+
+    Conventions that apply everywhere:
+
+    - **Auth**: every endpoint except `/healthz`, `/v1/login` and
+      `/v1/register` requires `Authorization: Bearer <token>`. Login
+      returns a short-lived *auth token* usable only for token
+      management; device tokens carry scopes (`sync`,
+      `read-insights`, `admin`).
+    - **Identity**: books are *works*. Clients never need a work to
+      exist before pushing: call `/v1/works/resolve` with every
+      identifier you have and use the returned `work_id`.
+    - **Idempotency**: `POST /v1/ops` and `POST /v1/sessions` are safe
+      to retry. Replaying the same `op_id`/`session_id` with the same
+      payload reports `duplicate`; the same id with a different payload
+      is a conflict (never an overwrite).
+    - **Delta sync**: `GET /v1/changes?since=<seq>` streams every op
+      after `seq` with a high-water mark. If your cursor falls below
+      the compaction horizon the server answers 410 `resync_required`;
+      fetch `/v1/heads` and resume from its `snapshot_seq`.
+    - **Errors**: JSON `{"error": "..."}`. Malformed input is always a
+      4xx with a reason, never a 5xx.
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
+
+servers:
+  - url: https://your-instance.example.com
+
+tags:
+  - name: auth
+  - name: identity
+  - name: sync
+  - name: sessions
+  - name: insights
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe (unauthenticated)
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+
+  /v1/login:
+    post:
+      tags: [auth]
+      security: []
+      summary: Exchange credentials for a short-lived auth token
+      description: |
+        The auth token (1 h) authorises token management only; it cannot
+        sync or read insights. Requires HTTPS unless the instance sets
+        `insecure_http`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  auth_token: { type: string, description: "Short-lived (1 h) token-management credential" }
+                  expires_in: { type: integer, description: seconds }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
+        "429": { $ref: "#/components/responses/Error", description: "Rate limited" }
+
+  /v1/register:
+    post:
+      tags: [auth]
+      security: []
+      summary: Create an account with an invite code
+      description: Registration is invite-only. Invite codes are single-use and expire.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite, username, password]
+              properties:
+                invite: { type: string }
+                username: { type: string }
+                password: { type: string, minLength: 8 }
+                timezone: { type: string, description: "IANA name, default UTC" }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error", description: "Invalid or expired invite" }
+        "409": { $ref: "#/components/responses/Error", description: "Username taken" }
+
+  /v1/tokens:
+    post:
+      tags: [auth]
+      summary: Create a device token
+      description: |
+        Requires the login auth token (not a device token). The token
+        secret is returned once; store it. Each token is bound to a
+        server-generated `device_id` that stamps every op and session it
+        pushes.
+      security: [{ loginAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scope]
+              properties:
+                name: { type: string, example: "Boox Palma" }
+                scope: { $ref: "#/components/schemas/Scope" }
+                expires_in_seconds: { type: integer }
+      responses:
+        "201":
+          description: Token created; secret shown once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token_id: { type: string }
+                  device_id: { type: string }
+                  name: { type: string }
+                  scope: { $ref: "#/components/schemas/Scope" }
+                  secret: { type: string, description: "Bearer secret, returned exactly once" }
+                  expires_at: { type: [string, "null"], format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [auth]
+      summary: List your tokens
+      security: [{ loginAuth: [] }]
+      responses:
+        "200":
+          description: Token list (secrets never included)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items: { $ref: "#/components/schemas/TokenInfo" }
+
+  /v1/tokens/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke a token
+      security: [{ loginAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/StatusOK" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/works/resolve:
+    post:
+      tags: [identity]
+      summary: Resolve a file's identifiers to a work
+      description: |
+        Send every identifier you have for the file. Resolution order:
+        `sha256` → `partial-md5` → `dc` → `ta`; first hit wins, and all
+        supplied identifiers are then registered as aliases of the
+        resolved work (this is how identity converges across re-encodes).
+        Fuzzy `ta` matches return `confidence: low` — confirm with the
+        user before treating it as authoritative.
+
+        If the identifiers resolve to more than one distinct work, the
+        server answers 409 with the conflicting work ids and changes
+        nothing; call `/v1/works/merge` to confirm the merge.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifiers]
+              properties:
+                identifiers:
+                  type: array
+                  minItems: 1
+                  items: { $ref: "#/components/schemas/Identifier" }
+                title: { type: string }
+                author: { type: string }
+      responses:
+        "200":
+          description: Resolved to an existing work
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResolveResult" }
+        "201":
+          description: New work created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResolveResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Identifiers map to multiple works; nothing changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  works: { type: array, items: { type: string } }
+
+  /v1/works/{id}/split:
+    post:
+      tags: [identity]
+      summary: Detach an edition into a new work
+      description: |
+        Repairs a wrong merge. Moves the edition and its ops/sessions to
+        a new work. Aliases belong to works, not editions, so pass the
+        aliases to move explicitly (the edition's own `sha256` alias is
+        implied).
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [edition_sha]
+              properties:
+                edition_sha: { type: string }
+                aliases:
+                  type: array
+                  items: { $ref: "#/components/schemas/Identifier" }
+      responses:
+        "200":
+          description: Split complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { work_id: { type: string } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error", description: "Edition not in this work" }
+
+  /v1/works/merge:
+    post:
+      tags: [identity]
+      summary: Merge one work into another (explicit confirmation)
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from_work_id, into_work_id]
+              properties:
+                from_work_id: { type: string }
+                into_work_id: { type: string }
+      responses:
+        "200":
+          description: Merged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { work_id: { type: string } }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/ops:
+    post:
+      tags: [sync]
+      summary: Push a batch of position ops
+      description: |
+        Ops are appended to your per-user log with a monotonic `seq`.
+        Retries are safe: replaying an `op_id` with the same payload
+        returns `duplicate` with the original seq; a reused `op_id` with
+        a different payload returns `conflict` and is not stored.
+        `device_id` is taken from the token; a client-supplied device id
+        is ignored.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ops]
+              properties:
+                ops:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/OpInput" }
+      responses:
+        "200":
+          description: Per-item results (valid items applied even if others conflict)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/OpResult" }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /v1/changes:
+    get:
+      tags: [sync]
+      summary: Delta-sync every op after a seq
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: since, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 500, maximum: 500 } }
+      responses:
+        "200":
+          description: Page of ops with the new high-water mark
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ops:
+                    type: array
+                    items: { $ref: "#/components/schemas/Op" }
+                  high_water: { type: integer }
+                  has_more: { type: boolean }
+        "410":
+          description: Cursor below the compaction horizon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string, enum: [resync_required] }
+                  high_water: { type: integer }
+                  heads_endpoint: { type: string }
+
+  /v1/heads:
+    get:
+      tags: [sync]
+      summary: Resync snapshot — newest op per (work, device)
+      description: |
+        The recovery protocol after `resync_required` (or first sync of
+        a fresh client): returns the newest op for every work+device
+        pair plus an atomic `snapshot_seq`. Rebuild your baseline from
+        the heads, then resume `/v1/changes?since=<snapshot_seq>`.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      responses:
+        "200":
+          description: Heads snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ops:
+                    type: array
+                    items: { $ref: "#/components/schemas/Op" }
+                  snapshot_seq: { type: integer }
+
+  /v1/works/{id}/positions:
+    get:
+      tags: [sync]
+      summary: Recent position history for a work (newest first)
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Recent ops
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ops:
+                    type: array
+                    items: { $ref: "#/components/schemas/Op" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/sessions:
+    post:
+      tags: [sessions]
+      summary: Push a batch of reading sessions
+      description: |
+        Sessions are append-only facts. Report progression fractions
+        measured at the time of reading (`start_progression`,
+        `end_progression`); never derive page numbers yourself — the
+        server derives pages from edition metadata when known. Same
+        `session_id` with a different payload is a 409.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sessions]
+              properties:
+                sessions:
+                  type: array
+                  maxItems: 1000
+                  items: { $ref: "#/components/schemas/SessionInput" }
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { accepted: { type: integer } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error", description: "session_id reused with different payload" }
+
+  /v1/insights/summary:
+    get:
+      tags: [insights]
+      summary: Reading totals, streak, speed over a range
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      parameters:
+        - { name: range, in: query, schema: { type: string, pattern: "^[0-9]+d$", default: 30d } }
+      responses:
+        "200":
+          description: Aggregates (rereads count time but zero pages)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  range_days: { type: integer }
+                  total_active_minutes: { type: number }
+                  total_pages: { type: number }
+                  sessions: { type: integer }
+                  streak_days: { type: integer }
+                  speed_prog_per_hour: { type: number }
+
+  /v1/insights/works/{id}:
+    get:
+      tags: [insights]
+      summary: Per-work statistics and ETA
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Per-work aggregates; eta_seconds is null when no speed history exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  work_id: { type: string }
+                  sessions: { type: integer }
+                  total_active_minutes: { type: number }
+                  total_pages: { type: number }
+                  current_progression: { type: number }
+                  eta_seconds: { type: [number, "null"] }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/insights/calendar:
+    get:
+      tags: [insights]
+      summary: Daily reading minutes for a year (user's timezone)
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      parameters:
+        - { name: year, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Days with activity; midnight-crossing sessions are split
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  year: { type: integer }
+                  days:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date }
+                        minutes: { type: number }
+                        pages: { type: number }
+
+components:
+  securitySchemes:
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: Scoped device token (`sync`, `read-insights`, or `admin`)
+    loginAuth:
+      type: http
+      scheme: bearer
+      description: Short-lived auth token from /v1/login (token management only)
+
+  responses:
+    Error:
+      description: Error with a human-readable reason
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: { error: { type: string } }
+    StatusOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: { status: { type: string } }
+
+  schemas:
+    Scope:
+      type: string
+      enum: [sync, read-insights, admin]
+      description: "`admin` implies all others; a `sync` token cannot read insights"
+    Identifier:
+      type: object
+      required: [kind, value]
+      properties:
+        kind:
+          type: string
+          enum: [sha256, partial-md5, dc, ta]
+          description: |
+            `sha256`: exact file bytes. `partial-md5`: KOReader
+            fingerprint. `dc`: the EPUB's dc:identifier (ISBN, UUID).
+            `ta`: normalised title+author (fuzzy).
+        value: { type: string, maxLength: 512 }
+    ResolveResult:
+      type: object
+      properties:
+        work_id: { type: string }
+        confidence: { type: string, enum: [high, low], description: "`low` only for fuzzy ta: matches" }
+        created: { type: boolean }
+    TokenInfo:
+      type: object
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        name: { type: string }
+        scope: { $ref: "#/components/schemas/Scope" }
+        created_at: { type: string, format: date-time }
+        revoked: { type: boolean }
+    OpInput:
+      type: object
+      required: [op_id, work_id, client_ts, progression]
+      properties:
+        op_id:
+          type: string
+          maxLength: 64
+          description: Client-generated UUIDv7; idempotency key
+        work_id: { type: string, description: "From /v1/works/resolve" }
+        edition_sha: { type: string, description: "sha256 of the exact file, if known" }
+        client_ts: { type: string, format: date-time }
+        progression: { type: number, minimum: 0, maximum: 1 }
+        locator:
+          type: object
+          description: Reader-native position (e.g. Readium locator), opaque to the server, replayed verbatim
+        foreign_pos:
+          type: string
+          description: Engine-native position string from another protocol (CRe xpointer), stored and replayed verbatim
+    Op:
+      allOf:
+        - $ref: "#/components/schemas/OpInput"
+        - type: object
+          properties:
+            seq: { type: integer, description: Server-assigned per-user monotonic sequence }
+            device_id: { type: string }
+            origin: { type: string, enum: [native, kosync] }
+            received_at: { type: string, format: date-time }
+    OpResult:
+      type: object
+      properties:
+        op_id: { type: string }
+        status: { type: string, enum: [applied, duplicate, conflict, invalid] }
+        seq: { type: integer }
+        reason: { type: string }
+    SessionInput:
+      type: object
+      required: [session_id, work_id, started_at, ended_at, start_progression, end_progression]
+      properties:
+        session_id: { type: string, maxLength: 64, description: "Client-generated UUIDv7; idempotency key" }
+        work_id: { type: string }
+        edition_sha: { type: string }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        start_progression: { type: number, minimum: 0, maximum: 1 }
+        end_progression: { type: number, minimum: 0, maximum: 1 }
+        idle_ms: { type: integer, minimum: 0, description: "Reader-visible idle time, excluded from speed" }
