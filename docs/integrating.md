@@ -61,10 +61,36 @@ resolves directly. Compute `partial-md5` exactly like KOReader
 (`util.partialMD5`: 1024-byte samples at offsets 1024<<2i for
 i = -1..10) if you want to share identity with KOReader devices.
 
+Note that in LuaJIT the first of those offsets is not 256 but 0:
+`lshift(1024, -2)` is masked to a shift of 30, which overflows 32 bits
+to zero. So the first sample is the head of the file. Reproduce the
+overflow rather than the formula, or your hashes will not match
+KOReader's.
+
+**`ta` values must be normalised identically by every client.** The
+server compares them as exact strings and computes nothing itself, so a
+client that normalises differently will silently never match another
+client's books. The normalisation is:
+
+    fold(title) + "|" + fold(author)
+
+where `fold` is NFKD decomposition, Unicode mark characters
+(`\p{Mn}`) stripped, lowercased, every run of non-alphanumeric
+characters replaced with a single space, and the result trimmed. Send
+`ta` only when both a title and an author are known; a title alone
+matches far too much.
+
+A book with no file — one your client only knows from a catalog — still
+resolves, on `dc` and `ta` alone. That is weaker, and the server says
+so with `confidence: "low"`, but refusing to resolve until a file
+exists would strand the reader's place on whichever device holds it.
+
 Two responses need care:
 
 - `confidence: "low"` means only a title+author match was found. Show a
-  "same book?" confirmation before merging reading state.
+  "same book?" confirmation before merging reading state, and remember
+  a refusal: a client that forgets it will resolve the same book again
+  on its next run and ask the same question forever.
 - `409` with a `works` array means your identifiers map to two
   different works (usually a fuzzy false positive). Nothing was
   changed. Ask the user, then either resolve with a narrower identifier
