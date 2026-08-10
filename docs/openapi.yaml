@@ -545,14 +545,31 @@ components:
           enum: [sha256, partial-md5, dc, ta]
           description: |
             `sha256`: exact file bytes. `partial-md5`: KOReader
-            fingerprint. `dc`: the EPUB's dc:identifier (ISBN, UUID).
+            fingerprint (`util.partialMD5`; note LuaJIT's first offset
+            overflows to 0, so the first sample is the head of the
+            file). `dc`: the EPUB's dc:identifier (ISBN, UUID).
             `ta`: normalised title+author (fuzzy).
+
+            `ta` values are compared as exact strings and are never
+            normalised by the server, so every client must normalise
+            identically or they will silently fail to match each other:
+            `fold(title) + "|" + fold(author)`, where fold is NFKD,
+            `\p{Mn}` stripped, lowercased, runs of non-alphanumerics
+            replaced with a single space, trimmed. Send it only when
+            both title and author are known.
         value: { type: string, maxLength: 512 }
     ResolveResult:
       type: object
       properties:
         work_id: { type: string }
-        confidence: { type: string, enum: [high, low], description: "`low` only for fuzzy ta: matches" }
+        confidence:
+          type: string
+          enum: [high, low]
+          description: |
+            `low` only for fuzzy ta: matches. Confirm with the user
+            before exchanging any reading state, and remember a refusal
+            — a client that forgets will resolve the same book again on
+            its next run and ask forever.
         created: { type: boolean }
     TokenInfo:
       type: object
@@ -570,14 +587,29 @@ components:
         op_id:
           type: string
           maxLength: 64
-          description: Client-generated UUIDv7; idempotency key
+          description: |
+            Client-generated idempotency key. UUIDv7 is the suggestion,
+            but the server treats it as opaque and does not check the
+            format. Deriving it from (device, work, revision) rather
+            than drawing it at random makes an interrupted push free to
+            repeat: the same id with the same payload is `duplicate`,
+            the same id with a different payload is `conflict`, never an
+            overwrite. That only holds if every field of the payload
+            comes from stored state — in particular `client_ts` must be
+            the stored update time, not the clock at send time.
         work_id: { type: string, description: "From /v1/works/resolve" }
         edition_sha: { type: string, description: "sha256 of the exact file, if known" }
         client_ts: { type: string, format: date-time }
         progression: { type: number, minimum: 0, maximum: 1 }
         locator:
           type: object
-          description: Reader-native position (e.g. Readium locator), opaque to the server, replayed verbatim
+          description: |
+            Reader-native position (e.g. Readium locator), opaque to the
+            server, replayed verbatim. Refused with 400 above
+            `ops.max_locator_bytes` (16 KiB by default), and the refusal
+            fails the whole batch. A client with an oversized locator
+            should drop it and send the progression alone rather than
+            lose the position entirely.
         foreign_pos:
           type: string
           description: Engine-native position string from another protocol (CRe xpointer), stored and replayed verbatim
@@ -601,7 +633,15 @@ components:
       type: object
       required: [session_id, work_id, started_at, ended_at, start_progression, end_progression]
       properties:
-        session_id: { type: string, maxLength: 64, description: "Client-generated UUIDv7; idempotency key" }
+        session_id:
+          type: string
+          maxLength: 64
+          description: |
+            Client-generated idempotency key, opaque to the server, same
+            bargain as `op_id`. It matters more here: a position sent
+            twice is the same position, but an hour sent twice is an
+            hour that never happened. Send only sessions that have
+            ended, so the payload behind the id can never change.
         work_id: { type: string }
         edition_sha: { type: string }
         started_at: { type: string, format: date-time }
