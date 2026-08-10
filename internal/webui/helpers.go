@@ -12,7 +12,7 @@ import (
 // takes a page served at request path p back to the UI root (/ui/).
 // All links, form actions and redirects are rendered relative to it so
 // the UI works when a reverse proxy exposes it under a stripped
-// subpath (e.g. Caddy `handle_path /synch*`): the browser resolves
+// subpath (e.g. Caddy `handle_path /sync*`): the browser resolves
 // relative URLs against its own (unstripped) URL.
 func relPrefix(p string) string {
 	if !strings.HasSuffix(p, "/") {
