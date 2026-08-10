@@ -288,6 +288,20 @@ func TestAdminInvites(t *testing.T) {
 	}
 }
 
+func TestStaticAssets(t *testing.T) {
+	ts, _ := testServer(t)
+	for _, name := range []string{"style.css", "htmx.min.js"} {
+		resp, err := http.Get(ts.URL + "/ui/static/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("/ui/static/%s: want 200, got %d", name, resp.StatusCode)
+		}
+	}
+}
+
 func TestCrossUserIsolation(t *testing.T) {
 	ts, st := testServer(t)
 	ctx := t.Context()

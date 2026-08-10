@@ -7,6 +7,7 @@ package webui
 import (
 	"crypto/subtle"
 	"embed"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -16,6 +17,16 @@ import (
 
 //go:embed static
 var staticFS embed.FS
+
+// staticContent returns the embedded files rooted at static/, so the
+// stripped request path matches ("/ui/static/x" -> "x" in static/).
+func staticContent() fs.FS {
+	sub, err := fs.Sub(staticFS, "static")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
 
 // Server is the web UI handler set.
 type Server struct {
@@ -70,7 +81,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/",
-		http.FileServerFS(staticFS)))
+		http.FileServerFS(staticContent())))
 
 	// /ui normalizes to /ui/ so the dashboard shares the /ui/ base
 	// directory with the other top-level pages and relative links
