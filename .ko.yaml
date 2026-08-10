@@ -1,0 +1,10 @@
+# ko build config: static binary on distroless nonroot (uid 65532).
+defaultBaseImage: gcr.io/distroless/static-debian12:nonroot
+
+builds:
+  - id: liseur-sync
+    main: ./cmd/liseur-sync
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w

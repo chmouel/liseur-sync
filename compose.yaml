@@ -11,6 +11,7 @@
 x-app: &app
   image: ghcr.io/chmouel/liseur-sync:latest
   build: .
+  command: ["serve"]
   restart: unless-stopped
   ports:
     - "127.0.0.1:8585:8585"
@@ -35,7 +36,7 @@ services:
     image: busybox
     profiles: ["sqlite"]
     user: root
-    entrypoint: ["sh", "-c", "chown -R 65534:65534 /data"]
+    entrypoint: ["sh", "-c", "chown -R 65532:65532 /data"]
     volumes:
       - sqlite-data:/data
 
