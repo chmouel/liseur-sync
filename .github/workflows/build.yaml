@@ -37,36 +37,35 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install templ and ko
+        run: |
+          go install github.com/a-h/templ/cmd/templ@latest
+          go install github.com/google/ko@latest
+      - name: Generate templ
+        run: templ generate ./internal/webui/
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=semver,pattern={{version}}
-      - name: Build and push (amd64 + arm64)
-        uses: docker/build-push-action@v6
-        with:
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-      - name: Smoke-test the image
+      - name: Publish with ko (multi-arch, no daemon)
+        env:
+          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
+          VERSION_TAGS: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+        run: ko build --bare --platform=linux/amd64,linux/arm64 --tags "$VERSION_TAGS" ./cmd/liseur-sync
+      - name: Smoke-test the published image
         run: |
-          docker buildx build --load -t liseur-sync:smoke .
+          docker pull ghcr.io/${{ github.repository }}:${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
           docker run -d --name ls -p 127.0.0.1:18585:8585 \
-            --tmpfs /data:rw,uid=65534,gid=65534 \
+            --tmpfs /data:rw,uid=65532,gid=65532 \
             -e LISEUR_LISTEN_ADDR=0.0.0.0:8585 \
             -e LISEUR_DATABASE_URL=/data/liseur-sync.db \
-            liseur-sync:smoke
+            ghcr.io/${{ github.repository }}:latest serve
           for i in $(seq 1 20); do
             sleep 1
             if curl -sf http://127.0.0.1:18585/healthz; then break; fi
