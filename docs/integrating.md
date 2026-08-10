@@ -194,6 +194,15 @@ Rereading (a session whose progression goes backwards) counts time but
 never negative pages. ETA is `null` until the user has enough speed
 history on the work.
 
+`total_pages` will be `0` for you unless the work has a page count on
+its edition, and nothing in the native API sets one — only the KOReader
+statistics adapter reports it, because only a paginated reader has a
+page count to report. A reflowable EPUB has no inherent number of
+pages, and one derived from a particular device's font size would make
+the total depend on which device synced. Report minutes and
+progression, which mean the same thing everywhere, and treat pages as
+something you may not have.
+
 ## Errors and limits
 
 - Every error is `{"error": "reason"}` with a 4xx; a 5xx is a server
