@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install templ
+        run: go install github.com/a-h/templ/cmd/templ@latest
+      - name: Generate templ
+        run: templ generate ./internal/webui/
+      - name: Build static binaries (amd64 + arm64)
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags='-s -w' \
+              -o dist/liseur-sync-linux-$arch ./cmd/liseur-sync
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (amd64 + arm64)
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            -t liseur-sync:ci .
+      - name: Smoke-test the image
+        run: |
+          docker buildx build --load -t liseur-sync:smoke .
+          docker run -d --name ls -p 127.0.0.1:18585:8585 \
+            --tmpfs /data:rw,uid=65534,gid=65534 \
+            -e LISEUR_LISTEN_ADDR=0.0.0.0:8585 \
+            -e LISEUR_DATABASE_URL=/data/liseur-sync.db \
+            liseur-sync:smoke
+          for i in $(seq 1 20); do
+            sleep 1
+            if curl -sf http://127.0.0.1:18585/healthz; then break; fi
+          done
+          curl -sf http://127.0.0.1:18585/healthz | grep -q ok
+          docker rm -f ls

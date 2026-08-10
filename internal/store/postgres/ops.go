@@ -95,7 +95,7 @@ func sameOp(ctx context.Context, tx *sql.Tx, userID string, o store.Op, deviceID
 		return false, err
 	}
 	if workID != o.WorkID || devID != deviceID || prog != o.Progression ||
-		!clientTS.Equal(o.ClientTS.UTC()) || origin != string(o.Origin) {
+		!tsEqual(clientTS, o.ClientTS) || origin != string(o.Origin) {
 		return false, nil
 	}
 	if (edSHA == nil) != (o.EditionSHA == nil) || (edSHA != nil && *edSHA != *o.EditionSHA) {

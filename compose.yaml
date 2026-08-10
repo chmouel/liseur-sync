@@ -11,8 +11,6 @@
 x-app: &app
   build: .
   restart: unless-stopped
-  environment:
-    LISEUR_LISTEN_ADDR: 0.0.0.0:8585
   ports:
     - "127.0.0.1:8585:8585"
 
@@ -21,13 +19,24 @@ services:
     <<: *app
     profiles: ["sqlite"]
     environment:
+      LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: sqlite
       LISEUR_DATABASE_URL: /data/liseur-sync.db
     volumes:
       - sqlite-data:/data
-    # The image runs as uid 65534; named volumes are root-owned, so
-    # fix ownership once via: docker compose run --rm --user root app-sqlite \
-    #   (or use a host bind-mount you own)
+    depends_on:
+      sqlite-init:
+        condition: service_completed_successfully
+
+  # Named volumes are root-owned; the app runs as uid 65534. This
+  # one-shot container fixes ownership on first run.
+  sqlite-init:
+    image: busybox
+    profiles: ["sqlite"]
+    user: root
+    entrypoint: ["sh", "-c", "chown -R 65534:65534 /data"]
+    volumes:
+      - sqlite-data:/data
 
   postgres:
     image: postgres:17-alpine
@@ -49,6 +58,7 @@ services:
     <<: *app
     profiles: ["postgres"]
     environment:
+      LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: postgres://liseur:${POSTGRES_PASSWORD}@postgres:5432/liseur_sync
     depends_on:
@@ -59,6 +69,7 @@ services:
     <<: *app
     profiles: ["external"]
     environment:
+      LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
     # The target database and role must already exist; startup

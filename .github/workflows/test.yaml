@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: liseur
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: liseur_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U liseur -d liseur_test"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install templ
+        run: go install github.com/a-h/templ/cmd/templ@latest
+      - name: Generate templ
+        run: templ generate ./internal/webui/
+      - name: Check generated code is fresh
+        run: |
+          if [ -n "$(git status --porcelain internal/webui)" ]; then
+            echo "templ output is stale; run 'templ generate ./internal/webui/' and commit"
+            git diff --stat internal/webui
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test (SQLite + PostgreSQL, race detector)
+        env:
+          LISEUR_PG_TEST_DSN: postgres://liseur:ci@localhost:5432/liseur_test?sslmode=disable
+        run: go test -race -timeout 300s ./...
+
+  lint-openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint OpenAPI spec
+        run: npx -y @redocly/cli@latest lint docs/openapi.yaml --format stylish
