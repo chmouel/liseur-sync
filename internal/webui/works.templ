@@ -79,7 +79,9 @@ templ workBody(d WorkDetail, ops []OpRow) {
 	<section class="cards">
 		<div class="stat"><span class="num">{ pct(d.CurrentProg) }</span><span class="lbl">read</span></div>
 		<div class="stat"><span class="num">{ f0(d.Minutes) }</span><span class="lbl">minutes</span></div>
-		<div class="stat"><span class="num">{ f0(d.Pages) }</span><span class="lbl">pages</span></div>
+		if d.Pages > 0 {
+			<div class="stat"><span class="num">{ f0(d.Pages) }</span><span class="lbl">pages</span></div>
+		}
 		<div class="stat"><span class="num">{ i2s(d.Sessions) }</span><span class="lbl">sessions</span></div>
 		if d.ETAHuman != "" {
 			<div class="stat"><span class="num">{ d.ETAHuman }</span><span class="lbl">left (est.)</span></div>

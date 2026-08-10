@@ -12,6 +12,14 @@ import (
 // - pages read = max(0, end-start progression delta) x edition page
 //   count when known; negative deltas (rereads) count time but zero
 //   pages — never fabricated, never negative.
+//
+//   "When known" is the common case for it not to be. Only the KOReader
+//   statistics adapter reports a page count, because only a paginated
+//   reader has one to report: a reflowable EPUB has no inherent number
+//   of pages, and inventing one from whichever device happened to sync
+//   first would make the figure depend on that device's font size. So
+//   total_pages is legitimately 0 for a native client, and the web UI
+//   hides the tile rather than showing a zero that looks like a fault.
 // - day boundaries use the user's configured IANA timezone; sessions
 //   crossing midnight split across tz-local days.
 // - speed = progression delta / active duration (duration - idle).

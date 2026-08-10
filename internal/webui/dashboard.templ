@@ -24,7 +24,9 @@ templ dashboardBody(prefix string, csrf string, sum SummaryData, heatmap []DayCe
 	<h1>Dashboard</h1>
 	<section class="cards">
 		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes ({ i2s(sum.RangeDays) }d)</span></div>
-		<div class="stat"><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+		if sum.Pages > 0 {
+			<div class="stat"><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+		}
 		<div class="stat"><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
 		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak</span></div>
 	</section>
