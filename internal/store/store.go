@@ -181,6 +181,7 @@ type Store interface {
 
 	// User settings.
 	UpdateUserSettings(ctx context.Context, userID, timezone string, kosyncEnabled, kopluginEnabled bool) error
+	UpdateUserPassword(ctx context.Context, userID, argon2Hash string) error
 
 	// Invites (admin).
 	CreateInvite(ctx context.Context, inv Invite) error

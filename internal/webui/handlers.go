@@ -268,7 +268,7 @@ func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a st
 // --- settings ---
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), false, commonZones).Render(r.Context(), w)
+	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), false, commonZones, "", false).Render(r.Context(), w)
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -289,7 +289,44 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 	u.Timezone = tz
 	u.KosyncEnabled = kosyncOn
 	u.KopluginEnabled = kopluginOn
-	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), true, commonZones).Render(r.Context(), w)
+	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), true, commonZones, "", false).Render(r.Context(), w)
+}
+
+// handleChangePassword verifies the current password, then replaces the
+// hash and revokes every other web session (the changing session stays
+// live so the user isn't logged out mid-action).
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	render := func(msg string, isErr bool) {
+		settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), false, commonZones, msg, isErr).Render(r.Context(), w)
+	}
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	cur, new1, new2 := r.FormValue("current"), r.FormValue("new"), r.FormValue("repeat")
+	if new1 != new2 {
+		render("New passwords do not match.", true)
+		return
+	}
+	if len(new1) < 8 {
+		render("Password must be at least 8 characters.", true)
+		return
+	}
+	ok, err := auth.CheckPassword(cur, u.Argon2Hash)
+	if err != nil || !ok {
+		render("Current password is wrong.", true)
+		return
+	}
+	hash, err := auth.HashPassword(new1)
+	if err != nil {
+		render("Internal error.", true)
+		return
+	}
+	if err := s.St.UpdateUserPassword(r.Context(), u.ID, hash); err != nil {
+		render("Internal error.", true)
+		return
+	}
+	render("Password changed.", false)
 }
 
 // commonZones keeps the picker usable; arbitrary IANA names are also

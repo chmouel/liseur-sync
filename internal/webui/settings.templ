@@ -4,11 +4,11 @@ import "github.com/chmouel/liseur-sync/internal/store"
 
 // Settings and admin pages.
 
-templ settingsPage(prefix string, u userCtx, csrf string, saved bool, zones []string) {
-	@layout("Settings", prefix, u.User, csrf, settingsBody(prefix, u, csrf, saved, zones))
+templ settingsPage(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
+	@layout("Settings", prefix, u.User, csrf, settingsBody(prefix, u, csrf, saved, zones, pwMsg, pwErr))
 }
 
-templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []string) {
+templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
 	<h1>Settings</h1>
 	if saved {
 		<p class="ok">Saved.</p>
@@ -48,6 +48,23 @@ templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []st
 				</label>
 			</fieldset>
 			<button type="submit" class="primary">Save</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Change password</h2>
+		if pwMsg != "" {
+			if pwErr {
+				<p class="error">{ pwMsg }</p>
+			} else {
+				<p class="ok">{ pwMsg }</p>
+			}
+		}
+		<form method="post" action={ prefix + "settings/password" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Current password <input name="current" type="password" required autocomplete="current-password"/></label>
+			<label>New password <input name="new" type="password" required minlength="8" autocomplete="new-password"/></label>
+			<label>Repeat new password <input name="repeat" type="password" required minlength="8" autocomplete="new-password"/></label>
+			<button type="submit" class="primary">Change password</button>
 		</form>
 	</section>
 }

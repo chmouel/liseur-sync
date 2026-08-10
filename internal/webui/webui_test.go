@@ -302,6 +302,48 @@ func TestStaticAssets(t *testing.T) {
 	}
 }
 
+func TestChangePassword(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings")
+	csrf := extractCSRF(t, body)
+
+	// Wrong current password.
+	code, body := postForm(t, ts, cookie, "/ui/settings/password", url.Values{
+		"current": {"wrong"}, "new": {"new-password-123"}, "repeat": {"new-password-123"}, "csrf": {csrf},
+	})
+	if code != 200 || !strings.Contains(body, "Current password is wrong") {
+		t.Fatalf("wrong current: %d", code)
+	}
+
+	// Mismatched new passwords.
+	code, body = postForm(t, ts, cookie, "/ui/settings/password", url.Values{
+		"current": {"hunter2hunter"}, "new": {"new-password-123"}, "repeat": {"different"}, "csrf": {csrf},
+	})
+	if code != 200 || !strings.Contains(body, "do not match") {
+		t.Fatalf("mismatch: %d", code)
+	}
+
+	// Happy path.
+	code, body = postForm(t, ts, cookie, "/ui/settings/password", url.Values{
+		"current": {"hunter2hunter"}, "new": {"new-password-123"}, "repeat": {"new-password-123"}, "csrf": {csrf},
+	})
+	if code != 200 || !strings.Contains(body, "Password changed") {
+		t.Fatalf("change: %d", code)
+	}
+
+	// Old password no longer works; new one does.
+	u, _ := st.UserByID(t.Context(), "u1")
+	ok, _ := auth.CheckPassword("hunter2hunter", u.Argon2Hash)
+	if ok {
+		t.Fatal("old password still valid")
+	}
+	ok, _ = auth.CheckPassword("new-password-123", u.Argon2Hash)
+	if !ok {
+		t.Fatal("new password not valid")
+	}
+}
+
 func TestCrossUserIsolation(t *testing.T) {
 	ts, st := testServer(t)
 	ctx := t.Context()
