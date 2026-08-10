@@ -114,14 +114,44 @@ func extractCSRF(t *testing.T, html string) string {
 func TestAuthFlowAndPages(t *testing.T) {
 	ts, _ := testServer(t)
 
-	// Root 301s to /ui.
+	// Root 301s with a relative Location (subpath-safe).
 	resp, _ := noRedirect().Get(ts.URL + "/")
 	resp.Body.Close()
-	if resp.StatusCode != 301 {
-		t.Fatalf("root: want 301, got %d", resp.StatusCode)
+	if resp.StatusCode != 301 || resp.Header.Get("Location") != "ui/" {
+		t.Fatalf("root: want 301 -> ui/, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	// Following the root redirect lands on the UI (login page when
+	// signed out).
+	resp, err := http.DefaultClient.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(b), "Sign in") {
+		t.Fatalf("root follow: %d", resp.StatusCode)
 	}
 
-	// Unauthenticated pages render the login form.
+	// /ui normalizes to /ui/ so relative links share one base.
+	resp, _ = noRedirect().Get(ts.URL + "/ui")
+	resp.Body.Close()
+	if resp.StatusCode != 301 || resp.Header.Get("Location") != "ui/" {
+		t.Fatalf("/ui: want 301 -> ui/, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// Unauthenticated pages redirect (relatively) to the login page.
+	resp, _ = noRedirect().Get(ts.URL + "/ui/works")
+	resp.Body.Close()
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "login" {
+		t.Fatalf("unauth /ui/works: want 303 -> login, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	// Depth-aware: from a nested page the relative target needs "../".
+	resp, _ = noRedirect().Get(ts.URL + "/ui/works/xyz")
+	resp.Body.Close()
+	if resp.StatusCode != 303 || resp.Header.Get("Location") != "../login" {
+		t.Fatalf("unauth /ui/works/xyz: want 303 -> ../login, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	// Following redirects renders the login form.
 	code, body := page(t, ts, nil, "/ui")
 	if code != 200 || !strings.Contains(body, "Sign in") {
 		t.Fatalf("unauth /ui: %d", code)
@@ -137,10 +167,17 @@ func TestAuthFlowAndPages(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 
-	for _, path := range []string{"/ui", "/ui/works", "/ui/devices", "/ui/settings"} {
+	for _, path := range []string{"/ui", "/ui/", "/ui/works", "/ui/devices", "/ui/settings"} {
 		code, body = page(t, ts, cookie, path)
 		if code != 200 || !strings.Contains(body, "liseur-sync") {
 			t.Fatalf("%s: %d", path, code)
+		}
+		// Pages must render only relative URLs so they work behind a
+		// prefix-stripping proxy.
+		for _, abs := range []string{`href="/`, `action="/`, `src="/`} {
+			if strings.Contains(body, abs) {
+				t.Fatalf("%s: absolute URL %q in page", path, abs)
+			}
 		}
 	}
 	// Dashboard shows the heatmap and stat cards.

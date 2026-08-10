@@ -52,16 +52,46 @@ func (s *Server) checkCSRF(r *http.Request, a store.AuthSession) bool {
 	return subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(csrfFor(a))) == 1
 }
 
-// Mount registers the UI routes. / and /ui redirects are the only 301s
-// in the server.
+// redirectRel emits a redirect with a relative Location header. Unlike
+// http.Redirect (which would resolve the target against the stripped
+// request path), the browser resolves it against its own URL — this is
+// what keeps redirects under the proxy prefix.
+func redirectRel(w http.ResponseWriter, loc string, code int) {
+	w.Header().Set("Location", loc)
+	w.WriteHeader(code)
+}
+
+// Mount registers the UI routes. Route patterns stay absolute /ui/...;
+// only rendered URLs and redirect Locations are relative, so the UI
+// can be served under a stripped subpath (e.g. Caddy `handle_path
+// /synch*`, ideally paired with `redir /synch /synch/`).
 func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler) {
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui", http.StatusMovedPermanently)
+		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/",
 		http.FileServerFS(staticFS)))
 
-	mux.Handle("GET /ui", http.HandlerFunc(s.requireAuth(s.handleDashboard)))
+	// /ui normalizes to /ui/ so the dashboard shares the /ui/ base
+	// directory with the other top-level pages and relative links
+	// resolve identically everywhere.
+	mux.Handle("GET /ui", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectRel(w, "ui/", http.StatusMovedPermanently)
+	}))
+	mux.Handle("GET /ui/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ui/" {
+			http.NotFound(w, r)
+			return
+		}
+		s.requireAuth(s.handleDashboard)(w, r)
+	}))
+	mux.Handle("GET /ui/login", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := s.session(r); ok {
+			redirectRel(w, "./", http.StatusSeeOther)
+			return
+		}
+		loginPage(relPrefix(r.URL.Path), "").Render(r.Context(), w)
+	}))
 	mux.Handle("GET /ui/works", http.HandlerFunc(s.requireAuth(s.handleWorks)))
 	mux.Handle("GET /ui/works/{id}", http.HandlerFunc(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/devices", http.HandlerFunc(s.requireAuth(s.handleDevices)))
@@ -81,12 +111,14 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", http.HandlerFunc(s.requireAdmin(s.handleRevokeInvite)))
 }
 
-// requireAuth redirects to the login page when unauthenticated.
+// requireAuth redirects to the canonical login page when
+// unauthenticated, via a relative Location so the browser stays under
+// the proxy prefix.
 func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store.AuthSession, *store.User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a, u, ok := s.session(r)
 		if !ok {
-			loginPage("").Render(r.Context(), w)
+			redirectRel(w, relPrefix(r.URL.Path)+"login", http.StatusSeeOther)
 			return
 		}
 		next(w, r, a, u)
@@ -119,14 +151,15 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, stor
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	prefix := relPrefix(r.URL.Path)
 	u, err := s.St.UserByName(r.Context(), r.FormValue("username"))
 	if err != nil {
-		loginPage("invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, "invalid credentials").Render(r.Context(), w)
 		return
 	}
 	ok, err := auth.CheckPassword(r.FormValue("password"), u.Argon2Hash)
 	if err != nil || !ok {
-		loginPage("invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, "invalid credentials").Render(r.Context(), w)
 		return
 	}
 	secret, _ := auth.NewSecret()
@@ -138,15 +171,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		CSRFHash: auth.HashSecret(csrf), CreatedAt: now,
 		ExpiresAt: now.Add(7 * 24 * time.Hour),
 	}); err != nil {
-		loginPage("internal error").Render(r.Context(), w)
+		loginPage(prefix, "internal error").Render(r.Context(), w)
 		return
 	}
+	// No Path attribute: the RFC 6265 default-path (the directory of
+	// the request URL) scopes the cookie to /ui/ — or to the proxy
+	// subpath (e.g. /synch/ui/) when served under one.
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: secret, Path: "/ui",
+		Name: cookieName, Value: secret,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
 		Expires: now.Add(7 * 24 * time.Hour),
 	})
-	http.Redirect(w, r, "/ui", http.StatusSeeOther)
+	redirectRel(w, "./", http.StatusSeeOther)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +190,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if ok && s.checkCSRF(r, a) {
 		_ = s.St.RevokeAuthSession(r.Context(), a.UserID, a.ID)
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/ui", MaxAge: -1})
-	http.Redirect(w, r, "/ui", http.StatusSeeOther)
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1})
+	redirectRel(w, "./", http.StatusSeeOther)
 }

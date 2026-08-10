@@ -2,29 +2,31 @@ package webui
 
 import "github.com/chmouel/liseur-sync/internal/store"
 
-// layout wraps every page: nav, flash area, htmx.
-templ layout(title string, u *store.User, csrf string, body templ.Component) {
+// layout wraps every page: nav, flash area, htmx. prefix is the
+// relative path back to the UI root ("" or "../"), so every URL below
+// stays correct when the app is served under a stripped subpath.
+templ layout(title string, prefix string, u *store.User, csrf string, body templ.Component) {
 	<!doctype html>
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title } · liseur-sync</title>
-			<link rel="stylesheet" href="/ui/static/style.css"/>
-			<script src="/ui/static/htmx.min.js" defer></script>
+			<link rel="stylesheet" href={ prefix + "static/style.css" }/>
+			<script src={ prefix + "static/htmx.min.js" } defer></script>
 		</head>
 		<body>
 			<header class="topbar">
-				<a class="brand" href="/ui">liseur-sync</a>
+				<a class="brand" href={ prefix + "." }>liseur-sync</a>
 				if u != nil {
 					<nav>
-						<a href="/ui">Dashboard</a>
-						<a href="/ui/works">Library</a>
-						<a href="/ui/devices">Devices</a>
-						<a href="/ui/settings">Settings</a>
-						<a href="/ui/admin">Admin</a>
+						<a href={ prefix + "." }>Dashboard</a>
+						<a href={ prefix + "works" }>Library</a>
+						<a href={ prefix + "devices" }>Devices</a>
+						<a href={ prefix + "settings" }>Settings</a>
+						<a href={ prefix + "admin" }>Admin</a>
 					</nav>
-					<form method="post" action="/ui/logout" class="logout">
+					<form method="post" action={ prefix + "logout" } class="logout">
 						<input type="hidden" name="csrf" value={ csrf }/>
 						<button class="link" type="submit">Log out { u.Name }</button>
 					</form>
@@ -38,18 +40,19 @@ templ layout(title string, u *store.User, csrf string, body templ.Component) {
 	</html>
 }
 
-// loginPage is the unauthenticated entry point.
-templ loginPage(errMsg string) {
-	@layout("Sign in", nil, "", loginBody(errMsg))
+// loginPage is the unauthenticated entry point, rendered at /ui/login
+// (or re-rendered from POST /ui/login on bad credentials).
+templ loginPage(prefix string, errMsg string) {
+	@layout("Sign in", prefix, nil, "", loginBody(prefix, errMsg))
 }
 
-templ loginBody(errMsg string) {
+templ loginBody(prefix string, errMsg string) {
 	<section class="card narrow">
 		<h1>Sign in</h1>
 		if errMsg != "" {
 			<p class="error">{ errMsg }</p>
 		}
-		<form method="post" action="/ui/login">
+		<form method="post" action={ prefix + "login" }>
 			<label>Username <input name="username" required autofocus/></label>
 			<label>Password <input name="password" type="password" required/></label>
 			<button type="submit" class="primary">Sign in</button>

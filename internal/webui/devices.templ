@@ -4,8 +4,8 @@ import "github.com/chmouel/liseur-sync/internal/store"
 
 // Devices page: tokens, kosync slots, koplugin capabilities, pairing.
 
-templ devicesPage(u userCtx, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
-	@layout("Devices", u.User, csrf, devicesBody(csrf, toks, kosyncDevs, kopluginDevs, flash))
+templ devicesPage(prefix string, u userCtx, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
+	@layout("Devices", prefix, u.User, csrf, devicesBody(prefix, csrf, toks, kosyncDevs, kopluginDevs, flash))
 }
 
 // Flash carries one-time results (a shown-once secret).
@@ -15,7 +15,7 @@ type Flash struct {
 	Notice      string
 }
 
-templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
+templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
 	<h1>Devices</h1>
 	if flash.Secret != "" {
 		<div class="card secret">
@@ -45,7 +45,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 					</td>
 					<td>
 						if t.RevokedAt == nil {
-							<form method="post" action={ "/ui/tokens/" + t.ID + "/revoke" }>
+							<form method="post" action={ prefix + "tokens/" + t.ID + "/revoke" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<button type="submit" class="danger">Revoke</button>
 							</form>
@@ -54,7 +54,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 				</tr>
 			}
 		</table>
-		<form method="post" action="/ui/tokens" class="inline">
+		<form method="post" action={ prefix + "tokens" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<input name="name" placeholder="Boox Palma" required/>
 			<select name="scope">
@@ -68,7 +68,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 	<section class="card">
 		<h2>KOReader (kosync)</h2>
 		<p class="muted">Generate a pairing code, then in KOReader's kosync settings: username = device name, password = code, server = <code>https://&lt;host&gt;/adapter/kosync</code>.</p>
-		<form method="post" action="/ui/pairing" class="inline">
+		<form method="post" action={ prefix + "pairing" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<button type="submit">Generate pairing code</button>
 		</form>
@@ -88,7 +88,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 						</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ "/ui/kosync/" + d.DeviceSlot + "/revoke" }>
+								<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -103,7 +103,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 	<section class="card">
 		<h2>KOReader statistics plugin</h2>
 		<p class="muted">Point the plugin's server at <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.</p>
-		<form method="post" action="/ui/koplugin" class="inline">
+		<form method="post" action={ prefix + "koplugin" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<input name="name" placeholder="Kobo Clara" required/>
 			<button type="submit" class="primary">New capability</button>
@@ -124,7 +124,7 @@ templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevi
 						</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ "/ui/koplugin/" + d.ID + "/revoke" }>
+								<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
