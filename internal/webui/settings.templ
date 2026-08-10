@@ -1,0 +1,114 @@
+package webui
+
+import "github.com/chmouel/liseur-sync/internal/store"
+
+// Settings and admin pages.
+
+templ settingsPage(u userCtx, csrf string, saved bool, zones []string) {
+	@layout("Settings", u.User, csrf, settingsBody(u, csrf, saved, zones))
+}
+
+templ settingsBody(u userCtx, csrf string, saved bool, zones []string) {
+	<h1>Settings</h1>
+	if saved {
+		<p class="ok">Saved.</p>
+	}
+	<section class="card">
+		<h2>Profile</h2>
+		<form method="post" action="/ui/settings">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Timezone
+				<select name="timezone">
+					for _, z := range zones {
+						if z == u.User.Timezone {
+							<option value={ z } selected>{ z }</option>
+						} else {
+							<option value={ z }>{ z }</option>
+						}
+					}
+				</select>
+			</label>
+			<fieldset>
+				<legend>Adapters</legend>
+				<label class="check">
+					if u.User.KosyncEnabled {
+						<input type="checkbox" name="kosync_enabled" checked/>
+					} else {
+						<input type="checkbox" name="kosync_enabled"/>
+					}
+					kosync (stock KOReader position sync)
+				</label>
+				<label class="check">
+					if u.User.KopluginEnabled {
+						<input type="checkbox" name="koplugin_enabled" checked/>
+					} else {
+						<input type="checkbox" name="koplugin_enabled"/>
+					}
+					statistics plugin (koplugin)
+				</label>
+			</fieldset>
+			<button type="submit" class="primary">Save</button>
+		</form>
+	</section>
+}
+
+templ adminPage(u userCtx, csrf string, invites []store.Invite, users []store.User, flash Flash) {
+	@layout("Admin", u.User, csrf, adminBody(csrf, invites, users, flash))
+}
+
+templ adminBody(csrf string, invites []store.Invite, users []store.User, flash Flash) {
+	<h1>Admin</h1>
+	if flash.Secret != "" {
+		<div class="card secret">
+			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
+			<code class="big">{ flash.Secret }</code>
+		</div>
+	}
+	<section class="card">
+		<h2>Users</h2>
+		<table>
+			<tr><th>Name</th><th>ID</th><th>Created</th></tr>
+			for _, usr := range users {
+				<tr>
+					<td>{ usr.Name }</td>
+					<td><code>{ usr.ID }</code></td>
+					<td>{ usr.CreatedAt.Format("2006-01-02") }</td>
+				</tr>
+			}
+		</table>
+	</section>
+	<section class="card">
+		<h2>Invite codes</h2>
+		<p class="muted">Registration is invite-only. Codes expire after 7 days and are single-use.</p>
+		<form method="post" action="/ui/admin/invites" class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit" class="primary">New invite</button>
+		</form>
+		if len(invites) > 0 {
+			<table>
+				<tr><th>Created</th><th>Expires</th><th>State</th><th></th></tr>
+				for _, inv := range invites {
+					<tr>
+						<td>{ inv.ExpiresAt.AddDate(0, 0, -7).Format("2006-01-02 15:04") }</td>
+						<td>{ inv.ExpiresAt.Format("2006-01-02 15:04") }</td>
+						<td>
+							if inv.UsedAt != nil {
+								used
+							} else {
+								open
+							}
+						</td>
+						<td>
+							if inv.UsedAt == nil {
+								<form method="post" action={ "/ui/admin/invites/" + inv.ID + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}

@@ -1,0 +1,60 @@
+package webui
+
+// Dashboard data carriers (populated by handlers).
+
+type SummaryData struct {
+	RangeDays     int
+	ActiveMinutes float64
+	Pages         float64
+	Sessions      int
+	StreakDays    int
+	SpeedPerHour  float64 // progression fraction per hour
+}
+
+type DayCell struct {
+	Date    string
+	Minutes float64
+}
+
+templ dashboard(u userCtx, csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {
+	@layout("Dashboard", u.User, csrf, dashboardBody(csrf, sum, heatmap, recent))
+}
+
+templ dashboardBody(csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {
+	<h1>Dashboard</h1>
+	<section class="cards">
+		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes ({ i2s(sum.RangeDays) }d)</span></div>
+		<div class="stat"><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+		<div class="stat"><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
+		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak</span></div>
+	</section>
+
+	<section class="card">
+		<h2>This year</h2>
+		<div class="heatmap" role="img" aria-label="daily reading minutes">
+			for _, d := range heatmap {
+				<span class={ cellClass(d.Minutes) } title={ d.Date + " — " + f0(d.Minutes) + " min" }></span>
+			}
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Recent sessions</h2>
+		if len(recent) == 0 {
+			<p class="muted">No sessions yet. They appear once a device syncs.</p>
+		} else {
+			<table>
+				<tr><th>When</th><th>Work</th><th>Device</th><th>Duration</th><th>Progress</th></tr>
+				for _, s := range recent {
+					<tr>
+						<td>{ s.When }</td>
+						<td><a href={ "/ui/works/" + s.WorkID }>{ s.WorkTitle }</a></td>
+						<td><code>{ s.DeviceID }</code></td>
+						<td>{ i2s(s.Minutes) } min</td>
+						<td>{ pct(s.StartProg) } → { pct(s.EndProg) }</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}

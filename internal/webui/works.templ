@@ -1,0 +1,107 @@
+package webui
+
+import "github.com/chmouel/liseur-sync/internal/store"
+
+// Works library + per-work pages.
+
+type WorkRow struct {
+	ID          string
+	Title       string
+	Author      string
+	Progression *float64
+	LastActive  string
+	Pending     bool
+}
+
+templ worksPage(u userCtx, csrf string, rows []WorkRow) {
+	@layout("Library", u.User, csrf, worksBody(rows))
+}
+
+templ worksBody(rows []WorkRow) {
+	<h1>Library</h1>
+	<section class="card">
+		if len(rows) == 0 {
+			<p class="muted">No books yet. Resolve one from a client to see it here.</p>
+		} else {
+			<table>
+				<tr><th>Title</th><th>Author</th><th>Progress</th><th>Last active</th></tr>
+				for _, w := range rows {
+					<tr>
+						<td>
+							<a href={ "/ui/works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
+							if w.Pending {
+								<span class="tag">pending</span>
+							}
+						</td>
+						<td>{ w.Author }</td>
+						<td>
+							if w.Progression != nil {
+								<div class="bar"><span style={ barWidth(*w.Progression) }></span></div>
+								{ pct(*w.Progression) }
+							} else {
+								<span class="muted">—</span>
+							}
+						</td>
+						<td>{ w.LastActive }</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}
+
+type WorkDetail struct {
+	Work        store.Work
+	Minutes     float64
+	Pages       float64
+	Sessions    int
+	CurrentProg float64
+	ETAHuman    string
+}
+
+type OpRow struct {
+	When        string
+	DeviceID    string
+	Origin      string
+	Progression float64
+	ForeignPos  string
+}
+
+templ workPage(u userCtx, csrf string, d WorkDetail, ops []OpRow) {
+	@layout(orPlaceholder(d.Work.Title), u.User, csrf, workBody(d, ops))
+}
+
+templ workBody(d WorkDetail, ops []OpRow) {
+	<h1>{ orPlaceholder(d.Work.Title) }</h1>
+	if d.Work.Author != "" {
+		<p class="muted">{ d.Work.Author }</p>
+	}
+	<section class="cards">
+		<div class="stat"><span class="num">{ pct(d.CurrentProg) }</span><span class="lbl">read</span></div>
+		<div class="stat"><span class="num">{ f0(d.Minutes) }</span><span class="lbl">minutes</span></div>
+		<div class="stat"><span class="num">{ f0(d.Pages) }</span><span class="lbl">pages</span></div>
+		<div class="stat"><span class="num">{ i2s(d.Sessions) }</span><span class="lbl">sessions</span></div>
+		if d.ETAHuman != "" {
+			<div class="stat"><span class="num">{ d.ETAHuman }</span><span class="lbl">left (est.)</span></div>
+		}
+	</section>
+	<section class="card">
+		<h2>Position history</h2>
+		<p class="muted">Newest first — the operation log makes a mis-synced position recoverable.</p>
+		if len(ops) == 0 {
+			<p class="muted">No positions recorded yet.</p>
+		} else {
+			<table>
+				<tr><th>When</th><th>Device</th><th>Via</th><th>Progress</th></tr>
+				for _, o := range ops {
+					<tr>
+						<td>{ o.When }</td>
+						<td><code>{ o.DeviceID }</code></td>
+						<td>{ o.Origin }</td>
+						<td>{ pct(o.Progression) }</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}

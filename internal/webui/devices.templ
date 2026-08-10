@@ -1,0 +1,138 @@
+package webui
+
+import "github.com/chmouel/liseur-sync/internal/store"
+
+// Devices page: tokens, kosync slots, koplugin capabilities, pairing.
+
+templ devicesPage(u userCtx, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
+	@layout("Devices", u.User, csrf, devicesBody(csrf, toks, kosyncDevs, kopluginDevs, flash))
+}
+
+// Flash carries one-time results (a shown-once secret).
+type Flash struct {
+	Secret      string
+	SecretLabel string
+	Notice      string
+}
+
+templ devicesBody(csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
+	<h1>Devices</h1>
+	if flash.Secret != "" {
+		<div class="card secret">
+			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
+			<code class="big">{ flash.Secret }</code>
+		</div>
+	}
+	if flash.Notice != "" {
+		<p class="ok">{ flash.Notice }</p>
+	}
+
+	<section class="card">
+		<h2>API tokens</h2>
+		<table>
+			<tr><th>Name</th><th>Scope</th><th>Device id</th><th>State</th><th></th></tr>
+			for _, t := range toks {
+				<tr>
+					<td>{ t.Name }</td>
+					<td>{ string(t.Scope) }</td>
+					<td><code>{ t.DeviceID }</code></td>
+					<td>
+						if t.RevokedAt != nil {
+							<span class="muted">revoked</span>
+						} else {
+							active
+						}
+					</td>
+					<td>
+						if t.RevokedAt == nil {
+							<form method="post" action={ "/ui/tokens/" + t.ID + "/revoke" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit" class="danger">Revoke</button>
+							</form>
+						}
+					</td>
+				</tr>
+			}
+		</table>
+		<form method="post" action="/ui/tokens" class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<input name="name" placeholder="Boox Palma" required/>
+			<select name="scope">
+				<option value="sync">sync</option>
+				<option value="read-insights">read-insights</option>
+			</select>
+			<button type="submit" class="primary">New token</button>
+		</form>
+	</section>
+
+	<section class="card">
+		<h2>KOReader (kosync)</h2>
+		<p class="muted">Generate a pairing code, then in KOReader's kosync settings: username = device name, password = code, server = <code>https://&lt;host&gt;/adapter/kosync</code>.</p>
+		<form method="post" action="/ui/pairing" class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit">Generate pairing code</button>
+		</form>
+		if len(kosyncDevs) > 0 {
+			<table>
+				<tr><th>Slot</th><th>Label</th><th>State</th><th></th></tr>
+				for _, d := range kosyncDevs {
+					<tr>
+						<td><code>{ d.DeviceSlot }</code></td>
+						<td>{ d.Label }</td>
+						<td>
+							if d.RevokedAt != nil {
+								<span class="muted">revoked</span>
+							} else {
+								active
+							}
+						</td>
+						<td>
+							if d.RevokedAt == nil {
+								<form method="post" action={ "/ui/kosync/" + d.DeviceSlot + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+
+	<section class="card">
+		<h2>KOReader statistics plugin</h2>
+		<p class="muted">Point the plugin's server at <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.</p>
+		<form method="post" action="/ui/koplugin" class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<input name="name" placeholder="Kobo Clara" required/>
+			<button type="submit" class="primary">New capability</button>
+		</form>
+		if len(kopluginDevs) > 0 {
+			<table>
+				<tr><th>Name</th><th>Device id</th><th>State</th><th></th></tr>
+				for _, d := range kopluginDevs {
+					<tr>
+						<td>{ d.Label }</td>
+						<td><code>{ d.DeviceID }</code></td>
+						<td>
+							if d.RevokedAt != nil {
+								<span class="muted">revoked</span>
+							} else {
+								active
+							}
+						</td>
+						<td>
+							if d.RevokedAt == nil {
+								<form method="post" action={ "/ui/koplugin/" + d.ID + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}

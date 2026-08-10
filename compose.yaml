@@ -1,0 +1,69 @@
+# liseur-sync deployment. Three database postures via profiles:
+#
+#   docker compose --profile sqlite up -d      # app + SQLite volume
+#   docker compose --profile postgres up -d    # app + bundled Postgres
+#   docker compose --profile external up -d    # app + your existing Postgres
+#                                              # (set LISEUR_DATABASE_URL in .env)
+#
+# All variants publish on localhost only; terminate TLS at your reverse
+# proxy (see docs/deployment.md). Single replica.
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  environment:
+    LISEUR_LISTEN_ADDR: 0.0.0.0:8585
+  ports:
+    - "127.0.0.1:8585:8585"
+
+services:
+  app-sqlite:
+    <<: *app
+    profiles: ["sqlite"]
+    environment:
+      LISEUR_DATABASE_DRIVER: sqlite
+      LISEUR_DATABASE_URL: /data/liseur-sync.db
+    volumes:
+      - sqlite-data:/data
+    # The image runs as uid 65534; named volumes are root-owned, so
+    # fix ownership once via: docker compose run --rm --user root app-sqlite \
+    #   (or use a host bind-mount you own)
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: liseur
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: liseur_sync
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liseur -d liseur_sync"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app-pg:
+    <<: *app
+    profiles: ["postgres"]
+    environment:
+      LISEUR_DATABASE_DRIVER: postgres
+      LISEUR_DATABASE_URL: postgres://liseur:${POSTGRES_PASSWORD}@postgres:5432/liseur_sync
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app-external:
+    <<: *app
+    profiles: ["external"]
+    environment:
+      LISEUR_DATABASE_DRIVER: postgres
+      LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
+    # The target database and role must already exist; startup
+    # migrations need DDL rights on that database.
+
+volumes:
+  sqlite-data:
+  pg-data:
