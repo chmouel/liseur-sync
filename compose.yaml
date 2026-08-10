@@ -9,6 +9,7 @@
 # proxy (see docs/deployment.md). Single replica.
 
 x-app: &app
+  image: ghcr.io/chmouel/liseur-sync:latest
   build: .
   restart: unless-stopped
   ports:
