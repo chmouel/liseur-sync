@@ -13,11 +13,11 @@ type WorkRow struct {
 	Pending     bool
 }
 
-templ worksPage(u userCtx, csrf string, rows []WorkRow) {
-	@layout("Library", u.User, csrf, worksBody(rows))
+templ worksPage(prefix string, u userCtx, csrf string, rows []WorkRow) {
+	@layout("Library", prefix, u.User, csrf, worksBody(prefix, rows))
 }
 
-templ worksBody(rows []WorkRow) {
+templ worksBody(prefix string, rows []WorkRow) {
 	<h1>Library</h1>
 	<section class="card">
 		if len(rows) == 0 {
@@ -28,7 +28,7 @@ templ worksBody(rows []WorkRow) {
 				for _, w := range rows {
 					<tr>
 						<td>
-							<a href={ "/ui/works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
+							<a href={ prefix + "works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
 							if w.Pending {
 								<span class="tag">pending</span>
 							}
@@ -67,8 +67,8 @@ type OpRow struct {
 	ForeignPos  string
 }
 
-templ workPage(u userCtx, csrf string, d WorkDetail, ops []OpRow) {
-	@layout(orPlaceholder(d.Work.Title), u.User, csrf, workBody(d, ops))
+templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow) {
+	@layout(orPlaceholder(d.Work.Title), prefix, u.User, csrf, workBody(d, ops))
 }
 
 templ workBody(d WorkDetail, ops []OpRow) {

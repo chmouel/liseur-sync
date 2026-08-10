@@ -69,10 +69,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 				EndProg:   ses.EndProg,
 			})
 		}
-		dashboard(userCtx{User: u}, csrfFor(a), sum, heat, recent).Render(r.Context(), w)
+		dashboard(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), sum, heat, recent).Render(r.Context(), w)
 		return
 	}
-	dashboard(userCtx{User: u}, csrfFor(a), sum, nil, nil).Render(r.Context(), w)
+	dashboard(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), sum, nil, nil).Render(r.Context(), w)
 }
 
 func userLoc(u *store.User) *time.Location {
@@ -117,7 +117,7 @@ func (s *Server) handleWorks(w http.ResponseWriter, r *http.Request, a store.Aut
 		}
 		rows = append(rows, row)
 	}
-	worksPage(userCtx{User: u}, csrfFor(a), rows).Render(r.Context(), w)
+	worksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), rows).Render(r.Context(), w)
 }
 
 func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -167,7 +167,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		}
 		opRows = append(opRows, row)
 	}
-	workPage(userCtx{User: u}, csrfFor(a), d, opRows).Render(r.Context(), w)
+	workPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), d, opRows).Render(r.Context(), w)
 }
 
 func humanDuration(d time.Duration) string {
@@ -188,7 +188,7 @@ func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.A
 	toks, _ := s.St.ListTokens(r.Context(), u.ID)
 	kosyncDevs, _ := s.St.ListKosyncDevices(r.Context(), u.ID)
 	kopluginDevs, _ := s.St.ListKopluginDevices(r.Context(), u.ID)
-	devicesPage(userCtx{User: u}, csrfFor(a), toks, kosyncDevs, kopluginDevs, flash).Render(r.Context(), w)
+	devicesPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), toks, kosyncDevs, kopluginDevs, flash).Render(r.Context(), w)
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -268,7 +268,7 @@ func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a st
 // --- settings ---
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	settingsPage(userCtx{User: u}, csrfFor(a), false, commonZones).Render(r.Context(), w)
+	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), false, commonZones).Render(r.Context(), w)
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -289,7 +289,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 	u.Timezone = tz
 	u.KosyncEnabled = kosyncOn
 	u.KopluginEnabled = kopluginOn
-	settingsPage(userCtx{User: u}, csrfFor(a), true, commonZones).Render(r.Context(), w)
+	settingsPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), true, commonZones).Render(r.Context(), w)
 }
 
 // commonZones keeps the picker usable; arbitrary IANA names are also
@@ -311,7 +311,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, a store.Aut
 func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash) {
 	invites, _ := s.St.ListInvites(r.Context(), u.ID)
 	users, _ := s.St.ListUsers(r.Context())
-	adminPage(userCtx{User: u}, csrfFor(a), invites, users, flash).Render(r.Context(), w)
+	adminPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), invites, users, flash).Render(r.Context(), w)
 }
 
 func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {

@@ -3,9 +3,27 @@ package webui
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+// relPrefix returns the relative path ("", "../", "../../", ...) that
+// takes a page served at request path p back to the UI root (/ui/).
+// All links, form actions and redirects are rendered relative to it so
+// the UI works when a reverse proxy exposes it under a stripped
+// subpath (e.g. Caddy `handle_path /synch*`): the browser resolves
+// relative URLs against its own (unstripped) URL.
+func relPrefix(p string) string {
+	if !strings.HasSuffix(p, "/") {
+		p = p[:strings.LastIndex(p, "/")+1]
+	}
+	rest := strings.TrimSuffix(strings.TrimPrefix(p, "/ui/"), "/")
+	if rest == "" {
+		return ""
+	}
+	return strings.Repeat("../", strings.Count(rest, "/")+1)
+}
 
 // userCtx carries the signed-in user into templates.
 type userCtx struct {
