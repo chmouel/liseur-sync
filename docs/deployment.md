@@ -1,0 +1,70 @@
+# Deploying liseur-sync
+
+## Postures
+
+One static binary, one config file, one database. Three supported
+database setups, all covered by `compose.yaml`:
+
+| Posture | Command | Notes |
+|---|---|---|
+| SQLite (default) | `docker compose --profile sqlite up -d` | Single file in a named volume |
+| Bundled Postgres | `docker compose --profile postgres up -d` | Set `POSTGRES_PASSWORD` in `.env` |
+| External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights (migrations run at startup) |
+
+Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
+
+## TLS
+
+Terminate TLS at a reverse proxy. The app publishes on localhost only.
+Add your proxy's addresses to `trusted_proxies` so the app can see the
+real scheme; without that it refuses credential traffic as insecure.
+
+Caddy example:
+
+```
+reader.example.com {
+    reverse_proxy 127.0.0.1:8585
+}
+```
+
+nginx example — note the koplugin capability URLs carry a secret in the
+path, so redact it from access logs:
+
+```nginx
+map $uri $redacted_uri {
+    ~^/adapter/koplugin/(?<cap>[^/]+)(?<rest>/.*)$  /adapter/koplugin/[redacted]$rest;
+    default  $uri;
+}
+log_format redacted '$remote_addr - $remote_user [$time_local] '
+                    '"$request_method $redacted_uri $server_protocol" $status';
+access_log /var/log/nginx/liseur-sync.log redacted;
+
+location / {
+    proxy_pass http://127.0.0.1:8585;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+`insecure_http = true` exists only for LAN-only setups where TLS is
+genuinely out of scope.
+
+## First run
+
+```
+liseur-sync admin -config liseur-sync.toml create-user alice
+liseur-sync admin -config liseur-sync.toml mint-token alice "Boox Palma"
+liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReader kosync
+liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
+```
+
+## Backup
+
+- **SQLite:** `sqlite3 liseur-sync.db 'VACUUM INTO "/backups/ls.db"'` —
+  or the `.backup` command. Never copy the live `.db`/`.wal` files.
+- **Postgres:** `pg_dump` as usual.
+
+## Upgrades
+
+Migrations run at startup under a cross-process lock. If a migration
+fails, the server refuses to start (non-zero exit, clear log) rather
+than run against a partially migrated schema. Back up before upgrades.
