@@ -118,6 +118,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/koplugin/{id}/revoke", http.HandlerFunc(s.requireAuth(s.handleRevokeKoplugin)))
 	mux.Handle("POST /ui/kosync/{slot}/revoke", http.HandlerFunc(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/settings", http.HandlerFunc(s.requireAuth(s.handleSaveSettings)))
+	mux.Handle("POST /ui/settings/password", http.HandlerFunc(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("POST /ui/admin/invites", http.HandlerFunc(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", http.HandlerFunc(s.requireAdmin(s.handleRevokeInvite)))
 }

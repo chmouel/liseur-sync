@@ -195,3 +195,16 @@ func (s *Store) RedeemInvite(ctx context.Context, codeSHA256 string, at time.Tim
 	}
 	return inv, tx.Commit()
 }
+
+// UpdateUserPassword replaces a user's argon2id hash.
+func (s *Store) UpdateUserPassword(ctx context.Context, userID, argon2Hash string) error {
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE users SET argon2_hash = ? WHERE id = ?`), argon2Hash, userID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
