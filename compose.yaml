@@ -73,9 +73,24 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
+      # Reverse proxy on the docker host reaches the app via the bridge
+      # gateway; trust X-Forwarded-Proto from the stack's subnet.
+      LISEUR_TRUSTED_PROXIES: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}
     # The target database and role must already exist; startup
     # migrations need DDL rights on that database.
 
 volumes:
   sqlite-data:
   pg-data:
+
+# Pinned bridge subnet (default 172.29.0.0/16, override with
+# LISEUR_DOCKER_SUBNET) so host services with per-subnet ACLs (e.g.
+# PostgreSQL pg_hba) get a stable source range. The external-postgres
+# posture reaches a host PG at <subnet gateway>, i.e. 172.29.0.1 by
+# default.
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}
