@@ -48,6 +48,16 @@ location / {
 `insecure_http = true` exists only for LAN-only setups where TLS is
 genuinely out of scope.
 
+### Optional: extra auth at the proxy
+
+The API is fully authenticated by design, but you can put an extra
+basicauth layer in front of the whole path for non-LAN clients (the
+civuole deployment does this with Caddy's `import auth` snippet; LAN
+devices bypass it). Caveat: kosync clients cannot send HTTP basic-auth
+headers, so this only works while KOReader devices sync from the LAN.
+If one ever needs WAN access, exempt `/adapter/*` from the proxy auth
+— the adapter authenticates with its own credentials either way.
+
 ## First run
 
 ```

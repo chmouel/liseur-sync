@@ -75,7 +75,7 @@ func redirectRel(w http.ResponseWriter, loc string, code int) {
 // Mount registers the UI routes. Route patterns stay absolute /ui/...;
 // only rendered URLs and redirect Locations are relative, so the UI
 // can be served under a stripped subpath (e.g. Caddy `handle_path
-// /synch*`, ideally paired with `redir /synch /synch/`).
+// /sync*`, ideally paired with `redir /sync /sync/`).
 func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler) {
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
@@ -188,7 +188,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// No Path attribute: the RFC 6265 default-path (the directory of
 	// the request URL) scopes the cookie to /ui/ — or to the proxy
-	// subpath (e.g. /synch/ui/) when served under one.
+	// subpath (e.g. /sync/ui/) when served under one.
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: secret,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
