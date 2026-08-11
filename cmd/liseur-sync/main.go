@@ -91,7 +91,7 @@ func cmdServe(args []string) error {
 			AuthRateLim: auth.NewRateLimiter(10, time.Minute),
 		},
 		Koplugin: &koplugin.Server{St: st},
-		WebUI:    &webui.Server{St: st, Auth: auth.NewService(st)},
+		WebUI:    &webui.Server{St: st, Auth: auth.NewService(st), Cfg: cfg},
 	}
 	mux := apiSrv.Routes()
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -32,6 +33,12 @@ func staticContent() fs.FS {
 type Server struct {
 	St   store.Store
 	Auth *auth.Service
+	// Cfg is the instance config. The session cookie's Secure
+	// attribute derives from it rather than from r.TLS: in the
+	// documented deployment TLS terminates at a reverse proxy and the
+	// backend is spoken to over HTTP, so r.TLS is nil even though the
+	// browser is on HTTPS.
+	Cfg config.Config
 }
 
 const cookieName = "liseur_session"
@@ -77,6 +84,12 @@ func redirectRel(w http.ResponseWriter, loc string, code int) {
 // can be served under a stripped subpath (e.g. Caddy `handle_path
 // /sync*`, ideally paired with `redir /sync /sync/`).
 func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler) {
+	// Every route below carries or sets the session cookie, so all of
+	// them go through the transport check — not just the login POST.
+	// Static assets are exempt: they hold no credential, and serving
+	// the stylesheet keeps the "https required" page readable.
+	sec := func(h http.HandlerFunc) http.Handler { return secure(h) }
+
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
@@ -89,38 +102,38 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
-	mux.Handle("GET /ui/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /ui/", sec(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ui/" {
 			http.NotFound(w, r)
 			return
 		}
 		s.requireAuth(s.handleDashboard)(w, r)
 	}))
-	mux.Handle("GET /ui/login", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("GET /ui/login", sec(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := s.session(r); ok {
 			redirectRel(w, "./", http.StatusSeeOther)
 			return
 		}
 		loginPage(relPrefix(r.URL.Path), "").Render(r.Context(), w)
 	}))
-	mux.Handle("GET /ui/works", http.HandlerFunc(s.requireAuth(s.handleWorks)))
-	mux.Handle("GET /ui/works/{id}", http.HandlerFunc(s.requireAuth(s.handleWork)))
-	mux.Handle("GET /ui/devices", http.HandlerFunc(s.requireAuth(s.handleDevices)))
-	mux.Handle("GET /ui/settings", http.HandlerFunc(s.requireAuth(s.handleSettings)))
-	mux.Handle("GET /ui/admin", http.HandlerFunc(s.requireAdmin(s.handleAdmin)))
+	mux.Handle("GET /ui/works", sec(s.requireAuth(s.handleWorks)))
+	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
+	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
+	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
+	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
 
-	mux.Handle("POST /ui/login", secure(http.HandlerFunc(s.handleLogin)))
-	mux.Handle("POST /ui/logout", http.HandlerFunc(s.handleLogout))
-	mux.Handle("POST /ui/tokens", http.HandlerFunc(s.requireAuth(s.handleCreateToken)))
-	mux.Handle("POST /ui/tokens/{id}/revoke", http.HandlerFunc(s.requireAuth(s.handleRevokeToken)))
-	mux.Handle("POST /ui/pairing", http.HandlerFunc(s.requireAuth(s.handlePairing)))
-	mux.Handle("POST /ui/koplugin", http.HandlerFunc(s.requireAuth(s.handleCreateKoplugin)))
-	mux.Handle("POST /ui/koplugin/{id}/revoke", http.HandlerFunc(s.requireAuth(s.handleRevokeKoplugin)))
-	mux.Handle("POST /ui/kosync/{slot}/revoke", http.HandlerFunc(s.requireAuth(s.handleRevokeKosync)))
-	mux.Handle("POST /ui/settings", http.HandlerFunc(s.requireAuth(s.handleSaveSettings)))
-	mux.Handle("POST /ui/settings/password", http.HandlerFunc(s.requireAuth(s.handleChangePassword)))
-	mux.Handle("POST /ui/admin/invites", http.HandlerFunc(s.requireAdmin(s.handleCreateInvite)))
-	mux.Handle("POST /ui/admin/invites/{id}/revoke", http.HandlerFunc(s.requireAdmin(s.handleRevokeInvite)))
+	mux.Handle("POST /ui/login", sec(s.handleLogin))
+	mux.Handle("POST /ui/logout", sec(s.handleLogout))
+	mux.Handle("POST /ui/tokens", sec(s.requireAuth(s.handleCreateToken)))
+	mux.Handle("POST /ui/tokens/{id}/revoke", sec(s.requireAuth(s.handleRevokeToken)))
+	mux.Handle("POST /ui/pairing", sec(s.requireAuth(s.handlePairing)))
+	mux.Handle("POST /ui/koplugin", sec(s.requireAuth(s.handleCreateKoplugin)))
+	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
+	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
+	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
+	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
+	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
+	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }
 
 // requireAuth redirects to the canonical login page when
@@ -184,7 +197,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// subpath (e.g. /sync/ui/) when served under one.
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: secret,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Secure:  !s.Cfg.InsecureHTTP,
 		Expires: now.Add(7 * 24 * time.Hour),
 	})
 	redirectRel(w, "./", http.StatusSeeOther)
