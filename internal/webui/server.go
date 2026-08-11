@@ -137,22 +137,15 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store
 	}
 }
 
-// requireAdmin additionally demands an admin-scope token exists for the
-// user (the web session is user-level; admin pages require the user to
-// hold at least one active admin token — crude but explicit for v1).
+// requireAdmin additionally demands admin rights, per the single
+// definition in auth.Service.IsAdmin (an active admin-scope token,
+// which only the admin CLI or an existing admin can mint).
 func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, store.AuthSession, *store.User)) http.HandlerFunc {
 	return s.requireAuth(func(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-		toks, err := s.St.ListTokens(r.Context(), u.ID)
+		isAdmin, err := s.Auth.IsAdmin(r.Context(), u.ID)
 		if err != nil {
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
-		}
-		isAdmin := false
-		for _, t := range toks {
-			if t.Scope == store.ScopeAdmin && t.RevokedAt == nil {
-				isAdmin = true
-				break
-			}
 		}
 		if !isAdmin {
 			http.Error(w, "forbidden", http.StatusForbidden)
