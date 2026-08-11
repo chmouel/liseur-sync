@@ -212,8 +212,9 @@ func sha256hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Mount registers the adapter routes. Capability appears in the path;
-// the server's access logging must redact it (see Server.LogRedactor).
+// Mount registers the adapter routes. The capability secret appears in
+// the path, so anything that logs a path must run it through
+// api.RedactPath first.
 func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler) {
 	mux.Handle("POST /adapter/koplugin/{capability}/api/plugin/upload",
 		secure(http.HandlerFunc(s.HandleUpload)))

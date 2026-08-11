@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -601,5 +603,48 @@ func TestAdminScopeNotSelfMintable(t *testing.T) {
 		"name": "second admin", "scope": "admin",
 	}); code != 201 {
 		t.Fatalf("admin minting admin: want 201, got %d %v", code, out)
+	}
+}
+
+// TestRedactPath pins the fix for the koplugin capability secret
+// leaking into the server log: LogServerErrors logged r.URL.Path
+// verbatim, and the upload handler answers 500 on any store error.
+func TestRedactPath(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{
+			"/adapter/koplugin/s3cr3tcapability/api/plugin/upload",
+			"/adapter/koplugin/[redacted]/api/plugin/upload",
+		},
+		{"/adapter/koplugin/s3cr3tcapability", "/adapter/koplugin/[redacted]"},
+		{"/adapter/koplugin/", "/adapter/koplugin/[redacted]"},
+		{"/v1/ops", "/v1/ops"},
+		{"/adapter/kosync/syncs/progress", "/adapter/kosync/syncs/progress"},
+		{"/ui/settings", "/ui/settings"},
+	} {
+		if got := RedactPath(tc.in); got != tc.want {
+			t.Errorf("RedactPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestServerErrorLogRedactsCapability checks the redaction where it
+// matters: through the logging middleware itself.
+func TestServerErrorLogRedactsCapability(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := LogServerErrors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	req := httptest.NewRequest("POST",
+		"/adapter/koplugin/s3cr3tcapability/api/plugin/upload", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got := buf.String(); strings.Contains(got, "s3cr3tcapability") {
+		t.Fatalf("capability secret leaked into the log: %s", got)
+	} else if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("path not logged redacted: %s", got)
 	}
 }

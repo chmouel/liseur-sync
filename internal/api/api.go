@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
@@ -52,9 +53,31 @@ func LogServerErrors(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r)
 		if sw.status >= 500 {
-			slog.Error("request failed", "method", r.Method, "path", r.URL.Path, "status", sw.status)
+			slog.Error("request failed", "method", r.Method, "path", RedactPath(r.URL.Path), "status", sw.status)
 		}
 	})
+}
+
+// kopluginPrefix is the koplugin adapter mount point. The path segment
+// that follows it is the capability secret.
+const kopluginPrefix = "/adapter/koplugin/"
+
+// RedactPath strips credentials that legacy adapters carry in the URL
+// path, so they never reach a log file. The koplugin adapter
+// authenticates with a capability secret embedded in the path (stock
+// KOReader's statistics plugin can only be pointed at a URL, it cannot
+// send a header), and that secret is a device credential stored hashed
+// like any other. Every path that gets logged must go through here.
+func RedactPath(p string) string {
+	rest, ok := strings.CutPrefix(p, kopluginPrefix)
+	if !ok {
+		return p
+	}
+	tail := ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		tail = rest[i:]
+	}
+	return kopluginPrefix + "[redacted]" + tail
 }
 
 type statusWriter struct {
