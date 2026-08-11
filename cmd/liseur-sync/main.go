@@ -79,11 +79,16 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 
+	// One limiter for every path that verifies a password, so the web
+	// form and /v1/login share a per-IP budget instead of each
+	// offering an unthrottled way around the other.
+	loginLimiter := auth.NewRateLimiter(10, time.Minute)
+
 	apiSrv := &api.Server{
 		St:           st,
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
-		LoginLimiter: auth.NewRateLimiter(10, time.Minute),
+		LoginLimiter: loginLimiter,
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,
@@ -91,7 +96,10 @@ func cmdServe(args []string) error {
 			AuthRateLim: auth.NewRateLimiter(10, time.Minute),
 		},
 		Koplugin: &koplugin.Server{St: st},
-		WebUI:    &webui.Server{St: st, Auth: auth.NewService(st), Cfg: cfg},
+		WebUI: &webui.Server{
+			St: st, Auth: auth.NewService(st), Cfg: cfg,
+			LoginLimiter: loginLimiter,
+		},
 	}
 	mux := apiSrv.Routes()
 

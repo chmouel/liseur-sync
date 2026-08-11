@@ -18,12 +18,13 @@ import (
 
 func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
-	return testServerCfg(t, nil)
+	return testServerCfg(t, nil, nil)
 }
 
-// testServerCfg builds the UI against a config the caller can tweak,
-// so transport-security behaviour can be exercised both ways.
-func testServerCfg(t *testing.T, mutate func(*config.Config)) (*httptest.Server, store.Store) {
+// testServerCfg builds the UI against a config and a Server the caller
+// can tweak, so transport security and rate limiting can be exercised
+// both ways.
+func testServerCfg(t *testing.T, mutate func(*config.Config), tune func(*Server)) (*httptest.Server, store.Store) {
 	t.Helper()
 	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -46,6 +47,9 @@ func testServerCfg(t *testing.T, mutate func(*config.Config)) (*httptest.Server,
 		mutate(&cfg)
 	}
 	s := &Server{St: st, Auth: auth.NewService(st), Cfg: cfg}
+	if tune != nil {
+		tune(s)
+	}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler {
 		return auth.RequireSecureTransport(cfg, h)
@@ -399,7 +403,7 @@ func TestCrossUserIsolation(t *testing.T) {
 // session-cookie-bearing route accepted the credential over plain
 // HTTP even when insecure_http was false.
 func TestSecureTransportOnAllUIRoutes(t *testing.T) {
-	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false })
+	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/works", "/ui/devices", "/ui/settings", "/ui/admin",
 	} {
@@ -438,7 +442,7 @@ func TestSessionCookieSecureAttribute(t *testing.T) {
 	ts2, _ := testServerCfg(t, func(c *config.Config) {
 		c.InsecureHTTP = false
 		c.TrustedProxies = []string{"127.0.0.0/8", "::1/128"}
-	})
+	}, nil)
 	req, _ := http.NewRequest("POST", ts2.URL+"/ui/login", strings.NewReader(
 		url.Values{"username": {"alice"}, "password": {"hunter2hunter"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -462,5 +466,64 @@ func TestSessionCookieSecureAttribute(t *testing.T) {
 	}
 	if !got.HttpOnly || got.SameSite != http.SameSiteStrictMode {
 		t.Error("cookie must stay HttpOnly and SameSite=Strict")
+	}
+}
+
+// TestLoginFormRateLimited is a regression test: POST /v1/login was
+// rate-limited but POST /ui/login was not, so the form was an
+// unthrottled way around the API's limit.
+func TestLoginFormRateLimited(t *testing.T) {
+	ts, _ := testServerCfg(t, nil, func(s *Server) {
+		s.LoginLimiter = auth.NewRateLimiter(3, time.Minute)
+	})
+	form := url.Values{"username": {"alice"}, "password": {"wrong"}}
+	for i := range 3 {
+		if code, _ := postForm(t, ts, nil, "/ui/login", form); code != http.StatusOK {
+			t.Fatalf("attempt %d: want 200 with an error page, got %d", i+1, code)
+		}
+	}
+	code, body := postForm(t, ts, nil, "/ui/login", form)
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("fourth attempt: want 429, got %d", code)
+	}
+	if !strings.Contains(body, "too many attempts") {
+		t.Errorf("limited response should render the login page: %s", body)
+	}
+	// The limiter must not become an authentication bypass.
+	if code, _ := postForm(t, ts, nil, "/ui/login", url.Values{
+		"username": {"alice"}, "password": {"hunter2hunter"},
+	}); code == http.StatusSeeOther {
+		t.Error("valid credentials accepted while rate limited")
+	}
+}
+
+// TestLoginDoesNotLeakUserExistence pins the constant-work check: the
+// unknown-user path returned before hashing anything, and argon2id at
+// 64 MiB is slow enough that the gap is a usable enumeration oracle.
+func TestLoginDoesNotLeakUserExistence(t *testing.T) {
+	ts, _ := testServer(t)
+	unknownCode, unknownBody := postForm(t, ts, nil, "/ui/login", url.Values{
+		"username": {"nosuchuser"}, "password": {"hunter2hunter"},
+	})
+	knownCode, knownBody := postForm(t, ts, nil, "/ui/login", url.Values{
+		"username": {"alice"}, "password": {"wrong"},
+	})
+	if unknownCode != knownCode || unknownBody != knownBody {
+		t.Fatal("unknown user and wrong password must be indistinguishable")
+	}
+
+	timeOnce := func(username string) time.Duration {
+		start := time.Now()
+		postForm(t, ts, nil, "/ui/login", url.Values{
+			"username": {username}, "password": {"hunter2hunter"},
+		})
+		return time.Since(start)
+	}
+	// Wall-clock timing is noisy, so this only catches the gross case
+	// the bug produced: a near-instant return with no hashing at all.
+	unknown, known := timeOnce("nosuchuser"), timeOnce("alice")
+	if unknown < known/4 {
+		t.Errorf("unknown user answered in %v vs %v for a known one; "+
+			"the dummy hash check is not running", unknown, known)
 	}
 }

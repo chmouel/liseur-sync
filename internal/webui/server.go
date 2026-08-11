@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"io/fs"
+	"net"
 	"net/http"
 	"time"
 
@@ -39,6 +40,10 @@ type Server struct {
 	// backend is spoken to over HTTP, so r.TLS is nil even though the
 	// browser is on HTTPS.
 	Cfg config.Config
+	// LoginLimiter throttles the login form. It is the same limiter
+	// the API's /v1/login uses, so the two surfaces share one budget
+	// per IP and the form cannot be used to sidestep the API's limit.
+	LoginLimiter *auth.RateLimiter
 }
 
 const cookieName = "liseur_session"
@@ -122,7 +127,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
 	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
 
-	mux.Handle("POST /ui/login", sec(s.handleLogin))
+	mux.Handle("POST /ui/login", sec(s.rateLimited(s.handleLogin)))
 	mux.Handle("POST /ui/logout", sec(s.handleLogout))
 	mux.Handle("POST /ui/tokens", sec(s.requireAuth(s.handleCreateToken)))
 	mux.Handle("POST /ui/tokens/{id}/revoke", sec(s.requireAuth(s.handleRevokeToken)))
@@ -168,10 +173,35 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, stor
 	})
 }
 
+// rateLimited throttles a credential-verifying handler per remote IP.
+// It renders the login page with a message rather than the API's JSON
+// 429, since the only caller is a browser form.
+func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.LoginLimiter != nil {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			if !s.LoginLimiter.Allow(host) {
+				w.Header().Set("Retry-After", "60")
+				w.WriteHeader(http.StatusTooManyRequests)
+				loginPage(relPrefix(r.URL.Path), "too many attempts, try again later").
+					Render(r.Context(), w)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	prefix := relPrefix(r.URL.Path)
 	u, err := s.St.UserByName(r.Context(), r.FormValue("username"))
 	if err != nil {
+		// Same work as a real check, so an unknown username cannot be
+		// told apart from a wrong password by response time.
+		auth.CheckDummyPassword(r.FormValue("password"))
 		loginPage(prefix, "invalid credentials").Render(r.Context(), w)
 		return
 	}

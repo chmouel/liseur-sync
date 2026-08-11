@@ -27,9 +27,7 @@ func NewService(st store.Store) *Service {
 func (s *Service) Login(ctx context.Context, username, password string) (secret string, err error) {
 	u, err := s.St.UserByName(ctx, username)
 	if err != nil {
-		// Constant-work defense: check against a dummy hash so unknown
-		// users and wrong passwords take the same path.
-		_, _ = CheckPassword(password, dummyHash)
+		CheckDummyPassword(password)
 		return "", errors.New("invalid credentials")
 	}
 	ok, err := CheckPassword(password, u.Argon2Hash)
@@ -169,3 +167,13 @@ func (s *Service) tokenByHashGlobal(ctx context.Context, hash string) (store.Tok
 // dummyHash is a valid argon2id encoding used to equalize timing when
 // the username does not exist. Password "dummy".
 const dummyHash = "$argon2id$v=19$m=65536,t=3,p=2$c2FsdHNhbHRzYWx0c2FsdA$M2DdlP2yhB+CZCm2lp3DKbT8NYDMv0hWQRdnJP0bLcU"
+
+// CheckDummyPassword burns the same work a real password check would,
+// so an unknown username and a wrong password take comparable time.
+// Argon2id at 64 MiB is slow enough that skipping it is a plainly
+// measurable signal, which turns any login form into a user
+// enumeration oracle. Every path that verifies a password must call
+// this when the user is not found.
+func CheckDummyPassword(password string) {
+	_, _ = CheckPassword(password, dummyHash)
+}
