@@ -480,7 +480,36 @@ paths:
                   total_pages: { type: number }
                   current_progression: { type: number }
                   eta_seconds: { type: [number, "null"] }
+                  last_read_at: { type: [string, "null"], format: date-time }
         "404": { $ref: "#/components/responses/Error" }
+
+  /v1/insights/works:
+    get:
+      tags: [insights]
+      summary: Per-work statistics for every work with reading history
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      responses:
+        "200":
+          description: Per-work aggregates, ordered by active time descending
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [works]
+                properties:
+                  works:
+                    type: array
+                    items:
+                      type: object
+                      required: [work_id, sessions, total_active_minutes, total_pages, current_progression]
+                      properties:
+                        work_id: { type: string }
+                        sessions: { type: integer }
+                        total_active_minutes: { type: number }
+                        total_pages: { type: number }
+                        current_progression: { type: number }
+                        eta_seconds: { type: [number, "null"] }
+                        last_read_at: { type: [string, "null"], format: date-time }
 
   /v1/insights/calendar:
     get:

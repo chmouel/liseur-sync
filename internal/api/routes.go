@@ -192,6 +192,7 @@ func (s *Server) Routes() *http.ServeMux {
 			auth.RequireScope(s.Auth, store.ScopeReadInsights, h))
 	}
 	mux.Handle("GET /v1/insights/summary", insH(s.HandleInsightsSummary))
+	mux.Handle("GET /v1/insights/works", insH(s.HandleInsightsWorks))
 	mux.Handle("GET /v1/insights/works/{id}", insH(s.HandleInsightsWork))
 	mux.Handle("GET /v1/insights/calendar", insH(s.HandleInsightsCalendar))
 

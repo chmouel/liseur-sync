@@ -198,6 +198,7 @@ through `page / total_pages` yourself and say so in the fractions.
 With a `read-insights` token:
 
 - `GET /v1/insights/summary?range=30d` — totals, streak, speed trend
+- `GET /v1/insights/works` — aggregates for every work with reading history
 - `GET /v1/insights/works/{id}` — per-work time, pace, ETA
 - `GET /v1/insights/calendar?year=2026` — daily minutes for heatmaps
 

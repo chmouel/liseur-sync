@@ -261,6 +261,7 @@ Read-only aggregation endpoints, all per-user:
 
 ```
 GET /v1/insights/summary?range=30d      totals, streak, speed trend
+GET /v1/insights/works                  all per-book aggregates
 GET /v1/insights/works/{id}             per-book: time, sessions, pace, ETA
 GET /v1/insights/calendar?year=2026    daily minutes for heatmaps
 ```

@@ -478,6 +478,17 @@ func TestSessionsAndInsights(t *testing.T) {
 		t.Fatalf("sessions: %v", out["sessions"])
 	}
 
+	// All work insights in one request for client dashboards.
+	code, out = get(t, ts.URL+"/v1/insights/works", roSecret)
+	works, ok := out["works"].([]any)
+	if code != 200 || !ok || len(works) != 1 {
+		t.Fatalf("all work insights: %d %v", code, out)
+	}
+	work := works[0].(map[string]any)
+	if work["work_id"] != "w1" || work["sessions"].(float64) != 2 || work["last_read_at"] == nil {
+		t.Fatalf("work aggregate: %v", work)
+	}
+
 	// Summary over 30d.
 	code, out = get(t, ts.URL+"/v1/insights/summary?range=30d", roSecret)
 	if code != 200 {
