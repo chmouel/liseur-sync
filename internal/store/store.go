@@ -253,6 +253,7 @@ type Store interface {
 	SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]Session, error)
 	SessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
+	WorkIDsWithInsights(ctx context.Context, userID string) ([]string, error)
 	EditionBySHA(ctx context.Context, userID, sha256 string) (Edition, error)
 
 	// Session rollups (retention). SessionsEndedBefore feeds the rollup

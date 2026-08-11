@@ -143,6 +143,30 @@ func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID strin
 	return out, rows.Err()
 }
 
+// WorkIDsWithInsights returns only works which have raw sessions or
+// retained rollups. It keeps the aggregate endpoint proportional to the
+// reader's history rather than to the size of a catalog it once resolved.
+func (s *Store) WorkIDsWithInsights(ctx context.Context, userID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT work_id FROM sessions WHERE user_id = ?
+		 UNION
+		 SELECT work_id FROM session_rollups WHERE user_id = ?
+		 ORDER BY work_id`), userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var workID string
+		if err := rows.Scan(&workID); err != nil {
+			return nil, err
+		}
+		out = append(out, workID)
+	}
+	return out, rows.Err()
+}
+
 // SessionsInRange returns sessions overlapping [from, to), oldest first.
 func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx, q(

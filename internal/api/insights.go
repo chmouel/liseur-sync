@@ -33,6 +33,16 @@ type dayStat struct {
 	Pages   float64 `json:"pages"`
 }
 
+type workInsight struct {
+	WorkID             string     `json:"work_id"`
+	Sessions           int        `json:"sessions"`
+	TotalActiveMinutes float64    `json:"total_active_minutes"`
+	TotalPages         float64    `json:"total_pages"`
+	CurrentProgression float64    `json:"current_progression"`
+	ETASeconds         *float64   `json:"eta_seconds"`
+	LastReadAt         *time.Time `json:"last_read_at"`
+}
+
 // userLocation loads the user's configured timezone.
 func (s *Server) userLocation(r *http.Request, userID string) *time.Location {
 	u, err := s.St.UserByID(r.Context(), userID)
@@ -132,44 +142,44 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleInsightsWork implements GET /v1/insights/works/{id}.
-func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
-	tok, _ := auth.TokenFrom(r)
-	workID := r.PathValue("id")
-	if _, err := s.St.WorkByID(r.Context(), tok.UserID, workID); err != nil {
-		writeError(w, http.StatusNotFound, "work not found")
-		return
-	}
-	sessions, err := s.St.CurrentSessionsForWork(r.Context(), tok.UserID, workID, 10_000)
+func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *time.Location) (workInsight, error) {
+	sessions, err := s.St.CurrentSessionsForWork(ctx, userID, workID, 10_000)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "work insights failed")
-		return
+		return workInsight{}, err
 	}
 	var totalActive, totalPages, progDelta float64
 	sessionCount := len(sessions)
+	var lastReadAt *time.Time
 	for _, ses := range sessions {
 		totalActive += activeSeconds(ses)
-		totalPages += s.pagesRead(r.Context(), ses)
+		totalPages += s.pagesRead(ctx, ses)
 		if d := ses.EndProg - ses.StartProg; d > 0 {
 			progDelta += d
 		}
+		if lastReadAt == nil || ses.EndedAt.After(*lastReadAt) {
+			ended := ses.EndedAt
+			lastReadAt = &ended
+		}
 	}
 	// Aged sessions live as daily rollups.
-	rollups, err := s.St.RollupsForWork(r.Context(), tok.UserID, workID)
+	rollups, err := s.St.RollupsForWork(ctx, userID, workID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "work insights failed")
-		return
+		return workInsight{}, err
 	}
 	for _, ru := range rollups {
 		totalActive += ru.ActiveSeconds
 		totalPages += ru.Pages
 		progDelta += ru.ProgDelta
 		sessionCount += int(ru.SessionCount)
+		if day, err := time.ParseInLocation("2006-01-02", ru.Day, loc); err == nil &&
+			(lastReadAt == nil || day.After(*lastReadAt)) {
+			lastReadAt = &day
+		}
 	}
 	// Current position: newest op.
 	var currentProg float64
 	var etaSeconds *float64
-	if ops, err := s.St.Positions(r.Context(), tok.UserID, workID, 1); err == nil && len(ops) > 0 {
+	if ops, err := s.St.Positions(ctx, userID, workID, 1); err == nil && len(ops) > 0 {
 		currentProg = ops[0].Progression
 		if totalActive > 0 && progDelta > 0 {
 			speed := progDelta / totalActive
@@ -180,14 +190,59 @@ func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"work_id":              workID,
-		"sessions":             sessionCount,
-		"total_active_minutes": totalActive / 60,
-		"total_pages":          totalPages,
-		"current_progression":  currentProg,
-		"eta_seconds":          etaSeconds,
+	return workInsight{
+		WorkID:             workID,
+		Sessions:           sessionCount,
+		TotalActiveMinutes: totalActive / 60,
+		TotalPages:         totalPages,
+		CurrentProgression: currentProg,
+		ETASeconds:         etaSeconds,
+		LastReadAt:         lastReadAt,
+	}, nil
+}
+
+// HandleInsightsWorks implements GET /v1/insights/works. It returns one
+// aggregate per work with reading history, so a client can render its
+// per-book dashboard without issuing one request for every catalog item.
+func (s *Server) HandleInsightsWorks(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFrom(r)
+	workIDs, err := s.St.WorkIDsWithInsights(r.Context(), tok.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "work insights failed")
+		return
+	}
+	loc := s.userLocation(r, tok.UserID)
+	works := make([]workInsight, 0, len(workIDs))
+	for _, workID := range workIDs {
+		insight, err := s.workInsight(r.Context(), tok.UserID, workID, loc)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "work insights failed")
+			return
+		}
+		if insight.Sessions > 0 || insight.TotalActiveMinutes > 0 {
+			works = append(works, insight)
+		}
+	}
+	sort.Slice(works, func(i, j int) bool {
+		return works[i].TotalActiveMinutes > works[j].TotalActiveMinutes
 	})
+	writeJSON(w, http.StatusOK, map[string]any{"works": works})
+}
+
+// HandleInsightsWork implements GET /v1/insights/works/{id}.
+func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFrom(r)
+	workID := r.PathValue("id")
+	if _, err := s.St.WorkByID(r.Context(), tok.UserID, workID); err != nil {
+		writeError(w, http.StatusNotFound, "work not found")
+		return
+	}
+	insight, err := s.workInsight(r.Context(), tok.UserID, workID, s.userLocation(r, tok.UserID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "work insights failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, insight)
 }
 
 // HandleInsightsCalendar implements GET /v1/insights/calendar?year=2026 —
