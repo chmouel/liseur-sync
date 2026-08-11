@@ -20,6 +20,10 @@ type resolveRequest struct {
 	Identifiers []identifierJSON `json:"identifiers"`
 	Title       string           `json:"title,omitempty"`
 	Author      string           `json:"author,omitempty"`
+	// Confirmed is the reader's word that a fuzzy match is the same
+	// book: a ta hit resolves high and registers the stronger
+	// identifiers, which an unconfirmed guess must never do.
+	Confirmed bool `json:"confirmed,omitempty"`
 }
 
 type resolveResponse struct {
@@ -117,7 +121,7 @@ func (s *Server) HandleResolve(w http.ResponseWriter, r *http.Request) {
 		// sha256 match stays "high" even when a ta alias also hit.
 		workID := ordered[0].workID
 		conf := "high"
-		if ordered[0].kind == "ta" {
+		if ordered[0].kind == "ta" && !req.Confirmed {
 			conf = "low"
 		}
 		var toAdd []store.Identifier
@@ -126,7 +130,10 @@ func (s *Server) HandleResolve(w http.ResponseWriter, r *http.Request) {
 				toAdd = append(toAdd, id)
 			}
 		}
-		if len(toAdd) > 0 {
+		// A low-confidence hit is a guess: registering the stronger
+		// identifiers against it would let the next resolve match on
+		// one of them and launder the guess into a certainty.
+		if len(toAdd) > 0 && conf != "low" {
 			if err := s.St.AddAliases(ctx, tok.UserID, workID, toAdd); err != nil {
 				writeError(w, http.StatusInternalServerError, "alias registration failed")
 				return
