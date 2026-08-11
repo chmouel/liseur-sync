@@ -37,7 +37,7 @@ func TestStore(t *testing.T) {
 func reset(t *testing.T, s *Store) {
 	t.Helper()
 	tables := []string{
-		"session_supersessions", "sessions", "ops", "aliases", "editions",
+		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "kosync_devices",
 		"koplugin_devices", "pairing_codes", "invites", "auth_sessions",
 		"tokens", "users", "schema_migrations",

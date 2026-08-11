@@ -231,7 +231,13 @@ only safe default: the adapter's `GET` returns the newest op's
 ```
 
 `POST /v1/sessions` accepts batches, idempotent on `session_id`. Rows are
-never updated, only appended — a session is a historical fact.
+never updated in place — a session is a historical fact. Immutable
+native and inferred sessions older than the configurable retention
+window (default 180 days) are reduced to per-work, timezone-local daily
+totals (active time, pages, progression delta, and session count), then
+their raw rows are removed. A compact id/fingerprint tombstone preserves
+the original idempotency and conflict behavior. Mutable koplugin
+supersession chains stay raw because a later revision may replace them.
 
 The design principle, learned from the Liseur/KoInsight investigation:
 **never fabricate resolution you didn't measure.** Liseur's
@@ -243,7 +249,8 @@ to the book's current page. liseur-sync instead requires
 
 - pages read = progression delta × edition page count (when known)
 - reading speed = progression delta / active duration, per work and rolling
-- streaks, per-book time, calendar heatmaps: plain SQL over sessions
+- streaks, per-book time, calendar heatmaps: raw sessions plus daily
+  rollups
 
 ### 6.2 Insight API
 
@@ -439,6 +446,6 @@ Cross-user dedup is an optimisation, not a semantic.
 |---|---|
 | Fuzzy `ta:` aliases merge distinct books | Low-confidence flag, client confirmation, `split` repair endpoint |
 | kosync adapter drift as KOReader evolves | Conformance tests are captured transcripts; KOReader's plugin has been wire-stable for years |
-| Op log growth on chatty clients | Per-user seq compaction window (§5.3); clients batch |
+| Op/session growth on chatty clients | Per-user seq compaction (§5.3), daily session rollups (§6.1); clients batch |
 | SQLite write contention at larger scale | WAL + single-writer queue is fine for the target (≤ ~100 users); Postgres is a non-goal until proven otherwise |
 | A second project to maintain | Small surface on purpose: no book files, no rendering, adapters gated; the native API is ~10 endpoints |

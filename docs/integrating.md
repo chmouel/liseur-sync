@@ -174,7 +174,12 @@ POST /v1/sessions
 
 The same rules as ops: `session_id` is the idempotency key, batch
 freely, same id + different payload is a 409. Sessions are never
-updated after acceptance.
+updated after acceptance. Raw immutable sessions are retained for 180
+days by default, then reduced to daily totals. Insights remain complete;
+raw session history beyond the retention horizon is intentionally not
+available. The server retains a compact fingerprint so replaying an old
+session remains idempotent and reusing its ID with another payload still
+returns 409.
 
 Do not send page numbers. The server derives pages from progression ×
 the edition's page count, and speed from progression delta over active

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -55,12 +57,12 @@ func activeSeconds(ses store.Session) float64 {
 
 // pagesRead converts a progression delta to pages using the session's
 // edition page count; negative deltas yield zero.
-func (s *Server) pagesRead(r *http.Request, ses store.Session) float64 {
+func (s *Server) pagesRead(ctx context.Context, ses store.Session) float64 {
 	delta := ses.EndProg - ses.StartProg
 	if delta <= 0 || ses.EditionSHA == nil {
 		return 0
 	}
-	ed, err := s.St.EditionBySHA(r.Context(), ses.UserID, *ses.EditionSHA)
+	ed, err := s.St.EditionBySHA(ctx, ses.UserID, *ses.EditionSHA)
 	if err != nil || ed.PageCount == nil {
 		return 0
 	}
@@ -82,18 +84,36 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 
 	var totalActive float64
 	var totalPages float64
+	sessionCount := len(sessions)
 	daySet := map[string]bool{}
 	// Rolling speed: progression delta per active second over range.
 	var progDelta float64
 	for _, ses := range sessions {
 		a := activeSeconds(ses)
 		totalActive += a
-		totalPages += s.pagesRead(r, ses)
+		totalPages += s.pagesRead(r.Context(), ses)
 		if d := ses.EndProg - ses.StartProg; d > 0 {
 			progDelta += d
 		}
 		for _, day := range splitDays(ses, loc) {
 			daySet[day.date] = true
+		}
+	}
+	// Aged sessions live as daily rollups; merge them in so ranges
+	// wider than the retention window stay correct.
+	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID,
+		from.In(loc).Format("2006-01-02"), now.In(loc).Format("2006-01-02"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "summary failed")
+		return
+	}
+	for _, ru := range rollups {
+		totalActive += ru.ActiveSeconds
+		totalPages += ru.Pages
+		progDelta += ru.ProgDelta
+		sessionCount += int(ru.SessionCount)
+		if ru.ActiveSeconds > 0 {
+			daySet[ru.Day] = true
 		}
 	}
 	streak := streakDays(daySet, loc, now)
@@ -103,10 +123,10 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 		speed = progDelta / totalActive // progression fraction per second
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"range_days":          days,
+		"range_days":           days,
 		"total_active_minutes": totalActive / 60,
 		"total_pages":          totalPages,
-		"sessions":             len(sessions),
+		"sessions":             sessionCount,
 		"streak_days":          streak,
 		"speed_prog_per_hour":  speed * 3600,
 	})
@@ -120,18 +140,31 @@ func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "work not found")
 		return
 	}
-	sessions, err := s.St.SessionsForWork(r.Context(), tok.UserID, workID, 10_000)
+	sessions, err := s.St.CurrentSessionsForWork(r.Context(), tok.UserID, workID, 10_000)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "work insights failed")
 		return
 	}
 	var totalActive, totalPages, progDelta float64
+	sessionCount := len(sessions)
 	for _, ses := range sessions {
 		totalActive += activeSeconds(ses)
-		totalPages += s.pagesRead(r, ses)
+		totalPages += s.pagesRead(r.Context(), ses)
 		if d := ses.EndProg - ses.StartProg; d > 0 {
 			progDelta += d
 		}
+	}
+	// Aged sessions live as daily rollups.
+	rollups, err := s.St.RollupsForWork(r.Context(), tok.UserID, workID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "work insights failed")
+		return
+	}
+	for _, ru := range rollups {
+		totalActive += ru.ActiveSeconds
+		totalPages += ru.Pages
+		progDelta += ru.ProgDelta
+		sessionCount += int(ru.SessionCount)
 	}
 	// Current position: newest op.
 	var currentProg float64
@@ -149,7 +182,7 @@ func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"work_id":              workID,
-		"sessions":             len(sessions),
+		"sessions":             sessionCount,
 		"total_active_minutes": totalActive / 60,
 		"total_pages":          totalPages,
 		"current_progression":  currentProg,
@@ -178,7 +211,7 @@ func (s *Server) HandleInsightsCalendar(w http.ResponseWriter, r *http.Request) 
 	}
 	byDay := map[string]*dayStat{}
 	for _, ses := range sessions {
-		for _, part := range splitDays(ses, loc) {
+		for _, part := range s.splitDaysFull(r.Context(), ses, loc) {
 			d := byDay[part.date]
 			if d == nil {
 				d = &dayStat{Date: part.date}
@@ -188,10 +221,26 @@ func (s *Server) HandleInsightsCalendar(w http.ResponseWriter, r *http.Request) 
 			d.Pages += part.pages
 		}
 	}
+	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID,
+		from.Format("2006-01-02"), to.AddDate(0, 0, -1).Format("2006-01-02"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "calendar failed")
+		return
+	}
+	for _, ru := range rollups {
+		d := byDay[ru.Day]
+		if d == nil {
+			d = &dayStat{Date: ru.Day}
+			byDay[ru.Day] = d
+		}
+		d.Minutes += ru.ActiveSeconds / 60
+		d.Pages += ru.Pages
+	}
 	out := []dayStat{}
 	for _, d := range byDay {
 		out = append(out, *d)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
 	writeJSON(w, http.StatusOK, map[string]any{"year": year, "days": out})
 }
 
@@ -203,13 +252,13 @@ type dayPart struct {
 
 // splitDays splits a session into tz-local day parts. Pages attribute
 // pro-rata by active time share (approximation, honest about it).
-func (s *Server) splitDaysFull(r *http.Request, ses store.Session, loc *time.Location) []dayPart {
+func (s *Server) splitDaysFull(ctx context.Context, ses store.Session, loc *time.Location) []dayPart {
 	parts := splitDays(ses, loc)
 	total := 0.0
 	for _, p := range parts {
 		total += p.activeSec
 	}
-	pages := s.pagesRead(r, ses)
+	pages := s.pagesRead(ctx, ses)
 	for i := range parts {
 		if total > 0 {
 			parts[i].pages = pages * parts[i].activeSec / total
@@ -242,12 +291,16 @@ func splitDays(ses store.Session, loc *time.Location) []dayPart {
 			activeSec: segEnd.Sub(segStart).Seconds(),
 		})
 	}
-	// Subtract idle from the last segment (where the reader paused).
-	if len(parts) > 0 && idleSec > 0 {
-		parts[len(parts)-1].activeSec -= idleSec
-		if parts[len(parts)-1].activeSec < 0 {
-			parts[len(parts)-1].activeSec = 0
+	// Subtract idle from the end backwards. A pause can exceed the
+	// final day's segment when a session crosses midnight.
+	for i := len(parts) - 1; i >= 0 && idleSec > 0; i-- {
+		if idleSec >= parts[i].activeSec {
+			idleSec -= parts[i].activeSec
+			parts[i].activeSec = 0
+			continue
 		}
+		parts[i].activeSec -= idleSec
+		idleSec = 0
 	}
 	return parts
 }

@@ -182,4 +182,27 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-var migrations = []string{schema}
+// migration2 adds per-(work, tz-local day) session aggregates and
+// compact tombstones that preserve idempotency after raw rows age out.
+const migration2 = `
+CREATE TABLE session_rollups (
+    user_id        TEXT NOT NULL,
+    work_id        TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    active_seconds REAL NOT NULL DEFAULT 0,
+    pages          REAL NOT NULL DEFAULT 0,
+    prog_delta     REAL NOT NULL DEFAULT 0,
+    session_count  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, work_id, day),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE session_tombstones (
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_id  TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    PRIMARY KEY (user_id, session_id)
+);
+`
+
+var migrations = []string{schema, migration2}

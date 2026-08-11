@@ -24,6 +24,8 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ChangesPaginationAndHeads", func(t *testing.T) { testChangesAndHeads(t, open) })
 	t.Run("SplitAndMerge", func(t *testing.T) { testSplitAndMerge(t, open) })
 	t.Run("SessionsAppendOnly", func(t *testing.T) { testSessionsAppendOnly(t, open) })
+	t.Run("SessionRollups", func(t *testing.T) { testSessionRollups(t, open) })
+	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
@@ -315,6 +317,93 @@ func testSessionsAppendOnly(t *testing.T, open OpenFunc) {
 	ses2.EndProg = 0.9
 	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses2}); err != store.ErrIDMismatch {
 		t.Fatalf("want ErrIDMismatch, got %v", err)
+	}
+}
+
+func testSessionRollups(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "rollup")
+	other := MkUser(t, s, "rollup-other")
+	w := MkWork(t, s, u, "w1", "rollup-sha")
+	old := time.Now().Add(-200 * 24 * time.Hour)
+	ses := store.Session{
+		SessionID: "old-s1", WorkID: w.ID, EditionSHA: Ptr("rollup-sha"), DeviceID: "d1",
+		StartedAt: old, EndedAt: old.Add(time.Hour), StartProg: 0.1, EndProg: 0.2,
+		Origin: store.OriginNative,
+	}
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses}); err != nil {
+		t.Fatal(err)
+	}
+	ended, err := s.SessionsEndedBefore(ctx, u.ID, time.Now().Add(-180*24*time.Hour))
+	if err != nil || len(ended) != 1 {
+		t.Fatalf("sessions for rollup: %d %v", len(ended), err)
+	}
+	day := old.In(time.FixedZone("test", 3600)).Format("2006-01-02")
+	ru := store.SessionRollup{
+		UserID: u.ID, WorkID: w.ID, Day: day,
+		ActiveSeconds: 3600, Pages: 46.2, ProgDelta: 0.1, SessionCount: 1,
+	}
+	if err := s.ApplyRollups(ctx, u.ID, []store.SessionRollup{ru}, ended); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := s.SessionsInRange(ctx, u.ID, old.Add(-time.Hour), old.Add(2*time.Hour))
+	if err != nil || len(raw) != 0 {
+		t.Fatalf("raw session retained: %d %v", len(raw), err)
+	}
+	got, err := s.RollupsInRange(ctx, u.ID, day, day)
+	if err != nil || len(got) != 1 || got[0].SessionCount != 1 || got[0].ActiveSeconds != 3600 {
+		t.Fatalf("rollup: %+v %v", got, err)
+	}
+	if cross, err := s.RollupsInRange(ctx, other.ID, day, day); err != nil || len(cross) != 0 {
+		t.Fatalf("cross-user rollup read: %+v %v", cross, err)
+	}
+	// The compact tombstone preserves append idempotency after deletion.
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses}); err != nil {
+		t.Fatalf("archived duplicate: %v", err)
+	}
+	changed := ses
+	changed.EndProg = 0.3
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{changed}); err != store.ErrIDMismatch {
+		t.Fatalf("archived mismatch: want ErrIDMismatch, got %v", err)
+	}
+}
+
+func testHousekeeping(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "cleanup")
+	now := time.Now()
+	expired := now.Add(-store.TokenPurgeGrace - time.Hour)
+	if err := s.CreateToken(ctx, store.Token{
+		ID: "expired-token", UserID: u.ID, DeviceID: "d1", Name: "old",
+		Scope: store.ScopeSync, SHA256: "expired-token-hash", CreatedAt: expired,
+		ExpiresAt: &expired,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateAuthSession(ctx, store.AuthSession{
+		ID: "expired-auth", UserID: u.ID, SHA256: "expired-auth-hash", Kind: "web",
+		CreatedAt: expired, ExpiresAt: expired,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePairingCode(ctx, store.PairingCode{
+		ID: "expired-pair", UserID: u.ID, CodeSHA256: "expired-pair-hash", ExpiresAt: expired,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Housekeep(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TokenByHash(ctx, u.ID, "expired-token-hash"); err != store.ErrNotFound {
+		t.Fatalf("expired token retained: %v", err)
+	}
+	if _, err := s.AuthSessionByHash(ctx, "expired-auth-hash"); err != store.ErrNotFound {
+		t.Fatalf("expired auth session retained: %v", err)
+	}
+	if _, err := s.RedeemPairingCode(ctx, "expired-pair-hash", now); err != store.ErrNotFound {
+		t.Fatalf("expired pairing code retained: %v", err)
 	}
 }
 

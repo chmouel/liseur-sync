@@ -430,3 +430,52 @@ func TestSessionsAndInsights(t *testing.T) {
 }
 
 func ptrI64(v int64) *int64 { return &v }
+
+func TestSessionRollupPreservesTotals(t *testing.T) {
+	_, st := testServer(t)
+	ctx := t.Context()
+	u := store.User{
+		ID: "rollup-user", Name: "rollup-user", Argon2Hash: "x",
+		Timezone: "Europe/Paris", KosyncEnabled: true, KopluginEnabled: true,
+		CreatedAt: time.Now(),
+	}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	w := store.Work{
+		ID: "rollup-work", UserID: u.ID, Title: "Old book", CreatedAt: time.Now(),
+	}
+	ed := store.Edition{
+		UserID: u.ID, SHA256: "rollup-edition", WorkID: w.ID, PageCount: ptrI64(462),
+	}
+	if err := st.CreateWork(ctx, w, &ed, nil); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-200 * 24 * time.Hour).Truncate(time.Second)
+	ses := store.Session{
+		SessionID: "rollup-session", WorkID: w.ID, EditionSHA: &ed.SHA256, DeviceID: "reader",
+		StartedAt: old, EndedAt: old.Add(time.Hour), StartProg: 0.1, EndProg: 0.2,
+		Origin: store.OriginNative,
+	}
+	if err := st.AppendSessions(ctx, u.ID, []store.Session{ses}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{St: st}
+	srv.rollupSessionsOnce(ctx, 180*24*time.Hour)
+
+	raw, err := st.CurrentSessionsForWork(ctx, u.ID, w.ID, 10)
+	if err != nil || len(raw) != 0 {
+		t.Fatalf("raw sessions after rollup: %d %v", len(raw), err)
+	}
+	rollups, err := st.RollupsForWork(ctx, u.ID, w.ID)
+	if err != nil || len(rollups) != 1 {
+		t.Fatalf("rollups: %+v %v", rollups, err)
+	}
+	got := rollups[0]
+	if got.ActiveSeconds != 3600 || got.SessionCount != 1 ||
+		got.Pages < 46.19 || got.Pages > 46.21 ||
+		got.ProgDelta < 0.099 || got.ProgDelta > 0.101 {
+		t.Fatalf("unexpected totals: %+v", got)
+	}
+}
