@@ -18,6 +18,13 @@ import (
 
 func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
+	return testServerCfg(t, nil)
+}
+
+// testServerCfg builds the UI against a config the caller can tweak,
+// so transport-security behaviour can be exercised both ways.
+func testServerCfg(t *testing.T, mutate func(*config.Config)) (*httptest.Server, store.Store) {
+	t.Helper()
 	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +42,10 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	}
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
-	s := &Server{St: st, Auth: auth.NewService(st)}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	s := &Server{St: st, Auth: auth.NewService(st), Cfg: cfg}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler {
 		return auth.RequireSecureTransport(cfg, h)
@@ -381,5 +391,76 @@ func TestCrossUserIsolation(t *testing.T) {
 	code, _ := page(t, ts, bobCookie, "/ui/works/wa")
 	if code != 404 {
 		t.Fatalf("cross-user work page: want 404, got %d", code)
+	}
+}
+
+// TestSecureTransportOnAllUIRoutes is a regression test: only the
+// login POST used to be behind RequireSecureTransport, so every other
+// session-cookie-bearing route accepted the credential over plain
+// HTTP even when insecure_http was false.
+func TestSecureTransportOnAllUIRoutes(t *testing.T) {
+	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false })
+	for _, p := range []string{
+		"/ui/", "/ui/login", "/ui/works", "/ui/devices", "/ui/settings", "/ui/admin",
+	} {
+		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
+			t.Errorf("GET %s over plain HTTP: want 403, got %d", p, code)
+		}
+	}
+	for _, p := range []string{
+		"/ui/login", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
+		"/ui/settings", "/ui/settings/password", "/ui/admin/invites",
+	} {
+		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
+			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)
+		}
+	}
+	// Static assets carry no credential and must stay reachable so the
+	// rejection page renders.
+	if code, _ := page(t, ts, nil, "/ui/static/style.css"); code != http.StatusOK {
+		t.Errorf("static asset: want 200, got %d", code)
+	}
+}
+
+// TestSessionCookieSecureAttribute pins the fix for a cookie whose
+// Secure flag came from r.TLS: behind a TLS-terminating proxy r.TLS is
+// nil, so the session secret was sent in the clear.
+func TestSessionCookieSecureAttribute(t *testing.T) {
+	// insecure_http instances are plain HTTP by definition; a Secure
+	// cookie would be dropped by the browser and lock the user out.
+	ts, _ := testServer(t)
+	if c := loginCookie(t, ts); c.Secure {
+		t.Error("insecure_http instance: cookie must not be Secure")
+	}
+
+	// The proxy case: the backend speaks plain HTTP but the browser is
+	// on HTTPS, so the cookie must still be Secure.
+	ts2, _ := testServerCfg(t, func(c *config.Config) {
+		c.InsecureHTTP = false
+		c.TrustedProxies = []string{"127.0.0.0/8", "::1/128"}
+	})
+	req, _ := http.NewRequest("POST", ts2.URL+"/ui/login", strings.NewReader(
+		url.Values{"username": {"alice"}, "password": {"hunter2hunter"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	resp, err := noRedirect().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == cookieName {
+			got = c
+		}
+	}
+	if got == nil {
+		t.Fatal("no session cookie behind proxy")
+	}
+	if !got.Secure {
+		t.Error("cookie must be Secure when the instance requires HTTPS")
+	}
+	if !got.HttpOnly || got.SameSite != http.SameSiteStrictMode {
+		t.Error("cookie must stay HttpOnly and SameSite=Strict")
 	}
 }
