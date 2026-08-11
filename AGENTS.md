@@ -18,7 +18,7 @@ section.
 go build ./...          # build everything
 go vet ./...            # vet
 go test -race ./...     # full suite, always run with -race
-~/go/bin/templ generate ./internal/webui/   # regenerate after editing .templ files
+go tool templ generate ./internal/webui/    # regenerate after editing .templ files
 ```
 
 CI (`.github/workflows/`): `test.yaml` runs vet + the full race-enabled
@@ -41,7 +41,7 @@ One binary, two subcommands (`serve`, `admin`). Storage goes through the
 full-fidelity surface; legacy protocols are edge adapters
 (`internal/adapter/kosync`, `internal/adapter/koplugin`) that write
 native records only. The web UI (`internal/webui`) is templ + vendored
-htmx, no CDN, no build pipeline beyond `templ generate`.
+htmx, no CDN, no build pipeline beyond `go tool templ generate`.
 
 The API contract is [docs/openapi.yaml](docs/openapi.yaml) — update it
 in the same commit as any route/shape change, and keep

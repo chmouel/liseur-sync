@@ -25,14 +25,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install templ
-        run: go install github.com/a-h/templ/cmd/templ@latest
       - name: Generate templ
-        run: templ generate ./internal/webui/
+        run: go tool templ generate ./internal/webui/
       - name: Check generated code is fresh
         run: |
           if [ -n "$(git status --porcelain internal/webui)" ]; then
-            echo "templ output is stale; run 'templ generate ./internal/webui/' and commit"
+            echo "templ output is stale; run 'go tool templ generate ./internal/webui/' and commit"
             git diff --stat internal/webui
             exit 1
           fi

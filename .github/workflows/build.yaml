@@ -14,10 +14,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install templ
-        run: go install github.com/a-h/templ/cmd/templ@latest
       - name: Generate templ
-        run: templ generate ./internal/webui/
+        run: go tool templ generate ./internal/webui/
       - name: Build static binaries (amd64 + arm64)
         run: |
           for arch in amd64 arm64; do
@@ -32,6 +30,8 @@ jobs:
 
   container:
     runs-on: ubuntu-latest
+    env:
+      KOCACHE: /tmp/ko-cache
     permissions:
       contents: read
       packages: write
@@ -41,12 +41,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install templ and ko
-        run: |
-          go install github.com/a-h/templ/cmd/templ@latest
-          go install github.com/google/ko@latest
+      - name: Cache ko layer cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: /tmp/ko-cache
+          key: ${{ runner.os }}-ko-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-ko-
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
       - name: Generate templ
-        run: templ generate ./internal/webui/
+        run: go tool templ generate ./internal/webui/
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -59,13 +63,15 @@ jobs:
           VERSION_TAGS: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
         run: ko build --bare --platform=linux/amd64,linux/arm64 --tags "$VERSION_TAGS" ./cmd/liseur-sync
       - name: Smoke-test the published image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
         run: |
-          docker pull ghcr.io/${{ github.repository }}:${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+          docker pull "$IMAGE"
           docker run -d --name ls -p 127.0.0.1:18585:8585 \
             --tmpfs /data:rw,uid=65532,gid=65532 \
             -e LISEUR_LISTEN_ADDR=0.0.0.0:8585 \
             -e LISEUR_DATABASE_URL=/data/liseur-sync.db \
-            ghcr.io/${{ github.repository }}:latest serve
+            "$IMAGE" serve
           for i in $(seq 1 20); do
             sleep 1
             if curl -sf http://127.0.0.1:18585/healthz; then break; fi
