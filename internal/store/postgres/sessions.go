@@ -17,8 +17,21 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 	defer tx.Rollback()
 	now := time.Now().UTC()
 	for _, ses := range ss {
+		var archivedFingerprint string
+		err := tx.QueryRowContext(ctx, q(
+			`SELECT fingerprint FROM session_tombstones WHERE user_id = ? AND session_id = ?`),
+			userID, ses.SessionID).Scan(&archivedFingerprint)
+		if err == nil {
+			if archivedFingerprint != store.SessionFingerprint(ses) {
+				return store.ErrIDMismatch
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		var found int
-		if err := tx.QueryRowContext(ctx, q(
+		if err = tx.QueryRowContext(ctx, q(
 			`SELECT COUNT(1) FROM sessions WHERE user_id = ? AND session_id = ?`),
 			userID, ses.SessionID).Scan(&found); err != nil {
 			return err
@@ -99,6 +112,37 @@ func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limi
 	return out, rows.Err()
 }
 
+// CurrentSessionsForWork excludes superseded koplugin revisions.
+func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
+		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		 FROM sessions s WHERE user_id = ? AND work_id = ?
+		   AND (source_key IS NULL OR session_id = (
+		       SELECT ss.session_id FROM session_supersessions ss
+		       WHERE ss.user_id = s.user_id AND ss.source_key = s.source_key
+		       ORDER BY ss.revision DESC LIMIT 1))
+		 ORDER BY started_at DESC LIMIT ?`),
+		userID, workID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Session
+	for rows.Next() {
+		var ses store.Session
+		var origin string
+		if err := rows.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
+			&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
+			&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
+			return nil, err
+		}
+		ses.Origin = store.Origin(origin)
+		out = append(out, ses)
+	}
+	return out, rows.Err()
+}
+
 // SessionsInRange returns sessions overlapping [from, to), oldest first.
 func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx, q(
@@ -106,6 +150,10 @@ func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to tim
 		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
 		 FROM sessions
 		 WHERE user_id = ? AND ended_at > ? AND started_at < ?
+		   AND (source_key IS NULL OR session_id = (
+		       SELECT ss.session_id FROM session_supersessions ss
+		       WHERE ss.user_id = sessions.user_id AND ss.source_key = sessions.source_key
+		       ORDER BY ss.revision DESC LIMIT 1))
 		 ORDER BY started_at`), userID, from.UTC(), to.UTC())
 	if err != nil {
 		return nil, err

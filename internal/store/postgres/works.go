@@ -212,6 +212,24 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 		intoWorkID, userID, fromWorkID); err != nil {
 		return err
 	}
+	// Fold aged rollup totals into the target work (additive on day
+	// collisions) so merge never loses statistics.
+	if _, err := tx.ExecContext(ctx, q(
+		`INSERT INTO session_rollups (user_id, work_id, day, active_seconds, pages, prog_delta, session_count)
+		 SELECT user_id, ?, day, active_seconds, pages, prog_delta, session_count
+		 FROM session_rollups WHERE user_id = ? AND work_id = ?
+		 ON CONFLICT (user_id, work_id, day) DO UPDATE SET
+		     active_seconds = session_rollups.active_seconds + excluded.active_seconds,
+		     pages          = session_rollups.pages + excluded.pages,
+		     prog_delta     = session_rollups.prog_delta + excluded.prog_delta,
+		     session_count  = session_rollups.session_count + excluded.session_count`),
+		intoWorkID, userID, fromWorkID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`DELETE FROM session_rollups WHERE user_id = ? AND work_id = ?`), userID, fromWorkID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, q(
 		`DELETE FROM works WHERE user_id = ? AND id = ?`), userID, fromWorkID); err != nil {
 		return err

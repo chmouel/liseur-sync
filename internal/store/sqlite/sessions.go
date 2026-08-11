@@ -23,8 +23,21 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 	defer tx.Rollback()
 	now := formatTime(time.Now())
 	for _, ses := range ss {
-		var found int
+		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx,
+			`SELECT fingerprint FROM session_tombstones WHERE user_id = ? AND session_id = ?`,
+			userID, ses.SessionID).Scan(&archivedFingerprint)
+		if err == nil {
+			if archivedFingerprint != store.SessionFingerprint(ses) {
+				return store.ErrIDMismatch
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var found int
+		err = tx.QueryRowContext(ctx,
 			`SELECT COUNT(1) FROM sessions WHERE user_id = ? AND session_id = ?`,
 			userID, ses.SessionID).Scan(&found)
 		if err != nil {
@@ -58,11 +71,11 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 
 func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Session) (bool, error) {
 	var (
-		workID, devID, origin         string
-		started, ended                string
-		sp, ep                        float64
-		idle                          int64
-		edSHA, oalias, skey           sql.NullString
+		workID, devID, origin string
+		started, ended        string
+		sp, ep                float64
+		idle                  int64
+		edSHA, oalias, skey   sql.NullString
 	)
 	err := tx.QueryRowContext(ctx,
 		`SELECT work_id, edition_sha, device_id, started_at, ended_at,
@@ -86,6 +99,33 @@ func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limi
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
 		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
 		 FROM sessions WHERE user_id = ? AND work_id = ? ORDER BY started_at DESC LIMIT ?`,
+		userID, workID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Session
+	for rows.Next() {
+		ses, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ses)
+	}
+	return out, rows.Err()
+}
+
+// CurrentSessionsForWork excludes superseded koplugin revisions.
+func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
+		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		 FROM sessions s WHERE user_id = ? AND work_id = ?
+		   AND (source_key IS NULL OR session_id = (
+		       SELECT ss.session_id FROM session_supersessions ss
+		       WHERE ss.user_id = s.user_id AND ss.source_key = s.source_key
+		       ORDER BY ss.revision DESC LIMIT 1))
+		 ORDER BY started_at DESC LIMIT ?`,
 		userID, workID, limit)
 	if err != nil {
 		return nil, err
@@ -141,6 +181,10 @@ func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to tim
 		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
 		 FROM sessions
 		 WHERE user_id = ? AND ended_at > ? AND started_at < ?
+		   AND (source_key IS NULL OR session_id = (
+		       SELECT ss.session_id FROM session_supersessions ss
+		       WHERE ss.user_id = sessions.user_id AND ss.source_key = sessions.source_key
+		       ORDER BY ss.revision DESC LIMIT 1))
 		 ORDER BY started_at`, userID, formatTime(from), formatTime(to))
 	if err != nil {
 		return nil, err

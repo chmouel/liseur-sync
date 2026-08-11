@@ -78,3 +78,9 @@ liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats p
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start (non-zero exit, clear log) rather
 than run against a partially migrated schema. Back up before upgrades.
+
+Compaction and session rollups delete old rows, and SQLite reuses those
+freed pages for future writes, so steady-state growth is bounded. The
+database file does not automatically shrink below its high-water size;
+use the documented `VACUUM INTO` backup procedure if physical shrinking
+is ever needed.

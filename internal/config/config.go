@@ -41,11 +41,11 @@ type Config struct {
 	OpenRegistration bool `toml:"open_registration"`
 
 	Ops struct {
-		MaxBatch           int `toml:"max_batch"`            // default 500
+		MaxBatch           int   `toml:"max_batch"`            // default 500
 		MaxBodyBytes       int64 `toml:"max_body_bytes"`       // default 1 MiB
 		MaxLocatorBytes    int   `toml:"max_locator_bytes"`    // default 16 KiB
 		RetentionDays      int   `toml:"retention_days"`       // default 180
-		CompactionEnabled  bool  `toml:"compaction_enabled"`   // default false until M4
+		CompactionEnabled  bool  `toml:"compaction_enabled"`   // default true
 		InferenceGapMin    int   `toml:"inference_gap_min"`    // default 15
 		InferenceLateHours int   `toml:"inference_late_hours"` // default 24
 	} `toml:"ops"`
@@ -65,7 +65,7 @@ func Default() Config {
 	c.Ops.MaxBodyBytes = 1 << 20
 	c.Ops.MaxLocatorBytes = 16 << 10
 	c.Ops.RetentionDays = 180
-	c.Ops.CompactionEnabled = false
+	c.Ops.CompactionEnabled = true
 	c.Ops.InferenceGapMin = 15
 	c.Ops.InferenceLateHours = 24
 	c.PairingCodeTTLMin = 15

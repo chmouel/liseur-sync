@@ -5,16 +5,23 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
 // Common sentinel errors.
 var (
 	ErrNotFound   = errors.New("store: not found")
-	ErrConflict   = errors.New("store: conflict")             // uniqueness or state conflict
+	ErrConflict   = errors.New("store: conflict") // uniqueness or state conflict
 	ErrIDMismatch = errors.New("store: idempotent id reused with different payload")
 )
+
+// TokenPurgeGrace is how long expired or revoked tokens remain listed
+// (for the UI) before Housekeep deletes them.
+const TokenPurgeGrace = 30 * 24 * time.Hour
 
 // Scope is a token scope.
 type Scope string
@@ -123,6 +130,43 @@ type Session struct {
 	ReceivedAt  time.Time
 }
 
+// SessionFingerprint identifies the immutable client payload. It is
+// retained after rollup so old inferred/native sessions remain
+// idempotent without keeping their full rows.
+func SessionFingerprint(s Session) string {
+	edition, alias, source := "", "", ""
+	if s.EditionSHA != nil {
+		edition = *s.EditionSHA
+	}
+	if s.OriginAlias != nil {
+		alias = *s.OriginAlias
+	}
+	if s.SourceKey != nil {
+		source = *s.SourceKey
+	}
+	raw := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.17g\x00%.17g\x00%d\x00%s\x00%s\x00%s",
+		s.WorkID, edition, s.DeviceID, s.StartedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano),
+		s.EndedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), s.SessionID, s.StartProg, s.EndProg,
+		s.IdleMs, s.Origin, alias, source)
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+// SessionRollup is a per-(work, tz-local day) aggregate of sessions
+// older than the retention window. Raw session rows past the horizon
+// are reduced to these daily totals; days are fixed in the user's
+// timezone at rollup time and are not re-bucketed if the user later
+// changes timezone.
+type SessionRollup struct {
+	UserID        string
+	WorkID        string
+	Day           string // YYYY-MM-DD
+	ActiveSeconds float64
+	Pages         float64
+	ProgDelta     float64
+	SessionCount  int64
+}
+
 // OpResult is the per-item outcome of a batch push.
 type OpResult struct {
 	OpID   string
@@ -208,7 +252,23 @@ type Store interface {
 	AppendSessions(ctx context.Context, userID string, ss []Session) error
 	SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]Session, error)
 	SessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
+	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	EditionBySHA(ctx context.Context, userID, sha256 string) (Edition, error)
+
+	// Session rollups (retention). SessionsEndedBefore feeds the rollup
+	// job; ApplyRollups additively upserts daily aggregates and deletes
+	// the rolled-up raw sessions in one transaction (supersession rows
+	// cascade). Day bounds are inclusive YYYY-MM-DD strings.
+	SessionsEndedBefore(ctx context.Context, userID string, before time.Time) ([]Session, error)
+	ApplyRollups(ctx context.Context, userID string, rollups []SessionRollup, deleteSessions []Session) error
+	RollupsInRange(ctx context.Context, userID, fromDay, toDay string) ([]SessionRollup, error)
+	RollupsForWork(ctx context.Context, userID, workID string) ([]SessionRollup, error)
+
+	// Housekeep deletes expired auth debris: expired pairing codes,
+	// expired or revoked auth sessions, and tokens expired/revoked more
+	// than TokenPurgeGrace ago. Global (all users) by design, like
+	// UserIDs: it runs from the background maintenance loop.
+	Housekeep(ctx context.Context, now time.Time) error
 
 	// Auth sessions (login credentials and web sessions).
 	CreateAuthSession(ctx context.Context, a AuthSession) error
@@ -231,13 +291,13 @@ type Store interface {
 // statistics plugin adapter. Upload-only; the request's device_id is
 // derived from this row.
 type KopluginDevice struct {
-	ID           string
-	UserID       string
-	TokenSHA256  string
-	Label        string
-	DeviceID     string
-	CreatedAt    time.Time
-	RevokedAt    *time.Time
+	ID          string
+	UserID      string
+	TokenSHA256 string
+	Label       string
+	DeviceID    string
+	CreatedAt   time.Time
+	RevokedAt   *time.Time
 }
 
 // PairingCode is a one-time code used to bind a kosync device slot.
@@ -280,7 +340,7 @@ type Identifier struct {
 
 // WorkSummary is a work plus its current head position for list views.
 type WorkSummary struct {
-	Work       Work
+	Work        Work
 	Progression *float64 // newest op's progression, nil if none
 	LastActive  *time.Time
 	Pending     bool

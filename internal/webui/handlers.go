@@ -28,27 +28,37 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 	var sum SummaryData
 	sum.RangeDays = 30
 	dayMin := map[string]float64{}
+	loc := userLoc(u)
 	for _, ses := range sessions {
-		active := ses.EndedAt.Sub(ses.StartedAt).Seconds() - float64(ses.IdleMs)/1000
-		if active < 0 {
-			active = 0
-		}
+		active := sessionActiveSeconds(ses)
 		sum.ActiveMinutes += active / 60
 		sum.Sessions++
-		loc := userLoc(u)
 		dayMin[ses.StartedAt.In(loc).Format("2006-01-02")] += active / 60
+	}
+	if rollups, err := s.St.RollupsInRange(r.Context(), u.ID,
+		from.In(loc).Format("2006-01-02"), now.In(loc).Format("2006-01-02")); err == nil {
+		for _, ru := range rollups {
+			sum.ActiveMinutes += ru.ActiveSeconds / 60
+			sum.Sessions += int(ru.SessionCount)
+			dayMin[ru.Day] += ru.ActiveSeconds / 60
+		}
 	}
 	sum.StreakDays = streakFrom(dayMin, u, now)
 
 	// Year heatmap.
-	loc := userLoc(u)
 	yearStart := time.Date(now.In(loc).Year(), 1, 1, 0, 0, 0, 0, loc)
 	yearSessions, err := s.St.SessionsInRange(r.Context(), u.ID, yearStart, now)
 	if err == nil {
 		yearMin := map[string]float64{}
 		for _, ses := range yearSessions {
 			yearMin[ses.StartedAt.In(loc).Format("2006-01-02")] +=
-				ses.EndedAt.Sub(ses.StartedAt).Minutes()
+				sessionActiveSeconds(ses) / 60
+		}
+		if rollups, err := s.St.RollupsInRange(r.Context(), u.ID,
+			yearStart.Format("2006-01-02"), now.In(loc).Format("2006-01-02")); err == nil {
+			for _, ru := range rollups {
+				yearMin[ru.Day] += ru.ActiveSeconds / 60
+			}
 		}
 		var heat []DayCell
 		for d := yearStart; !d.After(now); d = d.AddDate(0, 0, 1) {
@@ -81,6 +91,14 @@ func userLoc(u *store.User) *time.Location {
 		return time.UTC
 	}
 	return loc
+}
+
+func sessionActiveSeconds(ses store.Session) float64 {
+	active := ses.EndedAt.Sub(ses.StartedAt).Seconds() - float64(ses.IdleMs)/1000
+	if active < 0 {
+		return 0
+	}
+	return active
 }
 
 func streakFrom(dayMin map[string]float64, u *store.User, now time.Time) int {
@@ -127,19 +145,27 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		http.NotFound(w, r)
 		return
 	}
-	sessions, _ := s.St.SessionsForWork(r.Context(), u.ID, workID, 10_000)
+	sessions, _ := s.St.CurrentSessionsForWork(r.Context(), u.ID, workID, 10_000)
 	var d WorkDetail
 	d.Work = wk
 	d.Sessions = len(sessions)
 	var progDelta float64
 	for _, ses := range sessions {
-		d.Minutes += ses.EndedAt.Sub(ses.StartedAt).Minutes()
+		d.Minutes += sessionActiveSeconds(ses) / 60
 		if delta := ses.EndProg - ses.StartProg; delta > 0 {
 			progDelta += delta
 			if ses.EditionSHA != nil {
 				if ed, err := s.St.EditionBySHA(r.Context(), u.ID, *ses.EditionSHA); err == nil && ed.PageCount != nil {
 					d.Pages += delta * float64(*ed.PageCount)
 				}
+			}
+		}
+		if rollups, err := s.St.RollupsForWork(r.Context(), u.ID, workID); err == nil {
+			for _, ru := range rollups {
+				d.Sessions += int(ru.SessionCount)
+				d.Minutes += ru.ActiveSeconds / 60
+				d.Pages += ru.Pages
+				progDelta += ru.ProgDelta
 			}
 		}
 	}
@@ -158,7 +184,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	var opRows []OpRow
 	for _, o := range ops {
 		row := OpRow{
-			When: o.ReceivedAt.In(loc).Format("Jan 2 15:04"),
+			When:     o.ReceivedAt.In(loc).Format("Jan 2 15:04"),
 			DeviceID: o.DeviceID, Origin: string(o.Origin),
 			Progression: o.Progression,
 		}

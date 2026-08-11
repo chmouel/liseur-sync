@@ -64,9 +64,11 @@ of them.
   that can read across users (the few global lookups — token/auth
   hashes, `UserIDs`, `ListUsers` — exist for auth and background jobs
   and are documented as such).
-- **The op log and sessions are append-only.** Same id with a different
-  payload is a conflict, never an overwrite. koplugin revisions become
-  new rows in `session_supersessions`, never updates.
+- **The op log and sessions are append-only within their retention
+  windows.** Same id with a different payload is a conflict, never an
+  overwrite. Aged immutable sessions become daily rollup totals plus
+  compact idempotency tombstones; koplugin revisions remain raw and
+  become new rows in `session_supersessions`, never updates.
 - **`seq` is never renumbered**, including by compaction. Heads (newest
   op per work+device) are never compacted.
 - **Adapters write native records only.** No legacy wire shape is stored
