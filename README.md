@@ -12,6 +12,20 @@ SQLite by default, PostgreSQL optional. Multi-user.
 
 ## Quick start
 
+The easiest way is the installer — it detects Docker (or sets up
+rootless Podman + a systemd user service), asks which database you
+want, starts the server, and walks you through creating your first
+user and device credentials:
+
+```
+curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/install.sh | bash
+```
+
+(or clone the repo and run `scripts/install.sh`; pin a release with
+`LISEUR_VERSION=vX.Y.Z`.)
+
+### Manual
+
 ```
 go build ./cmd/liseur-sync
 ./liseur-sync admin create-user alice        # password via prompt

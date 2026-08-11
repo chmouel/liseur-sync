@@ -1,5 +1,24 @@
 # Deploying liseur-sync
 
+## Install script
+
+`scripts/install.sh` automates the two most common setups: Docker
+Compose (sqlite or bundled-postgres profile) when Docker is present,
+and a rootless Podman + systemd user quadlet otherwise (it offers to
+install podman). It starts the server, waits for `/healthz`, and
+optionally creates the first user, a device token, and a kosync
+pairing code.
+
+```
+curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/install.sh | bash
+```
+
+Knobs: `LISEUR_VERSION` (image tag, default `latest`), `LISEUR_REF`
+(git ref for the fetched `compose.yaml`, default `main`),
+`LISEUR_COMPOSE_URL` (full URL override), and `--yes --db=…
+--runtime=… --port=…` for non-interactive runs. The rest of this
+document applies regardless of how the server was installed.
+
 ## Postures
 
 One static binary, one config file, one database. Three supported
