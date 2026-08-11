@@ -107,8 +107,10 @@ func (s *Server) HandleResolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if len(ordered) == 1 {
-		// Single hit: register remaining identifiers as aliases.
+	if len(distinct) == 1 {
+		// All hits agree on one work: register remaining identifiers as
+		// aliases. Confidence comes from the highest-priority hit, so a
+		// sha256 match stays "high" even when a ta alias also hit.
 		workID := ordered[0].workID
 		conf := "high"
 		if ordered[0].kind == "ta" {
