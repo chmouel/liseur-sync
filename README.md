@@ -44,7 +44,7 @@ docker compose --profile external up -d      # your existing Postgres
 Setup details (TLS, pairing KOReader, backups) are in
 [docs/deployment.md](docs/deployment.md). 
 
-### Integration
+## Integration
 
 Reference implement is [liseur](https://github.com/chmouel/liseur) for clients authors: see
 [docs/integrating.md](docs/integrating.md) and the OpenAPI spec in [docs/openapi.yaml](docs/openapi.yaml).
