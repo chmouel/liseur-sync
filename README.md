@@ -48,8 +48,7 @@ Setup details (TLS, pairing KOReader, backups) are in
 
 ## Security
 
-Report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Do
-not open a public issue.
+See [SECURITY.md](SECURITY.md). Do not open a public issue.
 
 ## License
 
