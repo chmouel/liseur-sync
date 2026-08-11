@@ -32,6 +32,10 @@ The design rationale (why the API looks like this) is in
    `secret`; it is shown once. Add `read-insights` scope on a separate
    token if your client displays statistics.
 
+   `admin` is not self-grantable: requesting it returns `403` unless
+   the caller already holds an admin token. The first one comes from
+   `liseur-sync admin mint-token -scope admin`. Clients never need it.
+
 All API calls then use `Authorization: Bearer <token secret>`.
 
 ## Position sync

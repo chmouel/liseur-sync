@@ -328,7 +328,9 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   "Liseur pixel8"). Native API auth is `Authorization: Bearer <token>`.
 - Tokens carry scopes: `sync` (ops + sessions), `read-insights`,
   `admin`. A device token is `sync` only; a stolen e-reader cannot
-  delete the account.
+  delete the account. `admin` is never self-grantable: minting one
+  requires an existing admin token or the admin CLI, so a login
+  credential alone can never escalate.
 
 ### 8.2 Instance posture
 
@@ -337,7 +339,10 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   origin allowlist for the (future) web UI.
 - Registration is invite-only by default (admin-generated codes).
 - Per-token and per-IP rate limits on auth endpoints; constant-time
-  compares on all credential checks.
+  compares on all credential checks. Every path that verifies a
+  password shares one rate-limit budget and burns the same argon2id
+  work for an unknown username, so neither surface is a way around the
+  other or a user-enumeration oracle.
 - All data strictly scoped by `user_id` at the query layer — the lesson
   of KoInsight's open `DELETE /api/books/:id`.
 
@@ -361,6 +366,12 @@ The server never redirects API routes (the Liseur client work showed
 OkHttp will happily carry custom auth headers like `x-auth-key` across
 redirects; well-behaved servers should not create that trap). `301`s
 exist only on the web UI.
+
+Credentials never reach a log. The koplugin adapter is the one place a
+secret rides in the URL path (stock KOReader can only be pointed at a
+URL), so any path the server logs goes through a redactor first, and
+the deployment docs show the equivalent rule for the proxy's access
+log.
 
 ## 9. Implementation shape
 

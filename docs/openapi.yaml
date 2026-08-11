@@ -120,6 +120,11 @@ paths:
         secret is returned once; store it. Each token is bound to a
         server-generated `device_id` that stamps every op and session it
         pushes.
+
+        `admin` scope may only be requested by a caller who already
+        holds an active admin token; otherwise the request is refused
+        with `403`. The first admin token on an instance is minted with
+        `liseur-sync admin mint-token -scope admin`.
       security: [{ loginAuth: [] }]
       requestBody:
         required: true
@@ -148,6 +153,15 @@ paths:
                   expires_at: { type: [string, "null"], format: date-time }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403":
+          description: |
+            `admin` scope requested by a caller who is not already an
+            admin.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { error: { type: string } }
     get:
       tags: [auth]
       summary: List your tokens
@@ -567,7 +581,10 @@ components:
     Scope:
       type: string
       enum: [sync, read-insights, admin]
-      description: "`admin` implies all others; a `sync` token cannot read insights"
+      description: |
+        `admin` implies all others; a `sync` token cannot read
+        insights. `admin` cannot be self-granted: creating one requires
+        an existing admin token or the admin CLI.
     Identifier:
       type: object
       required: [kind, value]
