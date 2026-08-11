@@ -28,7 +28,11 @@ type resolveResponse struct {
 	Created    bool   `json:"created"`
 }
 
-var aliasOrder = []string{"sha256", "partial-md5", "dc", "ta"}
+// aliasOrder resolves in decreasing strength. "source" is the catalog
+// server's own id for the book (e.g. "komga:<id>"): two devices browsing
+// the same catalog hold the same one, so it identifies the book without
+// either of them having downloaded the file.
+var aliasOrder = []string{"sha256", "partial-md5", "source", "dc", "ta"}
 
 // HandleResolve implements POST /v1/works/resolve. One transaction:
 // resolution in alias-priority order, first hit wins; all supplied
@@ -57,7 +61,7 @@ func (s *Server) HandleResolve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch kind {
-		case "sha256", "partial-md5", "dc", "ta":
+		case "sha256", "partial-md5", "source", "dc", "ta":
 		default:
 			writeError(w, http.StatusBadRequest, "unknown identifier kind "+kind)
 			return

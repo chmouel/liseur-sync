@@ -181,7 +181,7 @@ paths:
       summary: Resolve a file's identifiers to a work
       description: |
         Send every identifier you have for the file. Resolution order:
-        `sha256` → `partial-md5` → `dc` → `ta`; first hit wins, and all
+        `sha256` → `partial-md5` → `source` → `dc` → `ta`; first hit wins, and all
         supplied identifiers are then registered as aliases of the
         resolved work (this is how identity converges across re-encodes).
         Fuzzy `ta` matches return `confidence: low` — confirm with the
@@ -542,12 +542,15 @@ components:
       properties:
         kind:
           type: string
-          enum: [sha256, partial-md5, dc, ta]
+          enum: [sha256, partial-md5, source, dc, ta]
           description: |
             `sha256`: exact file bytes. `partial-md5`: KOReader
             fingerprint (`util.partialMD5`; note LuaJIT's first offset
             overflows to 0, so the first sample is the head of the
-            file). `dc`: the EPUB's dc:identifier (ISBN, UUID).
+            file). `source`: the catalog server's own id for the book
+            (e.g. `komga:<id>`), shared by devices browsing the same
+            catalog before any of them has the file. `dc`: the EPUB's
+            dc:identifier (ISBN, UUID).
             `ta`: normalised title+author (fuzzy).
 
             `ta` values are compared as exact strings and are never

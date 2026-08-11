@@ -112,6 +112,9 @@ harder.
   - `sha256:<hex>` — exact bytes (also the edition key)
   - `partial-md5:<hex>` — KOReader's fingerprint, registered so kosync
     adapter traffic resolves
+  - `source:<catalog-id>` — the catalog server's own id for the book
+    (e.g. `komga:<id>`); shared by devices browsing the same catalog
+    before any of them has downloaded the file
   - `dc:<urn>` — the EPUB's `dc:identifier` (ISBN, UUID, calibre ID)
   - `ta:<fingerprint>` — normalised title+author hash, the fuzzy fallback
 
@@ -120,7 +123,7 @@ harder.
 A client asks `POST /v1/works/resolve` with every identifier it has for
 a file. The server answers with the matching `work_id`, creating work,
 edition, and aliases as needed. Resolution order: `sha256` → `partial-md5`
-→ `dc` → `ta`. The first hit wins; all supplied identifiers are then
+→ `source` → `dc` → `ta`. The first hit wins; all supplied identifiers are then
 registered as aliases of the resolved work, which is how the graph
 converges over time.
 

@@ -55,11 +55,15 @@ POST /v1/works/resolve
 ```
 
 Send every identifier you can compute. The server tries them in
-priority order (sha256, partial-md5, dc, ta), and registers all of them
+priority order (sha256, partial-md5, source, dc, ta), and registers all
+of them
 on whichever work matches, so next time any variant of the file
 resolves directly. Compute `partial-md5` exactly like KOReader
 (`util.partialMD5`: 1024-byte samples at offsets 1024<<2i for
 i = -1..10) if you want to share identity with KOReader devices.
+`source` is the catalog server's own id for the book (e.g.
+`komga:<id>`), useful when several devices browse the same catalog:
+they share it before any of them has downloaded the file.
 
 Note that in LuaJIT the first of those offsets is not 256 but 0:
 `lshift(1024, -2)` is masked to a shift of 30, which overflows 32 bits
