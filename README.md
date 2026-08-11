@@ -46,6 +46,11 @@ Setup details (TLS, pairing KOReader, backups) are in
 [docs/integrating.md](docs/integrating.md) and the OpenAPI spec in
 [docs/openapi.yaml](docs/openapi.yaml).
 
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](SECURITY.md). Do
+not open a public issue.
+
 ## License
 
 MIT
