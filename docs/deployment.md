@@ -36,7 +36,9 @@ Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
 
 Terminate TLS at a reverse proxy. The app publishes on localhost only.
 Add your proxy's addresses to `trusted_proxies` so the app can see the
-real scheme; without that it refuses credential traffic as insecure.
+real scheme; without that it refuses credential traffic as insecure —
+that includes the whole `/ui` surface, not just the login form, and the
+session cookie is issued with `Secure` unless `insecure_http` is set.
 
 Caddy example:
 
@@ -46,8 +48,8 @@ reader.example.com {
 }
 ```
 
-nginx example — note the koplugin capability URLs carry a secret in the
-path, so redact it from access logs:
+nginx example — the koplugin capability URLs carry a secret in the
+path. The app redacts it from its own logs; do the same at the proxy:
 
 ```nginx
 map $uri $redacted_uri {
