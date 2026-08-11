@@ -555,3 +555,51 @@ func TestSessionRollupPreservesTotals(t *testing.T) {
 		t.Fatalf("unexpected totals: %+v", got)
 	}
 }
+
+// TestAdminScopeNotSelfMintable is a regression test for a privilege
+// escalation: POST /v1/tokens accepted scope=admin from any user
+// holding an ordinary login credential. Admin scope implies every
+// other scope and unlocks the instance-wide admin pages, so it must
+// only be mintable by an existing admin (or the admin CLI).
+func TestAdminScopeNotSelfMintable(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	if err := st.CreateUser(ctx, store.User{
+		ID: "u1", Name: "alice", Argon2Hash: hash, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	login := func() string {
+		code, out := post(t, ts.URL+"/v1/login", "", map[string]string{
+			"username": "alice", "password": "hunter2hunter",
+		})
+		if code != 200 {
+			t.Fatalf("login: %d %v", code, out)
+		}
+		return out["auth_token"].(string)
+	}
+
+	code, out := post(t, ts.URL+"/v1/tokens", login(), map[string]string{
+		"name": "escalate", "scope": "admin",
+	})
+	if code != http.StatusForbidden {
+		t.Fatalf("self-minted admin token: want 403, got %d %v", code, out)
+	}
+	// Ordinary scopes still work.
+	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]string{
+		"name": "Boox Palma", "scope": "sync",
+	}); code != 201 {
+		t.Fatalf("sync token: want 201, got %d %v", code, out)
+	}
+
+	// An existing admin may mint another admin token.
+	if _, _, err := auth.NewService(st).MintToken(ctx, "u1", "cli", store.ScopeAdmin, nil); err != nil {
+		t.Fatal(err)
+	}
+	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]string{
+		"name": "second admin", "scope": "admin",
+	}); code != 201 {
+		t.Fatalf("admin minting admin: want 201, got %d %v", code, out)
+	}
+}

@@ -113,6 +113,30 @@ func (s *Service) MintToken(ctx context.Context, userID, name string, scope stor
 	return secret, tok, nil
 }
 
+// IsAdmin reports whether the user holds an active admin-scope token.
+// This is the single definition of "is an admin" — the API's admin
+// scope gate and the web UI's admin pages both go through it, so a
+// user can never bootstrap admin rights for themselves. Admin tokens
+// are minted out of band by `liseur-sync admin mint-token -scope
+// admin`.
+func (s *Service) IsAdmin(ctx context.Context, userID string) (bool, error) {
+	toks, err := s.St.ListTokens(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	now := s.Now()
+	for _, t := range toks {
+		if t.Scope != store.ScopeAdmin || t.RevokedAt != nil {
+			continue
+		}
+		if t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // AuthenticateToken validates a bearer secret and returns its token.
 // Revoked and expired tokens are rejected; last_used is touched.
 func (s *Service) AuthenticateToken(ctx context.Context, secret string) (store.Token, error) {

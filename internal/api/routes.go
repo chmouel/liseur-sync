@@ -56,7 +56,8 @@ func cutBearer(h string) (string, bool) {
 
 // HandleCreateToken implements POST /v1/tokens (login-credential auth).
 func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.loginAuth(r); !ok {
+	userID, ok := s.loginAuth(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "invalid auth credential")
 		return
 	}
@@ -79,6 +80,20 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, "scope must be sync|read-insights|admin")
 		return
+	}
+	// A login credential alone must never be able to escalate: admin
+	// scope implies every other scope and unlocks the instance-wide
+	// admin pages, so minting one requires already being an admin.
+	if scope == store.ScopeAdmin {
+		isAdmin, err := s.Auth.IsAdmin(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "token creation failed")
+			return
+		}
+		if !isAdmin {
+			writeError(w, http.StatusForbidden, "admin scope requires an existing admin token")
+			return
+		}
 	}
 	var expires *time.Time
 	if req.ExpiresIn > 0 {
