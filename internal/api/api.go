@@ -3,6 +3,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -41,6 +42,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// LogServerErrors wraps a handler and logs every 5xx response, so a
+// failing endpoint shows up in the server log instead of only on the
+// client.
+func LogServerErrors(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		if sw.status >= 500 {
+			slog.Error("request failed", "method", r.Method, "path", r.URL.Path, "status", sw.status)
+		}
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }
 
 // opJSON is the wire shape of an op (design §5.1).

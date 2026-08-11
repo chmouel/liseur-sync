@@ -141,6 +141,32 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Fatalf("re-resolve: %d %v", code, out)
 	}
 
+	// A second device resolving the same file sends identifiers that
+	// *all* hit the same work. This must reuse the work, not fall
+	// through to creation and die on duplicate aliases.
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "sha256", "value": "abc123"},
+			{"kind": "partial-md5", "value": "ffff"},
+			{"kind": "ta", "value": "a memory called empire|arkady martine"},
+		},
+		"title":  "A Memory Called Empire",
+		"author": "Arkady Martine",
+	})
+	if code != 200 || out["work_id"] != workID || out["created"] != false || out["confidence"] != "high" {
+		t.Fatalf("second-device resolve: %d %v", code, out)
+	}
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "sha256", "value": "abc123"},
+			{"kind": "partial-md5", "value": "ffff"},
+			{"kind": "ta", "value": "a memory called empire|arkady martine"},
+		},
+	})
+	if code != 200 || out["work_id"] != workID {
+		t.Fatalf("second-device re-resolve: %d %v", code, out)
+	}
+
 	// Push an op.
 	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
 		"ops": []map[string]any{{

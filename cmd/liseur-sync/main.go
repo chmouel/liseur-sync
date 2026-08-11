@@ -102,7 +102,7 @@ func cmdServe(args []string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           mux,
+		Handler:           api.LogServerErrors(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
