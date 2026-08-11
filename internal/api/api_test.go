@@ -167,6 +167,32 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Fatalf("second-device re-resolve: %d %v", code, out)
 	}
 
+	// The first device also registers the catalog's own id for the book.
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "sha256", "value": "abc123"},
+			{"kind": "source", "value": "komga:0K1QJDF1TW3Rit"},
+		},
+	})
+	if code != 200 || out["work_id"] != workID {
+		t.Fatalf("source registration: %d %v", code, out)
+	}
+
+	// A device that browses the same catalog but has not downloaded the
+	// file has no hashes to offer — only the catalog id and the title.
+	// The catalog id alone must identify the book with high confidence.
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "source", "value": "komga:0K1QJDF1TW3Rit"},
+			{"kind": "ta", "value": "a memory called empire|arkady martine"},
+		},
+		"title":  "A Memory Called Empire",
+		"author": "Arkady Martine",
+	})
+	if code != 200 || out["work_id"] != workID || out["confidence"] != "high" {
+		t.Fatalf("catalog-only resolve: %d %v", code, out)
+	}
+
 	// Push an op.
 	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
 		"ops": []map[string]any{{
