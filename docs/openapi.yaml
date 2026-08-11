@@ -185,7 +185,10 @@ paths:
         supplied identifiers are then registered as aliases of the
         resolved work (this is how identity converges across re-encodes).
         Fuzzy `ta` matches return `confidence: low` — confirm with the
-        user before treating it as authoritative.
+        user before treating it as authoritative. On a low match nothing
+        is registered, so a guess cannot be laundered into a certainty;
+        send `confirmed: true` once the user has said it is the same
+        book, and the match resolves high and registers the identifiers.
 
         If the identifiers resolve to more than one distinct work, the
         server answers 409 with the conflicting work ids and changes

@@ -94,7 +94,10 @@ Two responses need care:
 - `confidence: "low"` means only a title+author match was found. Show a
   "same book?" confirmation before merging reading state, and remember
   a refusal: a client that forgets it will resolve the same book again
-  on its next run and ask the same question forever.
+  on its next run and ask the same question forever. Nothing was
+  registered on a low match; once the user says yes, resolve again with
+  `confirmed: true` and the same identifiers — the match comes back
+  high and the identifiers are registered.
 - `409` with a `works` array means your identifiers map to two
   different works (usually a fuzzy false positive). Nothing was
   changed. Ask the user, then either resolve with a narrower identifier

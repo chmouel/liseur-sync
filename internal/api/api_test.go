@@ -193,6 +193,45 @@ func TestFullSyncFlow(t *testing.T) {
 		t.Fatalf("catalog-only resolve: %d %v", code, out)
 	}
 
+	// A fuzzy, unconfirmed hit is a guess: the stronger identifiers
+	// sent along with it must not be registered, or the next resolve
+	// would match on one of them and launder the guess into a fact.
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "sha256", "value": "dddd"},
+			{"kind": "ta", "value": "a memory called empire|arkady martine"},
+		},
+	})
+	if code != 200 || out["work_id"] != workID || out["confidence"] != "low" {
+		t.Fatalf("fuzzy resolve: %d %v", code, out)
+	}
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{{"kind": "sha256", "value": "dddd"}},
+		"title":       "Some Other Edition",
+	})
+	if code != 201 || out["created"] != true {
+		t.Fatalf("guessed sha must not have been registered: %d %v", code, out)
+	}
+
+	// The reader's word makes the same fuzzy match a real one, and the
+	// stronger identifiers are registered on it.
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{
+			{"kind": "source", "value": "komga:9XkPa22TR"},
+			{"kind": "ta", "value": "a memory called empire|arkady martine"},
+		},
+		"confirmed": true,
+	})
+	if code != 200 || out["work_id"] != workID || out["confidence"] != "high" {
+		t.Fatalf("confirmed resolve: %d %v", code, out)
+	}
+	code, out = post(t, ts.URL+"/v1/works/resolve", devTok, map[string]any{
+		"identifiers": []map[string]string{{"kind": "source", "value": "komga:9XkPa22TR"}},
+	})
+	if code != 200 || out["work_id"] != workID {
+		t.Fatalf("confirmed registration: %d %v", code, out)
+	}
+
 	// Push an op.
 	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
 		"ops": []map[string]any{{
