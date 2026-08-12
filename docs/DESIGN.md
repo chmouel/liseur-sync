@@ -119,7 +119,9 @@ kosync adapter so stock KOReader devices participate without modification.**
   [ADR-0003](adr/0003-catalog-work-identity.md).
 - **Ingestion is durable and bounded.** Uploads and watched files pass
   through the same persistent state machine and security limits in
-  [ADR-0005](adr/0005-upload-and-ingestion.md).
+  [ADR-0005](adr/0005-upload-and-ingestion.md). Watched sources remain
+  untouched, but downloads use immutable validated CAS snapshots rather than
+  mutable source paths.
 
 ## 4. Identity: works, editions, aliases
 
@@ -485,7 +487,7 @@ library_access   library_id, user_id, role(read|manage)
 books            id, library_id, status, metadata fields + source/lock data
 blobs            sha256 PK, size, created_at, orphaned_at?
 blob_reservations quota_user_id, blob_sha256, bytes
-book_files       id, book_id, blob_sha256? or watched-relative-path, availability
+book_files       id, book_id, blob_sha256, source_relative_path?, availability
 user_book_works  user_id, book_id, work_id
 ingest_jobs      id, user_id, library_id, source, state, bytes, error, timestamps
 series           id, library_id, name
@@ -500,6 +502,12 @@ Cross-user work dedup is an optimisation, not a semantic.
 Catalog rows may be shared through library ACLs, but the
 `user_book_works` bridge keeps the work graph per-user. Physical blob
 deduplication likewise conveys no access or semantic sharing.
+
+Catalog metadata requires `library-read`. Work mappings, positions,
+completion, and reading-state filters additionally require `sync`; aggregate
+statistics require `read-insights`. OPDS feeds remain metadata-only
+regardless of extra token scopes and therefore cannot inspect private reading
+state.
 
 ### 9.3 Testing strategy
 

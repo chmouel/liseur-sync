@@ -85,7 +85,12 @@ SQLite uses FTS5 and PostgreSQL uses `tsvector`. Search covers title,
 subtitle, contributors, series, identifiers, tags, genres, and publisher.
 Indexes are updated transactionally with metadata changes. Results support
 filters for library, availability, series, contributor, language, tag,
-genre, and reading state.
+and genre. The native catalog API adds reading-state filters only when the
+requesting token also has `sync`; aggregated statistics require
+`read-insights`. OPDS never exposes sync-derived filters or fields,
+regardless of the authenticating token's additional scopes. A
+`library-read`-only native API token likewise cannot infer positions,
+mappings, completion, or reading history.
 
 ## Consequences
 
@@ -114,3 +119,4 @@ External metadata cannot be a required ingest dependency.
 - The official container verifies HTTPS provider connections with its shipped
   CA bundle.
 - SQLite and PostgreSQL search return equivalent results for shared fixtures.
+- Catalog-only search responses and filters expose no sync-derived state.
