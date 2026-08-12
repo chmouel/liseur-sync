@@ -73,6 +73,11 @@ Each phase is independently releasable. Route or payload changes update
 - Add admin commands for library creation, access grants, scans, maintenance,
   and backup verification.
 
+The scope-set migration and the catalog schema, ACL store operations, and
+atomic catalog-to-work resolution foundation are implemented. CAS file
+handling, ingestion workers, metadata parsing, GC, and admin commands remain
+in Phase 1.
+
 ### Phase 2: managed uploads and management UI
 
 - Add bounded upload endpoints and htmx drag-and-drop upload.
@@ -130,4 +135,3 @@ guessing.
   guarantees.
 - Every implementation phase points to a focused decision and a testable
   completion condition.
-

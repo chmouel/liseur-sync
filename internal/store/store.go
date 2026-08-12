@@ -138,6 +138,108 @@ type Token struct {
 	RevokedAt *time.Time
 }
 
+// LibraryKind controls whether content is server-managed or discovered from
+// an administrator-configured read-only root.
+type LibraryKind string
+
+const (
+	LibraryManaged LibraryKind = "managed"
+	LibraryWatched LibraryKind = "watched"
+)
+
+// LibraryRole is an ACL capability. Manage implies read.
+type LibraryRole string
+
+const (
+	LibraryRoleRead   LibraryRole = "read"
+	LibraryRoleManage LibraryRole = "manage"
+)
+
+func (r LibraryRole) Valid() bool {
+	return r == LibraryRoleRead || r == LibraryRoleManage
+}
+
+func (r LibraryRole) Allows(required LibraryRole) bool {
+	return r == LibraryRoleManage || r == required
+}
+
+// Library is one shared catalog namespace.
+type Library struct {
+	ID          string
+	OwnerUserID string
+	QuotaUserID string
+	Kind        LibraryKind
+	Name        string
+	RootPath    *string
+	ConfigJSON  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// AccessibleLibrary includes the caller's effective ACL role.
+type AccessibleLibrary struct {
+	Library Library
+	Role    LibraryRole
+}
+
+// BookStatus is the catalog lifecycle state.
+type BookStatus string
+
+const (
+	BookActive  BookStatus = "active"
+	BookMissing BookStatus = "missing"
+	BookTrashed BookStatus = "trashed"
+	BookReview  BookStatus = "review"
+)
+
+// MetadataSource records which precedence stage supplied a field.
+type MetadataSource string
+
+const (
+	MetadataEmbedded MetadataSource = "embedded"
+	MetadataFilename MetadataSource = "filename"
+	MetadataExternal MetadataSource = "external"
+	MetadataManual   MetadataSource = "manual"
+)
+
+// CatalogBook is shared through a library ACL. Its sync Work remains
+// user-scoped and is joined through UserBookWork.
+type CatalogBook struct {
+	ID                  string
+	LibraryID           string
+	Status              BookStatus
+	Title               string
+	TitleSource         MetadataSource
+	TitleLocked         bool
+	Subtitle            string
+	SubtitleSource      MetadataSource
+	SubtitleLocked      bool
+	Description         string
+	DescriptionSource   MetadataSource
+	DescriptionLocked   bool
+	Publisher           string
+	PublisherSource     MetadataSource
+	PublisherLocked     bool
+	PublishedDate       string
+	PublishedDateSource MetadataSource
+	PublishedDateLocked bool
+	RawMetadataJSON     []byte
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	TrashedAt           *time.Time
+	TrashExpiresAt      *time.Time
+}
+
+// UserBookWork is the privacy boundary between a shared catalog book and
+// one user's sync graph.
+type UserBookWork struct {
+	UserID    string
+	LibraryID string
+	BookID    string
+	WorkID    string
+	CreatedAt time.Time
+}
+
 // Work is the abstract book positions and statistics attach to.
 type Work struct {
 	ID        string
@@ -384,6 +486,21 @@ type Store interface {
 	RevokeToken(ctx context.Context, userID, tokenID string) error
 	TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error
 
+	// Catalog and ACLs.
+	CreateLibrary(ctx context.Context, library Library) error
+	LibraryByID(ctx context.Context, userID, libraryID string, required LibraryRole) (AccessibleLibrary, error)
+	ListLibraries(ctx context.Context, userID string, required LibraryRole) ([]AccessibleLibrary, error)
+	GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role LibraryRole, at time.Time) error
+	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
+	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
+	CatalogBookByID(ctx context.Context, userID, bookID string, required LibraryRole) (CatalogBook, error)
+	ListCatalogBooks(ctx context.Context, userID, libraryID string) ([]CatalogBook, error)
+	// ResolveCatalogBookWork resolves the user's work graph and inserts the
+	// catalog mapping in the same transaction. Low-confidence and conflicting
+	// resolutions do not mutate the graph or create a mapping.
+	ResolveCatalogBookWork(ctx context.Context, userID, bookID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool, at time.Time) (WorkResolution, error)
+	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
+
 	// Works / editions / aliases.
 	// ResolveWork atomically resolves identifiers ordered strongest-first,
 	// creates the proposed work when none match, and promotes missing aliases
@@ -516,6 +633,41 @@ type AuthSession struct {
 type Identifier struct {
 	Kind  string
 	Value string
+}
+
+// CatalogWorkIdentifiers adds the stable catalog source alias while
+// preserving the resolver's strongest-first identifier order.
+func CatalogWorkIdentifiers(bookID string, ids []Identifier) []Identifier {
+	stable := Identifier{Kind: "source", Value: "liseur-sync:" + bookID}
+	out := make([]Identifier, 0, len(ids)+1)
+	seen := make(map[string]bool, len(ids)+1)
+	appendKind := func(kind string) {
+		for _, id := range ids {
+			key := id.Kind + ":" + id.Value
+			if id.Kind == kind && !seen[key] {
+				seen[key] = true
+				out = append(out, id)
+			}
+		}
+	}
+	appendKind("sha256")
+	appendKind("partial-md5")
+	appendKind("source")
+	stableKey := stable.Kind + ":" + stable.Value
+	if !seen[stableKey] {
+		seen[stableKey] = true
+		out = append(out, stable)
+	}
+	appendKind("dc")
+	appendKind("ta")
+	for _, id := range ids {
+		key := id.Kind + ":" + id.Value
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // WorkSummary is a work plus its current head position for list views.

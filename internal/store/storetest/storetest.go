@@ -20,6 +20,10 @@ type OpenFunc func(t *testing.T) store.Store
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
+	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })
+	t.Run("AtomicCatalogWorkResolution", func(t *testing.T) {
+		testAtomicCatalogWorkResolution(t, open)
+	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })
@@ -107,6 +111,7 @@ func testTokens(t *testing.T, open OpenFunc) {
 		Scopes: store.ScopeSet{store.ScopeLibraryRead, store.ScopeSync, store.ScopeLibraryRead},
 		SHA256: "deadbeef", CreatedAt: time.Now(),
 	}
+
 	if err := s.CreateToken(ctx, tok); err != nil {
 		t.Fatal(err)
 	}

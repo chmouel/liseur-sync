@@ -185,8 +185,12 @@ The planned content catalog does not make works cross-user. Catalog
 reader's existing work graph. Catalog browse and download do not mutate sync
 identity. Before syncing or reporting sessions, a client with both
 `library-read` and `sync` explicitly runs the normal alias resolver in that
-user's namespace. The same shared book can therefore have different work IDs
-for different users without leaking either graph. See
+user's namespace. Resolution, alias promotion, and mapping insertion commit
+in one per-user graph transaction, which also records the stable
+`liseur-sync:<book_id>` source alias. Splits and merges repair mappings and
+that source alias in the same graph transaction. The same shared book can
+therefore have different work IDs for different users without leaking either
+graph. See
 [ADR-0003](adr/0003-catalog-work-identity.md).
 
 ## 5. Position sync
@@ -568,6 +572,12 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M10 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
 | M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
+
+M6 is in progress: compatible token scope sets and the shared catalog,
+metadata, blob, ingestion-job, ACL, and per-user work-mapping schema are
+implemented on SQLite and PostgreSQL, together with ACL-scoped store
+operations and atomic catalog resolution. Bounded extraction, CAS lifecycle,
+ingestion workers, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

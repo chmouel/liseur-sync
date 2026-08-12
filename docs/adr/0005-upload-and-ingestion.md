@@ -127,7 +127,8 @@ name a stable job and reason instead of losing state when a request ends.
 ## Implementation phases
 
 1. Job schema, worker loop, staging, CAS promotion, recovery, and
-   reconciliation.
+   reconciliation. The durable job and blob/reference schema is implemented;
+   workers, staging, promotion, recovery, and reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
