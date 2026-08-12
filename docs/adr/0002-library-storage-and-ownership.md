@@ -107,7 +107,12 @@ missing.
   source mutation can never serve unvalidated bytes. A later notification or
   sweep creates and validates a new snapshot, then reconciles identity before
   changing the catalog:
-  - the same hash at another path is a rename and preserves `book_id`;
+  - the same hash at another path is a rename only when a paired filesystem
+    rename event proves continuity or a complete sweep finds an unambiguous
+    one-missing-path to one-new-path match for that hash; zero-to-many,
+    many-to-one, and many-to-many matches are flagged for review and do not
+    transfer identity; if both paths exist, they remain distinct catalog
+    references that deduplicate to the same blob;
   - a new hash preserves `book_id` only when a stable embedded identifier
     agrees with the existing book or an administrator confirms the match;
   - an ambiguous replacement leaves the old snapshot available, records a
@@ -193,3 +198,5 @@ server disk allocation.
 - Scanner rename, missing-root, symlink, and ancestor-swap cases have tests.
 - Replacing a watched path with an unrelated valid EPUB cannot inherit the
   previous `book_id`, metadata, or user work mappings.
+- Identical EPUBs at two live paths remain distinct catalog references; hash
+  equality alone never proves a rename.
