@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -56,15 +57,16 @@ func cutBearer(h string) (string, bool) {
 
 // HandleCreateToken implements POST /v1/tokens (login-credential auth).
 func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
-	userID, ok := s.loginAuth(r)
+	_, ok := s.loginAuth(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "invalid auth credential")
 		return
 	}
 	var req struct {
-		Name      string `json:"name"`
-		Scope     string `json:"scope"`
-		ExpiresIn int    `json:"expires_in_seconds,omitempty"`
+		Name      string          `json:"name"`
+		Scope     *store.Scope    `json:"scope,omitempty"`
+		Scopes    *store.ScopeSet `json:"scopes,omitempty"`
+		ExpiresIn int             `json:"expires_in_seconds,omitempty"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -74,45 +76,39 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name required")
 		return
 	}
-	scope := store.Scope(req.Scope)
-	switch scope {
-	case store.ScopeSync, store.ScopeReadInsights, store.ScopeAdmin:
-	default:
-		writeError(w, http.StatusBadRequest, "scope must be sync|read-insights|admin")
+	scopes, err := requestedScopes(req.Scope, req.Scopes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-	// A login credential alone must never be able to escalate: admin
-	// scope implies every other scope and unlocks the instance-wide
-	// admin pages, so minting one requires already being an admin.
-	if scope == store.ScopeAdmin {
-		isAdmin, err := s.Auth.IsAdmin(r.Context(), userID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "token creation failed")
-			return
-		}
-		if !isAdmin {
-			writeError(w, http.StatusForbidden, "admin scope requires an existing admin token")
-			return
-		}
 	}
 	var expires *time.Time
 	if req.ExpiresIn > 0 {
 		t := time.Now().Add(time.Duration(req.ExpiresIn) * time.Second)
 		expires = &t
 	}
-	secret, tok, err := s.Auth.CreateToken(r.Context(), mustLoginSecret(r), req.Name, scope, expires)
+	secret, tok, err := s.Auth.CreateToken(r.Context(), mustLoginSecret(r), req.Name, scopes, expires)
 	if err != nil {
+		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "token creation failed")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"token_id":   tok.ID,
-		"device_id":  tok.DeviceID,
-		"name":       tok.Name,
-		"scope":      tok.Scope,
-		"secret":     secret, // shown once
-		"expires_at": expires,
-	})
+	response := struct {
+		TokenID   string         `json:"token_id"`
+		DeviceID  string         `json:"device_id"`
+		Name      string         `json:"name"`
+		Scope     *store.Scope   `json:"scope,omitempty"`
+		Scopes    store.ScopeSet `json:"scopes"`
+		Secret    string         `json:"secret"`
+		ExpiresAt *time.Time     `json:"expires_at"`
+	}{
+		TokenID: tok.ID, DeviceID: tok.DeviceID, Name: tok.Name,
+		Scope: legacyScope(tok.Scopes), Scopes: tok.Scopes,
+		Secret: secret, ExpiresAt: expires,
+	}
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func mustLoginSecret(r *http.Request) string {
@@ -133,21 +129,112 @@ func (s *Server) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type tj struct {
-		ID        string `json:"id"`
-		DeviceID  string `json:"device_id"`
-		Name      string `json:"name"`
-		Scope     string `json:"scope"`
-		CreatedAt string `json:"created_at"`
-		Revoked   bool   `json:"revoked"`
+		ID        string         `json:"id"`
+		DeviceID  string         `json:"device_id"`
+		Name      string         `json:"name"`
+		Scope     *store.Scope   `json:"scope,omitempty"`
+		Scopes    store.ScopeSet `json:"scopes"`
+		CreatedAt string         `json:"created_at"`
+		Revoked   bool           `json:"revoked"`
 	}
 	out := []tj{}
 	for _, t := range toks {
 		out = append(out, tj{
-			ID: t.ID, DeviceID: t.DeviceID, Name: t.Name, Scope: string(t.Scope),
+			ID: t.ID, DeviceID: t.DeviceID, Name: t.Name,
+			Scope: legacyScope(t.Scopes), Scopes: t.Scopes,
 			CreatedAt: t.CreatedAt.UTC().Format(time.RFC3339), Revoked: t.RevokedAt != nil,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
+}
+
+// HandleUpdateTokenScopes changes a token's capabilities without replacing
+// its secret, device identity, or retry identity.
+func (s *Server) HandleUpdateTokenScopes(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.loginAuth(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid auth credential")
+		return
+	}
+	var req struct {
+		Scope  *store.Scope    `json:"scope,omitempty"`
+		Scopes *store.ScopeSet `json:"scopes,omitempty"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	scopes, err := requestedScopes(req.Scope, req.Scopes)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.Auth.CheckScopeGrant(r.Context(), userID, scopes); err != nil {
+		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "token update failed")
+		return
+	}
+	if err := s.St.UpdateTokenScopes(r.Context(), userID, r.PathValue("id"), scopes); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "active token not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "token update failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Status string         `json:"status"`
+		Scope  *store.Scope   `json:"scope,omitempty"`
+		Scopes store.ScopeSet `json:"scopes"`
+	}{
+		Status: "updated", Scope: legacyScope(scopes), Scopes: scopes,
+	})
+}
+
+func requestedScopes(scope *store.Scope, scopes *store.ScopeSet) (store.ScopeSet, error) {
+	if scope == nil && scopes == nil {
+		return nil, errors.New("scope or scopes required")
+	}
+	var scalarSet, arraySet store.ScopeSet
+	var err error
+	if scope != nil {
+		scalarSet, err = store.NormalizeScopes([]store.Scope{*scope})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if scopes != nil {
+		arraySet, err = store.NormalizeScopes(*scopes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if scope == nil {
+		return arraySet, nil
+	}
+	if scopes == nil {
+		return scalarSet, nil
+	}
+	if len(scalarSet) != len(arraySet) {
+		return nil, errors.New("scope and scopes must describe the same set")
+	}
+	for i := range scalarSet {
+		if scalarSet[i] != arraySet[i] {
+			return nil, errors.New("scope and scopes must describe the same set")
+		}
+	}
+	return scalarSet, nil
+}
+
+func legacyScope(scopes store.ScopeSet) *store.Scope {
+	scope, ok := scopes.Legacy()
+	if !ok {
+		return nil
+	}
+	return &scope
 }
 
 // HandleRevokeToken implements DELETE /v1/tokens/{id}.
@@ -218,6 +305,7 @@ func (s *Server) Routes() *http.ServeMux {
 	}
 	mux.Handle("POST /v1/tokens", tokH(s.HandleCreateToken))
 	mux.Handle("GET /v1/tokens", tokH(s.HandleListTokens))
+	mux.Handle("PATCH /v1/tokens/{id}", tokH(s.HandleUpdateTokenScopes))
 	mux.Handle("DELETE /v1/tokens/{id}", tokH(s.HandleRevokeToken))
 
 	// kosync adapter (feature-gated per instance).

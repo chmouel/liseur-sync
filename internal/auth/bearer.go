@@ -36,7 +36,7 @@ func RequireScope(svc *Service, scope store.Scope, next http.Handler) http.Handl
 			http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 			return
 		}
-		if !scopeAllowed(tok.Scope, scope) {
+		if !scopeAllowed(tok.Scopes, scope) {
 			http.Error(w, `{"error":"insufficient scope"}`, http.StatusForbidden)
 			return
 		}
@@ -44,9 +44,6 @@ func RequireScope(svc *Service, scope store.Scope, next http.Handler) http.Handl
 	})
 }
 
-func scopeAllowed(have, want store.Scope) bool {
-	if have == store.ScopeAdmin {
-		return true
-	}
-	return have == want
+func scopeAllowed(have store.ScopeSet, want store.Scope) bool {
+	return have.Allows(want)
 }

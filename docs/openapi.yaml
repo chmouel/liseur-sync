@@ -10,8 +10,8 @@ info:
     - **Auth**: every endpoint except `/healthz`, `/v1/login` and
       `/v1/register` requires `Authorization: Bearer <token>`. Login
       returns a short-lived *auth token* usable only for token
-      management; device tokens carry scopes (`sync`,
-      `read-insights`, `admin`).
+      management; device tokens carry one or more scopes (`sync`,
+      `read-insights`, `library-read`, `library-manage`, `admin`).
     - **Identity**: books are *works*. Clients never need a work to
       exist before pushing: call `/v1/works/resolve` with every
       identifier you have and use the returned `work_id`.
@@ -125,6 +125,11 @@ paths:
         holds an active admin token; otherwise the request is refused
         with `403`. The first admin token on an instance is minted with
         `liseur-sync admin mint-token -scope admin`.
+
+        Legacy clients may send `scope`. New clients send `scopes`.
+        Supplying both is accepted only when they describe the same
+        singleton set. Responses always return `scopes` and return the
+        deprecated `scope` field only for singleton sets.
       security: [{ loginAuth: [] }]
       requestBody:
         required: true
@@ -132,10 +137,18 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, scope]
+              required: [name]
+              anyOf:
+                - required: [scope]
+                - required: [scopes]
               properties:
                 name: { type: string, example: "Boox Palma" }
-                scope: { $ref: "#/components/schemas/Scope" }
+                scope:
+                  allOf:
+                    - { $ref: "#/components/schemas/Scope" }
+                  deprecated: true
+                  description: "Legacy singleton form."
+                scopes: { $ref: "#/components/schemas/ScopeSet" }
                 expires_in_seconds: { type: integer }
       responses:
         "201":
@@ -144,11 +157,17 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [token_id, device_id, name, scopes, secret, expires_at]
                 properties:
                   token_id: { type: string }
                   device_id: { type: string }
                   name: { type: string }
-                  scope: { $ref: "#/components/schemas/Scope" }
+                  scope:
+                    allOf:
+                      - { $ref: "#/components/schemas/Scope" }
+                    deprecated: true
+                    description: "Present only for singleton scope sets."
+                  scopes: { $ref: "#/components/schemas/ScopeSet" }
                   secret: { type: string, description: "Bearer secret, returned exactly once" }
                   expires_at: { type: [string, "null"], format: date-time }
         "400": { $ref: "#/components/responses/Error" }
@@ -179,6 +198,51 @@ paths:
                     items: { $ref: "#/components/schemas/TokenInfo" }
 
   /v1/tokens/{id}:
+    patch:
+      tags: [auth]
+      summary: Update a device token's scopes in place
+      description: |
+        Preserves the token id, device id, and secret. Requires the
+        short-lived login credential. Adding `admin` requires the user
+        to already hold an active admin token.
+      security: [{ loginAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              anyOf:
+                - required: [scope]
+                - required: [scopes]
+              properties:
+                scope:
+                  allOf:
+                    - { $ref: "#/components/schemas/Scope" }
+                  deprecated: true
+                scopes: { $ref: "#/components/schemas/ScopeSet" }
+      responses:
+        "200":
+          description: Token scopes updated in place
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, scopes]
+                properties:
+                  status: { type: string, const: updated }
+                  scope:
+                    allOf:
+                      - { $ref: "#/components/schemas/Scope" }
+                    deprecated: true
+                    description: "Present only for singleton scope sets."
+                  scopes: { $ref: "#/components/schemas/ScopeSet" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [auth]
       summary: Revoke a token
@@ -593,11 +657,19 @@ components:
   schemas:
     Scope:
       type: string
-      enum: [sync, read-insights, admin]
+      enum: [sync, read-insights, library-read, library-manage, admin]
       description: |
-        `admin` implies all others; a `sync` token cannot read
-        insights. `admin` cannot be self-granted: creating one requires
-        an existing admin token or the admin CLI.
+        `library-manage` implies `library-read`; `admin` implies all
+        scopes. No other scope implies another. `admin` cannot be
+        self-granted: creating or updating a token to include it
+        requires an existing admin token or the admin CLI.
+    ScopeSet:
+      type: array
+      minItems: 1
+      items: { $ref: "#/components/schemas/Scope" }
+      description: |
+        A set of token capabilities. Duplicate values are accepted and
+        canonicalized; responses use deterministic scope order.
     Identifier:
       type: object
       required: [kind, value]
@@ -638,11 +710,17 @@ components:
         created: { type: boolean }
     TokenInfo:
       type: object
+      required: [id, device_id, name, scopes, created_at, revoked]
       properties:
         id: { type: string }
         device_id: { type: string }
         name: { type: string }
-        scope: { $ref: "#/components/schemas/Scope" }
+        scope:
+          allOf:
+            - { $ref: "#/components/schemas/Scope" }
+          deprecated: true
+          description: "Present only for singleton scope sets."
+        scopes: { $ref: "#/components/schemas/ScopeSet" }
         created_at: { type: string, format: date-time }
         revoked: { type: boolean }
     OpInput:

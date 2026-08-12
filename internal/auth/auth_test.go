@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"testing"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 func TestPasswordRoundTrip(t *testing.T) {
@@ -37,17 +39,27 @@ func TestNewSecretUnique(t *testing.T) {
 }
 
 func TestScopeAllowed(t *testing.T) {
-	if !scopeAllowed("admin", "sync") {
+	if !scopeAllowed(store.ScopeSet{store.ScopeAdmin}, store.ScopeSync) {
 		t.Fatal("admin should imply sync")
 	}
-	if scopeAllowed("sync", "admin") {
+	if scopeAllowed(store.ScopeSet{store.ScopeSync}, store.ScopeAdmin) {
 		t.Fatal("sync must not imply admin")
 	}
-	if scopeAllowed("sync", "read-insights") {
+	if scopeAllowed(store.ScopeSet{store.ScopeSync}, store.ScopeReadInsights) {
 		t.Fatal("sync must not read insights")
 	}
-	if !scopeAllowed("read-insights", "read-insights") {
+	if !scopeAllowed(store.ScopeSet{store.ScopeReadInsights}, store.ScopeReadInsights) {
 		t.Fatal("exact scope should pass")
+	}
+	if !scopeAllowed(store.ScopeSet{store.ScopeLibraryManage}, store.ScopeLibraryRead) {
+		t.Fatal("library-manage should imply library-read")
+	}
+	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, store.ScopeLibraryManage) {
+		t.Fatal("library-read must not imply library-manage")
+	}
+	multi := store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}
+	if !scopeAllowed(multi, store.ScopeSync) || !scopeAllowed(multi, store.ScopeLibraryRead) {
+		t.Fatal("multi-scope token should grant every explicit scope")
 	}
 }
 

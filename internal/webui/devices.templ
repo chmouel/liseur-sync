@@ -30,11 +30,24 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 	<section class="card">
 		<h2>API tokens</h2>
 		<table>
-			<tr><th>Name</th><th>Scope</th><th>Device id</th><th>State</th><th></th></tr>
+			<tr><th>Name</th><th>Scopes</th><th>Device id</th><th>State</th><th></th></tr>
 			for _, t := range toks {
 				<tr>
 					<td>{ t.Name }</td>
-					<td>{ string(t.Scope) }</td>
+					<td>
+						if t.RevokedAt == nil && !hasScope(t.Scopes, store.ScopeAdmin) {
+							<form method="post" action={ prefix + "tokens/" + t.ID + "/scopes" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
+								@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
+								@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
+								@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
+								<button type="submit">Update</button>
+							</form>
+						} else {
+							{ formatScopes(t.Scopes) }
+						}
+					</td>
 					<td><code>{ t.DeviceID }</code></td>
 					<td>
 						if t.RevokedAt != nil {
@@ -57,10 +70,10 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 		<form method="post" action={ prefix + "tokens" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<input name="name" placeholder="Boox Palma" required/>
-			<select name="scope">
-				<option value="sync">sync</option>
-				<option value="read-insights">read-insights</option>
-			</select>
+			@scopeChoice(store.ScopeSync, true)
+			@scopeChoice(store.ScopeReadInsights, false)
+			@scopeChoice(store.ScopeLibraryRead, false)
+			@scopeChoice(store.ScopeLibraryManage, false)
 			<button type="submit" class="primary">New token</button>
 		</form>
 	</section>
@@ -135,4 +148,15 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 			</table>
 		}
 	</section>
+}
+
+templ scopeChoice(scope store.Scope, checked bool) {
+	<label class="check">
+		if checked {
+			<input type="checkbox" name="scopes" value={ string(scope) } checked/>
+		} else {
+			<input type="checkbox" name="scopes" value={ string(scope) }/>
+		}
+		{ string(scope) }
+	</label>
 }

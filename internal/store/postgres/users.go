@@ -20,10 +20,8 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 
 func scanToken(row interface{ Scan(...any) error }) (store.Token, error) {
 	var t store.Token
-	var scope string
-	err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name, &scope,
+	err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name,
 		&t.SHA256, &t.CreatedAt, &t.ExpiresAt, &t.LastUsed, &t.RevokedAt)
-	t.Scope = store.Scope(scope)
 	return t, err
 }
 
@@ -73,18 +71,39 @@ func (s *Store) UserByID(ctx context.Context, userID string) (store.User, error)
 }
 
 func (s *Store) CreateToken(ctx context.Context, t store.Token) error {
-	_, err := s.db.ExecContext(ctx, q(
+	scopes, err := store.NormalizeScopes(t.Scopes)
+	if err != nil {
+		return err
+	}
+	legacy, _ := scopes.Legacy()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, q(
 		`INSERT INTO tokens (id, user_id, device_id, name, scope, sha256, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-		t.ID, t.UserID, t.DeviceID, t.Name, string(t.Scope), t.SHA256,
+		t.ID, t.UserID, t.DeviceID, t.Name, string(legacy), t.SHA256,
 		t.CreatedAt.UTC(), t.ExpiresAt)
 	if isUniqueErr(err) {
 		return store.ErrConflict
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO token_scopes (token_id, user_id, scope) VALUES (?, ?, ?)
+			 ON CONFLICT (token_id, scope) DO NOTHING`),
+			t.ID, t.UserID, string(scope)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
-const tokenCols = `id, user_id, device_id, name, scope, sha256, created_at, expires_at, last_used, revoked_at`
+const tokenCols = `id, user_id, device_id, name, sha256, created_at, expires_at, last_used, revoked_at`
 
 func (s *Store) TokenByHash(ctx context.Context, userID, sha256 string) (store.Token, error) {
 	t, err := scanToken(s.db.QueryRowContext(ctx, q(
@@ -92,6 +111,10 @@ func (s *Store) TokenByHash(ctx context.Context, userID, sha256 string) (store.T
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, store.ErrNotFound
 	}
+	if err != nil {
+		return t, err
+	}
+	err = s.loadTokenScopes(ctx, &t)
 	return t, err
 }
 
@@ -101,6 +124,10 @@ func (s *Store) TokenByHashGlobal(ctx context.Context, sha256 string) (store.Tok
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, store.ErrNotFound
 	}
+	if err != nil {
+		return t, err
+	}
+	err = s.loadTokenScopes(ctx, &t)
 	return t, err
 }
 
@@ -119,7 +146,80 @@ func (s *Store) ListTokens(ctx context.Context, userID string) ([]store.Token, e
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if err := s.loadTokenScopes(ctx, &out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) loadTokenScopes(ctx context.Context, t *store.Token) error {
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT scope FROM token_scopes WHERE user_id = ? AND token_id = ?`),
+		t.UserID, t.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var scopes []store.Scope
+	for rows.Next() {
+		var scope store.Scope
+		if err := rows.Scan(&scope); err != nil {
+			return err
+		}
+		scopes = append(scopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	t.Scopes, err = store.NormalizeScopes(scopes)
+	return err
+}
+
+func (s *Store) UpdateTokenScopes(ctx context.Context, userID, tokenID string, requested store.ScopeSet) error {
+	scopes, err := store.NormalizeScopes(requested)
+	if err != nil {
+		return err
+	}
+	legacy, _ := scopes.Legacy()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, q(
+		`UPDATE tokens SET scope = ? WHERE user_id = ? AND id = ? AND revoked_at IS NULL`),
+		string(legacy), userID, tokenID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`DELETE FROM token_scopes WHERE user_id = ? AND token_id = ?`),
+		userID, tokenID); err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO token_scopes (token_id, user_id, scope) VALUES (?, ?, ?)`),
+			tokenID, userID, string(scope)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RevokeToken(ctx context.Context, userID, tokenID string) error {

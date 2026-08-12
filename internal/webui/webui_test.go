@@ -220,7 +220,7 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 
 	// Create a token with CSRF.
 	code, body = postForm(t, ts, cookie, "/ui/tokens", url.Values{
-		"name": {"Test Dev"}, "scope": {"sync"}, "csrf": {csrf},
+		"name": {"Test Dev"}, "scopes": {"sync", "library-read"}, "csrf": {csrf},
 	})
 	if code != 200 || !strings.Contains(body, "shown once") {
 		t.Fatalf("token create: %d", code)
@@ -228,8 +228,23 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 
 	// The new token appears in the store.
 	toks, _ := st.ListTokens(t.Context(), "u1")
-	if len(toks) != 1 || toks[0].Name != "Test Dev" {
+	if len(toks) != 1 || toks[0].Name != "Test Dev" ||
+		toks[0].Scopes.String() != "sync,library-read" {
 		t.Fatalf("tokens: %+v", toks)
+	}
+	deviceID := toks[0].DeviceID
+
+	// Updating scopes preserves the token and device identities.
+	code, body = postForm(t, ts, cookie, "/ui/tokens/"+toks[0].ID+"/scopes", url.Values{
+		"scopes": {"read-insights", "library-manage"}, "csrf": {csrf},
+	})
+	if code != 200 || !strings.Contains(body, "Token scopes updated") {
+		t.Fatalf("token scope update: %d", code)
+	}
+	toks, _ = st.ListTokens(t.Context(), "u1")
+	if len(toks) != 1 || toks[0].DeviceID != deviceID ||
+		toks[0].Scopes.String() != "read-insights,library-manage" {
+		t.Fatalf("updated token: %+v", toks)
 	}
 
 	// Pairing code generation.
@@ -283,7 +298,7 @@ func TestAdminInvites(t *testing.T) {
 	ts, st := testServer(t)
 	// Grant the user an admin token so admin pages unlock.
 	svc := auth.NewService(st)
-	if _, _, err := svc.MintToken(t.Context(), "u1", "adm", store.ScopeAdmin, nil); err != nil {
+	if _, _, err := svc.MintToken(t.Context(), "u1", "adm", store.ScopeSet{store.ScopeAdmin}, nil); err != nil {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
@@ -413,7 +428,8 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/ui/login", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
-		"/ui/settings", "/ui/settings/password", "/ui/admin/invites",
+		"/ui/tokens/example/scopes", "/ui/settings", "/ui/settings/password",
+		"/ui/admin/invites",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
 			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)

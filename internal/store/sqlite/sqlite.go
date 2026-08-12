@@ -137,7 +137,7 @@ func scanToken(row interface{ Scan(...any) error }) (store.Token, error) {
 	var t store.Token
 	var created string
 	var expires, lastUsed, revoked sql.NullString
-	err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name, &t.Scope,
+	err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name,
 		&t.SHA256, &created, &expires, &lastUsed, &revoked)
 	if err != nil {
 		return t, err

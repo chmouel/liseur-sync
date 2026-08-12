@@ -376,10 +376,10 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   **per-device API tokens**: random 256-bit, stored hashed (SHA-256),
   shown once, revocable individually, named ("Boox Palma",
   "Liseur pixel8"). Native API auth is `Authorization: Bearer <token>`.
-- Tokens currently carry `sync`, `read-insights`, or `admin`. Catalog clients
-  need combinations, so [ADR-0006](adr/0006-catalog-api-and-opds.md)
-  migrates this scalar to a scope set and adds `library-read` and
-  `library-manage`. `library-manage` implies `library-read`; `admin` implies
+- Tokens carry scope sets containing `sync`, `read-insights`, `library-read`,
+  `library-manage`, or `admin`, as defined by
+  [ADR-0006](adr/0006-catalog-api-and-opds.md).
+  `library-manage` implies `library-read`; `admin` implies
   all scopes. Existing singleton tokens remain wire-compatible, and explicit
   in-place scope updates preserve a token's device identity and secret.
   `admin` is never self-grantable: minting or adding it requires an existing
@@ -468,7 +468,8 @@ tokens are revoked with the session. See
 
 ```
 users            id, name, argon2_hash, created_at
-tokens           id, user_id, name, scope, sha256, created_at, last_used, revoked_at
+tokens           id, user_id, name, scope (legacy singleton), sha256, created_at, last_used, revoked_at
+token_scopes     token_id, user_id, scope  PK (token_id, scope)
 works            user_id, id            PK (user_id, id)
 editions         user_id, sha256, work_id  PK (user_id, sha256)
 aliases          user_id, kind, value, work_id  PK (user_id, kind, value)
@@ -482,7 +483,6 @@ sessions         user_id, session_id, work_id, device_id,
 kosync_devices   user_id, device_slot, key_sha256, label, revoked_at
 
 # Planned catalog tables (ADRs 0002–0006)
-token_scopes     token_id, scope (ADR-0006 migration; singleton compatibility)
 libraries        id, owner_user_id, quota_user_id, kind, name, root?, config
 library_access   library_id, user_id, role(read|manage)
 books            id, library_id, status, metadata fields + source/lock data

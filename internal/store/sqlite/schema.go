@@ -297,4 +297,32 @@ SET inferred_session_id = NULL
 WHERE inferred_session_id = 'legacy-rollup';
 `
 
-var migrations = []string{schema, migration2, migration3, migration4}
+// migration5 replaces scalar token capabilities with a normalized scope
+// relation. The legacy column remains populated for singleton compatibility;
+// multi-scope tokens store an empty legacy value so old binaries fail closed.
+const migration5 = `
+CREATE UNIQUE INDEX tokens_id_user ON tokens(id, user_id);
+
+CREATE TABLE token_scopes (
+    token_id TEXT NOT NULL,
+    user_id  TEXT NOT NULL,
+    scope    TEXT NOT NULL,
+    PRIMARY KEY (token_id, scope),
+    FOREIGN KEY (token_id, user_id)
+        REFERENCES tokens(id, user_id) ON DELETE CASCADE
+);
+CREATE INDEX token_scopes_user ON token_scopes(user_id, token_id);
+
+INSERT INTO token_scopes (token_id, user_id, scope)
+SELECT id, user_id, scope FROM tokens;
+
+CREATE TRIGGER tokens_scope_legacy_insert
+AFTER INSERT ON tokens
+WHEN NEW.scope <> ''
+BEGIN
+    INSERT OR IGNORE INTO token_scopes (token_id, user_id, scope)
+    VALUES (NEW.id, NEW.user_id, NEW.scope);
+END;
+`
+
+var migrations = []string{schema, migration2, migration3, migration4, migration5}

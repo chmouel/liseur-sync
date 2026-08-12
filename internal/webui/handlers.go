@@ -1,8 +1,10 @@
 package webui
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -222,16 +224,81 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a sto
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	scope := store.Scope(r.FormValue("scope"))
-	if scope != store.ScopeSync && scope != store.ScopeReadInsights {
-		scope = store.ScopeSync
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
 	}
-	secret, _, err := s.Auth.MintToken(r.Context(), u.ID, r.FormValue("name"), scope, nil)
+	scopes, err := formScopes(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Auth.CheckScopeGrant(r.Context(), u.ID, scopes); err != nil {
+		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	secret, _, err := s.Auth.MintToken(r.Context(), u.ID, name, scopes, nil)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	s.renderDevices(w, r, a, u, Flash{Secret: secret, SecretLabel: "New token secret"})
+}
+
+func (s *Server) handleUpdateTokenScopes(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	scopes, err := formScopes(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.Auth.CheckScopeGrant(r.Context(), u.ID, scopes); err != nil {
+		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if err := s.St.UpdateTokenScopes(r.Context(), u.ID, r.PathValue("id"), scopes); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	s.renderDevices(w, r, a, u, Flash{Notice: "Token scopes updated."})
+}
+
+func formScopes(r *http.Request) (store.ScopeSet, error) {
+	values := r.Form["scopes"]
+	if len(values) == 0 {
+		if legacy := r.FormValue("scope"); legacy != "" {
+			values = []string{legacy}
+		}
+	}
+	requested := make([]store.Scope, len(values))
+	for i, value := range values {
+		requested[i] = store.Scope(value)
+	}
+	return store.NormalizeScopes(requested)
+}
+
+func formatScopes(scopes store.ScopeSet) string {
+	return scopes.String()
+}
+
+func hasScope(scopes store.ScopeSet, scope store.Scope) bool {
+	return scopes.Contains(scope)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
