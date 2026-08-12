@@ -122,8 +122,12 @@ func TestMigration3MarksLegacyInference(t *testing.T) {
 		t.Fatal(err)
 	}
 	pending, err := s.PendingInferenceOps(ctx, "u1")
-	if err != nil || len(pending) != 1 || pending[0].OpID != "recent-op" {
-		t.Fatalf("migration did not preserve only unmatched activity: %+v %v", pending, err)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("migration did not preserve ambiguous activity: %+v %v", pending, err)
+	}
+	pendingIDs := map[string]bool{pending[0].OpID: true, pending[1].OpID: true}
+	if !pendingIDs["recent-op"] || !pendingIDs["rolled-op"] {
+		t.Fatalf("wrong pending activity after migration: %+v", pending)
 	}
 	sessions, err := s.SessionsForWork(ctx, "u1", "w2", 10)
 	if err != nil || len(sessions) != 1 || sessions[0].OriginAlias == nil ||

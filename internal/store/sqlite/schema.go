@@ -288,4 +288,13 @@ CREATE INDEX idx_ops_inference_pending
     WHERE origin = 'kosync' AND inferred_session_id IS NULL;
 `
 
-var migrations = []string{schema, migration2, migration3}
+// migration4 reverses migration3's date-only rollup inference. A
+// rollup for another work is not evidence that an unmatched op was
+// materialized, so ambiguous legacy snapshots must remain pending.
+const migration4 = `
+UPDATE ops
+SET inferred_session_id = NULL
+WHERE inferred_session_id = 'legacy-rollup';
+`
+
+var migrations = []string{schema, migration2, migration3, migration4}
