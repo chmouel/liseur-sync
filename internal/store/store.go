@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -27,10 +29,79 @@ const TokenPurgeGrace = 30 * 24 * time.Hour
 type Scope string
 
 const (
-	ScopeSync         Scope = "sync"
-	ScopeReadInsights Scope = "read-insights"
-	ScopeAdmin        Scope = "admin"
+	ScopeSync          Scope = "sync"
+	ScopeReadInsights  Scope = "read-insights"
+	ScopeLibraryRead   Scope = "library-read"
+	ScopeLibraryManage Scope = "library-manage"
+	ScopeAdmin         Scope = "admin"
 )
+
+var scopeOrder = map[Scope]int{
+	ScopeSync:          0,
+	ScopeReadInsights:  1,
+	ScopeLibraryRead:   2,
+	ScopeLibraryManage: 3,
+	ScopeAdmin:         4,
+}
+
+// ScopeSet is the canonical, duplicate-free set of capabilities on a token.
+type ScopeSet []Scope
+
+// NormalizeScopes validates, deduplicates, and orders a scope set.
+func NormalizeScopes(scopes []Scope) (ScopeSet, error) {
+	if len(scopes) == 0 {
+		return nil, errors.New("at least one scope is required")
+	}
+	seen := make(map[Scope]bool, len(scopes))
+	out := make(ScopeSet, 0, len(scopes))
+	for _, scope := range scopes {
+		if _, ok := scopeOrder[scope]; !ok {
+			return nil, fmt.Errorf("invalid scope %q", scope)
+		}
+		if !seen[scope] {
+			seen[scope] = true
+			out = append(out, scope)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return scopeOrder[out[i]] < scopeOrder[out[j]]
+	})
+	return out, nil
+}
+
+// Contains reports whether a scope is explicitly present.
+func (s ScopeSet) Contains(scope Scope) bool {
+	for _, candidate := range s {
+		if candidate == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// Allows reports whether the set grants a requested capability.
+func (s ScopeSet) Allows(scope Scope) bool {
+	if s.Contains(ScopeAdmin) || s.Contains(scope) {
+		return true
+	}
+	return scope == ScopeLibraryRead && s.Contains(ScopeLibraryManage)
+}
+
+// Legacy returns the deprecated scalar representation for singleton sets.
+func (s ScopeSet) Legacy() (Scope, bool) {
+	if len(s) != 1 {
+		return "", false
+	}
+	return s[0], true
+}
+
+func (s ScopeSet) String() string {
+	values := make([]string, len(s))
+	for i, scope := range s {
+		values[i] = string(scope)
+	}
+	return strings.Join(values, ",")
+}
 
 // Origin of a record: which protocol it arrived on.
 type Origin string
@@ -59,7 +130,7 @@ type Token struct {
 	UserID    string
 	DeviceID  string
 	Name      string
-	Scope     Scope
+	Scopes    ScopeSet
 	SHA256    string
 	CreatedAt time.Time
 	ExpiresAt *time.Time
@@ -309,6 +380,7 @@ type Store interface {
 	CreateToken(ctx context.Context, t Token) error
 	TokenByHash(ctx context.Context, userID, sha256 string) (Token, error)
 	ListTokens(ctx context.Context, userID string) ([]Token, error)
+	UpdateTokenScopes(ctx context.Context, userID, tokenID string, scopes ScopeSet) error
 	RevokeToken(ctx context.Context, userID, tokenID string) error
 	TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error
 

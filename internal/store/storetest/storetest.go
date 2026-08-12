@@ -104,7 +104,8 @@ func testTokens(t *testing.T, open OpenFunc) {
 	u := MkUser(t, s, "bob")
 	tok := store.Token{
 		ID: "t1", UserID: u.ID, DeviceID: "d-boox", Name: "Boox Palma",
-		Scope: store.ScopeSync, SHA256: "deadbeef", CreatedAt: time.Now(),
+		Scopes: store.ScopeSet{store.ScopeLibraryRead, store.ScopeSync, store.ScopeLibraryRead},
+		SHA256: "deadbeef", CreatedAt: time.Now(),
 	}
 	if err := s.CreateToken(ctx, tok); err != nil {
 		t.Fatal(err)
@@ -113,11 +114,28 @@ func testTokens(t *testing.T, open OpenFunc) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DeviceID != "d-boox" || got.Scope != store.ScopeSync {
+	if got.DeviceID != "d-boox" || got.Scopes.String() != "sync,library-read" {
 		t.Fatalf("bad token: %+v", got)
 	}
 	if _, err := s.TokenByHash(ctx, "u-other", "deadbeef"); err != store.ErrNotFound {
 		t.Fatalf("cross-user token read: want ErrNotFound, got %v", err)
+	}
+	if err := s.UpdateTokenScopes(ctx, "u-other", "t1",
+		store.ScopeSet{store.ScopeReadInsights}); err != store.ErrNotFound {
+		t.Fatalf("cross-user token update: want ErrNotFound, got %v", err)
+	}
+	if err := s.UpdateTokenScopes(ctx, u.ID, "t1",
+		store.ScopeSet{store.ScopeLibraryManage, store.ScopeReadInsights}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.TokenByHash(ctx, u.ID, "deadbeef")
+	if err != nil || got.DeviceID != "d-boox" ||
+		got.Scopes.String() != "read-insights,library-manage" {
+		t.Fatalf("scope update changed identity or scopes: %+v %v", got, err)
+	}
+	listed, err := s.ListTokens(ctx, u.ID)
+	if err != nil || len(listed) != 1 || listed[0].Scopes.String() != "read-insights,library-manage" {
+		t.Fatalf("listed tokens: %+v %v", listed, err)
 	}
 	if err := s.RevokeToken(ctx, u.ID, "t1"); err != nil {
 		t.Fatal(err)
@@ -697,7 +715,7 @@ func testHousekeeping(t *testing.T, open OpenFunc) {
 	expired := now.Add(-store.TokenPurgeGrace - time.Hour)
 	if err := s.CreateToken(ctx, store.Token{
 		ID: "expired-token", UserID: u.ID, DeviceID: "d1", Name: "old",
-		Scope: store.ScopeSync, SHA256: "expired-token-hash", CreatedAt: expired,
+		Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "expired-token-hash", CreatedAt: expired,
 		ExpiresAt: &expired,
 	}); err != nil {
 		t.Fatal(err)

@@ -44,7 +44,7 @@ const usage = `usage: liseur-sync admin <subcommand>
 
   create-user <name>            create a user (password from TTY/stdin)
   mint-token <user> <name>      create a device token
-                                flags: -scope sync|read-insights|admin
+                                flags: -scope <scope>[,<scope>...]
   list-tokens <user>            list tokens for a user
   revoke-token <user> <tokenID> revoke a token
   pairing-code <user>           generate a kosync pairing code (15 min TTL)
@@ -94,35 +94,47 @@ func createUser(ctx context.Context, st store.Store, args []string) error {
 }
 
 func mintToken(ctx context.Context, st store.Store, args []string) error {
-	scope := store.ScopeSync
+	var requested []store.Scope
+	explicitScopes := false
 	var rest []string
 	for i := 0; i < len(args); i++ {
-		if args[i] == "-scope" && i+1 < len(args) {
-			scope = store.Scope(args[i+1])
+		if args[i] == "-scope" {
+			if i+1 >= len(args) {
+				return errors.New("-scope requires a value")
+			}
+			if !explicitScopes {
+				requested = nil
+				explicitScopes = true
+			}
+			for _, value := range strings.Split(args[i+1], ",") {
+				requested = append(requested, store.Scope(strings.TrimSpace(value)))
+			}
 			i++
 			continue
 		}
 		rest = append(rest, args[i])
 	}
 	if len(rest) != 2 {
-		return errors.New("usage: mint-token [-scope sync|read-insights|admin] <user> <token-name>")
+		return errors.New("usage: mint-token [-scope <scope>[,<scope>...]] <user> <token-name>")
 	}
-	switch scope {
-	case store.ScopeSync, store.ScopeReadInsights, store.ScopeAdmin:
-	default:
-		return fmt.Errorf("invalid scope %q", scope)
+	if !explicitScopes {
+		requested = []store.Scope{store.ScopeSync}
+	}
+	scopes, err := store.NormalizeScopes(requested)
+	if err != nil {
+		return err
 	}
 	u, err := st.UserByName(ctx, rest[0])
 	if err != nil {
 		return err
 	}
 	svc := auth.NewService(st)
-	secret, tok, err := svc.MintToken(ctx, u.ID, rest[1], scope, nil)
+	secret, tok, err := svc.MintToken(ctx, u.ID, rest[1], scopes, nil)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("token id:     %s\ndevice id:    %s\nscope:        %s\nsecret (shown once): %s\n",
-		tok.ID, tok.DeviceID, tok.Scope, secret)
+	fmt.Printf("token id:     %s\ndevice id:    %s\nscopes:       %s\nsecret (shown once): %s\n",
+		tok.ID, tok.DeviceID, tok.Scopes, secret)
 	return nil
 }
 
@@ -143,7 +155,7 @@ func listTokens(ctx context.Context, st store.Store, args []string) error {
 		if t.RevokedAt != nil {
 			state = "revoked " + t.RevokedAt.Format(time.RFC3339)
 		}
-		fmt.Printf("%s  %-20s scope=%-13s device=%s  %s\n", t.ID, t.Name, t.Scope, t.DeviceID, state)
+		fmt.Printf("%s  %-20s scopes=%-30s device=%s  %s\n", t.ID, t.Name, t.Scopes, t.DeviceID, state)
 	}
 	return nil
 }

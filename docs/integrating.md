@@ -19,7 +19,7 @@ The design rationale (why the API looks like this) is in
   fractions. Sessions feed the statistics endpoints.
 - **Device token**: a scoped bearer token per physical device. The
   server stamps ops and sessions with the token's `device_id`; you do
-  not send one.
+  not send one. A token may carry several scopes.
 
 ## Setup
 
@@ -28,9 +28,16 @@ The design rationale (why the API looks like this) is in
 2. Log in once: `POST /v1/login` → `auth_token` (valid 1 hour, only
    usable for the next step).
 3. Create a device token: `POST /v1/tokens` with
-   `{"name": "Boox Palma", "scope": "sync"}`. Store the returned
-   `secret`; it is shown once. Add `read-insights` scope on a separate
-   token if your client displays statistics.
+   `{"name": "Boox Palma", "scopes": ["sync", "read-insights"]}`.
+   Store the returned `secret`; it is shown once. Legacy clients may
+   continue sending `"scope": "sync"`. Responses always include
+   `scopes` and include the deprecated scalar `scope` only for
+   singleton sets.
+
+   Use `PATCH /v1/tokens/{id}` with the same `scope`/`scopes` shape to
+   change capabilities without changing the token secret, device id,
+   or retry identity. `library-manage` implies `library-read`; `admin`
+   implies every scope. No other implication exists.
 
    `admin` is not self-grantable: requesting it returns `403` unless
    the caller already holds an admin token. The first one comes from

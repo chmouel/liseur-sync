@@ -42,8 +42,18 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 
 func post(t *testing.T, url, token string, body any) (int, map[string]any) {
 	t.Helper()
+	return requestJSON(t, http.MethodPost, url, token, body)
+}
+
+func patch(t *testing.T, url, token string, body any) (int, map[string]any) {
+	t.Helper()
+	return requestJSON(t, http.MethodPatch, url, token, body)
+}
+
+func requestJSON(t *testing.T, method, url, token string, body any) (int, map[string]any) {
+	t.Helper()
 	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(b))
+	req, _ := http.NewRequest(method, url, bytes.NewReader(b))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -301,7 +311,7 @@ func TestAliasConflict409(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := auth.NewService(st)
-	_, tok, err := svc.MintToken(ctx, u.ID, "dev", store.ScopeSync, nil)
+	_, tok, err := svc.MintToken(ctx, u.ID, "dev", store.ScopeSet{store.ScopeSync}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +385,7 @@ func TestSplitValidatesAndNormalizesAliases(t *testing.T) {
 func bearerSecret(t *testing.T, st store.Store, userID string) string {
 	t.Helper()
 	svc := auth.NewService(st)
-	secret, _, err := svc.MintToken(t.Context(), userID, "dev", store.ScopeSync, nil)
+	secret, _, err := svc.MintToken(t.Context(), userID, "dev", store.ScopeSet{store.ScopeSync}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,9 +438,10 @@ func TestScopeEnforcement(t *testing.T) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
+
 	svc := auth.NewService(st)
-	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "syncdev", store.ScopeSync, nil)
-	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeReadInsights, nil)
+	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "syncdev", store.ScopeSet{store.ScopeSync}, nil)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
 
 	// read-insights cannot push ops.
 	code, _ := post(t, ts.URL+"/v1/ops", roSecret, map[string]any{
@@ -460,8 +471,8 @@ func TestSessionsAndInsights(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := auth.NewService(st)
-	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSync, nil)
-	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeReadInsights, nil)
+	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
 
 	// Work with a known page count.
 	w := store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()}
@@ -633,6 +644,11 @@ func TestAdminScopeNotSelfMintable(t *testing.T) {
 	if code != http.StatusForbidden {
 		t.Fatalf("self-minted admin token: want 403, got %d %v", code, out)
 	}
+	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]any{
+		"name": "hidden escalation", "scopes": []string{"sync", "admin"},
+	}); code != http.StatusForbidden {
+		t.Fatalf("multi-scope admin escalation: want 403, got %d %v", code, out)
+	}
 	// Ordinary scopes still work.
 	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]string{
 		"name": "Boox Palma", "scope": "sync",
@@ -641,7 +657,7 @@ func TestAdminScopeNotSelfMintable(t *testing.T) {
 	}
 
 	// An existing admin may mint another admin token.
-	if _, _, err := auth.NewService(st).MintToken(ctx, "u1", "cli", store.ScopeAdmin, nil); err != nil {
+	if _, _, err := auth.NewService(st).MintToken(ctx, "u1", "cli", store.ScopeSet{store.ScopeAdmin}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]string{
@@ -670,6 +686,7 @@ func TestRedactPath(t *testing.T) {
 			t.Errorf("RedactPath(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
+
 }
 
 // TestServerErrorLogRedactsCapability checks the redaction where it

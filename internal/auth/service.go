@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -11,6 +12,10 @@ import (
 // LoginTTL is the lifetime of the short-lived auth credential returned
 // by login (usable only for token management).
 const LoginTTL = time.Hour
+
+// ErrAdminGrantRequiresAdmin prevents login credentials from bootstrapping
+// instance-wide privileges.
+var ErrAdminGrantRequiresAdmin = errors.New("admin scope requires an existing admin token")
 
 // Service wires auth against a store.
 type Service struct {
@@ -73,16 +78,23 @@ func (s *Service) AuthenticateLogin(ctx context.Context, secret string) (string,
 
 // CreateToken mints a per-device token for a user authenticated via the
 // login credential. Returns the plaintext secret once.
-func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, scope store.Scope, expiresAt *time.Time) (plaintext string, tok store.Token, err error) {
+func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, scopes store.ScopeSet, expiresAt *time.Time) (plaintext string, tok store.Token, err error) {
 	userID, err := s.AuthenticateLogin(ctx, loginSecret)
 	if err != nil {
 		return "", tok, err
 	}
-	return s.MintToken(ctx, userID, name, scope, expiresAt)
+	if err := s.CheckScopeGrant(ctx, userID, scopes); err != nil {
+		return "", tok, err
+	}
+	return s.MintToken(ctx, userID, name, scopes, expiresAt)
 }
 
 // MintToken creates a token for a known user (admin CLI path).
-func (s *Service) MintToken(ctx context.Context, userID, name string, scope store.Scope, expiresAt *time.Time) (string, store.Token, error) {
+func (s *Service) MintToken(ctx context.Context, userID, name string, requested store.ScopeSet, expiresAt *time.Time) (string, store.Token, error) {
+	scopes, err := store.NormalizeScopes(requested)
+	if err != nil {
+		return "", store.Token{}, err
+	}
 	secret, err := NewSecret()
 	if err != nil {
 		return "", store.Token{}, err
@@ -100,7 +112,7 @@ func (s *Service) MintToken(ctx context.Context, userID, name string, scope stor
 		UserID:    userID,
 		DeviceID:  deviceID[:16], // device ids are short
 		Name:      name,
-		Scope:     scope,
+		Scopes:    scopes,
 		SHA256:    HashSecret(secret),
 		CreatedAt: s.Now(),
 		ExpiresAt: expiresAt,
@@ -109,6 +121,26 @@ func (s *Service) MintToken(ctx context.Context, userID, name string, scope stor
 		return "", store.Token{}, err
 	}
 	return secret, tok, nil
+}
+
+// CheckScopeGrant applies the privilege-escalation rule shared by the
+// token API and web UI. The admin CLI intentionally bypasses it.
+func (s *Service) CheckScopeGrant(ctx context.Context, userID string, scopes store.ScopeSet) error {
+	normalized, err := store.NormalizeScopes(scopes)
+	if err != nil {
+		return err
+	}
+	if !normalized.Contains(store.ScopeAdmin) {
+		return nil
+	}
+	isAdmin, err := s.IsAdmin(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("check admin grant: %w", err)
+	}
+	if !isAdmin {
+		return ErrAdminGrantRequiresAdmin
+	}
+	return nil
 }
 
 // IsAdmin reports whether the user holds an active admin-scope token.
@@ -124,7 +156,7 @@ func (s *Service) IsAdmin(ctx context.Context, userID string) (bool, error) {
 	}
 	now := s.Now()
 	for _, t := range toks {
-		if t.Scope != store.ScopeAdmin || t.RevokedAt != nil {
+		if !t.Scopes.Contains(store.ScopeAdmin) || t.RevokedAt != nil {
 			continue
 		}
 		if t.ExpiresAt != nil && now.After(*t.ExpiresAt) {

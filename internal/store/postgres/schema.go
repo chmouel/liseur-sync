@@ -296,4 +296,42 @@ SET inferred_session_id = NULL
 WHERE inferred_session_id = 'legacy-rollup';
 `
 
-var migrations = []string{schema, migration2, migration3, migration4}
+// migration5 replaces scalar token capabilities with a normalized scope
+// relation. The legacy column remains populated for singleton compatibility;
+// multi-scope tokens store an empty legacy value so old binaries fail closed.
+const migration5 = `
+CREATE UNIQUE INDEX tokens_id_user ON tokens(id, user_id);
+
+CREATE TABLE token_scopes (
+    token_id TEXT NOT NULL,
+    user_id  TEXT NOT NULL,
+    scope    TEXT NOT NULL,
+    PRIMARY KEY (token_id, scope),
+    FOREIGN KEY (token_id, user_id)
+        REFERENCES tokens(id, user_id) ON DELETE CASCADE
+);
+CREATE INDEX token_scopes_user ON token_scopes(user_id, token_id);
+
+INSERT INTO token_scopes (token_id, user_id, scope)
+SELECT id, user_id, scope FROM tokens;
+
+CREATE OR REPLACE FUNCTION sync_legacy_token_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.scope <> '' THEN
+        INSERT INTO token_scopes (token_id, user_id, scope)
+        VALUES (NEW.id, NEW.user_id, NEW.scope)
+        ON CONFLICT (token_id, scope) DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tokens_scope_legacy_insert
+AFTER INSERT ON tokens
+FOR EACH ROW EXECUTE FUNCTION sync_legacy_token_scope();
+`
+
+var migrations = []string{schema, migration2, migration3, migration4, migration5}

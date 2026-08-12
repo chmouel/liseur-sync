@@ -117,7 +117,7 @@ metadata edits, work resolution, and rich sync remain native operations.
 ## Implementation phases
 
 1. Scope-set migration, in-place token update, API compatibility, implication
-   matrix, and UI.
+   matrix, and UI. **Implemented.**
 2. Native catalog read/download API and OpenAPI contract.
 3. Mutation API and ingestion job resources.
 4. OPDS 1.2 and KOReader conformance fixtures.

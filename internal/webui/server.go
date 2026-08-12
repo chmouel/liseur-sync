@@ -130,6 +130,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/login", sec(s.rateLimited(s.handleLogin)))
 	mux.Handle("POST /ui/logout", sec(s.handleLogout))
 	mux.Handle("POST /ui/tokens", sec(s.requireAuth(s.handleCreateToken)))
+	mux.Handle("POST /ui/tokens/{id}/scopes", sec(s.requireAuth(s.handleUpdateTokenScopes)))
 	mux.Handle("POST /ui/tokens/{id}/revoke", sec(s.requireAuth(s.handleRevokeToken)))
 	mux.Handle("POST /ui/pairing", sec(s.requireAuth(s.handlePairing)))
 	mux.Handle("POST /ui/koplugin", sec(s.requireAuth(s.handleCreateKoplugin)))
