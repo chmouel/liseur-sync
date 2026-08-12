@@ -193,14 +193,6 @@ func (s *Server) HandlePutProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Resolve the document digest via the alias table; create a pending
-	// work when unknown.
-	workID, _, err := s.St.CreatePendingWork(ctx, d.UserID, strings.ToLower(req.Document))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
-		return
-	}
-
 	clientTS := time.Now()
 	if req.Timestamp > 0 {
 		clientTS = time.Unix(req.Timestamp, 0) // kosync sends unix seconds
@@ -208,7 +200,6 @@ func (s *Server) HandlePutProgress(w http.ResponseWriter, r *http.Request) {
 	opID, _ := auth.NewSecret()
 	op := store.Op{
 		OpID:        opID,
-		WorkID:      workID,
 		DeviceID:    "kosync:" + d.DeviceSlot,
 		ClientTS:    clientTS,
 		Progression: req.Percentage,
@@ -216,8 +207,9 @@ func (s *Server) HandlePutProgress(w http.ResponseWriter, r *http.Request) {
 		Origin:      store.OriginKosync,
 		OriginAlias: strPtr("partial-md5:" + strings.ToLower(req.Document)),
 	}
-	res, err := s.St.AppendOps(ctx, d.UserID, "kosync:"+d.DeviceSlot, []store.Op{op})
-	if err != nil || len(res) == 0 || res[0].Status == "conflict" {
+	res, err := s.St.AppendKosyncOp(
+		ctx, d.UserID, strings.ToLower(req.Document), "kosync:"+d.DeviceSlot, op)
+	if err != nil || res.Status == "conflict" {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 		return
 	}

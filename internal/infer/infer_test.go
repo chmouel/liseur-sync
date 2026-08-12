@@ -55,6 +55,17 @@ func TestClosedGroupsLateness(t *testing.T) {
 	}
 }
 
+func TestClosedGroupsKeepsGroupStraddlingCutoffOpen(t *testing.T) {
+	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	ops := []store.Op{
+		op("w1", "kobo", cutoff.Add(-5*time.Minute), 0.1, 1),
+		op("w1", "kobo", cutoff.Add(5*time.Minute), 0.2, 2),
+	}
+	if closed := ClosedGroups(ops, 15*time.Minute, cutoff); len(closed) != 0 {
+		t.Fatalf("group straddling lateness cutoff was closed: %+v", closed)
+	}
+}
+
 func TestMaterializeDeterministic(t *testing.T) {
 	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	g := []store.Op{
@@ -71,5 +82,21 @@ func TestMaterializeDeterministic(t *testing.T) {
 	}
 	if !s1.EndedAt.Equal(base.Add(10 * time.Minute)) {
 		t.Fatalf("end: %v", s1.EndedAt)
+	}
+}
+
+func TestGroupingPreservesAliasProvenance(t *testing.T) {
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	firstAlias, secondAlias := "partial-md5:first", "partial-md5:second"
+	first := op("w1", "kobo", base, 0.1, 1)
+	first.OriginAlias = &firstAlias
+	second := op("w1", "kobo", base.Add(time.Minute), 0.2, 2)
+	second.OriginAlias = &secondAlias
+	groups := Group([]store.Op{first, second}, 15*time.Minute)
+	if len(groups) != 2 {
+		t.Fatalf("different aliases grouped together: %+v", groups)
+	}
+	if got := Materialize("u1", groups[0]).OriginAlias; got == nil || *got != firstAlias {
+		t.Fatalf("origin alias not preserved: %v", got)
 	}
 }

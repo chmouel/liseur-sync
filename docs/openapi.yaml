@@ -194,9 +194,11 @@ paths:
       tags: [identity]
       summary: Resolve a file's identifiers to a work
       description: |
-        Send every identifier you have for the file. Resolution order:
-        `sha256` → `partial-md5` → `source` → `dc` → `ta`; first hit wins, and all
-        supplied identifiers are then registered as aliases of the
+        Send every identifier you have for the file. Resolution priority is
+        `sha256` → `partial-md5` → `source` → `dc` → `ta`, but every supplied
+        identifier that already matches must agree on one work. On a
+        high-confidence result, all supplied identifiers are registered as
+        aliases and every supplied SHA-256 is registered as an edition of the
         resolved work (this is how identity converges across re-encodes).
         Fuzzy `ta` matches return `confidence: low` — confirm with the
         user before treating it as authoritative. On a low match nothing
@@ -252,7 +254,11 @@ paths:
         Repairs a wrong merge. Moves the edition and its ops/sessions to
         a new work. Aliases belong to works, not editions, so pass the
         aliases to move explicitly (the edition's own `sha256` alias is
-        implied).
+        implied). A different edition's `sha256` alias is rejected.
+        Works with compacted session rollups cannot be split because the
+        aggregate no longer retains enough edition provenance. The same
+        restriction applies to legacy inferred sessions whose edition or
+        origin alias cannot be recovered.
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -276,13 +282,19 @@ paths:
               schema:
                 type: object
                 properties: { work_id: { type: string } }
+        "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error", description: "Edition not in this work" }
+        "409": { $ref: "#/components/responses/Error", description: "Edition or history cannot be split from this work" }
 
   /v1/works/merge:
     post:
       tags: [identity]
       summary: Merge one work into another (explicit confirmation)
+      description: |
+        Moves aliases, editions, operations, and raw sessions into the
+        target work. A source work with compacted session rollups cannot
+        be merged because those aggregates no longer retain session
+        provenance.
       security: [{ deviceToken: [] }]  # requires sync scope
       requestBody:
         required: true
@@ -303,6 +315,7 @@ paths:
                 type: object
                 properties: { work_id: { type: string } }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error", description: "Source work has compacted history" }
 
   /v1/ops:
     post:

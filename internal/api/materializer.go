@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -65,27 +66,24 @@ func (s *Server) materializeOnce(ctx context.Context, gap, lateBy time.Duration)
 	}
 	lateBefore := time.Now().Add(-lateBy)
 	for _, userID := range users {
-		ops, err := s.St.OpsBefore(ctx, userID, lateBefore)
+		ops, err := s.St.PendingInferenceOps(ctx, userID)
 		if err != nil {
 			slog.Warn("materializer: ops", "user", userID, "err", err)
 			continue
 		}
-		var sessions []store.Session
 		for _, g := range infer.ClosedGroups(ops, gap, lateBefore) {
-			// Skip native-origin groups: those devices report real
-			// sessions; inference is for position-only (kosync) devices.
-			if g[0].Origin != store.OriginKosync {
-				continue
+			group := store.InferredSessionGroup{
+				Session: infer.Materialize(userID, g),
+				Ops:     g,
 			}
-			sessions = append(sessions, infer.Materialize(userID, g))
-		}
-		if len(sessions) == 0 {
-			continue
-		}
-		// Idempotent: deterministic session IDs make re-materialization
-		// a no-op.
-		if err := s.St.AppendSessions(ctx, userID, sessions); err != nil {
-			slog.Warn("materializer: append", "user", userID, "err", err)
+			if err := s.St.AppendInferredSession(ctx, userID, group); err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					// A concurrent split/merge or another materializer
+					// changed this snapshot. The next pass re-reads it.
+					continue
+				}
+				slog.Warn("materializer: append", "user", userID, "err", err)
+			}
 		}
 	}
 }

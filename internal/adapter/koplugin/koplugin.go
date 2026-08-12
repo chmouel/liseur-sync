@@ -146,12 +146,6 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 
 		md5v := strings.ToLower(rw.BookMD5)
-		workID, _, err := s.St.CreatePendingWork(ctx, d.UserID, md5v)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
-			return
-		}
-
 		key := sourceKey(d.DeviceID, md5v, rw.Page, rw.StartTime)
 		// Deterministic session id over key + full payload, so a changed
 		// payload yields a new session (supersession) and an identical
@@ -159,7 +153,6 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		payloadHash := sha256hex(fmt.Sprintf("%d|%d|%d|%d", rw.StartTime, rw.Duration, rw.Page, rw.TotalPages))
 		ses := store.Session{
 			SessionID:   sessionIDFor(key, payloadHash),
-			WorkID:      workID,
 			DeviceID:    d.DeviceID,
 			StartedAt:   time.Unix(rw.StartTime, 0),
 			EndedAt:     time.Unix(rw.StartTime+rw.Duration, 0),
@@ -169,7 +162,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			OriginAlias: strPtr("partial-md5:" + md5v),
 			SourceKey:   strPtr(key),
 		}
-		status, err := s.St.UpsertKopluginSession(ctx, d.UserID, ses)
+		status, err := s.St.UpsertKopluginSessionByAlias(ctx, d.UserID, md5v, ses)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 			return

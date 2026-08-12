@@ -75,16 +75,35 @@ func (s *Store) KosyncDeviceByKey(ctx context.Context, keySHA256 string) (store.
 }
 
 func (s *Store) CreatePendingWork(ctx context.Context, userID, partialMD5 string) (string, bool, error) {
-	if wid, err := s.WorkIDByAlias(ctx, userID, "partial-md5", partialMD5); err == nil {
-		return wid, false, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return "", false, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", false, err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return "", false, err
+	}
+	workID, created, err := createPendingWorkTx(ctx, tx, userID, partialMD5)
+	if err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return workID, created, nil
+}
+
+func createPendingWorkTx(ctx context.Context, tx *sql.Tx, userID, partialMD5 string) (string, bool, error) {
+	var existing string
+	err := tx.QueryRowContext(ctx, q(
+		`SELECT work_id FROM aliases WHERE user_id = ? AND kind = 'partial-md5' AND value = ?`),
+		userID, partialMD5).Scan(&existing)
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", false, err
+	}
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", false, err
@@ -104,7 +123,7 @@ func (s *Store) CreatePendingWork(ctx context.Context, userID, partialMD5 string
 		`INSERT INTO seq_counters (user_id, next_seq) VALUES (?, 1) ON CONFLICT DO NOTHING`), userID); err != nil {
 		return "", false, err
 	}
-	return workID, true, tx.Commit()
+	return workID, true, nil
 }
 
 func (s *Store) WorkIDByAlias(ctx context.Context, userID, kind, value string) (string, error) {

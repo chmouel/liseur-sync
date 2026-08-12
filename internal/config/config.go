@@ -125,5 +125,18 @@ func (c *Config) Validate() error {
 	if c.Ops.RetentionDays < 1 {
 		return fmt.Errorf("ops.retention_days must be >= 1")
 	}
+	if c.Ops.InferenceGapMin < 1 {
+		return fmt.Errorf("ops.inference_gap_min must be >= 1")
+	}
+	if c.Ops.InferenceLateHours < 1 {
+		return fmt.Errorf("ops.inference_late_hours must be >= 1")
+	}
+	minLateHours := c.Ops.InferenceGapMin / 60
+	if c.Ops.InferenceGapMin%60 != 0 {
+		minLateHours++
+	}
+	if c.Ops.InferenceLateHours < minLateHours {
+		return fmt.Errorf("ops.inference_late_hours must cover ops.inference_gap_min")
+	}
 	return nil
 }

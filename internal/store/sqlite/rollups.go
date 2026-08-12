@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -40,6 +42,25 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	for _, expected := range deleteSessions {
+		current, err := scanSession(tx.QueryRowContext(ctx,
+			`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
+			        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+			 FROM sessions WHERE user_id = ? AND session_id = ?`,
+			userID, expected.SessionID))
+		if err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			return store.ErrConflict
+		}
+		if store.SessionFingerprint(current) != store.SessionFingerprint(expected) {
+			return store.ErrConflict
+		}
+	}
 	for _, r := range rollups {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO session_rollups (user_id, work_id, day, active_seconds, pages, prog_delta, session_count)
@@ -60,10 +81,18 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 			userID, ses.SessionID, store.SessionFingerprint(ses)); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx,
+		result, err := tx.ExecContext(ctx,
 			`DELETE FROM sessions WHERE user_id = ? AND session_id = ?`,
-			userID, ses.SessionID); err != nil {
+			userID, ses.SessionID)
+		if err != nil {
 			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return store.ErrConflict
 		}
 	}
 	return tx.Commit()

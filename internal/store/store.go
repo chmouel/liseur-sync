@@ -95,11 +95,53 @@ type Alias struct {
 	WorkID string
 }
 
+// WorkResolution is the atomic result of resolving ordered identifiers.
+// ConflictingWorkIDs is non-empty when the identifiers name multiple works;
+// in that case no work-graph mutation is committed.
+type WorkResolution struct {
+	WorkID             string
+	Confidence         string // "high" | "low"
+	Created            bool
+	ConflictingWorkIDs []string
+}
+
+// DecideWorkResolution applies the protocol decision to identifiers already
+// ordered strongest-first. matches is keyed by "kind:value".
+func DecideWorkResolution(ids []Identifier, matches map[string]string, confirmed bool) WorkResolution {
+	var result WorkResolution
+	seen := make(map[string]bool)
+	firstKind := ""
+	for _, id := range ids {
+		workID, ok := matches[id.Kind+":"+id.Value]
+		if !ok {
+			continue
+		}
+		if firstKind == "" {
+			firstKind = id.Kind
+			result.WorkID = workID
+		}
+		if !seen[workID] {
+			seen[workID] = true
+			result.ConflictingWorkIDs = append(result.ConflictingWorkIDs, workID)
+		}
+	}
+	if len(result.ConflictingWorkIDs) > 1 {
+		result.WorkID = ""
+		return result
+	}
+	result.ConflictingWorkIDs = nil
+	result.Confidence = "high"
+	if firstKind == "ta" && !confirmed {
+		result.Confidence = "low"
+	}
+	return result
+}
+
 // Op is one position operation in the append-only per-user log.
 type Op struct {
 	UserID      string
 	Seq         int64
-	OpID        string // client-generated UUIDv7
+	OpID        string // client-generated deterministic opaque id
 	WorkID      string
 	EditionSHA  *string
 	DeviceID    string // server-side, from the token
@@ -144,6 +186,12 @@ func SessionFingerprint(s Session) string {
 	if s.SourceKey != nil {
 		source = *s.SourceKey
 	}
+	// Inferred-session provenance may be backfilled after deployment.
+	// It does not change the immutable reading fact.
+	if s.Origin == OriginInferred {
+		alias = ""
+		source = ""
+	}
 	raw := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%.17g\x00%.17g\x00%d\x00%s\x00%s\x00%s",
 		s.WorkID, edition, s.DeviceID, s.StartedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano),
 		s.EndedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), s.SessionID, s.StartProg, s.EndProg,
@@ -173,6 +221,59 @@ type OpResult struct {
 	Status string // "applied" | "duplicate" | "conflict" | "invalid"
 	Seq    int64  // when applied or duplicate
 	Reason string // when conflict or invalid
+}
+
+// InferredSessionGroup is one closed kosync op group and the session
+// derived from that exact snapshot.
+type InferredSessionGroup struct {
+	Session Session
+	Ops     []Op
+}
+
+// InferenceOpFingerprint captures the fields used to group and
+// materialize one position op.
+func InferenceOpFingerprint(o Op) string {
+	edition, alias := "", ""
+	if o.EditionSHA != nil {
+		edition = *o.EditionSHA
+	}
+	if o.OriginAlias != nil {
+		alias = *o.OriginAlias
+	}
+	raw := fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%.17g\x00%s\x00%s\x00%s",
+		o.Seq, o.OpID, o.WorkID, edition, o.DeviceID, o.Progression, o.Origin, alias,
+		o.ReceivedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano))
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+// ValidInferredSessionGroup verifies that the session was derived from
+// the exact ordered kosync snapshot supplied with it.
+func ValidInferredSessionGroup(group InferredSessionGroup) bool {
+	if len(group.Ops) == 0 || group.Session.SessionID == "" ||
+		group.Session.Origin != OriginInferred {
+		return false
+	}
+	first, last := group.Ops[0], group.Ops[len(group.Ops)-1]
+	for i, op := range group.Ops {
+		if op.Origin != OriginKosync || op.WorkID != last.WorkID ||
+			op.DeviceID != last.DeviceID ||
+			!equalOptionalString(op.EditionSHA, last.EditionSHA) ||
+			!equalOptionalString(op.OriginAlias, last.OriginAlias) ||
+			(i > 0 && op.ReceivedAt.Before(group.Ops[i-1].ReceivedAt)) {
+			return false
+		}
+	}
+	ses := group.Session
+	return ses.WorkID == last.WorkID && ses.DeviceID == last.DeviceID &&
+		ses.StartedAt.Equal(first.ReceivedAt) && ses.EndedAt.Equal(last.ReceivedAt) &&
+		ses.StartProg == first.Progression && ses.EndProg == last.Progression &&
+		equalOptionalString(ses.EditionSHA, last.EditionSHA) &&
+		equalOptionalString(ses.OriginAlias, last.OriginAlias)
+}
+
+func equalOptionalString(a, b *string) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 // ChangesPage is one page of the delta-sync stream.
@@ -212,8 +313,11 @@ type Store interface {
 	TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error
 
 	// Works / editions / aliases.
-	// ResolveAliases returns the distinct work IDs that any of the given
-	// aliases currently map to, in alias-priority order per identifier.
+	// ResolveWork atomically resolves identifiers ordered strongest-first,
+	// creates the proposed work when none match, and promotes missing aliases
+	// only for a high-confidence result.
+	ResolveWork(ctx context.Context, userID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool) (WorkResolution, error)
+	// ResolveAliases reports the current alias graph without mutation.
 	ResolveAliases(ctx context.Context, userID string, ids []Identifier) (map[string]string, error)
 	CreateWork(ctx context.Context, w Work, e *Edition, ids []Identifier) error
 	AddAliases(ctx context.Context, userID, workID string, ids []Identifier) error
@@ -243,13 +347,14 @@ type Store interface {
 	AppendOps(ctx context.Context, userID, deviceID string, ops []Op) ([]OpResult, error)
 	Changes(ctx context.Context, userID string, since int64, limit int) (ChangesPage, error)
 	Positions(ctx context.Context, userID, workID string, limit int) ([]Op, error)
-	OpsBefore(ctx context.Context, userID string, before time.Time) ([]Op, error)
+	PendingInferenceOps(ctx context.Context, userID string) ([]Op, error)
 	HeadsFor(ctx context.Context, userID string) (Heads, error)
 	CompactionHorizon(ctx context.Context, userID string) (int64, error)
 	Compact(ctx context.Context, userID string, olderThan time.Time) (newHorizon int64, err error)
 
 	// Sessions.
 	AppendSessions(ctx context.Context, userID string, ss []Session) error
+	AppendInferredSession(ctx context.Context, userID string, group InferredSessionGroup) error
 	SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]Session, error)
 	SessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
@@ -281,9 +386,11 @@ type Store interface {
 	RedeemPairingCode(ctx context.Context, codeSHA256 string, at time.Time) (PairingCode, error)
 	CreateKosyncDevice(ctx context.Context, d KosyncDevice) error
 	KosyncDeviceByKey(ctx context.Context, keySHA256 string) (KosyncDevice, error)
+	AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID string, op Op) (OpResult, error)
 	CreateKopluginDevice(ctx context.Context, d KopluginDevice) error
 	KopluginDeviceByToken(ctx context.Context, tokenSHA256 string) (KopluginDevice, error)
 	UpsertKopluginSession(ctx context.Context, userID string, ses Session) (status string, err error)
+	UpsertKopluginSessionByAlias(ctx context.Context, userID, partialMD5 string, ses Session) (status string, err error)
 	CreatePendingWork(ctx context.Context, userID string, partialMD5 string) (workID string, created bool, err error)
 	WorkIDByAlias(ctx context.Context, userID, kind, value string) (string, error)
 }

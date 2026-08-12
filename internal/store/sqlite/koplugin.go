@@ -59,6 +59,44 @@ func (s *Store) UpsertKopluginSession(ctx context.Context, userID string, ses st
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return "", err
+	}
+	status, err := upsertKopluginSessionTx(ctx, tx, userID, ses)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+func (s *Store) UpsertKopluginSessionByAlias(ctx context.Context, userID, partialMD5 string, ses store.Session) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return "", err
+	}
+	workID, _, err := createPendingWorkTx(ctx, tx, userID, partialMD5)
+	if err != nil {
+		return "", err
+	}
+	ses.WorkID = workID
+	status, err := upsertKopluginSessionTx(ctx, tx, userID, ses)
+	if err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session) (string, error) {
 	now := formatTime(time.Now())
 
 	// Does this exact session_id already exist? -> identical re-upload.
@@ -69,13 +107,13 @@ func (s *Store) UpsertKopluginSession(ctx context.Context, userID string, ses st
 		return "", err
 	}
 	if cnt > 0 {
-		return "duplicate", tx.Commit()
+		return "duplicate", nil
 	}
 
 	// Latest revision for this source key?
 	var curSessionID string
 	var curRev int64
-	err = tx.QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		`SELECT session_id, revision FROM session_supersessions
 		 WHERE user_id = ? AND source_key = ?
 		 ORDER BY revision DESC LIMIT 1`, userID, *ses.SourceKey).Scan(&curSessionID, &curRev)
@@ -97,7 +135,7 @@ func (s *Store) UpsertKopluginSession(ctx context.Context, userID string, ses st
 		 VALUES (?, ?, ?, ?, ?)`, userID, *ses.SourceKey, nextRev, ses.SessionID, now); err != nil {
 		return "", err
 	}
-	return status, tx.Commit()
+	return status, nil
 }
 
 func insertSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session, now string) error {
