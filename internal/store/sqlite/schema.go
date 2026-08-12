@@ -325,4 +325,319 @@ BEGIN
 END;
 `
 
-var migrations = []string{schema, migration2, migration3, migration4, migration5}
+// migration6 adds the shared catalog, ACL, metadata, durable ingest, and
+// per-user catalog-to-work identity tables. Cross-library and cross-user
+// joins are protected by composite foreign keys.
+const migration6 = `
+CREATE TABLE libraries (
+    id            TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    quota_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    kind          TEXT NOT NULL CHECK (kind IN ('managed', 'watched')),
+    name          TEXT NOT NULL,
+    root_path     TEXT,
+    config_json   BLOB,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (id, quota_user_id),
+    CHECK ((kind = 'managed' AND root_path IS NULL) OR
+           (kind = 'watched' AND root_path IS NOT NULL))
+);
+CREATE UNIQUE INDEX libraries_watched_root
+    ON libraries(root_path) WHERE root_path IS NOT NULL;
+CREATE INDEX libraries_owner ON libraries(owner_user_id);
+
+CREATE TABLE library_access (
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL CHECK (role IN ('read', 'manage')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (library_id, user_id)
+);
+CREATE INDEX library_access_user ON library_access(user_id, library_id);
+
+CREATE TABLE books (
+    id                    TEXT PRIMARY KEY,
+    library_id            TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    status                TEXT NOT NULL CHECK (status IN ('active', 'missing', 'trashed', 'review')),
+    title                 TEXT NOT NULL DEFAULT '',
+    title_source          TEXT NOT NULL DEFAULT '',
+    title_locked          INTEGER NOT NULL DEFAULT 0 CHECK (title_locked IN (0, 1)),
+    subtitle              TEXT NOT NULL DEFAULT '',
+    subtitle_source       TEXT NOT NULL DEFAULT '',
+    subtitle_locked       INTEGER NOT NULL DEFAULT 0 CHECK (subtitle_locked IN (0, 1)),
+    description           TEXT NOT NULL DEFAULT '',
+    description_source    TEXT NOT NULL DEFAULT '',
+    description_locked    INTEGER NOT NULL DEFAULT 0 CHECK (description_locked IN (0, 1)),
+    publisher             TEXT NOT NULL DEFAULT '',
+    publisher_source      TEXT NOT NULL DEFAULT '',
+    publisher_locked      INTEGER NOT NULL DEFAULT 0 CHECK (publisher_locked IN (0, 1)),
+    published_date        TEXT NOT NULL DEFAULT '',
+    published_date_source TEXT NOT NULL DEFAULT '',
+    published_date_locked INTEGER NOT NULL DEFAULT 0 CHECK (published_date_locked IN (0, 1)),
+    raw_metadata_json     BLOB,
+    created_at            TEXT NOT NULL,
+    updated_at            TEXT NOT NULL,
+    trashed_at            TEXT,
+    trash_expires_at      TEXT,
+    UNIQUE (library_id, id)
+);
+CREATE INDEX books_library_status ON books(library_id, status, created_at);
+
+CREATE TABLE blobs (
+    sha256      TEXT PRIMARY KEY,
+    size_bytes  INTEGER NOT NULL CHECK (size_bytes >= 0),
+    created_at  TEXT NOT NULL,
+    orphaned_at TEXT
+);
+
+CREATE TABLE book_files (
+    id                   TEXT PRIMARY KEY,
+    library_id           TEXT NOT NULL,
+    book_id              TEXT NOT NULL,
+    blob_sha256          TEXT NOT NULL REFERENCES blobs(sha256) ON DELETE RESTRICT,
+    source               TEXT NOT NULL CHECK (source IN ('upload', 'watched')),
+    source_relative_path TEXT,
+    original_filename    TEXT NOT NULL DEFAULT '',
+    media_type           TEXT NOT NULL DEFAULT 'application/epub+zip',
+    partial_md5          TEXT,
+    dc_identifier        TEXT,
+    availability         TEXT NOT NULL CHECK (availability IN ('available', 'missing', 'superseded')),
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+CREATE INDEX book_files_book ON book_files(library_id, book_id, availability);
+CREATE INDEX book_files_blob ON book_files(blob_sha256);
+CREATE INDEX book_files_source_path ON book_files(library_id, source_relative_path);
+
+CREATE TABLE blob_reservations (
+    quota_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blob_sha256   TEXT NOT NULL REFERENCES blobs(sha256) ON DELETE CASCADE,
+    bytes         INTEGER NOT NULL CHECK (bytes >= 0),
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (quota_user_id, blob_sha256)
+);
+
+CREATE TABLE book_identifiers (
+    library_id TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    scheme     TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    locked     INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, scheme, value),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+CREATE INDEX book_identifiers_lookup ON book_identifiers(library_id, scheme, value);
+
+CREATE TABLE series (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE book_series (
+    library_id TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    series_id  TEXT NOT NULL,
+    position   REAL,
+    source     TEXT NOT NULL,
+    locked     INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, series_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, series_id)
+        REFERENCES series(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE contributors (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE book_contributors (
+    library_id    TEXT NOT NULL,
+    book_id       TEXT NOT NULL,
+    contributor_id TEXT NOT NULL,
+    role          TEXT NOT NULL,
+    position      INTEGER NOT NULL DEFAULT 0,
+    source        TEXT NOT NULL,
+    locked        INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, contributor_id, role),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, contributor_id)
+        REFERENCES contributors(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE tags (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE book_tags (
+    library_id TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    tag_id     TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    locked     INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, tag_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, tag_id)
+        REFERENCES tags(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE genres (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE book_genres (
+    library_id TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    genre_id   TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    locked     INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, genre_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, genre_id)
+        REFERENCES genres(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE book_languages (
+    library_id  TEXT NOT NULL,
+    book_id     TEXT NOT NULL,
+    language    TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    locked      INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    PRIMARY KEY (book_id, language),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE collections (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    created_by      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE collection_books (
+    library_id   TEXT NOT NULL,
+    collection_id TEXT NOT NULL,
+    book_id      TEXT NOT NULL,
+    position     INTEGER NOT NULL DEFAULT 0,
+    added_at     TEXT NOT NULL,
+    PRIMARY KEY (collection_id, book_id),
+    FOREIGN KEY (library_id, collection_id)
+        REFERENCES collections(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE reading_lists (
+    id              TEXT PRIMARY KEY,
+    library_id      TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    created_by      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    UNIQUE (library_id, id),
+    UNIQUE (library_id, normalized_name)
+);
+
+CREATE TABLE reading_list_books (
+    library_id     TEXT NOT NULL,
+    reading_list_id TEXT NOT NULL,
+    book_id        TEXT NOT NULL,
+    position       INTEGER NOT NULL CHECK (position >= 0),
+    added_at       TEXT NOT NULL,
+    PRIMARY KEY (reading_list_id, book_id),
+    UNIQUE (reading_list_id, position),
+    FOREIGN KEY (library_id, reading_list_id)
+        REFERENCES reading_lists(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE user_book_works (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    library_id TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    work_id    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, book_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id, work_id)
+        REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX user_book_works_work ON user_book_works(user_id, work_id);
+
+CREATE TABLE ingest_jobs (
+    id                   TEXT PRIMARY KEY,
+    user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    library_id           TEXT NOT NULL,
+    quota_user_id        TEXT NOT NULL,
+    source               TEXT NOT NULL CHECK (source IN ('upload', 'watched')),
+    client_key           TEXT,
+    state                TEXT NOT NULL CHECK (state IN ('received', 'staged', 'validated', 'extracted', 'promoted', 'quarantined', 'failed')),
+    bytes_received       INTEGER NOT NULL DEFAULT 0 CHECK (bytes_received >= 0),
+    content_sha256       TEXT,
+    staging_path         TEXT,
+    source_relative_path TEXT,
+    book_library_id      TEXT,
+    book_id              TEXT,
+    error_code           TEXT,
+    error_detail         TEXT,
+    retry_count          INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    expires_at           TEXT,
+    CHECK ((book_library_id IS NULL AND book_id IS NULL) OR
+           (book_library_id IS NOT NULL AND book_id IS NOT NULL AND
+            book_library_id = library_id)),
+    FOREIGN KEY (book_library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE SET NULL,
+    FOREIGN KEY (library_id, quota_user_id)
+        REFERENCES libraries(id, quota_user_id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX ingest_jobs_client_key
+    ON ingest_jobs(user_id, library_id, client_key)
+    WHERE client_key IS NOT NULL;
+CREATE INDEX ingest_jobs_state ON ingest_jobs(state, updated_at);
+CREATE INDEX ingest_jobs_library ON ingest_jobs(library_id, created_at);
+`
+
+var migrations = []string{schema, migration2, migration3, migration4, migration5, migration6}

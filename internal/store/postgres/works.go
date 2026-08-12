@@ -107,23 +107,15 @@ func ensureAliases(ctx context.Context, tx *sql.Tx, userID, workID string, ids [
 	return nil
 }
 
-// ResolveWork resolves and promotes a work graph in one locked transaction.
-func (s *Store) ResolveWork(
+func resolveWorkTx(
 	ctx context.Context,
+	tx *sql.Tx,
 	userID string,
 	proposed store.Work,
 	editions []store.Edition,
 	ids []store.Identifier,
 	confirmed bool,
 ) (store.WorkResolution, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return store.WorkResolution{}, err
-	}
-	defer tx.Rollback()
-	if err := lockWorkGraph(ctx, tx, userID); err != nil {
-		return store.WorkResolution{}, err
-	}
 	matches, err := resolveMatches(ctx, tx, userID, ids)
 	if err != nil {
 		return store.WorkResolution{}, err
@@ -153,9 +145,6 @@ func (s *Store) ResolveWork(
 			userID); err != nil {
 			return store.WorkResolution{}, err
 		}
-		if err := tx.Commit(); err != nil {
-			return store.WorkResolution{}, err
-		}
 		return store.WorkResolution{
 			WorkID: proposed.ID, Confidence: "high", Created: true,
 		}, nil
@@ -173,6 +162,30 @@ func (s *Store) ResolveWork(
 		`UPDATE works SET pending = FALSE WHERE user_id = ? AND id = ?`),
 		userID, result.WorkID); err != nil {
 		return store.WorkResolution{}, err
+	}
+	return result, nil
+}
+
+// ResolveWork resolves and promotes a work graph in one locked transaction.
+func (s *Store) ResolveWork(
+	ctx context.Context,
+	userID string,
+	proposed store.Work,
+	editions []store.Edition,
+	ids []store.Identifier,
+	confirmed bool,
+) (store.WorkResolution, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.WorkResolution{}, err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return store.WorkResolution{}, err
+	}
+	result, err := resolveWorkTx(ctx, tx, userID, proposed, editions, ids, confirmed)
+	if err != nil || len(result.ConflictingWorkIDs) > 0 || result.Confidence == "low" {
+		return result, err
 	}
 	if err := tx.Commit(); err != nil {
 		return store.WorkResolution{}, err
@@ -383,6 +396,34 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 			return err
 		}
 	}
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE aliases
+		 SET work_id = ?
+		 WHERE user_id = ? AND work_id = ? AND kind = 'source'
+		   AND value IN (
+		       SELECT 'liseur-sync:' || m.book_id
+		       FROM user_book_works m
+		       JOIN book_files f
+		         ON f.library_id = m.library_id AND f.book_id = m.book_id
+		       WHERE m.user_id = ? AND m.work_id = ?
+		         AND f.blob_sha256 = ?
+		         AND f.availability IN ('available', 'missing')
+		   )`),
+		newWork.ID, userID, workID, userID, workID, editionSHA); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE user_book_works
+		 SET work_id = ?
+		 WHERE user_id = ? AND work_id = ?
+		   AND book_id IN (
+		       SELECT book_id FROM book_files
+		       WHERE blob_sha256 = ?
+		         AND availability IN ('available', 'missing')
+		   )`),
+		newWork.ID, userID, workID, editionSHA); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -459,6 +500,11 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	}
 	if _, err := tx.ExecContext(ctx, q(
 		`UPDATE sessions SET work_id = ? WHERE user_id = ? AND work_id = ?`),
+		intoWorkID, userID, fromWorkID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE user_book_works SET work_id = ? WHERE user_id = ? AND work_id = ?`),
 		intoWorkID, userID, fromWorkID); err != nil {
 		return err
 	}
