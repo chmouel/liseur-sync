@@ -64,8 +64,10 @@ deduplication is not semantic work sharing.
 
 If the catalog metadata or file changes, the mapping is not silently
 rewritten. A changed file becomes another edition or invokes the existing
-merge/split repair flow. Manual split and merge operations update or
-invalidate affected mappings explicitly.
+merge/split repair flow only after strong embedded identity or explicit
+confirmation. A different publication found at the same watched path gets a
+new `book_id` and no inherited mapping. Manual split and merge operations
+update or invalidate affected mappings explicitly.
 
 Existing works require no eager migration. The first catalog resolution
 finds matching aliases and backfills the join. A maintenance command may
