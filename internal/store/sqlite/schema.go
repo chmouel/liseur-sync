@@ -205,4 +205,87 @@ CREATE TABLE session_tombstones (
 );
 `
 
-var migrations = []string{schema, migration2}
+// migration3 records which kosync ops have already contributed to an
+// inferred session. Existing raw sessions and rolled-up history mark
+// their covered ops; unmatched activity remains pending.
+const migration3 = `
+ALTER TABLE ops ADD COLUMN inferred_session_id TEXT;
+
+UPDATE sessions
+SET origin_alias = (
+        SELECT MIN(o.origin_alias)
+        FROM ops o
+        WHERE o.user_id = sessions.user_id
+          AND o.device_id = sessions.device_id
+          AND o.received_at >= sessions.started_at
+          AND o.received_at <= sessions.ended_at
+          AND o.origin = 'kosync'
+    ),
+    work_id = (
+        SELECT MIN(o.work_id)
+        FROM ops o
+        WHERE o.user_id = sessions.user_id
+          AND o.device_id = sessions.device_id
+          AND o.received_at >= sessions.started_at
+          AND o.received_at <= sessions.ended_at
+          AND o.origin = 'kosync'
+    )
+WHERE origin = 'inferred'
+  AND edition_sha IS NULL
+  AND origin_alias IS NULL
+  AND 1 = (
+      SELECT COUNT(DISTINCT o.work_id || char(31) || COALESCE(o.origin_alias, ''))
+      FROM ops o
+      WHERE o.user_id = sessions.user_id
+        AND o.device_id = sessions.device_id
+        AND o.received_at >= sessions.started_at
+        AND o.received_at <= sessions.ended_at
+        AND o.origin = 'kosync'
+  );
+
+UPDATE ops
+SET inferred_session_id = (
+    SELECT s.session_id
+    FROM sessions s
+    WHERE s.user_id = ops.user_id
+      AND (s.work_id = ops.work_id
+           OR (s.origin_alias IS NULL AND s.edition_sha IS NULL))
+      AND s.device_id = ops.device_id
+      AND s.origin = 'inferred'
+      AND ops.received_at >= s.started_at
+      AND ops.received_at <= s.ended_at
+      AND (s.origin_alias = ops.origin_alias OR s.origin_alias IS NULL)
+    ORDER BY s.started_at DESC
+    LIMIT 1
+)
+WHERE origin = 'kosync'
+  AND EXISTS (
+      SELECT 1
+      FROM sessions s
+      WHERE s.user_id = ops.user_id
+        AND (s.work_id = ops.work_id
+             OR (s.origin_alias IS NULL AND s.edition_sha IS NULL))
+        AND s.device_id = ops.device_id
+        AND s.origin = 'inferred'
+        AND ops.received_at >= s.started_at
+        AND ops.received_at <= s.ended_at
+        AND (s.origin_alias = ops.origin_alias OR s.origin_alias IS NULL)
+  );
+
+UPDATE ops
+SET inferred_session_id = 'legacy-rollup'
+WHERE origin = 'kosync'
+  AND inferred_session_id IS NULL
+  AND EXISTS (
+      SELECT 1
+      FROM session_rollups r
+      WHERE r.user_id = ops.user_id
+        AND substr(ops.received_at, 1, 10) <= date(r.day, '+1 day')
+  );
+
+CREATE INDEX idx_ops_inference_pending
+    ON ops(user_id, received_at)
+    WHERE origin = 'kosync' AND inferred_session_id IS NULL;
+`
+
+var migrations = []string{schema, migration2, migration3}

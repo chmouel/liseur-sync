@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -22,7 +23,8 @@ func (s *Server) HandleSplit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.EditionSHA == "" {
+	req.EditionSHA = strings.ToLower(strings.TrimSpace(req.EditionSHA))
+	if req.EditionSHA == "" || len(req.EditionSHA) > 512 {
 		writeError(w, http.StatusBadRequest, "edition_sha required")
 		return
 	}
@@ -30,9 +32,17 @@ func (s *Server) HandleSplit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "work not found")
 		return
 	}
-	var aliases []store.Identifier
-	for _, a := range req.Aliases {
-		aliases = append(aliases, store.Identifier{Kind: a.Kind, Value: a.Value})
+	aliases, invalid := normalizeIdentifiers(req.Aliases)
+	if invalid != "" {
+		writeError(w, http.StatusBadRequest, invalid)
+		return
+	}
+	aliases = orderIdentifiers(aliases)
+	for _, alias := range aliases {
+		if alias.Kind == "sha256" && alias.Value != req.EditionSHA {
+			writeError(w, http.StatusBadRequest, "cannot move a different edition's sha256 alias")
+			return
+		}
 	}
 	newIDStr, err := newID()
 	if err != nil {
@@ -45,7 +55,7 @@ func (s *Server) HandleSplit(w http.ResponseWriter, r *http.Request) {
 		case store.ErrNotFound:
 			writeError(w, http.StatusNotFound, "edition not found")
 		case store.ErrConflict:
-			writeError(w, http.StatusConflict, "edition does not belong to work")
+			writeError(w, http.StatusConflict, "work cannot be split with the requested edition and aliases")
 		default:
 			writeError(w, http.StatusInternalServerError, "split failed")
 		}
@@ -73,6 +83,10 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 	if err := s.St.MergeWorks(r.Context(), tok.UserID, req.From, req.Into); err != nil {
 		if err == store.ErrNotFound {
 			writeError(w, http.StatusNotFound, "work not found")
+			return
+		}
+		if err == store.ErrConflict {
+			writeError(w, http.StatusConflict, "work with compacted history cannot be merged")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "merge failed")

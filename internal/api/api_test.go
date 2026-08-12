@@ -317,14 +317,58 @@ func TestAliasConflict409(t *testing.T) {
 		}
 	}
 
-	_, out := post(t, ts.URL+"/v1/works/resolve", bearerSecret(t, st, u.ID), map[string]any{
+	code, out := post(t, ts.URL+"/v1/works/resolve", bearerSecret(t, st, u.ID), map[string]any{
 		"identifiers": []map[string]string{
 			{"kind": "sha256", "value": "aaaa"},
 			{"kind": "sha256", "value": "bbbb"},
 		},
 	})
-	if out["works"] == nil {
-		t.Fatalf("want conflict listing works, got %v", out)
+	if code != http.StatusConflict || out["works"] == nil {
+		t.Fatalf("want 409 conflict listing works, got %d %v", code, out)
+	}
+}
+
+func TestSplitValidatesAndNormalizesAliases(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateWork(ctx,
+		store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()},
+		&store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w1"},
+		[]store.Identifier{
+			{Kind: "sha256", Value: "abc123"},
+			{Kind: "partial-md5", Value: "ffff"},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	token := bearerSecret(t, st, u.ID)
+
+	code, _ := post(t, ts.URL+"/v1/works/w1/split", token, map[string]any{
+		"edition_sha": "abc123",
+		"aliases": []map[string]string{
+			{"kind": "sha256", "value": "different-edition"},
+		},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("mismatched sha alias: want 400, got %d", code)
+	}
+
+	code, out := post(t, ts.URL+"/v1/works/w1/split", token, map[string]any{
+		"edition_sha": " ABC123 ",
+		"aliases": []map[string]string{
+			{"kind": "partial-md5", "value": " FFFF "},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("normalized split: %d %v", code, out)
+	}
+	got, err := st.WorkIDByAlias(ctx, u.ID, "partial-md5", "ffff")
+	if err != nil || got != out["work_id"] {
+		t.Fatalf("normalized alias not moved: work=%q response=%v err=%v", got, out, err)
 	}
 }
 
@@ -426,7 +470,8 @@ func TestSessionsAndInsights(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	now := time.Now().UTC()
+	current := time.Now().UTC()
+	now := time.Date(current.Year(), current.Month(), current.Day(), 12, 0, 0, 0, time.UTC)
 	// Two sessions: +0.10 progression over 30 min active each.
 	mk := func(id string, start time.Time, sp, ep float64) map[string]any {
 		return map[string]any{
@@ -529,7 +574,7 @@ func TestSessionRollupPreservesTotals(t *testing.T) {
 	if err := st.CreateWork(ctx, w, &ed, nil); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-200 * 24 * time.Hour).Truncate(time.Second)
+	old := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	ses := store.Session{
 		SessionID: "rollup-session", WorkID: w.ID, EditionSHA: &ed.SHA256, DeviceID: "reader",
 		StartedAt: old, EndedAt: old.Add(time.Hour), StartProg: 0.1, EndProg: 0.2,

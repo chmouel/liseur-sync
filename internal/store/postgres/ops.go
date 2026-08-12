@@ -18,7 +18,20 @@ func (s *Store) AppendOps(ctx context.Context, userID, deviceID string, ops []st
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return nil, err
+	}
+	results, err := appendOpsTx(ctx, tx, userID, deviceID, ops)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
 
+func appendOpsTx(ctx context.Context, tx *sql.Tx, userID, deviceID string, ops []store.Op) ([]store.OpResult, error) {
 	results := make([]store.OpResult, len(ops))
 	now := time.Now().UTC()
 
@@ -73,10 +86,31 @@ func (s *Store) AppendOps(ctx context.Context, userID, deviceID string, ops []st
 		}
 		results[i].Seq = seq
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
 	return results, nil
+}
+
+func (s *Store) AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID string, op store.Op) (store.OpResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.OpResult{}, err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return store.OpResult{}, err
+	}
+	workID, _, err := createPendingWorkTx(ctx, tx, userID, partialMD5)
+	if err != nil {
+		return store.OpResult{}, err
+	}
+	op.WorkID = workID
+	results, err := appendOpsTx(ctx, tx, userID, deviceID, []store.Op{op})
+	if err != nil {
+		return store.OpResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.OpResult{}, err
+	}
+	return results[0], nil
 }
 
 func sameOp(ctx context.Context, tx *sql.Tx, userID string, o store.Op, deviceID string) (bool, error) {
@@ -210,12 +244,14 @@ func (s *Store) CompactionHorizon(ctx context.Context, userID string) (int64, er
 	return h, err
 }
 
-// OpsBefore returns all ops received before the given time.
-func (s *Store) OpsBefore(ctx context.Context, userID string, before time.Time) ([]store.Op, error) {
+// PendingInferenceOps returns every unmaterialized kosync op, including
+// recent ones needed to decide whether an older group is truly closed.
+func (s *Store) PendingInferenceOps(ctx context.Context, userID string) ([]store.Op, error) {
 	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND received_at < ?
+		`SELECT `+opCols+` FROM ops
+		 WHERE user_id = ? AND origin = 'kosync' AND inferred_session_id IS NULL
 		 ORDER BY device_id, work_id, received_at, seq`),
-		userID, before.UTC())
+		userID)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +279,7 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 	rows, err := tx.QueryContext(ctx, q(
 		`DELETE FROM ops
 		 WHERE user_id = ? AND received_at < ?
+		 AND (origin <> 'kosync' OR inferred_session_id IS NOT NULL)
 		 AND seq NOT IN (
 		     SELECT MAX(seq) FROM ops o2
 		     WHERE o2.user_id = ops.user_id AND o2.received_at < ?

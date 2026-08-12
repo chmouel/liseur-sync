@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/infer"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -20,6 +21,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
+	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })
 	t.Run("ChangesPaginationAndHeads", func(t *testing.T) { testChangesAndHeads(t, open) })
 	t.Run("SplitAndMerge", func(t *testing.T) { testSplitAndMerge(t, open) })
@@ -29,6 +31,8 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
+	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })
+	t.Run("InferredSessionIdentity", func(t *testing.T) { testInferredSessionIdentity(t, open) })
 }
 
 func Ptr[T any](v T) *T { return &v }
@@ -143,6 +147,279 @@ func testResolveAliases(t *testing.T, open OpenFunc) {
 	}
 }
 
+func testAtomicWorkResolution(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "resolver")
+	ids := []store.Identifier{
+		{Kind: "sha256", Value: "same-sha"},
+		{Kind: "partial-md5", Value: "same-md5"},
+	}
+
+	const workers = 12
+	start := make(chan struct{})
+	results := make(chan store.WorkResolution, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			workID := fmt.Sprintf("candidate-%02d", i)
+			result, err := s.ResolveWork(ctx, u.ID,
+				store.Work{
+					ID: workID, UserID: u.ID, Title: "Concurrent",
+					CreatedAt: time.Now(),
+				},
+				[]store.Edition{{UserID: u.ID, SHA256: "same-sha", WorkID: workID}},
+				ids, false)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- result
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent resolve: %v", err)
+	}
+
+	var resolved string
+	created := 0
+	for result := range results {
+		if len(result.ConflictingWorkIDs) != 0 || result.Confidence != "high" {
+			t.Fatalf("unexpected resolution: %+v", result)
+		}
+		if resolved == "" {
+			resolved = result.WorkID
+		} else if result.WorkID != resolved {
+			t.Fatalf("split resolution: %q != %q", result.WorkID, resolved)
+		}
+		if result.Created {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("want exactly one creation, got %d", created)
+	}
+	works, err := s.ListWorks(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || works[0].Work.ID != resolved {
+		t.Fatalf("want one resolved work %q, got %+v", resolved, works)
+	}
+	got, err := s.ResolveAliases(ctx, u.ID, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if got[id.Kind+":"+id.Value] != resolved {
+			t.Fatalf("alias %s:%s did not converge: %v", id.Kind, id.Value, got)
+		}
+	}
+	edition, err := s.EditionBySHA(ctx, u.ID, "same-sha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edition.WorkID != resolved {
+		t.Fatalf("edition mapped to %q, want %q", edition.WorkID, resolved)
+	}
+
+	conflictUser := MkUser(t, s, "resolver-conflict")
+	MkWork(t, s, conflictUser, "wa", "sha-a")
+	MkWork(t, s, conflictUser, "wb", "sha-b")
+	conflictIDs := []store.Identifier{
+		{Kind: "sha256", Value: "sha-a"},
+		{Kind: "sha256", Value: "sha-b"},
+		{Kind: "source", Value: "catalog:new"},
+	}
+	conflict, err := s.ResolveWork(ctx, conflictUser.ID,
+		store.Work{ID: "wc", UserID: conflictUser.ID, CreatedAt: time.Now()},
+		nil, conflictIDs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(conflict.ConflictingWorkIDs) != "[wa wb]" {
+		t.Fatalf("want ordered conflict [wa wb], got %+v", conflict)
+	}
+	got, err = s.ResolveAliases(ctx, conflictUser.ID,
+		[]store.Identifier{{Kind: "source", Value: "catalog:new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("conflict partially registered alias: %v", got)
+	}
+	works, err = s.ListWorks(ctx, conflictUser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 2 {
+		t.Fatalf("conflict partially created a work: %+v", works)
+	}
+
+	editionUser := MkUser(t, s, "resolver-edition")
+	base := store.Work{
+		ID: "base", UserID: editionUser.ID, Title: "Base", CreatedAt: time.Now(),
+	}
+	if err := s.CreateWork(ctx, base, nil,
+		[]store.Identifier{{Kind: "source", Value: "catalog:base"}}); err != nil {
+		t.Fatal(err)
+	}
+	editionResult, err := s.ResolveWork(ctx, editionUser.ID,
+		store.Work{ID: "unused", UserID: editionUser.ID, CreatedAt: time.Now()},
+		[]store.Edition{{UserID: editionUser.ID, SHA256: "new-edition", WorkID: "unused"}},
+		[]store.Identifier{
+			{Kind: "sha256", Value: "new-edition"},
+			{Kind: "source", Value: "catalog:base"},
+		}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if editionResult.WorkID != base.ID || editionResult.Created {
+		t.Fatalf("new edition did not resolve onto base: %+v", editionResult)
+	}
+	edition, err = s.EditionBySHA(ctx, editionUser.ID, "new-edition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edition.WorkID != base.ID {
+		t.Fatalf("new edition mapped to %q, want %q", edition.WorkID, base.ID)
+	}
+
+	multiUser := MkUser(t, s, "resolver-multi-edition")
+	multiIDs := []store.Identifier{
+		{Kind: "sha256", Value: "multi-a"},
+		{Kind: "sha256", Value: "multi-b"},
+		{Kind: "source", Value: "catalog:multi"},
+	}
+	multiResult, err := s.ResolveWork(ctx, multiUser.ID,
+		store.Work{ID: "multi", UserID: multiUser.ID, CreatedAt: time.Now()},
+		[]store.Edition{
+			{UserID: multiUser.ID, SHA256: "multi-a", WorkID: "multi"},
+			{UserID: multiUser.ID, SHA256: "multi-b", WorkID: "multi"},
+		},
+		multiIDs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !multiResult.Created || multiResult.WorkID != "multi" {
+		t.Fatalf("multiple editions did not create one work: %+v", multiResult)
+	}
+	for _, sha := range []string{"multi-a", "multi-b"} {
+		edition, err = s.EditionBySHA(ctx, multiUser.ID, sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if edition.WorkID != "multi" {
+			t.Fatalf("edition %q mapped to %q", sha, edition.WorkID)
+		}
+	}
+
+	fuzzyUser := MkUser(t, s, "resolver-fuzzy")
+	fuzzy := store.Work{
+		ID: "fuzzy", UserID: fuzzyUser.ID, Title: "Fuzzy", CreatedAt: time.Now(),
+	}
+	if err := s.CreateWork(ctx, fuzzy, nil,
+		[]store.Identifier{{Kind: "ta", Value: "fuzzy|author"}}); err != nil {
+		t.Fatal(err)
+	}
+	fuzzyIDs := []store.Identifier{
+		{Kind: "sha256", Value: "fuzzy-sha"},
+		{Kind: "ta", Value: "fuzzy|author"},
+	}
+	fuzzyResult, err := s.ResolveWork(ctx, fuzzyUser.ID,
+		store.Work{ID: "unused-fuzzy", UserID: fuzzyUser.ID, CreatedAt: time.Now()},
+		[]store.Edition{{UserID: fuzzyUser.ID, SHA256: "fuzzy-sha", WorkID: "unused-fuzzy"}},
+		fuzzyIDs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fuzzyResult.WorkID != fuzzy.ID || fuzzyResult.Confidence != "low" {
+		t.Fatalf("want low-confidence fuzzy result, got %+v", fuzzyResult)
+	}
+	if _, err := s.EditionBySHA(ctx, fuzzyUser.ID, "fuzzy-sha"); err != store.ErrNotFound {
+		t.Fatalf("unconfirmed fuzzy match promoted edition: %v", err)
+	}
+	got, err = s.ResolveAliases(ctx, fuzzyUser.ID,
+		[]store.Identifier{{Kind: "sha256", Value: "fuzzy-sha"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("unconfirmed fuzzy match promoted alias: %v", got)
+	}
+	fuzzyResult, err = s.ResolveWork(ctx, fuzzyUser.ID,
+		store.Work{ID: "unused-confirmed", UserID: fuzzyUser.ID, CreatedAt: time.Now()},
+		[]store.Edition{{UserID: fuzzyUser.ID, SHA256: "fuzzy-sha", WorkID: "unused-confirmed"}},
+		fuzzyIDs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fuzzyResult.WorkID != fuzzy.ID || fuzzyResult.Confidence != "high" {
+		t.Fatalf("want confirmed high-confidence result, got %+v", fuzzyResult)
+	}
+	edition, err = s.EditionBySHA(ctx, fuzzyUser.ID, "fuzzy-sha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edition.WorkID != fuzzy.ID {
+		t.Fatalf("confirmed edition mapped to %q, want %q", edition.WorkID, fuzzy.ID)
+	}
+
+	pendingUser := MkUser(t, s, "resolver-pending")
+	start = make(chan struct{})
+	pendingIDs := make(chan string, workers)
+	createdFlags := make(chan bool, workers)
+	errs = make(chan error, workers)
+	wg = sync.WaitGroup{}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			workID, wasCreated, err := s.CreatePendingWork(ctx, pendingUser.ID, "pending-md5")
+			if err != nil {
+				errs <- err
+				return
+			}
+			pendingIDs <- workID
+			createdFlags <- wasCreated
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(pendingIDs)
+	close(createdFlags)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent pending resolve: %v", err)
+	}
+	resolved = ""
+	for workID := range pendingIDs {
+		if resolved == "" {
+			resolved = workID
+		} else if workID != resolved {
+			t.Fatalf("split pending resolution: %q != %q", workID, resolved)
+		}
+	}
+	created = 0
+	for wasCreated := range createdFlags {
+		if wasCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("want one pending work creation, got %d", created)
+	}
+}
+
 func testAppendOps(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
@@ -254,7 +531,7 @@ func testSplitAndMerge(t *testing.T, open OpenFunc) {
 
 	newWork := store.Work{ID: "w2", UserID: u.ID, Title: "split", CreatedAt: time.Now()}
 	err := s.SplitWork(ctx, u.ID, w.ID, "abc123",
-		[]store.Identifier{{Kind: "sha256", Value: "abc123"}, {Kind: "dc", Value: "urn:isbn:9780316419568-w1"}},
+		[]store.Identifier{{Kind: "dc", Value: "urn:isbn:9780316419568-w1"}},
 		newWork)
 	if err != nil {
 		t.Fatal(err)
@@ -279,6 +556,12 @@ func testSplitAndMerge(t *testing.T, open OpenFunc) {
 	})
 	if got["sha256:abc123"] != "w2" || got["partial-md5:md5-w1"] != w.ID {
 		t.Fatalf("bad alias split: %v", got)
+	}
+
+	if err := s.SplitWork(ctx, u.ID, "w2", "abc123",
+		[]store.Identifier{{Kind: "sha256", Value: "other-edition"}},
+		store.Work{ID: "w3", UserID: u.ID, CreatedAt: time.Now()}); err != store.ErrConflict {
+		t.Fatalf("moving another edition's sha alias: want conflict, got %v", err)
 	}
 
 	if err := s.MergeWorks(ctx, u.ID, "w2", w.ID); err != nil {
@@ -366,6 +649,43 @@ func testSessionRollups(t *testing.T, open OpenFunc) {
 	changed.EndProg = 0.3
 	if err := s.AppendSessions(ctx, u.ID, []store.Session{changed}); err != store.ErrIDMismatch {
 		t.Fatalf("archived mismatch: want ErrIDMismatch, got %v", err)
+	}
+	MkWork(t, s, u, "rollup-target", "rollup-target-sha")
+	if err := s.SplitWork(ctx, u.ID, w.ID, "rollup-sha", nil,
+		store.Work{ID: "rollup-split", UserID: u.ID, CreatedAt: time.Now()}); err != store.ErrConflict {
+		t.Fatalf("split with compacted history: want conflict, got %v", err)
+	}
+	if err := s.MergeWorks(ctx, u.ID, w.ID, "rollup-target"); err != store.ErrConflict {
+		t.Fatalf("merge with compacted history: want conflict, got %v", err)
+	}
+
+	staleUser := MkUser(t, s, "rollup-stale")
+	staleWork := MkWork(t, s, staleUser, "stale-w1", "stale-sha")
+	staleSession := store.Session{
+		SessionID: "stale-session", WorkID: staleWork.ID, EditionSHA: Ptr("stale-sha"), DeviceID: "d1",
+		StartedAt: old, EndedAt: old.Add(time.Hour), StartProg: 0.1, EndProg: 0.2,
+		Origin: store.OriginNative,
+	}
+	if err := s.AppendSessions(ctx, staleUser.ID, []store.Session{staleSession}); err != nil {
+		t.Fatal(err)
+	}
+	staleSnapshot, err := s.SessionsEndedBefore(ctx, staleUser.ID, time.Now())
+	if err != nil || len(staleSnapshot) != 1 {
+		t.Fatalf("stale snapshot: %+v %v", staleSnapshot, err)
+	}
+	if err := s.SplitWork(ctx, staleUser.ID, staleWork.ID, "stale-sha", nil,
+		store.Work{ID: "stale-w2", UserID: staleUser.ID, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	staleRollup := store.SessionRollup{
+		UserID: staleUser.ID, WorkID: staleWork.ID, Day: day,
+		ActiveSeconds: 3600, Pages: 1, ProgDelta: 0.1, SessionCount: 1,
+	}
+	if err := s.ApplyRollups(ctx, staleUser.ID, []store.SessionRollup{staleRollup}, staleSnapshot); err != store.ErrConflict {
+		t.Fatalf("stale rollup snapshot: want conflict, got %v", err)
+	}
+	if got, err := s.SessionsForWork(ctx, staleUser.ID, "stale-w2", 10); err != nil || len(got) != 1 {
+		t.Fatalf("stale rollup deleted moved session: %+v %v", got, err)
 	}
 }
 
@@ -537,4 +857,296 @@ func testKopluginUpsert(t *testing.T, open OpenFunc) {
 	if err != nil || st != "duplicate" {
 		t.Fatalf("old revision re-upload: %q %v", st, err)
 	}
+}
+
+func testLegacyAliasWritesAtomic(t *testing.T, open OpenFunc) {
+	t.Run("KosyncSplit", func(t *testing.T) {
+		s := open(t)
+		ctx := context.Background()
+		u := MkUser(t, s, "kosync-split")
+		w := MkWork(t, s, u, "w1", "sha1")
+		alias := "md5-w1"
+		op := store.Op{
+			OpID: "kosync-split-op", ClientTS: time.Now(), Progression: 0.4,
+			Origin: store.OriginKosync, OriginAlias: Ptr("partial-md5:" + alias),
+		}
+		runConcurrent(t,
+			func() error {
+				result, err := s.AppendKosyncOp(ctx, u.ID, alias, "kosync:kobo", op)
+				if err == nil && result.Status == "conflict" {
+					return fmt.Errorf("append conflict: %+v", result)
+				}
+				return err
+			},
+			func() error {
+				return s.SplitWork(ctx, u.ID, w.ID, "sha1",
+					[]store.Identifier{{Kind: "partial-md5", Value: alias}},
+					store.Work{ID: "w2", UserID: u.ID, CreatedAt: time.Now()})
+			})
+		assertOpFollowsAlias(t, s, u.ID, alias, op.OpID)
+	})
+
+	t.Run("KosyncMerge", func(t *testing.T) {
+		s := open(t)
+		ctx := context.Background()
+		u := MkUser(t, s, "kosync-merge")
+		MkWork(t, s, u, "w1", "sha1")
+		MkWork(t, s, u, "w2", "sha2")
+		alias := "md5-w1"
+		op := store.Op{
+			OpID: "kosync-merge-op", ClientTS: time.Now(), Progression: 0.4,
+			Origin: store.OriginKosync, OriginAlias: Ptr("partial-md5:" + alias),
+		}
+		runConcurrent(t,
+			func() error {
+				result, err := s.AppendKosyncOp(ctx, u.ID, alias, "kosync:kobo", op)
+				if err == nil && result.Status == "conflict" {
+					return fmt.Errorf("append conflict: %+v", result)
+				}
+				return err
+			},
+			func() error { return s.MergeWorks(ctx, u.ID, "w1", "w2") })
+		assertOpFollowsAlias(t, s, u.ID, alias, op.OpID)
+	})
+
+	t.Run("KopluginSplit", func(t *testing.T) {
+		s := open(t)
+		ctx := context.Background()
+		u := MkUser(t, s, "koplugin-split")
+		w := MkWork(t, s, u, "w1", "sha1")
+		alias := "md5-w1"
+		ses := legacySession("koplugin-split-session", alias)
+		runConcurrent(t,
+			func() error {
+				_, err := s.UpsertKopluginSessionByAlias(ctx, u.ID, alias, ses)
+				return err
+			},
+			func() error {
+				return s.SplitWork(ctx, u.ID, w.ID, "sha1",
+					[]store.Identifier{{Kind: "partial-md5", Value: alias}},
+					store.Work{ID: "w2", UserID: u.ID, CreatedAt: time.Now()})
+			})
+		assertSessionFollowsAlias(t, s, u.ID, alias, ses.SessionID)
+	})
+
+	t.Run("KopluginMerge", func(t *testing.T) {
+		s := open(t)
+		ctx := context.Background()
+		u := MkUser(t, s, "koplugin-merge")
+		MkWork(t, s, u, "w1", "sha1")
+		MkWork(t, s, u, "w2", "sha2")
+		alias := "md5-w1"
+		ses := legacySession("koplugin-merge-session", alias)
+		runConcurrent(t,
+			func() error {
+				_, err := s.UpsertKopluginSessionByAlias(ctx, u.ID, alias, ses)
+				return err
+			},
+			func() error { return s.MergeWorks(ctx, u.ID, "w1", "w2") })
+		assertSessionFollowsAlias(t, s, u.ID, alias, ses.SessionID)
+	})
+
+	t.Run("NativeSessionMerge", func(t *testing.T) {
+		s := open(t)
+		ctx := context.Background()
+		u := MkUser(t, s, "native-session-merge")
+		MkWork(t, s, u, "w1", "sha1")
+		MkWork(t, s, u, "w2", "sha2")
+		ses := store.Session{
+			SessionID: "native-merge-session", WorkID: "w1", DeviceID: "phone",
+			StartedAt: time.Now().Add(-time.Hour), EndedAt: time.Now(),
+			StartProg: 0.1, EndProg: 0.2, Origin: store.OriginNative,
+		}
+		start := make(chan struct{})
+		appendResult := make(chan error, 1)
+		mergeResult := make(chan error, 1)
+		go func() {
+			<-start
+			appendResult <- s.AppendSessions(ctx, u.ID, []store.Session{ses})
+		}()
+		go func() {
+			<-start
+			mergeResult <- s.MergeWorks(ctx, u.ID, "w1", "w2")
+		}()
+		close(start)
+		appendErr := <-appendResult
+		if err := <-mergeResult; err != nil {
+			t.Fatal(err)
+		}
+		if appendErr == nil {
+			sessions, err := s.SessionsForWork(ctx, u.ID, "w2", 10)
+			if err != nil || len(sessions) != 1 || sessions[0].SessionID != ses.SessionID {
+				t.Fatalf("accepted native session lost during merge: %+v %v", sessions, err)
+			}
+		}
+	})
+}
+
+func testInferredSessionIdentity(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "inferred")
+	w := MkWork(t, s, u, "w1", "sha1")
+	alias := "md5-w1"
+	for i, progression := range []float64{0.4, 0.5} {
+		op := store.Op{
+			OpID: fmt.Sprintf("inferred-op-%d", i), ClientTS: time.Now(), Progression: progression,
+			Origin: store.OriginKosync, OriginAlias: Ptr("partial-md5:" + alias),
+		}
+		if _, err := s.AppendKosyncOp(ctx, u.ID, alias, "kosync:kobo", op); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := s.PendingInferenceOps(ctx, u.ID)
+	if err != nil || len(before) != 2 {
+		t.Fatalf("ops before split: %+v %v", before, err)
+	}
+	first := infer.Materialize(u.ID, before)
+	if first.OriginAlias == nil || *first.OriginAlias != "partial-md5:"+alias {
+		t.Fatalf("inferred session lost origin alias: %+v", first)
+	}
+
+	if err := s.SplitWork(ctx, u.ID, w.ID, "sha1",
+		[]store.Identifier{{Kind: "partial-md5", Value: alias}},
+		store.Work{ID: "w2", UserID: u.ID, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendInferredSession(ctx, u.ID,
+		store.InferredSessionGroup{Session: first, Ops: before}); err != store.ErrConflict {
+		t.Fatalf("stale inferred snapshot: want conflict, got %v", err)
+	}
+	if _, err := s.Compact(ctx, u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	afterSplit, err := s.PendingInferenceOps(ctx, u.ID)
+	if err != nil || len(afterSplit) != 2 {
+		t.Fatalf("ops after split: %+v %v", afterSplit, err)
+	}
+	for _, op := range afterSplit {
+		if op.WorkID != "w2" {
+			t.Fatalf("split did not move pending inference op: %+v", op)
+		}
+	}
+	second := infer.Materialize(u.ID, afterSplit)
+	if err := s.AppendInferredSession(ctx, u.ID,
+		store.InferredSessionGroup{Session: second, Ops: afterSplit}); err != nil {
+		t.Fatalf("materialize after split: %v", err)
+	}
+	if pending, err := s.PendingInferenceOps(ctx, u.ID); err != nil || len(pending) != 0 {
+		t.Fatalf("materialized ops remained pending: %+v %v", pending, err)
+	}
+	sessions, err := s.SessionsForWork(ctx, u.ID, "w2", 10)
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("split duplicated inferred session: %+v %v", sessions, err)
+	}
+
+	MkWork(t, s, u, "w3", "sha3")
+	if err := s.MergeWorks(ctx, u.ID, "w2", "w3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compact(ctx, u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.PendingInferenceOps(ctx, u.ID); err != nil || len(pending) != 0 {
+		t.Fatalf("compacted materialized ops became pending: %+v %v", pending, err)
+	}
+	sessions, err = s.SessionsForWork(ctx, u.ID, "w3", 10)
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("merge duplicated inferred session: %+v %v", sessions, err)
+	}
+
+	day := sessions[0].EndedAt.UTC().Format("2006-01-02")
+	rollup := store.SessionRollup{
+		UserID: u.ID, WorkID: "w3", Day: day,
+		ActiveSeconds: 1, ProgDelta: 0.1, SessionCount: 1,
+	}
+	if err := s.ApplyRollups(ctx, u.ID, []store.SessionRollup{rollup}, sessions); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.PendingInferenceOps(ctx, u.ID); err != nil || len(pending) != 0 {
+		t.Fatalf("rolled-up materialized ops became pending: %+v %v", pending, err)
+	}
+	rollups, err := s.RollupsForWork(ctx, u.ID, "w3")
+	if err != nil || len(rollups) != 1 || rollups[0].SessionCount != 1 {
+		t.Fatalf("materialize/compact/rollup duplicated totals: %+v %v", rollups, err)
+	}
+
+	legacyUser := MkUser(t, s, "inferred-legacy")
+	legacyWork := MkWork(t, s, legacyUser, "legacy-w1", "legacy-sha")
+	legacySession := store.Session{
+		SessionID: "legacy-inferred", WorkID: legacyWork.ID, DeviceID: "kosync:kobo",
+		StartedAt: time.Now().Add(-time.Hour), EndedAt: time.Now(),
+		StartProg: 0.1, EndProg: 0.2, Origin: store.OriginInferred,
+	}
+	if err := s.AppendSessions(ctx, legacyUser.ID, []store.Session{legacySession}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SplitWork(ctx, legacyUser.ID, legacyWork.ID, "legacy-sha", nil,
+		store.Work{ID: "legacy-w2", UserID: legacyUser.ID, CreatedAt: time.Now()}); err != store.ErrConflict {
+		t.Fatalf("split with unpartitionable inferred history: want conflict, got %v", err)
+	}
+}
+
+func runConcurrent(t *testing.T, first, second func() error) {
+	t.Helper()
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, fn := range []func() error{first, second} {
+		go func(fn func() error) {
+			<-start
+			errs <- fn()
+		}(fn)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func legacySession(id, alias string) store.Session {
+	started := time.Unix(1754800000, 0)
+	return store.Session{
+		SessionID: id, DeviceID: "koplugin:kobo",
+		StartedAt: started, EndedAt: started.Add(15 * time.Minute),
+		StartProg: 0.4, EndProg: 0.5, Origin: store.OriginKoplugin,
+		OriginAlias: Ptr("partial-md5:" + alias), SourceKey: Ptr(id + "-source"),
+	}
+}
+
+func assertOpFollowsAlias(t *testing.T, s store.Store, userID, alias, opID string) {
+	t.Helper()
+	workID, err := s.WorkIDByAlias(t.Context(), userID, "partial-md5", alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := s.Positions(t.Context(), userID, workID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range ops {
+		if op.OpID == opID {
+			return
+		}
+	}
+	t.Fatalf("op %q did not follow alias to work %q: %+v", opID, workID, ops)
+}
+
+func assertSessionFollowsAlias(t *testing.T, s store.Store, userID, alias, sessionID string) {
+	t.Helper()
+	workID, err := s.WorkIDByAlias(t.Context(), userID, "partial-md5", alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := s.SessionsForWork(t.Context(), userID, workID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range sessions {
+		if session.SessionID == sessionID {
+			return
+		}
+	}
+	t.Fatalf("session %q did not follow alias to work %q: %+v", sessionID, workID, sessions)
 }

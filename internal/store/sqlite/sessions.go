@@ -21,7 +21,16 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 		return err
 	}
 	defer tx.Rollback()
-	now := formatTime(time.Now())
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	if err := appendSessionsTx(ctx, tx, userID, ss, formatTime(time.Now())); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now string) error {
 	for _, ses := range ss {
 		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx,
@@ -64,6 +73,56 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 			string(ses.Origin), nullStr(ses.OriginAlias), nullStr(ses.SourceKey), now)
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) AppendInferredSession(ctx context.Context, userID string, group store.InferredSessionGroup) error {
+	if !store.ValidInferredSessionGroup(group) {
+		return store.ErrConflict
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	for _, expected := range group.Ops {
+		current, err := scanOp(tx.QueryRowContext(ctx,
+			`SELECT `+opCols+` FROM ops
+			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL`,
+			userID, expected.OpID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if store.InferenceOpFingerprint(current) != store.InferenceOpFingerprint(expected) {
+			return store.ErrConflict
+		}
+	}
+	if err := appendSessionsTx(ctx, tx, userID,
+		[]store.Session{group.Session}, formatTime(time.Now())); err != nil {
+		return err
+	}
+	for _, op := range group.Ops {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE ops SET inferred_session_id = ?
+			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL`,
+			group.Session.SessionID, userID, op.OpID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return store.ErrConflict
 		}
 	}
 	return tx.Commit()

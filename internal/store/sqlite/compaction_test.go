@@ -22,12 +22,12 @@ func TestCompaction(t *testing.T) {
 
 	// Two devices, three days of ops (received_at is server-side; we
 	// cheat by inserting directly to control it).
-	old := time.Now().Add(-400 * 24 * time.Hour)
+	old := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 	insertRaw := func(seq int64, opID, dev string, at time.Time, prog float64) {
 		_, err := s.db.ExecContext(ctx,
 			`INSERT INTO ops (user_id, seq, op_id, work_id, edition_sha, device_id,
-			                  client_ts, progression, origin, received_at)
-			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'kosync', ?)`,
+			                  client_ts, progression, origin, received_at, inferred_session_id)
+			 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'kosync', ?, 'test-session')`,
 			u.ID, seq, opID, w.ID, dev, formatTime(at), prog, formatTime(at))
 		if err != nil {
 			t.Fatal(err)
@@ -91,4 +91,30 @@ func TestCompaction(t *testing.T) {
 		t.Fatalf("want 5 surviving ops, got %d", len(pos))
 	}
 	var _ = store.Op{}
+}
+
+func TestCompactionKeepsUnmaterializedKosyncOps(t *testing.T) {
+	st := openStore(t)
+	s := st.(*Store)
+	ctx := context.Background()
+	u := storetest.MkUser(t, st, "pending-inference")
+	w := storetest.MkWork(t, st, u, "w1", "abc123")
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	for seq, at := range []time.Time{old, old.Add(time.Hour)} {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO ops (user_id, seq, op_id, work_id, device_id, client_ts,
+			                  progression, origin, received_at)
+			 VALUES (?, ?, ?, ?, 'kobo', ?, ?, 'kosync', ?)`,
+			u.ID, seq+1, "pending-"+string(rune('a'+seq)), w.ID,
+			formatTime(at), float64(seq+1)/10, formatTime(at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Compact(ctx, u.ID, time.Now().Add(-180*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.PendingInferenceOps(ctx, u.ID)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("unmaterialized kosync ops compacted: %+v %v", pending, err)
+	}
 }

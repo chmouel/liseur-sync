@@ -33,6 +33,6 @@ max_locator_bytes = 16384          # 16 KiB
 retention_days = 180
 compaction_enabled = true          # compact old ops to daily snapshots
 inference_gap_min = 15
-inference_late_hours = 24
+inference_late_hours = 24             # must be at least the gap, rounded up to hours
 
 pairing_code_ttl_min = 15

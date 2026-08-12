@@ -15,22 +15,22 @@ import (
 
 var sessionNS = uuid.MustParse("7e0a3b10-5f2e-4c3a-9b6d-2f6f6c1a0002")
 
-// SessionID derives the deterministic id for an inferred group:
-// UUIDv5(ns, user|work|device|first op_id).
+// SessionID derives the deterministic id for an inferred group.
 func SessionID(userID, workID, deviceID, firstOpID string) string {
 	return uuid.NewSHA1(sessionNS, []byte(userID+"|"+workID+"|"+deviceID+"|"+firstOpID)).String()
 }
 
 // Group splits ops (already ordered by seq per the caller contract)
-// into sessions: same (work, device), consecutive gaps below gapDur on
-// received_at. Returns groups in order; the caller decides which are
-// closed.
+// into sessions. Identity provenance is part of the grouping key so a
+// later split can move the inferred session with its edition or alias.
 func Group(ops []store.Op, gapDur time.Duration) [][]store.Op {
 	var groups [][]store.Op
 	for _, o := range ops {
 		if n := len(groups); n > 0 {
 			last := groups[n-1][len(groups[n-1])-1]
 			if last.WorkID == o.WorkID && last.DeviceID == o.DeviceID &&
+				equalStringPtr(last.EditionSHA, o.EditionSHA) &&
+				equalStringPtr(last.OriginAlias, o.OriginAlias) &&
 				o.ReceivedAt.Sub(last.ReceivedAt) < gapDur {
 				groups[n-1] = append(groups[n-1], o)
 				continue
@@ -48,15 +48,21 @@ func Group(ops []store.Op, gapDur time.Duration) [][]store.Op {
 func Materialize(userID string, group []store.Op) store.Session {
 	first, last := group[0], group[len(group)-1]
 	return store.Session{
-		SessionID: SessionID(userID, last.WorkID, last.DeviceID, first.OpID),
-		WorkID:    last.WorkID,
-		DeviceID:  last.DeviceID,
-		StartedAt: first.ReceivedAt,
-		EndedAt:   last.ReceivedAt,
-		StartProg: first.Progression,
-		EndProg:   last.Progression,
-		Origin:    store.OriginInferred,
+		SessionID:   SessionID(userID, last.WorkID, last.DeviceID, first.OpID),
+		WorkID:      last.WorkID,
+		EditionSHA:  last.EditionSHA,
+		DeviceID:    last.DeviceID,
+		StartedAt:   first.ReceivedAt,
+		EndedAt:     last.ReceivedAt,
+		StartProg:   first.Progression,
+		EndProg:     last.Progression,
+		Origin:      store.OriginInferred,
+		OriginAlias: last.OriginAlias,
 	}
+}
+
+func equalStringPtr(a, b *string) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }
 
 // ClosedGroups returns the groups whose last op is older than the

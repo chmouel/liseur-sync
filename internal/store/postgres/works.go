@@ -8,6 +8,178 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+// lockWorkGraph serializes every alias mutation for one user. PostgreSQL row
+// locks cannot protect aliases that do not exist yet, so use a transaction-
+// scoped advisory lock keyed by user identity.
+func lockWorkGraph(ctx context.Context, tx *sql.Tx, userID string) error {
+	_, err := tx.ExecContext(ctx, q(
+		`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`), userID)
+	return err
+}
+
+func resolveMatches(ctx context.Context, tx *sql.Tx, userID string, ids []store.Identifier) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		var aliasWork string
+		aliasErr := tx.QueryRowContext(ctx, q(
+			`SELECT work_id FROM aliases WHERE user_id = ? AND kind = ? AND value = ?`),
+			userID, id.Kind, id.Value).Scan(&aliasWork)
+		if aliasErr != nil && !errors.Is(aliasErr, sql.ErrNoRows) {
+			return nil, aliasErr
+		}
+
+		var editionWork string
+		editionErr := sql.ErrNoRows
+		if id.Kind == "sha256" {
+			editionErr = tx.QueryRowContext(ctx, q(
+				`SELECT work_id FROM editions WHERE user_id = ? AND sha256 = ?`),
+				userID, id.Value).Scan(&editionWork)
+			if editionErr != nil && !errors.Is(editionErr, sql.ErrNoRows) {
+				return nil, editionErr
+			}
+		}
+		if aliasErr == nil && editionErr == nil && aliasWork != editionWork {
+			return nil, store.ErrConflict
+		}
+		switch {
+		case aliasErr == nil:
+			out[id.Kind+":"+id.Value] = aliasWork
+		case editionErr == nil:
+			out[id.Kind+":"+id.Value] = editionWork
+		}
+	}
+	return out, nil
+}
+
+func ensureEditions(ctx context.Context, tx *sql.Tx, userID, workID string, editions []store.Edition) error {
+	for _, edition := range editions {
+		var existing string
+		err := tx.QueryRowContext(ctx, q(
+			`SELECT work_id FROM editions WHERE user_id = ? AND sha256 = ?`),
+			userID, edition.SHA256).Scan(&existing)
+		if err == nil {
+			if existing != workID {
+				return store.ErrConflict
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, q(
+			`INSERT INTO editions (user_id, sha256, work_id, page_count, char_count, meta_json)
+			 VALUES (?, ?, ?, ?, ?, ?)`),
+			userID, edition.SHA256, workID, edition.PageCount, edition.CharCount, edition.MetaJSON)
+		if isUniqueErr(err) {
+			return store.ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureAliases(ctx context.Context, tx *sql.Tx, userID, workID string, ids []store.Identifier) error {
+	for _, id := range ids {
+		var existing string
+		err := tx.QueryRowContext(ctx, q(
+			`SELECT work_id FROM aliases WHERE user_id = ? AND kind = ? AND value = ?`),
+			userID, id.Kind, id.Value).Scan(&existing)
+		if err == nil {
+			if existing != workID {
+				return store.ErrConflict
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO aliases (user_id, kind, value, work_id) VALUES (?, ?, ?, ?)`),
+			userID, id.Kind, id.Value, workID); err != nil {
+			if isUniqueErr(err) {
+				return store.ErrConflict
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// ResolveWork resolves and promotes a work graph in one locked transaction.
+func (s *Store) ResolveWork(
+	ctx context.Context,
+	userID string,
+	proposed store.Work,
+	editions []store.Edition,
+	ids []store.Identifier,
+	confirmed bool,
+) (store.WorkResolution, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.WorkResolution{}, err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return store.WorkResolution{}, err
+	}
+	matches, err := resolveMatches(ctx, tx, userID, ids)
+	if err != nil {
+		return store.WorkResolution{}, err
+	}
+	result := store.DecideWorkResolution(ids, matches, confirmed)
+	if len(result.ConflictingWorkIDs) > 0 {
+		return result, nil
+	}
+	if result.WorkID == "" {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO works (id, user_id, title, author, pending, created_at) VALUES (?, ?, ?, ?, ?, ?)`),
+			proposed.ID, userID, proposed.Title, proposed.Author, proposed.Pending,
+			proposed.CreatedAt.UTC()); err != nil {
+			if isUniqueErr(err) {
+				return store.WorkResolution{}, store.ErrConflict
+			}
+			return store.WorkResolution{}, err
+		}
+		if err := ensureEditions(ctx, tx, userID, proposed.ID, editions); err != nil {
+			return store.WorkResolution{}, err
+		}
+		if err := ensureAliases(ctx, tx, userID, proposed.ID, ids); err != nil {
+			return store.WorkResolution{}, err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO seq_counters (user_id, next_seq) VALUES (?, 1) ON CONFLICT DO NOTHING`),
+			userID); err != nil {
+			return store.WorkResolution{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return store.WorkResolution{}, err
+		}
+		return store.WorkResolution{
+			WorkID: proposed.ID, Confidence: "high", Created: true,
+		}, nil
+	}
+	if result.Confidence == "low" {
+		return result, nil
+	}
+	if err := ensureEditions(ctx, tx, userID, result.WorkID, editions); err != nil {
+		return store.WorkResolution{}, err
+	}
+	if err := ensureAliases(ctx, tx, userID, result.WorkID, ids); err != nil {
+		return store.WorkResolution{}, err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE works SET pending = FALSE WHERE user_id = ? AND id = ?`),
+		userID, result.WorkID); err != nil {
+		return store.WorkResolution{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.WorkResolution{}, err
+	}
+	return result, nil
+}
+
 func (s *Store) ResolveAliases(ctx context.Context, userID string, ids []store.Identifier) (map[string]string, error) {
 	out := make(map[string]string, len(ids))
 	for _, id := range ids {
@@ -32,6 +204,9 @@ func (s *Store) CreateWork(ctx context.Context, w store.Work, e *store.Edition, 
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, w.UserID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, q(
 		`INSERT INTO works (id, user_id, title, author, pending, created_at) VALUES (?, ?, ?, ?, ?, ?)`),
 		w.ID, w.UserID, w.Title, w.Author, w.Pending, w.CreatedAt.UTC()); err != nil {
@@ -87,6 +262,9 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
 
 	var found string
 	err = tx.QueryRowContext(ctx, q(
@@ -98,6 +276,41 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		return err
 	}
 	if found != workID {
+		return store.ErrConflict
+	}
+	var shaAliasWork string
+	shaAliasErr := tx.QueryRowContext(ctx, q(
+		`SELECT work_id FROM aliases WHERE user_id = ? AND kind = 'sha256' AND value = ?`),
+		userID, editionSHA).Scan(&shaAliasWork)
+	if shaAliasErr == nil && shaAliasWork != workID {
+		return store.ErrConflict
+	}
+	if shaAliasErr != nil && !errors.Is(shaAliasErr, sql.ErrNoRows) {
+		return shaAliasErr
+	}
+	for _, alias := range aliasIDs {
+		if alias.Kind == "sha256" && alias.Value != editionSHA {
+			return store.ErrConflict
+		}
+	}
+	var rollupCount int
+	if err := tx.QueryRowContext(ctx, q(
+		`SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?`),
+		userID, workID).Scan(&rollupCount); err != nil {
+		return err
+	}
+	if rollupCount > 0 {
+		return store.ErrConflict
+	}
+	var unpartitionable int
+	if err := tx.QueryRowContext(ctx, q(
+		`SELECT COUNT(1) FROM sessions
+		 WHERE user_id = ? AND work_id = ? AND origin = 'inferred'
+		   AND edition_sha IS NULL AND origin_alias IS NULL`),
+		userID, workID).Scan(&unpartitionable); err != nil {
+		return err
+	}
+	if unpartitionable > 0 {
 		return store.ErrConflict
 	}
 
@@ -121,7 +334,32 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		newWork.ID, userID, editionSHA, workID); err != nil {
 		return err
 	}
+	if errors.Is(shaAliasErr, sql.ErrNoRows) {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO aliases (user_id, kind, value, work_id) VALUES (?, 'sha256', ?, ?)`),
+			userID, editionSHA, newWork.ID); err != nil {
+			return err
+		}
+	} else if _, err := tx.ExecContext(ctx, q(
+		`UPDATE aliases SET work_id = ? WHERE user_id = ? AND kind = 'sha256' AND value = ? AND work_id = ?`),
+		newWork.ID, userID, editionSHA, workID); err != nil {
+		return err
+	}
+	shaOrigin := "sha256:" + editionSHA
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE ops SET work_id = ? WHERE user_id = ? AND edition_sha IS NULL AND origin_alias = ? AND work_id = ?`),
+		newWork.ID, userID, shaOrigin, workID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE sessions SET work_id = ? WHERE user_id = ? AND edition_sha IS NULL AND origin_alias = ? AND work_id = ?`),
+		newWork.ID, userID, shaOrigin, workID); err != nil {
+		return err
+	}
 	for _, a := range aliasIDs {
+		if a.Kind == "sha256" && a.Value == editionSHA {
+			continue
+		}
 		kv := a.Kind + ":" + a.Value
 		res, err := tx.ExecContext(ctx, q(
 			`UPDATE aliases SET work_id = ? WHERE user_id = ? AND kind = ? AND value = ? AND work_id = ?`),
@@ -154,6 +392,18 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	var rollupCount int
+	if err := tx.QueryRowContext(ctx, q(
+		`SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?`),
+		userID, fromWorkID).Scan(&rollupCount); err != nil {
+		return err
+	}
+	if rollupCount > 0 {
+		return store.ErrConflict
+	}
 
 	var dummy int
 	for _, id := range []string{fromWorkID, intoWorkID} {
@@ -212,24 +462,6 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 		intoWorkID, userID, fromWorkID); err != nil {
 		return err
 	}
-	// Fold aged rollup totals into the target work (additive on day
-	// collisions) so merge never loses statistics.
-	if _, err := tx.ExecContext(ctx, q(
-		`INSERT INTO session_rollups (user_id, work_id, day, active_seconds, pages, prog_delta, session_count)
-		 SELECT user_id, ?, day, active_seconds, pages, prog_delta, session_count
-		 FROM session_rollups WHERE user_id = ? AND work_id = ?
-		 ON CONFLICT (user_id, work_id, day) DO UPDATE SET
-		     active_seconds = session_rollups.active_seconds + excluded.active_seconds,
-		     pages          = session_rollups.pages + excluded.pages,
-		     prog_delta     = session_rollups.prog_delta + excluded.prog_delta,
-		     session_count  = session_rollups.session_count + excluded.session_count`),
-		intoWorkID, userID, fromWorkID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, q(
-		`DELETE FROM session_rollups WHERE user_id = ? AND work_id = ?`), userID, fromWorkID); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, q(
 		`DELETE FROM works WHERE user_id = ? AND id = ?`), userID, fromWorkID); err != nil {
 		return err
@@ -244,13 +476,11 @@ func (s *Store) AddAliases(ctx context.Context, userID, workID string, ids []sto
 		return err
 	}
 	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, q(
-			`INSERT INTO aliases (user_id, kind, value, work_id) VALUES (?, ?, ?, ?)
-			 ON CONFLICT (user_id, kind, value) DO NOTHING`),
-			userID, id.Kind, id.Value, workID); err != nil {
-			return err
-		}
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	if err := ensureAliases(ctx, tx, userID, workID, ids); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

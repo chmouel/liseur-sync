@@ -15,7 +15,16 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 		return err
 	}
 	defer tx.Rollback()
-	now := time.Now().UTC()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	if err := appendSessionsTx(ctx, tx, userID, ss, time.Now().UTC()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now time.Time) error {
 	for _, ses := range ss {
 		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx, q(
@@ -57,6 +66,56 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 			string(ses.Origin), ses.OriginAlias, ses.SourceKey, now)
 		if err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) AppendInferredSession(ctx context.Context, userID string, group store.InferredSessionGroup) error {
+	if !store.ValidInferredSessionGroup(group) {
+		return store.ErrConflict
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return err
+	}
+	for _, expected := range group.Ops {
+		current, err := scanOp(tx.QueryRowContext(ctx, q(
+			`SELECT `+opCols+` FROM ops
+			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL`),
+			userID, expected.OpID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if store.InferenceOpFingerprint(current) != store.InferenceOpFingerprint(expected) {
+			return store.ErrConflict
+		}
+	}
+	if err := appendSessionsTx(ctx, tx, userID,
+		[]store.Session{group.Session}, time.Now().UTC()); err != nil {
+		return err
+	}
+	for _, op := range group.Ops {
+		result, err := tx.ExecContext(ctx, q(
+			`UPDATE ops SET inferred_session_id = ?
+			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL`),
+			group.Session.SessionID, userID, op.OpID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return store.ErrConflict
 		}
 	}
 	return tx.Commit()
@@ -189,17 +248,23 @@ func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to tim
 func scanSessions(rows *sql.Rows) ([]store.Session, error) {
 	var out []store.Session
 	for rows.Next() {
-		var ses store.Session
-		var origin string
-		if err := rows.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
-			&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
-			&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
+		ses, err := scanSession(rows)
+		if err != nil {
 			return nil, err
 		}
-		ses.Origin = store.Origin(origin)
 		out = append(out, ses)
 	}
 	return out, rows.Err()
+}
+
+func scanSession(row interface{ Scan(...any) error }) (store.Session, error) {
+	var ses store.Session
+	var origin string
+	err := row.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
+		&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
+		&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt)
+	ses.Origin = store.Origin(origin)
+	return ses, err
 }
 
 func (s *Store) EditionBySHA(ctx context.Context, userID, sha256 string) (store.Edition, error) {
