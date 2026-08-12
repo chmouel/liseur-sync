@@ -35,8 +35,13 @@ After the rename, the worker fsyncs the destination directory and
 `.incoming`, and only then commits the blob/reference rows and `promoted` job
 state. A crash before the database commit leaves a reconcilable orphan, never
 a database reference to a non-durable path. Atomic promotion therefore works
-even when initial staging is on another filesystem. Watched files use the
-same validation and extraction stages but remain at their source path.
+even when initial staging is on another filesystem.
+
+Watched ingestion opens the source through `os.Root` and copies from that
+single descriptor into the same CAS-side staging path. Hashing, validation,
+metadata extraction, covers, and downloads all use the immutable copied
+snapshot, never a path that can change after validation. The source path and
+fingerprint remain reconciliation inputs; the server never mutates them.
 
 On startup, stale jobs are resumed when safe or moved to a clear failed
 state. Reconciliation detects missing rows, missing blobs, and unreferenced
@@ -102,10 +107,13 @@ manage ACL access to the target library.
 
 ### Retention and quotas
 
-Staged, quarantined, and failed bytes count toward the uploader's logical
-quota. Instance and per-user caps prevent unbounded failure storage.
-Quarantine and failed artifacts expire after a configurable period and are
-cleaned by the GC worker. Users can delete their own failed jobs sooner.
+Staged, quarantined, failed, and promoted bytes count toward the target
+library's `quota_user_id`, matching ADR-0002. The initiating user is retained
+for audit and authorization but is not a second quota principal; automated
+watched scans use the same library principal. Instance-wide staging and
+per-principal caps prevent unbounded failure storage. Quarantine and failed
+artifacts expire after a configurable period and are cleaned by the GC
+worker. An authorized manager can delete failed jobs sooner.
 
 ## Consequences
 
@@ -132,4 +140,7 @@ name a stable job and reason instead of losing state when a request ends.
   asynchronous content failures produce stable failed/quarantined job codes
   and no writes outside staging.
 - Font-obfuscated EPUBs remain valid.
+- Mutating a watched source after ingest cannot change bytes served from the
+  validated snapshot; only a successfully re-ingested snapshot can replace
+  it.
 - Failed artifacts respect quota and expiry.

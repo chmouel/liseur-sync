@@ -24,6 +24,8 @@ An instance can contain multiple libraries:
   storage.
 - **Watched:** an administrator registers an existing root. The server reads
   it but never writes, renames, moves, trashes, or deletes anything below it.
+  Ingest copies each discovered EPUB into an immutable validated CAS snapshot;
+  downloads never serve the mutable source path directly.
 
 Every library has one owner and an ACL of users with `read` or `manage`
 access. `manage` implies `read`. Revocation takes effect on the next request;
@@ -33,7 +35,7 @@ Catalog rows are library-scoped. Positions and sessions remain user-scoped.
 The mapping is defined by
 [ADR-0003](0003-catalog-work-identity.md).
 
-### Managed content
+### Content-addressed snapshots and quota
 
 Managed files are stored by streaming SHA-256:
 
@@ -46,16 +48,19 @@ size, creation time, and orphan-mark time. `book_files` references blobs.
 Physical deduplication is instance-wide, but authorization is always checked
 through the user's accessible library and book references.
 
-Quota is logical and charged to the managed library's `quota_user_id`, which
-defaults to its owner. Granting read or manage access does not charge the
-grantee, and an upload by a manager does not silently transfer ownership.
-Changing the quota principal is an explicit admin operation.
+Every managed or watched library has a `quota_user_id`, defaulting to its
+owner. Managed uploads and watched CAS snapshots are both charged to that
+principal. A watched scan that would exceed quota records a bounded failed
+job and does not replace the current snapshot. Granting read or manage access
+does not charge the grantee, and an upload by a manager does not silently
+transfer ownership. Changing the quota principal is an explicit admin
+operation.
 
 A `blob_reservations(quota_user_id, blob_sha256, bytes)` row charges one
-principal once for a blob while any of that principal's managed libraries
-reference it. A second reference by the same principal costs no additional
-quota; another principal referencing the deduplicated blob receives a
-separate logical charge. Deleting the principal's last live reference
+principal once for a blob while any of that principal's libraries reference
+it. A second reference by the same principal costs no additional quota;
+another principal referencing the deduplicated blob receives a separate
+logical charge. Deleting the principal's last live reference
 does not release quota while that reference remains in trash. Quota is
 released when the last retained reference, active or trashed, is permanently
 deleted. Physical storage is reclaimed independently by garbage collection.
@@ -94,6 +99,14 @@ The scanner combines filesystem notifications with a periodic full sweep.
 Notifications reduce latency; only a complete sweep may declare a file
 missing.
 
+- The scanner copies from one descriptor into CAS-side staging; hashing,
+  validation, and extraction operate on that immutable snapshot. The
+  source's descriptor metadata and hash are recorded only for later
+  reconciliation.
+- Downloads and covers always use the recorded CAS blob, so an in-place
+  source mutation can never serve unvalidated bytes. A later notification or
+  sweep creates and validates a new snapshot before atomically replacing the
+  catalog file reference.
 - Rename detection uses content hash, preserving book identity.
 - A disappeared root marks its books `missing`; it never deletes rows.
 - Files reappearing with the same hash restore availability.
@@ -156,11 +169,15 @@ server disk allocation.
 ## Acceptance criteria
 
 - No watched-library operation mutates the watched root.
+- Watched downloads never read from the mutable source path and cannot serve
+  bytes that differ from the validated blob.
 - No catalog query crosses a library ACL.
 - Concurrent identical uploads create one blob and separate authorized
   references and quota reservations.
 - Readers and managers are not charged merely because a library is shared
   with them.
+- Managed uploads and watched snapshots obey the same explicit quota
+  principal and limit.
 - Trashing a book does not free quota; permanent deletion of the last
   retained reference does.
 - An orphan is not physically removed before the grace period.

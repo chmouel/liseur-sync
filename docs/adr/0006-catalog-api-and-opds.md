@@ -64,7 +64,15 @@ The `/v1/library/*` API includes:
 - metadata edits and managed-book trash/restore.
 
 List endpoints use stable cursor pagination. Responses can include the
-current user's optional `work_id` mapping but never another user's mapping.
+current user's optional `work_id`, position, completion, or reading-state
+fields only when the token also has `sync`, and never include another user's
+mapping. Aggregated statistics additionally require `read-insights`.
+`library-read` by itself returns catalog metadata only.
+
+OPDS feeds are always catalog-only. They suppress work mappings, positions,
+completion, reading-state filters, and statistics even when the Basic token
+also carries `sync` or `read-insights`. A future OPDS progress extension
+requires its own decision and tests.
 
 Downloads support `GET`, `HEAD`, byte ranges, `ETag`, `Last-Modified`, and
 conditional requests. Filenames in `Content-Disposition` are sanitized and
@@ -121,6 +129,10 @@ metadata edits, work resolution, and rich sync remain native operations.
   self-grant admin.
 - Contradictory `scope` and `scopes` requests fail with a precise 400.
 - Every catalog route checks both token capability and library ACL.
+- Catalog-only and OPDS credentials cannot filter by or observe sync-derived
+  reading state.
+- OPDS remains metadata-only even when authenticated with a multi-scope
+  token.
 - Range, `HEAD`, conditional download, pagination, and safe filename tests
   pass on both stores.
 - OPDS rejects account passwords and correctly escapes hostile metadata.
