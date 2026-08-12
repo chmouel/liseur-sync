@@ -1,12 +1,15 @@
 # liseur-sync — Design
 
-**Status:** draft, pre-implementation
+**Status:** living design; sync core implemented, content-server expansion
+proposed in [ADR-0001](adr/0001-content-server.md)
+
 **Audience:** contributors to liseur-sync and client authors (Liseur first,
 third parties later)
 **Purpose:** define the data model, protocol, and architecture of a
-self-hostable server that syncs reading positions and collects reading
-statistics across devices and reader apps — including stock KOReader
-devices — without repeating the mistakes of the servers that came before it.
+self-hostable server that syncs reading positions, collects reading
+statistics, and is expanding into an EPUB content server for reader apps —
+including stock KOReader devices — without repeating the mistakes of the
+servers that came before it.
 
 ---
 
@@ -35,8 +38,10 @@ kosync adapter so stock KOReader devices participate without modification.**
 
 ### 1.2 Non-goals
 
-- **Not a library server.** No book files, covers, or catalogue. Komga,
-  calibre-web, and local folders already do that; Liseur keeps them.
+- **Formats other than EPUB.** The former "not a library server" non-goal is
+  superseded by [ADR-0001](adr/0001-content-server.md). The first content
+  server supports EPUB only; PDF, comics, and audiobooks require separate
+  decisions.
 - **Not a merge authority.** The server stores and orders operations; it
   never decides which position "wins". Conflict resolution is a client
   concern (§5.4).
@@ -59,42 +64,62 @@ kosync adapter so stock KOReader devices participate without modification.**
 3. **Work identity that survives format shuffling**: the same book
    recognised across a Komga original, a calibre re-encode, and the
    copy on a Kindle-jailbreak KOReader.
-4. **First-class self-hosting**: one static Go binary, one SQLite file,
-   TLS via reverse proxy or built-in ACME. No external services.
+4. **First-class self-hosting**: one static Go binary, SQLite by default or
+   PostgreSQL when desired, and explicit persistent content storage. TLS is
+   provided by a reverse proxy or built-in ACME; no mandatory external
+   services.
 5. **Legacy interop as adapters**: stock KOReader syncs via a
    kosync-compatible endpoint; its statistics plugin uploads via a
    KoInsight-compatible endpoint. Neither contaminates the native model.
 6. **Multi-user** from day one: a family or small community on one
    instance, data strictly scoped per user.
+7. **First-class EPUB catalog**: managed uploads and read-only watched
+   folders, shared through explicit library ACLs without sharing users'
+   positions or sessions.
+8. **Broad reader integration**: a native catalog API for Liseur clients,
+   OPDS 1.2 for existing readers, and eventually an isolated web reader using
+   the same sync protocol.
 
 ## 3. Architecture overview
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │              liseur-sync                │
-                    │                (Go)                     │
- Liseur (native) ──▶│  /v1/*           native API             │
-                    │                                         │
- KOReader kosync ──▶│  /adapter/kosync/*   translation layer  │
-                    │                                         │
- KOReader stats  ──▶│  /adapter/koplugin/* translation layer  │
- plugin             │                                         │
-                    │  /admin/*        instance management    │
-                    │                                         │
-                    │  storage: SQLite (WAL) ── single file   │
-                    └─────────────────────────────────────────┘
+                    ┌──────────────────────────────────────────────┐
+                    │                 liseur-sync                  │
+                    │                     (Go)                     │
+ Liseur (native) ──▶│  /v1/*              native sync/catalog API │
+ OPDS readers ─────▶│  /opds/v1.2/*        catalog adapter        │
+                    │                                              │
+ KOReader kosync ──▶│  /adapter/kosync/*   translation layer      │
+ KOReader stats  ──▶│  /adapter/koplugin/* translation layer      │
+                    │                                              │
+ Browser ──────────▶│  /ui/*               management + reader    │
+                    │  ingest workers       validate/index/cover   │
+                    │                                              │
+                    │  DB: SQLite or PostgreSQL                    │
+                    │  files: managed CAS + read-only watched roots│
+                    └──────────────────────────────────────────────┘
 ```
 
-- **One process, one binary, one SQLite database.** SQLite in WAL mode
-  comfortably serves this workload (tens of users, bursts of small
-  writes); it keeps backup a file copy and deployment a `scp`.
+- **One process and one binary.** SQLite in WAL mode is the default for
+  small self-hosted installations; PostgreSQL is supported for deployments
+  that already operate it. Managed EPUB blobs live beside the database in a
+  content-addressed directory, as defined by
+  [ADR-0002](adr/0002-library-storage-and-ownership.md).
 - **Adapters translate at the edge.** The kosync and koplugin endpoints
   parse the legacy wire formats and write *native* records tagged with
   their origin. Nothing downstream knows or cares which protocol a
   record arrived on.
 - **The native API is the only full-fidelity surface.** Adapters are
   deliberately lossy where the legacy protocol is (e.g. kosync carries
-  no session data); the design never bends the native model to fit them.
+  no session data and OPDS cannot edit metadata); the design never bends
+  the native model to fit them.
+- **Catalog storage and sync state have separate ownership.** Libraries and
+  books may be shared through ACLs. Works, operations, and sessions remain
+  per-user and are joined lazily through the mapping in
+  [ADR-0003](adr/0003-catalog-work-identity.md).
+- **Ingestion is durable and bounded.** Uploads and watched files pass
+  through the same persistent state machine and security limits in
+  [ADR-0005](adr/0005-upload-and-ingestion.md).
 
 ## 4. Identity: works, editions, aliases
 
@@ -122,10 +147,19 @@ harder.
 
 A client asks `POST /v1/works/resolve` with every identifier it has for
 a file. The server answers with the matching `work_id`, creating work,
-edition, and aliases as needed. Resolution order: `sha256` → `partial-md5`
-→ `source` → `dc` → `ta`. The first hit wins; all supplied identifiers are then
-registered as aliases of the resolved work, which is how the graph
-converges over time.
+edition, and aliases as needed. Resolution order is `sha256` → `partial-md5`
+→ `source` → `dc` → `ta`, but every supplied alias that already matches must
+agree on one work. Aliases spanning multiple works return 409 without
+mutation. After one high-confidence match, supplied identifiers are
+registered as aliases of that work, which is how the graph converges over
+time. A `ta:`-only match stays low-confidence and does not promote stronger
+aliases until the reader confirms it.
+
+Lookup, work/edition creation, alias registration, and any catalog mapping
+are one store transaction. A uniqueness race is re-evaluated and returns
+success on the one agreed work or 409; it never silently ignores a conflicting
+alias or turns an identity conflict into a 500
+([ADR-0003](adr/0003-catalog-work-identity.md)).
 
 Fuzzy (`ta:`) matches are marked `confidence: low` in the response, and
 clients may present a "same book?" confirmation before merging. Wrong
@@ -140,6 +174,18 @@ editions of the same ISBN can have different pagination, and anthologies
 share titles. The layered scheme lets exact identity carry when it can
 and metadata rescue it when it cannot.
 
+### 4.3 Catalog identity
+
+The planned content catalog does not make works cross-user. Catalog
+`book_id`s are stable library identities; a
+`user_book_works(user_id, book_id, work_id)` row maps a book into each
+reader's existing work graph. Catalog browse and download do not mutate sync
+identity. Before syncing or reporting sessions, a client with both
+`library-read` and `sync` explicitly runs the normal alias resolver in that
+user's namespace. The same shared book can therefore have different work IDs
+for different users without leaking either graph. See
+[ADR-0003](adr/0003-catalog-work-identity.md).
+
 ## 5. Position sync
 
 ### 5.1 The record
@@ -148,7 +194,7 @@ Positions are an **append-only operation log per work per user**:
 
 ```json
 {
-  "op_id":        "client-generated UUIDv7",
+  "op_id":        "client-generated deterministic opaque id",
   "work_id":      "…",
   "edition_sha":  "sha256:…",
   "device_id":    "…",
@@ -170,8 +216,9 @@ Positions are an **append-only operation log per work per user**:
   `GotoXPointer`: `percentage` rides along but is not navigated by, so
   the server must preserve the engine-native string or KOReader users
   land on page 1.
-- `op_id` is UUIDv7 (client-generated): idempotent retries for free,
-  roughly time-ordered for debugging.
+- `op_id` is a client-generated opaque deterministic string (currently at
+  most 64 bytes). The same local fact must produce the same ID and payload on
+  retry; UUIDv3 and deterministic hash-derived IDs are both valid.
 
 The server assigns each accepted op a **per-user monotonic `seq`**.
 
@@ -221,7 +268,7 @@ only safe default: the adapter's `GET` returns the newest op's
 
 ```json
 {
-  "session_id":        "UUIDv7",
+  "session_id":        "client-generated deterministic opaque id",
   "work_id":           "…",
   "device_id":         "…",
   "started_at":        "…",
@@ -326,17 +373,21 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   **per-device API tokens**: random 256-bit, stored hashed (SHA-256),
   shown once, revocable individually, named ("Boox Palma",
   "Liseur pixel8"). Native API auth is `Authorization: Bearer <token>`.
-- Tokens carry scopes: `sync` (ops + sessions), `read-insights`,
-  `admin`. A device token is `sync` only; a stolen e-reader cannot
-  delete the account. `admin` is never self-grantable: minting one
-  requires an existing admin token or the admin CLI, so a login
-  credential alone can never escalate.
+- Tokens currently carry `sync`, `read-insights`, or `admin`. Catalog clients
+  need combinations, so [ADR-0006](adr/0006-catalog-api-and-opds.md)
+  migrates this scalar to a scope set and adds `library-read` and
+  `library-manage`. `library-manage` implies `library-read`; `admin` implies
+  all scopes. Existing singleton tokens remain wire-compatible, and explicit
+  in-place scope updates preserve a token's device identity and secret.
+  `admin` is never self-grantable: minting or adding it requires an existing
+  admin token or the admin CLI, so a login credential alone can never
+  escalate.
 
 ### 8.2 Instance posture
 
-- **Every route authenticated** except `/healthz` and login. There is no
-  anonymous read anywhere; CORS is deny-by-default with an explicit
-  origin allowlist for the (future) web UI.
+- **Every route authenticated** except the documented login, invite
+  registration, health, and adapter-pairing routes. There is no anonymous
+  catalog read; CORS is deny-by-default with an explicit origin allowlist.
 - Registration is invite-only by default (admin-generated codes).
 - Per-token and per-IP rate limits on auth endpoints; constant-time
   compares on all credential checks. Every path that verifies a
@@ -345,6 +396,9 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   other or a user-enumeration oracle.
 - All data strictly scoped by `user_id` at the query layer — the lesson
   of KoInsight's open `DELETE /api/books/:id`.
+- Catalog queries additionally require access through the library ACL.
+  Shared catalog access never grants access to another user's work,
+  operation, or session rows.
 
 ### 8.3 The kosync credential problem, contained
 
@@ -373,37 +427,79 @@ URL), so any path the server logs goes through a redactor first, and
 the deployment docs show the equivalent rule for the proxy's access
 log.
 
+### 8.5 Untrusted book content
+
+EPUB files are untrusted ZIP and XML input. Ingestion applies size, entry,
+decompression-ratio, path, symlink, XML, and encryption-algorithm bounds
+before promotion. Covers are rasterized and served with fixed MIME types and
+`nosniff`. Details and the required hostile-input corpus are in
+[ADR-0005](adr/0005-upload-and-ingestion.md).
+
+The planned browser reader never executes publication content as an ordinary
+document on the authenticated UI origin. It uses sandboxed documents without
+`allow-same-origin`, a restrictive CSP, and optionally a separate content
+origin. Each reader tab gets a short-lived `sync + library-read` device token
+linked to the UI session; tabs do not revoke each other, and all linked
+tokens are revoked with the session. See
+[ADR-0007](adr/0007-web-reader.md).
+
 ## 9. Implementation shape
 
 ### 9.1 Stack
 
-- **Go**, standard library HTTP + `chi` or stdlib mux; no framework.
+- **Go**, standard library HTTP mux; no framework.
 - **SQLite** via `modernc.org/sqlite` (pure Go, CGO-free → trivial
   cross-compilation for ARM NAS/Pi self-hosters).
 - Single static binary; container image `FROM scratch`.
+- The scratch image copies a maintained CA certificate bundle from its build
+  stage so opt-in HTTPS metadata providers retain normal certificate
+  verification.
 - Config: one TOML file + env overrides. Built-in ACME optional;
   reverse-proxy TLS documented as the default posture.
+- Managed content, staging, watched roots, quotas, retention, and maintenance
+  mode are explicit configuration. Container deployments mount managed
+  content persistently and watched roots read-only
+  ([ADR-0002](adr/0002-library-storage-and-ownership.md)).
 
 ### 9.2 Schema (core tables)
 
 ```
 users            id, name, argon2_hash, created_at
 tokens           id, user_id, name, scope, sha256, created_at, last_used, revoked_at
-works            id, user_scope?, title, author, created_at
-editions         sha256 PK, work_id, page_count?, char_count?, meta_json
-aliases          kind, value, work_id   (unique on kind+value per user)
-ops              seq PK (per-user monotonic), op_id UNIQUE, user_id, work_id,
+works            user_id, id            PK (user_id, id)
+editions         user_id, sha256, work_id  PK (user_id, sha256)
+aliases          user_id, kind, value, work_id  PK (user_id, kind, value)
+ops              user_id, seq, op_id, work_id  PK (user_id, seq),
+                 UNIQUE (user_id, op_id),
                  edition_sha, device_id, client_ts, progression,
                  locator_json?, foreign_pos?, origin, received_at
-sessions         session_id PK, user_id, work_id, device_id,
+sessions         user_id, session_id, work_id, device_id,
                  started_at, ended_at, start_prog, end_prog,
-                 idle_ms, origin, received_at
+                 idle_ms, origin, received_at  PK (user_id, session_id)
 kosync_devices   user_id, device_slot, key_sha256, label, revoked_at
+
+# Planned catalog tables (ADRs 0002–0006)
+token_scopes     token_id, scope (ADR-0006 migration; singleton compatibility)
+libraries        id, owner_user_id, quota_user_id, kind, name, root?, config
+library_access   library_id, user_id, role(read|manage)
+books            id, library_id, status, metadata fields + source/lock data
+blobs            sha256 PK, size, created_at, orphaned_at?
+blob_reservations quota_user_id, blob_sha256, bytes
+book_files       id, book_id, blob_sha256? or watched-relative-path, availability
+user_book_works  user_id, book_id, work_id
+ingest_jobs      id, user_id, library_id, source, state, bytes, error, timestamps
+series           id, library_id, name
+contributors     id, library_id, name
+book_contributors/book_tags/collections/reading_lists ...
 ```
 
 Works are per-user in v1 (no cross-user shared works): simpler privacy
 story, and a family syncing the same EPUB simply gets parallel works.
-Cross-user dedup is an optimisation, not a semantic.
+Cross-user work dedup is an optimisation, not a semantic.
+
+Catalog rows may be shared through library ACLs, but the
+`user_book_works` bridge keeps the work graph per-user. Physical blob
+deduplication likewise conveys no access or semantic sharing.
 
 ### 9.3 Testing strategy
 
@@ -417,8 +513,21 @@ Cross-user dedup is an optimisation, not a semantic.
 - Named regression tests for every legacy bug this design routes around:
   falsy-zero percentage, xpointer round-tripping, redirect header
   carriage, open-route access.
+- Shared-library ACL and `user_book_works` tenant-isolation matrices.
+- Concurrent resolver tests proving alias uniqueness races are atomic and
+  return one work or 409 without partial mutation.
+- Crash and concurrency tests for every ingestion state, duplicate promotion,
+  orphan reconciliation, grace-period GC, and backup verification.
+- A hostile EPUB corpus covering zip bombs, zip slip, symlinks, malformed or
+  oversized XML, font obfuscation, unsupported DRM, SVG covers, and MIME
+  confusion.
+- Catalog protocol tests for cursor pagination, range and conditional
+  downloads, OPDS escaping, Basic authentication, and scope-set
+  compatibility.
+- Browser-reader CSP, sandbox, asset-header, and linked-token lifecycle
+  tests before web reading is enabled.
 
-### 9.4 Liseur-side work (tracked in the liseur repo)
+### 9.4 Client-side work
 
 1. Add `start/end_progression` to `reading_sessions` +
    `ReadingSessionRecorder` (already scoped as the blocked
@@ -427,6 +536,12 @@ Cross-user dedup is an optimisation, not a semantic.
    `PeerPositionSync` interface — the `CompositePositionSync` seam built
    for kosync means no coordinator changes.
 3. Reuse `ReadingStateMerge` as-is for three-way reconciliation.
+
+The content-server changes are planned in
+[ADR-0008](adr/0008-liseur-android-client.md) for Android and
+[ADR-0009](adr/0009-liseur-desktop-client.md) for desktop. Both clients use
+the native catalog API, keep catalog `book_id` separate from sync `work_id`,
+remain local-first, and preserve their existing conflict/cursor guarantees.
 
 ### 9.5 Milestones
 
@@ -437,6 +552,13 @@ Cross-user dedup is an optimisation, not a semantic.
 | M3 | Sessions + insight endpoints; Liseur recorder change | Honest statistics across devices |
 | M4 | koplugin adapter; inferred sessions | KOReader statistics ingested |
 | M5 | Admin CLI + minimal web UI (tokens, pairing, insights) | Self-host UX complete |
+| M6 | Catalog identity, ACLs, scope sets, bounded metadata extraction, and durable ingestion core | Shared catalog without cross-user sync leakage |
+| M7 | Managed upload and library-management UI | Books can be safely added without filesystem access |
+| M8 | Read-only watched libraries | Existing EPUB folders can be indexed without mutation |
+| M9 | Metadata editing, categorization UI, external lookup, and search | A large library is organized and discoverable |
+| M10 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
+| M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
+| M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
 
 ## 10. Future work (explicitly out of v1)
 
@@ -454,6 +576,11 @@ Cross-user dedup is an optimisation, not a semantic.
   library server on the user's behalf). Liseur already handles this
   client-side; server-side bridging doubles the credential surface for
   little gain.
+- **OPDS 2.0 and OPDS-PSE.** OPDS 1.2 acquisition feeds land first for
+  existing-reader compatibility.
+- **Additional content formats.** PDF, CBZ/CBR, audiobook, and fixed-layout
+  support require format-specific ingestion, metadata, serving, and reader
+  decisions.
 
 ## 11. Risks
 
@@ -462,5 +589,9 @@ Cross-user dedup is an optimisation, not a semantic.
 | Fuzzy `ta:` aliases merge distinct books | Low-confidence flag, client confirmation, `split` repair endpoint |
 | kosync adapter drift as KOReader evolves | Conformance tests are captured transcripts; KOReader's plugin has been wire-stable for years |
 | Op/session growth on chatty clients | Per-user seq compaction (§5.3), daily session rollups (§6.1); clients batch |
-| SQLite write contention at larger scale | WAL + single-writer queue is fine for the target (≤ ~100 users); Postgres is a non-goal until proven otherwise |
-| A second project to maintain | Small surface on purpose: no book files, no rendering, adapters gated; the native API is ~10 endpoints |
+| SQLite write contention at larger scale | WAL remains the self-host default; the existing PostgreSQL backend must maintain parity through shared store tests |
+| Shared catalog leaks private reading data | Library ACLs govern catalog rows; per-user works are joined only through `user_book_works` composite constraints |
+| Malicious or oversized EPUB exhausts or escapes the server | Durable bounded ingestion, descriptor-relative watched-root traversal, hostile fixture corpus |
+| Blob/database backup becomes inconsistent | Quiesced or snapshot backup, DB-before-CAS ordering, reference verification, grace-period GC |
+| Publisher content attacks the authenticated web UI | Sandboxed non-same-origin documents, strict CSP, fixed MIME and `nosniff`, optional separate content origin |
+| Content features expand maintenance cost | Phase gates, native API as full-fidelity contract, adapters kept narrow, EPUB-only initial scope |
