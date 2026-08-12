@@ -121,7 +121,8 @@ kosync adapter so stock KOReader devices participate without modification.**
   through the same persistent state machine and security limits in
   [ADR-0005](adr/0005-upload-and-ingestion.md). Watched sources remain
   untouched, but downloads use immutable validated CAS snapshots rather than
-  mutable source paths.
+  mutable source paths. A hash-changing source replacement preserves catalog
+  identity only after strong embedded matching or explicit confirmation.
 
 ## 4. Identity: works, editions, aliases
 

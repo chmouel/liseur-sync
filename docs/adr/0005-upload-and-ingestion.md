@@ -42,6 +42,9 @@ single descriptor into the same CAS-side staging path. Hashing, validation,
 metadata extraction, covers, and downloads all use the immutable copied
 snapshot, never a path that can change after validation. The source path and
 fingerprint remain reconciliation inputs; the server never mutates them.
+Successful validation does not prove catalog identity: a hash-changing
+watched snapshot enters ADR-0002's identity reconciliation before it may
+replace a book's current file reference.
 
 On startup, stale jobs are resumed when safe or moved to a clear failed
 state. Reconciliation detects missing rows, missing blobs, and unreferenced
@@ -142,5 +145,5 @@ name a stable job and reason instead of losing state when a request ends.
 - Font-obfuscated EPUBs remain valid.
 - Mutating a watched source after ingest cannot change bytes served from the
   validated snapshot; only a successfully re-ingested snapshot can replace
-  it.
+  it after identity reconciliation.
 - Failed artifacts respect quota and expiry.

@@ -105,8 +105,15 @@ missing.
   reconciliation.
 - Downloads and covers always use the recorded CAS blob, so an in-place
   source mutation can never serve unvalidated bytes. A later notification or
-  sweep creates and validates a new snapshot before atomically replacing the
-  catalog file reference.
+  sweep creates and validates a new snapshot, then reconciles identity before
+  changing the catalog:
+  - the same hash at another path is a rename and preserves `book_id`;
+  - a new hash preserves `book_id` only when a stable embedded identifier
+    agrees with the existing book or an administrator confirms the match;
+  - an ambiguous replacement leaves the old snapshot available, records a
+    review item, and does not change user work mappings;
+  - a confirmed different publication marks the old path missing and creates
+    a new catalog book with no inherited mappings.
 - Rename detection uses content hash, preserving book identity.
 - A disappeared root marks its books `missing`; it never deletes rows.
 - Files reappearing with the same hash restore availability.
@@ -184,3 +191,5 @@ server disk allocation.
 - A restorable trash entry remains a GC root until its retention expires.
 - Backup verification detects every missing referenced blob.
 - Scanner rename, missing-root, symlink, and ancestor-swap cases have tests.
+- Replacing a watched path with an unrelated valid EPUB cannot inherit the
+  previous `book_id`, metadata, or user work mappings.
