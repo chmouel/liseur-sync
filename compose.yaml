@@ -24,6 +24,7 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: sqlite
       LISEUR_DATABASE_URL: /data/liseur-sync.db
+      LISEUR_CONTENT_ROOT: /data/content
     volumes:
       - sqlite-data:/data
     depends_on:
@@ -36,7 +37,7 @@ services:
     image: busybox
     profiles: ["sqlite"]
     user: root
-    entrypoint: ["sh", "-c", "chown -R 65532:65532 /data"]
+    entrypoint: ["sh", "-c", "chown -R 65532:65532 /data && chmod 700 /data"]
     volumes:
       - sqlite-data:/data
 
@@ -63,9 +64,14 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: postgres://liseur:${POSTGRES_PASSWORD}@postgres:5432/liseur_sync
+      LISEUR_CONTENT_ROOT: /data/content
+    volumes:
+      - content-data:/data
     depends_on:
       postgres:
         condition: service_healthy
+      content-init:
+        condition: service_completed_successfully
 
   app-external:
     <<: *app
@@ -74,15 +80,30 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
+      LISEUR_CONTENT_ROOT: /data/content
       # Reverse proxy on the docker host reaches the app via the bridge
       # gateway; trust X-Forwarded-Proto from the stack's subnet.
       LISEUR_TRUSTED_PROXIES: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}
+    volumes:
+      - content-data:/data
+    depends_on:
+      content-init:
+        condition: service_completed_successfully
     # The target database and role must already exist; startup
     # migrations need DDL rights on that database.
+
+  content-init:
+    image: busybox
+    profiles: ["postgres", "external"]
+    user: root
+    entrypoint: ["sh", "-c", "chown -R 65532:65532 /data && chmod 700 /data"]
+    volumes:
+      - content-data:/data
 
 volumes:
   sqlite-data:
   pg-data:
+  content-data:
 
 # Pinned bridge subnet (default 172.29.0.0/16, override with
 # LISEUR_DOCKER_SUBNET) so host services with per-subnet ACLs (e.g.

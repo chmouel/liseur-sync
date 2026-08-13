@@ -173,7 +173,8 @@ name a stable job and reason instead of losing state when a request ends.
    holds/reservations, full-payload replay detection, and terminal artifact
    expiry are also implemented. Stale-artifact verification, lost-promotion
    detection, and retryable two-phase filesystem cleanup are implemented;
-   startup scheduling, workers, and blob/catalog reconciliation remain.
+   `serve` runs the recovery pass before accepting traffic. Workers and
+   blob/catalog reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

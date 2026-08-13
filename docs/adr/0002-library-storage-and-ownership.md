@@ -178,7 +178,9 @@ server disk allocation.
    primitive are implemented. Atomic database promotion and per-principal
    quota holds/reservations are implemented, including concurrent
    deduplication and two-phase expiry release/cleanup; last-reference
-   deletion, trash, blob GC, and backup verification remain.
+   deletion, trash, blob GC, and backup verification remain. The configured
+   private content root and persistent Docker/Podman volume wiring are
+   implemented.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

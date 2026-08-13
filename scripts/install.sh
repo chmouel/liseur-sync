@@ -466,7 +466,24 @@ install_docker() {
 	mkdir -p "$INSTALL_DIR"
 	local compose_file="$INSTALL_DIR/compose.yaml"
 
-	if [ -f "$compose_file" ] && asked; then
+	if [ -f "$compose_file" ] &&
+		{ ! grep -q 'LISEUR_CONTENT_ROOT:' "$compose_file" ||
+			{ [ "$DB" = "postgres" ] &&
+				{ ! grep -q 'content-data:/data' "$compose_file" ||
+					! grep -q 'content-init:' "$compose_file"; }; }; }; then
+		if ! asked; then
+			die "existing compose.yaml predates persistent content storage; replace it with the ${GIT_REF} version before upgrading"
+		fi
+		local legacy_choice
+		legacy_choice=$(ui_choose \
+			"compose.yaml must be refreshed for persistent content storage" 1 \
+			"Fetch a fresh copy from git ref '${GIT_REF}'" \
+			"Abort")
+		case "$legacy_choice" in
+		1) rm -f "$compose_file" ;;
+		2) die "aborted by user" ;;
+		esac
+	elif [ -f "$compose_file" ] && asked; then
 		local c
 		c=$(ui_choose "compose.yaml already exists in $INSTALL_DIR" 1 \
 			"Keep the existing file" \
@@ -556,9 +573,9 @@ install_podman() {
 		db_url="/data/liseur-sync.db"
 	fi
 
-	# Quadlet files. Named volumes under rootless podman get their
-	# ownership mapped into the user namespace automatically, so no
-	# chown bootstrap is needed (unlike rootful docker named volumes).
+	# Quadlet files. The app data mount uses Podman's :U option so the
+	# named volume is owned by the image's non-root UID inside the user
+	# namespace; :Z applies the SELinux label.
 	local qdir="$HOME/.config/containers/systemd"
 	mkdir -p "$qdir"
 
@@ -609,10 +626,11 @@ EOF
 		[ "$DB" = "postgres" ] && echo "Network=liseur-sync.network"
 		cat <<EOF
 PublishPort=127.0.0.1:${PORT}:8585
-Volume=liseur-sync-data:/data:Z
+Volume=liseur-sync-data:/data:Z,U
 Environment=LISEUR_LISTEN_ADDR=0.0.0.0:8585
 Environment=LISEUR_DATABASE_DRIVER=${DB}
 Environment=LISEUR_DATABASE_URL=${db_url}
+Environment=LISEUR_CONTENT_ROOT=/data/content
 Exec=serve
 
 [Service]

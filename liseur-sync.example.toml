@@ -1,13 +1,19 @@
 # liseur-sync configuration. All values shown are defaults.
 # Env overrides: LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER,
-# LISEUR_DATABASE_URL, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
-# LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES.
+# LISEUR_DATABASE_URL, LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP,
+# LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES.
 
 listen_addr = "127.0.0.1:8585"
 
 [database]
 driver = "sqlite"                  # sqlite | postgres
 url = "liseur-sync.db"             # sqlite path, or postgres DSN
+
+[content]
+root = "content"
+recovery_stale_minutes = 5
+failure_retention_hours = 24
+recovery_batch_size = 100
 
 # Allow credential traffic over plain HTTP (LAN-only setups). The
 # server refuses login/tokens/adapter credentials over HTTP otherwise.
