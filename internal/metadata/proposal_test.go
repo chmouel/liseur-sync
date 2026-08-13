@@ -126,6 +126,58 @@ func TestFromPath(t *testing.T) {
 	if got.Identifiers != nil || got.Languages != nil || got.Tags != nil {
 		t.Fatalf("a path produced unrelated assertions: %+v", got)
 	}
+	if !got.PartialSets {
+		t.Fatalf("a path proposal must be partial: %+v", got)
+	}
+}
+
+// TestFromPathKeepsUnrelatedEmbeddedRows pins the reason a path proposal is
+// partial: merging it as a complete assertion would delete every embedded
+// contributor and series the path could not name.
+func TestFromPathKeepsUnrelatedEmbeddedRows(t *testing.T) {
+	embedded := FromEmbedded(epub.Metadata{
+		Contributors: []epub.Contributor{
+			{Name: "Frank Herbert", Role: "author"},
+			{Name: "Jane Doe", Role: "translator"},
+		},
+		Series: []epub.Series{{Name: "Dune"}, {Name: "Omnibus"}},
+	})
+	if embedded.PartialSets {
+		t.Fatalf("an extraction reads the whole publication and is complete")
+	}
+	var contributors []SetEntry[ContributorKey, string]
+	contributors, _ = MergeSet(
+		contributors, embedded.Contributors, embedded.Source, false)
+	var series []SetEntry[string, SeriesValue]
+	series, _ = MergeSet(series, embedded.Series, embedded.Source, false)
+
+	fromPath := FromPath(ParsePath(
+		"Frank Herbert/Omnibus/02 - Dune Messiah.epub", DefaultPathPatterns()))
+	mergedContributors, changed := MergeEntries(
+		contributors, fromPath.Contributors, fromPath.Source, false)
+	if !changed || len(mergedContributors) != 2 {
+		t.Fatalf("a path deleted contributors it never saw: %+v",
+			mergedContributors)
+	}
+	if mergedContributors[0].Source != store.MetadataFilename ||
+		mergedContributors[1].Source != store.MetadataEmbedded {
+		t.Fatalf("the path should own only the author: %+v", mergedContributors)
+	}
+	mergedSeries, changed := MergeEntries(
+		series, fromPath.Series, fromPath.Source, false)
+	if !changed || len(mergedSeries) != 2 {
+		t.Fatalf("a path deleted series it never saw: %+v", mergedSeries)
+	}
+	if mergedSeries[1].Value.Position != 2 || !mergedSeries[1].Value.HasPosition {
+		t.Fatalf("the path should supply the omnibus position: %+v", mergedSeries)
+	}
+
+	dropped, _ := MergeSet(contributors, fromPath.Contributors,
+		fromPath.Source, false)
+	if len(dropped) != 1 {
+		t.Fatalf("a complete merge of a partial proposal is expected to " +
+			"delete rows, which is why PartialSets exists")
+	}
 }
 
 func TestFromPathUnparsable(t *testing.T) {
