@@ -589,7 +589,7 @@ func TestRunIngestPromotionPassCountsWhatItDid(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, FixedPatterns(nil), fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestRunIngestPromotionPassSkipsAJobAnotherWorkerTook(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, FixedPatterns(nil), fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestRunIngestPromotionPassCountsAReplaySeparately(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(context.Background(), st,
-		&fakeBlobPromoter{}, nil, fixedClock(now), time.Hour, 25)
+		&fakeBlobPromoter{}, FixedPatterns(nil), fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestRunIngestPromotionPassReportsAQuarantine(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, FixedPatterns(nil), fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -654,24 +654,27 @@ func TestRunIngestPromotionPassReportsAQuarantine(t *testing.T) {
 
 func TestRunIngestPromotionPassRejectsAnUnusableRequest(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
+	all := FixedPatterns(nil)
 	for _, tc := range []struct {
 		name      string
 		st        ingestPromotionQueue
 		blobs     ingestBlobPromoter
+		patterns  PatternResolver
 		clock     func() time.Time
 		retention time.Duration
 		batch     int
 	}{
-		{"no store", nil, &fakeBlobPromoter{}, fixedClock(now), time.Hour, 25},
-		{"no blobs", &fakePromotionStore{}, nil, fixedClock(now), time.Hour, 25},
-		{"no clock", &fakePromotionStore{}, &fakeBlobPromoter{}, nil, time.Hour, 25},
-		{"no retention", &fakePromotionStore{}, &fakeBlobPromoter{}, fixedClock(now), 0, 25},
-		{"empty batch", &fakePromotionStore{}, &fakeBlobPromoter{}, fixedClock(now), time.Hour, 0},
-		{"huge batch", &fakePromotionStore{}, &fakeBlobPromoter{}, fixedClock(now), time.Hour, 501},
+		{"no store", nil, &fakeBlobPromoter{}, all, fixedClock(now), time.Hour, 25},
+		{"no blobs", &fakePromotionStore{}, nil, all, fixedClock(now), time.Hour, 25},
+		{"no patterns", &fakePromotionStore{}, &fakeBlobPromoter{}, nil, fixedClock(now), time.Hour, 25},
+		{"no clock", &fakePromotionStore{}, &fakeBlobPromoter{}, all, nil, time.Hour, 25},
+		{"no retention", &fakePromotionStore{}, &fakeBlobPromoter{}, all, fixedClock(now), 0, 25},
+		{"empty batch", &fakePromotionStore{}, &fakeBlobPromoter{}, all, fixedClock(now), time.Hour, 0},
+		{"huge batch", &fakePromotionStore{}, &fakeBlobPromoter{}, all, fixedClock(now), time.Hour, 501},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := RunIngestPromotionPass(context.Background(),
-				tc.st, tc.blobs, nil, tc.clock, tc.retention, tc.batch)
+				tc.st, tc.blobs, tc.patterns, tc.clock, tc.retention, tc.batch)
 			if !errors.Is(err, store.ErrInvalidTransition) {
 				t.Fatalf("err = %v, want invalid transition", err)
 			}
@@ -685,7 +688,7 @@ func TestRunIngestPromotionPassPropagatesAListingFailure(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	_, err := RunIngestPromotionPass(context.Background(), st,
-		&fakeBlobPromoter{}, nil, fixedClock(now), time.Hour, 25)
+		&fakeBlobPromoter{}, FixedPatterns(nil), fixedClock(now), time.Hour, 25)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want %v", err, sentinel)
 	}

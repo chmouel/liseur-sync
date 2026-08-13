@@ -122,7 +122,7 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 		SHA256: *job.ContentSHA256, SizeBytes: job.BytesReceived}
 
 	report, err := RunIngestPromotionPass(
-		ctx, st, cas, nil, func() time.Time { return now.Add(5 * time.Minute) },
+		ctx, st, cas, FixedPatterns(nil), func() time.Time { return now.Add(5 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
 		t.Fatalf("promotion pass: %v", err)
@@ -188,7 +188,7 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 	// A second pass has nothing to list: the job left extracted, so the pass
 	// cannot create a second book for the same artifact.
 	again, err := RunIngestPromotionPass(
-		ctx, st, cas, nil, func() time.Time { return now.Add(9 * time.Minute) },
+		ctx, st, cas, FixedPatterns(nil), func() time.Time { return now.Add(9 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
 		t.Fatalf("second pass: %v", err)

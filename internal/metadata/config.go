@@ -70,12 +70,10 @@ func WithPathPatterns(raw []byte, patterns []PathPattern) ([]byte, error) {
 	} else {
 		names := make([]string, 0, len(patterns))
 		for _, pattern := range patterns {
-			if !KnownPathPattern(pattern) {
-				return nil, fmt.Errorf("%w: unknown layout %q",
-					ErrInvalidLibraryConfig, pattern)
-			}
 			names = append(names, string(pattern))
 		}
+		// The same validation the read side runs, so a document this
+		// package writes is always one it can read back.
 		if _, err := validatePathPatterns(names); err != nil {
 			return nil, err
 		}

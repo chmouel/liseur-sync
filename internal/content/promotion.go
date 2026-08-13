@@ -88,6 +88,10 @@ type IngestPromotionReport struct {
 	// Undescribed counts books that were promoted with their titles intact
 	// but whose entity sets did not attach.
 	Undescribed int
+	// Misconfigured counts jobs left where they were because their
+	// library's layout configuration could not be read. They are not
+	// failures of the job and are retried on the next pass.
+	Misconfigured int
 }
 
 // PromoteIngestJob publishes an extracted job's artifact into the CAS and
@@ -223,11 +227,12 @@ func newBookPromotion(
 // not stop the book being published — the title can be corrected, an
 // unpublishable book cannot.
 //
-// The result stays a pure function of the job, which the promotion
-// fingerprint depends on. Two workers configured with different layout
-// patterns would describe the same job differently and the loser would see a
-// conflict rather than a replay; that is a misconfiguration reporting itself,
-// not a race.
+// The result stays a pure function of the job and the library's configured
+// layouts, which the promotion fingerprint depends on. Both workers read
+// that configuration from the same row, so ordinary contention produces
+// byte-identical requests. An operator who changes the layouts in the
+// instant between two racing workers gets a conflict rather than a replay,
+// which is the configuration change reporting itself.
 func promotedBook(
 	job store.IngestJob, patterns []metadata.PathPattern, book store.CatalogBook,
 ) store.CatalogBook {
@@ -293,13 +298,13 @@ func RunIngestPromotionPass(
 	ctx context.Context,
 	st ingestPromotionQueue,
 	blobs ingestBlobPromoter,
-	patterns []metadata.PathPattern,
+	patterns PatternResolver,
 	clock func() time.Time,
 	failureRetention time.Duration,
 	batchSize int,
 ) (IngestPromotionReport, error) {
 	var report IngestPromotionReport
-	if st == nil || blobs == nil || clock == nil ||
+	if st == nil || blobs == nil || clock == nil || patterns == nil ||
 		failureRetention <= 0 || batchSize < 1 || batchSize > 500 {
 		return report, store.ErrInvalidTransition
 	}
@@ -307,9 +312,25 @@ func RunIngestPromotionPass(
 	if err != nil {
 		return report, fmt.Errorf("list extracted ingest jobs: %w", err)
 	}
+	layouts := memoize(patterns)
 	for _, job := range jobs {
+		jobPatterns, err := layouts.PatternsFor(ctx, job.UserID, job.LibraryID)
+		if err != nil {
+			// A library nobody can describe stalls its own backlog and
+			// nothing else. Promoting it anyway would file its books under
+			// whatever layout happened to be compiled in, which is the
+			// misreading this configuration exists to prevent, and failing
+			// the pass would let one library's typo stop every other
+			// library's uploads.
+			if errors.Is(err, metadata.ErrInvalidLibraryConfig) ||
+				errors.Is(err, store.ErrNotFound) {
+				report.Misconfigured++
+				continue
+			}
+			return report, err
+		}
 		result, err := PromoteIngestJob(
-			ctx, st, blobs, job, patterns, clock, failureRetention)
+			ctx, st, blobs, job, jobPatterns, clock, failureRetention)
 		if errors.Is(err, store.ErrStaleRevision) {
 			report.Skipped++
 			continue
@@ -325,7 +346,7 @@ func RunIngestPromotionPass(
 			}
 			report.Promoted++
 			if _, _, err := MaterializeBookMetadata(
-				ctx, st, result.Job, patterns, clock); err != nil {
+				ctx, st, result.Job, jobPatterns, clock); err != nil {
 				report.Undescribed++
 			}
 		case store.IngestQuarantined:
