@@ -33,6 +33,15 @@ The store test suite runs against SQLite by default. Set
 `LISEUR_PG_TEST_DSN=postgres://...` to also exercise the PostgreSQL
 backend (throwaway database).
 
+The web reader has a browser check (`TestReaderOpensInARealBrowser`)
+that drives Chromium over CDP. It skips when no Chromium is found,
+including in CI; set `LISEUR_CHROME` to point at one, and
+`LISEUR_READER_SCREENSHOT=/tmp/reader.png` to keep what it saw. Run it
+after touching `static/reader*.js`, `reader.templ` or the reader's CSP:
+a `srcdoc` document inherits the framing page's policy, so a page CSP
+that is slightly too strict renders a blank frame with no error
+anywhere.
+
 ## Architecture in one paragraph
 
 One binary, two subcommands (`serve`, `admin`). Storage goes through the
