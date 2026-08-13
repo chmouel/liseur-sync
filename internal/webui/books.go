@@ -102,6 +102,10 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 	if v.CanWrite {
 		v.Uploads = s.uploadActivity(r, u.ID, v.Selected, loc)
 		v.Trash = s.trashActivity(r, u.ID, v.Selected, loc)
+		// Shown to librarians only, for the same reason as the trash: it
+		// is a list of things to do something about, and only a librarian
+		// can do anything about them.
+		v.Duplicates = s.duplicateGroups(r, u.ID, v.Selected)
 	}
 	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
 		Render(r.Context(), w)
@@ -423,6 +427,51 @@ func trashProblem(err error) string {
 	default:
 		return "that did not work; try again"
 	}
+}
+
+// duplicateLimit bounds the survey. It counts books rather than groups,
+// so a library that is duplicated wholesale reports the first of them and
+// no more: the point is to tell the user it is happening, and the tenth
+// example does not make the point better.
+const duplicateLimit = 50
+
+// duplicateGroups collects books sharing bytes into one entry per file.
+// The store returns them ordered by digest, so a group is a run.
+func (s *Server) duplicateGroups(
+	r *http.Request, userID, libraryID string,
+) []DuplicateGroup {
+	books, err := s.St.ListDuplicateContentBooks(
+		r.Context(), userID, libraryID, duplicateLimit)
+	if err != nil {
+		slog.Error("duplicate listing unavailable",
+			"library", libraryID, "err", err)
+		return nil
+	}
+	return groupDuplicates(books)
+}
+
+// groupDuplicates turns the store's digest-ordered list into one entry
+// per file. A group is a run of books carrying the same digest, so this
+// depends on that ordering and on nothing else, which is why it is a
+// function of its argument and testable as one.
+func groupDuplicates(books []store.DuplicateContentBook) []DuplicateGroup {
+	var groups []DuplicateGroup
+	digest := ""
+	for i, duplicate := range books {
+		if i == 0 || duplicate.SHA256 != digest {
+			digest = duplicate.SHA256
+			groups = append(groups, DuplicateGroup{})
+		}
+		last := len(groups) - 1
+		groups[last].Titles = append(groups[last].Titles, duplicate.Book.Title)
+	}
+	// The limit can cut a group in half, leaving a lone title that reads
+	// as "this book duplicates itself". Dropping it is better than
+	// explaining it.
+	if len(groups) > 0 && len(groups[len(groups)-1].Titles) < 2 {
+		groups = groups[:len(groups)-1]
+	}
+	return groups
 }
 
 // trashLimit keeps the trash section a short list of recent regrets

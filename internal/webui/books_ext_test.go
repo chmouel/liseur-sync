@@ -646,3 +646,66 @@ func TestBooksUIRestoreSaysWhenTheFileIsGone(t *testing.T) {
 		t.Fatalf("download offered for a book with no bytes:\n%s", html)
 	}
 }
+
+// TestBooksUIPointsOutTheSameFileTwice: uploading one file twice is
+// allowed on purpose — a second catalog entry for deduplicated bytes may
+// be exactly what somebody meant — so the page owes the user the fact
+// that it happened rather than a silent pair of identical rows. Deleting
+// one settles it.
+func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+
+	body := bytes.Repeat([]byte("same-bytes"), 40)
+	for _, name := range []string{"first", "second"} {
+		if up := f.uploadForm(
+			t, f.cookie, csrf, f.library, name+".epub", body,
+		); up.StatusCode != http.StatusSeeOther {
+			t.Fatalf("upload %s: %d", name, up.StatusCode)
+		}
+		f.promote(t, name)
+	}
+	// A book nothing else shares must not be dragged into the report.
+	if up := f.uploadForm(t, f.cookie, csrf, f.library, "alone.epub",
+		bytes.Repeat([]byte("different"), 40),
+	); up.StatusCode != http.StatusSeeOther {
+		t.Fatalf("upload alone: %d", up.StatusCode)
+	}
+	f.promote(t, "alone")
+
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if !strings.Contains(html, "The same file, more than once") {
+		t.Fatalf("duplicates not reported:\n%s", html)
+	}
+	section := html[strings.Index(html, "The same file, more than once"):]
+	section = section[:strings.Index(section, "In this library")]
+	for _, want := range []string{"first", "second"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("%q missing from the duplicate report:\n%s", want, section)
+		}
+	}
+	if strings.Contains(section, "alone") {
+		t.Fatalf("a book with unique bytes was reported:\n%s", section)
+	}
+
+	// A reader may see the library but is shown nothing to act on, since
+	// acting on it is a deletion they cannot perform. Checked while the
+	// duplicate is still there, or this proves nothing.
+	_, readerHTML := f.get(t, "/ui/books?library="+f.library, f.readerCookie(t))
+	if strings.Contains(readerHTML, "The same file, more than once") {
+		t.Fatalf("a reader was shown librarian work:\n%s", readerHTML)
+	}
+
+	// Deleting the spare resolves it, and the page stops nagging.
+	resp := f.postForm(t, "/ui/books/book-second/delete", f.cookie, url.Values{
+		"csrf": {csrf}, "library": {f.library},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("delete: %d", resp.StatusCode)
+	}
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if strings.Contains(html, "The same file, more than once") {
+		t.Fatalf("duplicates still reported after deleting one:\n%s", html)
+	}
+}

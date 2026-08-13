@@ -35,14 +35,22 @@ type TrashRow struct {
 	Until string
 }
 
+// DuplicateGroup is a set of books in one library that are the same
+// bytes. The page reports them and leaves the deciding to the user: two
+// entries for one file may be exactly what somebody meant.
+type DuplicateGroup struct {
+	Titles []string
+}
+
 type BooksView struct {
 	Libraries []LibraryOption
 	Selected  string
 	CanWrite  bool
 	Books     []BookRow
 	Uploads   []UploadRow
-	Trash     []TrashRow
-	NextURL   string
+	Trash      []TrashRow
+	Duplicates []DuplicateGroup
+	NextURL    string
 	Notice    string
 	Problem   string
 }
@@ -140,6 +148,23 @@ templ booksBody(prefix, csrf string, v BooksView) {
 						</tr>
 					}
 				</table>
+			</section>
+		}
+		if len(v.Duplicates) > 0 {
+			<section class="card">
+				<h2>The same file, more than once</h2>
+				<p class="muted">
+					These entries hold identical bytes. The file itself is only
+					stored once, so this costs no space — but if you did not mean
+					to add it twice, deleting the spare tidies the list.
+				</p>
+				for _, group := range v.Duplicates {
+					<ul>
+						for _, title := range group.Titles {
+							<li>{ orPlaceholder(title) }</li>
+						}
+					</ul>
+				}
 			</section>
 		}
 		<section class="card">
