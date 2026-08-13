@@ -183,7 +183,8 @@ server disk allocation.
    implemented, together with strict descriptor-relative inventory and
    verification of durable final blobs. Database reconciliation records
    missing blobs and grace-period orphan marks without mutating catalog
-   availability or deleting content.
+   availability or deleting content, and the full comparison runs before the
+   server accepts traffic.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

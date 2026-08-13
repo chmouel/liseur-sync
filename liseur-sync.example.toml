@@ -12,7 +12,7 @@ url = "liseur-sync.db"             # sqlite path, or postgres DSN
 [content]
 root = "content"
 failure_retention_hours = 24
-recovery_batch_size = 100
+recovery_batch_size = 100          # ingest jobs and blob reconciliation
 
 # Allow credential traffic over plain HTTP (LAN-only setups). The
 # server refuses login/tokens/adapter credentials over HTTP otherwise.
