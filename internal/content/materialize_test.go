@@ -567,3 +567,21 @@ func TestMaterializeWritesWhatAnEditorDidNotSupersede(t *testing.T) {
 		t.Fatalf("dropped what the editor never supplied: %+v", applied.Tags)
 	}
 }
+
+// A publication that declared nothing usable is not evidence either, and
+// its snapshot is stored all the same.
+func TestMaterializeSkipsAnEmptySnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata()}
+	job := materializeJob(t, epub.Metadata{}, "")
+
+	if _, changed, err := MaterializeBookMetadata(
+		context.Background(), st, job, metadata.DefaultPathPatterns(),
+		clockAt(now)); err != nil || changed {
+		t.Fatalf("empty snapshot: changed=%v err=%v", changed, err)
+	}
+	if st.reads != 0 {
+		t.Fatalf("read the catalog for a snapshot that asserts nothing: %d",
+			st.reads)
+	}
+}
