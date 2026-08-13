@@ -71,6 +71,7 @@ func openContentAndRecover(
 	if err != nil {
 		return nil, report, fmt.Errorf("open content store: %w", err)
 	}
+	cas.SetStagingCap(cfg.Content.MaxStagingBytes)
 	report.Ingest, err = content.RecoverIngest(
 		ctx, st, cas, now, now,
 		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,

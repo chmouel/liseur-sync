@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/contentpath"
@@ -28,6 +29,7 @@ var (
 	ErrDigestMismatch        = errors.New("content: staged content does not match its digest")
 	ErrCorruptBlob           = errors.New("content: existing blob does not match its digest")
 	ErrUnsafePath            = errors.New("content: unsafe path or file type")
+	ErrStagingFull           = errors.New("content: staging area is full")
 	ErrUnsupportedFilesystem = errors.New("content: filesystem lacks atomic no-replace rename")
 )
 
@@ -60,6 +62,86 @@ type CAS struct {
 	rootFD     int
 	incomingFD int
 	shaFD      int
+
+	// stagingCapBytes bounds everything sitting in .incoming at once, or
+	// 0 for unlimited. Per-request and per-user bounds cannot do this
+	// job: every upload can be inside both and still, together, fill the
+	// disk.
+	stagingCapBytes int64
+	// stagingMu guards reservedBytes, which is what stops concurrent
+	// uploads from each measuring the same free space and all taking it.
+	// In-process is enough for the same reason the rate limiter is: v1
+	// is single-replica.
+	stagingMu     sync.Mutex
+	reservedBytes int64
+}
+
+// SetStagingCap bounds the total size of the incoming directory. It is
+// separate from Open because the CAS is opened before configuration is
+// fully resolved, and 0 keeps the previous unlimited behaviour.
+func (c *CAS) SetStagingCap(bytes int64) {
+	c.stagingMu.Lock()
+	defer c.stagingMu.Unlock()
+	c.stagingCapBytes = bytes
+}
+
+// reserveStaging claims room for one upload of at most maxBytes, and
+// returns the function that gives it back. The caller must call it exactly
+// once, which is why every call site defers it.
+//
+// It reserves the worst case rather than the actual size, which is not yet
+// known: a request that would only be refused after its bytes were written
+// has already done the damage the cap exists to prevent.
+//
+// Usage is measured from the directory itself, not from the database. The
+// bytes that matter are the ones on the disk, and those include partials
+// from requests still in flight and stages orphaned by a crash, neither of
+// which any table knows about.
+func (c *CAS) reserveStaging(maxBytes int64) (func(), error) {
+	c.stagingMu.Lock()
+	defer c.stagingMu.Unlock()
+	if c.stagingCapBytes <= 0 {
+		return func() {}, nil
+	}
+	used, err := c.incomingBytes()
+	if err != nil {
+		return nil, err
+	}
+	if used+c.reservedBytes+maxBytes > c.stagingCapBytes {
+		return nil, ErrStagingFull
+	}
+	c.reservedBytes += maxBytes
+	return func() {
+		c.stagingMu.Lock()
+		defer c.stagingMu.Unlock()
+		c.reservedBytes -= maxBytes
+	}, nil
+}
+
+// incomingBytes totals the regular files in the incoming directory. The
+// caller holds stagingMu.
+func (c *CAS) incomingBytes() (int64, error) {
+	names, err := readDirectoryEntries(c.incomingFD)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, name := range names {
+		var st unix.Stat_t
+		if err := unix.Fstatat(c.incomingFD, name, &st,
+			unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				// A stage finishing while we count is not an error;
+				// it only means the directory is smaller than measured.
+				continue
+			}
+			return 0, classifyPathError(err)
+		}
+		if st.Mode&unix.S_IFMT == unix.S_IFREG {
+			total += st.Size
+		}
+	}
+	return total, nil
 }
 
 // Open creates and opens a durable private CAS root.
@@ -139,6 +221,15 @@ func (c *CAS) Stage(ctx context.Context, jobID string, src io.Reader, maxBytes i
 	} else if !errors.Is(err, unix.ENOENT) {
 		return StagedBlob{}, classifyPathError(err)
 	}
+
+	// Reserved only once a replay has been ruled out: a job re-entering
+	// its own completed stage occupies space it already holds, and
+	// refusing it would strand an upload that is finished.
+	release, err := c.reserveStaging(maxBytes)
+	if err != nil {
+		return StagedBlob{}, err
+	}
+	defer release()
 
 	partialName := prefix + ".partial"
 	if err := unlinkIfExists(c.incomingFD, partialName); err != nil {

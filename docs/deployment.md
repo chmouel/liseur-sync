@@ -100,6 +100,20 @@ liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReade
 liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
 ```
 
+## Sizing the content disk
+
+Uploads land in `content.root/.incoming` while they are received and
+verified, and only then move to permanent storage. `max_staging_bytes`
+(8 GiB by default) bounds what that directory holds at once; uploads that
+would exceed it are answered `503` with `Retry-After`. Neither
+`max_upload_bytes` nor a user's `quota_bytes` can do this job, since every
+upload can be inside both and still, together, fill the disk.
+
+Size it for the concurrency you expect — it must be at least
+`max_upload_bytes`, or no upload could ever fit — and leave the permanent
+library room to grow beside it. Setting it to `0` restores unbounded
+staging, which only makes sense where the disk is bounded another way.
+
 ## Backup
 
 The database and `content.root` are one backup unit. Until maintenance mode
