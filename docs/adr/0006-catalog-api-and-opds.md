@@ -94,9 +94,15 @@ reachable under `/opds` as well as `/v1`, because a reader fetches feed
 images with the Basic credential it used for the feed and the bearer route
 would refuse every one of them.
 
+A library's feed carries a `search` link to an OpenSearch description and
+`http://opds-spec.org/facet` links to its series, contributors, tags and
+genres, so a reader finds both from the feed it already has rather than
+from configuration. The search template offers `searchTerms` and nothing
+else: a term a reader could substitute is a question this surface can be
+asked, and reading state must not be one of them.
+
 A "recently added" feed is still deferred: it is not on the path from
-opening a reader to reading a book. Search through OpenSearch and
-series/contributor feeds follow later; OPDS 2.0 and OPDS-PSE are deferred
+opening a reader to reading a book. OPDS 2.0 and OPDS-PSE are deferred
 entirely.
 
 XML is generated through an encoder, never string interpolation, and has
@@ -129,16 +135,20 @@ metadata edits, work resolution, and rich sync remain native operations.
 2. **Native catalog read and download API.** Done: `GET /v1/libraries`,
    `GET /v1/libraries/{library}/books` with opaque cursor pagination,
    `GET /v1/books/{id}`, and `GET`/`HEAD /v1/books/{id}/download` with
-   ranges, `ETag` and conditional requests. **Remaining:** covers, and
-   filtering beyond a plain listing.
+   ranges, `ETag` and conditional requests, plus covers and
+   `GET /v1/libraries/{library}/search` with facets (ADR-0004 phase 3).
+   **Nothing outstanding.**
 3. **OPDS 1.2 acquisition feeds.** Done: `GET /opds/v1.2` navigation over
    the caller's libraries, `GET /opds/v1.2/libraries/{library}` paginated
    acquisition feeds, and `GET /opds/v1.2/books/{id}/download`, all behind
-   HTTP Basic. **Remaining:** recently added, covers, OpenSearch, and
-   series/contributor feeds.
+   HTTP Basic, with covers, an OpenSearch description and search results
+   feed, and navigation feeds for series, contributors, tags and genres,
+   all discovered through links rather than configuration.
+   **Remaining:** a recently-added feed.
 4. Mutation API and ingestion job resources. Done: the ADR-0005 upload
-   endpoint, the job resource, and `DELETE`/`POST .../restore` for
-   reversible deletion. **Remaining:** metadata edits.
+   endpoint, the job resource, `DELETE`/`POST .../restore` for reversible
+   deletion, and the metadata edit and entity routes from ADR-0004 phase
+   2. **Nothing outstanding.**
 
 ## Acceptance criteria
 
