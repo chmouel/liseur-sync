@@ -597,8 +597,10 @@ tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
 M7 and M8 are now in place: uploads create ingest jobs, the admin subcommand
 creates libraries and grants access, the catalog API lists and downloads
 books, and OPDS 1.2 puts that same catalog in front of readers that speak
-nothing else. What the first release still needs is the web UI — uploading
-and browsing from a browser rather than from `curl` and a reader.
+nothing else. The web UI's books pages
+close the loop for a browser. What is left before a release belongs to
+M6: catalog availability reconciliation, deletion and trash, and backup
+verification.
 
 ## 10. Future work (explicitly out of v1)
 

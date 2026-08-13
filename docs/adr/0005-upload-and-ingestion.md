@@ -194,7 +194,8 @@ name a stable job and reason instead of losing state when a request ends.
    staging deletes its own bytes, since nothing in the database references
    them; a crash in that same window still orphans one file per in-flight
    request, which needs a sweep over abandoned `received` jobs.
-   **Remaining:** the htmx upload UI.
+   The web UI drives the same code path with a session cookie instead of a
+   token, so there is one implementation of the staging rules.
 
 **Remaining elsewhere:** catalog availability reconciliation, and the
 watched-folder scanner in ADR-0002.
