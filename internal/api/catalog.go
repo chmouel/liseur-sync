@@ -469,3 +469,64 @@ func (s *Server) HandleRestoreBook(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, catalogBookJSON(book))
 }
+
+// HandleLibraryDuplicates reports books in one library that hold
+// identical bytes.
+//
+// It is a read, not a repair: a second catalog entry for deduplicated
+// content is something a user may have meant, so the server says what it
+// knows and leaves the decision alone. Resolving a group is an ordinary
+// delete of whichever entry the client chooses.
+func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	libraryID := r.PathValue("library")
+	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	limit, err := catalogPageSize(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	books, err := s.St.ListDuplicateContentBooks(
+		r.Context(), tok.UserID, libraryID, limit)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
+		return
+	}
+	// Grouped by digest rather than returned flat, because a client that
+	// had to group them itself would have to know the ordering rule to do
+	// it, and one that guessed would show a book duplicating itself.
+	groups := make([]map[string]any, 0)
+	digest := ""
+	for i, duplicate := range books {
+		if i == 0 || duplicate.SHA256 != digest {
+			digest = duplicate.SHA256
+			groups = append(groups, map[string]any{
+				"sha256": digest,
+				"books":  make([]map[string]any, 0, 2),
+			})
+		}
+		last := groups[len(groups)-1]
+		last["books"] = append(
+			last["books"].([]map[string]any), catalogBookJSON(duplicate.Book))
+	}
+	// A group cut in half by the limit is dropped: one book on its own is
+	// not a duplicate of anything, and saying so would be wrong rather
+	// than merely incomplete.
+	if n := len(groups); n > 0 {
+		if last, _ := groups[n-1]["books"].([]map[string]any); len(last) < 2 {
+			groups = groups[:n-1]
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"duplicates": groups})
+}

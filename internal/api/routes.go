@@ -325,6 +325,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/ingest/jobs/{id}", readH(s.HandleIngestJob))
 	mux.Handle("GET /v1/libraries", readH(s.HandleLibraries))
 	mux.Handle("GET /v1/libraries/{library}/books", readH(s.HandleLibraryBooks))
+	mux.Handle("GET /v1/libraries/{library}/duplicates", readH(s.HandleLibraryDuplicates))
 	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
 	// Download serves HEAD too: ServeContent handles it, and catalog
 	// clients probe with HEAD before fetching.

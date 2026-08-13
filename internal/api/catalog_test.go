@@ -329,6 +329,7 @@ func TestCatalogRequiresTheLibraryReadScope(t *testing.T) {
 	for _, path := range []string{
 		"/v1/libraries",
 		"/v1/libraries/" + f.library + "/books",
+		"/v1/libraries/" + f.library + "/duplicates",
 		"/v1/books/" + bookID,
 		"/v1/books/" + bookID + "/download",
 	} {
@@ -712,5 +713,64 @@ func TestDeleteRequiresTheManageScope(t *testing.T) {
 	// The book is untouched by all that.
 	if resp, _ := f.get(t, "/v1/books/"+bookID, read); resp.StatusCode != http.StatusOK {
 		t.Fatalf("book damaged by refused deletes: %d", resp.StatusCode)
+	}
+}
+
+// TestDuplicatesGroupBooksThatAreTheSameFile is the API half of
+// duplicate detection. A client asks what is duplicated and gets groups
+// it can act on; a book nothing else shares is not one of them, and
+// resolving a group is an ordinary delete.
+func TestDuplicatesGroupBooksThatAreTheSameFile(t *testing.T) {
+	f := newUploadFixture(t)
+	same := []byte("identical bytes for two books")
+	firstID, _ := f.publishAs(t, "copy-one", "Morning Star", same)
+	secondID, _ := f.publishAs(t, "copy-two", "Morning Star Again", same)
+	f.publishAs(t, "unique", "Only Copy", []byte("nothing else has these"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	path := "/v1/libraries/" + f.library + "/duplicates"
+	code, page := getJSON(t, f.ts.URL+path, read)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d: %v", code, page)
+	}
+	groups, _ := page["duplicates"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("duplicates = %v, want one group", page["duplicates"])
+	}
+	group, _ := groups[0].(map[string]any)
+	if sha, _ := group["sha256"].(string); len(sha) != 64 {
+		t.Fatalf("group digest = %v", group["sha256"])
+	}
+	books, _ := group["books"].([]any)
+	if len(books) != 2 {
+		t.Fatalf("group holds %d books, want 2", len(books))
+	}
+	got := map[string]bool{}
+	for _, entry := range books {
+		book, _ := entry.(map[string]any)
+		id, _ := book["book_id"].(string)
+		got[id] = true
+		if _, ok := book["title"].(string); !ok {
+			t.Fatalf("book in a group is not described: %v", book)
+		}
+	}
+	if !got[firstID] || !got[secondID] {
+		t.Fatalf("group = %v, want %s and %s", got, firstID, secondID)
+	}
+
+	// Deleting one settles it, which is the whole resolution story: there
+	// is no separate merge, and nothing was decided for the caller.
+	manage := f.mintToken(t, f.user.ID, store.ScopeLibraryManage)
+	if resp, _ := f.req(
+		t, http.MethodDelete, "/v1/books/"+secondID, manage,
+	); resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete: %d", resp.StatusCode)
+	}
+	code, page = getJSON(t, f.ts.URL+path, read)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d: %v", code, page)
+	}
+	if groups, _ := page["duplicates"].([]any); len(groups) != 0 {
+		t.Fatalf("duplicates after deleting one = %v", page["duplicates"])
 	}
 }
