@@ -291,7 +291,12 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 	if book.UpdatedAt.IsZero() {
 		book.UpdatedAt = book.CreatedAt
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO books (
 		     id, library_id, status,
 		     title, title_source, title_locked,
@@ -335,7 +340,12 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 	if n == 0 {
 		return store.ErrNotFound
 	}
-	return nil
+	// A book is findable from the moment it exists. Indexing it later
+	// would mean a book that is listed and cannot be found by its title.
+	if err := reindexBookTx(ctx, tx, book.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CatalogBookByID(ctx context.Context, userID, bookID string, required store.LibraryRole) (store.CatalogBook, error) {
@@ -774,6 +784,12 @@ func (s *Store) ApplyCatalogBookMetadata(
 	out, err := catalogBookMetadataTx(
 		ctx, tx, userID, book.ID, store.LibraryRoleManage)
 	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	// The index is rebuilt in the same transaction as the edit, so a book
+	// is findable by its new title the moment the edit that gave it one
+	// commits. A search that lags behind the catalog lies about it.
+	if err := reindexBookTx(ctx, tx, book.ID); err != nil {
 		return store.BookMetadata{}, err
 	}
 	if err := tx.Commit(); err != nil {

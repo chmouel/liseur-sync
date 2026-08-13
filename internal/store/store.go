@@ -836,6 +836,54 @@ type CatalogEntity struct {
 // problem no page size can fix.
 const MaxEntityListLimit = 500
 
+// SearchQuery asks one library for the books matching some words.
+//
+// It carries no reading-state filter, and that is a rule rather than an
+// omission (ADR-0004): a catalog-only credential must not be able to
+// observe reading state, and the surest way to keep that true is for the
+// catalog's search to have no vocabulary for it.
+type SearchQuery struct {
+	LibraryID string
+	// Text is what the person typed. It is treated as words to match,
+	// never as index syntax, so no character in it can change how the
+	// query is read.
+	Text string
+	// Entities narrows to books claiming all of these, whatever their
+	// kind. Facets are how a caller learns which ids are worth sending.
+	Entities []string
+	Limit    int
+}
+
+// MaxSearchLimit bounds one search. Search answers "where is that book",
+// which is a question with a short answer; browsing a whole library is
+// what the paged listings are for.
+const MaxSearchLimit = 100
+
+// MaxSearchFacets bounds how many values of each kind a result describes.
+// A facet list is a set of suggestions, and a suggestion nobody will read
+// is only a bigger response.
+const MaxSearchFacets = 20
+
+// SearchResult is one library's answer: the matching books, best first,
+// and what those books have in common.
+type SearchResult struct {
+	Books  []CatalogBook
+	Facets []SearchFacet
+	// Truncated says the answer was cut at the limit, so a caller can
+	// say "narrow this" rather than implying it found everything.
+	Truncated bool
+}
+
+// SearchFacet is one entity the matching books share, with how many of
+// them claim it. Counts are over the matched set rather than the library,
+// because a facet's job is to describe the answer.
+type SearchFacet struct {
+	Kind      EntityKind
+	ID        string
+	Name      string
+	BookCount int
+}
+
 // CommitNewBookPromotionRequest atomically creates one new catalog book and
 // file from an extracted job after its CAS blob is durable.
 type CommitNewBookPromotionRequest struct {
@@ -1397,6 +1445,14 @@ type Store interface {
 	// Guin" are two entities until somebody says otherwise, and only a
 	// person can say it.
 	MergeCatalogEntities(ctx context.Context, userID, libraryID, fromID, intoID string, kind EntityKind, at time.Time) (int, error)
+	// SearchCatalogBooks finds one library's active books by words, under
+	// read access, and describes what the matches have in common.
+	//
+	// The index is maintained inside the same transaction as every write
+	// that changes what a book says, so a book is findable by its new
+	// title the moment the edit that gave it one commits — a search that
+	// lags behind the catalog is a search that lies about it.
+	SearchCatalogBooks(ctx context.Context, userID string, query SearchQuery) (SearchResult, error)
 	// ResolveCatalogBookWork resolves the user's work graph and inserts the
 	// catalog mapping in the same transaction. Low-confidence and conflicting
 	// resolutions do not mutate the graph or create a mapping.

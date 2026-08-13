@@ -663,7 +663,13 @@ func insertPromotionBookTx(ctx context.Context, tx *sql.Tx, book store.CatalogBo
 	if isUniqueErr(err) {
 		return store.ErrConflict
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	// A promoted book is findable straight away. Waiting for the entity
+	// pass would mean a book existed, was listed, and could not be found
+	// by its own title.
+	return reindexBookTx(ctx, tx, book.ID)
 }
 
 func promotionReplayTx(

@@ -197,6 +197,12 @@ func (s *Store) PurgeExpiredTrash(
 			`DELETE FROM books WHERE id = ?`, bookID); err != nil {
 			return store.TrashPurgeResult{}, err
 		}
+		// The search index is not a foreign key and does not cascade, so
+		// a purged book would otherwise stay findable — and clicking a
+		// result would 404 on a book nobody can explain.
+		if err := reindexBookTx(ctx, tx, bookID); err != nil {
+			return store.TrashPurgeResult{}, err
+		}
 	}
 
 	for ref := range affected {
