@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/contentpath"
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"golang.org/x/sys/unix"
 )
 
@@ -335,6 +336,68 @@ func (c *CAS) InspectArtifact(
 		return "", err
 	}
 	return ArtifactStaged, nil
+}
+
+// ValidateEPUBArtifact opens and verifies a staged artifact, or its already
+// promoted final blob after a lost publication response, then runs bounded
+// structural EPUB validation while holding the per-job stage lock.
+func (c *CAS) ValidateEPUBArtifact(
+	ctx context.Context,
+	stagingPath, expectedSHA string,
+	expectedSize int64,
+	limits epub.Limits,
+) (epub.Result, ArtifactLocation, error) {
+	prefix, stageName, err := parseStagingPath(stagingPath)
+	if err != nil || !validSHA256(expectedSHA) || expectedSize < 0 {
+		return epub.Result{}, "", ErrUnsafePath
+	}
+	unlock, err := c.lockStage(ctx, prefix)
+	if err != nil {
+		return epub.Result{}, "", err
+	}
+	defer unlock()
+	stageFD, err := unix.Openat(c.incomingFD, stageName,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err == nil {
+		result, validateErr := validateEPUBFD(
+			ctx, stageFD, expectedSHA, expectedSize, limits)
+		return result, ArtifactStaged, validateErr
+	}
+	if !errors.Is(err, unix.ENOENT) {
+		return epub.Result{}, "", classifyPathError(err)
+	}
+	prefixFD, leafFD, err := c.openFinalDirectories(expectedSHA, false)
+	if err != nil {
+		return epub.Result{}, "", err
+	}
+	defer unix.Close(prefixFD)
+	defer unix.Close(leafFD)
+	finalFD, err := unix.Openat(leafFD, "file.epub",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return epub.Result{}, "", ErrStageMissing
+	}
+	if err != nil {
+		return epub.Result{}, "", classifyPathError(err)
+	}
+	result, validateErr := validateEPUBFD(
+		ctx, finalFD, expectedSHA, expectedSize, limits)
+	return result, ArtifactPromoted, validateErr
+}
+
+func validateEPUBFD(
+	ctx context.Context,
+	fd int,
+	expectedSHA string,
+	expectedSize int64,
+	limits epub.Limits,
+) (epub.Result, error) {
+	file := os.NewFile(uintptr(fd), "epub-artifact")
+	defer file.Close()
+	if err := verifyFD(ctx, fd, expectedSHA, expectedSize); err != nil {
+		return epub.Result{}, err
+	}
+	return epub.Validate(ctx, file, expectedSize, limits)
 }
 
 // ListBlobs inventories and verifies every durable final blob. Empty hash

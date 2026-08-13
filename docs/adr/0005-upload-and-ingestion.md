@@ -181,9 +181,12 @@ name a stable job and reason instead of losing state when a request ends.
    holds prevent collection. The pure EPUB validator now performs a bounded
    central-directory preflight, streams every entry under expansion and ratio
    limits, rejects unsafe entry types and paths, bounds control XML, and
-   accepts only manifest-declared font obfuscation. Worker/config wiring and
-   catalog availability reconciliation remain.
-2. EPUB security validator fixture expansion and worker integration.
+   accepts only manifest-declared font obfuscation. The CAS can validate either
+   the immutable stage or an already-promoted lost-response artifact, and the
+   revision-checked worker step advances valid jobs or retains content failures
+   as quarantined jobs with stable codes. Limit configuration, worker
+   scheduling, and catalog availability reconciliation remain.
+2. EPUB security validator fixture expansion and worker scheduling.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
 

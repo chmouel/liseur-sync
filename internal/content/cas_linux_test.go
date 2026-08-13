@@ -3,6 +3,7 @@
 package content
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"golang.org/x/sys/unix"
 )
 
@@ -38,6 +40,38 @@ func openTestCAS(t *testing.T) *CAS {
 	return cas
 }
 
+func minimalEPUB(t *testing.T) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	add := func(name, body string, method uint16) {
+		t.Helper()
+		header := &zip.FileHeader{Name: name, Method: method}
+		target, err := writer.CreateHeader(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := target.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("mimetype", "application/epub+zip", zip.Store)
+	add("META-INF/container.xml",
+		`<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">`+
+			`<rootfiles><rootfile full-path="OPS/book.opf"`+
+			` media-type="application/oebps-package+xml"/>`+
+			`</rootfiles></container>`,
+		zip.Deflate)
+	add("OPS/book.opf",
+		`<package xmlns="http://www.idpf.org/2007/opf">`+
+			`<metadata/><manifest/></package>`,
+		zip.Deflate)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
 func TestStageAndPromote(t *testing.T) {
 	cas := openTestCAS(t)
 	data := []byte("hello epub")
@@ -45,6 +79,7 @@ func TestStageAndPromote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if staged.SHA256 != digestOf(data) || staged.Size != int64(len(data)) ||
 		filepath.Dir(filepath.FromSlash(staged.Path)) != ".incoming" {
 		t.Fatalf("staged blob: %+v", staged)
@@ -89,6 +124,49 @@ func TestStageAndPromote(t *testing.T) {
 	replayed, err := cas.Promote(context.Background(), staged.Path, staged.SHA256, staged.Size)
 	if err != nil || !replayed.AlreadyPresent || replayed.Path != blob.Path {
 		t.Fatalf("lost-result replay: %+v %v", replayed, err)
+	}
+}
+
+func TestValidateEPUBArtifactFromStageAndFinal(t *testing.T) {
+	cas := openTestCAS(t)
+	data := minimalEPUB(t)
+	staged, err := cas.Stage(
+		context.Background(), "validate-epub",
+		bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, location, err := cas.ValidateEPUBArtifact(
+		context.Background(), staged.Path, staged.SHA256, staged.Size,
+		epub.DefaultLimits())
+	if err != nil || location != ArtifactStaged ||
+		result.PackagePath != "OPS/book.opf" {
+		t.Fatalf("validate staged EPUB: %+v %q %v", result, location, err)
+	}
+	if _, err := cas.Promote(
+		context.Background(), staged.Path, staged.SHA256, staged.Size); err != nil {
+		t.Fatal(err)
+	}
+	result, location, err = cas.ValidateEPUBArtifact(
+		context.Background(), staged.Path, staged.SHA256, staged.Size,
+		epub.DefaultLimits())
+	if err != nil || location != ArtifactPromoted ||
+		result.PackagePath != "OPS/book.opf" {
+		t.Fatalf("validate promoted EPUB: %+v %q %v", result, location, err)
+	}
+
+	invalid, err := cas.Stage(
+		context.Background(), "validate-invalid",
+		bytes.NewReader([]byte("not an EPUB")), 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cas.ValidateEPUBArtifact(
+		context.Background(), invalid.Path, invalid.SHA256, invalid.Size,
+		epub.DefaultLimits()); err == nil {
+		t.Fatal("invalid EPUB passed CAS validation")
+	} else if code, ok := epub.ErrorCode(err); !ok || code != epub.CodeInvalidEPUB {
+		t.Fatalf("invalid EPUB error: %v", err)
 	}
 }
 
