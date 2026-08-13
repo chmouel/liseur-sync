@@ -125,7 +125,7 @@ func extractPackageMetadata(
 				Space: opfNamespace, Local: "metadata",
 			}) && parent == (xml.Name{
 				Space: opfNamespace, Local: "package",
-			}) {
+			}) && depth == 2 {
 				metadataDepth = depth
 				continue
 			}
@@ -315,7 +315,7 @@ func buildMetadata(
 				if publicationDate == "" {
 					publicationDate = value.value
 				}
-			} else if fallbackDate == "" {
+			} else if event == "" && fallbackDate == "" {
 				fallbackDate = value.value
 			}
 		case "identifier":
