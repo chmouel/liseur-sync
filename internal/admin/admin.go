@@ -19,7 +19,9 @@ import (
 )
 
 // Run dispatches an admin subcommand. args excludes "admin" itself.
-func Run(st store.Store, args []string) error {
+// contentRoot is the configured content directory, needed by the
+// commands that inspect stored bytes rather than database rows.
+func Run(st store.Store, contentRoot string, args []string) error {
 	if len(args) == 0 {
 		return errors.New(Usage)
 	}
@@ -48,6 +50,8 @@ func Run(st store.Store, args []string) error {
 		return grantLibrary(ctx, st, args[1:])
 	case "revoke-library":
 		return revokeLibrary(ctx, st, args[1:])
+	case "verify-backup":
+		return verifyBackup(ctx, st, contentRoot, args[1:])
 	default:
 		return fmt.Errorf("unknown admin subcommand %q\n%s", args[0], Usage)
 	}
@@ -72,6 +76,10 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 grant access; actor must own or manage it
   revoke-library <actor> <library-id> <user>
                                 remove a grant
+
+  verify-backup                 check that the database and content
+                                directory named by -config are a
+                                restorable pair; exits non-zero if not
 `
 
 func createUser(ctx context.Context, st store.Store, args []string) error {

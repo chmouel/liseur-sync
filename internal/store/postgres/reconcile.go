@@ -223,3 +223,47 @@ func (s *Store) PurgeOrphanedBlobRecords(
 	}
 	return purged, nil
 }
+
+// ListReferencedBlobs pages the blobs the database says must exist,
+// ordered by digest. A blob is referenced when a retained book file
+// points at it, whatever that book's status: a trashed book keeps its
+// files so it can be restored, so a backup missing its bytes is a backup
+// that cannot honour the restore it promises. Blobs nothing references
+// are excluded — they are the orphan sweep's business, not a backup's.
+func (s *Store) ListReferencedBlobs(
+	ctx context.Context,
+	afterSHA256 string,
+	limit int,
+) ([]store.BlobInfo, error) {
+	if limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	if afterSHA256 != "" {
+		if err := store.ValidateBlobInfo(store.BlobInfo{
+			SHA256: afterSHA256,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT b.sha256, b.size_bytes
+		 FROM blobs b
+		 WHERE b.sha256 > ?
+		   AND EXISTS (SELECT 1 FROM book_files f WHERE f.blob_sha256 = b.sha256)
+		 ORDER BY b.sha256
+		 LIMIT ?`),
+		afterSHA256, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.BlobInfo
+	for rows.Next() {
+		var info store.BlobInfo
+		if err := rows.Scan(&info.SHA256, &info.SizeBytes); err != nil {
+			return nil, err
+		}
+		out = append(out, info)
+	}
+	return out, rows.Err()
+}
