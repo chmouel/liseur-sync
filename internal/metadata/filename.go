@@ -47,16 +47,20 @@ func DefaultPathPatterns() []PathPattern {
 	}
 }
 
-// Confidence grades how much structure a parsed candidate relied on.
+// Confidence grades how completely a layout accounted for the name it read.
 type Confidence string
 
 const (
 	// ConfidenceNone means nothing could be parsed.
 	ConfidenceNone Confidence = ""
-	// ConfidenceLow means at least one value came from splitting a single
-	// name on " - ", a separator that also occurs inside real titles.
+	// ConfidenceLow means a value was recovered by splitting a single name
+	// on " - ", or the name still holds a " - " the layout could not
+	// interpret. That separator also occurs inside real titles, so such a
+	// candidate is a guess about where one field ends and the next begins.
 	ConfidenceLow Confidence = "low"
-	// ConfidenceHigh means every value came from a directory boundary.
+	// ConfidenceHigh means the layout accounted for the whole name: every
+	// value came from a directory boundary or from a position prefix the
+	// parser fully understood.
 	ConfidenceHigh Confidence = "high"
 )
 
@@ -121,11 +125,14 @@ func applyPathPattern(
 		candidate.Author = parts[0]
 		candidate.Series = parts[1]
 		candidate.Confidence = ConfidenceHigh
-		title, position, hasPosition, exact := splitPositionPrefix(leaf)
-		candidate.Title = title
-		candidate.SeriesPosition = position
-		candidate.HasPosition = hasPosition
-		if !exact {
+		leafTitle, usable := splitPositionPrefix(leaf)
+		if !usable {
+			return PathCandidate{}, false
+		}
+		candidate.Title = leafTitle.Title
+		candidate.SeriesPosition = leafTitle.Position
+		candidate.HasPosition = leafTitle.HasPosition
+		if !leafTitle.Accounted {
 			candidate.Confidence = ConfidenceLow
 		}
 	case PatternSeriesAuthorTitle:
@@ -211,21 +218,44 @@ func splitNameSeparator(name string) []string {
 	return fields
 }
 
-// splitPositionPrefix reads a leading "02 - " series position. exact reports
-// whether the whole leaf was consumed by the numeric prefix rule; a leaf
-// without one keeps its full text as the title.
-func splitPositionPrefix(leaf string) (
-	title string, position float64, hasPosition, exact bool,
-) {
-	index := strings.Index(leaf, " - ")
-	if index < 0 {
-		return leaf, 0, false, true
+// leafTitle is what a series layout could make of its final path component.
+type leafTitle struct {
+	Title       string
+	Position    float64
+	HasPosition bool
+	// Accounted reports whether the layout explained the whole name. A leaf
+	// holding a " - " that is not a position prefix is only partly explained.
+	Accounted bool
+}
+
+// splitPositionPrefix reads a leading "02 - " series position. It reports
+// the leaf as unusable when nothing but a position and its separator remain,
+// because a name such as "02 - .epub" carries no title to keep.
+func splitPositionPrefix(leaf string) (leafTitle, bool) {
+	if index := strings.Index(leaf, " - "); index >= 0 {
+		number, ok := parsePosition(leaf[:index])
+		if !ok {
+			return leafTitle{Title: leaf}, true
+		}
+		title := strings.TrimSpace(leaf[index+len(" - "):])
+		if title == "" {
+			return leafTitle{}, false
+		}
+		return leafTitle{
+			Title:       title,
+			Position:    number,
+			HasPosition: true,
+			Accounted:   true,
+		}, true
 	}
-	number, ok := parsePosition(leaf[:index])
-	if !ok {
-		return leaf, 0, false, false
+	// Trimming the extension can leave a dangling "02 -" behind, which is a
+	// position with an empty title rather than a title of its own.
+	if trimmed, found := strings.CutSuffix(leaf, "-"); found {
+		if _, ok := parsePosition(trimmed); ok {
+			return leafTitle{}, false
+		}
 	}
-	return strings.TrimSpace(leaf[index+len(" - "):]), number, true, true
+	return leafTitle{Title: leaf, Accounted: true}, true
 }
 
 // splitPositionSuffix reads a trailing "Series 02" position.
