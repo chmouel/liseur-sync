@@ -51,25 +51,43 @@ func testBlobReconciliation(t *testing.T, open OpenFunc) {
 		missing.Record.OrphanedAt != nil {
 		t.Fatalf("mark missing blob: %+v %v", missing, err)
 	}
-	present, err := s.ReconcileBlob(ctx, blob, true, now.Add(6*time.Minute))
-	if err != nil || !present.MissingCleared ||
-		present.Record.MissingAt != nil || present.Record.OrphanedAt != nil {
-		t.Fatalf("clear missing blob: %+v %v", present, err)
+	restoreJob := createIngestJob(
+		t, s, user.ID, library.ID, "blob-restore-job", now.Add(6*time.Minute))
+	restaged, err := s.CommitIngestStage(ctx, user.ID, restoreJob.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: restoreJob.Revision, Artifact: blob,
+			StagingPath: contentpath.StagingPath(restoreJob.ID),
+			UpdatedAt:   now.Add(7 * time.Minute),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreJob = extractIngestJob(t, s, restaged.Job, now.Add(8*time.Minute))
+	if _, err := s.CommitNewBookPromotion(ctx, user.ID, restoreJob.ID,
+		promotionRequest(
+			restoreJob, blob, "restored-book", "restored-file",
+			now.Add(9*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	records, err = s.ListBlobRecords(ctx, "", 10)
+	if err != nil || len(records) != 1 || records[0].MissingAt != nil ||
+		records[0].OrphanedAt != nil {
+		t.Fatalf("promotion must clear blob marks: %+v %v", records, err)
 	}
 
 	orphan := ingestBlob("orphan-blob", 9)
-	inserted, err := s.ReconcileBlob(ctx, orphan, true, now.Add(7*time.Minute))
+	inserted, err := s.ReconcileBlob(ctx, orphan, true, now.Add(10*time.Minute))
 	if err != nil || !inserted.Inserted || !inserted.OrphanMarked ||
 		inserted.Record.OrphanedAt == nil || inserted.Record.MissingAt != nil {
 		t.Fatalf("insert orphan blob: %+v %v", inserted, err)
 	}
-	replayed, err := s.ReconcileBlob(ctx, orphan, true, now.Add(8*time.Minute))
+	replayed, err := s.ReconcileBlob(ctx, orphan, true, now.Add(11*time.Minute))
 	if err != nil || replayed.Inserted || replayed.OrphanMarked ||
 		replayed.Record.OrphanedAt == nil {
 		t.Fatalf("reconcile existing orphan: %+v %v", replayed, err)
 	}
 	orphanMissing, err := s.ReconcileBlob(
-		ctx, orphan, false, now.Add(9*time.Minute))
+		ctx, orphan, false, now.Add(12*time.Minute))
 	if err != nil || !orphanMissing.MissingMarked ||
 		orphanMissing.Record.OrphanedAt == nil ||
 		orphanMissing.Record.MissingAt == nil {
@@ -89,11 +107,11 @@ func testBlobReconciliation(t *testing.T, open OpenFunc) {
 	wrongSize := blob
 	wrongSize.SizeBytes++
 	if _, err := s.ReconcileBlob(
-		ctx, wrongSize, true, now.Add(10*time.Minute)); err != store.ErrInvariantViolation {
+		ctx, wrongSize, true, now.Add(13*time.Minute)); err != store.ErrInvariantViolation {
 		t.Fatalf("blob size mismatch: %v", err)
 	}
 	if _, err := s.ReconcileBlob(ctx,
-		ingestBlob("unknown-blob", 1), false, now.Add(10*time.Minute)); !errors.Is(err, store.ErrNotFound) {
+		ingestBlob("unknown-blob", 1), false, now.Add(13*time.Minute)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown missing blob: %v", err)
 	}
 }
