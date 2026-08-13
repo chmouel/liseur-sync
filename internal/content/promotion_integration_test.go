@@ -1,15 +1,15 @@
 //go:build linux
 
-package content_test
+package content
 
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/contentpath"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -24,7 +24,7 @@ import (
 func TestPromotionPassAgainstARealStore(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	cas, err := content.Open(filepath.Join(root, "content"))
+	cas, err := Open(filepath.Join(root, "content"))
 	if err != nil {
 		t.Fatalf("open cas: %v", err)
 	}
@@ -48,48 +48,80 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 		t.Fatalf("create library: %v", err)
 	}
 
-	job, created, err := st.CreateIngestJob(ctx, user.ID, store.IngestJobRequest{
-		ID: "job-1", LibraryID: library.ID, Source: store.IngestUpload,
-		RequestFingerprint: "request-job-1", CreatedAt: now,
-	})
-	if err != nil || !created {
-		t.Fatalf("create job: %v %v", created, err)
-	}
-
 	payload := []byte("a small but entirely real publication payload")
-	staged, err := cas.Stage(ctx, job.ID, bytes.NewReader(payload), 1<<20)
-	if err != nil {
-		t.Fatalf("stage: %v", err)
-	}
-	stage, err := st.CommitIngestStage(ctx, job.UserID, job.ID,
-		store.CommitIngestStageRequest{
-			ExpectedRevision: job.Revision,
-			Artifact: store.BlobInfo{
-				SHA256: staged.SHA256, SizeBytes: staged.Size},
-			StagingPath: contentpath.StagingPath(job.ID),
-			UpdatedAt:   now.Add(time.Minute),
+	extracted := func(id, title string) store.IngestJob {
+		t.Helper()
+		job, created, err := st.CreateIngestJob(ctx, user.ID, store.IngestJobRequest{
+			ID: id, LibraryID: library.ID, Source: store.IngestUpload,
+			RequestFingerprint: "request-" + id, CreatedAt: now,
 		})
-	if err != nil {
-		t.Fatalf("commit stage: %v", err)
-	}
-	job = stage.Job
-	for _, next := range []store.IngestState{
-		store.IngestValidated, store.IngestExtracted,
-	} {
-		change := store.IngestJobTransition{
-			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState: next, UpdatedAt: now.Add(2 * time.Minute),
+		if err != nil || !created {
+			t.Fatalf("create job: %v %v", created, err)
 		}
-		if next == store.IngestExtracted {
-			change.ExtractedEmbeddedMetadataJSON = []byte(`{"title":"Dune"}`)
+		staged, err := cas.Stage(ctx, job.ID,
+			bytes.NewReader(append(payload, id...)), 1<<20)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
 		}
-		if job, err = st.TransitionIngestJob(
-			ctx, job.UserID, job.ID, change); err != nil {
-			t.Fatalf("advance to %s: %v", next, err)
+		stage, err := st.CommitIngestStage(ctx, job.UserID, job.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: job.Revision,
+				Artifact: store.BlobInfo{
+					SHA256: staged.SHA256, SizeBytes: staged.Size},
+				StagingPath: contentpath.StagingPath(job.ID),
+				UpdatedAt:   now.Add(time.Minute),
+			})
+		if err != nil {
+			t.Fatalf("commit stage: %v", err)
 		}
+		job = stage.Job
+		for _, next := range []store.IngestState{
+			store.IngestValidated, store.IngestExtracted,
+		} {
+			change := store.IngestJobTransition{
+				ExpectedState: job.State, ExpectedRevision: job.Revision,
+				NextState: next, UpdatedAt: now.Add(2 * time.Minute),
+			}
+			if next == store.IngestExtracted {
+				change.ExtractedEmbeddedMetadataJSON = []byte(
+					`{"title":"` + title + `"}`)
+			}
+			if job, err = st.TransitionIngestJob(
+				ctx, job.UserID, job.ID, change); err != nil {
+				t.Fatalf("advance to %s: %v", next, err)
+			}
+		}
+		return job
 	}
 
-	report, err := content.RunIngestPromotionPass(
+	// Promote one job on its own, with no pass around it to attach entity
+	// sets afterwards. That isolates the claim: the title has to arrive in
+	// the promotion transaction itself, not in a later step, because promoted
+	// is terminal and no query would return this book to be finished.
+	alone := extracted("job-alone", "Neuromancer")
+	direct, err := PromoteIngestJob(ctx, st, cas, alone, nil,
+		func() time.Time { return now.Add(4 * time.Minute) }, 48*time.Hour)
+	if err != nil {
+		t.Fatalf("promote alone: %v", err)
+	}
+	if direct.Book.Title != "Neuromancer" ||
+		direct.Book.TitleSource != store.MetadataEmbedded {
+		t.Fatalf("promotion returned %+v", direct.Book)
+	}
+	stored, err := st.CatalogBookByID(ctx, user.ID, direct.Book.ID,
+		store.LibraryRoleRead)
+	if err != nil {
+		t.Fatalf("read directly promoted book: %v", err)
+	}
+	if stored.Title != "Neuromancer" {
+		t.Fatalf("committed book title = %q", stored.Title)
+	}
+
+	job := extracted("job-1", "Dune")
+	staged := store.BlobInfo{
+		SHA256: *job.ContentSHA256, SizeBytes: job.BytesReceived}
+
+	report, err := RunIngestPromotionPass(
 		ctx, st, cas, nil, func() time.Time { return now.Add(5 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
@@ -120,15 +152,48 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 		t.Fatalf("title = %q from %q", book.Title, book.TitleSource)
 	}
 
+	// The publication is readable at its content address, and the staging
+	// copy is gone. Without this the pass could commit rows naming a blob it
+	// never actually published and every assertion above would still pass.
+	onDisk, err := os.ReadFile(filepath.Join(cas.Root(),
+		"sha256", staged.SHA256[:2], staged.SHA256[2:], "file.epub"))
+	if err != nil {
+		t.Fatalf("read promoted blob: %v", err)
+	}
+	if !bytes.Equal(onDisk, append(payload, job.ID...)) {
+		t.Fatalf("promoted blob holds %q", onDisk)
+	}
+	if _, err := os.Stat(filepath.Join(
+		root, "content", contentpath.StagingPath(job.ID))); !os.IsNotExist(err) {
+		t.Fatalf("staged copy survived promotion: %v", err)
+	}
+
+	// A worker that lost the race commits the same request against a job that
+	// is already promoted. This is the case the request's timestamps exist to
+	// make work: it must read back the winner's rows rather than conflict.
+	// Nothing else in the tree covers the replay path.
+	replayed, err := st.CommitNewBookPromotion(ctx, user.ID, job.ID,
+		newBookPromotion(job, Blob{
+			SHA256: staged.SHA256, Size: staged.SizeBytes}, nil))
+	if err != nil {
+		t.Fatalf("replay promotion: %v", err)
+	}
+	if !replayed.Replayed {
+		t.Fatal("a second commit created a new promotion")
+	}
+	if replayed.Book.ID != book.ID || replayed.Book.Title != book.Title {
+		t.Fatalf("replay returned %+v, want the winner's book", replayed.Book)
+	}
+
 	// A second pass has nothing to list: the job left extracted, so the pass
 	// cannot create a second book for the same artifact.
-	again, err := content.RunIngestPromotionPass(
+	again, err := RunIngestPromotionPass(
 		ctx, st, cas, nil, func() time.Time { return now.Add(9 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
-	if again != (content.IngestPromotionReport{}) {
+	if again != (IngestPromotionReport{}) {
 		t.Fatalf("second pass did work: %+v", again)
 	}
 }
