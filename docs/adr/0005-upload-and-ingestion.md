@@ -30,7 +30,9 @@ code, and retry count. Creation replays the original job only when the
 idempotency key and request fingerprint agree. State changes compare both the
 expected state and revision, so retries and concurrent workers cannot
 overwrite a newer result. The generic transition operation cannot enter
-`promoted`.
+`promoted`. A failure before a complete staged artifact retries through
+`received`; failed or quarantined jobs that retain a complete staged artifact
+retry from `staged`.
 
 Managed uploads are streamed into a private staging file. After validation
 and extraction, the worker streams or copies the bytes into
