@@ -139,6 +139,12 @@ can be a read-only directory the server scans, and a file whose bytes
 changed underneath it is put to an administrator rather than silently
 reinterpreted.
 
+Similarity-based duplicate detection shipped since
+([ADR-0010](0010-duplicate-detection.md) phase 2). The normalization rule
+it was waiting for turned out to be the one search already used, which is
+also why it is worth defending: a librarian sees the same two books
+called duplicates that one query found.
+
 Metadata editing, categorization, search and facets shipped since
 ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3), and
 with them the OPDS discovery surface they made possible: an OpenSearch
@@ -150,10 +156,7 @@ which is now complete).
 
 1. **The web reader** ([ADR-0007](0007-web-reader.md)). It was waiting
    for a catalog worth reading from, and now it is not.
-2. **Similarity-based duplicate detection**
-   ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
-   normalization rule worth defending before it needs code.
-3. **External metadata providers**
+2. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
 

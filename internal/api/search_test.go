@@ -134,3 +134,48 @@ func TestSearchIsScopedToWhatTheCallerMayRead(t *testing.T) {
 		t.Fatalf("code = %d, want 401", code)
 	}
 }
+
+// TestDuplicatesReportsTheWeakerKindToo covers ADR-0010 phase 2 over the
+// wire: the guess rides along with the certainty, on one route, because
+// a librarian arrived with one question.
+func TestDuplicatesReportsTheWeakerKindToo(t *testing.T) {
+	f := newUploadFixture(t)
+	firstID, _ := f.publishAs(t, "build-one", "Dune", []byte("one build of dune"))
+	secondID, _ := f.publishAs(t, "build-two", "DUNE!", []byte("another build entirely"))
+	manage := f.mintScopes(t, f.user.ID, "editor",
+		store.ScopeLibraryRead, store.ScopeLibraryManage)
+	for _, id := range []string{firstID, secondID} {
+		before := f.metadata(t, id, manage)
+		resp, out := f.send(t, http.MethodPut, "/v1/books/"+id+"/metadata", manage,
+			map[string]any{
+				"revision": before["revision"],
+				"contributors": map[string]any{
+					"entries": []map[string]any{{"name": "Frank Herbert", "role": "author"}},
+				},
+			})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("edit %s: %d %v", id, resp.StatusCode, out)
+		}
+	}
+
+	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/duplicates", manage)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d: %v", code, page)
+	}
+	// Different bytes, so the certain report must stay silent about them.
+	if groups, _ := page["duplicates"].([]any); len(groups) != 0 {
+		t.Fatalf("exact duplicates = %v, want none", page["duplicates"])
+	}
+	similar, _ := page["similar"].([]any)
+	if len(similar) != 1 {
+		t.Fatalf("similar = %v, want one group", page["similar"])
+	}
+	group, _ := similar[0].(map[string]any)
+	if group["normalized_title"] != "dune" {
+		t.Fatalf("normalized_title = %v", group["normalized_title"])
+	}
+	books, _ := group["books"].([]any)
+	if len(books) != 2 {
+		t.Fatalf("group books = %v", group["books"])
+	}
+}

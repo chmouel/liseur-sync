@@ -548,5 +548,25 @@ func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request)
 			groups = groups[:n-1]
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"duplicates": groups})
+	// The weaker report rides along rather than living at its own route:
+	// it answers the same question a librarian came here with, and two
+	// routes would mean a page that shows one and not the other.
+	similar, err := s.St.ListSimilarBooks(r.Context(), tok.UserID, libraryID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
+		return
+	}
+	similarOut := make([]map[string]any, 0, len(similar))
+	for _, group := range similar {
+		books := make([]map[string]any, 0, len(group.Books))
+		for _, b := range group.Books {
+			books = append(books, catalogBookJSON(b))
+		}
+		similarOut = append(similarOut, map[string]any{
+			"normalized_title": group.Title, "books": books,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"duplicates": groups, "similar": similarOut,
+	})
 }

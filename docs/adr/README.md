@@ -32,7 +32,7 @@ loose ends that must come before any of it, are in
 | [0007](0007-web-reader.md) | Web reader | Later | Deferred | Nothing until the catalog is richer |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |
-| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Exact content built | A normalization rule, before any code |
+| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Implemented | Nothing outstanding |
 
 ## Convention
 

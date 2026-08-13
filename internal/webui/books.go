@@ -106,6 +106,7 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		// is a list of things to do something about, and only a librarian
 		// can do anything about them.
 		v.Duplicates = s.duplicateGroups(r, u.ID, v.Selected)
+		v.Similar = s.similarGroups(r, u.ID, v.Selected, loc)
 		// Same audience, same reason: a watched file that changed is a
 		// decision waiting for somebody who can make it.
 		v.Review = s.reviewRows(r, u.ID, v.Selected)
@@ -462,6 +463,35 @@ func (s *Server) duplicateGroups(
 		return nil
 	}
 	return groupDuplicates(books)
+}
+
+// similarGroups reports books that look like one book without being one
+// file. Like the digest report it is offered only to a librarian, and
+// like the digest report it changes nothing: this one is a guess, and a
+// guess acted on automatically is how a library loses an edition
+// somebody chose deliberately.
+func (s *Server) similarGroups(
+	r *http.Request, userID, libraryID string, loc *time.Location,
+) []SimilarGroup {
+	groups, err := s.St.ListSimilarBooks(
+		r.Context(), userID, libraryID, duplicateLimit)
+	if err != nil {
+		slog.Error("similarity listing unavailable",
+			"library", libraryID, "err", err)
+		return nil
+	}
+	out := make([]SimilarGroup, 0, len(groups))
+	for _, group := range groups {
+		row := SimilarGroup{}
+		for _, b := range group.Books {
+			row.Books = append(row.Books, BookRow{
+				ID: b.ID, Title: b.Title,
+				Added: b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			})
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // groupDuplicates turns the store's digest-ordered list into one entry
