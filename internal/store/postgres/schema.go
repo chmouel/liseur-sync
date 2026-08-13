@@ -722,8 +722,26 @@ ALTER TABLE books
     ADD COLUMN contributors_locked BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
+// migration14 records what a watched sweep observed about each file's
+// source path. Source presence is a separate axis from blob presence: a
+// watched book's bytes stay in the CAS after the file they were copied
+// from is deleted, so `blobs.missing_at` can never express that the
+// library no longer contains the book. NULL means present, matching
+// `blobs.missing_at`, so every existing row and every upload — which has
+// no source path to lose — starts out present without a backfill.
+const migration14 = `
+ALTER TABLE book_files
+    ADD COLUMN source_seen_at TIMESTAMPTZ;
+ALTER TABLE book_files
+    ADD COLUMN source_absent_at TIMESTAMPTZ;
+ALTER TABLE book_files
+    ADD COLUMN source_modified_at TIMESTAMPTZ;
+ALTER TABLE books
+    ADD COLUMN review_reason TEXT;
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13,
+	migration13, migration14,
 }

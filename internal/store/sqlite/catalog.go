@@ -47,7 +47,7 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	var identifiersLocked, languagesLocked, tagsLocked int
 	var genresLocked, seriesLocked, contributorsLocked int
 	var created, updated string
-	var trashed, trashExpires sql.NullString
+	var trashed, trashExpires, reviewReason sql.NullString
 	err := row.Scan(
 		&book.ID,
 		&book.LibraryID,
@@ -79,10 +79,12 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 		&genresLocked,
 		&seriesLocked,
 		&contributorsLocked,
+		&reviewReason,
 	)
 	if err != nil {
 		return book, err
 	}
+	book.ReviewReason = reviewReason.String
 	book.TitleLocked = titleLocked != 0
 	book.SubtitleLocked = subtitleLocked != 0
 	book.DescriptionLocked = descriptionLocked != 0
@@ -131,7 +133,7 @@ const bookColumns = `b.id, b.library_id, b.status,
 	b.published_date, b.published_date_source, b.published_date_locked,
 	b.raw_metadata_json, b.created_at, b.updated_at, b.trashed_at, b.trash_expires_at,
 	b.revision, b.identifiers_locked, b.languages_locked, b.tags_locked,
-	b.genres_locked, b.series_locked, b.contributors_locked`
+	b.genres_locked, b.series_locked, b.contributors_locked, b.review_reason`
 
 func checkLibraryRole(role store.LibraryRole) error {
 	if !role.Valid() {
