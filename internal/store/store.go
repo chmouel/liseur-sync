@@ -16,9 +16,12 @@ import (
 
 // Common sentinel errors.
 var (
-	ErrNotFound   = errors.New("store: not found")
-	ErrConflict   = errors.New("store: conflict") // uniqueness or state conflict
-	ErrIDMismatch = errors.New("store: idempotent id reused with different payload")
+	ErrNotFound            = errors.New("store: not found")
+	ErrConflict            = errors.New("store: conflict") // uniqueness or state conflict
+	ErrIDMismatch          = errors.New("store: idempotent id reused with different payload")
+	ErrIdempotencyConflict = errors.New("store: idempotency key reused with different request")
+	ErrInvalidTransition   = errors.New("store: invalid state transition")
+	ErrStaleRevision       = errors.New("store: stale revision")
 )
 
 // TokenPurgeGrace is how long expired or revoked tokens remain listed
@@ -238,6 +241,238 @@ type UserBookWork struct {
 	BookID    string
 	WorkID    string
 	CreatedAt time.Time
+}
+
+// IngestSource identifies how content entered the durable ingestion queue.
+type IngestSource string
+
+const (
+	IngestUpload  IngestSource = "upload"
+	IngestWatched IngestSource = "watched"
+)
+
+func (s IngestSource) Valid() bool {
+	return s == IngestUpload || s == IngestWatched
+}
+
+// IngestState is one durable stage of content ingestion.
+type IngestState string
+
+const (
+	IngestReceived    IngestState = "received"
+	IngestStaged      IngestState = "staged"
+	IngestValidated   IngestState = "validated"
+	IngestExtracted   IngestState = "extracted"
+	IngestPromoted    IngestState = "promoted"
+	IngestQuarantined IngestState = "quarantined"
+	IngestFailed      IngestState = "failed"
+)
+
+func (s IngestState) Valid() bool {
+	switch s {
+	case IngestReceived, IngestStaged, IngestValidated, IngestExtracted,
+		IngestPromoted, IngestQuarantined, IngestFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// CanTransitionIngest reports whether a generic job transition is legal.
+// Promotion is deliberately excluded: it must commit the durable blob,
+// catalog reference, quota reservation, and promoted state together.
+func CanTransitionIngest(from, to IngestState) bool {
+	switch from {
+	case IngestReceived:
+		return to == IngestStaged || to == IngestFailed
+	case IngestStaged:
+		return to == IngestValidated || to == IngestQuarantined || to == IngestFailed
+	case IngestValidated:
+		return to == IngestExtracted || to == IngestQuarantined || to == IngestFailed
+	case IngestExtracted:
+		return to == IngestQuarantined || to == IngestFailed
+	case IngestQuarantined, IngestFailed:
+		return to == IngestStaged
+	default:
+		return false
+	}
+}
+
+// IngestJob is the persisted ingestion state. RequestFingerprint describes
+// immutable request metadata, not the uploaded content digest.
+type IngestJob struct {
+	ID                 string
+	UserID             string
+	LibraryID          string
+	QuotaUserID        string
+	Source             IngestSource
+	ClientKey          *string
+	RequestFingerprint string
+	State              IngestState
+	BytesReceived      int64
+	ContentSHA256      *string
+	StagingPath        *string
+	SourceRelativePath *string
+	BookID             *string
+	ErrorCode          *string
+	ErrorDetail        *string
+	RetryCount         int64
+	Revision           int64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	ExpiresAt          *time.Time
+}
+
+// IngestJobRequest contains the immutable fields used to create or replay a
+// durable job. User and quota principals are derived by the store.
+type IngestJobRequest struct {
+	ID                 string
+	LibraryID          string
+	Source             IngestSource
+	ClientKey          *string
+	RequestFingerprint string
+	SourceRelativePath *string
+	CreatedAt          time.Time
+}
+
+// IngestJobCursor is the exclusive cursor for stable job pagination.
+type IngestJobCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+// IngestJobTransition applies one revision-checked state change. Content
+// fields may only be supplied while moving a received job to staged or
+// failed. Error fields are required for failed/quarantined targets.
+type IngestJobTransition struct {
+	ExpectedState    IngestState
+	ExpectedRevision int64
+	NextState        IngestState
+	BytesReceived    *int64
+	ContentSHA256    *string
+	StagingPath      *string
+	ErrorCode        string
+	ErrorDetail      string
+	ExpiresAt        *time.Time
+	IncrementRetry   bool
+	UpdatedAt        time.Time
+}
+
+// ValidateIngestJobRequest checks invariants shared by every backend.
+func ValidateIngestJobRequest(request IngestJobRequest) error {
+	if request.ID == "" || request.LibraryID == "" {
+		return errors.New("ingest job id and library id are required")
+	}
+	if !request.Source.Valid() {
+		return fmt.Errorf("invalid ingest source %q", request.Source)
+	}
+	if request.CreatedAt.IsZero() {
+		return errors.New("ingest job creation time is required")
+	}
+	if request.RequestFingerprint == "" || len(request.RequestFingerprint) > 512 {
+		return errors.New("invalid ingest request fingerprint")
+	}
+	if request.ClientKey != nil &&
+		(*request.ClientKey == "" || len(*request.ClientKey) > 256) {
+		return errors.New("invalid ingest client key")
+	}
+	switch request.Source {
+	case IngestUpload:
+		if request.SourceRelativePath != nil {
+			return errors.New("upload job cannot have a source path")
+		}
+	case IngestWatched:
+		if request.SourceRelativePath == nil || *request.SourceRelativePath == "" ||
+			len(*request.SourceRelativePath) > 4096 {
+			return errors.New("watched job requires a source path")
+		}
+	}
+	return nil
+}
+
+// ApplyIngestTransition validates and applies a transition without mutating
+// immutable job fields.
+func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (IngestJob, error) {
+	if current.State != change.ExpectedState ||
+		current.Revision != change.ExpectedRevision {
+		return IngestJob{}, ErrStaleRevision
+	}
+	if change.ExpectedRevision < 1 || change.UpdatedAt.IsZero() ||
+		change.UpdatedAt.Before(current.UpdatedAt) ||
+		!change.ExpectedState.Valid() || !change.NextState.Valid() ||
+		!CanTransitionIngest(change.ExpectedState, change.NextState) {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	retrying := change.ExpectedState == IngestFailed ||
+		change.ExpectedState == IngestQuarantined
+	if change.IncrementRetry != retrying {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	if change.BytesReceived != nil && *change.BytesReceived < 0 {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	contentUpdate := change.ContentSHA256 != nil || change.StagingPath != nil ||
+		change.BytesReceived != nil
+	if contentUpdate && change.ExpectedState != IngestReceived {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	if (change.ContentSHA256 == nil) != (change.StagingPath == nil) {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	if change.ContentSHA256 != nil &&
+		(*change.ContentSHA256 == "" || len(*change.ContentSHA256) > 128 ||
+			*change.StagingPath == "" || len(*change.StagingPath) > 4096) {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	if change.ExpectedState == IngestReceived &&
+		change.NextState == IngestStaged && change.BytesReceived == nil {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	failing := change.NextState == IngestFailed ||
+		change.NextState == IngestQuarantined
+	if failing {
+		if change.ErrorCode == "" || len(change.ErrorCode) > 128 ||
+			len(change.ErrorDetail) > 4096 || change.ExpiresAt == nil ||
+			!change.ExpiresAt.After(change.UpdatedAt) {
+			return IngestJob{}, ErrInvalidTransition
+		}
+	} else if change.ErrorCode != "" || change.ErrorDetail != "" ||
+		change.ExpiresAt != nil {
+		return IngestJob{}, ErrInvalidTransition
+	}
+
+	next := current
+	if change.BytesReceived != nil {
+		next.BytesReceived = *change.BytesReceived
+	}
+	if change.ContentSHA256 != nil {
+		next.ContentSHA256 = change.ContentSHA256
+		next.StagingPath = change.StagingPath
+	}
+	if change.NextState == IngestStaged &&
+		(next.ContentSHA256 == nil || next.StagingPath == nil) {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	next.State = change.NextState
+	next.UpdatedAt = change.UpdatedAt
+	next.Revision++
+	if change.IncrementRetry {
+		next.RetryCount++
+	}
+	if failing {
+		next.ErrorCode = &change.ErrorCode
+		if change.ErrorDetail != "" {
+			next.ErrorDetail = &change.ErrorDetail
+		} else {
+			next.ErrorDetail = nil
+		}
+		next.ExpiresAt = change.ExpiresAt
+	} else {
+		next.ErrorCode = nil
+		next.ErrorDetail = nil
+		next.ExpiresAt = nil
+	}
+	return next, nil
 }
 
 // Work is the abstract book positions and statistics attach to.
@@ -500,6 +735,14 @@ type Store interface {
 	// resolutions do not mutate the graph or create a mapping.
 	ResolveCatalogBookWork(ctx context.Context, userID, bookID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool, at time.Time) (WorkResolution, error)
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
+
+	// Ingestion jobs.
+	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
+	IngestJobByID(ctx context.Context, actorUserID, jobID string) (IngestJob, error)
+	ListIngestJobs(ctx context.Context, actorUserID, libraryID string, after *IngestJobCursor, limit int) ([]IngestJob, error)
+	// TransitionIngestJob is an internal worker/upload operation scoped by the
+	// initiating user, not by their current library ACL.
+	TransitionIngestJob(ctx context.Context, userID, jobID string, transition IngestJobTransition) (IngestJob, error)
 
 	// Works / editions / aliases.
 	// ResolveWork atomically resolves identifiers ordered strongest-first,

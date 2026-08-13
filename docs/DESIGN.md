@@ -576,8 +576,9 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 M6 is in progress: compatible token scope sets and the shared catalog,
 metadata, blob, ingestion-job, ACL, and per-user work-mapping schema are
 implemented on SQLite and PostgreSQL, together with ACL-scoped store
-operations and atomic catalog resolution. Bounded extraction, CAS lifecycle,
-ingestion workers, and administration remain.
+operations, atomic catalog resolution, and revision-checked idempotent ingest
+job transitions. Bounded extraction, CAS lifecycle, ingest workers, and
+administration remain.
 
 ## 10. Future work (explicitly out of v1)
 
