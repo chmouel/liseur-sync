@@ -421,6 +421,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/works", "/ui/devices", "/ui/settings", "/ui/admin",
+		"/ui/books", "/ui/books/x", "/ui/books/x/download",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
 			t.Errorf("GET %s over plain HTTP: want 403, got %d", p, code)
@@ -429,7 +430,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	for _, p := range []string{
 		"/ui/login", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
 		"/ui/tokens/example/scopes", "/ui/settings", "/ui/settings/password",
-		"/ui/admin/invites",
+		"/ui/admin/invites", "/ui/books/upload",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
 			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)

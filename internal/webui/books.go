@@ -1,0 +1,295 @@
+package webui
+
+// Books handlers: the browser surface of the content server. All of the
+// storage work is delegated — this file decides what a page shows, not
+// how bytes are stored or served.
+
+import (
+	"context"
+	"crypto/subtle"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/google/uuid"
+)
+
+// Uploader stages a web-form upload through the same path the API uses.
+// The UI must not grow its own ingest: the ordering rules around staged
+// bytes and their cleanup are subtle, and two implementations would
+// diverge.
+type Uploader interface {
+	StageUpload(ctx context.Context, userID, libraryID, key string, body io.Reader) (store.IngestJob, bool, error)
+}
+
+// Downloader serves a book's bytes for a caller identified some other
+// way than by a token — here, by a session cookie. Reusing it keeps the
+// media-type allowlist and filename sanitizing in one place.
+type Downloader interface {
+	ServeBookDownload(w http.ResponseWriter, r *http.Request, userID, bookID string)
+}
+
+// booksPageSize keeps the page short enough to read. The UI paginates
+// with the same opaque cursor the API hands out.
+const booksPageSize = 25
+
+func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	libs, err := s.St.ListLibraries(r.Context(), u.ID, store.LibraryRoleRead)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	v := BooksView{
+		Notice:  r.URL.Query().Get("notice"),
+		Problem: r.URL.Query().Get("problem"),
+	}
+	selected := r.URL.Query().Get("library")
+	if selected == "" && len(libs) > 0 {
+		selected = libs[0].Library.ID
+	}
+	for _, l := range libs {
+		v.Libraries = append(v.Libraries, LibraryOption{
+			ID:       l.Library.ID,
+			Name:     l.Library.Name,
+			CanWrite: l.Role == store.LibraryRoleManage,
+			Selected: l.Library.ID == selected,
+		})
+		if l.Library.ID == selected {
+			v.Selected = selected
+			v.CanWrite = l.Role == store.LibraryRoleManage
+		}
+	}
+	// A library id from the query string that the user cannot read is
+	// treated as no selection at all, rather than as an error: it is
+	// most often a stale bookmark.
+	if v.Selected == "" {
+		booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+			Render(r.Context(), w)
+		return
+	}
+
+	loc := userLoc(u)
+	books, next, err := s.listBooksPage(r, u.ID, v.Selected)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	for _, b := range books {
+		row := BookRow{ID: b.ID, Title: b.Title, Added: b.CreatedAt.In(loc).Format("Jan 2, 2006")}
+		files, err := s.St.ListBookFiles(r.Context(), u.ID, b.ID, store.LibraryRoleRead)
+		if err == nil {
+			for _, f := range files {
+				if f.Availability == store.BookFileAvailable {
+					row.CanGet = true
+					break
+				}
+			}
+		}
+		v.Books = append(v.Books, row)
+	}
+	if next != "" {
+		v.NextURL = "books?library=" + url.QueryEscape(v.Selected) +
+			"&cursor=" + url.QueryEscape(next)
+	}
+	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+		Render(r.Context(), w)
+}
+
+// listBooksPage returns one page and the cursor for the next, or "" when
+// this is the last one.
+func (s *Server) listBooksPage(
+	r *http.Request, userID, libraryID string,
+) ([]store.CatalogBook, string, error) {
+	after, err := decodeBooksCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		// A mangled cursor restarts at the beginning. There is nothing
+		// for a reader to do about it, and an error page would be worse
+		// than the first page.
+		after = nil
+	}
+	books, err := s.St.ListCatalogBooks(r.Context(), userID, libraryID, after, booksPageSize)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, "", nil
+		}
+		return nil, "", err
+	}
+	if len(books) < booksPageSize {
+		return books, "", nil
+	}
+	last := books[len(books)-1]
+	return books, encodeBooksCursor(store.CatalogBookCursor{
+		CreatedAt: last.CreatedAt, ID: last.ID,
+	}), nil
+}
+
+func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	bookID := r.PathValue("id")
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	v := BookView{
+		ID: book.ID, Title: book.Title, Subtitle: book.Subtitle,
+		Description: book.Description, Publisher: book.Publisher,
+		Published: book.PublishedDate, LibraryID: book.LibraryID,
+		Added: book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
+	}
+	files, err := s.St.ListBookFiles(r.Context(), u.ID, bookID, store.LibraryRoleRead)
+	if err == nil {
+		for _, f := range files {
+			if f.Availability != store.BookFileAvailable {
+				continue
+			}
+			v.Files = append(v.Files, BookFileRow{
+				Name: f.OriginalFilename, MediaType: f.MediaType, SHA256: f.BlobSHA256,
+			})
+		}
+	}
+	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+		Render(r.Context(), w)
+}
+
+// handleBookDownload hands off to the API's download, which owns the
+// rules about what a stored file may claim to be.
+func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	if s.Downloads == nil {
+		http.Error(w, "content storage is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.Downloads.ServeBookDownload(w, r, u.ID, r.PathValue("id"))
+}
+
+// handleUploadBook takes the file from the form and stages it. It is a
+// mutation, so it checks CSRF, and it answers with a redirect rather
+// than a page so that a reload does not re-upload.
+func (s *Server) handleUploadBook(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	if s.Uploads == nil {
+		s.uploadResult(w, r, "", "", "content storage is unavailable")
+		return
+	}
+	reader, err := r.MultipartReader()
+	if err != nil {
+		s.uploadResult(w, r, "", "", "that was not a file upload")
+		return
+	}
+	// The CSRF token travels in the multipart body, so it is only
+	// readable after the parts before the file have been consumed. The
+	// form puts it first for exactly that reason: the file must not be
+	// streamed anywhere until the request is known to be genuine.
+	fields := map[string]string{}
+	var part *multipartPart
+	for {
+		p, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			s.uploadResult(w, r, fields["library"], "", "the upload was malformed")
+			return
+		}
+		if p.FileName() != "" && p.FormName() == "file" {
+			part = &multipartPart{p}
+			break
+		}
+		value, err := io.ReadAll(io.LimitReader(p, 4<<10))
+		p.Close()
+		if err != nil {
+			s.uploadResult(w, r, fields["library"], "", "the upload was malformed")
+			return
+		}
+		fields[p.FormName()] = string(value)
+	}
+	if subtle.ConstantTimeCompare([]byte(fields["csrf"]), []byte(csrfFor(a))) != 1 {
+		http.Error(w, "bad csrf", http.StatusForbidden)
+		return
+	}
+	library := strings.TrimSpace(fields["library"])
+	if library == "" {
+		s.uploadResult(w, r, "", "", "choose a library first")
+		return
+	}
+	if part == nil {
+		s.uploadResult(w, r, library, "", "choose a file first")
+		return
+	}
+
+	// The key makes a double submit idempotent. A browser has none to
+	// offer, so one is generated per request: a user who clicks twice
+	// gets two jobs, but the content-addressed store gives them one
+	// blob, and the second job is a no-op once ingest deduplicates it.
+	key := "web-" + uuid.New().String()
+	_, _, err = s.Uploads.StageUpload(r.Context(), u.ID, library, key, part)
+	if err != nil {
+		part.Close()
+		s.uploadResult(w, r, library, "", uploadProblem(err))
+		return
+	}
+	part.Close()
+	s.uploadResult(w, r, library, "Upload stored. The book appears once it has been read.", "")
+}
+
+// multipartPart exists so the reader handed to StageUpload cannot be
+// closed by it: closing a multipart part drains the rest of it, which
+// after a refused upload is the data we declined to read.
+type multipartPart struct{ io.ReadCloser }
+
+func (s *Server) uploadResult(w http.ResponseWriter, r *http.Request, library, notice, problem string) {
+	q := url.Values{}
+	if library != "" {
+		q.Set("library", library)
+	}
+	if notice != "" {
+		q.Set("notice", notice)
+	}
+	if problem != "" {
+		q.Set("problem", problem)
+	}
+	target := "books"
+	if len(q) > 0 {
+		target += "?" + q.Encode()
+	}
+	redirectRel(w, relPrefix(r.URL.Path)+target, http.StatusSeeOther)
+}
+
+// uploadProblem turns a staging failure into something a person can act
+// on. The API's status codes are the authority on what went wrong; this
+// only translates them.
+func uploadProblem(err error) string {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "that library does not exist, or you cannot write to it"
+	case errors.Is(err, store.ErrConflict),
+		errors.Is(err, store.ErrIdempotencyConflict):
+		return "that upload is already in progress"
+	}
+	var quota *store.QuotaExceededError
+	if errors.As(err, &quota) {
+		return "the file does not fit in your storage quota"
+	}
+	return "the upload failed; the file may be too large"
+}
+
+func encodeBooksCursor(c store.CatalogBookCursor) string {
+	return c.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + c.ID
+}
+
+func decodeBooksCursor(raw string) (*store.CatalogBookCursor, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	at, id, ok := strings.Cut(raw, "|")
+	if !ok || id == "" {
+		return nil, errors.New("malformed cursor")
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return nil, errors.New("malformed cursor")
+	}
+	return &store.CatalogBookCursor{CreatedAt: parsed, ID: id}, nil
+}
