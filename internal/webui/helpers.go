@@ -45,6 +45,15 @@ func pct(f float64) string { return strconv.Itoa(int(f*100)) + "%" }
 func f0(f float64) string  { return strconv.FormatFloat(f, 'f', 0, 64) }
 func i2s(i int) string     { return strconv.Itoa(i) }
 
+// plural counts things in words, because "1 books" reads as a bug even
+// when the number is right.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
+}
+
 func orPlaceholder(s string) string {
 	if s == "" {
 		return "(untitled)"

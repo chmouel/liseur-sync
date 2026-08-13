@@ -210,7 +210,18 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 		ID: book.ID, Title: book.Title, Subtitle: book.Subtitle,
 		Description: book.Description, Publisher: book.Publisher,
 		Published: book.PublishedDate, LibraryID: book.LibraryID,
-		Added: book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
+		Added:   book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
+		Notice:  r.URL.Query().Get("notice"),
+		Problem: r.URL.Query().Get("problem"),
+	}
+	// The edit form is only built for somebody who could submit it. A
+	// reader asking for this page must not be told a value's provenance,
+	// which is librarian's information rather than a fact about the book.
+	if full, err := s.St.CatalogBookMetadata(
+		r.Context(), u.ID, bookID, store.LibraryRoleManage,
+	); err == nil {
+		v.CanWrite = true
+		v.Edit = metadataEditView(full)
 	}
 	files, err := s.St.ListBookFiles(r.Context(), u.ID, bookID, store.LibraryRoleRead)
 	if err == nil {
