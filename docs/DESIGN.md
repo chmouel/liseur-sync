@@ -584,9 +584,10 @@ state; transient holds cover staged artifacts, full request fingerprints make
 promotion replay-safe, and expired failed artifacts use terminal tombstones
 with retryable two-phase filesystem cleanup. A recovery coordinator verifies
 stale stages, accepts an already-durable final blob after a lost promotion
-response, and terminalizes missing or corrupt artifacts. Startup scheduling,
-bounded extraction, the rest of the CAS lifecycle, ingest workers, and
-administration remain.
+response, and terminalizes missing or corrupt artifacts. The server opens the
+configured private CAS and completes recovery before listening. Bounded
+extraction, the rest of the CAS lifecycle, ingest workers, and administration
+remain.
 
 ## 10. Future work (explicitly out of v1)
 

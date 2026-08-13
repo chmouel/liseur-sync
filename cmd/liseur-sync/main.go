@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/api"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -34,6 +36,36 @@ func openStore(cfg config.Config) (store.Store, error) {
 		return postgres.Open(cfg.Database.URL)
 	}
 	return nil, fmt.Errorf("unknown database driver %q", cfg.Database.Driver)
+}
+
+func openContentAndRecover(
+	ctx context.Context,
+	st store.Store,
+	cfg config.Config,
+	now time.Time,
+) (*content.CAS, content.IngestRecoveryReport, error) {
+	contentRoot := cfg.Content.Root
+	if !filepath.IsAbs(contentRoot) &&
+		cfg.Database.Driver == "sqlite" &&
+		filepath.IsAbs(cfg.Database.URL) {
+		contentRoot = filepath.Join(filepath.Dir(cfg.Database.URL), contentRoot)
+	}
+	cas, err := content.Open(contentRoot)
+	if err != nil {
+		return nil, content.IngestRecoveryReport{}, fmt.Errorf(
+			"open content store: %w", err)
+	}
+	recovery, err := content.RecoverIngest(
+		ctx, st, cas, now,
+		now.Add(-time.Duration(cfg.Content.RecoveryStaleMinutes)*time.Minute),
+		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
+		cfg.Content.RecoveryBatchSize,
+	)
+	if err != nil {
+		cas.Close()
+		return nil, recovery, fmt.Errorf("recover content ingestion: %w", err)
+	}
+	return cas, recovery, nil
 }
 
 func main() {
@@ -78,6 +110,19 @@ func cmdServe(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
+	recoveryNow := time.Now().UTC()
+	cas, recovery, err := openContentAndRecover(
+		context.Background(), st, cfg, recoveryNow)
+	if err != nil {
+		return err
+	}
+	defer cas.Close()
+	slog.Info("content recovery complete",
+		"ready", len(recovery.Ready),
+		"failed", recovery.Failed,
+		"quarantined", recovery.Quarantined,
+		"cleaned", recovery.Cleaned,
+		"skipped", recovery.Skipped)
 
 	// One limiter for every path that verifies a password, so the web
 	// form and /v1/login share a per-IP budget instead of each

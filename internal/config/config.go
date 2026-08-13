@@ -17,6 +17,13 @@ type Config struct {
 		URL    string `toml:"url"`    // sqlite: file path; postgres: DSN
 	} `toml:"database"`
 
+	Content struct {
+		Root                  string `toml:"root"`                    // default ./content
+		RecoveryStaleMinutes  int    `toml:"recovery_stale_minutes"`  // default 5
+		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
+		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // default 100
+	} `toml:"content"`
+
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
 	// (LAN-only setups). Default false: login, bearer tokens, kosync and
 	// koplugin credentials are rejected over HTTP.
@@ -59,6 +66,10 @@ func Default() Config {
 	c.ListenAddr = "127.0.0.1:8585"
 	c.Database.Driver = "sqlite"
 	c.Database.URL = "liseur-sync.db"
+	c.Content.Root = "content"
+	c.Content.RecoveryStaleMinutes = 5
+	c.Content.FailureRetentionHours = 24
+	c.Content.RecoveryBatchSize = 100
 	c.Adapters.Kosync = true
 	c.Adapters.Koplugin = true
 	c.Ops.MaxBatch = 500
@@ -74,8 +85,9 @@ func Default() Config {
 
 // applyEnv applies LISEUR_* environment overrides. Supported:
 // LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER, LISEUR_DATABASE_URL,
-// LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS
-// (comma-separated), LISEUR_TRUSTED_PROXIES (comma-separated).
+// LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
+// LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
+// (comma-separated).
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -103,6 +115,7 @@ func (c *Config) applyEnv() {
 	setStr(&c.ListenAddr, "LISEUR_LISTEN_ADDR")
 	setStr(&c.Database.Driver, "LISEUR_DATABASE_DRIVER")
 	setStr(&c.Database.URL, "LISEUR_DATABASE_URL")
+	setStr(&c.Content.Root, "LISEUR_CONTENT_ROOT")
 	setBool(&c.InsecureHTTP, "LISEUR_INSECURE_HTTP")
 	setBool(&c.OpenRegistration, "LISEUR_OPEN_REGISTRATION")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
@@ -118,6 +131,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Database.URL == "" {
 		return fmt.Errorf("database.url is required")
+	}
+	if strings.TrimSpace(c.Content.Root) == "" {
+		return fmt.Errorf("content.root is required")
+	}
+	if c.Content.RecoveryStaleMinutes < 1 {
+		return fmt.Errorf("content.recovery_stale_minutes must be >= 1")
+	}
+	if c.Content.FailureRetentionHours < 1 {
+		return fmt.Errorf("content.failure_retention_hours must be >= 1")
+	}
+	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
+		return fmt.Errorf("content.recovery_batch_size must be between 1 and 500")
 	}
 	if c.Ops.MaxBatch < 1 {
 		return fmt.Errorf("ops.max_batch must be >= 1")

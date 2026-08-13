@@ -21,16 +21,23 @@ document applies regardless of how the server was installed.
 
 ## Postures
 
-One static binary, one config file, one database. Three supported
+One static binary, one config file, one database, and one private content
+directory. Three supported
 database setups, all covered by `compose.yaml`:
 
 | Posture | Command | Notes |
 |---|---|---|
-| SQLite (default) | `docker compose --profile sqlite up -d` | Single file in a named volume |
-| Bundled Postgres | `docker compose --profile postgres up -d` | Set `POSTGRES_PASSWORD` in `.env` |
-| External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights (migrations run at startup) |
+| SQLite (default) | `docker compose --profile sqlite up -d` | Database and CAS share the persistent app volume |
+| Bundled Postgres | `docker compose --profile postgres up -d` | Set `POSTGRES_PASSWORD` in `.env`; CAS uses a separate persistent volume |
+| External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights (migrations run at startup); CAS remains local and persistent |
 
 Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
+`content.root` defaults to `./content`; it must be owned by the server user
+and have mode `0700`. Startup refuses unsafe ownership or permissions and
+runs stale-ingest recovery before listening.
+When SQLite uses an absolute database path, a relative content root resolves
+beside that database; container deployments still set `/data/content`
+explicitly.
 
 ## TLS
 
@@ -90,9 +97,16 @@ liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats p
 
 ## Backup
 
-- **SQLite:** `sqlite3 liseur-sync.db 'VACUUM INTO "/backups/ls.db"'` —
-  or the `.backup` command. Never copy the live `.db`/`.wal` files.
-- **Postgres:** `pg_dump` as usual.
+The database and `content.root` are one backup unit. Until maintenance mode
+is implemented, stop the app process before backup so ingestion recovery or
+future uploads cannot change the CAS:
+
+1. back up the database first;
+   - **SQLite:** use `sqlite3 liseur-sync.db '.backup /backups/ls.db'`;
+     never copy live `.db`/`.wal` files;
+   - **Postgres:** use `pg_dump` as usual;
+2. copy the content directory while the app remains stopped;
+3. verify that the backup preserves owner-only permissions before restore.
 
 ## Upgrades
 

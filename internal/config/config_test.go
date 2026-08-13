@@ -15,8 +15,31 @@ func TestInferenceLatenessMustCoverGap(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("inference lateness shorter than gap must be rejected")
 	}
+
 	cfg.Ops.InferenceLateHours = 3
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid inference window rejected: %v", err)
+	}
+}
+
+func TestContentDefaultsAndValidation(t *testing.T) {
+	cfg := Default()
+	if cfg.Content.Root == "" || cfg.Content.RecoveryStaleMinutes < 1 ||
+		cfg.Content.FailureRetentionHours < 1 ||
+		cfg.Content.RecoveryBatchSize < 1 {
+		t.Fatalf("invalid content defaults: %+v", cfg.Content)
+	}
+	cfg.Content.RecoveryBatchSize = 501
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("oversized recovery batch accepted")
+	}
+}
+
+func TestContentRootEnvironmentOverride(t *testing.T) {
+	t.Setenv("LISEUR_CONTENT_ROOT", "/srv/liseur-content")
+	cfg := Default()
+	cfg.applyEnv()
+	if cfg.Content.Root != "/srv/liseur-content" {
+		t.Fatalf("content root override: %q", cfg.Content.Root)
 	}
 }
