@@ -194,7 +194,9 @@ name a stable job and reason instead of losing state when a request ends.
    Catalog availability reconciliation remains.
 2. EPUB security validator fixture expansion and worker scheduling.
    Implemented.
-3. Metadata and cover extraction.
+3. Metadata and cover extraction. The pure bounded OPF extractor is
+   implemented; durable `validated -> extracted` persistence and cover
+   extraction remain.
 4. API upload and htmx upload UI.
 
 ## Acceptance criteria

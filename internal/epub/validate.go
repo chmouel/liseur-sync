@@ -90,6 +90,7 @@ type Result struct {
 	PackagePath    string
 	NavigationPath string
 	Encrypted      bool
+	Metadata       Metadata
 }
 
 // Validate verifies an EPUB ZIP and its bounded control documents.
@@ -238,6 +239,11 @@ func Validate(
 
 	result := Result{
 		PackagePath: packagePath, NavigationPath: packageInfo.navigationPath,
+	}
+	result.Metadata, err = extractPackageMetadata(
+		ctx, packageXML, entries, packageInfo, limits)
+	if err != nil {
+		return Result{}, err
 	}
 	if encryption, ok := entries["META-INF/encryption.xml"]; ok {
 		encryptionXML, err := readMetadata(
@@ -673,6 +679,13 @@ func parseContainer(value []byte, maxDepth int) (string, error) {
 type packageDetails struct {
 	navigationPath string
 	manifest       map[string]string
+	manifestByID   map[string]manifestItem
+	cover          *manifestItem
+}
+
+type manifestItem struct {
+	path      string
+	mediaType string
 }
 
 type navigationDocument struct {
@@ -693,7 +706,9 @@ func parsePackage(
 	depth := 0
 	roots := 0
 	manifestItems := 0
-	details := packageDetails{manifest: make(map[string]string)}
+	details := packageDetails{
+		manifest: make(map[string]string), manifestByID: make(map[string]manifestItem),
+	}
 	navigationSeen := make(map[string]bool)
 	var navigation []navigationDocument
 	var stack []xml.Name
@@ -770,6 +785,7 @@ func parsePackage(
 					errors.New("package manifest exceeds entry limit"))
 			}
 			href := unqualifiedAttribute(typed.Attr, "href")
+			id := unqualifiedAttribute(typed.Attr, "id")
 			mediaType := unqualifiedAttribute(typed.Attr, "media-type")
 			properties := unqualifiedAttribute(typed.Attr, "properties")
 			if href == "" || mediaType == "" {
@@ -787,8 +803,21 @@ func parsePackage(
 					fmt.Errorf("conflicting manifest path %q", resolved))
 			}
 			details.manifest[resolved] = mediaType
+			item := manifestItem{path: resolved, mediaType: mediaType}
+			if id != "" {
+				if _, duplicate := details.manifestByID[id]; duplicate {
+					return packageDetails{}, validationError(
+						CodeInvalidEPUB,
+						fmt.Errorf("duplicate manifest id %q", id))
+				}
+				details.manifestByID[id] = item
+			}
+			if details.cover == nil && propertyToken(properties, "cover-image") {
+				cover := item
+				details.cover = &cover
+			}
 			isNavigation := mediaType == "application/x-dtbncx+xml" ||
-				strings.Contains(" "+properties+" ", " nav ")
+				propertyToken(properties, "nav")
 			if !isNavigation || navigationSeen[resolved] {
 				continue
 			}
@@ -815,6 +844,15 @@ func parsePackage(
 				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
 		}
 	}
+}
+
+func propertyToken(properties, token string) bool {
+	for _, property := range strings.Fields(properties) {
+		if property == token {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveArchiveReference(basePath, reference string) (string, error) {
