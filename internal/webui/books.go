@@ -101,6 +101,7 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 	// accepted and then rejected, which looks exactly like losing it.
 	if v.CanWrite {
 		v.Uploads = s.uploadActivity(r, u.ID, v.Selected, loc)
+		v.Trash = s.trashActivity(r, u.ID, v.Selected, loc)
 	}
 	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
 		Render(r.Context(), w)
@@ -356,4 +357,95 @@ func decodeBooksCursor(raw string) (*store.CatalogBookCursor, error) {
 		return nil, errors.New("malformed cursor")
 	}
 	return &store.CatalogBookCursor{CreatedAt: parsed, ID: id}, nil
+}
+
+// handleDeleteBook moves a book to the trash. It is deliberately not a
+// permanent deletion: the bytes stay until retention runs out, so a
+// misclick is recoverable from the same page it happened on.
+func (s *Server) handleDeleteBook(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	library := strings.TrimSpace(r.FormValue("library"))
+	now := time.Now().UTC()
+	retention := time.Duration(s.Cfg.Content.TrashRetentionHours) * time.Hour
+	book, err := s.St.TrashCatalogBook(
+		r.Context(), u.ID, r.PathValue("id"), now, now.Add(retention))
+	if err != nil {
+		s.uploadResult(w, r, library, "", trashProblem(err))
+		return
+	}
+	if library == "" {
+		library = book.LibraryID
+	}
+	s.uploadResult(w, r, library,
+		"Deleted. You can put it back until it is purged.", "")
+}
+
+// handleRestoreBook is the undo for handleDeleteBook.
+func (s *Server) handleRestoreBook(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	library := strings.TrimSpace(r.FormValue("library"))
+	book, err := s.St.RestoreCatalogBook(
+		r.Context(), u.ID, r.PathValue("id"), time.Now().UTC())
+	if err != nil {
+		s.uploadResult(w, r, library, "", trashProblem(err))
+		return
+	}
+	if library == "" {
+		library = book.LibraryID
+	}
+	notice := "Restored."
+	if book.Status == store.BookMissing {
+		// Saying "restored" alone would be a lie: the catalog entry is
+		// back but there is nothing to download.
+		notice = "Restored, but its file is gone — upload it again to read it."
+	}
+	s.uploadResult(w, r, library, notice, "")
+}
+
+// trashProblem translates a refused deletion into a sentence. Readers and
+// strangers get the same answer, so neither learns the book exists.
+func trashProblem(err error) string {
+	switch {
+	case errors.Is(err, store.ErrInvalidTransition):
+		return "that book is not in a state where this makes sense"
+	case errors.Is(err, store.ErrNotFound):
+		return "that book does not exist, or you cannot manage it"
+	default:
+		return "that did not work; try again"
+	}
+}
+
+// trashLimit keeps the trash section a short list of recent regrets
+// rather than a second catalog.
+const trashLimit = 10
+
+// trashActivity lists what can still be restored. Like uploadActivity, a
+// failure here must not take the page down with it.
+func (s *Server) trashActivity(
+	r *http.Request, userID, libraryID string, loc *time.Location,
+) []TrashRow {
+	books, err := s.St.ListTrashedBooks(r.Context(), userID, libraryID, trashLimit)
+	if err != nil {
+		slog.Error("trash listing unavailable", "library", libraryID, "err", err)
+		return nil
+	}
+	rows := make([]TrashRow, 0, len(books))
+	for _, b := range books {
+		row := TrashRow{ID: b.ID, Title: b.Title}
+		if b.TrashExpiresAt != nil {
+			row.Until = b.TrashExpiresAt.In(loc).Format("Jan 2, 2006 15:04")
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }

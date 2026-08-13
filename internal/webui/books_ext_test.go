@@ -495,3 +495,154 @@ func (f *booksFixture) readerCookie(t *testing.T) *http.Cookie {
 	}
 	return f.login(t, "bob")
 }
+
+// postForm posts a urlencoded form the way the page's buttons do.
+func (f *booksFixture) postForm(
+	t *testing.T, path string, cookie *http.Cookie, form url.Values,
+) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, f.ts.URL+path,
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp
+}
+
+// TestBooksUIDeletesAndRestoresABook walks the deletion path the way a
+// person does: press Delete, see the book gone and its download refused,
+// find it under "Recently deleted", press Put back, download it again.
+func TestBooksUIDeletesAndRestoresABook(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	body := bytes.Repeat([]byte("deletable"), 40)
+	f.uploadForm(t, f.cookie, csrf, f.library, "regret.epub", body)
+	bookID := f.promote(t, "regret")
+
+	form := url.Values{"csrf": {csrf}, "library": {f.library}}
+	if resp := f.postForm(
+		t, "/ui/books/"+bookID+"/delete", f.cookie, form,
+	); resp.StatusCode != http.StatusSeeOther ||
+		strings.Contains(resp.Header.Get("Location"), "problem=") {
+		t.Fatalf("delete: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if strings.Contains(html, "books/"+bookID+"/download") {
+		t.Fatalf("deleted book still offered for download:\n%s", html)
+	}
+	if !strings.Contains(html, "Recently deleted") ||
+		!strings.Contains(html, "books/"+bookID+"/restore") {
+		t.Fatalf("deleted book is not restorable from the page:\n%s", html)
+	}
+	if resp, _ := f.get(
+		t, "/ui/books/"+bookID+"/download", f.cookie,
+	); resp.StatusCode == http.StatusOK {
+		t.Fatal("deleted book is still downloadable")
+	}
+
+	if resp := f.postForm(
+		t, "/ui/books/"+bookID+"/restore", f.cookie, form,
+	); resp.StatusCode != http.StatusSeeOther ||
+		strings.Contains(resp.Header.Get("Location"), "problem=") {
+		t.Fatalf("restore: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	resp, got := f.get(t, "/ui/books/"+bookID+"/download", f.cookie)
+	if resp.StatusCode != http.StatusOK || got != string(body) {
+		t.Fatalf("restored download: %d, %d bytes", resp.StatusCode, len(got))
+	}
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if strings.Contains(html, "Recently deleted") {
+		t.Fatalf("restored book still in the trash:\n%s", html)
+	}
+}
+
+// TestBooksUIDeleteRequiresCSRFAndAccess: deletion is the most damaging
+// button on the page, so a forged form and another user's cookie must
+// both fail, and the book must survive both.
+func TestBooksUIDeleteRequiresCSRFAndAccess(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	body := []byte("protected bytes")
+	f.uploadForm(t, f.cookie, csrf, f.library, "safe.epub", body)
+	bookID := f.promote(t, "safe")
+
+	for _, bad := range []string{"", "not-the-token"} {
+		if resp := f.postForm(t, "/ui/books/"+bookID+"/delete", f.cookie,
+			url.Values{"csrf": {bad}, "library": {f.library}},
+		); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("csrf %q: %d, want 403", bad, resp.StatusCode)
+		}
+	}
+
+	// Bob has a valid session and his own token, but no access to the
+	// book. He must not be able to delete it.
+	bob := f.login(t, "bob")
+	_, bobHTML := f.get(t, "/ui/books", bob)
+	resp := f.postForm(t, "/ui/books/"+bookID+"/delete", bob,
+		url.Values{"csrf": {csrfFrom(t, bobHTML)}})
+	if resp.StatusCode == http.StatusOK ||
+		!strings.Contains(resp.Header.Get("Location"), "problem=") {
+		t.Fatalf("stranger's delete was not refused: %d %s",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	if resp, got := f.get(
+		t, "/ui/books/"+bookID+"/download", f.cookie,
+	); resp.StatusCode != http.StatusOK || got != string(body) {
+		t.Fatalf("book damaged by refused deletes: %d", resp.StatusCode)
+	}
+}
+
+// TestBooksUIRestoreSaysWhenTheFileIsGone covers the corner where the
+// undo cannot fully undo: the bytes were lost while the book sat in the
+// trash. The entry comes back, but calling that "restored" and leaving a
+// dead Download link would be a lie.
+func TestBooksUIRestoreSaysWhenTheFileIsGone(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	body := []byte("bytes that will vanish")
+	f.uploadForm(t, f.cookie, csrf, f.library, "doomed.epub", body)
+	bookID := f.promote(t, "doomed")
+
+	files, err := f.st.ListBookFiles(t.Context(), "u1", bookID, store.LibraryRoleRead)
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no file to lose: %+v %v", files, err)
+	}
+	form := url.Values{"csrf": {csrf}, "library": {f.library}}
+	f.postForm(t, "/ui/books/"+bookID+"/delete", f.cookie, form)
+
+	// The bytes go missing while the book is in the trash.
+	if _, err := f.st.ReconcileBlob(t.Context(), store.BlobInfo{
+		SHA256: files[0].BlobSHA256, SizeBytes: int64(len(body)),
+	}, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.ReconcileCatalogAvailability(
+		t.Context(), time.Now().UTC(), 100,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := f.postForm(t, "/ui/books/"+bookID+"/restore", f.cookie, form)
+	loc := resp.Header.Get("Location")
+	if strings.Contains(loc, "problem=") {
+		t.Fatalf("restore refused: %s", loc)
+	}
+	if !strings.Contains(loc, "upload+it+again") {
+		t.Fatalf("restore claimed success with no file: %s", loc)
+	}
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if strings.Contains(html, "books/"+bookID+"/download") {
+		t.Fatalf("download offered for a book with no bytes:\n%s", html)
+	}
+}
