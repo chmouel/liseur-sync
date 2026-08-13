@@ -12,12 +12,12 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-type ingestValidationStore interface {
+type ingestTransitionStore interface {
 	TransitionIngestJob(context.Context, string, string, store.IngestJobTransition) (store.IngestJob, error)
 }
 
-type ingestValidationQueue interface {
-	ingestValidationStore
+type ingestWorkerQueue interface {
+	ingestTransitionStore
 	ListIngestWorkerJobs(context.Context, store.IngestState, int) ([]store.IngestJob, error)
 }
 
@@ -45,7 +45,7 @@ type IngestValidationReport struct {
 // operational failures are returned for retry without changing durable state.
 func ValidateIngestJob(
 	ctx context.Context,
-	st ingestValidationStore,
+	st ingestTransitionStore,
 	artifacts ingestArtifactValidator,
 	job store.IngestJob,
 	clock func() time.Time,
@@ -60,12 +60,9 @@ func ValidateIngestJob(
 	}
 	publication, location, err := artifacts.ValidateEPUBArtifact(
 		ctx, *job.StagingPath, *job.ContentSHA256, job.BytesReceived, limits)
-	updatedAt := clock().UTC()
-	if updatedAt.IsZero() {
-		return result, store.ErrInvalidTransition
-	}
-	if job.UpdatedAt.After(updatedAt) {
-		updatedAt = job.UpdatedAt
+	updatedAt, timeErr := ingestPostProcessTime(job, clock)
+	if timeErr != nil {
+		return result, timeErr
 	}
 	if err != nil {
 		code, contentFailure := epub.ErrorCode(err)
@@ -110,7 +107,7 @@ func ValidateIngestJob(
 // Later polls pick up jobs outside this batch.
 func RunIngestValidationPass(
 	ctx context.Context,
-	st ingestValidationQueue,
+	st ingestWorkerQueue,
 	artifacts ingestArtifactValidator,
 	clock func() time.Time,
 	failureRetention time.Duration,
@@ -150,4 +147,18 @@ func RunIngestValidationPass(
 		}
 	}
 	return report, nil
+}
+
+func ingestPostProcessTime(
+	job store.IngestJob,
+	clock func() time.Time,
+) (time.Time, error) {
+	updatedAt := clock().UTC()
+	if updatedAt.IsZero() {
+		return time.Time{}, store.ErrInvalidTransition
+	}
+	if job.UpdatedAt.After(updatedAt) {
+		updatedAt = job.UpdatedAt
+	}
+	return updatedAt, nil
 }

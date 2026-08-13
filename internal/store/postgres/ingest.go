@@ -13,7 +13,8 @@ const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
 	j.source, j.client_key, j.request_fingerprint, j.promotion_fingerprint,
 	j.artifacts_expired, j.artifact_cleanup_pending, j.state,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
-	j.book_id, j.error_code, j.error_detail, j.retry_count, j.revision,
+	j.extracted_embedded_metadata_json, j.book_id, j.error_code, j.error_detail,
+	j.retry_count, j.revision,
 	j.created_at, j.updated_at, j.expires_at`
 
 func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error) {
@@ -24,9 +25,9 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 		&job.PromotionFingerprint, &job.ArtifactsExpired,
 		&job.ArtifactCleanupPending, &job.State,
 		&job.BytesReceived, &job.ContentSHA256, &job.StagingPath,
-		&job.SourceRelativePath, &job.BookID, &job.ErrorCode, &job.ErrorDetail,
-		&job.RetryCount, &job.Revision, &job.CreatedAt, &job.UpdatedAt,
-		&job.ExpiresAt,
+		&job.SourceRelativePath, &job.ExtractedEmbeddedMetadataJSON, &job.BookID,
+		&job.ErrorCode, &job.ErrorDetail, &job.RetryCount, &job.Revision,
+		&job.CreatedAt, &job.UpdatedAt, &job.ExpiresAt,
 	)
 	return job, err
 }
@@ -309,11 +310,13 @@ func (s *Store) TransitionIngestJob(
 	res, err := tx.ExecContext(ctx, q(
 		`UPDATE ingest_jobs
 		 SET state = ?, bytes_received = ?, content_sha256 = ?,
-		     staging_path = ?, error_code = ?, error_detail = ?,
+		     staging_path = ?, extracted_embedded_metadata_json = ?,
+		     error_code = ?, error_detail = ?,
 		     retry_count = ?, revision = ?, updated_at = ?, expires_at = ?
 		 WHERE user_id = ? AND id = ? AND state = ? AND revision = ?`),
 		string(next.State), next.BytesReceived, next.ContentSHA256,
-		next.StagingPath, next.ErrorCode, next.ErrorDetail,
+		next.StagingPath, next.ExtractedEmbeddedMetadataJSON,
+		next.ErrorCode, next.ErrorDetail,
 		next.RetryCount, next.Revision, next.UpdatedAt.UTC(), next.ExpiresAt,
 		userID, jobID, string(change.ExpectedState), change.ExpectedRevision)
 	if err != nil {

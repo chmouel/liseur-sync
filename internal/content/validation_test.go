@@ -15,8 +15,9 @@ import (
 )
 
 type validationStoreFake struct {
-	job         store.IngestJob
-	transitions int
+	job           store.IngestJob
+	transitions   int
+	transitionErr error
 }
 
 func (f *validationStoreFake) TransitionIngestJob(
@@ -26,6 +27,9 @@ func (f *validationStoreFake) TransitionIngestJob(
 ) (store.IngestJob, error) {
 	if f.job.UserID != userID || f.job.ID != jobID {
 		return store.IngestJob{}, store.ErrNotFound
+	}
+	if f.transitionErr != nil {
+		return store.IngestJob{}, f.transitionErr
 	}
 	next, err := store.ApplyIngestTransition(f.job, change)
 	if err != nil {

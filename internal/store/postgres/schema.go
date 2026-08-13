@@ -700,7 +700,12 @@ ALTER TABLE blobs
     ADD COLUMN missing_at TIMESTAMPTZ;
 `
 
+const migration12 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN extracted_embedded_metadata_json BYTEA;
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
-	migration7, migration8, migration9, migration10, migration11,
+	migration7, migration8, migration9, migration10, migration11, migration12,
 }

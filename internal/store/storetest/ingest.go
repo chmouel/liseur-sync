@@ -57,7 +57,9 @@ func extractIngestJob(
 	job, err = s.TransitionIngestJob(ctx, job.UserID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState: store.IngestExtracted, UpdatedAt: at.Add(time.Second),
+			NextState:                     store.IngestExtracted,
+			ExtractedEmbeddedMetadataJSON: []byte(`{"title":"Extracted"}`),
+			UpdatedAt:                     at.Add(time.Second),
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +137,8 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	}
 	if job.UserID != manager.ID || job.QuotaUserID != owner.ID ||
 		job.State != store.IngestReceived || job.Revision != 1 ||
-		job.BytesReceived != 0 {
+		job.BytesReceived != 0 ||
+		job.ExtractedEmbeddedMetadataJSON != nil {
 		t.Fatalf("created ingest job: %+v", job)
 	}
 	if _, _, err := s.CreateIngestJob(ctx, reader.ID, store.IngestJobRequest{
@@ -614,7 +617,9 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		}
 		promoted := 0
 		for result := range promotionResults {
-			if result.Job.State != store.IngestPromoted || result.Replayed {
+			if result.Job.State != store.IngestPromoted || result.Replayed ||
+				string(result.Job.ExtractedEmbeddedMetadataJSON) !=
+					`{"title":"Extracted"}` {
 				t.Fatalf("promotion result: %+v", result)
 			}
 			promoted++
@@ -696,6 +701,15 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		}); err != store.ErrStaleRevision {
 		t.Fatalf("stale transition: %v", err)
 	}
+	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestStaged, ExpectedRevision: 2,
+			ExtractedEmbeddedMetadataJSON: []byte(`{"title":"too early"}`),
+			NextState:                     store.IngestValidated,
+			UpdatedAt:                     now.Add(2 * time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("pre-extraction metadata accepted: %v", err)
+	}
 	job, err = s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestStaged, ExpectedRevision: 2,
@@ -704,13 +718,47 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	if err != nil || job.State != store.IngestValidated || job.Revision != 3 {
 		t.Fatalf("validated transition: %+v %v", job, err)
 	}
-	job, err = s.TransitionIngestJob(ctx, manager.ID, job.ID,
+	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestValidated, ExpectedRevision: 3,
 			NextState: store.IngestExtracted, UpdatedAt: now.Add(3 * time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("metadata-free extraction accepted: %v", err)
+	}
+	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestValidated, ExpectedRevision: 3,
+			NextState:                     store.IngestExtracted,
+			ExtractedEmbeddedMetadataJSON: []byte(`{"title":`),
+			UpdatedAt:                     now.Add(3 * time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("invalid extraction metadata accepted: %v", err)
+	}
+	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestValidated, ExpectedRevision: 3,
+			NextState:                     store.IngestExtracted,
+			ExtractedEmbeddedMetadataJSON: []byte(`null`),
+			UpdatedAt:                     now.Add(3 * time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("non-object extraction metadata accepted: %v", err)
+	}
+	const extractedMetadata = `{"title":"Embedded","languages":["en","fr"]}`
+	job, err = s.TransitionIngestJob(ctx, manager.ID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestValidated, ExpectedRevision: 3,
+			NextState:                     store.IngestExtracted,
+			ExtractedEmbeddedMetadataJSON: []byte(extractedMetadata),
+			UpdatedAt:                     now.Add(3 * time.Minute),
 		})
-	if err != nil || job.State != store.IngestExtracted || job.Revision != 4 {
+	if err != nil || job.State != store.IngestExtracted || job.Revision != 4 ||
+		string(job.ExtractedEmbeddedMetadataJSON) != extractedMetadata {
 		t.Fatalf("extracted transition: %+v %v", job, err)
+	}
+	roundTripped, err := s.IngestJobByID(ctx, manager.ID, job.ID)
+	if err != nil ||
+		string(roundTripped.ExtractedEmbeddedMetadataJSON) != extractedMetadata {
+		t.Fatalf("extracted metadata round trip: %+v %v", roundTripped, err)
 	}
 	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
@@ -772,7 +820,8 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 			NextState: store.IngestFailed, ErrorCode: "worker_failure",
 			ExpiresAt: &expiry, UpdatedAt: now.Add(6 * time.Minute),
 		})
-	if err != nil || job.State != store.IngestFailed {
+	if err != nil || job.State != store.IngestFailed ||
+		string(job.ExtractedEmbeddedMetadataJSON) != extractedMetadata {
 		t.Fatalf("ACL revocation stranded ingest job: %+v %v", job, err)
 	}
 }

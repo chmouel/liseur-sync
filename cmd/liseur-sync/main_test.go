@@ -397,8 +397,9 @@ func promoteTestCatalogBlob(
 	job, err = st.TransitionIngestJob(ctx, userID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState: store.IngestExtracted,
-			UpdatedAt: at.Add(3 * time.Minute),
+			NextState:                     store.IngestExtracted,
+			ExtractedEmbeddedMetadataJSON: []byte(`{}`),
+			UpdatedAt:                     at.Add(3 * time.Minute),
 		})
 	if err != nil {
 		t.Fatal(err)
