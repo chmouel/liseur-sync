@@ -201,7 +201,52 @@ func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", `"`+file.BlobSHA256+`"`)
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, "", file.UpdatedAt.UTC(), blob)
+	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "",
+		file.UpdatedAt.UTC(), blob)
+}
+
+// catalogErrorWriter keeps http.ServeContent inside this package's error
+// contract. ServeContent parses the Range header itself, and answers a
+// malformed one with a plain-text "invalid range" body — client-controlled
+// input producing a non-JSON error, which every other route here refuses
+// to do. It also leaves the Content-Disposition we set in place, so a
+// failed request still looks like an attachment.
+//
+// Anything below 400 passes through untouched: the 200, 206 and 304 paths
+// are exactly what ServeContent exists to get right.
+type catalogErrorWriter struct {
+	http.ResponseWriter
+	failed bool
+}
+
+func (w *catalogErrorWriter) WriteHeader(status int) {
+	if status < 400 {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
+	w.failed = true
+	w.Header().Del("Content-Disposition")
+	// Content-Range survives on a 416: it tells the client the real
+	// length, which is how it recovers.
+	writeError(w.ResponseWriter, status, statusErrorMessage(status))
+}
+
+func (w *catalogErrorWriter) Write(p []byte) (int, error) {
+	if w.failed {
+		// Swallow ServeContent's own plain-text body; ours is already
+		// written.
+		return len(p), nil
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func statusErrorMessage(status int) string {
+	switch status {
+	case http.StatusRequestedRangeNotSatisfiable:
+		return "requested range is not satisfiable"
+	default:
+		return "download failed"
+	}
 }
 
 func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
