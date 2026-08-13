@@ -211,11 +211,16 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 		records[present.SHA256].OrphanedAt != nil {
 		t.Fatalf("present referenced blob state: %+v", records[present.SHA256])
 	}
-	book, err := st.CatalogBookByID(
-		ctx, user.ID, "missing-book", store.LibraryRoleRead)
-	if err != nil || book.Status != store.BookActive {
-		t.Fatalf("missing blob changed catalog availability: %+v %v", book, err)
+	// Startup propagates the blob it could not find into the catalog, so
+	// the server never comes up offering a download it cannot serve.
+	if report.Availability.FilesMarkedMissing != 1 ||
+		report.Availability.BooksMarkedMissing != 1 ||
+		report.Availability.FilesMarkedAvailable != 0 ||
+		report.Availability.BooksMarkedActive != 0 {
+		t.Fatalf("startup availability: %+v", report.Availability)
 	}
+	assertBookStatus(t, st, user.ID, "missing-book", store.BookMissing)
+	assertBookStatus(t, st, user.ID, "present-book", store.BookActive)
 	if _, err := os.Stat(filepath.Join(
 		root, filepath.FromSlash(filesystemOnly.Path))); err != nil {
 		t.Fatalf("orphan was deleted during mark-only reconciliation: %v", err)
@@ -251,6 +256,15 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 	if records[missing.SHA256].MissingAt != nil {
 		t.Fatalf("restored blob remains missing: %+v", records[missing.SHA256])
 	}
+	// The bytes came back, so the book must become downloadable again.
+	if report.Availability.FilesMarkedAvailable != 1 ||
+		report.Availability.BooksMarkedActive != 1 ||
+		report.Availability.FilesMarkedMissing != 0 ||
+		report.Availability.BooksMarkedMissing != 0 {
+		t.Fatalf("availability after restore: %+v", report.Availability)
+	}
+	assertBookStatus(t, st, user.ID, "missing-book", store.BookActive)
+	assertBookStatus(t, st, user.ID, "present-book", store.BookActive)
 	if _, err := os.Stat(filepath.Join(
 		root, filepath.FromSlash(filesystemOnly.Path))); err != nil {
 		t.Fatalf("orphan was deleted before a grace-period sweep: %v", err)
@@ -447,4 +461,21 @@ func blobRecordsBySHA(t *testing.T, st store.Store) map[string]store.BlobRecord 
 		bySHA[record.SHA256] = record
 	}
 	return bySHA
+}
+
+func assertBookStatus(
+	t *testing.T,
+	st store.Store,
+	userID, bookID string,
+	want store.BookStatus,
+) {
+	t.Helper()
+	book, err := st.CatalogBookByID(
+		context.Background(), userID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatalf("%s: %v", bookID, err)
+	}
+	if book.Status != want {
+		t.Fatalf("%s status: got %q want %q", bookID, book.Status, want)
+	}
 }

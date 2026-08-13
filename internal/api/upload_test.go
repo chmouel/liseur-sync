@@ -725,11 +725,15 @@ func TestOversizedUploadIsNotDrained(t *testing.T) {
 		}
 	}
 
-	// The server reads a little past the limit: net/http drains a bounded
-	// amount after the handler returns so the connection can be reused.
-	// Draining the *part*, by contrast, reads until the transport bound
-	// (max_upload_bytes plus a 1 MiB envelope), which is well above this.
-	if got := counter.count(); got > 700<<10 {
+	// The counter measures what the client handed to the transport, which
+	// runs somewhat ahead of what the server actually consumed, so the
+	// bound is empirical rather than exact. Measured under -race: this
+	// handler moves 480-790 KiB (net/http drains a bounded amount after
+	// the handler returns so the connection can be reused), while a
+	// handler that closes the part instead reads to the transport bound
+	// and moves 1.44-1.9 MiB. The threshold sits between the two with
+	// headroom on both sides.
+	if got := counter.count(); got > 1100<<10 {
 		t.Fatalf("server read %d bytes of a %d-byte upload it refused", got, sent)
 	}
 }

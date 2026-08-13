@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -553,5 +554,77 @@ func TestDownloadStillServesGoodRanges(t *testing.T) {
 	}
 	if got := resp.Header.Get("Content-Disposition"); got == "" {
 		t.Fatal("206 lost its attachment header")
+	}
+}
+
+// TestReconciliationHidesABookWhoseBytesAreGone is the end of the chain
+// the store and content passes start: losing a blob must take the book
+// out of the catalog a reader browses, not merely fail at download time.
+func TestReconciliationHidesABookWhoseBytesAreGone(t *testing.T) {
+	f := newUploadFixture(t)
+	body := []byte("about to vanish under reconciliation")
+	bookID, digest := f.publish(t, "vanishing", body)
+	keptID, _ := f.publish(t, "surviving", []byte("still here"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	removed, err := f.cas.RemoveBlob(t.Context(), digest, int64(len(body)))
+	if err != nil || !removed {
+		t.Fatalf("remove blob: %v %v", removed, err)
+	}
+
+	// Before reconciliation the catalog still advertises a file it can no
+	// longer serve.
+	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
+	if code != http.StatusOK {
+		t.Fatalf("detail before: %d %v", code, detail)
+	}
+	if files, _ := detail["files"].([]any); len(files) != 1 {
+		t.Fatalf("expected a stale file entry before reconciliation: %v", detail)
+	}
+
+	now := time.Now().UTC()
+	if _, err := content.ReconcileBlobInventory(
+		t.Context(), f.st, f.cas, now, 100); err != nil {
+		t.Fatal(err)
+	}
+	report, err := content.ReconcileCatalogAvailability(
+		t.Context(), f.st, now, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FilesMarkedMissing != 1 || report.BooksMarkedMissing != 1 {
+		t.Fatalf("reconciliation report: %+v", report)
+	}
+
+	code, detail = getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
+	if code != http.StatusOK {
+		t.Fatalf("detail after: %d %v", code, detail)
+	}
+	if files, _ := detail["files"].([]any); len(files) != 0 {
+		t.Fatalf("catalog still offers a file it cannot serve: %v", detail)
+	}
+	if detail["status"] != string(store.BookMissing) {
+		t.Fatalf("status after reconciliation: %v", detail["status"])
+	}
+
+	resp, raw := f.get(t, "/v1/books/"+bookID+"/download", read)
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("download = %d, want 410: %s", resp.StatusCode, raw)
+	}
+
+	// The book that kept its bytes must be untouched.
+	code, kept := getJSON(t, f.ts.URL+"/v1/books/"+keptID, read)
+	if code != http.StatusOK {
+		t.Fatalf("kept detail: %d %v", code, kept)
+	}
+	if files, _ := kept["files"].([]any); len(files) != 1 {
+		t.Fatalf("reconciliation hid a book that was fine: %v", kept)
+	}
+	if kept["status"] != string(store.BookActive) {
+		t.Fatalf("kept status: %v", kept["status"])
+	}
+	resp, raw = f.get(t, "/v1/books/"+keptID+"/download", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kept download = %d: %s", resp.StatusCode, raw)
 	}
 }

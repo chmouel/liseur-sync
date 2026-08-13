@@ -623,6 +623,23 @@ type BlobReconcileResult struct {
 	MissingCleared bool
 }
 
+// CatalogAvailabilityResult counts one bounded catalog availability pass.
+// Files follow their blob: a file whose bytes are gone is not downloadable,
+// and a book with no downloadable file is not a book a reader can open.
+type CatalogAvailabilityResult struct {
+	FilesMarkedMissing   int
+	FilesMarkedAvailable int
+	BooksMarkedMissing   int
+	BooksMarkedActive    int
+}
+
+// Changed reports whether the pass mutated anything, so that a caller can
+// stop looping.
+func (r CatalogAvailabilityResult) Changed() bool {
+	return r.FilesMarkedMissing != 0 || r.FilesMarkedAvailable != 0 ||
+		r.BooksMarkedMissing != 0 || r.BooksMarkedActive != 0
+}
+
 // QuotaUsage is the logical per-principal usage after an operation.
 type QuotaUsage struct {
 	UsedBytes       int64
@@ -1226,6 +1243,16 @@ type Store interface {
 	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
 	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
 	ReconcileBlob(ctx context.Context, blob BlobInfo, present bool, at time.Time) (BlobReconcileResult, error)
+	// ReconcileCatalogAvailability is a global housekeeping operation that
+	// propagates blob presence into the catalog: a file whose blob is
+	// recorded missing becomes unavailable, and one whose blob has returned
+	// becomes available again. Superseded files are left alone, because
+	// supersession is a different axis from presence. Books follow their
+	// files between active and missing; trashed and review books are never
+	// touched, since neither state is a statement about bytes. The limit
+	// bounds each of the four updates, so a caller loops while Changed
+	// reports work was done.
+	ReconcileCatalogAvailability(ctx context.Context, at time.Time, limit int) (CatalogAvailabilityResult, error)
 	// PurgeOrphanedBlobRecords atomically removes database rows that have
 	// remained orphaned through the supplied cutoff and still have no retained
 	// book-file references or active ingest holds. The caller must keep content
