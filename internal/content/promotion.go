@@ -72,6 +72,9 @@ type IngestPromotionResult struct {
 	Job  store.IngestJob
 	Book store.CatalogBook
 	File store.BookFile
+	// Replayed reports that another worker had already promoted this job and
+	// these rows are its work, read back rather than created.
+	Replayed bool
 }
 
 // IngestPromotionReport describes one bounded extracted-job pass.
@@ -79,6 +82,9 @@ type IngestPromotionReport struct {
 	Promoted    int
 	Quarantined int
 	Skipped     int
+	// Replayed counts jobs another worker had already promoted. It is the
+	// only signal that workers are contending for the same batch.
+	Replayed int
 	// Undescribed counts books that were promoted with their titles intact
 	// but whose entity sets did not attach.
 	Undescribed int
@@ -158,6 +164,7 @@ func PromoteIngestJob(
 	result.Job = promoted.Job
 	result.Book = promoted.Book
 	result.File = promoted.File
+	result.Replayed = promoted.Replayed
 	return result, nil
 }
 
@@ -312,6 +319,10 @@ func RunIngestPromotionPass(
 		}
 		switch result.Job.State {
 		case store.IngestPromoted:
+			if result.Replayed {
+				report.Replayed++
+				continue
+			}
 			report.Promoted++
 			if _, _, err := MaterializeBookMetadata(
 				ctx, st, result.Job, patterns, clock); err != nil {
