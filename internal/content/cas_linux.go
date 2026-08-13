@@ -489,6 +489,52 @@ func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
 // RemoveBlob verifies and durably removes one final blob. Missing content is
 // an idempotent success. Empty hash directories are retained and ignored by
 // inventory, avoiding unsafe directory cleanup races.
+// OpenBlob opens a promoted blob for reading. The caller owns the returned
+// file and must close it.
+//
+// It returns an *os.File rather than an io.Reader because downloads serve
+// byte ranges and conditional requests: http.ServeContent needs to seek,
+// and giving it the real file lets the kernel do the copying. The open is
+// O_NOFOLLOW and relative to the content root's directory handles, so a
+// symlink planted in the store cannot redirect a download elsewhere.
+//
+// The content is not re-hashed here. Verification belongs to ingest and to
+// the reconciliation pass; doing it per request would read every byte twice
+// and turn a range request into a full-file read.
+func (c *CAS) OpenBlob(ctx context.Context, expectedSHA string) (*os.File, int64, error) {
+	if !validSHA256(expectedSHA) {
+		return nil, 0, ErrUnsafePath
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	prefixFD, leafFD, err := c.openFinalDirectories(expectedSHA, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer unix.Close(prefixFD)
+	defer unix.Close(leafFD)
+	fd, err := unix.Openat(leafFD, "file.epub",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return nil, 0, ErrStageMissing
+	}
+	if err != nil {
+		return nil, 0, classifyPathError(err)
+	}
+	file := os.NewFile(uintptr(fd), finalRelativePath(expectedSHA))
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, 0, ErrUnsafePath
+	}
+	return file, info.Size(), nil
+}
+
 func (c *CAS) RemoveBlob(
 	ctx context.Context,
 	expectedSHA string,

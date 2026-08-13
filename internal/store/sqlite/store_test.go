@@ -28,6 +28,28 @@ func TestStore(t *testing.T) {
 	storetest.Run(t, openStore)
 }
 
+func (s *Store) InsertBookFileForTest(ctx context.Context, file store.BookFile, sizeBytes int64) error {
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO blobs (sha256, size_bytes, created_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(sha256) DO NOTHING`,
+		file.BlobSHA256, sizeBytes, formatTime(file.CreatedAt)); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO book_files
+		 (id, library_id, book_id, blob_sha256, source,
+		  source_relative_path, original_filename, media_type,
+		  partial_md5, dc_identifier, availability, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		file.ID, file.LibraryID, file.BookID, file.BlobSHA256,
+		string(file.Source), file.SourceRelativePath, file.OriginalFilename,
+		file.MediaType, file.PartialMD5, file.DCIdentifier,
+		string(file.Availability), formatTime(file.CreatedAt),
+		formatTime(file.UpdatedAt))
+	return err
+}
+
 func TestMigration3MarksLegacyInference(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "upgrade.db"))
 	if err != nil {

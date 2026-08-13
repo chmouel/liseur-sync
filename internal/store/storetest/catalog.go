@@ -201,7 +201,7 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 	if _, err := s.CatalogBookByID(ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
 		t.Fatalf("book visible to outsider: %v", err)
 	}
-	if books, err := s.ListCatalogBooks(ctx, reader.ID, library.ID); err != nil ||
+	if books, err := s.ListCatalogBooks(ctx, reader.ID, library.ID, nil, 50); err != nil ||
 		len(books) != 1 || books[0].ID != book.ID {
 		t.Fatalf("reader books: %+v %v", books, err)
 	}
@@ -332,7 +332,7 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 	if _, err := s.UserBookWork(ctx, reader.ID, book.ID); err != store.ErrNotFound {
 		t.Fatalf("revoked reader still sees mapping: %v", err)
 	}
-	if _, err := s.ListCatalogBooks(ctx, reader.ID, library.ID); err != store.ErrNotFound {
+	if _, err := s.ListCatalogBooks(ctx, reader.ID, library.ID, nil, 50); err != store.ErrNotFound {
 		t.Fatalf("revoked reader still lists books: %v", err)
 	}
 	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
@@ -345,6 +345,146 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 	readerMapping, err = s.UserBookWork(ctx, reader.ID, book.ID)
 	if err != nil || readerMapping.WorkID != otherReaderWork.ID {
 		t.Fatalf("merge left stale catalog mapping: %+v %v", readerMapping, err)
+	}
+}
+
+type bookFileTestInserter interface {
+	InsertBookFileForTest(ctx context.Context, file store.BookFile, sizeBytes int64) error
+}
+
+func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "catalog-page-owner")
+	outsider := MkUser(t, s, "catalog-page-outsider")
+	now := time.Date(2026, time.August, 13, 9, 0, 0, 123456000, time.UTC)
+	library := store.Library{
+		ID: "lib-catalog-page", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Paged", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	books := []store.CatalogBook{
+		{ID: "book-page-c", LibraryID: library.ID, Status: store.BookActive, Title: "C", CreatedAt: now},
+		{ID: "book-page-a", LibraryID: library.ID, Status: store.BookActive, Title: "A", CreatedAt: now},
+		{ID: "book-page-b", LibraryID: library.ID, Status: store.BookActive, Title: "B", CreatedAt: now},
+		{ID: "book-page-later", LibraryID: library.ID, Status: store.BookActive, Title: "Later", CreatedAt: now.Add(time.Second)},
+		{ID: "book-page-trashed", LibraryID: library.ID, Status: store.BookTrashed, Title: "Trash", CreatedAt: now.Add(2 * time.Second)},
+		{ID: "book-page-last", LibraryID: library.ID, Status: store.BookActive, Title: "Last", CreatedAt: now.Add(3 * time.Second)},
+	}
+	for _, book := range books {
+		if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, limit := range []int{0, -1, 501} {
+		if _, err := s.ListCatalogBooks(ctx, owner.ID, library.ID, nil, limit); err != store.ErrInvalidTransition {
+			t.Fatalf("catalog listing limit %d: %v", limit, err)
+		}
+	}
+	if _, err := s.ListCatalogBooks(ctx, outsider.ID, library.ID, nil, 50); err != store.ErrNotFound {
+		t.Fatalf("outsider listed private catalog: %v", err)
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	var cursor *store.CatalogBookCursor
+	for {
+		page, err := s.ListCatalogBooks(ctx, owner.ID, library.ID, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		if len(page) > 2 {
+			t.Fatalf("page exceeded limit: %+v", page)
+		}
+		for _, book := range page {
+			if seen[book.ID] {
+				t.Fatalf("duplicate book across pages: %s", book.ID)
+			}
+			if book.Status == store.BookTrashed {
+				t.Fatalf("trashed book listed: %+v", book)
+			}
+			seen[book.ID] = true
+			got = append(got, book.ID)
+		}
+		last := page[len(page)-1]
+		cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		if len(page) < 2 {
+			break
+		}
+	}
+	want := []string{"book-page-a", "book-page-b", "book-page-c", "book-page-later", "book-page-last"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("paged books: got %v want %v", got, want)
+	}
+}
+
+func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
+	s := open(t)
+	inserter, ok := s.(bookFileTestInserter)
+	if !ok {
+		t.Fatalf("%T cannot insert book files for shared tests", s)
+	}
+	ctx := context.Background()
+	owner := MkUser(t, s, "catalog-files-owner")
+	reader := MkUser(t, s, "catalog-files-reader")
+	outsider := MkUser(t, s, "catalog-files-outsider")
+	now := time.Date(2026, time.August, 13, 10, 0, 0, 654321000, time.UTC)
+	library := store.Library{
+		ID: "lib-catalog-files", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Files", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
+		t.Fatal(err)
+	}
+	book := store.CatalogBook{
+		ID: "book-files", LibraryID: library.ID, Status: store.BookActive,
+		Title: "Files", CreatedAt: now,
+	}
+	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+		t.Fatal(err)
+	}
+	files := []store.BookFile{
+		{ID: "file-old", CreatedAt: now},
+		{ID: "file-new-a", CreatedAt: now.Add(time.Second)},
+		{ID: "file-new-z", CreatedAt: now.Add(time.Second)},
+	}
+	for i, file := range files {
+		file.LibraryID = library.ID
+		file.BookID = book.ID
+		file.BlobSHA256 = ingestBlob(file.ID, int64(i+1)).SHA256
+		file.Source = store.IngestUpload
+		file.OriginalFilename = file.ID + ".epub"
+		file.MediaType = "application/epub+zip"
+		file.Availability = store.BookFileAvailable
+		file.UpdatedAt = file.CreatedAt
+		if err := inserter.InsertBookFileForTest(ctx, file, int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gotFiles, err := s.ListBookFiles(ctx, reader.ID, book.ID, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(gotFiles))
+	for i, file := range gotFiles {
+		got[i] = file.ID
+	}
+	want := []string{"file-new-z", "file-new-a", "file-old"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("book files: got %v want %v", got, want)
+	}
+	if _, err := s.ListBookFiles(ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
+		t.Fatalf("outsider listed private book files: %v", err)
 	}
 }
 
