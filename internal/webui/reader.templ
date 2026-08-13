@@ -1,0 +1,70 @@
+package webui
+
+// The reader page (ADR-0007). It deliberately does not use the shared
+// layout: a book wants the whole window, and the fewer things share a
+// document with publication content the better, even though that
+// content is a sandbox away.
+
+type ReaderView struct {
+	BookID      string
+	Title       string
+	BackURL     string
+	DownloadURL string
+	TokenURL    string
+	APIBase     string
+	StaticBase  string
+	// Nonce lets the one script a rendered chapter carries run under
+	// both this page's policy and the chapter's own.
+	Nonce string
+}
+
+templ readerPage(v ReaderView, csrf string) {
+	<!doctype html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ v.Title } · liseur-sync</title>
+			<link rel="stylesheet" href={ v.StaticBase + "style.css" }/>
+		</head>
+		<body class="reader-body">
+			<div
+				id="reader-config"
+				data-book={ v.BookID }
+				data-csrf={ csrf }
+				data-token-url={ v.TokenURL }
+				data-download-url={ v.DownloadURL }
+				data-api-base={ v.APIBase }
+				data-nonce={ v.Nonce }
+				hidden
+			></div>
+			<header class="reader-bar">
+				<a class="reader-back" href={ templ.SafeURL(v.BackURL) }>&larr; Back</a>
+				<div class="reader-title">
+					<strong>{ v.Title }</strong>
+				</div>
+				<div class="reader-meta">
+					<span id="reader-chapter"></span>
+					<span id="reader-progress-text"></span>
+				</div>
+			</header>
+			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
+			<p id="reader-status" class="reader-status">Loading…</p>
+			<div class="reader-stage">
+				<button id="reader-prev" class="reader-turn" type="button" aria-label="Previous page">&lsaquo;</button>
+				// sandbox without allow-same-origin is the load-bearing
+				// attribute: it gives the publication an opaque origin,
+				// with no cookies, no storage and no reach into this page.
+				<iframe
+					id="reader-frame"
+					title="Publication"
+					sandbox="allow-scripts"
+					referrerpolicy="no-referrer"
+				></iframe>
+				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
+			</div>
+			<script src={ v.StaticBase + "reader.js" }></script>
+			<script src={ v.StaticBase + "reader-app.js" } defer></script>
+		</body>
+	</html>
+}

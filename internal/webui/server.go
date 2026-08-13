@@ -164,6 +164,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
+	mux.Handle("GET /ui/books/{id}/read", sec(s.requireAuth(s.handleReaderPage)))
 	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))

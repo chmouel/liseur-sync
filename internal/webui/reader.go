@@ -3,10 +3,73 @@ package webui
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/auth"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+// handleReaderPage serves the browser reader for one book (ADR-0007).
+//
+// The page carries no publication bytes. It fetches the EPUB with the
+// session cookie and unpacks it in the browser, so the only thing this
+// handler decides is whether the caller may read the book at all.
+func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	bookID := r.PathValue("id")
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	prefix := relPrefix(r.URL.Path)
+	escaped := url.PathEscape(bookID)
+
+	// The nonce is minted here, not in the page, because a chapter is
+	// shown to the sandboxed frame with srcdoc — and a srcdoc document
+	// inherits this policy as well as declaring its own. Both have to
+	// permit the one script the chapter carries, and only the server
+	// can put a nonce in this header.
+	//
+	// So this policy is the looser of the two by design: it is wide
+	// enough for a rendered chapter, and the chapter's own policy is
+	// what actually confines the publication. The page itself has no
+	// user content in it, and with default-src 'none' there is nowhere
+	// for anything here to send what it reads.
+	nonce, err := auth.NewSecret()
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	nonce = nonce[:24]
+	w.Header().Set("Content-Security-Policy", strings.Join([]string{
+		"default-src 'none'",
+		"script-src 'self' 'nonce-" + nonce + "'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data:",
+		"font-src data:",
+		"media-src data:",
+		"connect-src 'self'",
+		"frame-src 'self'",
+		"base-uri 'none'",
+		"form-action 'none'",
+	}, "; "))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+
+	readerPage(ReaderView{
+		BookID:      book.ID,
+		Title:       book.Title,
+		BackURL:     prefix + "books/" + escaped,
+		DownloadURL: prefix + "books/" + escaped + "/download",
+		TokenURL:    prefix + "reader/token",
+		APIBase:     prefix + "../",
+		StaticBase:  prefix + "static/",
+		Nonce:       nonce,
+	}, csrfFor(a)).Render(r.Context(), w)
+}
 
 // readerTokenResponse is the browser reader's credential. The secret is
 // returned in the body rather than set as a cookie on purpose: the

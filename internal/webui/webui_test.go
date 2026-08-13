@@ -421,7 +421,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/works", "/ui/devices", "/ui/settings", "/ui/admin",
-		"/ui/books", "/ui/books/x", "/ui/books/x/download",
+		"/ui/books", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
 			t.Errorf("GET %s over plain HTTP: want 403, got %d", p, code)

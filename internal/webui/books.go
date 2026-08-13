@@ -86,7 +86,7 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 			for _, f := range files {
 				if f.Availability == store.BookFileAvailable {
 					row.CanGet = true
-					break
+					row.CanRead = row.CanRead || isEPUB(f.MediaType)
 				}
 			}
 		}
@@ -233,6 +233,7 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 			v.Files = append(v.Files, BookFileRow{
 				Name: f.OriginalFilename, MediaType: f.MediaType, SHA256: f.BlobSHA256,
 			})
+			v.CanRead = v.CanRead || isEPUB(f.MediaType)
 		}
 	}
 	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
@@ -601,4 +602,12 @@ func (s *Server) trashActivity(
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// isEPUB reports whether a stored file is something the browser reader
+// can open. Everything else in a library stays downloadable; only EPUB
+// is offered for reading, because that is the only format the reader
+// knows how to unpack.
+func isEPUB(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "application/epub")
 }
