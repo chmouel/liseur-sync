@@ -139,7 +139,7 @@ func testCatalogAvailabilityReconciliation(t *testing.T, open OpenFunc) {
 	assertStatus(t, s, owner.ID, "book-lost", store.BookMissing)
 	assertStatus(t, s, owner.ID, "book-kept", store.BookActive)
 	assertStatus(t, s, owner.ID, "book-superseded", store.BookMissing)
-	assertStatus(t, s, owner.ID, "book-trashed", store.BookTrashed)
+	assertStillTrashed(t, s, owner.ID, library.ID, "book-trashed")
 	assertStatus(t, s, owner.ID, "book-fileless", store.BookActive)
 
 	// A second pass over unchanged state must be a no-op, or the pass
@@ -173,7 +173,7 @@ func testCatalogAvailabilityReconciliation(t *testing.T, open OpenFunc) {
 	// Its only file is superseded, so it has nothing to serve and stays
 	// missing.
 	assertStatus(t, s, owner.ID, "book-superseded", store.BookMissing)
-	assertStatus(t, s, owner.ID, "book-trashed", store.BookTrashed)
+	assertStillTrashed(t, s, owner.ID, library.ID, "book-trashed")
 	assertStatus(t, s, owner.ID, "book-fileless", store.BookActive)
 
 	for _, limit := range []int{0, 501} {
@@ -285,6 +285,29 @@ func assertAvailability(
 		}
 	}
 	t.Fatalf("%s not found among %d files", fileID, len(files))
+}
+
+// assertStillTrashed checks the trashed fixture through the trash view,
+// because the catalog no longer admits a deleted book exists.
+func assertStillTrashed(
+	t *testing.T,
+	s store.Store,
+	userID, libraryID, bookID string,
+) {
+	t.Helper()
+	books, err := s.ListTrashedBooks(context.Background(), userID, libraryID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range books {
+		if b.ID == bookID {
+			if b.Status != store.BookTrashed {
+				t.Fatalf("%s status: got %q", bookID, b.Status)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s left the trash", bookID)
 }
 
 func assertStatus(
