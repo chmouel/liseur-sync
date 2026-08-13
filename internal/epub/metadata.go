@@ -214,8 +214,9 @@ func extractPackageMetadata(
 			stack = stack[:len(stack)-1]
 			depth--
 		case xml.Directive:
-			return Metadata{}, validationError(
-				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
+			if err := checkDirective(typed); err != nil {
+				return Metadata{}, err
+			}
 		}
 	}
 }

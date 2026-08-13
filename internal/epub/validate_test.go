@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -341,5 +342,195 @@ func TestValidateRejectsXMLDirectives(t *testing.T) {
 	requireCode(t, err, CodeInvalidEPUB)
 	if errors.Is(err, io.EOF) {
 		t.Fatal("directive rejection was reported as EOF")
+	}
+}
+
+// TestValidateAcceptsDeflatedDirectoryEntries is the regression for a
+// real book that was refused: common EPUB writers store directory
+// entries deflated, and an empty deflate stream is a couple of bytes
+// long. Only the uncompressed size says whether a directory carries
+// content.
+func TestValidateAcceptsDeflatedDirectoryEntries(t *testing.T) {
+	entries := validEntries()
+	entries = append(entries,
+		zipEntry{name: "OPS/", method: zip.Deflate, mode: 0o40755},
+		zipEntry{name: "META-INF/", method: zip.Deflate, mode: 0o40755})
+	data := makeEPUB(t, entries...)
+	if _, err := validateBytes(data, DefaultLimits()); err != nil {
+		t.Fatalf("deflated directory entries refused: %v", err)
+	}
+}
+
+// TestValidateRejectsDirectoriesCarryingContent keeps the check that
+// matters: a directory entry with actual bytes in it is a malformed
+// archive, whatever its compressed size. Go's zip writer refuses to
+// produce one, so the size is patched into the finished archive.
+func TestValidateRejectsDirectoriesCarryingContent(t *testing.T) {
+	entries := validEntries()
+	entries = append(entries,
+		zipEntry{name: "OPS/", method: zip.Deflate, mode: 0o40755})
+	data := makeEPUB(t, entries...)
+	patched := setDirectoryUncompressedSize(t, data, "OPS/", 8)
+	_, err := validateBytes(patched, DefaultLimits())
+	requireCode(t, err, CodeUnsafeArchive)
+}
+
+// setDirectoryUncompressedSize rewrites the uncompressed size recorded
+// for one entry in the central directory, which is what the reader
+// trusts. Building the archive this way keeps the test honest about what
+// the validator sees rather than about what Go is willing to write.
+func setDirectoryUncompressedSize(
+	t *testing.T, data []byte, name string, size uint32,
+) []byte {
+	t.Helper()
+	patched := append([]byte(nil), data...)
+	signature := []byte{0x50, 0x4b, 0x01, 0x02}
+	target := []byte(name)
+	for i := 0; i+46 <= len(patched); i++ {
+		if !bytes.Equal(patched[i:i+4], signature) {
+			continue
+		}
+		nameLen := int(binary.LittleEndian.Uint16(patched[i+28 : i+30]))
+		if i+46+nameLen > len(patched) ||
+			!bytes.Equal(patched[i+46:i+46+nameLen], target) {
+			continue
+		}
+		binary.LittleEndian.PutUint32(patched[i+24:i+28], size)
+		return patched
+	}
+	t.Fatalf("central directory entry %q not found", name)
+	return nil
+}
+
+// TestValidateAcceptsADoctype covers the other real book that was
+// refused. EPUB 3 navigation documents are XHTML5 and carry a doctype;
+// EPUB 2 packages often carry a public one. Neither is a threat.
+func TestValidateAcceptsADoctype(t *testing.T) {
+	for _, doctype := range []string{
+		"<!DOCTYPE html>",
+		`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" ` +
+			`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">`,
+		"<!doctype html>",
+	} {
+		entries := validEntries()
+		for i := range entries {
+			if entries[i].name == "OPS/nav.xhtml" {
+				entries[i].body = doctype + entries[i].body
+			}
+		}
+		if _, err := validateBytes(
+			makeEPUB(t, entries...), DefaultLimits(),
+		); err != nil {
+			t.Fatalf("doctype %q refused: %v", doctype, err)
+		}
+	}
+}
+
+// TestValidateRejectsEntityDeclarations is what the blanket directive ban
+// was really protecting against, and it must survive relaxing that ban: a
+// declared entity is the setup for expanding a small file into a huge one
+// or for reading a file the server never meant to expose.
+func TestValidateRejectsEntityDeclarations(t *testing.T) {
+	bombs := []string{
+		`<!DOCTYPE p [<!ENTITY a "aaaaaaaaaa">]>`,
+		`<!DOCTYPE p [<!entity a "aaa">]>`,
+		`<!DOCTYPE p [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>`,
+	}
+	for _, bomb := range bombs {
+		for _, target := range []string{"OPS/nav.xhtml", "OPS/book.opf"} {
+			entries := validEntries()
+			for i := range entries {
+				if entries[i].name == target {
+					entries[i].body = bomb + entries[i].body
+				}
+			}
+			_, err := validateBytes(makeEPUB(t, entries...), DefaultLimits())
+			requireCode(t, err, CodeInvalidEPUB)
+		}
+	}
+}
+
+// TestValidateAcceptsLegacyFontMediaTypes: obfuscated fonts are declared
+// with whatever spelling the producing tool used. The bytes are the same,
+// and rejecting the label rejected a whole book as if it were DRM.
+func TestValidateAcceptsLegacyFontMediaTypes(t *testing.T) {
+	for _, mediaType := range []string{
+		"application/x-font-truetype",
+		"application/x-truetype-font",
+		"font/truetype",
+		"application/vnd.ms-opentype",
+	} {
+		entries := validEntries()
+		for i := range entries {
+			if entries[i].name == "OPS/book.opf" {
+				entries[i].body = strings.Replace(
+					entries[i].body, `media-type="font/otf"`,
+					`media-type="`+mediaType+`"`, 1)
+			}
+		}
+		entries = append(entries, zipEntry{
+			name: "META-INF/encryption.xml", method: zip.Deflate,
+			body: `<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"` +
+				` xmlns:enc="http://www.w3.org/2001/04/xmlenc#">` +
+				`<enc:EncryptedData><enc:EncryptionMethod` +
+				` Algorithm="http://www.idpf.org/2008/embedding"/>` +
+				`<enc:CipherData><enc:CipherReference URI="OPS/font.otf"/>` +
+				`</enc:CipherData></enc:EncryptedData></encryption>`,
+		})
+		result, err := validateBytes(makeEPUB(t, entries...), DefaultLimits())
+		if err != nil {
+			t.Fatalf("font media type %q refused: %v", mediaType, err)
+		}
+		if !result.Encrypted {
+			t.Fatalf("font media type %q: obfuscation not reported", mediaType)
+		}
+	}
+}
+
+// TestValidateStillRefusesRealEncryption: relaxing the media-type list
+// must not turn actual DRM into an accepted book.
+func TestValidateStillRefusesRealEncryption(t *testing.T) {
+	entries := append(validEntries(), zipEntry{
+		name: "META-INF/encryption.xml", method: zip.Deflate,
+		body: `<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"` +
+			` xmlns:enc="http://www.w3.org/2001/04/xmlenc#">` +
+			`<enc:EncryptedData><enc:EncryptionMethod` +
+			` Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>` +
+			`<enc:CipherData><enc:CipherReference URI="OPS/font.otf"/>` +
+			`</enc:CipherData></enc:EncryptedData></encryption>`,
+	})
+	_, err := validateBytes(makeEPUB(t, entries...), DefaultLimits())
+	requireCode(t, err, CodeUnsupportedDRM)
+}
+
+// TestValidateRefusesEncryptedNonFonts: the font media-type list is what
+// separates harmless obfuscation from encrypted content, so a file that
+// is encrypted while claiming not to be a font must still be refused.
+// Widening that list must never widen this.
+func TestValidateRefusesEncryptedNonFonts(t *testing.T) {
+	for _, mediaType := range []string{
+		"application/octet-stream",
+		"application/xhtml+xml",
+		"image/jpeg",
+	} {
+		entries := validEntries()
+		for i := range entries {
+			if entries[i].name == "OPS/book.opf" {
+				entries[i].body = strings.Replace(
+					entries[i].body, `media-type="font/otf"`,
+					`media-type="`+mediaType+`"`, 1)
+			}
+		}
+		entries = append(entries, zipEntry{
+			name: "META-INF/encryption.xml", method: zip.Deflate,
+			body: `<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"` +
+				` xmlns:enc="http://www.w3.org/2001/04/xmlenc#">` +
+				`<enc:EncryptedData><enc:EncryptionMethod` +
+				` Algorithm="http://www.idpf.org/2008/embedding"/>` +
+				`<enc:CipherData><enc:CipherReference URI="OPS/font.otf"/>` +
+				`</enc:CipherData></enc:EncryptedData></encryption>`,
+		})
+		_, err := validateBytes(makeEPUB(t, entries...), DefaultLimits())
+		requireCode(t, err, CodeUnsupportedDRM)
 	}
 }
