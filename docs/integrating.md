@@ -296,6 +296,83 @@ A restored book comes back with `status: "missing"` rather than
 not a failure to report; the catalog entry and its metadata are back,
 and the file needs uploading again.
 
+### Correcting a book's metadata
+
+`GET /v1/books/{id}/metadata` returns everything an edit form needs:
+each field's value, where it came from, and whether a person has pinned
+it. It needs `library-read`; the write below needs `library-manage`.
+
+```json
+{"book_id": "...", "revision": 4,
+ "title": {"value": "Dune", "source": "embedded", "locked": false},
+ "tags": [{"id": "...", "name": "space", "source": "manual", "locked": true}],
+ "set_locks": {"tags": true}}
+```
+
+`PUT` the corrections back. Two things about that request are worth
+knowing before you write a client for it:
+
+**`revision` is required, and it must be the one you read.** Two people
+editing one book is ordinary in a shared library, and a mismatch is
+answered with `409` rather than overwriting the other person's work.
+
+**Every accepted change is recorded as `manual` and locks its field.**
+That is the point of the operation and not a side effect: the next pass
+over the file must not undo a correction. Send `{"unlock": true}` on a
+field to hand it back to the extractors instead.
+
+```json
+{"revision": 4,
+ "title": {"value": "Dune"},
+ "publisher": {"value": ""},
+ "tags": {"entries": [{"name": "space"}, {"name": "politics"}]},
+ "series": {"entries": [{"name": "Dune", "position": 1}]},
+ "contributors": {"entries": [{"name": "Frank Herbert", "role": "author"}]}}
+```
+
+A field you leave out is silence, not a request to clear it — a form may
+submit one field without asserting anything about the rest. A field you
+send with a blank `value` *is* an assertion, and clears and locks it;
+that is how you suppress a wrong value the file insists on. Sets are
+replaced whole, because that is what a form does, so an empty `entries`
+is how a set is emptied.
+
+An edit that changes nothing is answered with the current state and does
+not advance the revision, so a resubmitted form does not invalidate the
+editor that sent it.
+
+Identifiers are returned but not editable. They feed work identity, so
+changing one moves a reader's reading history from one book to another;
+that needs to be a deliberate, separate act.
+
+### Browsing by series, contributor, tag or genre
+
+`GET /v1/libraries/{library}/entities/{kind}` lists them, where `kind`
+is `series`, `contributors`, `tags` or `genres`. `book_count` counts
+active books only, so a name whose books are all in the trash reads as
+empty rather than leading you to a blank page. Paging resumes after
+`next_after` rather than at an offset, because an offset would skip or
+repeat entries as books are added underneath it.
+
+`GET .../entities/{kind}/{entity}/books` lists one entity's books. A
+series comes back in reading order, with books that have no position
+last: an unplaced book is an unanswered question, not book zero.
+
+Both need `library-read`. The two below need `library-manage`.
+
+`PATCH .../entities/{kind}/{entity}` respells one. A name another entity
+of the same kind already holds is refused with `409` rather than
+silently merging the two.
+
+`POST .../entities/{kind}/merge` with `{"from": "...", "into": "..."}`
+does the merging, and reports how many memberships moved. Matching only
+folds case and spacing, so "Le Guin, Ursula K." and "Ursula K. Le Guin"
+stay two contributors until somebody says otherwise — which is what this
+route is for. A book that claimed both keeps the row it had, except that
+a manual lock carries over, and so does a series position the surviving
+row does not have: dropping either would discard the only answer anybody
+gave. It is not reversible.
+
 ### Books that are the same file
 
 Uploading one file twice gives two books. That is allowed on purpose —
