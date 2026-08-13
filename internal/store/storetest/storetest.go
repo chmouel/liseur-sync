@@ -46,6 +46,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ConcurrentIngestJobCreate", func(t *testing.T) {
 		testConcurrentIngestJobCreate(t, open)
 	})
+	t.Run("AbandonedIngestList", func(t *testing.T) {
+		testAbandonedIngestList(t, open)
+	})
 	t.Run("IngestRecoveryList", func(t *testing.T) {
 		testIngestRecoveryList(t, open)
 	})

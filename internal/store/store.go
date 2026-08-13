@@ -1287,6 +1287,13 @@ type Store interface {
 	// ListIngestRecoveryJobs is a global housekeeping query for stale jobs
 	// whose durable artifacts must be verified before workers resume them.
 	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)
+	// ListAbandonedIngestJobs pages the jobs still in `received`, oldest
+	// first, after the id given. A job leaves that state as soon as its
+	// bytes are committed, so one that is still in it either has an
+	// upload in flight or was interrupted by a crash between writing the
+	// bytes and recording them. Only the caller can tell those apart —
+	// at startup nothing is in flight, so all of them are the second.
+	ListAbandonedIngestJobs(ctx context.Context, afterID string, limit int) ([]IngestJob, error)
 	// ListIngestWorkerJobs snapshots one bounded internal worker batch.
 	// Revision-checked transitions resolve concurrent workers.
 	ListIngestWorkerJobs(ctx context.Context, state IngestState, limit int) ([]IngestJob, error)

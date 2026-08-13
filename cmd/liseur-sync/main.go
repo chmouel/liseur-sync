@@ -40,6 +40,7 @@ func openStore(cfg config.Config) (store.Store, error) {
 }
 
 type contentStartupReport struct {
+	Abandoned      content.AbandonedUploadReport
 	Ingest         content.IngestRecoveryReport
 	Reconciliation content.BlobReconciliationReport
 	Availability   content.CatalogAvailabilityReport
@@ -72,6 +73,18 @@ func openContentAndRecover(
 		return nil, report, fmt.Errorf("open content store: %w", err)
 	}
 	cas.SetStagingCap(cfg.Content.MaxStagingBytes)
+	// Before anything else, and before the listener opens: an upload
+	// interrupted by a crash can only be told apart from one in flight by
+	// the fact that nothing is in flight yet.
+	report.Abandoned, err = content.SweepAbandonedUploads(
+		ctx, st, cas, now,
+		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
+		cfg.Content.RecoveryBatchSize,
+	)
+	if err != nil {
+		cas.Close()
+		return nil, report, fmt.Errorf("sweep abandoned uploads: %w", err)
+	}
 	report.Ingest, err = content.RecoverIngest(
 		ctx, st, cas, now, now,
 		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
@@ -371,7 +384,9 @@ func cmdServe(args []string) error {
 		"books_restored", recovery.Availability.BooksMarkedActive,
 		"gc_records_purged", recovery.GC.RecordsPurged,
 		"gc_files_removed", recovery.GC.FilesRemoved,
-		"gc_files_missing", recovery.GC.FilesMissing)
+		"gc_files_missing", recovery.GC.FilesMissing,
+		"abandoned_uploads_failed", recovery.Abandoned.Failed,
+		"abandoned_uploads_skipped", recovery.Abandoned.Skipped)
 
 	// One limiter for every path that verifies a password, so the web
 	// form and /v1/login share a per-IP budget instead of each
