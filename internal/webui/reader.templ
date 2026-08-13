@@ -13,6 +13,13 @@ type ReaderView struct {
 	TokenURL    string
 	APIBase    string
 	StaticBase string
+
+	// Detached says the page is being served from the separate reader
+	// origin (ADR-0007 phase 3), where there is no session and no CSRF
+	// token. Everything the reader needs then arrives in the URL
+	// fragment instead, which is why the server leaves those fields
+	// empty rather than guessing them.
+	Detached bool
 }
 
 templ readerPage(v ReaderView, csrf string) {
@@ -21,7 +28,7 @@ templ readerPage(v ReaderView, csrf string) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>{ v.Title } · liseur-sync</title>
+			<title>{ readerTitle(v.Title) }</title>
 			<link rel="stylesheet" href={ v.StaticBase + "style.css" }/>
 		</head>
 		<body class="reader-body">
@@ -32,6 +39,7 @@ templ readerPage(v ReaderView, csrf string) {
 				data-token-url={ v.TokenURL }
 				data-download-url={ v.DownloadURL }
 				data-api-base={ v.APIBase }
+				data-detached={ boolAttr(v.Detached) }
 				hidden
 			></div>
 			<header class="reader-bar">

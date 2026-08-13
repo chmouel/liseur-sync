@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,24 +122,89 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
 	bookID := f.promote(t, "novel")
 
+	// The API is mounted beside the UI, as it is in the binary, so the
+	// reader's sync calls are real and their failures are visible.
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
 	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", f.cookie); resp.StatusCode != http.StatusOK {
 		t.Fatalf("reader page: %d", resp.StatusCode)
 	}
 
-	// The fixture serves /ui only, so the reader's sync calls 404. That
-	// is deliberate here: opening a book must not depend on sync being
-	// reachable, and this proves it.
 	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
 	cmd.Env = append(os.Environ(),
 		"SMOKE_CHROME="+chrome,
-		"SMOKE_URL="+f.ts.URL+"/ui/books/"+bookID+"/read",
-		"SMOKE_COOKIE="+f.cookie.Name+"="+f.cookie.Value,
-		"SMOKE_HOST="+strings.TrimPrefix(f.ts.URL, "http://"),
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
 		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
 	)
 	out, err := cmd.CombinedOutput()
 	t.Logf("%s", out)
 	if err != nil {
 		t.Fatalf("the reader did not work in a browser: %v", err)
+	}
+
+	page, err := f.st.Changes(t.Context(), "u1", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Ops) == 0 {
+		t.Error("the reader never managed to sync a position")
+	}
+}
+
+// TestDetachedReaderOpensInARealBrowser is the same check against the
+// two-origin deployment (ADR-0007 phase 3), which cannot be judged
+// anywhere else: the handoff is a redirect, the credential arrives in a
+// URL fragment, and the API calls that follow are cross-origin. Only a
+// browser enforces any of that.
+func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
+	bookID := f.promote(t, "novel")
+	ts, readerHost := splitOriginServer(t, f)
+	cookie := f.loginTo(t, ts, "alice")
+
+	// The browser is pointed at the main origin, as a reader always is.
+	// Everything after that — the redirect, the fragment, the
+	// cross-origin fetches — is the feature under test.
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_MAP="+readerHost,
+		"SMOKE_DETACHED=1",
+		"SMOKE_SHOT=",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the detached reader did not work in a browser: %v", err)
+	}
+
+	// Rendering a book proves the download crossed origins. Sync is the
+	// other half and is invisible from the page, so it is checked here:
+	// a position written by the detached reader has to reach the same op
+	// log every other client reads.
+	page, err := f.st.Changes(t.Context(), "u1", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Ops) == 0 {
+		t.Error("the detached reader never managed to sync a position")
 	}
 }
