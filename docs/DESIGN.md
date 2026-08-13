@@ -599,9 +599,14 @@ database-snapshotted, size-capped validation batch at a time, timestamps
 transitions after validation, skips only revision races, and surfaces
 operational worker failures through coordinated shutdown. A pure bounded OPF
 extractor now returns embedded catalog fields and cover references from EPUB2
-and EPUB3 metadata. Durable metadata and cover extraction, catalog
-availability reconciliation, last-reference deletion/trash, backup
-verification, and administration remain.
+and EPUB3 metadata. An independent worker revalidates each immutable artifact
+and atomically persists the bounded embedded metadata as canonical JSON while
+advancing `validated -> extracted`; it supports lost-promotion final blobs,
+retains content failures, and uses the same revision-safe shutdown behavior.
+Materializing that snapshot into catalog fields and metadata entities,
+precedence and filename parsing, cover extraction/transcoding, automatic
+promotion, catalog availability reconciliation, last-reference
+deletion/trash, backup verification, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

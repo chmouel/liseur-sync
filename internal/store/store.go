@@ -4,6 +4,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -310,29 +311,30 @@ func CanTransitionIngest(from, to IngestState) bool {
 // IngestJob is the persisted ingestion state. RequestFingerprint describes
 // immutable request metadata, not the uploaded content digest.
 type IngestJob struct {
-	ID                     string
-	UserID                 string
-	LibraryID              string
-	QuotaUserID            string
-	Source                 IngestSource
-	ClientKey              *string
-	RequestFingerprint     string
-	PromotionFingerprint   *string
-	ArtifactsExpired       bool
-	ArtifactCleanupPending bool
-	State                  IngestState
-	BytesReceived          int64
-	ContentSHA256          *string
-	StagingPath            *string
-	SourceRelativePath     *string
-	BookID                 *string
-	ErrorCode              *string
-	ErrorDetail            *string
-	RetryCount             int64
-	Revision               int64
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
-	ExpiresAt              *time.Time
+	ID                            string
+	UserID                        string
+	LibraryID                     string
+	QuotaUserID                   string
+	Source                        IngestSource
+	ClientKey                     *string
+	RequestFingerprint            string
+	PromotionFingerprint          *string
+	ArtifactsExpired              bool
+	ArtifactCleanupPending        bool
+	State                         IngestState
+	BytesReceived                 int64
+	ContentSHA256                 *string
+	StagingPath                   *string
+	SourceRelativePath            *string
+	ExtractedEmbeddedMetadataJSON []byte
+	BookID                        *string
+	ErrorCode                     *string
+	ErrorDetail                   *string
+	RetryCount                    int64
+	Revision                      int64
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
+	ExpiresAt                     *time.Time
 }
 
 // IngestJobRequest contains the immutable fields used to create or replay a
@@ -361,18 +363,21 @@ type IngestRecoveryCursor struct {
 	ID        string
 }
 
-// IngestJobTransition applies one revision-checked state change. Content
-// fields may only be supplied while moving a received job to staged or
-// failed. Error fields are required for failed/quarantined targets.
+// IngestJobTransition applies one revision-checked state change.
+// ExtractedEmbeddedMetadataJSON is required as a valid JSON object and may only
+// be assigned by a validated-to-extracted transition; every other transition
+// preserves the existing snapshot and must leave this field empty. Error
+// fields are required for failed/quarantined targets.
 type IngestJobTransition struct {
-	ExpectedState    IngestState
-	ExpectedRevision int64
-	NextState        IngestState
-	ErrorCode        string
-	ErrorDetail      string
-	ExpiresAt        *time.Time
-	IncrementRetry   bool
-	UpdatedAt        time.Time
+	ExpectedState                 IngestState
+	ExpectedRevision              int64
+	NextState                     IngestState
+	ExtractedEmbeddedMetadataJSON []byte
+	ErrorCode                     string
+	ErrorDetail                   string
+	ExpiresAt                     *time.Time
+	IncrementRetry                bool
+	UpdatedAt                     time.Time
 }
 
 // BlobInfo identifies one verified durable CAS object.
@@ -638,6 +643,19 @@ func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (Inges
 		!CanTransitionIngest(change.ExpectedState, change.NextState) {
 		return IngestJob{}, ErrInvalidTransition
 	}
+	extracting := change.ExpectedState == IngestValidated &&
+		change.NextState == IngestExtracted
+	if extracting {
+		metadataJSON := bytes.TrimSpace(
+			change.ExtractedEmbeddedMetadataJSON)
+		if len(metadataJSON) < 2 || metadataJSON[0] != '{' ||
+			metadataJSON[len(metadataJSON)-1] != '}' ||
+			!json.Valid(metadataJSON) {
+			return IngestJob{}, ErrInvalidTransition
+		}
+	} else if len(change.ExtractedEmbeddedMetadataJSON) != 0 {
+		return IngestJob{}, ErrInvalidTransition
+	}
 	retrying := change.ExpectedState == IngestFailed ||
 		change.ExpectedState == IngestQuarantined
 	if change.IncrementRetry != retrying {
@@ -668,6 +686,10 @@ func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (Inges
 	next.State = change.NextState
 	next.UpdatedAt = change.UpdatedAt
 	next.Revision++
+	if extracting {
+		next.ExtractedEmbeddedMetadataJSON =
+			append([]byte(nil), change.ExtractedEmbeddedMetadataJSON...)
+	}
 	if change.IncrementRetry {
 		next.RetryCount++
 	}

@@ -108,8 +108,12 @@ External metadata cannot be a required ingest dependency.
    entities, field provenance, and lock schema are implemented. The pure OPF
    extractor now returns bounded embedded title, subtitle, description,
    publisher, publication date, identifiers, languages, subjects, series,
-   contributors, and cover references from EPUB2 and EPUB3 metadata.
-   Durable extraction persistence, precedence, and filename parsing remain.
+   contributors, and cover references from EPUB2 and EPUB3 metadata. The
+   ingestion worker now durably persists that bounded embedded result as a
+   canonical JSON snapshot in the atomic `validated -> extracted` transition.
+   Materializing the snapshot into catalog fields and normalized metadata
+   entities, precedence, filename parsing, cover extraction, and automatic
+   promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.

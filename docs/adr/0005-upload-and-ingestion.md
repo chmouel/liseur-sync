@@ -187,16 +187,22 @@ name a stable job and reason instead of losing state when a request ends.
    as quarantined jobs with stable codes. All ZIP, expansion, metadata, and
    XML bounds have explicit `[content]` configuration with conservative
    defaults. The server now runs one database-snapshotted, size-capped
-   validation batch on each configurable polling interval after startup
-   recovery and GC. It timestamps state changes after validation finishes,
-   skips revision races for a later pass, and surfaces operational validation
-   or store failures by coordinating worker cancellation and HTTP shutdown.
-   Catalog availability reconciliation remains.
+   validation batch and one independent metadata-extraction batch on each
+   configurable polling interval after startup recovery and GC. Extraction
+   revalidates the immutable stage or lost-promotion final artifact, persists
+   the bounded embedded metadata JSON in the revision-checked
+   `validated -> extracted` transition, timestamps after processing, and
+   quarantines content failures with stable validator codes. Both passes skip
+   revision races for a later pass and surface operational failures by
+   coordinating worker cancellation and HTTP shutdown. Catalog availability
+   reconciliation remains.
 2. EPUB security validator fixture expansion and worker scheduling.
    Implemented.
-3. Metadata and cover extraction. The pure bounded OPF extractor is
-   implemented; durable `validated -> extracted` persistence and cover
-   extraction remain.
+3. Metadata and cover extraction. The pure bounded OPF extractor and durable
+   canonical embedded-metadata snapshot in the atomic
+   `validated -> extracted` transition are implemented. Catalog-field/entity
+   materialization, precedence and filename parsing, cover extraction and
+   transcoding, and the automatic promotion worker remain.
 4. API upload and htmx upload UI.
 
 ## Acceptance criteria
