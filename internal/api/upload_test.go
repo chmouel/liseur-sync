@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -653,4 +654,82 @@ func getJSON(t *testing.T, url, token string) (int, map[string]any) {
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// countingReader reports how many bytes the client actually handed to the
+// connection, which is the only way to observe whether the server kept
+// reading a body it had already refused.
+type countingReader struct {
+	mu   sync.Mutex
+	n    int64
+	left int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.left <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	for i := range p {
+		p[i] = 'x'
+	}
+	c.left -= int64(len(p))
+	c.n += int64(len(p))
+	return len(p), nil
+}
+
+func (c *countingReader) count() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// TestOversizedUploadIsNotDrained: refusing an upload must also stop
+// reading it. multipart.Part.Close drains the remainder of a part, so
+// closing the part after a size rejection would make the server read the
+// very data it just declined — turning every 413 into free bandwidth and
+// CPU for the sender. The handler therefore closes only once the body has
+// been consumed.
+func TestOversizedUploadIsNotDrained(t *testing.T) {
+	f := newUploadFixture(t)
+	f.setMaxUpload(t, 1024)
+
+	const sent = 8 << 20
+	counter := &countingReader{left: sent}
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		part, err := mw.CreateFormFile("file", "big.epub")
+		if err == nil {
+			io.Copy(part, counter)
+			mw.Close()
+		}
+		pw.Close()
+	}()
+
+	req, _ := http.NewRequest(http.MethodPost,
+		f.ts.URL+"/v1/libraries/"+f.library+"/upload", pr)
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	req.Header.Set("Idempotency-Key", "oversized-drain")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want 413", resp.StatusCode)
+		}
+	}
+
+	// The server reads a little past the limit: net/http drains a bounded
+	// amount after the handler returns so the connection can be reused.
+	// Draining the *part*, by contrast, reads until the transport bound
+	// (max_upload_bytes plus a 1 MiB envelope), which is well above this.
+	if got := counter.count(); got > 700<<10 {
+		t.Fatalf("server read %d bytes of a %d-byte upload it refused", got, sent)
+	}
 }
