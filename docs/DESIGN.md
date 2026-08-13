@@ -590,8 +590,11 @@ recovery and grace-period collection; a bounded EPUB validator; and a
 three-pass ingest worker that carries an upload through to a published book
 with its title.
 
-What M6 still needs: catalog availability reconciliation, last-reference
-deletion and trash, and backup verification. Cover extraction and per-library parser configuration are
+What M6 still needs: last-reference deletion and trash, and backup
+verification. Catalog availability now follows the blob inventory: startup
+propagates a blob it could not find into the files that reference it and
+the books those files belong to, and restores both when the bytes come
+back, so the catalog never advertises a download it cannot serve. Cover extraction and per-library parser configuration are
 tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
 
 M7 and M8 are now in place: uploads create ingest jobs, the admin subcommand
@@ -599,8 +602,7 @@ creates libraries and grants access, the catalog API lists and downloads
 books, and OPDS 1.2 puts that same catalog in front of readers that speak
 nothing else. The web UI's books pages
 close the loop for a browser. What is left before a release belongs to
-M6: catalog availability reconciliation, deletion and trash, and backup
-verification.
+M6: deletion and trash, and backup verification.
 
 ## 10. Future work (explicitly out of v1)
 

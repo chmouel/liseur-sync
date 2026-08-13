@@ -169,7 +169,11 @@ server disk allocation.
    and startup reconciles the database against a strict descriptor-relative
    inventory before a configurable grace-period sweep runs. Active catalog
    references and ingest holds are GC roots, and deletion verifies the
-   immutable blob first.
+   immutable blob first. Catalog availability follows that inventory:
+   files whose blob is recorded missing stop being served, books with no
+   servable file become missing, and both reverse when the blob returns.
+   Superseded files are exempt, because supersession is not a statement
+   about bytes.
    **Remaining:** last-reference deletion, trash and restore, and the backup
    verifier.
 2. Managed-library upload and management UI — the MVP path.

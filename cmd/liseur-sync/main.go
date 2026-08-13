@@ -42,6 +42,7 @@ func openStore(cfg config.Config) (store.Store, error) {
 type contentStartupReport struct {
 	Ingest         content.IngestRecoveryReport
 	Reconciliation content.BlobReconciliationReport
+	Availability   content.CatalogAvailabilityReport
 	GC             content.BlobGCReport
 }
 
@@ -76,6 +77,14 @@ func openContentAndRecover(
 	if err != nil {
 		cas.Close()
 		return nil, report, fmt.Errorf("reconcile content blobs: %w", err)
+	}
+	// The catalog follows the inventory: a book whose blob was just found
+	// missing must stop being offered before the server starts serving.
+	report.Availability, err = content.ReconcileCatalogAvailability(
+		ctx, st, now, cfg.Content.RecoveryBatchSize)
+	if err != nil {
+		cas.Close()
+		return nil, report, fmt.Errorf("reconcile catalog availability: %w", err)
 	}
 	report.GC, err = content.SweepOrphanedBlobs(
 		ctx, st, cas,
@@ -290,6 +299,10 @@ func cmdServe(args []string) error {
 		"missing_marked", recovery.Reconciliation.MissingMarked,
 		"missing_cleared", recovery.Reconciliation.MissingCleared,
 		"unchanged_blobs", recovery.Reconciliation.Unchanged,
+		"files_hidden", recovery.Availability.FilesMarkedMissing,
+		"files_restored", recovery.Availability.FilesMarkedAvailable,
+		"books_missing", recovery.Availability.BooksMarkedMissing,
+		"books_restored", recovery.Availability.BooksMarkedActive,
 		"gc_records_purged", recovery.GC.RecordsPurged,
 		"gc_files_removed", recovery.GC.FilesRemoved,
 		"gc_files_missing", recovery.GC.FilesMissing)
