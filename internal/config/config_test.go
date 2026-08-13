@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/epub"
 )
 
 func TestDefaultEnablesCompaction(t *testing.T) {
@@ -28,7 +30,8 @@ func TestInferenceLatenessMustCoverGap(t *testing.T) {
 func TestContentDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.Content.Root == "" || cfg.Content.FailureRetentionHours < 1 ||
-		cfg.Content.OrphanGraceHours < 1 || cfg.Content.RecoveryBatchSize < 1 {
+		cfg.Content.OrphanGraceHours < 1 || cfg.Content.RecoveryBatchSize < 1 ||
+		cfg.EPUBLimits().Validate() != nil {
 		t.Fatalf("invalid content defaults: %+v", cfg.Content)
 	}
 	cfg.Content.OrphanGraceHours = 0
@@ -40,6 +43,11 @@ func TestContentDefaultsAndValidation(t *testing.T) {
 		t.Fatal("overflowing orphan grace accepted")
 	}
 	cfg.Content.OrphanGraceHours = 168
+	cfg.Content.EPUBMaxXMLDepth = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid EPUB limits accepted")
+	}
+	cfg.Content.EPUBMaxXMLDepth = epub.DefaultLimits().MaxXMLDepth
 	cfg.Content.RecoveryBatchSize = 501
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("oversized recovery batch accepted")

@@ -184,8 +184,9 @@ name a stable job and reason instead of losing state when a request ends.
    accepts only manifest-declared font obfuscation. The CAS can validate either
    the immutable stage or an already-promoted lost-response artifact, and the
    revision-checked worker step advances valid jobs or retains content failures
-   as quarantined jobs with stable codes. Limit configuration, worker
-   scheduling, and catalog availability reconciliation remain.
+   as quarantined jobs with stable codes. All ZIP, expansion, metadata, and
+   XML bounds have explicit `[content]` configuration with conservative
+   defaults. Worker scheduling and catalog availability reconciliation remain.
 2. EPUB security validator fixture expansion and worker scheduling.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
