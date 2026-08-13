@@ -26,40 +26,7 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 	prefix := relPrefix(r.URL.Path)
 	escaped := url.PathEscape(bookID)
 
-	// The policy has to admit two things the rendering engine needs, and
-	// nothing else.
-	//
-	// `blob:` is how epub.js hands each chapter to its iframe and how it
-	// rewrites the publication's own images and stylesheets. A blob
-	// document inherits the policy of whatever created it, so this
-	// header is what confines the publication as well as the page.
-	//
-	// `style-src 'unsafe-inline'` is unavoidable: a book's own markup
-	// carries style attributes, and there is no nonce to give markup
-	// that arrived in a zip file. `script-src` deliberately has no such
-	// hole — the engine is served from here, and the publication's
-	// scripts never run at all, because the iframe is sandboxed without
-	// allow-scripts.
-	w.Header().Set("Content-Security-Policy", strings.Join([]string{
-		"default-src 'none'",
-		"script-src 'self'",
-		"style-src 'self' 'unsafe-inline' blob:",
-		"img-src 'self' data: blob:",
-		"font-src data: blob:",
-		"media-src data: blob:",
-		"connect-src 'self' blob:",
-		"frame-src blob:",
-		"child-src blob:",
-		// The engine gives each chapter a <base> so that the
-		// publication's own relative links resolve against where the
-		// document actually came from. 'self' permits that and still
-		// refuses a base pointing at somebody else's origin, which is
-		// the attack this directive exists for.
-		"base-uri 'self'",
-		"form-action 'none'",
-	}, "; "))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	setReaderPolicy(w, "")
 
 	readerPage(ReaderView{
 		BookID:      book.ID,
@@ -120,4 +87,69 @@ func (s *Server) handleReaderToken(w http.ResponseWriter, r *http.Request, a sto
 		ExpiresAt: expires,
 		Scopes:    scopes,
 	})
+}
+
+// setReaderPolicy writes the headers that confine publication content.
+//
+// The policy has to admit two things the rendering engine needs, and
+// nothing else.
+//
+// `blob:` is how epub.js hands each chapter to its iframe and how it
+// rewrites the publication's own images and stylesheets. A blob document
+// inherits the policy of whatever created it, so this header is what
+// confines the publication as well as the page.
+//
+// `style-src 'unsafe-inline'` is unavoidable: a book's own markup
+// carries style attributes, and there is no nonce to give markup that
+// arrived in a zip file. `script-src` deliberately has no such hole —
+// the engine is served from here, and the publication's scripts never
+// run at all, because the iframe is sandboxed without allow-scripts.
+//
+// apiOrigin widens `connect-src` by exactly one origin, and only on the
+// separate reader origin, where the API is somewhere else by design. It
+// is a checked bare origin or nothing; the caller does that checking.
+func setReaderPolicy(w http.ResponseWriter, apiOrigin string) {
+	connect := "connect-src 'self' blob:"
+	if apiOrigin != "" {
+		connect += " " + apiOrigin
+	}
+	w.Header().Set("Content-Security-Policy", strings.Join([]string{
+		"default-src 'none'",
+		"script-src 'self'",
+		"style-src 'self' 'unsafe-inline' blob:",
+		"img-src 'self' data: blob:",
+		"font-src data: blob:",
+		"media-src data: blob:",
+		connect,
+		"frame-src blob:",
+		"child-src blob:",
+		// The engine gives each chapter a <base> so that the
+		// publication's own relative links resolve against where the
+		// document actually came from. 'self' permits that and still
+		// refuses a base pointing at somebody else's origin, which is
+		// the attack this directive exists for.
+		"base-uri 'self'",
+		"form-action 'none'",
+	}, "; "))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+}
+
+// boolAttr renders a bool as a data attribute the browser can read
+// without a second convention: absent is false, "1" is true.
+func boolAttr(v bool) string {
+	if v {
+		return "1"
+	}
+	return ""
+}
+
+// readerTitle keeps the tab from saying " · liseur-sync" before the
+// publication has told anybody its name, which is what the detached
+// reader sees for the first moment of its life.
+func readerTitle(title string) string {
+	if title == "" {
+		return "liseur-sync"
+	}
+	return title + " · liseur-sync"
 }

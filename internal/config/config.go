@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -77,8 +78,20 @@ type Config struct {
 	TrustedProxies []string `toml:"trusted_proxies"`
 
 	// CORSAllowedOrigins: deny-by-default; origins listed here may call
-	// the API from a browser (future web UI).
+	// the API from a browser. ReaderOrigin is allowed implicitly, since
+	// a reader that cannot reach the API is not a deployment mode.
 	CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
+
+	// ReaderOrigin serves the browser reader from a second hostname
+	// (ADR-0007 phase 3). Empty is the default and means the reader is
+	// served from the same origin as the rest of the UI.
+	//
+	// It buys one thing: a sandbox escape out of publication content
+	// lands on an origin that holds no session cookie and serves no
+	// authenticated route, so what it reaches is a short-lived
+	// library-read token rather than the account. It costs an operator a
+	// second hostname and certificate, which is why it is optional.
+	ReaderOrigin string `toml:"reader_origin"`
 
 	Adapters struct {
 		Kosync   bool `toml:"kosync"`
@@ -185,7 +198,8 @@ func Default() Config {
 // LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER, LISEUR_DATABASE_URL,
 // LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
-// (comma-separated), LISEUR_METADATA_PROVIDERS (comma-separated).
+// (comma-separated), LISEUR_METADATA_PROVIDERS (comma-separated),
+// LISEUR_READER_ORIGIN.
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -214,6 +228,7 @@ func (c *Config) applyEnv() {
 	setStr(&c.Database.Driver, "LISEUR_DATABASE_DRIVER")
 	setStr(&c.Database.URL, "LISEUR_DATABASE_URL")
 	setStr(&c.Content.Root, "LISEUR_CONTENT_ROOT")
+	setStr(&c.ReaderOrigin, "LISEUR_READER_ORIGIN")
 	setBool(&c.InsecureHTTP, "LISEUR_INSECURE_HTTP")
 	setBool(&c.OpenRegistration, "LISEUR_OPEN_REGISTRATION")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
@@ -223,6 +238,9 @@ func (c *Config) applyEnv() {
 
 // Validate checks the config is coherent.
 func (c *Config) Validate() error {
+	if err := c.validateReaderOrigin(); err != nil {
+		return err
+	}
 	switch c.Database.Driver {
 	case "sqlite", "postgres":
 	default:
@@ -358,4 +376,79 @@ func (c Config) EPUBLimits() epub.Limits {
 		MaxMetadataBytes:     c.Content.EPUBMaxMetadataBytes,
 		MaxXMLDepth:          c.Content.EPUBMaxXMLDepth,
 	}
+}
+
+// validateReaderOrigin refuses a reader origin that would not work, at
+// startup rather than at the first reader page.
+//
+// The strictness is the point rather than fussiness. This value decides
+// which host is allowed to hold reader credentials and which requests
+// the API answers cross-origin, so it has to be an origin — a scheme and
+// a host — and nothing else. A trailing path would silently never match
+// the Origin header a browser sends, and the operator would be left
+// looking at a reader that cannot reach the API for no visible reason.
+func (c *Config) validateReaderOrigin() error {
+	raw := strings.TrimSpace(c.ReaderOrigin)
+	c.ReaderOrigin = strings.TrimSuffix(raw, "/")
+	if c.ReaderOrigin == "" {
+		return nil
+	}
+	u, err := url.Parse(c.ReaderOrigin)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf(
+			"reader_origin must be an absolute origin like https://read.example.com, got %q",
+			c.ReaderOrigin)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		// The reader origin holds a live API credential. Over plain HTTP
+		// anybody on the path can take it out of the page, which is a
+		// worse posture than not splitting the origins at all.
+		if !c.InsecureHTTP {
+			return fmt.Errorf(
+				"reader_origin %q is http; set insecure_http = true if that is deliberate",
+				c.ReaderOrigin)
+		}
+	default:
+		return fmt.Errorf("reader_origin must be http or https, got %q", u.Scheme)
+	}
+	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return fmt.Errorf(
+			"reader_origin must be a bare origin with no path, got %q", c.ReaderOrigin)
+	}
+	// A reader origin equal to nothing in particular is fine; a reader
+	// origin the operator also listed by hand is not a conflict, it is
+	// the same permission stated twice.
+	return nil
+}
+
+// ReaderOriginHost is the host:port a request must arrive at to be
+// treated as the reader origin. Empty when the mode is off.
+func (c Config) ReaderOriginHost() string {
+	if c.ReaderOrigin == "" {
+		return ""
+	}
+	u, err := url.Parse(c.ReaderOrigin)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// BrowserOrigins is every origin the API answers cross-origin for. The
+// reader origin is included whether or not the operator also listed it,
+// because a reader that cannot call the API is not a deployment mode.
+func (c Config) BrowserOrigins() []string {
+	out := make([]string, 0, len(c.CORSAllowedOrigins)+1)
+	seen := map[string]bool{}
+	for _, origin := range append([]string{c.ReaderOrigin}, c.CORSAllowedOrigins...) {
+		origin = strings.TrimSuffix(strings.TrimSpace(origin), "/")
+		if origin == "" || seen[origin] {
+			continue
+		}
+		seen[origin] = true
+		out = append(out, origin)
+	}
+	return out
 }

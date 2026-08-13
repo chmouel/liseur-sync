@@ -30,11 +30,12 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	// cannot pass by coincidentally matching the default.
 	text := string(body)
 	for from, to := range map[string]string{
-		"insecure_http = false":                                   "insecure_http = true",
-		"open_registration = false":                               "open_registration = true",
-		"pairing_code_ttl_min = 15":                               "pairing_code_ttl_min = 42",
-		`# trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]`:    `trusted_proxies = ["10.0.0.0/8"]`,
-		`# cors_allowed_origins = ["https://reader.example.com"]`: `cors_allowed_origins = ["https://reader.example.com"]`,
+		"insecure_http = false":                                "insecure_http = true",
+		"open_registration = false":                            "open_registration = true",
+		"pairing_code_ttl_min = 15":                            "pairing_code_ttl_min = 42",
+		`# trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]`: `trusted_proxies = ["10.0.0.0/8"]`,
+		`# cors_allowed_origins = ["https://app.example.com"]`: `cors_allowed_origins = ["https://app.example.com"]`,
+		`# reader_origin = "https://read.example.com"`:         `reader_origin = "https://read.example.com"`,
 	} {
 		if !strings.Contains(text, from) {
 			t.Fatalf("example config no longer contains %q", from)
@@ -59,6 +60,9 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	}
 	if len(cfg.CORSAllowedOrigins) != 1 {
 		t.Fatalf("cors_allowed_origins: got %v", cfg.CORSAllowedOrigins)
+	}
+	if cfg.ReaderOrigin != "https://read.example.com" {
+		t.Fatalf("reader_origin: got %q", cfg.ReaderOrigin)
 	}
 }
 

@@ -549,7 +549,7 @@ func cmdServe(args []string) error {
 		Downloads:    apiSrv,
 		Covers:       apiSrv,
 	}
-	mux := apiSrv.Routes()
+	mux := apiSrv.Handler()
 
 	// Inferred-session materializer (idempotent; safe to always run).
 	bgCtx, bgStop := context.WithCancel(context.Background())

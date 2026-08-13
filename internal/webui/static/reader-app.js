@@ -23,7 +23,22 @@
     tokenURL: el.dataset.tokenUrl,
     downloadURL: el.dataset.downloadUrl,
     apiBase: el.dataset.apiBase,
+    detached: el.dataset.detached === '1',
+    handed: null,
   };
+
+  // On the separate reader origin (ADR-0007 phase 3) there is no session
+  // and no CSRF token, because there is no cookie on this hostname at
+  // all. The credential was handed over in the URL fragment, which the
+  // browser sent to nobody; the addresses it works against were in the
+  // query, checked by the server, and are already in the page.
+  if (cfg.detached) {
+    cfg.handed = new URLSearchParams(location.hash.slice(1)).get('t');
+    // Out of the address bar, out of the history entry, out of anything
+    // the user might paste to somebody. It stays in this closure, which
+    // is where a credential belongs.
+    history.replaceState(null, '', location.pathname + location.search);
+  }
   const stage = document.getElementById('reader-view');
   const status = document.getElementById('reader-status');
   const progressBar = document.getElementById('reader-progress-bar');
@@ -52,6 +67,19 @@
   // cookie is the thing that proves the browser may ask.
   async function credential() {
     if (token && Date.now() < tokenExpiry - 60000) return token;
+    if (cfg.detached) {
+      // Nothing on this origin can prove who the reader is, so there is
+      // no re-minting here: the token was handed over once and when it
+      // is gone the reader has to be opened from the library again. That
+      // is the price of a hostname with no session on it.
+      if (!cfg.handed) throw new Error('this reading session has expired; open the book from your library again');
+      token = cfg.handed;
+      // Once it has been refused there is no second one to ask for, so
+      // the next attempt reports that plainly instead of looping.
+      cfg.handed = null;
+      tokenExpiry = Date.now() + 86400000;
+      return token;
+    }
     const resp = await fetch(cfg.tokenURL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -162,7 +190,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ops: [{
-            op_id: crypto.randomUUID(),
+            op_id: opID(),
             work_id: workID,
             client_ts: new Date().toISOString(),
             progression: locator.locations.totalProgression,
@@ -173,6 +201,20 @@
     } catch (err) {
       /* offline: the next page turn will carry the position instead */
     }
+  }
+
+  // opID is a v4 UUID. crypto.randomUUID exists only in a secure
+  // context, and the reader origin may be plain HTTP on a LAN, so the
+  // bytes are drawn directly — getRandomValues has no such restriction
+  // — rather than letting sync fail quietly where TLS is absent.
+  function opID() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const hex = [...b].map((n) => n.toString(16).padStart(2, '0')).join('');
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+      hex.slice(16, 20), hex.slice(20)].join('-');
   }
 
   function schedulePush() {
@@ -245,7 +287,12 @@
   (async function start() {
     try {
       say('Fetching the book…');
-      const resp = await fetch(cfg.downloadURL, { credentials: 'same-origin' });
+      // Same-origin the cookie is enough and is what the UI download
+      // route expects; detached there is no cookie, so the book comes
+      // from the API with the bearer token like any other client.
+      const resp = cfg.detached
+        ? await api('v1/books/' + encodeURIComponent(cfg.bookID) + '/download')
+        : await fetch(cfg.downloadURL, { credentials: 'same-origin' });
       if (!resp.ok) throw new Error('this book could not be downloaded');
       const buf = await resp.arrayBuffer();
 

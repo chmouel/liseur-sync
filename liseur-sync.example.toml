@@ -1,7 +1,8 @@
 # liseur-sync configuration. All values shown are defaults.
 # Env overrides: LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER,
 # LISEUR_DATABASE_URL, LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP,
-# LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES.
+# LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES,
+# LISEUR_READER_ORIGIN.
 
 # Top-level settings must stay above the first [table] header. TOML binds
 # a bare key to the table above it, so moving any of these below one
@@ -18,8 +19,15 @@ insecure_http = false
 # CIDRs whose X-Forwarded-Proto is trusted (your reverse proxy).
 # trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]
 
-# Browser origins allowed to call the API (future web UI).
-# cors_allowed_origins = ["https://reader.example.com"]
+# Browser origins allowed to call the API from another hostname.
+# cors_allowed_origins = ["https://app.example.com"]
+
+# Serve the browser reader from a second hostname, so that publication
+# content is laid out on an origin that holds no session cookie and
+# answers no authenticated route. Point this hostname at the same
+# server; it serves the reader page and the static assets and nothing
+# else. Empty (the default) reads books on the main origin.
+# reader_origin = "https://read.example.com"
 
 # Allow kosync users/create without a pairing code (NOT recommended).
 open_registration = false
