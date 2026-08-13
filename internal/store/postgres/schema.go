@@ -740,8 +740,26 @@ ALTER TABLE books
     ADD COLUMN review_reason TEXT;
 `
 
+// migration15 adds the search index: one weighted tsvector per book,
+// maintained by the same writes that maintain the SQLite FTS5 table.
+//
+// The `simple` configuration is chosen rather than `english` so that both
+// backends answer the same question. `english` stems, so "reading" would
+// find a book called "Read" on PostgreSQL and not on SQLite, and a
+// self-hosted server whose behaviour depends on which database somebody
+// picked is a server nobody can support.
+//
+// `unaccent` is deliberately not used: it is an extension, and requiring
+// one would make the schema fail to migrate on a managed database that
+// does not offer it. Diacritics are folded when the vector is built
+// instead, where both backends can do it the same way.
+const migration15 = `
+ALTER TABLE books ADD COLUMN search_vector tsvector;
+CREATE INDEX books_search_idx ON books USING GIN (search_vector);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14,
+	migration13, migration14, migration15,
 }

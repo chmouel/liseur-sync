@@ -71,6 +71,21 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogEntityRejectsBadInput", func(t *testing.T) {
 		testCatalogEntityRejectsBadInput(t, open)
 	})
+	t.Run("SearchFindsBooksByEverythingTheySay", func(t *testing.T) {
+		testSearchFindsBooksByEverythingTheySay(t, open)
+	})
+	t.Run("SearchFollowsTheCatalogItIndexes", func(t *testing.T) {
+		testSearchFollowsTheCatalogItIndexes(t, open)
+	})
+	t.Run("SearchFacetsDescribeTheAnswer", func(t *testing.T) {
+		testSearchFacetsDescribeTheAnswer(t, open)
+	})
+	t.Run("SearchIsScopedAndBounded", func(t *testing.T) {
+		testSearchIsScopedAndBounded(t, open)
+	})
+	t.Run("SearchFollowsAMerge", func(t *testing.T) {
+		testSearchFollowsAMerge(t, open)
+	})
 	t.Run("WatchedSourceReconciliation", func(t *testing.T) {
 		testWatchedSourceReconciliation(t, open)
 	})

@@ -199,7 +199,12 @@ func (s *Store) RenameCatalogEntity(
 	if _, err := s.LibraryByID(ctx, userID, libraryID, store.LibraryRoleManage); err != nil {
 		return store.CatalogEntity{}, err
 	}
-	res, err := s.db.ExecContext(ctx, q(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.CatalogEntity{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, q(
 		`UPDATE `+tables.entity+` SET name = ?, normalized_name = ?
 		 WHERE id = ? AND library_id = ?
 		   AND NOT EXISTS (
@@ -216,10 +221,30 @@ func (s *Store) RenameCatalogEntity(
 		// Nothing changed for one of two reasons, and the caller is owed
 		// the difference: a name that is taken is an invitation to merge,
 		// an id that is not there is a mistake.
-		if _, err := s.CatalogEntityByID(ctx, userID, libraryID, entityID, kind); err != nil {
+		//
+		// The check runs on this transaction rather than the pool, so it
+		// sees the rows this transaction holds locked rather than waiting
+		// on a transaction that is waiting for it.
+		var exists int
+		if err := tx.QueryRowContext(ctx, q(
+			`SELECT COUNT(*) FROM `+tables.entity+`
+			 WHERE id = ? AND library_id = ?`), entityID, libraryID).
+			Scan(&exists); err != nil {
 			return store.CatalogEntity{}, err
 		}
+		if exists == 0 {
+			return store.CatalogEntity{}, store.ErrNotFound
+		}
 		return store.CatalogEntity{}, store.ErrConflict
+	}
+	// Every book claiming it is findable by the old spelling until the
+	// index is rebuilt, and by the new one only afterwards. Both happen
+	// in this transaction, so neither state is ever observable.
+	if err := reindexEntityBooksTx(ctx, tx, tables, entityID); err != nil {
+		return store.CatalogEntity{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.CatalogEntity{}, err
 	}
 	return s.CatalogEntityByID(ctx, userID, libraryID, entityID, kind)
 }
@@ -295,6 +320,12 @@ func (s *Store) MergeCatalogEntities(
 		     SELECT book_id FROM `+tables.membership+`
 		     WHERE library_id = ? AND `+tables.column+` = ?)`),
 		at, libraryID, libraryID, intoID); err != nil {
+		return 0, err
+	}
+	// Those same books are findable by a name that no longer exists until
+	// the index is rebuilt, which is why this is inside the transaction:
+	// the catalog and what it can be found by commit together.
+	if err := reindexEntityBooksTx(ctx, tx, tables, intoID); err != nil {
 		return 0, err
 	}
 	return int(count), tx.Commit()

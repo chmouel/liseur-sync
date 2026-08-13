@@ -767,8 +767,34 @@ ALTER TABLE books
     ADD COLUMN review_reason TEXT;
 `
 
+// migration15 adds the search index. It is a plain FTS5 table rather than
+// an external-content one because what a book is findable by is not one
+// table: the title lives on `books` and the author lives two joins away,
+// and an external-content index can only mirror a single table's rows.
+// The cost of owning the text is that every write which changes it must
+// say so, which is why reindexing is a call rather than a trigger — a
+// trigger on `books` alone would silently miss a rename two tables over.
+//
+// The tokenizer folds diacritics, so a library catalogued as "Émile" is
+// found by somebody who cannot type the accent. Both backends are
+// configured not to stem, so "reading" does not match "read" on one
+// backend and not the other.
+const migration15 = `
+CREATE VIRTUAL TABLE book_search USING fts5(
+    book_id UNINDEXED,
+    library_id UNINDEXED,
+    title,
+    subtitle,
+    description,
+    publisher,
+    people,
+    subjects,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14,
+	migration13, migration14, migration15,
 }
