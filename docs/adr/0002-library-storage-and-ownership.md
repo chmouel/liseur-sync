@@ -180,7 +180,8 @@ server disk allocation.
    deduplication and two-phase expiry release/cleanup; last-reference
    deletion, trash, blob GC, and backup verification remain. The configured
    private content root and persistent Docker/Podman volume wiring are
-   implemented.
+   implemented, together with strict descriptor-relative inventory and
+   verification of durable final blobs.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

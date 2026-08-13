@@ -82,8 +82,9 @@ artifact holds. The recovery coordinator verifies stale staged artifacts,
 recognizes lost filesystem-promotion responses, and terminalizes missing or
 corrupt content with retryable two-phase cleanup. `serve` opens the configured
 private CAS and recovers every pre-existing nonterminal job before listening.
-Ingestion
-workers, metadata parsing, GC, and admin commands remain in Phase 1.
+The CAS can also produce a strict verified inventory for reconciliation.
+Database comparison, ingestion workers, metadata parsing, GC, and admin
+commands remain in Phase 1.
 
 ### Phase 2: managed uploads and management UI
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -336,6 +337,92 @@ func (c *CAS) InspectArtifact(
 	return ArtifactStaged, nil
 }
 
+// ListBlobs inventories and verifies every durable final blob. Empty hash
+// directories left by an interrupted pre-publication attempt are ignored;
+// every other unexpected entry is treated as unsafe CAS corruption.
+func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
+	prefixes, err := readDirectoryEntries(c.shaFD)
+	if err != nil {
+		return nil, err
+	}
+	var blobs []Blob
+	for _, prefix := range prefixes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(prefix) != 2 || !validLowerHex(prefix) {
+			return nil, ErrUnsafePath
+		}
+		prefixFD, err := openDirectoryAt(c.shaFD, prefix)
+		if err != nil {
+			return nil, err
+		}
+		leaves, err := readDirectoryEntries(prefixFD)
+		if err != nil {
+			unix.Close(prefixFD)
+			return nil, err
+		}
+		for _, leaf := range leaves {
+			if err := ctx.Err(); err != nil {
+				unix.Close(prefixFD)
+				return nil, err
+			}
+			digest := prefix + leaf
+			if len(leaf) != sha256.Size*2-2 || !validSHA256(digest) {
+				unix.Close(prefixFD)
+				return nil, ErrUnsafePath
+			}
+			leafFD, err := openDirectoryAt(prefixFD, leaf)
+			if err != nil {
+				unix.Close(prefixFD)
+				return nil, err
+			}
+			entries, err := readDirectoryEntries(leafFD)
+			if err != nil {
+				unix.Close(leafFD)
+				unix.Close(prefixFD)
+				return nil, err
+			}
+			if len(entries) == 0 {
+				unix.Close(leafFD)
+				continue
+			}
+			if len(entries) != 1 || entries[0] != "file.epub" {
+				unix.Close(leafFD)
+				unix.Close(prefixFD)
+				return nil, ErrUnsafePath
+			}
+			fileFD, err := unix.Openat(leafFD, "file.epub",
+				unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+			if err != nil {
+				unix.Close(leafFD)
+				unix.Close(prefixFD)
+				return nil, classifyPathError(err)
+			}
+			var stat unix.Stat_t
+			if err := unix.Fstat(fileFD, &stat); err != nil {
+				unix.Close(fileFD)
+				unix.Close(leafFD)
+				unix.Close(prefixFD)
+				return nil, err
+			}
+			if err := verifyFD(ctx, fileFD, digest, stat.Size); err != nil {
+				unix.Close(fileFD)
+				unix.Close(leafFD)
+				unix.Close(prefixFD)
+				return nil, err
+			}
+			unix.Close(fileFD)
+			unix.Close(leafFD)
+			blobs = append(blobs, Blob{
+				Path: finalRelativePath(digest), SHA256: digest, Size: stat.Size,
+			})
+		}
+		unix.Close(prefixFD)
+	}
+	return blobs, nil
+}
+
 // RemoveStage removes completed or partial staging state for one job. It is
 // idempotent and serialized with Stage and Promote for that job.
 func (c *CAS) RemoveStage(ctx context.Context, stagingPath string) error {
@@ -620,6 +707,28 @@ func ensureDirectoryAt(parentFD int, name string) (int, error) {
 	return fd, nil
 }
 
+func readDirectoryEntries(parentFD int) ([]string, error) {
+	fd, err := openDirectoryAt(parentFD, ".")
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "content-directory")
+	entries, err := file.ReadDir(-1)
+	closeErr := file.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func validateDirectoryFD(fd int) error {
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
@@ -729,6 +838,11 @@ func validSHA256(value string) bool {
 	if len(value) != sha256.Size*2 {
 		return false
 	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && hex.EncodeToString(decoded) == value
+}
+
+func validLowerHex(value string) bool {
 	decoded, err := hex.DecodeString(value)
 	return err == nil && hex.EncodeToString(decoded) == value
 }

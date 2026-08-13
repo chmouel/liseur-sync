@@ -586,9 +586,9 @@ with retryable two-phase filesystem cleanup. A recovery coordinator verifies
 stale stages, accepts an already-durable final blob after a lost promotion
 response, and terminalizes missing or corrupt artifacts. The server opens the
 configured private CAS and recovers every pre-existing nonterminal job before
-listening. Bounded
-extraction, the rest of the CAS lifecycle, ingest workers, and administration
-remain.
+listening. The CAS also supports strict verified final-blob inventory.
+Database comparison, bounded extraction, the rest of the CAS lifecycle,
+ingest workers, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

@@ -174,8 +174,8 @@ name a stable job and reason instead of losing state when a request ends.
    expiry are also implemented. Stale-artifact verification, lost-promotion
    detection, and retryable two-phase filesystem cleanup are implemented;
    `serve` recovers every pre-existing nonterminal job before accepting
-   traffic. Workers and
-   blob/catalog reconciliation remain.
+   traffic. Strict final-blob filesystem inventory is implemented; workers
+   and database/catalog reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
