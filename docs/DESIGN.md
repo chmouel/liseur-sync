@@ -609,9 +609,12 @@ edits, an unlocked field accepts a strictly higher-precedence candidate or a
 refresh from its own source, and a manual edit locks the field. The same
 rules cover multi-valued entity sets through whole-set assertions, with
 case- and whitespace-insensitive entity matching and a set-level lock so a
-deliberately emptied set stays empty.
+deliberately emptied set stays empty. A pure filename and folder parser
+recognizes the four documented library layouts from an ordered per-library
+pattern list, grades each candidate's confidence, keeps the original path,
+and leaves ambiguous names unset.
 Materializing that snapshot into catalog fields and metadata entities,
-filename parsing, cover extraction/transcoding,
+per-library parser configuration, cover extraction/transcoding,
 automatic promotion, catalog availability reconciliation, last-reference
 deletion/trash, backup verification, and administration remain.
 
