@@ -30,6 +30,7 @@ import (
 // upload path's whole purpose is to move bytes between the two.
 type uploadFixture struct {
 	ts      *httptest.Server
+	handler http.Handler
 	st      store.Store
 	cas     *content.CAS
 	user    store.User
@@ -66,12 +67,13 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 		Content:      cas,
 		Blobs:        cas,
 	}
-	ts := httptest.NewServer(srv.Routes())
+	handler := srv.Routes()
+	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	f := &uploadFixture{
 		root: root,
-		ts:   ts, st: st, cas: cas,
+		ts:   ts, handler: handler, st: st, cas: cas,
 		user:    storetest.MkUser(t, st, "uploader"),
 		other:   storetest.MkUser(t, st, "stranger"),
 		library: "lib-1",
@@ -640,7 +642,8 @@ func (f *uploadFixture) rebuild(t *testing.T, apply func(*config.Config)) {
 		Blobs:        f.cas,
 	}
 	f.ts.Close()
-	f.ts = httptest.NewServer(srv.Routes())
+	f.handler = srv.Routes()
+	f.ts = httptest.NewServer(f.handler)
 	t.Cleanup(f.ts.Close)
 }
 
@@ -703,46 +706,45 @@ func (c *countingReader) count() int64 {
 // very data it just declined — turning every 413 into free bandwidth and
 // CPU for the sender. The handler therefore closes only once the body has
 // been consumed.
+//
+// The handler is called directly rather than over a socket. Across a
+// connection the only observable figure is what the client handed the
+// transport, which runs an unbounded distance ahead of the server and
+// swamps the difference being measured: the body is capped at
+// max_upload_bytes + uploadEnvelopeSlack either way, so both behaviours
+// land in the same range and the measurement decides nothing. Reading the
+// body in-process counts exactly what the server consumed.
 func TestOversizedUploadIsNotDrained(t *testing.T) {
 	f := newUploadFixture(t)
 	f.setMaxUpload(t, 1024)
 
 	const sent = 8 << 20
 	counter := &countingReader{left: sent}
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-	go func() {
-		part, err := mw.CreateFormFile("file", "big.epub")
-		if err == nil {
-			io.Copy(part, counter)
-			mw.Close()
-		}
-		pw.Close()
-	}()
+	const boundary = "drainboundary"
+	body := io.MultiReader(
+		strings.NewReader("--"+boundary+"\r\n"+
+			`Content-Disposition: form-data; name="file"; filename="big.epub"`+
+			"\r\nContent-Type: application/octet-stream\r\n\r\n"),
+		counter,
+		strings.NewReader("\r\n--"+boundary+"--\r\n"),
+	)
 
-	req, _ := http.NewRequest(http.MethodPost,
-		f.ts.URL+"/v1/libraries/"+f.library+"/upload", pr)
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/libraries/"+f.library+"/upload", body)
 	req.Header.Set("Authorization", "Bearer "+f.token)
 	req.Header.Set("Idempotency-Key", "oversized-drain")
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := http.DefaultClient.Do(req)
-	if err == nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusRequestEntityTooLarge {
-			t.Fatalf("status = %d, want 413", resp.StatusCode)
-		}
-	}
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	rec := httptest.NewRecorder()
+	f.handler.ServeHTTP(rec, req)
 
-	// The counter measures what the client handed to the transport, which
-	// runs somewhat ahead of what the server actually consumed, so the
-	// bound is empirical rather than exact. Measured under -race: this
-	// handler moves 480-790 KiB (net/http drains a bounded amount after
-	// the handler returns so the connection can be reused), while a
-	// handler that closes the part instead reads to the transport bound
-	// and moves 1.44-1.9 MiB. The threshold sits between the two with
-	// headroom on both sides.
-	if got := counter.count(); got > 1100<<10 {
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	// Measured in-process the two behaviours are far apart and do not
+	// move: stopping reads one 4 KiB buffer, closing the part reads the
+	// whole 1 MiB transport bound. The threshold sits between them with
+	// two orders of magnitude of room on the honest side.
+	if got := counter.count(); got > 256<<10 {
 		t.Fatalf("server read %d bytes of a %d-byte upload it refused", got, sent)
 	}
 }
