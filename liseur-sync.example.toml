@@ -67,6 +67,15 @@ max_staging_bytes = 8589934592            # 8 GiB
 # 0 means unlimited.
 quota_bytes = 0
 
+# How often each watched library's root is swept for EPUBs, and how much
+# of a root one sweep will look at. The limits are a guard against a root
+# that is larger or deeper than you meant to point at: a sweep that hits
+# either stops early and, because it cannot claim to have seen the whole
+# root, is not allowed to conclude that anything is missing.
+watched_scan_interval_seconds = 300
+watched_max_files = 200000
+watched_max_depth = 32
+
 [adapters]
 kosync = true
 koplugin = true

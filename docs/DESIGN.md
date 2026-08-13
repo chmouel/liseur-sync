@@ -576,7 +576,7 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
 
-**M1–M8 are done, and M6–M8 are the first release**
+**M1–M9 are done, and M6–M8 are the first release**
 ([ADR-0001](adr/0001-content-server.md)): upload a book, list it, download
 it in a reader you already own. M8 comes before M9 and M10 because a
 catalog nobody can download from is not yet a product, however well
@@ -609,6 +609,18 @@ creates libraries and grants access, the catalog API lists and downloads
 books, and OPDS 1.2 puts that same catalog in front of readers that speak
 nothing else. The web UI's books pages close the loop for a browser,
 including deleting a book and putting it back.
+
+M9 makes a folder you already have into a library. A periodic sweep walks
+each watched root by descriptor, skipping symlinks, and ingests the EPUBs
+it finds through the same pipeline uploads use, so a watched book is
+served from a validated snapshot and never from its mutable source. What
+the sweep concludes about absence is tracked separately from whether a
+blob is on disk, and is deliberately timid: only a sweep that finished
+may decide a file is gone, a root that will not open concludes nothing,
+and a path whose bytes changed is flagged for an administrator rather
+than silently becoming a new edition of the book that used to be there.
+`admin list-review` and `clear-review` are how that question gets
+answered.
 
 ## 10. Future work (explicitly out of v1)
 
