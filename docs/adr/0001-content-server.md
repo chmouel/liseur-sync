@@ -159,11 +159,16 @@ publication in the browser so that no route ever serves publisher
 markup. The renderer is written here rather than vendored, which is why
 the repository still has no JavaScript build step.
 
-**Features**, in order:
+External metadata providers shipped since
+([ADR-0004](0004-metadata-and-categorization.md) phase 4), which was the
+last item on this list. Lookup is off unless an operator names a
+provider, a lookup has no code path to the catalog, and accepting a
+candidate is an ordinary metadata write that a lock still refuses.
 
-1. **External metadata providers**
-   ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
-   forever, and the last thing on this list.
+**Features:** none outstanding. Everything this ADR set out is built.
+What is left is either a deployment mode an operator may not want
+([ADR-0007](0007-web-reader.md) phase 3, a separate content origin) or a
+new decision, which means a new ADR rather than an item here.
 
 The client work in [ADR-0008](0008-liseur-android-client.md) and
 [ADR-0009](0009-liseur-desktop-client.md) is independent of all of the
