@@ -178,13 +178,14 @@ server disk allocation.
    primitive are implemented. Atomic database promotion and per-principal
    quota holds/reservations are implemented, including concurrent
    deduplication and two-phase expiry release/cleanup; last-reference
-   deletion, trash, blob GC, and backup verification remain. The configured
+   deletion, trash, and backup verification remain. The configured
    private content root and persistent Docker/Podman volume wiring are
    implemented, together with strict descriptor-relative inventory and
    verification of durable final blobs. Database reconciliation records
    missing blobs and grace-period orphan marks without mutating catalog
-   availability or deleting content, and the full comparison runs before the
-   server accepts traffic.
+   availability. The full comparison and a configurable grace-period sweep
+   run before the server accepts traffic; active catalog references and ingest
+   holds remain GC roots, and deletion verifies the immutable blob first.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

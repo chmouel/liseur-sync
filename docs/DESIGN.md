@@ -588,9 +588,11 @@ response, and terminalizes missing or corrupt artifacts. The server opens the
 configured private CAS and recovers every pre-existing nonterminal job before
 listening. The CAS also supports strict verified final-blob inventory.
 Database reconciliation records missing content and grace-period orphan marks
-without deletion, and the complete comparison runs before the server accepts
-traffic. Bounded extraction, the rest of the CAS lifecycle, ingest workers,
-catalog availability reconciliation, and administration remain.
+without changing catalog availability. The complete comparison and verified
+grace-period orphan sweep run before the server accepts traffic, with active
+ingest holds treated as GC roots. Bounded extraction, ingest workers, catalog
+availability reconciliation, last-reference deletion/trash, backup
+verification, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

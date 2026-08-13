@@ -5,7 +5,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+const maxDurationHours = int64((1<<63 - 1) / time.Hour)
 
 // Config is the server configuration, loaded from one TOML file with
 // env overrides (LISEUR_*).
@@ -20,7 +23,8 @@ type Config struct {
 	Content struct {
 		Root                  string `toml:"root"`                    // default ./content
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
-		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob reconciliation, default 100
+		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
+		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -67,6 +71,7 @@ func Default() Config {
 	c.Database.URL = "liseur-sync.db"
 	c.Content.Root = "content"
 	c.Content.FailureRetentionHours = 24
+	c.Content.OrphanGraceHours = 168
 	c.Content.RecoveryBatchSize = 100
 	c.Adapters.Kosync = true
 	c.Adapters.Koplugin = true
@@ -133,8 +138,17 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Content.Root) == "" {
 		return fmt.Errorf("content.root is required")
 	}
-	if c.Content.FailureRetentionHours < 1 {
-		return fmt.Errorf("content.failure_retention_hours must be >= 1")
+	if c.Content.FailureRetentionHours < 1 ||
+		int64(c.Content.FailureRetentionHours) > maxDurationHours {
+		return fmt.Errorf(
+			"content.failure_retention_hours must be between 1 and %d",
+			maxDurationHours)
+	}
+	if c.Content.OrphanGraceHours < 1 ||
+		int64(c.Content.OrphanGraceHours) > maxDurationHours {
+		return fmt.Errorf(
+			"content.orphan_grace_hours must be between 1 and %d",
+			maxDurationHours)
 	}
 	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
 		return fmt.Errorf("content.recovery_batch_size must be between 1 and 500")

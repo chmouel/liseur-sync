@@ -423,6 +423,60 @@ func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
 	return blobs, nil
 }
 
+// RemoveBlob verifies and durably removes one final blob. Missing content is
+// an idempotent success. Empty hash directories are retained and ignored by
+// inventory, avoiding unsafe directory cleanup races.
+func (c *CAS) RemoveBlob(
+	ctx context.Context,
+	expectedSHA string,
+	expectedSize int64,
+) (bool, error) {
+	if !validSHA256(expectedSHA) || expectedSize < 0 {
+		return false, ErrUnsafePath
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	prefixFD, leafFD, err := c.openFinalDirectories(expectedSHA, false)
+	if errors.Is(err, ErrStageMissing) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer unix.Close(prefixFD)
+	defer unix.Close(leafFD)
+	finalFD, err := unix.Openat(leafFD, "file.epub",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if errors.Is(err, unix.ENOENT) {
+		entries, readErr := readDirectoryEntries(leafFD)
+		if readErr != nil {
+			return false, readErr
+		}
+		if len(entries) != 0 {
+			return false, ErrUnsafePath
+		}
+		return false, nil
+	}
+	if err != nil {
+		return false, classifyPathError(err)
+	}
+	defer unix.Close(finalFD)
+	if err := verifyFD(ctx, finalFD, expectedSHA, expectedSize); err != nil {
+		return false, err
+	}
+	if err := unix.Unlinkat(leafFD, "file.epub", 0); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := unix.Fsync(leafFD); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // RemoveStage removes completed or partial staging state for one job. It is
 // idempotent and serialized with Stage and Promote for that job.
 func (c *CAS) RemoveStage(ctx context.Context, stagingPath string) error {

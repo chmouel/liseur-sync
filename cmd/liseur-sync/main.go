@@ -38,12 +38,19 @@ func openStore(cfg config.Config) (store.Store, error) {
 	return nil, fmt.Errorf("unknown database driver %q", cfg.Database.Driver)
 }
 
+type contentStartupReport struct {
+	Ingest         content.IngestRecoveryReport
+	Reconciliation content.BlobReconciliationReport
+	GC             content.BlobGCReport
+}
+
 func openContentAndRecover(
 	ctx context.Context,
 	st store.Store,
 	cfg config.Config,
 	now time.Time,
-) (*content.CAS, content.IngestRecoveryReport, content.BlobReconciliationReport, error) {
+) (*content.CAS, contentStartupReport, error) {
+	var report contentStartupReport
 	contentRoot := cfg.Content.Root
 	if !filepath.IsAbs(contentRoot) &&
 		cfg.Database.Driver == "sqlite" &&
@@ -52,28 +59,32 @@ func openContentAndRecover(
 	}
 	cas, err := content.Open(contentRoot)
 	if err != nil {
-		return nil, content.IngestRecoveryReport{},
-			content.BlobReconciliationReport{}, fmt.Errorf(
-				"open content store: %w", err)
+		return nil, report, fmt.Errorf("open content store: %w", err)
 	}
-	recovery, err := content.RecoverIngest(
+	report.Ingest, err = content.RecoverIngest(
 		ctx, st, cas, now, now,
 		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
 		cfg.Content.RecoveryBatchSize,
 	)
 	if err != nil {
 		cas.Close()
-		return nil, recovery, content.BlobReconciliationReport{},
-			fmt.Errorf("recover content ingestion: %w", err)
+		return nil, report, fmt.Errorf("recover content ingestion: %w", err)
 	}
-	reconciliation, err := content.ReconcileBlobInventory(
+	report.Reconciliation, err = content.ReconcileBlobInventory(
 		ctx, st, cas, now, cfg.Content.RecoveryBatchSize)
 	if err != nil {
 		cas.Close()
-		return nil, recovery, reconciliation,
-			fmt.Errorf("reconcile content blobs: %w", err)
+		return nil, report, fmt.Errorf("reconcile content blobs: %w", err)
 	}
-	return cas, recovery, reconciliation, nil
+	report.GC, err = content.SweepOrphanedBlobs(
+		ctx, st, cas,
+		now.Add(-time.Duration(cfg.Content.OrphanGraceHours)*time.Hour),
+		cfg.Content.RecoveryBatchSize)
+	if err != nil {
+		cas.Close()
+		return nil, report, fmt.Errorf("sweep orphan content blobs: %w", err)
+	}
+	return cas, report, nil
 }
 
 func main() {
@@ -119,26 +130,29 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 	recoveryNow := time.Now().UTC()
-	cas, recovery, reconciliation, err := openContentAndRecover(
+	cas, recovery, err := openContentAndRecover(
 		context.Background(), st, cfg, recoveryNow)
 	if err != nil {
 		return err
 	}
 	defer cas.Close()
 	slog.Info("content recovery complete",
-		"ready", len(recovery.Ready),
-		"failed", recovery.Failed,
-		"quarantined", recovery.Quarantined,
-		"cleaned", recovery.Cleaned,
-		"skipped", recovery.Skipped,
-		"physical_blobs", reconciliation.PhysicalBlobs,
-		"database_blobs", reconciliation.DatabaseBlobs,
-		"inserted_orphans", reconciliation.InsertedOrphans,
-		"orphans_marked", reconciliation.OrphansMarked,
-		"orphans_cleared", reconciliation.OrphansCleared,
-		"missing_marked", reconciliation.MissingMarked,
-		"missing_cleared", reconciliation.MissingCleared,
-		"unchanged_blobs", reconciliation.Unchanged)
+		"ready", len(recovery.Ingest.Ready),
+		"failed", recovery.Ingest.Failed,
+		"quarantined", recovery.Ingest.Quarantined,
+		"cleaned", recovery.Ingest.Cleaned,
+		"skipped", recovery.Ingest.Skipped,
+		"physical_blobs", recovery.Reconciliation.PhysicalBlobs,
+		"database_blobs", recovery.Reconciliation.DatabaseBlobs,
+		"inserted_orphans", recovery.Reconciliation.InsertedOrphans,
+		"orphans_marked", recovery.Reconciliation.OrphansMarked,
+		"orphans_cleared", recovery.Reconciliation.OrphansCleared,
+		"missing_marked", recovery.Reconciliation.MissingMarked,
+		"missing_cleared", recovery.Reconciliation.MissingCleared,
+		"unchanged_blobs", recovery.Reconciliation.Unchanged,
+		"gc_records_purged", recovery.GC.RecordsPurged,
+		"gc_files_removed", recovery.GC.FilesRemoved,
+		"gc_files_missing", recovery.GC.FilesMissing)
 
 	// One limiter for every path that verifies a password, so the web
 	// form and /v1/login share a per-IP budget instead of each

@@ -81,12 +81,12 @@ func TestOpenContentAndRecoverBeforeServe(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Content.Root = root
-	cas, report, _, err := openContentAndRecover(ctx, st, cfg, now)
+	cas, report, err := openContentAndRecover(ctx, st, cfg, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cas.Close() })
-	if report.Failed != 1 {
+	if report.Ingest.Failed != 1 {
 		t.Fatalf("startup recovery report: %+v", report)
 	}
 	recovered, err := st.IngestJobByID(ctx, user.ID, job.ID)
@@ -110,7 +110,7 @@ func TestRelativeContentRootFollowsAbsoluteSQLiteDatabase(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	cas, _, _, err := openContentAndRecover(ctx, st, cfg, time.Now().UTC())
+	cas, _, err := openContentAndRecover(ctx, st, cfg, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,14 +182,15 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 	cfg := config.Default()
 	cfg.Database.URL = dbPath
 	cfg.Content.Root = root
-	cas, ingest, reconciled, err := openContentAndRecover(ctx, st, cfg, now.Add(time.Hour))
+	cas, report, err := openContentAndRecover(ctx, st, cfg, now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ingest.Failed != 0 || ingest.Quarantined != 0 ||
-		len(ingest.Ready) != 0 {
-		t.Fatalf("unexpected ingest recovery: %+v", ingest)
+	if report.Ingest.Failed != 0 || report.Ingest.Quarantined != 0 ||
+		len(report.Ingest.Ready) != 0 {
+		t.Fatalf("unexpected ingest recovery: %+v", report.Ingest)
 	}
+	reconciled := report.Reconciliation
 	if reconciled.PhysicalBlobs != 2 || reconciled.DatabaseBlobs != 3 ||
 		reconciled.InsertedOrphans != 1 || reconciled.OrphansMarked != 1 ||
 		reconciled.OrphansCleared != 1 || reconciled.MissingMarked != 1 ||
@@ -235,11 +236,12 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cas, _, reconciled, err = openContentAndRecover(
+	cas, report, err = openContentAndRecover(
 		ctx, st, cfg, now.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
+	reconciled = report.Reconciliation
 	t.Cleanup(func() { cas.Close() })
 	if reconciled.PhysicalBlobs != 3 || reconciled.DatabaseBlobs != 3 ||
 		reconciled.MissingCleared != 1 || reconciled.Unchanged != 2 {
@@ -252,6 +254,74 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(
 		root, filepath.FromSlash(filesystemOnly.Path))); err != nil {
 		t.Fatalf("orphan was deleted before a grace-period sweep: %v", err)
+	}
+}
+
+func TestOpenContentSweepsGraceExpiredOrphan(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, "content")
+	dbPath := filepath.Join(dataDir, "liseur-sync.db")
+	st, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setupCAS, err := content.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := publishTestBlob(
+		t, setupCAS, "startup-gc", []byte("startup garbage collection"))
+	if err := setupCAS.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Database.URL = dbPath
+	cfg.Content.Root = root
+	cfg.Content.OrphanGraceHours = 1
+	now := time.Date(2026, time.June, 7, 8, 9, 10, 0, time.UTC)
+	cas, report, err := openContentAndRecover(ctx, st, cfg, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Reconciliation.InsertedOrphans != 1 ||
+		report.GC.RecordsPurged != 0 {
+		t.Fatalf("initial orphan mark: %+v", report)
+	}
+	if err := cas.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		root, filepath.FromSlash(blob.Path))); err != nil {
+		t.Fatalf("orphan removed before grace period: %v", err)
+	}
+
+	cas, report, err = openContentAndRecover(
+		ctx, st, cfg, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cas.Close() })
+	if report.GC.RecordsPurged != 1 || report.GC.FilesRemoved != 1 ||
+		report.GC.FilesMissing != 0 {
+		t.Fatalf("startup orphan sweep: %+v", report.GC)
+	}
+	if _, err := os.Stat(filepath.Join(
+		root, filepath.FromSlash(blob.Path))); !os.IsNotExist(err) {
+		t.Fatalf("grace-expired orphan remains: %v", err)
+	}
+	records, err := st.ListBlobRecords(ctx, "", 10)
+	if err != nil || len(records) != 0 {
+		t.Fatalf("purged orphan record remains: %+v %v", records, err)
+	}
+	inventory, err := cas.ListBlobs(ctx)
+	if err != nil || len(inventory) != 0 {
+		t.Fatalf("purged orphan inventory: %+v %v", inventory, err)
 	}
 }
 
