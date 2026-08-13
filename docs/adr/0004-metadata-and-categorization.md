@@ -116,10 +116,12 @@ External metadata cannot be a required ingest dependency.
    an unlocked field accepts a strictly higher-precedence candidate or a
    refresh from its own source, and a manual edit locks the field. Entity-set
    merging uses the same rules with whole-set assertions: an empty assertion
-   is never treated as a request to empty a set, a source drops only the rows
-   it owns and no longer asserts, locked rows and stronger sources are left
-   alone, and a set-level manual lock keeps a deliberately emptied set empty
-   across rescans. Entity names match on a case- and whitespace-insensitive
+   is never treated as a request to empty a set, a source drops the unlocked
+   rows it owns or outranks and no longer asserts, and locked rows and rows
+   owned by a stronger source are left alone. Merging also accepts a
+   set-level lock that rejects an assertion outright, which is what will keep
+   a deliberately emptied set empty once that lock is persisted and raised by
+   the edit path. Entity names match on a case- and whitespace-insensitive
    key while keeping their display spelling.
    The filename and folder parser is implemented as a pure per-library
    pattern list: the four documented layouts, conservative " - " splitting,
@@ -127,8 +129,8 @@ External metadata cannot be a required ingest dependency.
    recovered from a single name rather than a directory boundary, the
    original path retained, and unusable or ambiguous names left unset.
    Materializing the snapshot into catalog fields and normalized metadata
-   entities, wiring the parser to per-library configuration, cover
-   extraction, and automatic promotion remain.
+   entities, persisting the set-level lock, wiring the parser to per-library
+   configuration, cover extraction, and automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.
