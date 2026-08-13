@@ -20,7 +20,7 @@ type Config struct {
 	Content struct {
 		Root                  string `toml:"root"`                    // default ./content
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
-		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // default 100
+		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob reconciliation, default 100
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP

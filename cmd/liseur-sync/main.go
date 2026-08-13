@@ -43,7 +43,7 @@ func openContentAndRecover(
 	st store.Store,
 	cfg config.Config,
 	now time.Time,
-) (*content.CAS, content.IngestRecoveryReport, error) {
+) (*content.CAS, content.IngestRecoveryReport, content.BlobReconciliationReport, error) {
 	contentRoot := cfg.Content.Root
 	if !filepath.IsAbs(contentRoot) &&
 		cfg.Database.Driver == "sqlite" &&
@@ -52,8 +52,9 @@ func openContentAndRecover(
 	}
 	cas, err := content.Open(contentRoot)
 	if err != nil {
-		return nil, content.IngestRecoveryReport{}, fmt.Errorf(
-			"open content store: %w", err)
+		return nil, content.IngestRecoveryReport{},
+			content.BlobReconciliationReport{}, fmt.Errorf(
+				"open content store: %w", err)
 	}
 	recovery, err := content.RecoverIngest(
 		ctx, st, cas, now, now,
@@ -62,9 +63,17 @@ func openContentAndRecover(
 	)
 	if err != nil {
 		cas.Close()
-		return nil, recovery, fmt.Errorf("recover content ingestion: %w", err)
+		return nil, recovery, content.BlobReconciliationReport{},
+			fmt.Errorf("recover content ingestion: %w", err)
 	}
-	return cas, recovery, nil
+	reconciliation, err := content.ReconcileBlobInventory(
+		ctx, st, cas, now, cfg.Content.RecoveryBatchSize)
+	if err != nil {
+		cas.Close()
+		return nil, recovery, reconciliation,
+			fmt.Errorf("reconcile content blobs: %w", err)
+	}
+	return cas, recovery, reconciliation, nil
 }
 
 func main() {
@@ -110,7 +119,7 @@ func cmdServe(args []string) error {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 	recoveryNow := time.Now().UTC()
-	cas, recovery, err := openContentAndRecover(
+	cas, recovery, reconciliation, err := openContentAndRecover(
 		context.Background(), st, cfg, recoveryNow)
 	if err != nil {
 		return err
@@ -121,7 +130,15 @@ func cmdServe(args []string) error {
 		"failed", recovery.Failed,
 		"quarantined", recovery.Quarantined,
 		"cleaned", recovery.Cleaned,
-		"skipped", recovery.Skipped)
+		"skipped", recovery.Skipped,
+		"physical_blobs", reconciliation.PhysicalBlobs,
+		"database_blobs", reconciliation.DatabaseBlobs,
+		"inserted_orphans", reconciliation.InsertedOrphans,
+		"orphans_marked", reconciliation.OrphansMarked,
+		"orphans_cleared", reconciliation.OrphansCleared,
+		"missing_marked", reconciliation.MissingMarked,
+		"missing_cleared", reconciliation.MissingCleared,
+		"unchanged_blobs", reconciliation.Unchanged)
 
 	// One limiter for every path that verifies a password, so the web
 	// form and /v1/login share a per-IP budget instead of each

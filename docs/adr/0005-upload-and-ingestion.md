@@ -176,8 +176,9 @@ name a stable job and reason instead of losing state when a request ends.
    `serve` recovers every pre-existing nonterminal job before accepting
    traffic. Strict final-blob filesystem inventory is implemented; workers
    remain. Database blob reconciliation can mark missing content and
-   filesystem-only or unreferenced orphans; startup comparison and catalog
-   reconciliation remain.
+   filesystem-only or unreferenced orphans, and startup performs the complete
+   mark-only comparison. Catalog availability reconciliation and workers
+   remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

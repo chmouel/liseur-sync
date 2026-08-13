@@ -490,7 +490,7 @@ kosync_devices   user_id, device_slot, key_sha256, label, revoked_at
 libraries        id, owner_user_id, quota_user_id, kind, name, root?, config
 library_access   library_id, user_id, role(read|manage)
 books            id, library_id, status, metadata fields + source/lock data
-blobs            sha256 PK, size, created_at, orphaned_at?
+blobs            sha256 PK, size, created_at, orphaned_at?, missing_at?
 blob_reservations quota_user_id, blob_sha256, bytes
 book_files       id, book_id, blob_sha256, source_relative_path?, availability
 user_book_works  user_id, book_id, work_id
@@ -588,8 +588,9 @@ response, and terminalizes missing or corrupt artifacts. The server opens the
 configured private CAS and recovers every pre-existing nonterminal job before
 listening. The CAS also supports strict verified final-blob inventory.
 Database reconciliation records missing content and grace-period orphan marks
-without deletion. Startup comparison, bounded extraction, the rest of the CAS
-lifecycle, ingest workers, and administration remain.
+without deletion, and the complete comparison runs before the server accepts
+traffic. Bounded extraction, the rest of the CAS lifecycle, ingest workers,
+catalog availability reconciliation, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 
