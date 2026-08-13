@@ -798,6 +798,63 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Bad limit" }
         "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
 
+  /v1/libraries/{library}/search:
+    get:
+      tags: [library]
+      summary: Find a book in a library
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Matches `q` against everything a book says about itself — title,
+        subtitle, description, publisher, and the names of the series,
+        contributors, tags and genres it claims — and returns the best
+        matches first. A book *called* Dune outranks one that merely
+        mentions it.
+
+        `q` is words, never index syntax. Punctuation and operators are
+        split away rather than interpreted, so no query can change how it
+        is read; a query made only of punctuation matches nothing.
+        Diacritics and case are folded, so `emile` finds `Émile`.
+
+        The answer is unpaged. A relevance order has no stable cursor, and
+        this route answers "where is that book" rather than "show me
+        everything"; `truncated` says the answer was cut at `limit` so a
+        client can ask the person to narrow it rather than implying it
+        found all there was. Browsing a whole library is what
+        `/v1/libraries/{library}/books` is for.
+
+        `facets` describe the books actually returned, counted over that
+        set rather than over the library, and each `id` can be passed back
+        as `entity` to narrow the query. A filter needs no `kind`: an id
+        already knows what it is. Repeating `entity` ANDs the filters.
+
+        There is no reading-state filter and there will not be one. A
+        catalog-only credential must not be able to observe reading state,
+        so this route has no vocabulary for it; reading state is reported
+        by the `sync` and `read-insights` surfaces, which ask for their
+        own scopes.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: q
+          in: query
+          description: The words to match. Absent or empty matches every book, which is useful with `entity`.
+          schema: { type: string, maxLength: 512 }
+        - name: entity
+          in: query
+          description: Narrow to books claiming this entity, whatever its kind. Repeatable; filters are ANDed.
+          schema: { type: array, items: { type: string, format: uuid }, maxItems: 8 }
+        - name: limit
+          in: query
+          description: Most books returned.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: The matching books and what they have in common
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResult" }
+        "400": { $ref: "#/components/responses/Error", description: "Bad limit, over-long query, or malformed entity filter" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
   /v1/books/{id}:
     get:
       tags: [library]
@@ -1443,6 +1500,44 @@ components:
         book_count:
           type: integer
           description: Active books claiming it. Trashed books do not count.
+
+    SearchResult:
+      type: object
+      description: |
+        One library's answer to a search: the matching books, best first,
+        and what those books have in common.
+      required: [books, facets, truncated]
+      properties:
+        books:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogBook" }
+        facets:
+          type: array
+          description: |
+            What the returned books share, at most 20 of each kind, most
+            claimed first. Counted over the answer rather than over the
+            library, so a facet can never describe a different set than
+            the one returned.
+          items: { $ref: "#/components/schemas/SearchFacet" }
+        truncated:
+          type: boolean
+          description: |
+            The answer was cut at `limit`. Ask the person to narrow it
+            rather than paging: there is no cursor.
+
+    SearchFacet:
+      type: object
+      description: |
+        One entity the matching books share. `id` is what to send back as
+        the `entity` filter.
+      required: [kind, id, name, book_count]
+      properties:
+        kind: { type: string, enum: [series, contributor, tag, genre] }
+        id: { type: string, format: uuid }
+        name: { type: string, description: The display spelling. }
+        book_count:
+          type: integer
+          description: Returned books claiming it, not library-wide books.
 
     MetadataField:
       type: object

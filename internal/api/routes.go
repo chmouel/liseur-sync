@@ -334,6 +334,9 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/libraries", readH(s.HandleLibraries))
 	mux.Handle("GET /v1/libraries/{library}/books", readH(s.HandleLibraryBooks))
 	mux.Handle("GET /v1/libraries/{library}/duplicates", readH(s.HandleLibraryDuplicates))
+	// Finding one book among many is a read of the catalog, so it asks
+	// for nothing beyond the scope that lists it.
+	mux.Handle("GET /v1/libraries/{library}/search", readH(s.HandleLibrarySearch))
 	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
 	// Provenance is editor data, so it is a resource of its own rather
 	// than more fields on the book: a catalog client wants the title, not
