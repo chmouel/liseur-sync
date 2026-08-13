@@ -49,6 +49,8 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return listLibraries(ctx, st, args[1:])
 	case "grant-library":
 		return grantLibrary(ctx, st, args[1:])
+	case "library-layout":
+		return libraryLayout(ctx, st, args[1:])
 	case "revoke-library":
 		return revokeLibrary(ctx, st, args[1:])
 	case "backfill-works":
@@ -79,6 +81,10 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 grant access; actor must own or manage it
   revoke-library <actor> <library-id> <user>
                                 remove a grant
+  library-layout <actor> <library-id> [<layouts>]
+                                show or set how a library's filenames are
+                                read; <layouts> is a comma-separated list,
+                                "default", or "none"
 
   backfill-works <user>         map every catalog book the user can
                                 read to a sync work, so statistics do

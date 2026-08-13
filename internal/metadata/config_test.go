@@ -244,3 +244,44 @@ func TestAllPathPatternsCoversEveryKnownLayout(t *testing.T) {
 			"or per-library configuration has nothing to choose between")
 	}
 }
+
+func TestPathPatternsConfiguredSeparatesChoiceFromAgreement(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		raw  []byte
+		want bool
+	}{
+		"unset":                {nil, false},
+		"empty document":       {[]byte(`{}`), false},
+		"other settings only":  {[]byte(`{"future_setting":42}`), false},
+		"explicit null":        {[]byte(`{"path_patterns":null}`), false},
+		"explicitly none":      {[]byte(`{"path_patterns":[]}`), true},
+		"same as the defaults": {[]byte(`{"path_patterns":["author/title"]}`), true},
+		"alongside other keys": {[]byte(`{"a":1,"path_patterns":["author/title"]}`), true},
+	}
+	for name, tc := range cases {
+		got, err := metadata.PathPatternsConfigured(tc.raw)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: got %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestPathPatternsConfiguredReportsAnUnreadableDocument(t *testing.T) {
+	t.Parallel()
+	for name, raw := range map[string][]byte{
+		"not json":      []byte(`{`),
+		"not an object": []byte(`["author/title"]`),
+	} {
+		got, err := metadata.PathPatternsConfigured(raw)
+		if !errors.Is(err, metadata.ErrInvalidLibraryConfig) {
+			t.Fatalf("%s: err = %v, want ErrInvalidLibraryConfig", name, err)
+		}
+		if got {
+			t.Fatalf("%s: claimed a configuration it could not read", name)
+		}
+	}
+}
