@@ -34,6 +34,13 @@ url = "liseur-sync.db"             # sqlite path, or postgres DSN
 root = "content"
 failure_retention_hours = 24
 orphan_grace_hours = 168          # seven days
+
+# How long a deleted book is kept before its files are removed for good.
+# Deleting is reversible until this passes, from the books page or with
+# POST /v1/books/{id}/restore. The bytes still count against the owner's
+# quota while they wait, so that upload-and-delete cycles cannot grow the
+# disk without bound.
+trash_retention_hours = 720       # thirty days
 recovery_batch_size = 100          # ingest jobs and blob housekeeping
 ingest_worker_interval_seconds = 5
 epub_max_entries = 10000

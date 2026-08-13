@@ -26,6 +26,7 @@ type Config struct {
 		Root                  string `toml:"root"`                    // default ./content
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
 		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
+		TrashRetentionHours   int    `toml:"trash_retention_hours"`   // default 720
 		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
 		IngestWorkerInterval  int    `toml:"ingest_worker_interval_seconds"`
 		// MaxUploadBytes bounds one uploaded file. It is the request-size
@@ -90,6 +91,10 @@ func Default() Config {
 	c.Content.Root = "content"
 	c.Content.FailureRetentionHours = 24
 	c.Content.OrphanGraceHours = 168
+	// A month is long enough that someone notices a mistaken deletion
+	// before the bytes are gone, and short enough that the trash is not
+	// a second copy of the library.
+	c.Content.TrashRetentionHours = 720
 	c.Content.RecoveryBatchSize = 100
 	c.Content.IngestWorkerInterval = 5
 	c.Content.MaxUploadBytes = 512 << 20
@@ -177,6 +182,12 @@ func (c *Config) Validate() error {
 		int64(c.Content.OrphanGraceHours) > maxDurationHours {
 		return fmt.Errorf(
 			"content.orphan_grace_hours must be between 1 and %d",
+			maxDurationHours)
+	}
+	if c.Content.TrashRetentionHours < 1 ||
+		int64(c.Content.TrashRetentionHours) > maxDurationHours {
+		return fmt.Errorf(
+			"content.trash_retention_hours must be between 1 and %d",
 			maxDurationHours)
 	}
 	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
