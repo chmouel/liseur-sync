@@ -92,13 +92,49 @@ A browser check asserts this rather than trusting it. The test EPUB
 carries a hostile `<script>` that stamps `documentElement.dataset`, and
 the test fails if the stamp appears.
 
-A separately configured content origin remains the hardened deployment
-mode and is phase 3, not a precondition. It defends against browser
-sandbox escapes rather than against the book, which is a different and
-much rarer threat, and it costs an operator a second hostname and
-certificate. The `cors_allowed_origins` config field, parsed today but
-read by nothing, is what that phase will finally use; until then it stays
-unused rather than being given a half meaning.
+### An operator who does not want to bet a cookie on that can name a second hostname
+
+`reader_origin` is optional and empty by default. Set to a hostname
+pointed at the same server, the reader moves there and the bet changes
+shape: publication content is laid out on an origin that holds no
+session cookie and answers no authenticated route, so a browser bug in
+sandbox enforcement reaches a page with nothing on it.
+
+What the second hostname serves is a closed list — the reader shell and
+the static assets — and everything else is a 404, enforced in one place
+around the whole mux rather than route by route. A route added next year
+does not appear there by being registered, and a 404 rather than a
+redirect, because a redirect would teach a browser that this hostname is
+a way to reach authenticated pages.
+
+The handoff is the interesting part. The reader page there cannot be
+authenticated by a cookie, since the point is that no cookie exists on
+it, so the main origin authorises the book, mints the short-lived reader
+token, and redirects with the credential in the URL **fragment**. A
+fragment is never sent to a server: it is absent from access logs,
+`Referer` headers and the operator's proxy, and readable only by script
+on the origin that was navigated to. The page erases it from the address
+bar on arrival, so it does not survive in history either. The two
+addresses that travel beside it — where the API is, and where "Back"
+goes — are not secret and ride in the query instead, where the server
+receiving them can act on them: it names the API origin in `connect-src`
+rather than widening the policy to "any host", and it renders the back
+link only if it points at that same origin. Both are validated as bare
+origins first, because a value that reaches a policy header is a value
+that can add a directive.
+
+The reader is then an ordinary cross-origin API client. `CORS` answers
+the listed origins on `/v1` only, and **never** with
+`Access-Control-Allow-Credentials`: the reader carries a bearer token it
+was handed, and allowing credentials would let any listed origin ride a
+logged-in visitor's cookie instead — the CSRF protection of the whole UI
+handed to whoever an operator typed into a config file. `/ui` stays
+same-origin, so a mistake in that list cannot reach it.
+
+The cost is what an operator sees: a second hostname and certificate,
+and a reading session that ends when its token expires rather than
+renewing itself, because the origin that could prove who you are is not
+this one.
 
 ### Position is a Readium Locator envelope, which is why the renderer is replaceable
 
@@ -218,12 +254,13 @@ removes.
    now the glue — credential, sync, locator translation — and the engine
    underneath it is a vendored file.
 
-3. **Hardened content origin.** Optional, operator-configurable, not
-   built.
+3. **Hardened content origin.** Done, and off by default.
 
-   Serves the reader document from a second origin so that a sandbox
-   escape still lands somewhere with no credentials. This is where
-   `cors_allowed_origins` becomes real.
+   `reader_origin` serves the reader document from a second hostname
+   that holds no cookie and answers nothing else, with the credential
+   handed over in a URL fragment and the API answering it cross-origin.
+   Empty means the reader stays where it was, which is what most
+   deployments will want.
 
 ## Acceptance criteria
 
@@ -237,6 +274,11 @@ removes.
 - The reader turns pages through a whole book. The same browser check
   turns the page repeatedly and fails if the reader stalls, which is the
   regression that cost the hand-written renderer its place.
+- With `reader_origin` set, no authenticated route and no cookie answer
+  on that hostname, and the reader still opens a book and syncs a
+  position from it. Both halves are checked in a real browser, because
+  the redirect, the fragment and the cross-origin fetch are things only
+  a browser enforces.
 - A reader token carries exactly `library-read` and `sync`, expires, and
   is refused on a `library-manage` route.
 - The web device identity is stable across re-mints, so two tabs and two
