@@ -211,3 +211,46 @@ func TestStagingCapCountsOnlyFiles(t *testing.T) {
 		t.Fatalf("stage beside a stray directory: %v", err)
 	}
 }
+
+// TestOpenSaysWhyARootWasRefused: an operator who prepares the directory
+// by hand gets 0755 from mkdir, and the refusal has to point at the
+// permissions rather than at the path.
+func TestOpenSaysWhyARootWasRefused(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "content")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(root)
+	if !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("err = %v, want ErrUnsafePath", err)
+	}
+	for _, want := range []string{root, "0755", "chmod 700"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+	// The same directory, made private, is accepted: the message named
+	// the actual fix.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cas, err := Open(root)
+	if err != nil {
+		t.Fatalf("open a private root: %v", err)
+	}
+	cas.Close()
+}
+
+// TestOpenRefusesARootThatIsAFile keeps the other reasons distinguishable,
+// since a single sentinel for all of them is what made this opaque.
+func TestOpenRefusesARootThatIsAFile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "content")
+	if err := os.WriteFile(root, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(root)
+	if !errors.Is(err, ErrUnsafePath) ||
+		!strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("err = %v, want a not-a-directory refusal", err)
+	}
+}
