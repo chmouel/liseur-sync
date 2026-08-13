@@ -101,6 +101,7 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
 			if v.Selected != "" {
+				@searchForm(prefix, SearchView{LibraryID: v.Selected})
 				<p>
 					Browse by
 					<a href={ prefix + "libraries/" + v.Selected + "/series" }>series</a>
