@@ -403,48 +403,82 @@ func validateEPUBFD(
 // ListBlobs inventories and verifies every durable final blob. Empty hash
 // directories left by an interrupted pre-publication attempt are ignored;
 // every other unexpected entry is treated as unsafe CAS corruption.
+//
+// A blob whose bytes no longer match its digest fails the whole call. That
+// is the right answer for a live store, where corruption is not a thing to
+// carry on past; callers that must survey damage rather than stop at it
+// use InventoryBlobs.
 func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
-	prefixes, err := readDirectoryEntries(c.shaFD)
+	blobs, damaged, err := c.InventoryBlobs(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if len(damaged) > 0 {
+		return nil, ErrCorruptBlob
+	}
+	return blobs, nil
+}
+
+// DamagedBlob is a promoted blob whose bytes no longer hash to the digest
+// they are filed under. Size is what is on disk now, which is what makes a
+// truncated copy recognisable as such.
+type DamagedBlob struct {
+	SHA256 string
+	Size   int64
+}
+
+// InventoryBlobs is ListBlobs for callers that need to see all of the
+// damage rather than stop at the first of it: a blob that fails
+// verification is returned in the second result instead of ending the
+// walk. Structural corruption — a stray file, a directory that is not a
+// digest — still fails, because that is not a fact about one blob and
+// nothing sensible can be reported per-digest about it.
+//
+// This exists for backup verification, whose entire job is to tell an
+// operator everything that is wrong with a copy in one pass.
+func (c *CAS) InventoryBlobs(ctx context.Context) ([]Blob, []DamagedBlob, error) {
+	prefixes, err := readDirectoryEntries(c.shaFD)
+	if err != nil {
+		return nil, nil, err
+	}
 	var blobs []Blob
+	var damaged []DamagedBlob
 	for _, prefix := range prefixes {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(prefix) != 2 || !validLowerHex(prefix) {
-			return nil, ErrUnsafePath
+			return nil, nil, ErrUnsafePath
 		}
 		prefixFD, err := openDirectoryAt(c.shaFD, prefix)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		leaves, err := readDirectoryEntries(prefixFD)
 		if err != nil {
 			unix.Close(prefixFD)
-			return nil, err
+			return nil, nil, err
 		}
 		for _, leaf := range leaves {
 			if err := ctx.Err(); err != nil {
 				unix.Close(prefixFD)
-				return nil, err
+				return nil, nil, err
 			}
 			digest := prefix + leaf
 			if len(leaf) != sha256.Size*2-2 || !validSHA256(digest) {
 				unix.Close(prefixFD)
-				return nil, ErrUnsafePath
+				return nil, nil, ErrUnsafePath
 			}
 			leafFD, err := openDirectoryAt(prefixFD, leaf)
 			if err != nil {
 				unix.Close(prefixFD)
-				return nil, err
+				return nil, nil, err
 			}
 			entries, err := readDirectoryEntries(leafFD)
 			if err != nil {
 				unix.Close(leafFD)
 				unix.Close(prefixFD)
-				return nil, err
+				return nil, nil, err
 			}
 			if len(entries) == 0 {
 				unix.Close(leafFD)
@@ -453,29 +487,39 @@ func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
 			if len(entries) != 1 || entries[0] != "file.epub" {
 				unix.Close(leafFD)
 				unix.Close(prefixFD)
-				return nil, ErrUnsafePath
+				return nil, nil, ErrUnsafePath
 			}
 			fileFD, err := unix.Openat(leafFD, "file.epub",
 				unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 			if err != nil {
 				unix.Close(leafFD)
 				unix.Close(prefixFD)
-				return nil, classifyPathError(err)
+				return nil, nil, classifyPathError(err)
 			}
 			var stat unix.Stat_t
 			if err := unix.Fstat(fileFD, &stat); err != nil {
 				unix.Close(fileFD)
 				unix.Close(leafFD)
 				unix.Close(prefixFD)
-				return nil, err
+				return nil, nil, err
 			}
-			if err := verifyFD(ctx, fileFD, digest, stat.Size); err != nil {
-				unix.Close(fileFD)
-				unix.Close(leafFD)
-				unix.Close(prefixFD)
-				return nil, err
-			}
+			verifyErr := verifyFD(ctx, fileFD, digest, stat.Size)
 			unix.Close(fileFD)
+			if verifyErr != nil {
+				if !errors.Is(verifyErr, ErrCorruptBlob) {
+					// Anything that is not a failed digest — a read error,
+					// a cancelled context — says nothing about this blob
+					// and everything about the walk, so it ends the walk.
+					unix.Close(leafFD)
+					unix.Close(prefixFD)
+					return nil, nil, verifyErr
+				}
+				unix.Close(leafFD)
+				damaged = append(damaged, DamagedBlob{
+					SHA256: digest, Size: stat.Size,
+				})
+				continue
+			}
 			unix.Close(leafFD)
 			blobs = append(blobs, Blob{
 				Path: finalRelativePath(digest), SHA256: digest, Size: stat.Size,
@@ -483,7 +527,7 @@ func (c *CAS) ListBlobs(ctx context.Context) ([]Blob, error) {
 		}
 		unix.Close(prefixFD)
 	}
-	return blobs, nil
+	return blobs, damaged, nil
 }
 
 // RemoveBlob verifies and durably removes one final blob. Missing content is

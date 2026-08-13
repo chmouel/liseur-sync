@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -589,5 +590,66 @@ func TestCanceledOperationsDoNotMutate(t *testing.T) {
 	}
 	if _, err := os.Lstat(stagePath); err != nil {
 		t.Fatalf("canceled removal deleted stage: %v", err)
+	}
+}
+
+// TestInventoryBlobsSurveysDamageInsteadOfStoppingAtIt: backup
+// verification has to report every bad blob in one pass, so the tolerant
+// inventory returns the damaged ones alongside the good rather than
+// failing at the first. Structural corruption is still fatal — it is not
+// a fact about any one digest.
+func TestInventoryBlobsSurveysDamageInsteadOfStoppingAtIt(t *testing.T) {
+	cas := openTestCAS(t)
+	var good, bad string
+	for i, body := range []string{"first blob", "second blob"} {
+		staged, err := cas.Stage(context.Background(),
+			fmt.Sprintf("inventory-job-%d", i),
+			bytes.NewReader([]byte(body)), int64(len(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, err := cas.Promote(
+			context.Background(), staged.Path, staged.SHA256, staged.Size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if good == "" {
+			good = blob.SHA256
+			continue
+		}
+		bad = blob.SHA256
+		path := filepath.Join(cas.Root(), filepath.FromSlash(blob.Path))
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("rot"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	blobs, damaged, err := cas.InventoryBlobs(context.Background())
+	if err != nil {
+		t.Fatalf("tolerant inventory failed on a damaged blob: %v", err)
+	}
+	if len(blobs) != 1 || blobs[0].SHA256 != good {
+		t.Fatalf("good blobs = %+v, want just %s", blobs, good)
+	}
+	if len(damaged) != 1 || damaged[0].SHA256 != bad || damaged[0].Size != 3 {
+		t.Fatalf("damaged = %+v, want %s at 3 bytes", damaged, bad)
+	}
+	// The strict view still refuses: a live store must not carry on past
+	// corruption just because something else needed to survey it.
+	if _, err := cas.ListBlobs(context.Background()); !errors.Is(err, ErrCorruptBlob) {
+		t.Fatalf("strict inventory accepted a damaged blob: %v", err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(cas.Root(), "sha256", "unexpected"),
+		[]byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cas.InventoryBlobs(
+		context.Background()); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("tolerant inventory accepted structural corruption: %v", err)
 	}
 }

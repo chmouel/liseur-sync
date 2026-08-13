@@ -62,14 +62,15 @@ func verifyBackup(
 	fmt.Printf("present:           %d\n", report.PresentBlobs)
 	fmt.Printf("missing:           %d\n", report.MissingBlobs)
 	fmt.Printf("wrong size:        %d\n", report.MismatchedBlobs)
+	fmt.Printf("corrupt:           %d\n", report.CorruptBlobs)
 	fmt.Printf("unreferenced:      %d (left for ordinary reconciliation)\n",
 		report.ExtraBlobs)
 	for _, problem := range report.Problems {
 		fmt.Printf("  %s %s\n", problem.SHA256, problem.Detail)
 	}
-	if len(report.Problems) < report.MissingBlobs+report.MismatchedBlobs {
-		fmt.Printf("  ... and %d more\n",
-			report.MissingBlobs+report.MismatchedBlobs-len(report.Problems))
+	problems := report.MissingBlobs + report.MismatchedBlobs + report.CorruptBlobs
+	if len(report.Problems) < problems {
+		fmt.Printf("  ... and %d more\n", problems-len(report.Problems))
 	}
 	if !report.Valid() {
 		// A non-zero exit is the part a backup script can act on, and the
