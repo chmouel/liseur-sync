@@ -98,20 +98,21 @@ precedence engine. Each ADR records its own remaining edges.
 
 ### To the MVP
 
-1. **Ingest input.** Done: `POST /v1/libraries/{library}/upload`
-   ([ADR-0005](0005-upload-and-ingestion.md)). The htmx upload UI is not.
+1. **Ingest input.** Done: `POST /v1/libraries/{library}/upload` and the
+   upload form on `/ui/books` ([ADR-0005](0005-upload-and-ingestion.md)).
 2. **Admin.** Done: `create-library`, `grant-library`, `revoke-library` and
    `list-libraries` in the `admin` subcommand.
-3. **Catalog output.** API done: libraries, paginated books, book detail and
-   download ([ADR-0006](0006-catalog-api-and-opds.md)). Catalog and
-   book-detail pages in the web UI are not.
+3. **Catalog output.** Done: libraries, paginated books, book detail and
+   download, in the API and as web pages
+   ([ADR-0006](0006-catalog-api-and-opds.md)).
 4. **An existing reader.** Done: OPDS 1.2 navigation and acquisition feeds
    under `/opds/v1.2`, authenticated with HTTP Basic
    ([ADR-0006](0006-catalog-api-and-opds.md)).
 
-With those four in place the MVP definition above is satisfied end to end.
-What remains before a release is the web UI: uploading and browsing from a
-browser rather than from `curl` and a reader.
+All four are in place: the MVP definition above is satisfied end to end.
+What is left before a release is operational rather than functional —
+catalog availability reconciliation, deletion and trash, and backup
+verification (M6), none of which stand between a user and their book.
 
 ### After the MVP
 
