@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +62,14 @@ func (f *fakeMetadataStore) ApplyCatalogBookMetadata(
 	}
 	applied := request.Metadata
 	applied.Book.Revision = request.ExpectedRevision + 1
+	// Copy the sets before rewriting them, or the request just recorded
+	// would be mutated too and a later assertion would read back what the
+	// store decided instead of what the caller proposed.
+	applied.Tags = slices.Clone(applied.Tags)
+	applied.Series = slices.Clone(applied.Series)
+	applied.Contributors = slices.Clone(applied.Contributors)
+	applied.Languages = slices.Clone(applied.Languages)
+	applied.Identifiers = slices.Clone(applied.Identifiers)
 	// The real store resolves an entity by normalized name and never
 	// renames it, so a read-back returns the library's first spelling
 	// rather than the one just written.
@@ -76,6 +86,23 @@ func (f *fakeMetadataStore) ApplyCatalogBookMetadata(
 		applied.Contributors[i].Name = f.firstSpelling(
 			"contributor", row.NormalizedName, row.Name)
 	}
+	// The real queries order every set, so a read-back does not return rows
+	// in the order they were written.
+	slices.SortFunc(applied.Tags, func(a, b store.BookTaxon) int {
+		return strings.Compare(a.NormalizedName, b.NormalizedName)
+	})
+	slices.SortFunc(applied.Languages, func(a, b store.BookLanguage) int {
+		return strings.Compare(a.Language, b.Language)
+	})
+	slices.SortFunc(applied.Series, func(a, b store.BookSeries) int {
+		return strings.Compare(a.NormalizedName, b.NormalizedName)
+	})
+	slices.SortFunc(applied.Contributors, func(a, b store.BookContributor) int {
+		if role := strings.Compare(a.Role, b.Role); role != 0 {
+			return role
+		}
+		return a.Position - b.Position
+	})
 	f.current = applied
 	return applied, nil
 }
@@ -143,16 +170,19 @@ func TestMaterializeAppliesEmbeddedThenPath(t *testing.T) {
 	if len(applied.Contributors) != 2 {
 		t.Fatalf("contributors: %+v", applied.Contributors)
 	}
-	if applied.Contributors[0].Role != "translator" ||
-		applied.Contributors[0].Position != 0 ||
-		applied.Contributors[0].Source != store.MetadataEmbedded {
-		t.Fatalf("translator: %+v", applied.Contributors[0])
+	// Rows are read back ordered by role, so the author leads; the index it
+	// carries is the one the write order gave it, and that index is the
+	// only thing the order of the two proposals decides.
+	if applied.Contributors[0].Role != "author" ||
+		applied.Contributors[0].Name != "Frank Herbert" ||
+		applied.Contributors[0].Position != 1 ||
+		applied.Contributors[0].Source != store.MetadataFilename {
+		t.Fatalf("author: %+v", applied.Contributors[0])
 	}
-	if applied.Contributors[1].Role != "author" ||
-		applied.Contributors[1].Name != "Frank Herbert" ||
-		applied.Contributors[1].Position != 1 ||
-		applied.Contributors[1].Source != store.MetadataFilename {
-		t.Fatalf("author: %+v", applied.Contributors[1])
+	if applied.Contributors[1].Role != "translator" ||
+		applied.Contributors[1].Position != 0 ||
+		applied.Contributors[1].Source != store.MetadataEmbedded {
+		t.Fatalf("translator: %+v", applied.Contributors[1])
 	}
 }
 
@@ -444,5 +474,43 @@ func TestMaterializeKeepsWhatAPathReadFromADirectory(t *testing.T) {
 		applied.Contributors[0].Source != store.MetadataFilename {
 		t.Fatalf("discarded an author read from a directory: %+v",
 			applied.Contributors)
+	}
+}
+
+// The editor who wins the race usually supersedes only part of what the job
+// learned. The retry must then still write, under the revision the winner
+// left, without touching what they locked.
+func TestMaterializeWritesWhatAnEditorDidNotSupersede(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata(), staleFor: 1}
+	st.concurrentWrite = func(current *store.BookMetadata) {
+		current.Book.Title = "Dune"
+		current.Book.TitleSource = store.MetadataManual
+		current.Book.TitleLocked = true
+	}
+	job := materializeJob(t, epub.Metadata{
+		Title:    "Dune Messiah",
+		Subjects: []string{"Science Fiction"},
+	}, "")
+
+	applied, changed, err := MaterializeBookMetadata(
+		context.Background(), st, job, metadata.DefaultPathPatterns(), clockAt(now))
+	if err != nil || !changed {
+		t.Fatalf("materialize: changed=%v err=%v", changed, err)
+	}
+	if len(st.applies) != 2 {
+		t.Fatalf("applies: %d", len(st.applies))
+	}
+	// The retry resolved against what the winner left, not against the
+	// revision it first read.
+	if st.applies[1].ExpectedRevision != 2 {
+		t.Fatalf("retry expected revision: %d", st.applies[1].ExpectedRevision)
+	}
+	if applied.Book.Title != "Dune" || !applied.Book.TitleLocked ||
+		applied.Book.TitleSource != store.MetadataManual {
+		t.Fatalf("overwrote a locked title: %+v", applied.Book)
+	}
+	if len(applied.Tags) != 1 || applied.Tags[0].Name != "Science Fiction" {
+		t.Fatalf("dropped what the editor never supplied: %+v", applied.Tags)
 	}
 }
