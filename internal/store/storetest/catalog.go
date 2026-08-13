@@ -172,6 +172,7 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 		Publisher: "Ace", PublisherSource: store.MetadataEmbedded,
 		PublishedDate: "1969", PublishedDateSource: store.MetadataEmbedded,
 		RawMetadataJSON: []byte(`{"dc:identifier":"urn:isbn:9780441478125"}`),
+		SetLocks:        store.MetadataSetLocks{Tags: true},
 		CreatedAt:       now,
 	}
 	if err := s.CreateCatalogBook(ctx, reader.ID, book); err != store.ErrNotFound {
@@ -187,6 +188,12 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 	if err != nil || gotBook.Title != book.Title || !gotBook.SubtitleLocked ||
 		string(gotBook.RawMetadataJSON) != string(book.RawMetadataJSON) {
 		t.Fatalf("reader book: %+v %v", gotBook, err)
+	}
+	if gotBook.Revision != 1 {
+		t.Fatalf("new book revision: want 1, got %d", gotBook.Revision)
+	}
+	if gotBook.SetLocks != (store.MetadataSetLocks{Tags: true}) {
+		t.Fatalf("new book set locks: %+v", gotBook.SetLocks)
 	}
 	if _, err := s.CatalogBookByID(ctx, reader.ID, book.ID, store.LibraryRoleManage); err != store.ErrNotFound {
 		t.Fatalf("reader received book management: %v", err)

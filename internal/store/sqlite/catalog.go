@@ -43,6 +43,8 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	var book store.CatalogBook
 	var titleLocked, subtitleLocked, descriptionLocked int
 	var publisherLocked, publishedDateLocked int
+	var identifiersLocked, languagesLocked, tagsLocked int
+	var genresLocked, seriesLocked, contributorsLocked int
 	var created, updated string
 	var trashed, trashExpires sql.NullString
 	err := row.Scan(
@@ -69,6 +71,13 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 		&updated,
 		&trashed,
 		&trashExpires,
+		&book.Revision,
+		&identifiersLocked,
+		&languagesLocked,
+		&tagsLocked,
+		&genresLocked,
+		&seriesLocked,
+		&contributorsLocked,
 	)
 	if err != nil {
 		return book, err
@@ -78,6 +87,14 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	book.DescriptionLocked = descriptionLocked != 0
 	book.PublisherLocked = publisherLocked != 0
 	book.PublishedDateLocked = publishedDateLocked != 0
+	book.SetLocks = store.MetadataSetLocks{
+		Identifiers:  identifiersLocked != 0,
+		Languages:    languagesLocked != 0,
+		Tags:         tagsLocked != 0,
+		Genres:       genresLocked != 0,
+		Series:       seriesLocked != 0,
+		Contributors: contributorsLocked != 0,
+	}
 	if book.CreatedAt, err = parseTime(created); err != nil {
 		return book, err
 	}
@@ -111,7 +128,9 @@ const bookColumns = `b.id, b.library_id, b.status,
 	b.description, b.description_source, b.description_locked,
 	b.publisher, b.publisher_source, b.publisher_locked,
 	b.published_date, b.published_date_source, b.published_date_locked,
-	b.raw_metadata_json, b.created_at, b.updated_at, b.trashed_at, b.trash_expires_at`
+	b.raw_metadata_json, b.created_at, b.updated_at, b.trashed_at, b.trash_expires_at,
+	b.revision, b.identifiers_locked, b.languages_locked, b.tags_locked,
+	b.genres_locked, b.series_locked, b.contributors_locked`
 
 func checkLibraryRole(role store.LibraryRole) error {
 	if !role.Valid() {
@@ -247,11 +266,14 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 		     description, description_source, description_locked,
 		     publisher, publisher_source, publisher_locked,
 		     published_date, published_date_source, published_date_locked,
-		     raw_metadata_json, created_at, updated_at, trashed_at, trash_expires_at
+		     raw_metadata_json, created_at, updated_at, trashed_at, trash_expires_at,
+		     identifiers_locked, languages_locked, tags_locked,
+		     genres_locked, series_locked, contributors_locked
 		 )
 		 SELECT ?, l.id, ?,
 		        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		        ?, ?, ?, ?, ?
+		        ?, ?, ?, ?, ?,
+		        ?, ?, ?, ?, ?, ?
 		 FROM libraries l
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
 		 WHERE l.id = ? AND (l.owner_user_id = ? OR a.role = 'manage')`,
@@ -263,6 +285,9 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 		book.PublishedDate, string(book.PublishedDateSource), b2i(book.PublishedDateLocked),
 		book.RawMetadataJSON, formatTime(book.CreatedAt), formatTime(book.UpdatedAt),
 		formatTimePtr(book.TrashedAt), formatTimePtr(book.TrashExpiresAt),
+		b2i(book.SetLocks.Identifiers), b2i(book.SetLocks.Languages),
+		b2i(book.SetLocks.Tags), b2i(book.SetLocks.Genres),
+		b2i(book.SetLocks.Series), b2i(book.SetLocks.Contributors),
 		actorUserID, book.LibraryID, actorUserID)
 	if isUniqueErr(err) {
 		return store.ErrConflict

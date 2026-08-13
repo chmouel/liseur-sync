@@ -213,12 +213,32 @@ const (
 	MetadataManual   MetadataSource = "manual"
 )
 
+// MetadataSetLocks records the set-level manual locks of one book. A row
+// lock cannot express a deliberately emptied set, because removing the last
+// row leaves nothing behind to carry the lock, so the set-level flag is what
+// keeps an emptied set empty across rescans.
+type MetadataSetLocks struct {
+	Identifiers  bool `json:"-"`
+	Languages    bool `json:"-"`
+	Tags         bool `json:"-"`
+	Genres       bool `json:"-"`
+	Series       bool `json:"-"`
+	Contributors bool `json:"-"`
+}
+
 // CatalogBook is shared through a library ACL. Its sync Work remains
 // user-scoped and is joined through UserBookWork.
+//
+// Revision and SetLocks are server-managed state rather than request
+// payload, so they are excluded from the JSON encoding that
+// NewBookPromotionFingerprint hashes; including them would change the
+// fingerprint of every in-flight promotion across an upgrade.
 type CatalogBook struct {
 	ID                  string
 	LibraryID           string
 	Status              BookStatus
+	Revision            int64            `json:"-"`
+	SetLocks            MetadataSetLocks `json:"-"`
 	Title               string
 	TitleSource         MetadataSource
 	TitleLocked         bool

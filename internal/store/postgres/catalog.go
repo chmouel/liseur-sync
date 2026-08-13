@@ -53,6 +53,13 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 		&book.UpdatedAt,
 		&book.TrashedAt,
 		&book.TrashExpiresAt,
+		&book.Revision,
+		&book.SetLocks.Identifiers,
+		&book.SetLocks.Languages,
+		&book.SetLocks.Tags,
+		&book.SetLocks.Genres,
+		&book.SetLocks.Series,
+		&book.SetLocks.Contributors,
 	)
 	return book, err
 }
@@ -67,7 +74,9 @@ const bookColumns = `b.id, b.library_id, b.status,
 	b.description, b.description_source, b.description_locked,
 	b.publisher, b.publisher_source, b.publisher_locked,
 	b.published_date, b.published_date_source, b.published_date_locked,
-	b.raw_metadata_json, b.created_at, b.updated_at, b.trashed_at, b.trash_expires_at`
+	b.raw_metadata_json, b.created_at, b.updated_at, b.trashed_at, b.trash_expires_at,
+	b.revision, b.identifiers_locked, b.languages_locked, b.tags_locked,
+	b.genres_locked, b.series_locked, b.contributors_locked`
 
 func checkLibraryRole(role store.LibraryRole) error {
 	if !role.Valid() {
@@ -203,11 +212,14 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 		     description, description_source, description_locked,
 		     publisher, publisher_source, publisher_locked,
 		     published_date, published_date_source, published_date_locked,
-		     raw_metadata_json, created_at, updated_at, trashed_at, trash_expires_at
+		     raw_metadata_json, created_at, updated_at, trashed_at, trash_expires_at,
+		     identifiers_locked, languages_locked, tags_locked,
+		     genres_locked, series_locked, contributors_locked
 		 )
 		 SELECT ?, l.id, ?,
 		        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-		        ?, ?, ?, ?, ?
+		        ?, ?, ?, ?, ?,
+		        ?, ?, ?, ?, ?, ?
 		 FROM libraries l
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
 		 WHERE l.id = ? AND (l.owner_user_id = ? OR a.role = 'manage')`),
@@ -219,6 +231,9 @@ func (s *Store) CreateCatalogBook(ctx context.Context, actorUserID string, book 
 		book.PublishedDate, string(book.PublishedDateSource), book.PublishedDateLocked,
 		book.RawMetadataJSON, book.CreatedAt.UTC(), book.UpdatedAt.UTC(),
 		book.TrashedAt, book.TrashExpiresAt,
+		book.SetLocks.Identifiers, book.SetLocks.Languages,
+		book.SetLocks.Tags, book.SetLocks.Genres,
+		book.SetLocks.Series, book.SetLocks.Contributors,
 		actorUserID, book.LibraryID, actorUserID)
 	if isUniqueErr(err) {
 		return store.ErrConflict

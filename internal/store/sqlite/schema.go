@@ -726,7 +726,31 @@ ALTER TABLE ingest_jobs
     ADD COLUMN extracted_embedded_metadata_json BLOB;
 `
 
+const migration13 = `
+ALTER TABLE books
+    ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
+ALTER TABLE books
+    ADD COLUMN identifiers_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (identifiers_locked IN (0, 1));
+ALTER TABLE books
+    ADD COLUMN languages_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (languages_locked IN (0, 1));
+ALTER TABLE books
+    ADD COLUMN tags_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (tags_locked IN (0, 1));
+ALTER TABLE books
+    ADD COLUMN genres_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (genres_locked IN (0, 1));
+ALTER TABLE books
+    ADD COLUMN series_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (series_locked IN (0, 1));
+ALTER TABLE books
+    ADD COLUMN contributors_locked INTEGER NOT NULL DEFAULT 0
+        CHECK (contributors_locked IN (0, 1));
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
+	migration13,
 }
