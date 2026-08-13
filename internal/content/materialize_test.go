@@ -15,9 +15,10 @@ import (
 )
 
 type fakeMetadataStore struct {
-	current store.BookMetadata
-	reads   int
-	applies []store.ApplyBookMetadataRequest
+	current   store.BookMetadata
+	reads     int
+	spellings map[string]string
+	applies   []store.ApplyBookMetadataRequest
 	// staleFor makes the first n applies lose the revision race, as a
 	// concurrent writer would.
 	staleFor int
@@ -50,8 +51,33 @@ func (f *fakeMetadataStore) ApplyCatalogBookMetadata(
 	}
 	applied := request.Metadata
 	applied.Book.Revision = request.ExpectedRevision + 1
+	// The real store resolves an entity by normalized name and never
+	// renames it, so a read-back returns the library's first spelling
+	// rather than the one just written.
+	if f.spellings == nil {
+		f.spellings = map[string]string{}
+	}
+	for i, row := range applied.Tags {
+		applied.Tags[i].Name = f.firstSpelling("tag", row.NormalizedName, row.Name)
+	}
+	for i, row := range applied.Series {
+		applied.Series[i].Name = f.firstSpelling("series", row.NormalizedName, row.Name)
+	}
+	for i, row := range applied.Contributors {
+		applied.Contributors[i].Name = f.firstSpelling(
+			"contributor", row.NormalizedName, row.Name)
+	}
 	f.current = applied
 	return applied, nil
+}
+
+func (f *fakeMetadataStore) firstSpelling(kind, normalized, display string) string {
+	key := kind + "|" + normalized
+	if existing, ok := f.spellings[key]; ok {
+		return existing
+	}
+	f.spellings[key] = display
+	return display
 }
 
 func materializeJob(t *testing.T, embedded epub.Metadata, path string) store.IngestJob {
@@ -265,5 +291,43 @@ func TestMaterializePropagatesReadFailure(t *testing.T) {
 		context.Background(), st, job, metadata.DefaultPathPatterns(),
 		clockAt(now)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("read failure: %v", err)
+	}
+}
+
+// The catalog's entity rows are library-wide and keep whichever spelling the
+// library saw first, so a read-back does not return what was just written.
+// Materialization must still converge, or every pass over a book whose
+// spelling differs from its library's rewrites it and bumps its revision.
+func TestMaterializeConvergesAgainstLibrarySpelling(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{
+		current: emptyMetadata(),
+		spellings: map[string]string{
+			"tag|science fiction":       "Science Fiction",
+			"contributor|frank herbert": "Frank Herbert",
+			"series|dune":               "Dune",
+		},
+	}
+	job := materializeJob(t, epub.Metadata{
+		Title:        "Dune",
+		Subjects:     []string{"science fiction"},
+		Series:       []epub.Series{{Name: "DUNE"}},
+		Contributors: []epub.Contributor{{Name: "frank herbert", Role: "author"}},
+	}, "")
+
+	for pass := 0; pass < 3; pass++ {
+		_, changed, err := MaterializeBookMetadata(
+			context.Background(), st, job, metadata.DefaultPathPatterns(),
+			clockAt(now))
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if pass > 0 && changed {
+			t.Fatalf("pass %d rewrote the book for a spelling it does not own",
+				pass)
+		}
+	}
+	if len(st.applies) != 1 {
+		t.Fatalf("applies: %d", len(st.applies))
 	}
 }
