@@ -103,6 +103,41 @@ liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReade
 liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
 ```
 
+## How a library reads its filenames
+
+A file that arrives with a path — one found under a watched root rather
+than uploaded — can say something about its own author, series and title,
+but only if the server knows how the library is laid out. Two common
+layouts are the same shape on disk: `Author/Title.epub` and
+`Series/Author - Title.epub` are both one directory and one file, and only
+you know which one your library uses.
+
+```
+liseur-sync admin -config liseur-sync.toml library-layout alice <library-id>
+liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> series/author-title
+liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> none
+liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> default
+```
+
+With no layout argument it prints what the library uses now and what it
+could use. The layouts are tried in the order you list them, which is how
+you resolve two that claim the same shape. `none` turns filename parsing
+off for that library, and `default` restores the conservative built-in
+list — `author/title`, `author/series/title` and `author-series-title`,
+which leaves out `series/author-title` precisely because it would
+otherwise reinterpret every `Author/Title.epub` library as a series
+library.
+
+Changing this affects files ingested afterwards. Books already in the
+catalog keep the metadata they were promoted with; a wrong layout is
+corrected by editing those books, not by re-reading their names.
+
+A library whose configuration cannot be parsed stops being promoted
+rather than being read with the wrong layout: the ingest pass counts it as
+`misconfigured` and moves on to the other libraries. Uploads are
+unaffected either way — an upload carries no path, so there is nothing for
+a layout to read.
+
 ## Reading statistics for books nobody has opened yet
 
 A book is joined to a reader's sync work the first time a client resolves

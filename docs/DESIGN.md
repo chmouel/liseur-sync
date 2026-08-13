@@ -599,9 +599,10 @@ keeps its files, so restoring it is a relink rather than a re-upload, and
 an hourly pass permanently removes what has outlived
 `content.trash_retention_hours`, releasing quota and handing the blobs to
 the orphan sweep. `liseur-sync admin verify-backup` answers whether a
-database and content directory are a restorable pair. Cover extraction and
-per-library parser configuration are tracked in
-[ADR-0004](adr/0004-metadata-and-categorization.md).
+database and content directory are a restorable pair. Cover extraction
+and per-library filename layouts are built; the rest of
+[ADR-0004](adr/0004-metadata-and-categorization.md) — metadata editing,
+then search — is not.
 
 M7 and M8 are now in place: uploads create ingest jobs, the admin subcommand
 creates libraries and grants access, the catalog API lists and downloads

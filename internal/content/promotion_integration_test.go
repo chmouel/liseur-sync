@@ -197,3 +197,141 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 		t.Fatalf("second pass did work: %+v", again)
 	}
 }
+
+// TestConfiguredLayoutReachesTheCatalog drives the whole chain against real
+// components: the layout an operator stores on a library, the resolver that
+// reads it back, the pass that applies it, and the catalog rows it produces.
+// The unit tests use a fake catalog, and a fake cannot tell you that the
+// document survived a round trip through the backend.
+func TestConfiguredLayoutReachesTheCatalog(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	cas, err := Open(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("open cas: %v", err)
+	}
+	defer cas.Close()
+	st, err := sqlite.Open(filepath.Join(root, "liseur.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := time.Date(2024, 5, 1, 12, 0, 0, 0, time.UTC)
+	user := storetest.MkUser(t, st, "layout-reader")
+	// Two libraries, one file name, one difference: what each library says
+	// about how its files are named.
+	libraries := map[string][]byte{
+		"lib-default": nil,
+		"lib-series":  []byte(`{"path_patterns":["series/author-title"]}`),
+	}
+	for id := range libraries {
+		// A layout only ever reads a path, and only a watched library's
+		// files have one.
+		rootPath := filepath.Join(root, id)
+		if err := st.CreateLibrary(ctx, store.Library{
+			ID: id, OwnerUserID: user.ID, QuotaUserID: user.ID,
+			Kind: store.LibraryWatched, Name: id, RootPath: &rootPath,
+			CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if config := libraries[id]; config != nil {
+			if err := st.SetLibraryConfig(ctx, user.ID, id, config, now); err != nil {
+				t.Fatalf("configure %s: %v", id, err)
+			}
+		}
+	}
+
+	const relative = "Earthsea/Le Guin - Tehanu.epub"
+	for _, library := range []string{"lib-default", "lib-series"} {
+		id := "job-" + library
+		job, created, err := st.CreateIngestJob(ctx, user.ID, store.IngestJobRequest{
+			ID: id, LibraryID: library, Source: store.IngestWatched,
+			SourceRelativePath: &[]string{relative}[0],
+			RequestFingerprint: "request-" + id, CreatedAt: now,
+		})
+		if err != nil || !created {
+			t.Fatalf("create job for %s: %v %v", library, created, err)
+		}
+		staged, err := cas.Stage(ctx, job.ID,
+			bytes.NewReader([]byte("publication for "+library)), 1<<20)
+		if err != nil {
+			t.Fatalf("stage: %v", err)
+		}
+		stage, err := st.CommitIngestStage(ctx, job.UserID, job.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: job.Revision,
+				Artifact: store.BlobInfo{
+					SHA256: staged.SHA256, SizeBytes: staged.Size},
+				StagingPath: contentpath.StagingPath(job.ID),
+				UpdatedAt:   now.Add(time.Minute),
+			})
+		if err != nil {
+			t.Fatalf("commit stage: %v", err)
+		}
+		job = stage.Job
+		for _, next := range []store.IngestState{
+			store.IngestValidated, store.IngestExtracted,
+		} {
+			change := store.IngestJobTransition{
+				ExpectedState: job.State, ExpectedRevision: job.Revision,
+				NextState: next, UpdatedAt: now.Add(2 * time.Minute),
+			}
+			if next == store.IngestExtracted {
+				// The publication itself says nothing, so the only thing
+				// that can describe these books is their path.
+				change.ExtractedEmbeddedMetadataJSON = []byte(`{}`)
+			}
+			if job, err = st.TransitionIngestJob(
+				ctx, job.UserID, job.ID, change); err != nil {
+				t.Fatalf("advance %s to %s: %v", library, next, err)
+			}
+		}
+	}
+
+	report, err := RunIngestPromotionPass(ctx, st, cas,
+		NewLibraryPatterns(st), func() time.Time { return now.Add(5 * time.Minute) },
+		48*time.Hour, 10)
+	if err != nil {
+		t.Fatalf("promotion pass: %v", err)
+	}
+	if report.Promoted != 2 || report.Undescribed != 0 || report.Misconfigured != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+
+	metadataFor := func(library string) store.BookMetadata {
+		t.Helper()
+		books, err := st.ListCatalogBooks(ctx, user.ID, library, nil, 10)
+		if err != nil {
+			t.Fatalf("list %s: %v", library, err)
+		}
+		if len(books) != 1 {
+			t.Fatalf("%s holds %d books, want one", library, len(books))
+		}
+		got, err := st.CatalogBookMetadata(
+			ctx, user.ID, books[0].ID, store.LibraryRoleRead)
+		if err != nil {
+			t.Fatalf("metadata for %s: %v", library, err)
+		}
+		return got
+	}
+
+	byDefault := metadataFor("lib-default")
+	if len(byDefault.Contributors) != 1 || byDefault.Contributors[0].Name != "Earthsea" {
+		t.Fatalf("default layout contributors = %+v", byDefault.Contributors)
+	}
+	if len(byDefault.Series) != 0 {
+		t.Fatalf("default layout invented a series: %+v", byDefault.Series)
+	}
+	bySeries := metadataFor("lib-series")
+	if len(bySeries.Series) != 1 || bySeries.Series[0].Name != "Earthsea" {
+		t.Fatalf("configured layout series = %+v", bySeries.Series)
+	}
+	if len(bySeries.Contributors) != 0 {
+		t.Fatalf("configured layout kept a guessed author: %+v", bySeries.Contributors)
+	}
+}
