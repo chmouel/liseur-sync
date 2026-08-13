@@ -270,6 +270,21 @@ All of these need a token with `library-read`. Uploading needs
 are separate, so a token cannot reach a library its owner was never
 granted.
 
+`DELETE /v1/books/{id}` deletes a book, and needs `library-manage` for
+the same reason uploading does. Deletion is reversible: the book leaves
+the catalog and stops being downloadable at once, but its files are
+kept until the server's trash retention passes, and
+`POST /v1/books/{id}/restore` brings it back until then. Both answer
+`409` when the book is in the wrong state — already deleted, or not in
+the trash — which is worth distinguishing from `404`: a client that
+retries a delete has not lost the book, and one that retries a restore
+too late has.
+
+A restored book comes back with `status: "missing"` rather than
+`"active"` if its bytes went away while it sat in the trash. That is
+not a failure to report; the catalog entry and its metadata are back,
+and the file needs uploading again.
+
 ## KOReader through OPDS
 
 KOReader can browse the catalog with no plugin at all. Add an OPDS
