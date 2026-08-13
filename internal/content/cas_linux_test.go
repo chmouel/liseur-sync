@@ -284,6 +284,45 @@ func TestListBlobsInventoriesOnlyVerifiedFinals(t *testing.T) {
 	}
 }
 
+func TestRemoveBlobVerifiesAndDeletesIdempotently(t *testing.T) {
+	cas := openTestCAS(t)
+	data := []byte("garbage collected")
+	staged, err := cas.Stage(context.Background(), "remove-blob",
+		bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := cas.Promote(
+		context.Background(), staged.Path, staged.SHA256, staged.Size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := cas.RemoveBlob(
+		context.Background(), blob.SHA256, blob.Size+1); !errors.Is(err, ErrCorruptBlob) || removed {
+		t.Fatalf("wrong-size removal: %v %v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		cas.Root(), filepath.FromSlash(blob.Path))); err != nil {
+		t.Fatalf("failed verification removed blob: %v", err)
+	}
+	if removed, err := cas.RemoveBlob(
+		context.Background(), blob.SHA256, blob.Size); err != nil || !removed {
+		t.Fatalf("remove blob: %v %v", removed, err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		cas.Root(), filepath.FromSlash(blob.Path))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed blob remains: %v", err)
+	}
+	if removed, err := cas.RemoveBlob(
+		context.Background(), blob.SHA256, blob.Size); err != nil || removed {
+		t.Fatalf("remove blob replay: %v %v", removed, err)
+	}
+	inventory, err := cas.ListBlobs(context.Background())
+	if err != nil || len(inventory) != 0 {
+		t.Fatalf("inventory after removal: %+v %v", inventory, err)
+	}
+}
+
 func TestListBlobsRejectsCorruptionAndUnexpectedEntries(t *testing.T) {
 	t.Run("corrupt blob", func(t *testing.T) {
 		cas := openTestCAS(t)

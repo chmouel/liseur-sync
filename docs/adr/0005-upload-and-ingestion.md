@@ -177,7 +177,8 @@ name a stable job and reason instead of losing state when a request ends.
    traffic. Strict final-blob filesystem inventory is implemented; workers
    remain. Database blob reconciliation can mark missing content and
    filesystem-only or unreferenced orphans, and startup performs the complete
-   mark-only comparison. Catalog availability reconciliation and workers
+   comparison followed by a configurable grace-period sweep. Active ingest
+   holds prevent collection. Catalog availability reconciliation and workers
    remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
