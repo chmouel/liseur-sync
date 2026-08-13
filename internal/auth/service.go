@@ -13,6 +13,23 @@ import (
 // by login (usable only for token management).
 const LoginTTL = time.Hour
 
+// ReaderTokenTTL is the lifetime of a browser reader's API credential.
+// The reader refreshes by asking for another one with the session cookie
+// it already holds, so there is no refresh token to steal and expiry is
+// the only revocation the reader has to implement.
+const ReaderTokenTTL = time.Hour
+
+// ReaderTokenName marks tokens minted for the browser reader. It is how
+// a reader token is recognised again, which is what keeps one browser to
+// one device identity in the op log.
+const ReaderTokenName = "Web reader"
+
+// readerScopes is the whole capability of a browser reader: read the
+// catalog, sync positions. It is deliberately not derived from the
+// user's other tokens, so a reader credential can never carry
+// library-manage or admin however privileged its owner is.
+var readerScopes = store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}
+
 // ErrAdminGrantRequiresAdmin prevents login credentials from bootstrapping
 // instance-wide privileges.
 var ErrAdminGrantRequiresAdmin = errors.New("admin scope requires an existing admin token")
@@ -91,6 +108,69 @@ func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, sco
 
 // MintToken creates a token for a known user (admin CLI path).
 func (s *Service) MintToken(ctx context.Context, userID, name string, requested store.ScopeSet, expiresAt *time.Time) (string, store.Token, error) {
+	return s.mintToken(ctx, userID, name, requested, expiresAt, "")
+}
+
+// MintReaderToken issues the browser reader's API credential: fixed
+// scopes, an hour's life, and the caller's existing web device identity
+// if they have read in a browser before.
+//
+// The device identity is reused rather than freshly minted because op
+// log heads are per work *and* device. A device per tab, or per hour,
+// would turn one person reading one book into several competing heads,
+// and "where did I stop" would depend on which window asked.
+//
+// Previous reader tokens are left alone unless they have already
+// expired. Revoking them here would let two open tabs invalidate each
+// other's credential in a loop, each re-minting in response to the
+// other's failure.
+func (s *Service) MintReaderToken(ctx context.Context, userID string) (string, store.Token, error) {
+	existing, err := s.St.ListTokens(ctx, userID)
+	if err != nil {
+		return "", store.Token{}, fmt.Errorf("list tokens: %w", err)
+	}
+	now := s.Now()
+	deviceID := ""
+	var newest time.Time
+	for _, t := range existing {
+		if t.Name != ReaderTokenName {
+			continue
+		}
+		// The device id is a label in the op log, not a credential, so
+		// even a revoked predecessor is the right thing to inherit: it
+		// is the same browser, and the reading history says so.
+		if deviceID == "" || t.CreatedAt.After(newest) {
+			deviceID, newest = t.DeviceID, t.CreatedAt
+		}
+		if t.RevokedAt == nil && t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
+			_ = s.St.RevokeToken(ctx, userID, t.ID)
+		}
+	}
+	expiresAt := now.Add(ReaderTokenTTL)
+	return s.mintToken(ctx, userID, ReaderTokenName, readerScopes, &expiresAt, deviceID)
+}
+
+// RevokeReaderTokens ends browser reading for a user. Signing out has to
+// take the reader's credential with it, or a token minted from a session
+// would quietly outlive the session that authorised it.
+func (s *Service) RevokeReaderTokens(ctx context.Context, userID string) error {
+	toks, err := s.St.ListTokens(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("list tokens: %w", err)
+	}
+	for _, t := range toks {
+		if t.Name != ReaderTokenName || t.RevokedAt != nil {
+			continue
+		}
+		if err := s.St.RevokeToken(ctx, userID, t.ID); err != nil {
+			return fmt.Errorf("revoke reader token: %w", err)
+		}
+	}
+	return nil
+}
+
+// mintToken is the shared body. An empty deviceID means mint a new one.
+func (s *Service) mintToken(ctx context.Context, userID, name string, requested store.ScopeSet, expiresAt *time.Time, deviceID string) (string, store.Token, error) {
 	scopes, err := store.NormalizeScopes(requested)
 	if err != nil {
 		return "", store.Token{}, err
@@ -103,14 +183,17 @@ func (s *Service) MintToken(ctx context.Context, userID, name string, requested 
 	if err != nil {
 		return "", store.Token{}, err
 	}
-	deviceID, err := NewSecret()
-	if err != nil {
-		return "", store.Token{}, err
+	if deviceID == "" {
+		fresh, err := NewSecret()
+		if err != nil {
+			return "", store.Token{}, err
+		}
+		deviceID = fresh[:16] // device ids are short
 	}
 	tok := store.Token{
 		ID:        id,
 		UserID:    userID,
-		DeviceID:  deviceID[:16], // device ids are short
+		DeviceID:  deviceID,
 		Name:      name,
 		Scopes:    scopes,
 		SHA256:    HashSecret(secret),

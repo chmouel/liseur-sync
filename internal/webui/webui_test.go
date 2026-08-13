@@ -430,7 +430,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	for _, p := range []string{
 		"/ui/login", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
 		"/ui/tokens/example/scopes", "/ui/settings", "/ui/settings/password",
-		"/ui/admin/invites", "/ui/books/upload",
+		"/ui/admin/invites", "/ui/books/upload", "/ui/reader/token",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
 			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)
