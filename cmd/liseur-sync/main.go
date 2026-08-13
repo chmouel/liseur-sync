@@ -313,10 +313,15 @@ func cmdServe(args []string) error {
 			AuthRateLim: auth.NewRateLimiter(10, time.Minute),
 		},
 		Koplugin: &koplugin.Server{St: st},
-		WebUI: &webui.Server{
-			St: st, Auth: auth.NewService(st), Cfg: cfg,
-			LoginLimiter: loginLimiter,
-		},
+	}
+	// The UI delegates uploads and downloads back to the API server, so
+	// the two surfaces share one implementation of the rules about
+	// staged bytes and what a stored file may claim to be.
+	apiSrv.WebUI = &webui.Server{
+		St: st, Auth: auth.NewService(st), Cfg: cfg,
+		LoginLimiter: loginLimiter,
+		Uploads:      apiSrv,
+		Downloads:    apiSrv,
 	}
 	mux := apiSrv.Routes()
 

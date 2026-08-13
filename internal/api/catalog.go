@@ -155,12 +155,22 @@ func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	s.ServeBookDownload(w, r, tok.UserID, r.PathValue("id"))
+}
+
+// ServeBookDownload is the download itself, without the token. The web
+// UI authenticates with a cookie session but must serve bytes under the
+// same rules — the media-type allowlist and the filename sanitizing
+// below are what keep a hostile upload from becoming a hostile
+// download, and there must not be a second copy of them.
+func (s *Server) ServeBookDownload(
+	w http.ResponseWriter, r *http.Request, userID, bookID string,
+) {
 	if s.Blobs == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
 		return
 	}
-	bookID := r.PathValue("id")
-	files, err := s.St.ListBookFiles(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	files, err := s.St.ListBookFiles(r.Context(), userID, bookID, store.LibraryRoleRead)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return

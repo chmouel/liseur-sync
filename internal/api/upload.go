@@ -101,20 +101,58 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body,
 		s.Cfg.Content.MaxUploadBytes+uploadEnvelopeSlack)
 
+	part, err := uploadPart(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Not deferred: multipart.Part.Close drains the rest of the part,
+	// which for a refused upload is exactly the data we declined to
+	// read. StageUpload reports whether it got as far as reading, so
+	// closing stays on the paths where the body is already consumed.
+	job, replayed, err := s.StageUpload(r.Context(),
+		tok.UserID, libraryID, key, part)
+	if err != nil {
+		if !errors.Is(err, errUploadBodyUnread) {
+			part.Close()
+		}
+		writeUploadError(w, err)
+		return
+	}
+	part.Close()
+	if replayed {
+		writeJSON(w, http.StatusOK, uploadJobJSON(job))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, uploadJobJSON(job))
+}
+
+// StageUpload is the whole of an upload that is not HTTP: it opens or
+// re-enters the idempotent job, streams the body into the CAS, and
+// records that it did. The web UI drives the same path with a cookie
+// session instead of a token, and must not grow a second copy of this —
+// the cleanup rules below are subtle enough once.
+//
+// It reports `replayed` when the job already carried its bytes, so a
+// caller can distinguish "stored now" from "stored earlier".
+func (s *Server) StageUpload(
+	ctx context.Context, userID, libraryID, key string, body io.Reader,
+) (store.IngestJob, bool, error) {
+	if s.Content == nil {
+		return store.IngestJob{}, false, errUploadNoStorage
+	}
 	now := time.Now().UTC()
-	jobID := uploadJobID(tok.UserID, libraryID, key)
-	job, created, err := s.St.CreateIngestJob(r.Context(), tok.UserID,
+	job, created, err := s.St.CreateIngestJob(ctx, userID,
 		store.IngestJobRequest{
-			ID:                 jobID,
+			ID:                 uploadJobID(userID, libraryID, key),
 			LibraryID:          libraryID,
 			Source:             store.IngestUpload,
 			ClientKey:          &key,
-			RequestFingerprint: uploadFingerprint(tok.UserID, libraryID, key),
+			RequestFingerprint: uploadFingerprint(userID, libraryID, key),
 			CreatedAt:          now,
 		})
 	if err != nil {
-		writeUploadJobError(w, err)
-		return
+		return store.IngestJob{}, false, uploadPhaseError{phase: uploadPhaseJob, err: err}
 	}
 
 	// A replay that already carries its bytes must not read the body again.
@@ -122,26 +160,15 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// original stage and discard what the client just sent, or contradict a
 	// digest the database has already committed.
 	if !created && job.State != store.IngestReceived {
-		writeJSON(w, http.StatusOK, uploadJobJSON(job))
-		return
+		return job, true, nil
 	}
 
-	part, err := uploadPart(r)
+	staged, err := s.Content.Stage(ctx, job.ID, body, s.Cfg.Content.MaxUploadBytes)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return store.IngestJob{}, false, uploadPhaseError{phase: uploadPhaseStage, err: err}
 	}
 
-	staged, err := s.Content.Stage(r.Context(), job.ID, part, s.Cfg.Content.MaxUploadBytes)
-	if err != nil {
-		// Do not close the part: Close drains what is left of it, which
-		// for an oversized upload is exactly the data we just refused.
-		writeStageError(w, err)
-		return
-	}
-	part.Close()
-
-	result, err := s.St.CommitIngestStage(r.Context(), tok.UserID, job.ID,
+	result, err := s.St.CommitIngestStage(ctx, userID, job.ID,
 		store.CommitIngestStageRequest{
 			ExpectedRevision: job.Revision,
 			Artifact:         store.BlobInfo{SHA256: staged.SHA256, SizeBytes: staged.Size},
@@ -158,12 +185,16 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// attempt honest: Stage replays an existing stage without reading
 		// the body, so a leftover would answer a later upload with the
 		// wrong file's digest.
-		if s.writeCommitError(w, r, tok.UserID, job.ID, err) {
-			s.removeStage(r.Context(), staged.Path)
+		winner, orphaned, raced := s.resolveCommitFailure(ctx, userID, job.ID, err)
+		if orphaned {
+			s.removeStage(ctx, staged.Path)
 		}
-		return
+		if raced {
+			return winner, true, nil
+		}
+		return store.IngestJob{}, false, uploadPhaseError{phase: uploadPhaseCommit, err: err}
 	}
-	writeJSON(w, http.StatusAccepted, uploadJobJSON(result.Job))
+	return result.Job, false, nil
 }
 
 // HandleIngestJob implements GET /v1/ingest/jobs/{id}, which is how a
@@ -236,6 +267,62 @@ func uploadPart(r *http.Request) (*multipart.Part, error) {
 	}
 }
 
+// uploadPhase says where an upload gave up. The same store error means
+// different things in different places — ErrConflict on job creation is a
+// reused idempotency key, ErrConflict on commit is a lost race — so the
+// phase travels with the error rather than being guessed from it.
+type uploadPhase int
+
+const (
+	uploadPhaseJob uploadPhase = iota
+	uploadPhaseStage
+	uploadPhaseCommit
+)
+
+type uploadPhaseError struct {
+	phase uploadPhase
+	err   error
+}
+
+func (e uploadPhaseError) Error() string { return e.err.Error() }
+func (e uploadPhaseError) Unwrap() error { return e.err }
+
+// errUploadNoStorage means the instance has no content root configured.
+var errUploadNoStorage = errors.New("content storage is unavailable")
+
+// errUploadBodyUnread marks the failures that happened before or during
+// the read, where draining the rest of the request is precisely what the
+// caller must not do.
+var errUploadBodyUnread = errors.New("upload body was not consumed")
+
+func (e uploadPhaseError) Is(target error) bool {
+	return target == errUploadBodyUnread &&
+		(e.phase == uploadPhaseJob || e.phase == uploadPhaseStage)
+}
+
+// writeUploadError maps a staging failure onto the HTTP contract. It is
+// the only place that decides a status, so the web UI and the API agree
+// on what each failure means even though they render it differently.
+func writeUploadError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errUploadNoStorage) {
+		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
+		return
+	}
+	var phased uploadPhaseError
+	if !errors.As(err, &phased) {
+		writeError(w, http.StatusInternalServerError, "upload failed")
+		return
+	}
+	switch phased.phase {
+	case uploadPhaseJob:
+		writeUploadJobError(w, phased.err)
+	case uploadPhaseStage:
+		writeStageError(w, phased.err)
+	default:
+		writeCommitError(w, phased.err)
+	}
+}
+
 func writeUploadJobError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -267,36 +354,40 @@ func writeStageError(w http.ResponseWriter, err error) {
 	}
 }
 
-// writeCommitError handles the gap between durable bytes and a durable
-// record. Losing this race is normal — two tabs, or a retry arriving while
-// the first request still runs — and it is not an error for the caller:
-// the bytes are staged either way, so we report the job the winner created.
-// writeCommitError answers a failed commit and reports whether the staged
-// bytes are now orphaned and should be deleted.
-func (s *Server) writeCommitError(
-	w http.ResponseWriter,
-	r *http.Request,
-	userID, jobID string,
-	err error,
-) bool {
+func writeCommitError(w http.ResponseWriter, err error) {
 	var quota *store.QuotaExceededError
 	if errors.As(err, &quota) {
 		// 413 rather than 507: the request is refused because of its size,
 		// and ADR-0005 requires envelope failures to be 4xx.
 		writeError(w, http.StatusRequestEntityTooLarge, "storage quota exceeded")
-		return true
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "upload failed")
+}
+
+// resolveCommitFailure handles the gap between durable bytes and a durable
+// record. Losing this race is normal — two tabs, or a retry arriving while
+// the first request still runs — and it is not an error for the caller:
+// the bytes are staged either way, so we report the job the winner created.
+//
+// It reports the winning job, whether the staged bytes are now orphaned
+// and should be deleted, and whether the failure was a race at all.
+func (s *Server) resolveCommitFailure(
+	ctx context.Context, userID, jobID string, err error,
+) (store.IngestJob, bool, bool) {
+	var quota *store.QuotaExceededError
+	if errors.As(err, &quota) {
+		return store.IngestJob{}, true, false
 	}
 	if errors.Is(err, store.ErrStaleRevision) || errors.Is(err, store.ErrInvalidTransition) {
-		if job, lookupErr := s.St.IngestJobByID(r.Context(), userID, jobID); lookupErr == nil {
+		if job, lookupErr := s.St.IngestJobByID(ctx, userID, jobID); lookupErr == nil {
 			// A concurrent request committed first. The stage it committed
 			// is the one we just wrote — the path is a function of the job
 			// id — so it is referenced now and must not be removed.
-			writeJSON(w, http.StatusOK, uploadJobJSON(job))
-			return job.StagingPath == nil
+			return job, job.StagingPath == nil, true
 		}
 	}
-	writeError(w, http.StatusInternalServerError, "upload failed")
-	return true
+	return store.IngestJob{}, true, false
 }
 
 // removeStage drops staged bytes that no database row references. It runs
