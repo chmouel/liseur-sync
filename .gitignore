@@ -1,4 +1,12 @@
 *_templ.go
 liseur-sync.db*
 .env
-/bin/liseur-sync
+
+# make dev: generated config and its data, neither fit to deploy
+liseur-sync.dev.toml
+.dev/
+/tmp/
+
+bin/
+dist/
+coverage.out
