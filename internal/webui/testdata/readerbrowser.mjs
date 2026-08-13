@@ -135,7 +135,7 @@ const probe = `(() => {
     sandbox: frame ? frame.getAttribute('sandbox') : null,
     text: body ? body.innerText.slice(0, 60) : '',
     colour: body ? getComputedStyle(body).color : '',
-    scrollLeft: doc ? doc.documentElement.scrollLeft : -1,
+    scroll: document.querySelector('#reader-view .epub-container')?.scrollLeft ?? -1,
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
   });
 })()`;
@@ -147,7 +147,7 @@ check('no error banner', !diag.status, diag.status);
 check('the engine rendered a chapter', diag.hasFrame && diag.text.length > 10,
   `frame=${diag.hasFrame} text=${JSON.stringify(diag.text)}`);
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
-check('reader knows the spine', diag.chapter === 'Chapter 1 of 2', diag.chapter);
+check('reader knows the spine', /^Chapter 1 of (\d+)$/.test(diag.chapter), diag.chapter);
 
 // The publication's own stylesheet is a separate zip entry. The engine
 // rewrites the link to a blob URL, which the page CSP has to permit.
@@ -173,31 +173,33 @@ check('the page painted something', png.length > 8000 && uniq > 40,
 // the reported bug survived one click — so this turns the page until the
 // book ends and asks how far it got.
 const seen = [];
-let lastText = diag.text;
 for (let i = 0; i < 10; i++) {
   await evalIn(`document.getElementById('reader-next').click()`);
   await new Promise((r) => setTimeout(r, 900));
   const now = JSON.parse(await evalIn(probe));
-  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, head: now.text.slice(0, 24) });
-  if (now.text !== lastText) lastText = now.text;
+  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, scroll: now.scroll });
 }
 console.log('page turns:', JSON.stringify(seen, null, 1));
 
-const distinct = new Set(seen.map((p) => p.head + '|' + p.progress)).size;
-check('the book pages past page 2', distinct >= 4,
+// Ten turns, ten different places. A book that lays itself out too wide
+// still turns the page — it just turns onto blank column after blank
+// column — so the count that matters is of distinct pages, not of clicks.
+const distinct = new Set(seen.map((p) => p.chapter + '|' + p.progress + '|' + p.scroll)).size;
+check('the book pages past page 2', distinct >= 6,
   `${distinct} distinct pages in 10 turns`);
-check('the reader reaches the second chapter',
-  seen.some((p) => p.chapter === 'Chapter 2 of 2'),
+check('the reader leaves the first chapter',
+  seen.some((p) => p.chapter !== diag.chapter),
   seen.map((p) => p.chapter).join(' '));
 
 // Going back has to work too, or the reader is a one-way trip.
 await evalIn(`document.getElementById('reader-prev').click()`);
 await new Promise((r) => setTimeout(r, 900));
 const back = JSON.parse(await evalIn(probe));
+const wasAt = seen[seen.length - 1];
 check('the book pages backwards',
-  back.chapter !== seen[seen.length - 1].chapter ||
-  back.progress !== seen[seen.length - 1].progress,
-  `${seen[seen.length - 1].progress} -> ${back.progress}`);
+  back.chapter !== wasAt.chapter || back.progress !== wasAt.progress ||
+  back.scroll !== wasAt.scroll,
+  `${wasAt.chapter} ${wasAt.progress} @${wasAt.scroll} -> ${back.chapter} ${back.progress} @${back.scroll}`);
 
 // The browser refusing to run the publication's script is not a fault,
 // it is the whole point, and it is reported as a console error. Assert

@@ -3,6 +3,7 @@ package webui_test
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,8 +41,14 @@ func findChrome() string {
 	return ""
 }
 
-// browserTestEPUB is a small but real publication: two spine documents,
-// a separate stylesheet entry, and a chapter long enough to scroll.
+// browserTestEPUB is a small but real publication, and it is deliberately
+// awkward in the way real books are. Twelve spine documents, a separate
+// stylesheet, a chapter long enough to need several pages — and a heading
+// parked at left: -9999px, the trick publishers use to speak to a screen
+// reader without showing anything. That last detail is the fixture's whole
+// reason for being this shape: a book with it laid out thirty thousand
+// pixels wide and would not turn past its first section, and a two-chapter
+// fixture without it saw nothing wrong.
 func browserTestEPUB(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -55,32 +62,48 @@ func browserTestEPUB(t *testing.T) []byte {
 	}
 	body := strings.Repeat(
 		"<p>Call me Ishmael. Some years ago, never mind how long precisely.</p>\n", 60)
-	for name, content := range map[string]string{
+	// Announced but never seen. epub.js measures the whole document, so
+	// this is what used to make a chapter forty blank pages long.
+	offscreen := `<h2 class="offscreen">Chapter heading for a screen reader</h2>`
+
+	files := map[string]string{
 		"META-INF/container.xml": `<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
 </container>`,
-		"OEBPS/content.opf": `<?xml version="1.0"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Moby-Dick</dc:title></metadata>
-  <manifest>
-    <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="c2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
-    <item id="css" href="style.css" media-type="text/css"/>
-  </manifest>
-  <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
-</package>`,
-		"OEBPS/style.css": `body { color: rgb(17, 34, 51); }`,
+		"OEBPS/style.css": "body { color: rgb(17, 34, 51); }\n" +
+			".offscreen { position: absolute; left: -9999px; width: 1px; overflow: hidden; }",
 		// The script is the test: a publication that tries to act must
 		// not be able to. It marks the document, and the browser check
 		// asserts the mark is absent.
 		"OEBPS/chapter1.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<head><link rel="stylesheet" href="style.css"/>` +
 			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
-			`</head><body>` + body + `</body></html>`,
-		"OEBPS/chapter2.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
-			`<body><p>The Carpet-Bag.</p></body></html>`,
-	} {
+			`</head><body>` + offscreen + body + `</body></html>`,
+	}
+	manifest := `<item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
+	spine := `<itemref idref="c1"/>`
+	for i := 2; i <= browserTestChapters; i++ {
+		name := fmt.Sprintf("chapter%d.xhtml", i)
+		files["OEBPS/"+name] = `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+			`<head><link rel="stylesheet" href="style.css"/></head><body>` + offscreen +
+			fmt.Sprintf("<p>The Carpet-Bag, part %d.</p>", i) +
+			strings.Repeat("<p>A cold, damp night, and the wind in the rigging.</p>\n", 20) +
+			`</body></html>`
+		manifest += fmt.Sprintf("\n    <item id=\"c%d\" href=\"%s\" media-type=\"application/xhtml+xml\"/>", i, name)
+		spine += fmt.Sprintf("<itemref idref=\"c%d\"/>", i)
+	}
+	files["OEBPS/content.opf"] = `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Moby-Dick</dc:title></metadata>
+  <manifest>
+    ` + manifest + `
+    <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine>` + spine + `</spine>
+</package>`
+
+	for name, content := range files {
 		f, err := w.Create(name)
 		if err != nil {
 			t.Fatal(err)
@@ -94,6 +117,11 @@ func browserTestEPUB(t *testing.T) []byte {
 	}
 	return buf.Bytes()
 }
+
+// browserTestChapters is how many spine documents the fixture has. It is
+// more than a page-turn test needs so that a book which refuses to leave
+// its first section is obvious rather than borderline.
+const browserTestChapters = 12
 
 // TestReaderOpensInARealBrowser is the only test that can judge whether
 // the reader works, because everything it does is a browser behaviour.
