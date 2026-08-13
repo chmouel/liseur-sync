@@ -131,7 +131,8 @@ silently or contradict a digest already committed. We do not detect a key
 reused for different content — that would mean staging to a scratch path and
 comparing, and the client is the one that broke its own promise. A new key
 may intentionally create another catalog reference to an already deduplicated
-blob.
+blob; [ADR-0010](0010-duplicate-detection.md) reports when that has happened
+rather than preventing it.
 
 Request-envelope failures such as authentication, ACL, multipart,
 declared-size, and quota errors return precise 4xx responses.
