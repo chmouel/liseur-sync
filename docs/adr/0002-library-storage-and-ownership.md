@@ -181,8 +181,11 @@ server disk allocation.
    reference. `admin verify-backup` checks that every referenced blob is
    present in a backup at the size the database recorded, and reports
    unreferenced content without touching it. **Implemented.**
-2. Managed-library upload and management UI — the MVP path.
-3. Watched-folder scanner and reconciliation — later.
+2. Managed-library upload and management UI — the MVP path. **Implemented**
+   ([ADR-0005](0005-upload-and-ingestion.md) phase 4).
+3. Watched-folder scanner and reconciliation. **Next for this ADR:** the
+   ingest pipeline already accepts a `watched` source, so what is missing
+   is the scanner and its reconciliation, not the machinery behind it.
 
 ## Acceptance criteria
 

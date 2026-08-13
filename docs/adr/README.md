@@ -11,18 +11,23 @@ ADRs explain decisions that add to or supersede parts of that design.
 the decision is recorded so it cannot invalidate storage or identity choices
 made now, and is not a commitment to build yet.
 
-| ADR | Title | Scope | State |
-|---|---|---|---|
-| [0001](0001-content-server.md) | Become a content server | — | MVP implemented |
-| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built; watched folders later |
-| [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Built; backfill later |
-| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction built, no covers |
-| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Built, upload and web UI |
-| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built; covers and search later |
-| [0007](0007-web-reader.md) | Web reader | Later | Deferred |
-| [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository |
-| [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository |
-| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Exact content built |
+`Next` is the one thing to build next under that ADR, so the table can be
+read instead of the whole directory. The ordering *between* ADRs, and the
+loose ends that must come before any of it, are in
+[ADR-0001](0001-content-server.md#after-the-mvp).
+
+| ADR | Title | Scope | State | Next |
+|---|---|---|---|---|
+| [0001](0001-content-server.md) | Become a content server | — | MVP implemented | Staging cap, then covers |
+| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built | Watched-folder scanner |
+| [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Built | Maintenance mapping backfill |
+| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction built | Cover extraction, per-library parsers |
+| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Built | Instance staging cap; abandoned-job sweep |
+| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built | Covers in feeds; filtering and search |
+| [0007](0007-web-reader.md) | Web reader | Later | Deferred | Nothing until the catalog is richer |
+| [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
+| [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |
+| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Exact content built | A normalization rule, before any code |
 
 ## Convention
 
