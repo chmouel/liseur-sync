@@ -695,7 +695,12 @@ ALTER TABLE ingest_jobs
     ADD COLUMN artifact_cleanup_pending BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
+const migration11 = `
+ALTER TABLE blobs
+    ADD COLUMN missing_at TIMESTAMPTZ;
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
-	migration7, migration8, migration9, migration10,
+	migration7, migration8, migration9, migration10, migration11,
 }

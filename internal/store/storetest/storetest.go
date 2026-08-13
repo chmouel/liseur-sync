@@ -31,6 +31,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("IngestRecoveryList", func(t *testing.T) {
 		testIngestRecoveryList(t, open)
 	})
+	t.Run("BlobReconciliation", func(t *testing.T) {
+		testBlobReconciliation(t, open)
+	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })

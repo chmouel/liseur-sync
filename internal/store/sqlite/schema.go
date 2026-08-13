@@ -716,7 +716,12 @@ ALTER TABLE ingest_jobs
         CHECK (artifact_cleanup_pending IN (0, 1));
 `
 
+const migration11 = `
+ALTER TABLE blobs
+    ADD COLUMN missing_at TEXT;
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
-	migration7, migration8, migration9, migration10,
+	migration7, migration8, migration9, migration10, migration11,
 }

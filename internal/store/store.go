@@ -381,6 +381,25 @@ type BlobInfo struct {
 	SizeBytes int64
 }
 
+// BlobRecord is the database reconciliation state for one CAS object.
+type BlobRecord struct {
+	BlobInfo
+	OrphanedAt *time.Time
+	MissingAt  *time.Time
+}
+
+// BlobReconcileResult describes state changes from one filesystem
+// observation. Reconciliation only marks; physical deletion is a later
+// grace-period sweep.
+type BlobReconcileResult struct {
+	Record         BlobRecord
+	Inserted       bool
+	OrphanMarked   bool
+	OrphanCleared  bool
+	MissingMarked  bool
+	MissingCleared bool
+}
+
 // QuotaUsage is the logical per-principal usage after an operation.
 type QuotaUsage struct {
 	UsedBytes       int64
@@ -938,6 +957,9 @@ type Store interface {
 	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)
 	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
 	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
+	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
+	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
+	ReconcileBlob(ctx context.Context, blob BlobInfo, present bool, at time.Time) (BlobReconcileResult, error)
 	// PurgeExpiredIngestArtifacts is a global housekeeping operation. It
 	// releases quota and returns staging paths for filesystem cleanup, while
 	// retaining permanent job tombstones so deterministic paths cannot be
