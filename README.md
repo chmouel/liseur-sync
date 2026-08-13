@@ -13,7 +13,15 @@ SQLite by default, PostgreSQL optional. Multi-user.
 It also holds the books. Upload an EPUB through the web UI or the API and
 it is validated, stored once whatever its name, and served back to any
 reader that speaks OPDS 1.2 — KOReader included — so one server supplies
-the file and the reading position that goes with it.
+the file and the reading position that goes with it. Or read it in the
+browser: the reader unpacks the publication client-side, so no route ever
+serves publisher markup, and it reports position like any other client.
+
+A librarian can correct any book, browse by series, contributor, tag or
+genre, search the lot, and — if the operator turns it on — ask
+OpenLibrary or Google Books about a book and accept what comes back. A
+correction is kept as the person's own: re-reading the file never undoes
+it.
 
 ## Quick start
 
@@ -53,12 +61,15 @@ docker compose --profile external up -d      # your existing Postgres
 ```
 
 Setup details (TLS, pairing KOReader, backups) are in
-[docs/deployment.md](docs/deployment.md). 
+[docs/deployment.md](docs/deployment.md).
 
 ## Integration
 
-Reference implement is [liseur](https://github.com/chmouel/liseur) for clients authors: see
-[docs/integrating.md](docs/integrating.md) and the OpenAPI spec in [docs/openapi.yaml](docs/openapi.yaml).
+[liseur](https://github.com/chmouel/liseur) is the reference client. If
+you are writing another one, start with
+[docs/integrating.md](docs/integrating.md), which explains the protocol's
+reasoning, and keep [docs/openapi.yaml](docs/openapi.yaml) open for the
+exact shapes.
 
 ## Security
 
