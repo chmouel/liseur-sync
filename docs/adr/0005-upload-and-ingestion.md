@@ -1,6 +1,7 @@
 # ADR-0005: Upload and ingestion pipeline
 
-- **Status:** Accepted
+- **Status:** Implemented (archived; every phase is built and nothing is
+  outstanding, so the record stands as written and is no longer a plan)
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0002](0002-library-storage-and-ownership.md),
   [ADR-0004](0004-metadata-and-categorization.md)
