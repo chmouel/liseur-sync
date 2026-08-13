@@ -4,6 +4,7 @@ package content
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 
 type ingestValidationStore interface {
 	TransitionIngestJob(context.Context, string, string, store.IngestJobTransition) (store.IngestJob, error)
+}
+
+type ingestValidationQueue interface {
+	ingestValidationStore
+	ListIngestWorkerJobs(context.Context, store.IngestState, int) ([]store.IngestJob, error)
 }
 
 type ingestArtifactValidator interface {
@@ -27,6 +33,13 @@ type IngestValidationResult struct {
 	Location    ArtifactLocation
 }
 
+// IngestValidationReport describes one complete paginated staged-job pass.
+type IngestValidationReport struct {
+	Validated   int
+	Quarantined int
+	Skipped     int
+}
+
 // ValidateIngestJob performs one revision-checked staged-to-validated worker
 // step. Content validation failures become retained quarantined jobs;
 // operational failures are returned for retry without changing durable state.
@@ -35,19 +48,22 @@ func ValidateIngestJob(
 	st ingestValidationStore,
 	artifacts ingestArtifactValidator,
 	job store.IngestJob,
-	now time.Time,
+	clock func() time.Time,
 	failureRetention time.Duration,
 	limits epub.Limits,
 ) (IngestValidationResult, error) {
 	var result IngestValidationResult
 	if st == nil || artifacts == nil || job.State != store.IngestStaged ||
 		job.ContentSHA256 == nil || job.StagingPath == nil ||
-		now.IsZero() || failureRetention <= 0 {
+		clock == nil || failureRetention <= 0 {
 		return result, store.ErrInvalidTransition
 	}
 	publication, location, err := artifacts.ValidateEPUBArtifact(
 		ctx, *job.StagingPath, *job.ContentSHA256, job.BytesReceived, limits)
-	updatedAt := now.UTC()
+	updatedAt := clock().UTC()
+	if updatedAt.IsZero() {
+		return result, store.ErrInvalidTransition
+	}
 	if job.UpdatedAt.After(updatedAt) {
 		updatedAt = job.UpdatedAt
 	}
@@ -74,6 +90,7 @@ func ValidateIngestJob(
 		result.Location = location
 		return result, nil
 	}
+
 	validated, err := st.TransitionIngestJob(
 		ctx, job.UserID, job.ID, store.IngestJobTransition{
 			ExpectedState: job.State, ExpectedRevision: job.Revision,
@@ -87,4 +104,50 @@ func ValidateIngestJob(
 	result.Publication = &publication
 	result.Location = location
 	return result, nil
+}
+
+// RunIngestValidationPass validates one bounded snapshot of staged jobs.
+// Later polls pick up jobs outside this batch.
+func RunIngestValidationPass(
+	ctx context.Context,
+	st ingestValidationQueue,
+	artifacts ingestArtifactValidator,
+	clock func() time.Time,
+	failureRetention time.Duration,
+	limits epub.Limits,
+	batchSize int,
+) (IngestValidationReport, error) {
+	var report IngestValidationReport
+	if st == nil || artifacts == nil || clock == nil ||
+		failureRetention <= 0 || batchSize < 1 || batchSize > 500 {
+		return report, store.ErrInvalidTransition
+	}
+	if err := limits.Validate(); err != nil {
+		return report, err
+	}
+	jobs, err := st.ListIngestWorkerJobs(
+		ctx, store.IngestStaged, batchSize)
+	if err != nil {
+		return report, fmt.Errorf("list staged ingest jobs: %w", err)
+	}
+	for _, job := range jobs {
+		result, err := ValidateIngestJob(
+			ctx, st, artifacts, job, clock, failureRetention, limits)
+		if errors.Is(err, store.ErrStaleRevision) {
+			report.Skipped++
+			continue
+		}
+		if err != nil {
+			return report, err
+		}
+		switch result.Job.State {
+		case store.IngestValidated:
+			report.Validated++
+		case store.IngestQuarantined:
+			report.Quarantined++
+		default:
+			return report, store.ErrInvariantViolation
+		}
+	}
+	return report, nil
 }
