@@ -111,7 +111,7 @@ func Resolve(
 
 	series, seriesChanged := mergeSet(
 		seriesEntries(current.Series),
-		adoptSeries(proposal.Series, current.Series),
+		adoptSeries(proposal.Series, current.Series, proposal.Source),
 		proposal, locks.Series)
 	if seriesChanged {
 		existing := make(map[string]string, len(current.Series))
@@ -244,9 +244,20 @@ func adoptContributors(
 // path that names a series but no number within it has determined nothing
 // about that number, and a source may only take over what it determined:
 // replacing the whole payload would erase the position the file declared.
+//
+// A person saying a book is in a series with no number in it is stating a
+// fact, not failing to determine one, so a manual proposal is taken at its
+// word — the same escape hatch ManualClear gives the scalar fields.
+//
+// Provenance stays row-level: the assertion takes over the row, so the
+// carried-over position ends up attributed to the weaker source that did
+// not determine it, and a later extraction can no longer correct that
+// number. Fixing that properly means per-field provenance inside a set row,
+// which is a wider change than the erasure this prevents.
 func adoptSeries(
 	incoming []metadata.Assertion[string, metadata.SeriesValue],
 	current []store.BookSeries,
+	source store.MetadataSource,
 ) []metadata.Assertion[string, metadata.SeriesValue] {
 	if len(incoming) == 0 || len(current) == 0 {
 		return incoming
@@ -259,7 +270,8 @@ func adoptSeries(
 	for _, assertion := range incoming {
 		if row, ok := persisted[assertion.Key]; ok {
 			assertion.Value.Display = row.Name
-			if !assertion.Value.HasPosition && row.Position != nil {
+			if source != store.MetadataManual &&
+				!assertion.Value.HasPosition && row.Position != nil {
 				assertion.Value.Position = *row.Position
 				assertion.Value.HasPosition = true
 			}

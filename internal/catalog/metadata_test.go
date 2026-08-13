@@ -248,4 +248,39 @@ func TestResolvePathKeepsAnUnclaimedSeriesPosition(t *testing.T) {
 		t.Fatalf("path erased the position the file declared: %+v",
 			resolved.Series[0])
 	}
+	// Provenance is row-level, so the path owns the number it carried over
+	// and a later extraction can no longer correct it. Pinned so the
+	// trade-off is visible if per-field provenance is ever added.
+	if resolved.Series[0].Source != store.MetadataFilename {
+		t.Fatalf("series source: %+v", resolved.Series[0])
+	}
+}
+
+// Blanking a value is the one thing only a person can mean. A manual
+// proposal that names a series without a number is saying the book has no
+// number in it, so the old one must not be resurrected underneath them.
+func TestResolveManualProposalClearsASeriesPosition(t *testing.T) {
+	position := 2.0
+	stored := emptyBook()
+	stored.Series = []store.BookSeries{{
+		SeriesID:       EntityID("lib-1", "series", "dune"),
+		Name:           "Dune",
+		NormalizedName: "dune",
+		Position:       &position,
+		Source:         store.MetadataEmbedded,
+	}}
+
+	resolved, changed := Resolve(stored, metadata.Proposal{
+		Source: store.MetadataManual,
+		Series: []metadata.Assertion[string, metadata.SeriesValue]{{
+			Key:   "dune",
+			Value: metadata.SeriesValue{Display: "Dune"},
+		}},
+	})
+	if !changed {
+		t.Fatal("a manual proposal clearing a position changed nothing")
+	}
+	if len(resolved.Series) != 1 || resolved.Series[0].Position != nil {
+		t.Fatalf("manual clear was overruled: %+v", resolved.Series)
+	}
 }
