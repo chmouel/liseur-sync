@@ -1347,6 +1347,100 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
 
+  /opds/v1.2/libraries/{library}/search.xml:
+    get:
+      tags: [opds]
+      summary: OpenSearch description for one library
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        Readers find this through the `search` link on the library's
+        acquisition feed rather than being configured with it, and read
+        the query template out of it. `searchTerms` is the only term
+        offered: a reader that could substitute anything else would be
+        asking a question this surface deliberately cannot answer.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: An OpenSearch description document
+          content:
+            application/opensearchdescription+xml:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
+  /opds/v1.2/libraries/{library}/search:
+    get:
+      tags: [opds]
+      summary: OPDS search results for one library
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The same search as `GET /v1/libraries/{library}/search`, rendered
+        as an acquisition feed so every result can be downloaded from
+        where it was found. It carries no `next` link: the feed is
+        unpaged, and the answer to wanting more is a better query.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: q, in: query, schema: { type: string, maxLength: 512 } }
+      responses:
+        "200":
+          description: An Atom acquisition feed of the matches
+          content:
+            application/atom+xml;profile=opds-catalog;kind=acquisition:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Over-long query" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
+  /opds/v1.2/libraries/{library}/{kind}:
+    get:
+      tags: [opds]
+      summary: OPDS navigation feed of a library's series, contributors, tags or genres
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        Reached from the `http://opds-spec.org/facet` links on the
+        library's acquisition feed. Each entry leads to the books
+        claiming it.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/EntityKind"
+        - name: after
+          in: query
+          schema: { type: string }
+          description: Only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An Atom navigation feed
+          content:
+            application/atom+xml;profile=opds-catalog;kind=navigation:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Over-long cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library or kind, or no access" }
+
+  /opds/v1.2/libraries/{library}/{kind}/{entity}:
+    get:
+      tags: [opds]
+      summary: OPDS acquisition feed of the books claiming one entity
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        A series comes back in reading order, with unplaced books last,
+        which is the whole reason a reader would rather browse a series
+        than search for it.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/EntityKind"
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An Atom acquisition feed
+          content:
+            application/atom+xml;profile=opds-catalog;kind=acquisition:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no access" }
+
   /opds/v1.2/books/{id}/download:
     get:
       tags: [opds]

@@ -152,7 +152,18 @@ func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
 			{Rel: "up", Href: opdsPrefix, Type: opdsNavigationType},
+			// Discovery, not decoration: a reader learns how to search
+			// and how to browse from the feed it already has, so neither
+			// URL has to be configured anywhere.
+			{Rel: "search", Href: self + "/search.xml", Type: opdsSearchType,
+				Title: "Search this library"},
 		},
+	}
+	for _, segment := range []string{"series", "contributors", "tags", "genres"} {
+		feed.Links = append(feed.Links, opdsLink{
+			Rel: "http://opds-spec.org/facet", Href: self + "/" + segment,
+			Type: opdsNavigationType, Title: opdsKindTitles[segment],
+		})
 	}
 	for _, b := range books {
 		feed.Entries = append(feed.Entries, opdsBookEntry(b))

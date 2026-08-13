@@ -504,3 +504,15 @@ to an acquisition feed of books, and each book to its EPUB. Feeds are
 catalog-only — they never expose positions, sessions or statistics,
 even if the same token also carries `sync`. Pair OPDS with the kosync
 adapter above to get downloads and position sync on a stock device.
+
+A library's feed also carries a `search` link to an OpenSearch
+description, and `http://opds-spec.org/facet` links to its series,
+contributors, tags and genres. A reader discovers both from the feed it
+already has; neither URL needs configuring. The search template offers
+`searchTerms` and nothing else, which is how reading state stays off
+this surface even for a token that could ask about it elsewhere.
+
+Browsing a series gives its books in reading order, with unplaced ones
+last. Search results are unpaged and carry no `next` link: the best
+matches are already there, and more of them is a better query rather
+than another page.

@@ -28,7 +28,7 @@ loose ends that must come before any of it, are in
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Phases 1-3 complete | External providers, optional forever |
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
-| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built | Filtering and search |
+| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built | A recently-added feed |
 | [0007](0007-web-reader.md) | Web reader | Later | Deferred | Nothing until the catalog is richer |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |

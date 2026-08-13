@@ -381,6 +381,14 @@ func (s *Server) Routes() *http.ServeMux {
 	// which hides client typos instead of reporting them.
 	mux.Handle("GET /opds/v1.2/{$}", opdsH(s.HandleOPDSRoot))
 	mux.Handle("GET /opds/v1.2/libraries/{library}", opdsH(s.HandleOPDSLibrary))
+	// A reader discovers these through links in the feeds above rather
+	// than being configured with them, which is the point of OPDS.
+	mux.Handle("GET /opds/v1.2/libraries/{library}/search.xml",
+		opdsH(s.HandleOPDSSearchDescription))
+	mux.Handle("GET /opds/v1.2/libraries/{library}/search", opdsH(s.HandleOPDSSearch))
+	mux.Handle("GET /opds/v1.2/libraries/{library}/{kind}", opdsH(s.HandleOPDSEntities))
+	mux.Handle("GET /opds/v1.2/libraries/{library}/{kind}/{entity}",
+		opdsH(s.HandleOPDSEntityBooks))
 	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
 	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
 	// Readers render covers in the feed, and they send the feed's Basic
