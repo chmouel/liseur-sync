@@ -597,9 +597,11 @@ staged-to-validated worker transition are implemented with configurable
 bounded-validation limits. After startup recovery and GC, the server polls one
 database-snapshotted, size-capped validation batch at a time, timestamps
 transitions after validation, skips only revision races, and surfaces
-operational worker failures through coordinated shutdown. Metadata and cover
-extraction, catalog availability reconciliation, last-reference
-deletion/trash, backup verification, and administration remain.
+operational worker failures through coordinated shutdown. A pure bounded OPF
+extractor now returns embedded catalog fields and cover references from EPUB2
+and EPUB3 metadata. Durable metadata and cover extraction, catalog
+availability reconciliation, last-reference deletion/trash, backup
+verification, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

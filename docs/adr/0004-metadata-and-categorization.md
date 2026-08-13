@@ -105,8 +105,11 @@ External metadata cannot be a required ingest dependency.
 1. Define the pure bounded-extraction result, metadata entities, provenance,
    locks, precedence engine, and filename parser. ADR-0005's ingestion worker
    calls this interface after structural EPUB validation. The relational
-   entities, field provenance, and lock schema are implemented; extraction,
-   precedence, and filename parsing remain.
+   entities, field provenance, and lock schema are implemented. The pure OPF
+   extractor now returns bounded embedded title, subtitle, description,
+   publisher, publication date, identifiers, languages, subjects, series,
+   contributors, and cover references from EPUB2 and EPUB3 metadata.
+   Durable extraction persistence, precedence, and filename parsing remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.
