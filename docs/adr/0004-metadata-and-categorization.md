@@ -92,7 +92,7 @@ External metadata cannot be a required ingest dependency.
 
 ## Implementation phases
 
-1. **Extraction, precedence, and ingest wiring.** Done, except where noted.
+1. **Extraction, precedence, and ingest wiring.** Done.
 
    The OPF extractor and the filename parser both feed one source-neutral
    proposal, which the precedence engine applies: a blank candidate never
@@ -129,9 +129,24 @@ External metadata cannot be a required ingest dependency.
    every book already in the catalog, and it works for those books from
    the day it ships.
 
-   **Remaining:** per-library parser configuration — the pattern list is
-   still the built-in default, so a library whose filenames follow another
-   convention cannot say so. **Next for this ADR:** that configuration.
+   Layouts are configured per library, in the library's existing
+   `config_json` column, and resolved per job by the ingest pass under the
+   job user's own read access. The list is stored rather than compiled in
+   because two of the layouts are the same shape on disk — `Author/Title`
+   and `Series/Author - Title` are both one directory and one file — so
+   only the operator can say which one a library uses. An absent list is
+   the conservative default; an empty list disables filename parsing,
+   which is a different answer and is stored as one.
+
+   A library whose configuration cannot be parsed stalls its own backlog
+   and is counted as `misconfigured` by the pass. Promoting it with the
+   compiled-in list would file its books under the wrong author, and
+   nothing afterwards lists the books that were misfiled; failing the pass
+   would let one library's typo stop every other library's uploads.
+
+   **Next for this ADR:** phase 2, the metadata edit UI, which is also
+   what makes a book promoted under the wrong layout correctable without
+   deleting and re-adding it.
 
 2. Metadata edit UI, series/contributor/tag pages, and merge tools — later.
 3. Full-text search and facets — later.

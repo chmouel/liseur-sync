@@ -102,10 +102,10 @@ precedence engine. Each ADR records its own remaining edges.
    upload form on `/ui/books` ([ADR-0005](0005-upload-and-ingestion.md)).
 2. **Admin.** Done: `create-library`, `grant-library`, `revoke-library` and
    `list-libraries` in the `admin` subcommand.
-3. **Catalog output.** Done: libraries, paginated books, book detail and
+2. **Catalog output.** Done: libraries, paginated books, book detail and
    download, in the API and as web pages
    ([ADR-0006](0006-catalog-api-and-opds.md)).
-4. **An existing reader.** Done: OPDS 1.2 navigation and acquisition feeds
+3. **An existing reader.** Done: OPDS 1.2 navigation and acquisition feeds
    under `/opds/v1.2`, authenticated with HTTP Basic
    ([ADR-0006](0006-catalog-api-and-opds.md)).
 
@@ -129,29 +129,29 @@ Cover extraction shipped since: `GET /v1/books/{id}/cover` renders the
 publication's own cover out of the CAS blob and caches the result, and
 the catalog JSON, the web UI and the OPDS feeds all point at it.
 
+Per-library parser configuration shipped since: a library states the
+filename layouts its files are read with, and `liseur-sync admin
+library-layout` is how an operator sets it.
+
 **Features**, in order:
 
-1. **Per-library parser configuration**
-   ([ADR-0004](0004-metadata-and-categorization.md) phase 1). The pattern
-   list is still the built-in default, so a library whose filenames follow
-   another convention cannot say so.
-2. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
+1. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
    phase 3). The ingest pipeline already accepts a `watched` source; what
    is missing is the scanner and its reconciliation.
-3. **Metadata editing and categorization**
+2. **Metadata editing and categorization**
    ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3):
    the edit UI, series/contributor/tag pages, then search and facets. The
    store already applies locked fields and whole-set assertions, so this is
    surface over settled rules.
-4. **Richer catalog output**
+3. **Richer catalog output**
    ([ADR-0006](0006-catalog-api-and-opds.md) phases 2 and 3): filtering
    beyond a plain listing, and recently-added, OpenSearch and
    series/contributor OPDS feeds.
-5. **The web reader** ([ADR-0007](0007-web-reader.md)).
-6. **Similarity-based duplicate detection**
+4. **The web reader** ([ADR-0007](0007-web-reader.md)).
+5. **Similarity-based duplicate detection**
    ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
    normalization rule worth defending before it needs code.
-7. **External metadata providers**
+6. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
 
