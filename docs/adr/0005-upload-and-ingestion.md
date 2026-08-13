@@ -71,6 +71,16 @@ period applies.
 The blob hash has a unique constraint. Concurrent identical uploads converge
 on one blob while preserving separate authorized references.
 
+Staging commits the job's content identity and a transient logical quota hold
+in one transaction. Quota counts each principal/hash once across transient
+holds and durable reservations, so concurrent identical jobs for one
+principal do not double-charge while another principal is charged
+independently. Promotion atomically creates or verifies the blob, installs
+the durable reservation and catalog book/file rows, consumes the hold, and
+advances the job. A canonical fingerprint of the complete normalized
+promotion request makes a lost successful response replayable without
+accepting a different book, file, metadata, source, or timestamp payload.
+
 ### EPUB bounds
 
 Hashing is streaming SHA-256. The existing KOReader partial-MD5 helper is
@@ -133,7 +143,11 @@ for audit and authorization but is not a second quota principal; automated
 watched scans use the same library principal. Instance-wide staging and
 per-principal caps prevent unbounded failure storage. Quarantine and failed
 artifacts expire after a configurable period and are cleaned by the GC
-worker. An authorized manager can delete failed jobs sooner.
+worker. Expiry releases the transient quota hold and returns the staging path
+for filesystem cleanup, but retains a terminal job tombstone. The tombstone
+cannot be retried or recreated, preventing delayed cleanup from racing with a
+new deterministic stage path. An authorized manager can delete failed jobs
+sooner only through the same tombstone-safe cleanup lifecycle.
 
 ## Consequences
 
@@ -146,8 +160,9 @@ name a stable job and reason instead of losing state when a request ends.
 1. Job schema, worker loop, staging, CAS promotion, recovery, and
    reconciliation. The revisioned, idempotent durable job store and
    blob/reference schema plus bounded, restart-safe filesystem staging and
-   promotion are implemented; workers, atomic database promotion, recovery,
-   and reconciliation remain.
+   promotion are implemented. Atomic database promotion, logical quota
+   holds/reservations, full-payload replay detection, and terminal artifact
+   expiry are also implemented; workers, recovery, and reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

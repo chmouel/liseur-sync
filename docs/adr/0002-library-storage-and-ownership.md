@@ -175,8 +175,10 @@ server disk allocation.
 
 1. Schema, ACL queries, CAS, logical quota, trash, GC, and backup verifier.
    The schema, ACL-scoped library/book queries, and durable filesystem CAS
-   primitive are implemented; database promotion, quota accounting, trash,
-   GC, and backup verification remain.
+   primitive are implemented. Atomic database promotion and per-principal
+   quota holds/reservations are implemented, including concurrent
+   deduplication and expiry release; last-reference deletion, trash, GC, and
+   backup verification remain.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

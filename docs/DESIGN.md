@@ -578,8 +578,12 @@ metadata, blob, ingestion-job, ACL, and per-user work-mapping schema are
 implemented on SQLite and PostgreSQL, together with ACL-scoped store
 operations, atomic catalog resolution, and revision-checked idempotent ingest
 job transitions. Bounded restart-safe filesystem staging and no-replace CAS
-publication are also implemented. Database promotion, bounded extraction,
-the rest of the CAS lifecycle, ingest workers, and administration remain.
+publication are also implemented. Database promotion now atomically installs
+blob identity, logical quota reservations, catalog book/file rows, and job
+state; transient holds cover staged artifacts, full request fingerprints make
+promotion replay-safe, and expired failed artifacts leave terminal
+tombstones. Bounded extraction, the rest of the CAS lifecycle, ingest
+workers, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 
