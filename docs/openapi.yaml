@@ -782,6 +782,48 @@ paths:
                             sha256: { type: string }
                             filename: { type: string }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+    delete:
+      tags: [library]
+      summary: Delete a book
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Moves the book to the trash. It leaves the catalog at once and its
+        files stop being servable, but the bytes are kept until the
+        server's trash retention passes, so the deletion can be undone
+        with `POST /v1/books/{id}/restore` until then. Only after that
+        does a maintenance pass release the quota and hand the blob to
+        the orphan sweep.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The book, now trashed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogBook" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
+        "409": { $ref: "#/components/responses/Error", description: "The book is already deleted" }
+
+  /v1/books/{id}/restore:
+    post:
+      tags: [library]
+      summary: Undo a deletion
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Returns a trashed book to the catalog, relinking the files it kept.
+        It works only inside the retention window. The book comes back as
+        `missing` rather than `active` when it has no servable file, so a
+        restore never advertises a download that is not there.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The restored book
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogBook" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
+        "409": { $ref: "#/components/responses/Error", description: "Not in the trash, or its retention window has closed" }
 
   /v1/books/{id}/download:
     get:
