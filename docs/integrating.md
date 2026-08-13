@@ -248,3 +248,42 @@ the pairing code. Their positions land in the same per-user op log with
 `origin: "kosync"`, so a native client sees them through
 `/v1/changes` like any other device; the xpointer rides in
 `foreign_pos` and round-trips verbatim to kosync pulls.
+
+## Browsing and downloading books
+
+Libraries hold books; a book holds one or more files. Start at
+`GET /v1/libraries`, which is the only route that needs no id, then
+page through `GET /v1/libraries/{library}/books`. The page carries
+`next_cursor` while more books remain; feed it back as `?cursor=` and
+stop when it is absent. Cursors are opaque — build a request from one,
+never parse it.
+
+`GET /v1/books/{id}/download` serves the file. It supports `HEAD`,
+byte ranges and conditional requests, and its `ETag` is the content
+digest, so a stored `ETag` stays valid forever: if the server answers
+`304`, the copy on disk is byte-identical. A `410` means the book is
+still catalogued but its content is gone, which is different from a
+`404` — resolve it by re-uploading, not by forgetting the book.
+
+All of these need a token with `library-read`. Uploading needs
+`library-manage` *and* manage access to that specific library; the two
+are separate, so a token cannot reach a library its owner was never
+granted.
+
+## KOReader through OPDS
+
+KOReader can browse the catalog with no plugin at all. Add an OPDS
+catalog pointing at `https://<host>/opds/v1.2`, with the username
+`token` and, as the password, a device token secret carrying
+`library-read`.
+
+The account password will not work, and that is deliberate: a reader
+keeps its catalog credential in plain text on the device, so it gets a
+credential that can only read books and that can be revoked on its own.
+Create one per device.
+
+The root feed lists the libraries that credential can read; each links
+to an acquisition feed of books, and each book to its EPUB. Feeds are
+catalog-only — they never expose positions, sessions or statistics,
+even if the same token also carries `sync`. Pair OPDS with the kosync
+adapter above to get downloads and position sync on a stock device.

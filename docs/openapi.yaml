@@ -39,6 +39,7 @@ tags:
   - name: sessions
   - name: insights
   - name: library
+  - name: opds
 
 paths:
   /healthz:
@@ -808,6 +809,74 @@ paths:
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
+  /opds/v1.2:
+    get:
+      tags: [opds]
+      summary: OPDS 1.2 navigation feed
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The catalog root for e-reader clients, and the only entry point
+        they need: it lists the caller's libraries, each linking to its
+        acquisition feed. `/opds/v1.2/` is accepted too, because readers
+        differ on the trailing slash.
+
+        OPDS is catalog-only by design. It exposes no reading positions,
+        sessions or statistics even when the token also carries `sync`.
+      responses:
+        "200":
+          description: An Atom navigation feed
+          content:
+            application/atom+xml;profile=opds-catalog;kind=navigation:
+              schema: { type: string }
+        "401": { description: "Missing or invalid credentials; carries WWW-Authenticate" }
+        "403": { $ref: "#/components/responses/Error", description: "Valid credential without library-read" }
+
+  /opds/v1.2/libraries/{library}:
+    get:
+      tags: [opds]
+      summary: OPDS 1.2 acquisition feed for one library
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        One page of books, each with an EPUB acquisition link. A `next`
+        link appears while more pages remain; readers follow it rather
+        than constructing cursors.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An Atom acquisition feed
+          content:
+            application/atom+xml;profile=opds-catalog;kind=acquisition:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
+  /opds/v1.2/books/{id}/download:
+    get:
+      tags: [opds]
+      summary: Acquire a book over OPDS
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The same download as `/v1/books/{id}/download`, reachable with
+        the Basic credential a reader already holds. Ranges, `HEAD` and
+        conditional requests behave identically.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The file
+          content:
+            application/epub+zip:
+              schema: { type: string, format: binary }
+        "206": { description: The requested byte range }
+        "304": { description: The client's copy is current }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+
   /v1/ingest/jobs/{id}:
     get:
       tags: [library]
@@ -840,6 +909,14 @@ components:
       type: http
       scheme: bearer
       description: Short-lived auth token from /v1/login (token management only)
+    opdsBasic:
+      type: http
+      scheme: basic
+      description: |
+        OPDS only. Username is the token's name or the literal `token`;
+        the password is a device token secret carrying `library-read`.
+        Account passwords are rejected — a reader stores its credential
+        in plain text on the device.
 
   responses:
     Error:

@@ -83,11 +83,16 @@ where possible and explicit MIME types with `nosniff`.
 
 ### OPDS 1.2
 
-OPDS is served below `/opds/v1.2/`. The MVP feeds are root navigation,
-libraries, recently added, and paginated acquisition feeds with EPUB
-acquisition links and cover thumbnails — enough for a reader to find a book
-and download it. Search through OpenSearch and series/contributor feeds
-follow later; OPDS 2.0 and OPDS-PSE are deferred entirely.
+OPDS is served below `/opds/v1.2`. The MVP feeds are root navigation and
+paginated acquisition feeds with EPUB acquisition links — enough for a
+reader to find a book and download it. The root feed *is* the library list:
+a separate libraries feed would be the same document behind another link.
+
+A "recently added" feed and cover thumbnails are deferred with the rest:
+neither is on the path from opening a reader to reading a book, and covers
+have no storage behind them yet. Search through OpenSearch and
+series/contributor feeds follow later; OPDS 2.0 and OPDS-PSE are deferred
+entirely.
 
 XML is generated through an encoder, never string interpolation, and has
 escaping and pagination tests. OPDS 2.0 and OPDS-PSE are deferred.
@@ -121,11 +126,11 @@ metadata edits, work resolution, and rich sync remain native operations.
    `GET /v1/books/{id}`, and `GET`/`HEAD /v1/books/{id}/download` with
    ranges, `ETag` and conditional requests. **Remaining:** covers, and
    filtering beyond a plain listing.
-3. **OPDS 1.2 acquisition feeds**, verified against KOReader — MVP, not
-   started. Root
-   navigation, libraries, recently added, and paginated acquisition feeds
-   are enough to browse and download; OpenSearch and series/contributor
-   feeds are later.
+3. **OPDS 1.2 acquisition feeds.** Done: `GET /opds/v1.2` navigation over
+   the caller's libraries, `GET /opds/v1.2/libraries/{library}` paginated
+   acquisition feeds, and `GET /opds/v1.2/books/{id}/download`, all behind
+   HTTP Basic. **Remaining:** recently added, covers, OpenSearch, and
+   series/contributor feeds.
 4. Mutation API and ingestion job resources — the upload endpoint in
    ADR-0005 phase 4 is MVP; metadata edits and trash/restore are later.
 
