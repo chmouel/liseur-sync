@@ -381,3 +381,58 @@ func TestOPDSRejectsAMalformedCursor(t *testing.T) {
 		}
 	}
 }
+
+// A reader renders covers straight from the feed, using the same Basic
+// credential it used to fetch it. Without both the links and a route that
+// accepts that credential, every image in an acquisition feed is a broken
+// one.
+func TestOPDSEntriesCarryCoverLinks(t *testing.T) {
+	f := newUploadFixture(t)
+	bookID, _ := f.publish(t, "opds-cover", coverEPUB(t, 300, 400, "cover.png"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+	resp, raw := f.opds(t, "/opds/v1.2/libraries/"+f.library, "token", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("acquisition feed: %d %s", resp.StatusCode, raw)
+	}
+	var feed parsedFeed
+	if err := xml.Unmarshal(raw, &feed); err != nil {
+		t.Fatal(err)
+	}
+
+	var thumbnail, full string
+	for _, entry := range feed.Entries {
+		for _, link := range entry.Links {
+			switch link.Rel {
+			case "http://opds-spec.org/image/thumbnail":
+				thumbnail = link.Href
+			case "http://opds-spec.org/image":
+				full = link.Href
+			}
+		}
+	}
+	if thumbnail == "" || full == "" {
+		t.Fatalf("feed entry has no cover links: %+v", feed.Entries)
+	}
+	if !strings.Contains(thumbnail, bookID) {
+		t.Fatalf("thumbnail link %q is not this book's", thumbnail)
+	}
+
+	// The links must be fetchable with the feed's own credential.
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		f.ts.URL+thumbnail, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SetBasicAuth("token", read)
+	fetched, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fetched.Body.Close()
+	if fetched.StatusCode != http.StatusOK {
+		t.Fatalf("fetching an advertised cover: %d", fetched.StatusCode)
+	}
+	if got := fetched.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/cover"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -19,6 +20,8 @@ const (
 	opdsNavigationType  = "application/atom+xml;profile=opds-catalog;kind=navigation"
 	opdsAcquisitionType = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 	opdsAcquisitionRel  = "http://opds-spec.org/acquisition"
+	opdsImageRel        = "http://opds-spec.org/image"
+	opdsThumbnailRel    = "http://opds-spec.org/image/thumbnail"
 	atomNS              = "http://www.w3.org/2005/Atom"
 	dublinCoreNS        = "http://purl.org/dc/terms/"
 	opdsNS              = "http://opds-spec.org/2010/catalog"
@@ -177,6 +180,17 @@ func opdsBookEntry(b store.CatalogBook) opdsEntry {
 			Rel:  opdsAcquisitionRel,
 			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/download",
 			Type: "application/epub+zip",
+		}, {
+			// Readers fetch these with the same Basic credential they
+			// used for the feed, which is why the cover is reachable
+			// under /opds as well as under /v1.
+			Rel:  opdsImageRel,
+			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover?size=full",
+			Type: cover.MediaType,
+		}, {
+			Rel:  opdsThumbnailRel,
+			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover",
+			Type: cover.MediaType,
 		}},
 	}
 	// A subtitle is worth showing even when there is no description, so

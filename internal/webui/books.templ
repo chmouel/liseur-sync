@@ -173,9 +173,20 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				<p class="muted">No books yet.</p>
 			} else {
 				<table>
-					<tr><th>Title</th><th>Added</th><th></th><th></th></tr>
+					<tr><th></th><th>Title</th><th>Added</th><th></th><th></th></tr>
 					for _, b := range v.Books {
 						<tr>
+							<td>
+								<a href={ prefix + "books/" + b.ID }>
+									<img
+										class="cover-thumb"
+										src={ prefix + "books/" + b.ID + "/cover" }
+										alt=""
+										loading="lazy"
+										width="40"
+										height="53"/>
+								</a>
+							</td>
 							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
 							<td>{ b.Added }</td>
 							<td>
@@ -232,6 +243,11 @@ templ bookBody(prefix string, b BookView) {
 	if b.Subtitle != "" {
 		<p class="muted">{ b.Subtitle }</p>
 	}
+	<img
+		class="cover-full"
+		src={ prefix + "books/" + b.ID + "/cover?size=full" }
+		alt=""
+		width="180"/>
 	<section class="card">
 		<table>
 			if b.Publisher != "" {

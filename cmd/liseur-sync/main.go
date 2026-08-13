@@ -417,6 +417,7 @@ func cmdServe(args []string) error {
 		LoginLimiter: loginLimiter,
 		Uploads:      apiSrv,
 		Downloads:    apiSrv,
+		Covers:       apiSrv,
 	}
 	mux := apiSrv.Routes()
 

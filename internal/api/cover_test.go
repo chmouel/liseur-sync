@@ -446,3 +446,40 @@ func TestCoverOfAnUnavailableFileReportsItGone(t *testing.T) {
 		t.Fatalf("code = %d, want 410: %s", resp.StatusCode, body)
 	}
 }
+
+// A client cannot guess where a cover lives, so the book record has to
+// say. It is advertised for every book: a client that asks and gets 404
+// has learned the same thing as one told in advance, without the server
+// having to record the answer for every book ever uploaded.
+func TestBookRecordAdvertisesItsCover(t *testing.T) {
+	f := newUploadFixture(t)
+	bookID, _ := f.publish(t, "advertised", coverEPUB(t, 300, 400, "cover.png"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %v", code, detail)
+	}
+	url, _ := detail["cover_url"].(string)
+	if url == "" {
+		t.Fatal("the book record does not say where its cover is")
+	}
+	resp, body := f.get(t, url, read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("advertised cover: %d %s", resp.StatusCode, body)
+	}
+
+	// And the listing carries it too, so a grid does not need a request
+	// per book to find out.
+	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books", read)
+	if code != http.StatusOK {
+		t.Fatalf("listing: %d %v", code, page)
+	}
+	books := page["books"].([]any)
+	if len(books) == 0 {
+		t.Fatal("no books listed")
+	}
+	if books[0].(map[string]any)["cover_url"] == nil {
+		t.Fatalf("listed book has no cover_url: %v", books[0])
+	}
+}

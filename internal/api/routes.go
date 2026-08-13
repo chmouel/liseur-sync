@@ -364,6 +364,11 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /opds/v1.2/libraries/{library}", opdsH(s.HandleOPDSLibrary))
 	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
 	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
+	// Readers render covers in the feed, and they send the feed's Basic
+	// credential to do it. Without this the images in an acquisition feed
+	// would all fail to load.
+	mux.Handle("GET /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
+	mux.Handle("HEAD /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
 
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {
