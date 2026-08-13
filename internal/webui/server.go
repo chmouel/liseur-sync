@@ -40,6 +40,13 @@ type Server struct {
 	// backend is spoken to over HTTP, so r.TLS is nil even though the
 	// browser is on HTTPS.
 	Cfg config.Config
+	// Uploads and Downloads delegate the content server's byte-handling
+	// to the API's implementation. They are interfaces rather than a
+	// concrete server so that this package keeps depending on nothing
+	// but the store — and, more importantly, so that there is exactly
+	// one implementation of the staging and download rules.
+	Uploads   Uploader
+	Downloads Downloader
 	// LoginLimiter throttles the login form. It is the same limiter
 	// the API's /v1/login uses, so the two surfaces share one budget
 	// per IP and the form cannot be used to sidestep the API's limit.
@@ -123,6 +130,10 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	}))
 	mux.Handle("GET /ui/works", sec(s.requireAuth(s.handleWorks)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
+	mux.Handle("GET /ui/books", sec(s.requireAuth(s.handleBooks)))
+	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
+	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
+	mux.Handle("POST /ui/books/upload", sec(s.requireAuth(s.handleUploadBook)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
 	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
