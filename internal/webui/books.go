@@ -106,6 +106,9 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		// is a list of things to do something about, and only a librarian
 		// can do anything about them.
 		v.Duplicates = s.duplicateGroups(r, u.ID, v.Selected)
+		// Same audience, same reason: a watched file that changed is a
+		// decision waiting for somebody who can make it.
+		v.Review = s.reviewRows(r, u.ID, v.Selected)
 	}
 	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
 		Render(r.Context(), w)
@@ -472,6 +475,66 @@ func groupDuplicates(books []store.DuplicateContentBook) []DuplicateGroup {
 		groups = groups[:len(groups)-1]
 	}
 	return groups
+}
+
+// reviewLimit keeps the section a list of decisions rather than a
+// second catalog. A queue longer than this means something happened to
+// the root, not to the books, and the page cannot help with that.
+const reviewLimit = 25
+
+// reviewRows lists the watched books whose source changed under them.
+// Like the other sections, a failure here must not take the page down.
+func (s *Server) reviewRows(
+	r *http.Request, userID, libraryID string,
+) []ReviewRow {
+	books, err := s.St.ListBooksInReview(r.Context(), userID, libraryID, reviewLimit)
+	if err != nil {
+		slog.Error("review listing unavailable", "library", libraryID, "err", err)
+		return nil
+	}
+	rows := make([]ReviewRow, 0, len(books))
+	for _, b := range books {
+		rows = append(rows, ReviewRow{
+			ID: b.ID, Title: b.Title, Reason: b.ReviewReason,
+		})
+	}
+	return rows
+}
+
+// handleAcceptBook records that a librarian looked at a changed watched
+// file and is content with the copy being served.
+//
+// It clears the flag and stops. The book returns to `missing`, and the
+// availability pass — the only thing allowed to decide a book is
+// servable — puts it back in the catalog on its next run if it still has
+// a file. Reingesting the new bytes here would be the server answering
+// the question it raised.
+func (s *Server) handleAcceptBook(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	library := strings.TrimSpace(r.FormValue("library"))
+	// The manage role is checked by reading the book under it, so a
+	// reader cannot clear a librarian's queue.
+	book, err := s.St.CatalogBookByID(
+		r.Context(), u.ID, r.PathValue("id"), store.LibraryRoleManage)
+	if err != nil {
+		s.uploadResult(w, r, library, "", trashProblem(err))
+		return
+	}
+	if library == "" {
+		library = book.LibraryID
+	}
+	if _, err := s.St.SetCatalogBookReview(
+		r.Context(), book.LibraryID, book.ID, "", time.Now().UTC()); err != nil {
+		s.uploadResult(w, r, library, "", "that did not work; try again")
+		return
+	}
+	s.uploadResult(w, r, library,
+		"Accepted. It returns to the catalog shortly.", "")
 }
 
 // trashLimit keeps the trash section a short list of recent regrets
