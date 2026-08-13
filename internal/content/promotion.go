@@ -1,0 +1,230 @@
+//go:build linux
+
+package content
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/chmouel/liseur-sync/internal/store"
+)
+
+// promotionNS derives a job's catalog ids. Deriving them rather than drawing
+// them fresh keeps one job's promotion a pure function of that job, so a
+// worker that has to build the request again names the same book and file
+// instead of a second set nothing refers to.
+var promotionNS = uuid.MustParse("7e0a3b10-5f2e-4c3a-9b6d-2f6f6c1a0004")
+
+// codeMissingArtifact reports an artifact that can no longer be promoted:
+// the staged bytes are gone or no longer hash to what was validated. It is a
+// failure of that job's content, not of the server, and a re-upload moves
+// the quarantined job back to staged.
+const codeMissingArtifact = "missing_artifact"
+
+// mediaTypeEPUB is the only publication type this server accepts, so a
+// promoted file always carries it.
+const mediaTypeEPUB = "application/epub+zip"
+
+type ingestPromotionStore interface {
+	ingestTransitionStore
+	CommitNewBookPromotion(
+		context.Context, string, string, store.CommitNewBookPromotionRequest,
+	) (store.IngestPromotionResult, error)
+}
+
+type ingestPromotionQueue interface {
+	ingestPromotionStore
+	ListIngestWorkerJobs(context.Context, store.IngestState, int) ([]store.IngestJob, error)
+}
+
+// ingestBlobPromoter publishes one staged artifact into the CAS. Promote
+// replays a lost success by verifying the final blob, so calling it again
+// for a job whose commit never landed is safe.
+type ingestBlobPromoter interface {
+	Promote(ctx context.Context, stagingPath, expectedSHA string, expectedSize int64) (Blob, error)
+}
+
+// IngestPromotionResult is the durable outcome of one extracted-to-promoted
+// worker step. Book and File are set only when the job reached promoted.
+type IngestPromotionResult struct {
+	Job  store.IngestJob
+	Book store.CatalogBook
+	File store.BookFile
+}
+
+// IngestPromotionReport describes one bounded extracted-job pass.
+type IngestPromotionReport struct {
+	Promoted    int
+	Quarantined int
+	Skipped     int
+}
+
+// PromoteIngestJob publishes an extracted job's artifact into the CAS and
+// creates the catalog book and file it becomes, in one revision-checked
+// transition.
+//
+// The blob is published first. A blob with no row is collectable garbage the
+// reconciler already knows how to find, while a row pointing at a blob that
+// was never published would be a catalog entry that cannot be read.
+//
+// The book is created bare. Filling it in is a separate step, because the
+// metadata a book ends up with is resolved against rows that only exist once
+// the book does.
+func PromoteIngestJob(
+	ctx context.Context,
+	st ingestPromotionStore,
+	blobs ingestBlobPromoter,
+	job store.IngestJob,
+	clock func() time.Time,
+	failureRetention time.Duration,
+) (IngestPromotionResult, error) {
+	var result IngestPromotionResult
+	if st == nil || blobs == nil || job.State != store.IngestExtracted ||
+		job.ContentSHA256 == nil || job.StagingPath == nil ||
+		clock == nil || failureRetention <= 0 {
+		return result, store.ErrInvalidTransition
+	}
+	updatedAt, err := ingestPostProcessTime(job, clock)
+	if err != nil {
+		return result, err
+	}
+	blob, err := blobs.Promote(
+		ctx, *job.StagingPath, *job.ContentSHA256, job.BytesReceived)
+	if err != nil {
+		if !promotionContentFailure(err) {
+			return result, fmt.Errorf(
+				"promote artifact for ingest job %q: %w", job.ID, err)
+		}
+		expiresAt := updatedAt.Add(failureRetention)
+		quarantined, transitionErr := st.TransitionIngestJob(
+			ctx, job.UserID, job.ID, store.IngestJobTransition{
+				ExpectedState: job.State, ExpectedRevision: job.Revision,
+				NextState:   store.IngestQuarantined,
+				ErrorCode:   codeMissingArtifact,
+				ErrorDetail: "staged artifact no longer matches what was validated",
+				ExpiresAt:   &expiresAt, UpdatedAt: updatedAt,
+			})
+		if transitionErr != nil {
+			return result, fmt.Errorf(
+				"quarantine promotion job %q: %w", job.ID, transitionErr)
+		}
+		result.Job = quarantined
+		return result, nil
+	}
+
+	promoted, err := st.CommitNewBookPromotion(ctx, job.UserID, job.ID,
+		newBookPromotion(job, blob, updatedAt))
+	if err != nil {
+		return result, fmt.Errorf(
+			"promote ingest job %q: %w", job.ID, err)
+	}
+	result.Job = promoted.Job
+	result.Book = promoted.Book
+	result.File = promoted.File
+	return result, nil
+}
+
+// newBookPromotion describes the book and file one job becomes. Every value
+// comes from the job or the published blob: nothing about the publication is
+// read here, so a book is never created carrying a claim no source made.
+func newBookPromotion(
+	job store.IngestJob, blob Blob, updatedAt time.Time,
+) store.CommitNewBookPromotionRequest {
+	info := store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size}
+	bookID := promotionID("book", job.ID)
+	return store.CommitNewBookPromotionRequest{
+		ExpectedRevision: job.Revision,
+		Blob:             info,
+		Book: store.CatalogBook{
+			ID:        bookID,
+			LibraryID: job.LibraryID,
+			Status:    store.BookActive,
+			CreatedAt: updatedAt,
+			UpdatedAt: updatedAt,
+		},
+		File: store.BookFile{
+			ID:                 promotionID("file", job.ID),
+			LibraryID:          job.LibraryID,
+			BookID:             bookID,
+			BlobSHA256:         blob.SHA256,
+			Source:             job.Source,
+			SourceRelativePath: job.SourceRelativePath,
+			OriginalFilename:   promotionFilename(job),
+			MediaType:          mediaTypeEPUB,
+			Availability:       store.BookFileAvailable,
+			CreatedAt:          updatedAt,
+			UpdatedAt:          updatedAt,
+		},
+		UpdatedAt: updatedAt,
+	}
+}
+
+// promotionFilename recovers the name the file was found under. An upload
+// carries no path, and the job id it was staged as is a server detail rather
+// than a name anybody chose, so it stays empty rather than invented.
+func promotionFilename(job store.IngestJob) string {
+	if job.SourceRelativePath == nil || *job.SourceRelativePath == "" {
+		return ""
+	}
+	return path.Base(*job.SourceRelativePath)
+}
+
+func promotionID(kind, jobID string) string {
+	return uuid.NewSHA1(promotionNS, []byte(kind+"|"+jobID)).String()
+}
+
+// promotionContentFailure separates an artifact this job can never promote
+// from a server that is temporarily unable to promote it. Only the former
+// may be quarantined: quarantining the latter would strand a job whose next
+// attempt would have worked.
+func promotionContentFailure(err error) bool {
+	return errors.Is(err, ErrStageMissing) ||
+		errors.Is(err, ErrDigestMismatch) ||
+		errors.Is(err, ErrCorruptBlob)
+}
+
+// RunIngestPromotionPass promotes one bounded snapshot of extracted jobs.
+// Later polls pick up jobs outside this batch.
+func RunIngestPromotionPass(
+	ctx context.Context,
+	st ingestPromotionQueue,
+	blobs ingestBlobPromoter,
+	clock func() time.Time,
+	failureRetention time.Duration,
+	batchSize int,
+) (IngestPromotionReport, error) {
+	var report IngestPromotionReport
+	if st == nil || blobs == nil || clock == nil ||
+		failureRetention <= 0 || batchSize < 1 || batchSize > 500 {
+		return report, store.ErrInvalidTransition
+	}
+	jobs, err := st.ListIngestWorkerJobs(ctx, store.IngestExtracted, batchSize)
+	if err != nil {
+		return report, fmt.Errorf("list extracted ingest jobs: %w", err)
+	}
+	for _, job := range jobs {
+		result, err := PromoteIngestJob(
+			ctx, st, blobs, job, clock, failureRetention)
+		if errors.Is(err, store.ErrStaleRevision) {
+			report.Skipped++
+			continue
+		}
+		if err != nil {
+			return report, err
+		}
+		switch result.Job.State {
+		case store.IngestPromoted:
+			report.Promoted++
+		case store.IngestQuarantined:
+			report.Quarantined++
+		default:
+			return report, store.ErrInvariantViolation
+		}
+	}
+	return report, nil
+}
