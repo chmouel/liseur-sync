@@ -103,7 +103,67 @@ liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReade
 liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
 ```
 
-## How a library reads its filenames
+## Watching a folder you already have
+
+A watched library indexes an existing directory of EPUBs without ever
+writing to it:
+
+```
+liseur-sync admin -config liseur-sync.toml watch-library alice "Calibre" /srv/books
+```
+
+Mount that directory read-only if you can. The server does not need write
+access and treating the mount as the enforcement point means a bug cannot
+become a data loss. Point it at the directory itself, not at a parent that
+happens to contain it: the sweep walks everything below the root, and
+`watched_max_files` and `watched_max_depth` exist to stop a mistake there
+from becoming a very long sweep.
+
+Every `watched_scan_interval_seconds` (300 by default) each root is swept
+and the EPUBs it holds are ingested through the same pipeline uploads use.
+Books are therefore served from a validated copy in `content.root`, never
+from the source file — a watched library costs disk like a managed one,
+and editing a file under the root does not change what readers are being
+served.
+
+What the sweep concludes about files that are *not* there is deliberately
+cautious:
+
+- A file that disappears is only marked missing by a sweep that finished.
+  A sweep that hit `watched_max_files` or `watched_max_depth` saw part of
+  a root and is not allowed to speak for the rest of it.
+- A root that cannot be opened at all changes nothing. An unmounted volume
+  and a deleted library look identical from here, and only one of them is
+  a reason to empty a catalog.
+- A path whose contents changed does not silently become a new edition of
+  the same book. The book is flagged for review and keeps the copy it was
+  promoted with, because a file appearing at a path proves nothing about
+  whether it is the same work — replacing `Author/Title.epub` with an
+  unrelated book must not inherit the first one's reading history.
+- Renaming a file is an unrecognized path plus a missing one, for the same
+  reason. Identity is not transferred on a matching hash alone.
+
+Symlinks under the root are skipped rather than followed, and the sweep
+walks by file descriptor rather than by path, so renaming a directory
+mid-sweep cannot redirect it outside the root.
+
+### Books waiting on your decision
+
+A changed path leaves a book flagged rather than reingested, so somebody
+has to be asked:
+
+```
+liseur-sync admin -config liseur-sync.toml list-review alice <library-id>
+liseur-sync admin -config liseur-sync.toml clear-review alice <library-id> <book-id>
+```
+
+`clear-review` says only that you are content with the copy being served;
+the book leaves review and the next availability pass puts it back in the
+catalog if it still has a servable file. If the new file really is a
+different book, delete the flagged one and let the next sweep ingest the
+path as what it now holds.
+
+
 
 A file that arrives with a path — one found under a watched root rather
 than uploaded — can say something about its own author, series and title,

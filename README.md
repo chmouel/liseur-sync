@@ -40,7 +40,9 @@ go build ./cmd/liseur-sync
 ```
 
 Then sign in at `/ui/books` to upload one, or point a reader at
-`/opds/v1.2`.
+`/opds/v1.2`. To index EPUBs you already have instead of uploading them,
+`admin watch-library alice "Calibre" /srv/books` — the server reads that
+directory and never writes to it.
 
 Or with Docker Compose, three database postures:
 

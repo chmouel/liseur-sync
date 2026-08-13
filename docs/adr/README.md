@@ -24,7 +24,7 @@ loose ends that must come before any of it, are in
 | ADR | Title | Scope | State | Next |
 |---|---|---|---|---|
 | [0001](0001-content-server.md) | Become a content server | — | MVP implemented | Cover extraction |
-| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built | Watched-folder scanner |
+| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Implemented | Nothing outstanding |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Phase 1 complete | Edit UI, then search |
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |

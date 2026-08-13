@@ -183,9 +183,24 @@ server disk allocation.
    unreferenced content without touching it. **Implemented.**
 2. Managed-library upload and management UI — the MVP path. **Implemented**
    ([ADR-0005](0005-upload-and-ingestion.md) phase 4).
-3. Watched-folder scanner and reconciliation. **Next for this ADR:** the
-   ingest pipeline already accepts a `watched` source, so what is missing
-   is the scanner and its reconciliation, not the machinery behind it.
+3. **Watched-folder scanner and reconciliation.** A periodic sweep walks
+   each watched root by descriptor, skipping symlinks, and hands the EPUBs
+   it finds to the same ingest pipeline uploads use, so a watched book is
+   served from a validated CAS snapshot rather than from its mutable
+   source. Source presence is tracked separately from blob presence: only
+   a sweep that completed may conclude a file is gone, a root that cannot
+   be opened at all concludes nothing, and a path whose bytes changed goes
+   to review instead of inheriting the previous book's identity.
+   **Implemented.**
+
+   Two consequences are worth stating. A newly promoted file is rehashed
+   once on the sweep after the one that discovered it, because promotion
+   records the row after the discovering sweep wrote its observations;
+   treating an unrecorded modification time as unchanged would miss a
+   same-length replacement, which is the case the review rule exists for.
+   And a review is a durable statement about one file, not a queue the
+   server drains — nothing is re-ingested until the operator decides what
+   the changed path means.
 
 ## Acceptance criteria
 
