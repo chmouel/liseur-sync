@@ -414,3 +414,35 @@ func TestMaterializeYieldsToAConcurrentEditor(t *testing.T) {
 		t.Fatalf("returned metadata: %+v", resolved.Book)
 	}
 }
+
+// A guess about where one field ended says nothing about a field the layout
+// read from a directory of its own, so the author survives while the title
+// the parser could not explain is withheld.
+func TestMaterializeKeepsWhatAPathReadFromADirectory(t *testing.T) {
+	path := "Frank Herbert/Dune - Special Edition.epub"
+	candidate := metadata.ParsePath(path, metadata.DefaultPathPatterns())
+	if candidate.Confidence != metadata.ConfidenceLow ||
+		!candidate.Guessed.Title || candidate.Guessed.Author {
+		t.Fatalf("fixture no longer isolates the guess: %+v", candidate)
+	}
+
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata()}
+	job := materializeJob(t, epub.Metadata{Title: "Dune"}, path)
+
+	applied, changed, err := MaterializeBookMetadata(
+		context.Background(), st, job, metadata.DefaultPathPatterns(), clockAt(now))
+	if err != nil || !changed {
+		t.Fatalf("materialize: changed=%v err=%v", changed, err)
+	}
+	if applied.Book.Title != "Dune" ||
+		applied.Book.TitleSource != store.MetadataEmbedded {
+		t.Fatalf("a guessed title overwrote the file's own: %+v", applied.Book)
+	}
+	if len(applied.Contributors) != 1 ||
+		applied.Contributors[0].Name != "Frank Herbert" ||
+		applied.Contributors[0].Source != store.MetadataFilename {
+		t.Fatalf("discarded an author read from a directory: %+v",
+			applied.Contributors)
+	}
+}

@@ -90,6 +90,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:    PatternAuthorSeriesTitle,
 			Confidence: ConfidenceLow,
+			Guessed:    PathFields{Title: true},
 			Author:     "Frank Herbert",
 			Series:     "Dune",
 			Title:      "Book Two - Dune Messiah",
@@ -101,6 +102,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:        PatternFlatAuthorSeriesTitle,
 			Confidence:     ConfidenceLow,
+			Guessed:        PathFields{Title: true, Series: true, Author: true},
 			Author:         "Frank Herbert",
 			Series:         "Dune",
 			SeriesPosition: 2,
@@ -140,6 +142,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:    PatternSeriesAuthorTitle,
 			Confidence: ConfidenceLow,
+			Guessed:    PathFields{Title: true, Author: true},
 			Series:     "Dune",
 			Author:     "Frank Herbert",
 			Title:      "Dune Messiah",
@@ -151,6 +154,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:    PatternAuthorTitle,
 			Confidence: ConfidenceLow,
+			Guessed:    PathFields{Title: true},
 			Author:     "Dune",
 			Title:      "Frank Herbert - Dune Messiah",
 		},
@@ -161,6 +165,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:        PatternAuthorSeriesTitle,
 			Confidence:     ConfidenceLow,
+			Guessed:        PathFields{Title: true},
 			Author:         "Frank Herbert",
 			Series:         "Dune",
 			SeriesPosition: 2,
@@ -219,6 +224,7 @@ func TestParsePath(t *testing.T) {
 		want: PathCandidate{
 			Pattern:        PatternFlatAuthorSeriesTitle,
 			Confidence:     ConfidenceLow,
+			Guessed:        PathFields{Title: true, Series: true, Author: true},
 			Author:         "Frank Herbert",
 			Series:         "Sci-Fi",
 			SeriesPosition: 2,

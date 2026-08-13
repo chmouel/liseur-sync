@@ -128,7 +128,10 @@ External metadata cannot be a required ingest dependency.
    plain decimal series positions only, a confidence grade recording whether
    the layout accounted for the whole name or had to guess where one field
    ended, the original path retained, and unusable or ambiguous names left
-   unset.
+   unset. The grade is per candidate but it also records which fields were
+   guessed, because the reason for it is per field: a layout can read an
+   unambiguous author from a directory and still fail to explain the rest of
+   the name.
    Both the embedded snapshot and a parsed path are mapped to one
    source-neutral proposal that the engine consumes; EPUB subjects become
    tags rather than genres, since a subject list mixes both and inventing a
@@ -142,11 +145,14 @@ External metadata cannot be a required ingest dependency.
    resolves against what it read and a concurrent editor's writes are never
    silently overwritten. One materialization step resolves a promoted job's
    embedded snapshot and library path against the persisted rows and applies
-   the result; a layout that had to guess where one field ended is held
-   back, since a filename outranks the file's own metadata. The step is not
-   yet scheduled, because the automatic promotion worker that would produce
-   jobs for it to consume does not exist and no worker query returns
-   promoted jobs.
+   the result. A filename outranks the publication's own metadata, so a
+   value recovered by splitting a single name is never applied, only the
+   ones a directory boundary settled: the two layouts that read every field
+   out of one name are therefore still parsed and graded but contribute
+   nothing on their own, pending a confirmation step an operator drives. The
+   materialization is not yet scheduled either, because the automatic
+   promotion worker that would produce jobs for it to consume does not exist
+   and no worker query returns promoted jobs.
    Wiring the parser to per-library configuration, cover extraction, and
    automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.

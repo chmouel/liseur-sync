@@ -112,12 +112,11 @@ func MaterializeBookMetadata(
 // library; an upload has no meaningful one, and inventing a layout from the
 // original filename alone would be guessing.
 //
-// Only a layout that accounted for the whole name is used. The engine does
-// not consult confidence, and a filename outranks the file's own metadata,
-// so admitting a guess about where one field ended would let it overwrite
-// what the publication declared and stamp filename provenance on it, which
-// no later re-extraction can take back. A weaker grade is left for the
-// operator to accept by naming the library's real layout.
+// A parsed path is used whatever its grade, because FromPath already leaves
+// out the values the layout had to guess at: a candidate that guessed
+// everything simply proposes nothing. Gating on the grade instead would
+// throw away the author a layout read from a directory of its own merely
+// because it could not explain the rest of the name.
 func bookMetadataProposals(
 	job store.IngestJob, patterns []metadata.PathPattern,
 ) ([]metadata.Proposal, error) {
@@ -132,7 +131,7 @@ func bookMetadataProposals(
 	}
 	if job.SourceRelativePath != nil && *job.SourceRelativePath != "" {
 		candidate := metadata.ParsePath(*job.SourceRelativePath, patterns)
-		if candidate.Confidence == metadata.ConfidenceHigh {
+		if candidate.Confidence != metadata.ConfidenceNone {
 			proposals = append(proposals, metadata.FromPath(candidate))
 		}
 	}
