@@ -126,19 +126,10 @@ how interesting they are to build.
 **Loose ends in shipped work.** Each is a gap inside something that already
 works, and each has an owning ADR:
 
-1. **A sweep over abandoned `received` jobs**
-   ([ADR-0005](0005-upload-and-ingestion.md) phase 4). A crash between
-   staging bytes and committing the job orphans one file per in-flight
-   request. Reconciliation does not collect them, because no job reached a
-   state that says they are garbage. Those orphans now consume the staging
-   cap until an operator removes them, so this is the last thing between
-   the upload path and being able to leave it alone.
-2. **Mapping backfill** ([ADR-0003](0003-catalog-work-identity.md) phase 3).
+1. **Mapping backfill** ([ADR-0003](0003-catalog-work-identity.md) phase 3).
    Resolution backfills lazily and correctly; there is no maintenance
-   command to pre-resolve a user's existing works.
-
-The first is durability, not polish, and should come before any feature
-below.
+   command to pre-resolve a user's existing works. It is convenience, not
+   durability, so it need not come before the features below.
 
 **Features**, in order:
 

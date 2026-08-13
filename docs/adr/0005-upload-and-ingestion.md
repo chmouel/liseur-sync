@@ -197,11 +197,12 @@ name a stable job and reason instead of losing state when a request ends.
    `max_upload_bytes` and the user's `quota_bytes`, and
    `GET /v1/ingest/jobs/{id}` reports progress. A commit that fails after
    staging deletes its own bytes, since nothing in the database references
-   them; a crash in that same window still orphans one file per in-flight
-   request, which needs a sweep over abandoned `received` jobs. That sweep
-   is the second thing outstanding here: reconciliation will not collect
-   those bytes, because no job ever reached a state saying they are
-   garbage.
+   them; a crash in that same window orphans one file per in-flight
+   request, which a startup sweep over `received` jobs collects. Nothing
+   else can: reconciliation only sees committed content, and recovery only
+   visits jobs that reached `staged`. The sweep runs at startup because a
+   job still receiving its body and one interrupted mid-upload are the same
+   row, and only "no upload is in flight" tells them apart.
    The web UI drives the same code path with a session cookie instead of a
    token, so there is one implementation of the staging rules.
 

@@ -1090,3 +1090,62 @@ func promoteForActivity(
 		t.Fatal(err)
 	}
 }
+
+// testAbandonedIngestList: an upload writes its bytes before the database
+// points at them, so `received` is where an interrupted one is left. The
+// query has to find exactly those and nothing that is merely in progress
+// somewhere further along.
+func testAbandonedIngestList(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	user := MkUser(t, s, "ingest-abandoned")
+	other := MkUser(t, s, "ingest-abandoned-other")
+	now := time.Date(2026, time.March, 4, 5, 6, 7, 0, time.UTC)
+	library := store.Library{
+		ID: "ingest-abandoned", OwnerUserID: user.ID, QuotaUserID: user.ID,
+		Kind: store.LibraryManaged, Name: "Abandoned", CreatedAt: now,
+	}
+	otherLibrary := store.Library{
+		ID: "ingest-abandoned-2", OwnerUserID: other.ID, QuotaUserID: other.ID,
+		Kind: store.LibraryManaged, Name: "Abandoned", CreatedAt: now,
+	}
+	for _, l := range []store.Library{library, otherLibrary} {
+		if err := s.CreateLibrary(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	createIngestJob(t, s, user.ID, library.ID, "abandoned-a", now)
+	createIngestJob(t, s, user.ID, library.ID, "abandoned-b", now)
+	// A job that got its bytes committed is not abandoned, whatever else
+	// happens to it afterwards.
+	staged := createIngestJob(t, s, user.ID, library.ID, "abandoned-staged", now)
+	if _, err := s.CommitIngestStage(ctx, user.ID, staged.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: staged.Revision,
+			Artifact:         ingestBlob("abandoned-staged", 10),
+			StagingPath:      contentpath.StagingPath(staged.ID),
+			UpdatedAt:        now.Add(time.Minute),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	// This sweep is global housekeeping, so another user's interrupted
+	// upload has to be visible too — it occupies the same disk.
+	createIngestJob(t, s, other.ID, otherLibrary.ID, "abandoned-z", now)
+
+	page, err := s.ListAbandonedIngestJobs(ctx, "", 2)
+	if err != nil || len(page) != 2 ||
+		page[0].ID != "abandoned-a" || page[1].ID != "abandoned-b" {
+		t.Fatalf("first abandoned page: %+v %v", page, err)
+	}
+	page, err = s.ListAbandonedIngestJobs(ctx, page[1].ID, 10)
+	if err != nil || len(page) != 1 || page[0].ID != "abandoned-z" ||
+		page[0].UserID != other.ID {
+		t.Fatalf("second abandoned page: %+v %v", page, err)
+	}
+	if _, err := s.ListAbandonedIngestJobs(ctx, "", 0); err != store.ErrInvalidTransition {
+		t.Fatalf("zero limit: %v", err)
+	}
+	if _, err := s.ListAbandonedIngestJobs(ctx, "", 501); err != store.ErrInvalidTransition {
+		t.Fatalf("oversized limit: %v", err)
+	}
+}
