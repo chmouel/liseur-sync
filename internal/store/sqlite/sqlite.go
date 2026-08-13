@@ -17,12 +17,24 @@ type Store struct {
 	db *sql.DB
 }
 
-// timeFormat is the canonical timestamp encoding (UTC, RFC3339 nano).
-const timeFormat = time.RFC3339Nano
+// timeFormat is the canonical timestamp encoding: RFC3339 in UTC with a
+// fixed nine-digit fraction.
+//
+// The width is not cosmetic. SQLite compares TEXT byte by byte, and
+// time.RFC3339Nano trims trailing zeros, so its output is
+// variable-length: "…:00.5Z" sorts *after* "…:00.55Z" because 'Z'
+// (0x5A) is greater than '5' (0x35), and after "…:00.9Z" for the same
+// reason. Every `ORDER BY … _at` in this backend would then be subtly
+// out of order for rows written within the same second — precisely
+// what a bulk import produces. Padding the fraction makes byte order
+// and chronological order the same thing.
+const timeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 
 func formatTime(t time.Time) string { return t.UTC().Format(timeFormat) }
 
-func parseTime(s string) (time.Time, error) { return time.Parse(timeFormat, s) }
+// parseTime reads with RFC3339Nano, which accepts any fraction width, so
+// rows written before the padding above still load.
+func parseTime(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano, s) }
 
 func formatTimePtr(t *time.Time) sql.NullString {
 	if t == nil {
