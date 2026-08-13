@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -35,6 +37,14 @@ func Run(st store.Store, args []string) error {
 		return pairingCode(ctx, st, args[1:])
 	case "koplugin-device":
 		return kopluginDevice(ctx, st, args[1:])
+	case "create-library":
+		return createLibrary(ctx, st, args[1:])
+	case "list-libraries":
+		return listLibraries(ctx, st, args[1:])
+	case "grant-library":
+		return grantLibrary(ctx, st, args[1:])
+	case "revoke-library":
+		return revokeLibrary(ctx, st, args[1:])
 	default:
 		return fmt.Errorf("unknown admin subcommand %q\n%s", args[0], usage)
 	}
@@ -48,7 +58,15 @@ const usage = `usage: liseur-sync admin <subcommand>
   list-tokens <user>            list tokens for a user
   revoke-token <user> <tokenID> revoke a token
   pairing-code <user>           generate a kosync pairing code (15 min TTL)
-  koplugin-device <user> <name> create a statistics-plugin capability URL`
+  koplugin-device <user> <name> create a statistics-plugin capability URL
+
+  create-library <owner> <name> create a managed library
+  list-libraries <user>         list libraries the user can read
+  grant-library <actor> <library-id> <user> read|manage
+                                grant access; actor must own or manage it
+  revoke-library <actor> <library-id> <user>
+                                remove a grant
+`
 
 func createUser(ctx context.Context, st store.Store, args []string) error {
 	if len(args) != 1 {
@@ -260,4 +278,116 @@ func readPassword(prompt string) (string, error) {
 		return pw, err
 	}
 	return "", errors.New("no TTY and no piped stdin for password input")
+}
+
+// createLibrary makes a managed library. Managed is the only kind the
+// MVP can fill: watched libraries need the folder scanner, which does
+// not exist yet, so a watched library would be permanently empty.
+func createLibrary(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: create-library <owner> <name>")
+	}
+	u, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	name := strings.TrimSpace(args[1])
+	if name == "" {
+		return errors.New("library name must not be blank")
+	}
+	lib := store.Library{
+		ID:          uuid.New().String(),
+		OwnerUserID: u.ID,
+		// The owner pays for what the library holds, including bytes
+		// uploaded by others they grant access to (ADR-0002).
+		QuotaUserID: u.ID,
+		Kind:        store.LibraryManaged,
+		Name:        name,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := st.CreateLibrary(ctx, lib); err != nil {
+		return err
+	}
+	fmt.Printf("created library %q (id %s) owned by %s\n", lib.Name, lib.ID, u.Name)
+	return nil
+}
+
+func listLibraries(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: list-libraries <user>")
+	}
+	u, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	libs, err := st.ListLibraries(ctx, u.ID, store.LibraryRoleRead)
+	if err != nil {
+		return err
+	}
+	for _, l := range libs {
+		owner := "shared"
+		if l.Library.OwnerUserID == u.ID {
+			owner = "owner"
+		}
+		fmt.Printf("%s  %-10s %-6s %-7s %s\n",
+			l.Library.ID, l.Library.Kind, l.Role, owner, l.Library.Name)
+	}
+	return nil
+}
+
+// grantLibrary goes through the same ACL-checked store call the API
+// uses, which is why it asks for an actor rather than acting as root:
+// the operator gets one authorization path to reason about instead of
+// a second one that could drift from it.
+func grantLibrary(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 4 {
+		return errors.New(
+			"usage: grant-library <actor> <library-id> <user> read|manage")
+	}
+	actor, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return fmt.Errorf("actor %q: %w", args[0], err)
+	}
+	target, err := st.UserByName(ctx, args[2])
+	if err != nil {
+		return fmt.Errorf("user %q: %w", args[2], err)
+	}
+	role := store.LibraryRole(args[3])
+	if !role.Valid() {
+		return fmt.Errorf("role must be read or manage, got %q", args[3])
+	}
+	err = st.GrantLibraryAccess(ctx, actor.ID, args[1], target.ID, role, time.Now().UTC())
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf(
+			"no such library, or %s cannot manage it, or %s already owns it",
+			actor.Name, target.Name)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("granted %s %s on library %s\n", target.Name, role, args[1])
+	return nil
+}
+
+func revokeLibrary(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 3 {
+		return errors.New("usage: revoke-library <actor> <library-id> <user>")
+	}
+	actor, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return fmt.Errorf("actor %q: %w", args[0], err)
+	}
+	target, err := st.UserByName(ctx, args[2])
+	if err != nil {
+		return fmt.Errorf("user %q: %w", args[2], err)
+	}
+	err = st.RevokeLibraryAccess(ctx, actor.ID, args[1], target.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("no such grant, or %s cannot manage that library", actor.Name)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("revoked %s's access to library %s\n", target.Name, args[1])
+	return nil
 }
