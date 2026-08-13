@@ -184,11 +184,12 @@ name a stable job and reason instead of losing state when a request ends.
    validated`, `validated -> extracted`, `extracted -> promoted`) run on a
    configurable interval, each revision-checked, each quarantining content
    failures under a stable code.
-   **Not yet enforced:** the instance-wide staging cap. Per-request and
-   per-user bounds arrived with the upload path in phase 4. **Next for this
-   ADR**, and before any feature work: concurrent uploads from users who
-   are each inside quota can still fill the disk, which is a durability
-   gap rather than a missing feature.
+   **Also enforced:** an instance-wide staging cap. `max_staging_bytes`
+   bounds everything in the incoming directory at once, measured from the
+   directory rather than from job rows so that partials and crash orphans
+   count; each upload reserves its worst case before reading a byte, and
+   what does not fit is refused `503` with `Retry-After`. **Next for this
+   ADR:** the sweep over abandoned `received` jobs in phase 4.
 3. **Metadata and cover extraction.** Metadata done — see ADR-0004 phase 1.
    **Remaining:** cover extraction and transcoding.
 4. **Upload API and htmx UI.** API done: `POST /v1/libraries/{library}/upload`

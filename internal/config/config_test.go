@@ -60,6 +60,35 @@ func TestContentDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+// TestStagingCapMustLeaveRoomForOneUpload: a cap below the largest
+// permitted upload refuses every upload, which looks like a broken server
+// rather than a full one. Better to refuse the config.
+func TestStagingCapMustLeaveRoomForOneUpload(t *testing.T) {
+	cfg := Default()
+	if cfg.Content.MaxStagingBytes < cfg.Content.MaxUploadBytes {
+		t.Fatalf("default cap %d is under the default upload limit %d",
+			cfg.Content.MaxStagingBytes, cfg.Content.MaxUploadBytes)
+	}
+	cfg.Content.MaxStagingBytes = cfg.Content.MaxUploadBytes - 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a cap smaller than one upload was accepted")
+	}
+	cfg.Content.MaxStagingBytes = cfg.Content.MaxUploadBytes
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a cap of exactly one upload: %v", err)
+	}
+	// Zero keeps the pre-cap behaviour for operators who bound the disk
+	// some other way, so it is not measured against the upload limit.
+	cfg.Content.MaxStagingBytes = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("an unlimited staging area: %v", err)
+	}
+	cfg.Content.MaxStagingBytes = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a negative cap was accepted")
+	}
+}
+
 func TestContentRootEnvironmentOverride(t *testing.T) {
 	t.Setenv("LISEUR_CONTENT_ROOT", "/srv/liseur-content")
 	cfg := Default()

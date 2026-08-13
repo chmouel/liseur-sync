@@ -345,6 +345,15 @@ func writeStageError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, content.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "upload exceeds the size limit")
+	case errors.Is(err, content.ErrStagingFull):
+		// Transient and not the client's fault: this upload is within
+		// every bound it was given, and the server is simply out of room
+		// to receive it right now. 503 says "try again", which is true,
+		// where 413 would tell the client to send something smaller and
+		// that would not help.
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusServiceUnavailable,
+			"the server is busy receiving uploads; try again shortly")
 	case errors.Is(err, context.Canceled), errors.Is(err, io.ErrUnexpectedEOF):
 		// The client went away mid-upload. Nothing was committed, and the
 		// partial file is removed by Stage itself.

@@ -746,3 +746,45 @@ func TestOversizedUploadIsNotDrained(t *testing.T) {
 		t.Fatalf("server read %d bytes of a %d-byte upload it refused", got, sent)
 	}
 }
+
+// TestUploadIsRefusedWhenTheStagingAreaIsFull: the server is out of room,
+// not the client out of line. The answer has to say "later", not "smaller",
+// or a retrying client will shrink its book forever and never succeed.
+func TestUploadIsRefusedWhenTheStagingAreaIsFull(t *testing.T) {
+	f := newUploadFixture(t)
+	// A cap of exactly one upload, the smallest the config permits, plus
+	// a byte of debris already on disk: the next upload cannot fit.
+	f.cas.SetStagingCap(config.Default().Content.MaxUploadBytes)
+	orphan := filepath.Join(f.cas.Root(), ".incoming", "crashed.stage")
+	if err := os.WriteFile(orphan, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := f.upload(t, f.token, f.library, "key-full", []byte("hello"))
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("upload into a full staging area = %d, want 503: %v", code, out)
+	}
+
+	// Once the debris is gone the same upload succeeds, so the refusal was
+	// about room and nothing else.
+	if err := os.Remove(orphan); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := f.upload(t, f.token, f.library, "key-full",
+		[]byte("hello")); code != http.StatusAccepted {
+		t.Fatalf("upload after room was freed = %d: %v", code, out)
+	}
+}
+
+// TestFullStagingAreaTellsTheClientToComeBack pins the header rather than
+// the status alone: without it a client has no interval to back off for.
+func TestFullStagingAreaTellsTheClientToComeBack(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeStageError(rec, content.ErrStagingFull)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("no Retry-After on a transient refusal")
+	}
+}

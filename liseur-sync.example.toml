@@ -56,6 +56,13 @@ epub_max_xml_depth = 128
 # for the client to finish sending.
 max_upload_bytes = 536870912              # 512 MiB
 
+# Total bytes uploads may occupy at once while being received and
+# verified, before they are committed to permanent storage. Per-upload
+# and per-user limits cannot bound this: every upload can be within both
+# and still, together, fill the disk. Uploads over the cap are answered
+# 503 with Retry-After. Must be at least max_upload_bytes; 0 disables it.
+max_staging_bytes = 8589934592            # 8 GiB
+
 # Total stored bytes allowed per user, counted over deduplicated blobs.
 # 0 means unlimited.
 quota_bytes = 0

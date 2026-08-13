@@ -34,6 +34,12 @@ type Config struct {
 		// once bytes are staged, so without this a single upload could
 		// fill the disk before anything inspected it.
 		MaxUploadBytes int64 `toml:"max_upload_bytes"`
+		// MaxStagingBytes bounds every in-flight upload together, or 0
+		// for unlimited. max_upload_bytes and quota_bytes both pass
+		// uploads that are individually fine and collectively fill the
+		// disk, and staged bytes are charged to nobody until they are
+		// promoted.
+		MaxStagingBytes int64 `toml:"max_staging_bytes"`
 		// QuotaBytes is the per-principal logical storage limit, or 0 for
 		// unlimited. Charged to a library's quota_user_id (ADR-0002).
 		QuotaBytes            int64 `toml:"quota_bytes"`
@@ -98,6 +104,10 @@ func Default() Config {
 	c.Content.RecoveryBatchSize = 100
 	c.Content.IngestWorkerInterval = 5
 	c.Content.MaxUploadBytes = 512 << 20
+	// Sixteen uploads of the default maximum size. Enough that a small
+	// instance never meets it, low enough that a runaway client cannot
+	// spend a disk before anything notices.
+	c.Content.MaxStagingBytes = 8 << 30
 	c.Content.QuotaBytes = 0
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
@@ -200,6 +210,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.MaxUploadBytes < 1 {
 		return fmt.Errorf("content.max_upload_bytes must be >= 1")
+	}
+	if c.Content.MaxStagingBytes < 0 {
+		return fmt.Errorf("content.max_staging_bytes must be >= 0 (0 disables the cap)")
+	}
+	// A cap below one upload refuses every upload, including the first,
+	// and would look like a broken server rather than a misconfigured one.
+	if c.Content.MaxStagingBytes > 0 && c.Content.MaxStagingBytes < c.Content.MaxUploadBytes {
+		return fmt.Errorf(
+			"content.max_staging_bytes (%d) must be >= content.max_upload_bytes (%d), or no upload can ever be accepted",
+			c.Content.MaxStagingBytes, c.Content.MaxUploadBytes)
 	}
 	if c.Content.QuotaBytes < 0 {
 		return fmt.Errorf("content.quota_bytes must be >= 0 (0 disables the quota)")
