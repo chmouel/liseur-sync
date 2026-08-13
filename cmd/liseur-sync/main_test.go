@@ -479,3 +479,71 @@ func assertBookStatus(
 		t.Fatalf("%s status: got %q want %q", bookID, book.Status, want)
 	}
 }
+
+// TestTrashPurgeWorkerDeletesOnlyWhatItsWindowAllows runs the worker the
+// way serve does. It is the only thing in the server that destroys a
+// user's content, so what matters is not that it deletes but that it
+// stops: a book still inside its retention window must survive the tick
+// that takes the one beside it.
+func TestTrashPurgeWorkerDeletesOnlyWhatItsWindowAllows(t *testing.T) {
+	ctx := context.Background()
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "purge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := st.CreateUser(ctx, store.User{
+		ID: "user", Name: "alice", Argon2Hash: "x", Timezone: "UTC",
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateLibrary(ctx, store.Library{
+		ID: "library", OwnerUserID: "user", QuotaUserID: "user",
+		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"expired", "still-recoverable"} {
+		if err := st.CreateCatalogBook(ctx, "user", store.CatalogBook{
+			ID: id, LibraryID: "library", Status: store.BookActive,
+			Title: id, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.TrashCatalogBook(
+		ctx, "user", "expired", now.Add(-48*time.Hour), now.Add(-time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.TrashCatalogBook(
+		ctx, "user", "still-recoverable", now, now.Add(720*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{}
+	cfg.Content.TrashRetentionHours = 720
+	cfg.Content.RecoveryBatchSize = 50
+	// The worker purges once on entry and then sleeps for an hour, so a
+	// context cancelled during that sleep exercises exactly one tick and
+	// the shutdown path with it.
+	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := runTrashPurgeWorker(runCtx, st, cfg); err != nil {
+		t.Fatalf("worker returned %v, want a clean shutdown", err)
+	}
+
+	left, err := st.ListTrashedBooks(ctx, "user", "library", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].ID != "still-recoverable" {
+		t.Fatalf("trash after a purge tick = %+v", left)
+	}
+}

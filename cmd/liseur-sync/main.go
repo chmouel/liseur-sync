@@ -236,6 +236,53 @@ func runIngestPromotionWorker(
 	}
 }
 
+// trashPurgeInterval is how often expired trash is collected. Deletion is
+// not urgent — retention is measured in weeks — and each tick is bounded,
+// so an hour keeps the work small without letting the bytes linger.
+const trashPurgeInterval = time.Hour
+
+// runTrashPurgeWorker permanently deletes books whose retention window
+// has closed. It is deliberately the only caller of the purge: an
+// operator who wants something gone sooner shortens retention, rather
+// than reaching past the window.
+func runTrashPurgeWorker(
+	ctx context.Context,
+	st store.Store,
+	cfg config.Config,
+) error {
+	retention := time.Duration(cfg.Content.TrashRetentionHours) * time.Hour
+	for {
+		report, err := content.PurgeExpiredTrash(
+			ctx, st, time.Now().UTC(), cfg.Content.RecoveryBatchSize)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if fatalWorkerError(err) {
+				return err
+			}
+			slog.Error("trash purge failed, retrying next tick", "err", err)
+		}
+		if len(report.BookIDs) != 0 {
+			slog.Info("trash purge complete",
+				"books", len(report.BookIDs),
+				"files", report.FilesPurged,
+				"quota_released", report.ReservationsReleased,
+				"blobs_orphaned", report.BlobsOrphaned,
+				"retention", retention)
+		}
+		timer := time.NewTimer(trashPurgeInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("fatal", "err", err)
@@ -367,7 +414,7 @@ func cmdServe(args []string) error {
 
 	// Each producer sends at most one terminal error. Buffer all producers so
 	// no goroutine can block reporting while coordinated shutdown waits for it.
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 5)
 	validationDone := make(chan struct{})
 	go func() {
 		defer close(validationDone)
@@ -388,6 +435,13 @@ func cmdServe(args []string) error {
 		defer close(promotionDone)
 		if err := runIngestPromotionWorker(bgCtx, st, cas, cfg); err != nil {
 			errCh <- fmt.Errorf("ingest promotion worker: %w", err)
+		}
+	}()
+	trashDone := make(chan struct{})
+	go func() {
+		defer close(trashDone)
+		if err := runTrashPurgeWorker(bgCtx, st, cfg); err != nil {
+			errCh <- fmt.Errorf("trash purge worker: %w", err)
 		}
 	}()
 	serverDone := make(chan struct{})
@@ -418,6 +472,7 @@ func cmdServe(args []string) error {
 	<-validationDone
 	<-extractionDone
 	<-promotionDone
+	<-trashDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)
 }
