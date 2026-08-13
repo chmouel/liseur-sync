@@ -13,6 +13,10 @@ import (
 // library actually uses.
 type PathPattern string
 
+// nameSeparator is the only field separator these layouts recognize inside a
+// single path component.
+const nameSeparator = " - "
+
 const (
 	// PatternAuthorTitle reads "Author/Title.epub".
 	PatternAuthorTitle PathPattern = "author/title"
@@ -132,9 +136,6 @@ func applyPathPattern(
 		candidate.Title = leafTitle.Title
 		candidate.SeriesPosition = leafTitle.Position
 		candidate.HasPosition = leafTitle.HasPosition
-		if !leafTitle.Accounted {
-			candidate.Confidence = ConfidenceLow
-		}
 	case PatternSeriesAuthorTitle:
 		if len(parts) != 2 {
 			return candidate, false
@@ -170,6 +171,11 @@ func applyPathPattern(
 	}
 	if candidate.Title == "" {
 		return PathCandidate{}, false
+	}
+	// A separator left inside the title is a field boundary the layout could
+	// not explain, whichever layout matched.
+	if strings.Contains(candidate.Title, nameSeparator) {
+		candidate.Confidence = ConfidenceLow
 	}
 	return candidate, true
 }
@@ -208,7 +214,7 @@ func splitRelative(relative string) ([]string, bool) {
 // Surrounding whitespace variations are tolerated but a hyphen inside a word
 // such as "sci-fi" is not a separator.
 func splitNameSeparator(name string) []string {
-	fields := strings.Split(name, " - ")
+	fields := strings.Split(name, nameSeparator)
 	for i, field := range fields {
 		fields[i] = strings.TrimSpace(field)
 		if fields[i] == "" {
@@ -223,30 +229,22 @@ type leafTitle struct {
 	Title       string
 	Position    float64
 	HasPosition bool
-	// Accounted reports whether the layout explained the whole name. A leaf
-	// holding a " - " that is not a position prefix is only partly explained.
-	Accounted bool
 }
 
 // splitPositionPrefix reads a leading "02 - " series position. It reports
 // the leaf as unusable when nothing but a position and its separator remain,
 // because a name such as "02 - .epub" carries no title to keep.
 func splitPositionPrefix(leaf string) (leafTitle, bool) {
-	if index := strings.Index(leaf, " - "); index >= 0 {
+	if index := strings.Index(leaf, nameSeparator); index >= 0 {
 		number, ok := parsePosition(leaf[:index])
 		if !ok {
 			return leafTitle{Title: leaf}, true
 		}
-		title := strings.TrimSpace(leaf[index+len(" - "):])
+		title := strings.TrimSpace(leaf[index+len(nameSeparator):])
 		if title == "" {
 			return leafTitle{}, false
 		}
-		return leafTitle{
-			Title:       title,
-			Position:    number,
-			HasPosition: true,
-			Accounted:   true,
-		}, true
+		return leafTitle{Title: title, Position: number, HasPosition: true}, true
 	}
 	// Trimming the extension can leave a dangling "02 -" behind, which is a
 	// position with an empty title rather than a title of its own.
@@ -255,7 +253,7 @@ func splitPositionPrefix(leaf string) (leafTitle, bool) {
 			return leafTitle{}, false
 		}
 	}
-	return leafTitle{Title: leaf, Accounted: true}, true
+	return leafTitle{Title: leaf}, true
 }
 
 // splitPositionSuffix reads a trailing "Series 02" position.

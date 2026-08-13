@@ -616,7 +616,9 @@ recognizes the four documented library layouts from an ordered per-library
 pattern list, grades each candidate by whether the layout accounted for the
 whole name, keeps the original path, and leaves ambiguous names unset.
 Both the embedded snapshot and a parsed path map to one source-neutral
-proposal the engine consumes.
+proposal the engine consumes, and a proposal declares whether its sets are
+complete, and so may drop what the source no longer claims, or partial, and
+so may only add or take over the rows the source can actually see.
 Persisting a proposal into catalog fields and metadata entities,
 persisting the set-level lock, per-library parser configuration,
 cover extraction/transcoding,

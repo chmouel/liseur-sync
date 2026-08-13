@@ -29,14 +29,21 @@ type SeriesValue struct {
 }
 
 // Proposal is everything one source claims about one book, expressed in the
-// vocabulary the precedence engine consumes. Every set is a complete
-// assertion by Source, so an omitted set means the source had no opinion.
-// Confidence grades how much structure the source relied on; the engine does
-// not consult it, so a caller that wants to hold back weakly parsed values
-// must check it before applying the proposal.
+// vocabulary the precedence engine consumes. Confidence grades how much
+// structure the source relied on; the engine does not consult it, so a
+// caller that wants to hold back weakly parsed values must check it before
+// applying the proposal.
+//
+// PartialSets decides how the sets must be merged. A source that reads the
+// whole publication asserts complete sets and its proposal goes through
+// MergeSet, which drops what the source no longer claims. A source that can
+// only ever see part of the picture sets PartialSets and must go through
+// MergeEntries instead, or it would delete rows it never had any knowledge
+// of.
 type Proposal struct {
 	Source        store.MetadataSource
 	Confidence    Confidence
+	PartialSets   bool
 	Title         Candidate
 	Subtitle      Candidate
 	Description   Candidate
@@ -111,10 +118,14 @@ func FromEmbedded(metadata epub.Metadata) Proposal {
 // FromPath maps a parsed library path to a filename-source proposal. A path
 // says nothing about a description, a publisher or a date, so those stay
 // empty and the precedence engine leaves whatever the file itself supplied.
+// Its sets are partial for the same reason: a path names at most one author
+// and one series and knows nothing of the other contributors or series the
+// file declared, so the result must be merged with MergeEntries.
 func FromPath(candidate PathCandidate) Proposal {
 	proposal := Proposal{
-		Source:     store.MetadataFilename,
-		Confidence: candidate.Confidence,
+		Source:      store.MetadataFilename,
+		Confidence:  candidate.Confidence,
+		PartialSets: true,
 		Title: Candidate{
 			Value: candidate.Title, Source: store.MetadataFilename},
 	}

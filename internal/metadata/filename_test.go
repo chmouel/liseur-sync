@@ -150,9 +150,22 @@ func TestParsePath(t *testing.T) {
 		patterns: all,
 		want: PathCandidate{
 			Pattern:    PatternAuthorTitle,
-			Confidence: ConfidenceHigh,
+			Confidence: ConfidenceLow,
 			Author:     "Dune",
 			Title:      "Frank Herbert - Dune Messiah",
+		},
+	}, {
+		name:     "a separator left inside a parsed title lowers confidence",
+		path:     "Frank Herbert/Dune/02 - Dune - Messiah.epub",
+		patterns: all,
+		want: PathCandidate{
+			Pattern:        PatternAuthorSeriesTitle,
+			Confidence:     ConfidenceLow,
+			Author:         "Frank Herbert",
+			Series:         "Dune",
+			SeriesPosition: 2,
+			HasPosition:    true,
+			Title:          "Dune - Messiah",
 		},
 	}, {
 		name:     "an ambiguous leaf is not split",

@@ -56,6 +56,30 @@ func MergeSet[K comparable, V comparable](
 	source store.MetadataSource,
 	setLocked bool,
 ) ([]SetEntry[K, V], bool) {
+	return mergeEntries(current, incoming, source, setLocked, true)
+}
+
+// MergeEntries resolves a partial assertion: a source that knows about some
+// rows but cannot see the rest. It adds and takes over the rows it names by
+// the same precedence rules as MergeSet, and removes nothing. A library path
+// naming one author is the motivating case, since it says nothing about the
+// translators and illustrators the file itself declared.
+func MergeEntries[K comparable, V comparable](
+	current []SetEntry[K, V],
+	incoming []Assertion[K, V],
+	source store.MetadataSource,
+	setLocked bool,
+) ([]SetEntry[K, V], bool) {
+	return mergeEntries(current, incoming, source, setLocked, false)
+}
+
+func mergeEntries[K comparable, V comparable](
+	current []SetEntry[K, V],
+	incoming []Assertion[K, V],
+	source store.MetadataSource,
+	setLocked bool,
+	dropUnasserted bool,
+) ([]SetEntry[K, V], bool) {
 	if setLocked || len(incoming) == 0 || !KnownSource(source) {
 		return current, false
 	}
@@ -77,7 +101,10 @@ func MergeSet[K comparable, V comparable](
 		case entry.Locked || Rank(entry.Source) > Rank(source):
 			merged = append(merged, entry)
 		case !listed:
-			continue
+			if dropUnasserted {
+				continue
+			}
+			merged = append(merged, entry)
 		default:
 			entry.Value = value
 			entry.Source = source

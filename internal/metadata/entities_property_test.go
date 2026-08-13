@@ -104,6 +104,28 @@ func TestMergeSetProperties(t *testing.T) {
 					assertion.Key, context())
 			}
 		}
+
+		partial, _ := MergeEntries(current, incoming, source, setLocked)
+		partialByKey := indexEntries(t, partial)
+		for _, row := range before {
+			got, ok := partialByKey[row.Key]
+			if !ok {
+				t.Fatalf("a partial merge removed row %+v: %s", row, context())
+			}
+			if row.Locked && got != row {
+				t.Fatalf("a partial merge altered locked row %+v: %s",
+					row, context())
+			}
+			if Rank(got.Source) < Rank(row.Source) {
+				t.Fatalf("a partial merge downgraded %+v to %+v: %s",
+					row, got, context())
+			}
+		}
+		replayedPartial, partialChanged := MergeEntries(
+			partial, incoming, source, setLocked)
+		if partialChanged || !equalSets(partial, replayedPartial) {
+			t.Fatalf("a partial merge is not idempotent: %s", context())
+		}
 	}
 }
 

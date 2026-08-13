@@ -132,7 +132,10 @@ External metadata cannot be a required ingest dependency.
    Both the embedded snapshot and a parsed path are mapped to one
    source-neutral proposal that the engine consumes; EPUB subjects become
    tags rather than genres, since a subject list mixes both and inventing a
-   genre would be guessing.
+   genre would be guessing. A proposal declares whether its sets are complete
+   or partial: an extraction reads the whole publication and may therefore
+   drop what it no longer claims, while a path names at most one author and
+   one series and may only add or take over the rows it names.
    Persisting a proposal into catalog fields and normalized metadata
    entities, persisting the set-level lock, wiring the parser to per-library
    configuration, cover extraction, and automatic promotion remain.
