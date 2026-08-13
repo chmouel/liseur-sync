@@ -125,9 +125,10 @@ External metadata cannot be a required ingest dependency.
    key while keeping their display spelling.
    The filename and folder parser is implemented as a pure per-library
    pattern list: the four documented layouts, conservative " - " splitting,
-   plain decimal series positions only, a confidence grade that marks values
-   recovered from a single name rather than a directory boundary, the
-   original path retained, and unusable or ambiguous names left unset.
+   plain decimal series positions only, a confidence grade recording whether
+   the layout accounted for the whole name or had to guess where one field
+   ended, the original path retained, and unusable or ambiguous names left
+   unset.
    Both the embedded snapshot and a parsed path are mapped to one
    source-neutral proposal that the engine consumes; EPUB subjects become
    tags rather than genres, since a subject list mixes both and inventing a

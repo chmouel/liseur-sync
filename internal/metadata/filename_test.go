@@ -113,6 +113,22 @@ func TestParsePath(t *testing.T) {
 		patterns: all,
 		want:     PathCandidate{},
 	}, {
+		name:     "a dangling position separator is not a title",
+		path:     "Frank Herbert/Dune/02 -.epub",
+		patterns: all,
+		want:     PathCandidate{},
+	}, {
+		name:     "a name that merely ends in a hyphen is still a title",
+		path:     "Frank Herbert/Dune/Dune Messiah -.epub",
+		patterns: all,
+		want: PathCandidate{
+			Pattern:    PatternAuthorSeriesTitle,
+			Confidence: ConfidenceHigh,
+			Author:     "Frank Herbert",
+			Series:     "Dune",
+			Title:      "Dune Messiah -",
+		},
+	}, {
 		name:     "a bare filename yields nothing",
 		path:     "Dune.epub",
 		patterns: all,
@@ -221,6 +237,9 @@ func TestParsePathRejectsUnusablePaths(t *testing.T) {
 		`Frank Herbert\Dune.epub`,
 		"Frank Herbert/.epub",
 		"Frank Herbert/   .epub",
+		"Frank Herbert/Dune/02 - .epub",
+		"Frank Herbert/Dune/02 -   .epub",
+		"Frank Herbert/Dune/1.5 - .epub",
 	}
 	for _, p := range paths {
 		got := ParsePath(p, DefaultPathPatterns())

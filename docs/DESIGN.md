@@ -613,8 +613,8 @@ with case- and whitespace-insensitive entity matching and a set-level lock
 that a caller can raise to reject an assertion outright. A pure filename and
 folder parser
 recognizes the four documented library layouts from an ordered per-library
-pattern list, grades each candidate's confidence, keeps the original path,
-and leaves ambiguous names unset.
+pattern list, grades each candidate by whether the layout accounted for the
+whole name, keeps the original path, and leaves ambiguous names unset.
 Both the embedded snapshot and a parsed path map to one source-neutral
 proposal the engine consumes.
 Persisting a proposal into catalog fields and metadata entities,
