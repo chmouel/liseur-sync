@@ -22,7 +22,6 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
-	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -224,7 +223,7 @@ func runIngestPromotionWorker(
 	interval := time.Duration(cfg.Content.IngestWorkerInterval) * time.Second
 	for {
 		report, err := content.RunIngestPromotionPass(
-			ctx, st, cas, metadata.DefaultPathPatterns(), time.Now,
+			ctx, st, cas, content.NewLibraryPatterns(st), time.Now,
 			time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
 			cfg.Content.RecoveryBatchSize)
 		if err != nil {
@@ -238,13 +237,14 @@ func runIngestPromotionWorker(
 		}
 		if report.Promoted != 0 || report.Quarantined != 0 ||
 			report.Skipped != 0 || report.Replayed != 0 ||
-			report.Undescribed != 0 {
+			report.Undescribed != 0 || report.Misconfigured != 0 {
 			slog.Info("ingest promotion pass complete",
 				"promoted", report.Promoted,
 				"quarantined", report.Quarantined,
 				"skipped", report.Skipped,
 				"replayed", report.Replayed,
-				"undescribed", report.Undescribed)
+				"undescribed", report.Undescribed,
+				"misconfigured", report.Misconfigured)
 		}
 		timer := time.NewTimer(interval)
 		select {
