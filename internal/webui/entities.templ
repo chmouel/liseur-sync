@@ -1,0 +1,160 @@
+package webui
+
+// EntityRow is one series, contributor, tag or genre as a list shows it.
+// The count is of active books only, so a row that reads 0 is a name the
+// library still knows but has nothing to show for — usually everything
+// that used it is in the trash.
+type EntityRow struct {
+	ID        string
+	Name      string
+	BookCount int
+}
+
+type EntitiesView struct {
+	LibraryID string
+	// Kind is the URL segment (`tags`, `series`, …), kept so the page can
+	// link back to itself without re-deriving it.
+	Kind     string
+	Heading  string
+	Singular string
+	Entities []EntityRow
+	NextURL  string
+	CanWrite bool
+	Notice   string
+	Problem  string
+}
+
+type EntityBooksView struct {
+	LibraryID string
+	Kind      string
+	Heading   string
+	Singular  string
+	Books     []BookRow
+	NextURL   string
+}
+
+templ entitiesPage(prefix string, u userCtx, csrf string, v EntitiesView) {
+	@layout(v.Heading, prefix, u.User, csrf, entitiesBody(prefix, csrf, v))
+}
+
+templ entitiesBody(prefix, csrf string, v EntitiesView) {
+	<h1>{ v.Heading }</h1>
+	if v.Problem != "" {
+		<p class="error" role="alert">{ v.Problem }</p>
+	}
+	if v.Notice != "" {
+		<p class="notice" role="status">{ v.Notice }</p>
+	}
+	<section class="card">
+		if len(v.Entities) == 0 {
+			<p class="muted">
+				Nothing here yet. These appear as books are added and read.
+			</p>
+		} else {
+			<table>
+				<tr>
+					<th>Name</th>
+					<th>Books</th>
+					if v.CanWrite {
+						<th></th>
+					}
+				</tr>
+				for _, e := range v.Entities {
+					<tr>
+						<td>
+							<a href={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID }>
+								{ e.Name }
+							</a>
+						</td>
+						<td>{ plural(e.BookCount, "book") }</td>
+						if v.CanWrite {
+							<td>
+								<form
+									method="post"
+									action={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID + "/rename" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<input
+										type="text"
+										name="name"
+										value={ e.Name }
+										aria-label={ "Rename this " + v.Singular }
+										required/>
+									<button type="submit">Rename</button>
+								</form>
+							</td>
+						}
+					</tr>
+				}
+			</table>
+		}
+		if v.NextURL != "" {
+			<p><a href={ prefix + v.NextURL }>Next page</a></p>
+		}
+	</section>
+	if v.CanWrite && len(v.Entities) > 1 {
+		@mergeForm(prefix, csrf, v)
+	}
+	<p><a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a></p>
+}
+
+// mergeForm folds two spellings of one thing together. Matching only
+// folds case and spacing, so anything further apart than that stays two
+// entities until somebody says otherwise — which is what this is for.
+templ mergeForm(prefix, csrf string, v EntitiesView) {
+	<section class="card">
+		<h2>Merge two</h2>
+		<p class="muted">
+			Every book on the first one moves to the second, and the first
+			disappears. This cannot be undone.
+		</p>
+		<form method="post" action={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/merge" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label for="merge-from">Move everything from</label>
+			<select id="merge-from" name="from" required>
+				for _, e := range v.Entities {
+					<option value={ e.ID }>{ e.Name }</option>
+				}
+			</select>
+			<label for="merge-into">onto</label>
+			<select id="merge-into" name="into" required>
+				for _, e := range v.Entities {
+					<option value={ e.ID }>{ e.Name }</option>
+				}
+			</select>
+			<button type="submit">Merge</button>
+		</form>
+	</section>
+}
+
+templ entityBooksPage(prefix string, u userCtx, csrf string, v EntityBooksView) {
+	@layout(v.Heading, prefix, u.User, csrf, entityBooksBody(prefix, v))
+}
+
+templ entityBooksBody(prefix string, v EntityBooksView) {
+	<h1>{ v.Heading }</h1>
+	<section class="card">
+		if len(v.Books) == 0 {
+			<p class="muted">Nothing here — every book that used this is in the trash.</p>
+		} else {
+			<table>
+				<tr><th>Title</th><th>Added</th></tr>
+				for _, b := range v.Books {
+					<tr>
+						<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
+						<td>{ b.Added }</td>
+					</tr>
+				}
+			</table>
+		}
+		if v.NextURL != "" {
+			<p><a href={ prefix + v.NextURL }>Next page</a></p>
+		}
+	</section>
+	<p>
+		<a href={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind }>
+			All { v.Kind }
+		</a>
+		{ " · " }
+		<a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a>
+	</p>
+}

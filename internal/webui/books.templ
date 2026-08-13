@@ -100,6 +100,18 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				</select>
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
+			if v.Selected != "" {
+				<p>
+					Browse by
+					<a href={ prefix + "libraries/" + v.Selected + "/series" }>series</a>
+					{ ", " }
+					<a href={ prefix + "libraries/" + v.Selected + "/contributors" }>contributors</a>
+					{ ", " }
+					<a href={ prefix + "libraries/" + v.Selected + "/tags" }>tags</a>
+					{ " or " }
+					<a href={ prefix + "libraries/" + v.Selected + "/genres" }>genres</a>
+				</p>
+			}
 		</section>
 		if v.CanWrite {
 			<section class="card">
@@ -271,14 +283,105 @@ type BookView struct {
 	Added       string
 	LibraryID   string
 	Files       []BookFileRow
+	Notice      string
+	Problem     string
+	// CanWrite gates the edit form. A reader sees the book exactly as
+	// before; nothing about how it was catalogued is theirs to change.
+	CanWrite bool
+	Edit     MetadataEditView
+}
+
+// MetadataFieldView is one editable field: its current text, where that
+// text came from, and whether a person has pinned it. The source is
+// shown because it is the answer to the question a librarian actually
+// has — "why does it say that?" — and the lock is shown because it is
+// the answer to "why does it keep saying that?".
+type MetadataFieldView struct {
+	Value  string
+	Source string
+	Locked bool
+}
+
+type MetadataEditView struct {
+	Title        MetadataFieldView
+	Subtitle     MetadataFieldView
+	Description  MetadataFieldView
+	Publisher    MetadataFieldView
+	Published    MetadataFieldView
+	Tags         MetadataFieldView
+	Genres       MetadataFieldView
+	Languages    MetadataFieldView
+	Series       MetadataFieldView
+	Contributors MetadataFieldView
 }
 
 templ bookPage(prefix string, u userCtx, csrf string, b BookView) {
-	@layout(orPlaceholder(b.Title), prefix, u.User, csrf, bookBody(prefix, b))
+	@layout(orPlaceholder(b.Title), prefix, u.User, csrf, bookBody(prefix, csrf, b))
 }
 
-templ bookBody(prefix string, b BookView) {
+// metadataRow renders one field of the edit form. The hidden `_was`
+// input carries what was rendered, so the handler can tell an edit from
+// an untouched field; without it, opening a book and pressing Save would
+// lock every field on it.
+templ metadataRow(name, label, hint string, f MetadataFieldView, area bool) {
+	<p>
+		<label for={ "md-" + name }>{ label }</label>
+		if area {
+			<textarea id={ "md-" + name } name={ name } rows="3">{ f.Value }</textarea>
+		} else {
+			<input id={ "md-" + name } name={ name } value={ f.Value } type="text"/>
+		}
+		<input type="hidden" name={ name + "_was" } value={ f.Value }/>
+		if hint != "" {
+			<span class="muted">{ hint }</span>
+		}
+		if f.Locked {
+			<label>
+				<input type="checkbox" name={ name + "_unlock" } value="1"/>
+				Edited by hand — untick to let the file decide again
+			</label>
+		} else if f.Source != "" {
+			<span class="muted">{ f.Source }</span>
+		}
+	</p>
+}
+
+templ bookEditForm(prefix, csrf string, b BookView) {
+	<section class="card">
+		<h2>Correct this book</h2>
+		<p class="muted">
+			Anything you change here is kept as yours: re-reading the file
+			will not undo it. Fields you do not touch stay as they are.
+		</p>
+		<form method="post" action={ prefix + "books/" + b.ID + "/metadata" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			@metadataRow("title", "Title", "", b.Edit.Title, false)
+			@metadataRow("subtitle", "Subtitle", "", b.Edit.Subtitle, false)
+			@metadataRow("publisher", "Publisher", "", b.Edit.Publisher, false)
+			@metadataRow("published", "Published", "", b.Edit.Published, false)
+			@metadataRow("description", "Description", "", b.Edit.Description, true)
+			@metadataRow("contributors", "Contributors",
+				"One per line, with an optional role in brackets: Frank Herbert (author)",
+				b.Edit.Contributors, true)
+			@metadataRow("series", "Series",
+				"One per line, with an optional place in it: Discworld #3",
+				b.Edit.Series, true)
+			@metadataRow("tags", "Tags", "Separated by commas", b.Edit.Tags, false)
+			@metadataRow("genres", "Genres", "Separated by commas", b.Edit.Genres, false)
+			@metadataRow("languages", "Languages", "Separated by commas", b.Edit.Languages, false)
+			<button type="submit">Save</button>
+		</form>
+	</section>
+}
+
+templ bookBody(prefix, csrf string, b BookView) {
 	<h1>{ orPlaceholder(b.Title) }</h1>
+	if b.Problem != "" {
+		<p class="error" role="alert">{ b.Problem }</p>
+	}
+	if b.Notice != "" {
+		<p class="notice" role="status">{ b.Notice }</p>
+	}
 	if b.Subtitle != "" {
 		<p class="muted">{ b.Subtitle }</p>
 	}
@@ -320,5 +423,8 @@ templ bookBody(prefix string, b BookView) {
 			</table>
 		}
 	</section>
+	if b.CanWrite {
+		@bookEditForm(prefix, csrf, b)
+	}
 	<p><a href={ prefix + "books?library=" + b.LibraryID }>Back to the library</a></p>
 }
