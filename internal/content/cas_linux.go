@@ -718,6 +718,12 @@ func (c *CAS) RemoveBlob(
 	if err := unix.Fsync(leafFD); err != nil {
 		return false, err
 	}
+	// Cached covers go with the blob they were rendered from. Failing to
+	// remove them does not un-delete the book, so it is reported rather
+	// than allowed to make the deletion look unsuccessful.
+	if err := c.RemoveCovers(ctx, expectedSHA); err != nil {
+		return true, err
+	}
 	return true, nil
 }
 
