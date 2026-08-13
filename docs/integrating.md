@@ -76,6 +76,14 @@ Four things about it are worth knowing before building on it:
 - **Signing out revokes it.** A token derived from a session does not
   outlive it.
 
+This is the credential the built-in web reader uses, at
+`/ui/books/{id}/read`. That reader is worth knowing about if you are
+writing your own browser client, because of what it does *not* do: it
+fetches the whole EPUB from the ordinary download route and unpacks it
+in the page. No route serves publication resources, so do not look for
+one. Rendering publisher markup anywhere it can reach a session cookie
+is the mistake the whole design is arranged to prevent.
+
 ## Position sync
 
 ### Resolving books

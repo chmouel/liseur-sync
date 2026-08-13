@@ -573,7 +573,7 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M8 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
 | M9 | Read-only watched libraries | Existing EPUB folders can be indexed without mutation |
 | M10 | Metadata editing, categorization UI, and search | A large library is organized and discoverable |
-| M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
+| M11 | Isolated web reader | Browser reading uses the same position/session protocol safely (shipped) |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
 
 **M1–M9 are done, and M6–M8 are the first release**
@@ -643,6 +643,19 @@ managed database might not have. Search has no way to ask about reading
 state, and that absence is the design: a catalog credential must not be
 able to observe what somebody has read, and a feature that does not exist
 cannot leak.
+
+M11 has shipped. A book opens in the browser, and the thing that makes
+that safe is where the archive is unpacked: in the page, not on the
+server. No route serves publisher HTML, CSS or fonts, so there is no URL
+a browser could be led to on the authenticated origin; each chapter is
+built into one self-contained document and handed to an iframe sandboxed
+without `allow-same-origin`, which leaves it with an opaque origin, no
+cookies and — under its own policy — no network. The reader is an
+ordinary API client for everything else: it holds a short-lived token
+carrying only `library-read` and `sync`, derived from the web session
+and revoked with it, and it reports position as a Readium locator like
+every other client. The renderer is written here rather than vendored,
+so the server still ships no JavaScript build step.
 
 ## 10. Future work (explicitly out of v1)
 

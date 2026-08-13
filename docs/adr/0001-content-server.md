@@ -152,17 +152,18 @@ description, browse feeds for series, contributors, tags and genres, and
 a recently-added feed ([ADR-0006](0006-catalog-api-and-opds.md) phase 3,
 which is now complete).
 
+The web reader shipped since ([ADR-0007](0007-web-reader.md)). Its
+deferral was replaced by a decision, and both phases of it are built: a
+short-lived derived credential, and a reader that unpacks the
+publication in the browser so that no route ever serves publisher
+markup. The renderer is written here rather than vendored, which is why
+the repository still has no JavaScript build step.
+
 **Features**, in order:
 
-1. **The web reader** ([ADR-0007](0007-web-reader.md)). It was waiting
-   for a catalog worth reading from, and now it is not: that ADR's
-   deferral has been replaced by a decision, and its phase 1 — the
-   short-lived credential a browser client authenticates with — is
-   built. What remains is the reader page itself, which is the one
-   thing on this list that adds a vendored third-party dependency.
-2. **External metadata providers**
+1. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
-   forever.
+   forever, and the last thing on this list.
 
 The client work in [ADR-0008](0008-liseur-android-client.md) and
 [ADR-0009](0009-liseur-desktop-client.md) is independent of all of the
