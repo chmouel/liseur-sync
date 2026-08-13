@@ -298,6 +298,24 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/insights/works/{id}", insH(s.HandleInsightsWork))
 	mux.Handle("GET /v1/insights/calendar", insH(s.HandleInsightsCalendar))
 
+	// library-manage scope: writing to a library. The store additionally
+	// requires manage access to the specific library through its ACL, so
+	// the token capability alone never grants access to someone else's
+	// books.
+	manageH := func(h http.HandlerFunc) http.Handler {
+		return auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryManage, h))
+	}
+	mux.Handle("POST /v1/library/{library}/upload", manageH(s.HandleUpload))
+
+	// library-read scope: a job resource describes the caller's own
+	// upload, and is user-scoped in the store.
+	readH := func(h http.HandlerFunc) http.Handler {
+		return auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryRead, h))
+	}
+	mux.Handle("GET /v1/library/jobs/{id}", readH(s.HandleIngestJob))
+
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,

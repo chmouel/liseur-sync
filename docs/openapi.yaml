@@ -38,6 +38,7 @@ tags:
   - name: sync
   - name: sessions
   - name: insights
+  - name: library
 
 paths:
   /healthz:
@@ -627,6 +628,89 @@ paths:
                         minutes: { type: number }
                         pages: { type: number }
 
+  /v1/library/{library}/upload:
+    post:
+      tags: [library]
+      summary: Upload an EPUB into a library
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Streams one file into the library and returns an *ingest job*.
+        The response is `202`, not `201`: the bytes are stored, but the
+        book does not exist yet. Validation, metadata extraction and
+        promotion happen in background passes; poll
+        `/v1/library/jobs/{id}` until the state is `promoted` (the job
+        then carries `book_id`) or `failed`/`quarantined`.
+
+        The token scope is necessary but not sufficient — the caller
+        must also hold manage access to this specific library. A
+        library that does not exist and a library the caller cannot
+        write to are both `404`, so the endpoint never reveals which.
+
+        Send `Idempotency-Key` and a retry after a lost response
+        returns the original job instead of storing the file twice. The
+        key is scoped to the caller and library, so two users sharing a
+        library never collide. A replayed key returns the first job
+        without reading the body: the upload is bound to the job, so
+        sending different bytes under a used key does not replace them.
+      parameters:
+        - name: library
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 200 }
+          description: Client-chosen; makes the upload safe to retry.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The EPUB. Other parts are ignored.
+              required: [file]
+      responses:
+        "202":
+          description: |
+            Stored and queued. Also returned for a replayed
+            `Idempotency-Key`, in whatever state that job has reached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestJob" }
+        "400": { $ref: "#/components/responses/Error", description: "No file part, or a malformed multipart body" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no manage access to it" }
+        "409": { $ref: "#/components/responses/Error", description: "Idempotency key already used for a different request" }
+        "413": { $ref: "#/components/responses/Error", description: "Larger than max_upload_bytes, or over the user's quota" }
+        "415": { $ref: "#/components/responses/Error", description: "Not multipart/form-data" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
+  /v1/library/jobs/{id}:
+    get:
+      tags: [library]
+      summary: Progress of one ingest job
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Poll after an upload. Visibility follows manage access to the
+        job's library, so a library's managers can see everything being
+        ingested into it, not only their own uploads.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IngestJob" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown job, or no access to its library" }
+
 components:
   securitySchemes:
     deviceToken:
@@ -655,6 +739,40 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    IngestJob:
+      type: object
+      description: |
+        The progress of one uploaded file on its way to becoming a
+        book. `sha256`, `size_bytes` and `book_id` appear as the job
+        advances; `error_code` only on `failed` or `quarantined`.
+      required: [job_id, library_id, state, source, created_at, updated_at]
+      properties:
+        job_id: { type: string, format: uuid }
+        library_id: { type: string, format: uuid }
+        state:
+          type: string
+          enum: [received, staged, validated, extracted, promoted, quarantined, failed]
+          description: |
+            `received` means the row exists but bytes may not be
+            stored yet; `staged` onwards means they are. `promoted` is
+            the only terminal success and is the only state that
+            carries `book_id`.
+        source:
+          type: string
+          description: How the file arrived (an upload, or a watched folder).
+        sha256:
+          type: string
+          description: Content digest, present once the bytes are staged.
+        size_bytes: { type: integer, format: int64 }
+        book_id:
+          type: string
+          format: uuid
+          description: The resulting book. Present only when `promoted`.
+        error_code:
+          type: string
+          description: Why the job stopped. Present only when `failed` or `quarantined`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Scope:
       type: string
       enum: [sync, read-insights, library-read, library-manage, admin]

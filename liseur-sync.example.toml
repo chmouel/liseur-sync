@@ -23,6 +23,15 @@ epub_max_compression_ratio = 1000
 epub_max_metadata_bytes = 4194304         # 4 MiB per control document
 epub_max_xml_depth = 128
 
+# Largest single upload accepted by POST /v1/library/{id}/upload. The
+# request is rejected as soon as the body passes this, without waiting
+# for the client to finish sending.
+max_upload_bytes = 536870912              # 512 MiB
+
+# Total stored bytes allowed per user, counted over deduplicated blobs.
+# 0 means unlimited.
+quota_bytes = 0
+
 # Allow credential traffic over plain HTTP (LAN-only setups). The
 # server refuses login/tokens/adapter credentials over HTTP otherwise.
 insecure_http = false

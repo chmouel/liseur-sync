@@ -595,8 +595,9 @@ deletion and trash, backup verification, and admin commands for libraries
 and grants. Cover extraction and per-library parser configuration are
 tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
 
-Nothing yet creates an ingest job, so M7's upload endpoint is the gap
-between a working pipeline and a usable server.
+M7's upload endpoint now creates ingest jobs, so the pipeline finally has an
+input. What M7 still needs is the htmx upload UI, and the admin commands
+above — without a way to create a library, there is nowhere to upload to.
 
 ## 10. Future work (explicitly out of v1)
 

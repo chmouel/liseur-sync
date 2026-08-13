@@ -28,13 +28,21 @@ type Config struct {
 		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
 		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
 		IngestWorkerInterval  int    `toml:"ingest_worker_interval_seconds"`
-		EPUBMaxEntries        int    `toml:"epub_max_entries"`
-		EPUBMaxDirectoryBytes int64  `toml:"epub_max_directory_bytes"`
-		EPUBMaxExpandedBytes  int64  `toml:"epub_max_expanded_bytes"`
-		EPUBMaxEntryBytes     int64  `toml:"epub_max_entry_bytes"`
-		EPUBMaxRatio          int64  `toml:"epub_max_compression_ratio"`
-		EPUBMaxMetadataBytes  int64  `toml:"epub_max_metadata_bytes"`
-		EPUBMaxXMLDepth       int    `toml:"epub_max_xml_depth"`
+		// MaxUploadBytes bounds one uploaded file. It is the request-size
+		// bound ADR-0005 requires: the EPUB validator's limits only apply
+		// once bytes are staged, so without this a single upload could
+		// fill the disk before anything inspected it.
+		MaxUploadBytes int64 `toml:"max_upload_bytes"`
+		// QuotaBytes is the per-principal logical storage limit, or 0 for
+		// unlimited. Charged to a library's quota_user_id (ADR-0002).
+		QuotaBytes            int64 `toml:"quota_bytes"`
+		EPUBMaxEntries        int   `toml:"epub_max_entries"`
+		EPUBMaxDirectoryBytes int64 `toml:"epub_max_directory_bytes"`
+		EPUBMaxExpandedBytes  int64 `toml:"epub_max_expanded_bytes"`
+		EPUBMaxEntryBytes     int64 `toml:"epub_max_entry_bytes"`
+		EPUBMaxRatio          int64 `toml:"epub_max_compression_ratio"`
+		EPUBMaxMetadataBytes  int64 `toml:"epub_max_metadata_bytes"`
+		EPUBMaxXMLDepth       int   `toml:"epub_max_xml_depth"`
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -84,6 +92,8 @@ func Default() Config {
 	c.Content.OrphanGraceHours = 168
 	c.Content.RecoveryBatchSize = 100
 	c.Content.IngestWorkerInterval = 5
+	c.Content.MaxUploadBytes = 512 << 20
+	c.Content.QuotaBytes = 0
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
 	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
@@ -176,6 +186,12 @@ func (c *Config) Validate() error {
 		c.Content.IngestWorkerInterval > 3600 {
 		return fmt.Errorf(
 			"content.ingest_worker_interval_seconds must be between 1 and 3600")
+	}
+	if c.Content.MaxUploadBytes < 1 {
+		return fmt.Errorf("content.max_upload_bytes must be >= 1")
+	}
+	if c.Content.QuotaBytes < 0 {
+		return fmt.Errorf("content.quota_bytes must be >= 0 (0 disables the quota)")
 	}
 	if c.Content.EPUBMaxRatio < 1 {
 		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")
