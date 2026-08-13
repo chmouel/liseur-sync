@@ -50,6 +50,11 @@ func TestStageAndPromote(t *testing.T) {
 		info.Mode().Perm() != 0o400 {
 		t.Fatalf("staged file: %+v %v", info, err)
 	}
+	if location, err := cas.InspectArtifact(context.Background(),
+		staged.Path, staged.SHA256, staged.Size); err != nil ||
+		location != ArtifactStaged {
+		t.Fatalf("inspect staged artifact: %q %v", location, err)
+	}
 
 	blob, err := cas.Promote(context.Background(), staged.Path, staged.SHA256, staged.Size)
 	if err != nil {
@@ -70,6 +75,11 @@ func TestStageAndPromote(t *testing.T) {
 	}
 	if info, err := os.Lstat(finalPath); err != nil || info.Mode().Perm() != 0o400 {
 		t.Fatalf("final mode: %+v %v", info, err)
+	}
+	if location, err := cas.InspectArtifact(context.Background(),
+		staged.Path, staged.SHA256, staged.Size); err != nil ||
+		location != ArtifactPromoted {
+		t.Fatalf("inspect promoted artifact: %q %v", location, err)
 	}
 
 	replayed, err := cas.Promote(context.Background(), staged.Path, staged.SHA256, staged.Size)
@@ -248,6 +258,10 @@ func TestPromotionRejectsMutatedStage(t *testing.T) {
 	}
 	if _, err := cas.Promote(context.Background(), staged.Path, staged.SHA256, staged.Size); !errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("mutated stage: %v", err)
+	}
+	if _, err := cas.InspectArtifact(context.Background(),
+		staged.Path, staged.SHA256, staged.Size); !errors.Is(err, ErrDigestMismatch) {
+		t.Fatalf("inspected mutated stage: %v", err)
 	}
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatalf("mutated stage removed: %v", err)

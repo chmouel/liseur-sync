@@ -68,6 +68,13 @@ state. Reconciliation detects missing rows, missing blobs, and unreferenced
 blobs. It never deletes an unreferenced blob immediately; ADR-0002's grace
 period applies.
 
+The recovery coordinator verifies each persisted stage against its expected
+hash and size. If the deterministic stage is absent but the final CAS blob is
+valid, it reports the job as recoverable after a lost filesystem-promotion
+response. Missing artifacts become failed; corrupt, unsafe, or mismatched
+artifacts become quarantined or stop recovery without touching another job's
+path. Valid jobs remain in their persisted state for the worker to resume.
+
 The blob hash has a unique constraint. Concurrent identical uploads converge
 on one blob while preserving separate authorized references.
 
@@ -143,11 +150,13 @@ for audit and authorization but is not a second quota principal; automated
 watched scans use the same library principal. Instance-wide staging and
 per-principal caps prevent unbounded failure storage. Quarantine and failed
 artifacts expire after a configurable period and are cleaned by the GC
-worker. Expiry releases the transient quota hold and returns the staging path
-for filesystem cleanup, but retains a terminal job tombstone. The tombstone
-cannot be retried or recreated, preventing delayed cleanup from racing with a
-new deterministic stage path. An authorized manager can delete failed jobs
-sooner only through the same tombstone-safe cleanup lifecycle.
+worker. Expiry releases the transient quota hold, marks cleanup pending, and
+retains the staging path in a terminal job tombstone. Filesystem removal is
+idempotent and explicitly acknowledged before the database clears the path,
+so a crash or I/O error retries cleanup on the next pass. The tombstone cannot
+be retried or recreated, preventing delayed cleanup from racing with a new
+deterministic stage path. An authorized manager can delete failed jobs sooner
+only through the same tombstone-safe cleanup lifecycle.
 
 ## Consequences
 
@@ -162,7 +171,9 @@ name a stable job and reason instead of losing state when a request ends.
    blob/reference schema plus bounded, restart-safe filesystem staging and
    promotion are implemented. Atomic database promotion, logical quota
    holds/reservations, full-payload replay detection, and terminal artifact
-   expiry are also implemented; workers, recovery, and reconciliation remain.
+   expiry are also implemented. Stale-artifact verification, lost-promotion
+   detection, and retryable two-phase filesystem cleanup are implemented;
+   startup scheduling, workers, and blob/catalog reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

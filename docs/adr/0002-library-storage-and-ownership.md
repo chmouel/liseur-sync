@@ -177,8 +177,8 @@ server disk allocation.
    The schema, ACL-scoped library/book queries, and durable filesystem CAS
    primitive are implemented. Atomic database promotion and per-principal
    quota holds/reservations are implemented, including concurrent
-   deduplication and expiry release; last-reference deletion, trash, GC, and
-   backup verification remain.
+   deduplication and two-phase expiry release/cleanup; last-reference
+   deletion, trash, blob GC, and backup verification remain.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

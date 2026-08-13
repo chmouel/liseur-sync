@@ -11,7 +11,7 @@ import (
 
 const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
 	j.source, j.client_key, j.request_fingerprint, j.promotion_fingerprint,
-	j.artifacts_expired, j.state,
+	j.artifacts_expired, j.artifact_cleanup_pending, j.state,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
 	j.book_id, j.error_code, j.error_detail, j.retry_count, j.revision,
 	j.created_at, j.updated_at, j.expires_at`
@@ -21,7 +21,8 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 	err := row.Scan(
 		&job.ID, &job.UserID, &job.LibraryID, &job.QuotaUserID,
 		&job.Source, &job.ClientKey, &job.RequestFingerprint,
-		&job.PromotionFingerprint, &job.ArtifactsExpired, &job.State,
+		&job.PromotionFingerprint, &job.ArtifactsExpired,
+		&job.ArtifactCleanupPending, &job.State,
 		&job.BytesReceived, &job.ContentSHA256, &job.StagingPath,
 		&job.SourceRelativePath, &job.BookID, &job.ErrorCode, &job.ErrorDetail,
 		&job.RetryCount, &job.Revision, &job.CreatedAt, &job.UpdatedAt,
@@ -215,6 +216,44 @@ func (s *Store) ListIngestJobs(
 	return jobs, rows.Err()
 }
 
+func (s *Store) ListIngestRecoveryJobs(
+	ctx context.Context,
+	before time.Time,
+	after *store.IngestRecoveryCursor,
+	limit int,
+) ([]store.IngestJob, error) {
+	if before.IsZero() || limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	query := `SELECT ` + ingestJobColumns + `
+		FROM ingest_jobs j
+		WHERE j.state IN ('staged', 'validated', 'extracted')
+		  AND j.artifacts_expired = FALSE
+		  AND j.updated_at <= ?`
+	args := []any{before.UTC()}
+	if after != nil {
+		cursorTime := after.UpdatedAt.UTC()
+		query += ` AND (j.updated_at > ? OR (j.updated_at = ? AND j.id > ?))`
+		args = append(args, cursorTime, cursorTime, after.ID)
+	}
+	query += ` ORDER BY j.updated_at, j.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, q(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []store.IngestJob
+	for rows.Next() {
+		job, err := scanIngestJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
 func (s *Store) TransitionIngestJob(
 	ctx context.Context,
 	userID, jobID string,
@@ -358,7 +397,7 @@ func (s *Store) CommitIngestStage(
 	userID, jobID string,
 	request store.CommitIngestStageRequest,
 ) (store.CommitIngestStageResult, error) {
-	if err := store.ValidateCommitIngestStage(request); err != nil {
+	if err := store.ValidateCommitIngestStage(jobID, request); err != nil {
 		return store.CommitIngestStageResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -702,9 +741,11 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 	rows, err := tx.QueryContext(ctx, q(
 		`SELECT `+ingestJobColumns+`
 		 FROM ingest_jobs j
-		 WHERE j.state IN ('failed', 'quarantined')
-		   AND j.expires_at IS NOT NULL AND j.expires_at <= ?
-		   AND j.staging_path IS NOT NULL
+		 WHERE j.artifact_cleanup_pending = TRUE
+		    OR (j.artifacts_expired = FALSE
+		        AND j.state IN ('failed', 'quarantined')
+		        AND j.expires_at IS NOT NULL AND j.expires_at <= ?
+		        AND j.staging_path IS NOT NULL)
 		 ORDER BY j.expires_at, j.id
 		 LIMIT ?
 		 FOR UPDATE SKIP LOCKED`),
@@ -724,15 +765,18 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for _, job := range jobs {
+	for i, job := range jobs {
+		if job.ArtifactCleanupPending {
+			continue
+		}
 		res, err := tx.ExecContext(ctx, q(
 			`UPDATE ingest_jobs
-			 SET bytes_received = 0, content_sha256 = NULL,
-			     staging_path = NULL, artifacts_expired = TRUE,
+			 SET artifacts_expired = TRUE, artifact_cleanup_pending = TRUE,
 			     revision = revision + 1
 			 WHERE id = ? AND user_id = ? AND state = ? AND revision = ?
 			   AND expires_at IS NOT NULL AND expires_at <= ?
-			   AND staging_path IS NOT NULL`),
+			   AND staging_path IS NOT NULL AND artifacts_expired = FALSE
+			   AND artifact_cleanup_pending = FALSE`),
 			job.ID, job.UserID, string(job.State), job.Revision, before.UTC())
 		if err != nil {
 			return nil, err
@@ -754,9 +798,54 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 		} else if n != 1 {
 			return nil, store.ErrInvariantViolation
 		}
+		jobs[i].ArtifactsExpired = true
+		jobs[i].ArtifactCleanupPending = true
+		jobs[i].Revision++
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (s *Store) CompleteIngestArtifactCleanup(
+	ctx context.Context,
+	jobID, stagingPath string,
+) error {
+	if jobID == "" || stagingPath == "" {
+		return store.ErrInvalidTransition
+	}
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE ingest_jobs
+		 SET bytes_received = 0, content_sha256 = NULL, staging_path = NULL,
+		     artifact_cleanup_pending = FALSE, revision = revision + 1
+		 WHERE id = ? AND staging_path = ?
+		   AND artifacts_expired = TRUE AND artifact_cleanup_pending = TRUE`),
+		jobID, stagingPath)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	var expired, pending bool
+	var currentPath sql.NullString
+	err = s.db.QueryRowContext(ctx, q(
+		`SELECT artifacts_expired, artifact_cleanup_pending, staging_path
+		 FROM ingest_jobs WHERE id = ?`), jobID).
+		Scan(&expired, &pending, &currentPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if expired && !pending && !currentPath.Valid {
+		return nil
+	}
+	return store.ErrStaleRevision
 }
