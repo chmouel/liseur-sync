@@ -648,14 +648,17 @@ M11 has shipped. A book opens in the browser, and the thing that makes
 that safe is where the archive is unpacked: in the page, not on the
 server. No route serves publisher HTML, CSS or fonts, so there is no URL
 a browser could be led to on the authenticated origin; each chapter is
-built into one self-contained document and handed to an iframe sandboxed
-without `allow-same-origin`, which leaves it with an opaque origin, no
-cookies and — under its own policy — no network. The reader is an
-ordinary API client for everything else: it holds a short-lived token
-carrying only `library-read` and `sync`, derived from the web session
-and revoked with it, and it reports position as a Readium locator like
-every other client. The renderer is written here rather than vendored,
-so the server still ships no JavaScript build step.
+handed to an iframe whose `sandbox` grants no `allow-scripts`, so no
+script inside a book ever runs, and a `script-src 'self'` policy with no
+nonce and no `unsafe-` anything says the same thing a second time. The
+reader is an ordinary API client for everything else: it holds a
+short-lived token carrying only `library-read` and `sync`, derived from
+the web session and revoked with it, and it reports position as a Readium
+locator like every other client. The rendering engine is vendored — two
+pinned, prebuilt files beside the other static assets — after a
+hand-written one failed to paginate past the second page of a real book.
+That keeps the promise that mattered, which was no build step and no CDN,
+and drops the one that was only a preference.
 
 M12 has shipped, and it is the one feature that makes this server talk
 to somebody else. A librarian on a book's page can ask OpenLibrary and

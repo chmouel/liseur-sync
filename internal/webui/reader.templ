@@ -11,11 +11,8 @@ type ReaderView struct {
 	BackURL     string
 	DownloadURL string
 	TokenURL    string
-	APIBase     string
-	StaticBase  string
-	// Nonce lets the one script a rendered chapter carries run under
-	// both this page's policy and the chapter's own.
-	Nonce string
+	APIBase    string
+	StaticBase string
 }
 
 templ readerPage(v ReaderView, csrf string) {
@@ -35,13 +32,12 @@ templ readerPage(v ReaderView, csrf string) {
 				data-token-url={ v.TokenURL }
 				data-download-url={ v.DownloadURL }
 				data-api-base={ v.APIBase }
-				data-nonce={ v.Nonce }
 				hidden
 			></div>
 			<header class="reader-bar">
 				<a class="reader-back" href={ templ.SafeURL(v.BackURL) }>&larr; Back</a>
 				<div class="reader-title">
-					<strong>{ v.Title }</strong>
+					<strong id="reader-title-text">{ v.Title }</strong>
 				</div>
 				<div class="reader-meta">
 					<span id="reader-chapter"></span>
@@ -52,18 +48,15 @@ templ readerPage(v ReaderView, csrf string) {
 			<p id="reader-status" class="reader-status">Loading…</p>
 			<div class="reader-stage">
 				<button id="reader-prev" class="reader-turn" type="button" aria-label="Previous page">&lsaquo;</button>
-				// sandbox without allow-same-origin is the load-bearing
-				// attribute: it gives the publication an opaque origin,
-				// with no cookies, no storage and no reach into this page.
-				<iframe
-					id="reader-frame"
-					title="Publication"
-					sandbox="allow-scripts"
-					referrerpolicy="no-referrer"
-				></iframe>
+				// epub.js builds the iframe itself, inside this element,
+				// and sandboxes it without allow-scripts: the
+				// publication is laid out and measured, and none of it
+				// runs.
+				<div id="reader-view"></div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>
-			<script src={ v.StaticBase + "reader.js" }></script>
+			<script src={ v.StaticBase + "vendor/jszip.min.js" }></script>
+			<script src={ v.StaticBase + "vendor/epub.min.js" }></script>
 			<script src={ v.StaticBase + "reader-app.js" } defer></script>
 		</body>
 	</html>

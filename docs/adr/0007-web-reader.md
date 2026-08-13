@@ -59,21 +59,38 @@ with server-side range extraction. For a personal library this is the
 right trade, and the `immutable` cache headers the download route already
 sets mean it is paid once per book per browser.
 
-### Publication content renders in a sandbox with no origin and no network
+### Publication content renders in a sandbox that cannot run scripts
 
 The reader document is ordinary UI, served from the authenticated origin
 and subject to the session cookie. Publication content is rendered inside
-an iframe with `sandbox` **not** containing `allow-same-origin`, so the
-document has an opaque origin: it cannot read `document.cookie`, cannot
-reach `localStorage`, cannot make credentialed requests, and cannot touch
-the parent DOM. A `Content-Security-Policy` on that document forbids
-network egress, so a book cannot phone home or leak which page you are
-on.
+an iframe carrying `sandbox="allow-same-origin"` and nothing else. The
+absence of `allow-scripts` is the load-bearing part: **no script in a
+book ever executes**, so the questions of what origin it would run on and
+what it could read never arise. A book cannot read `document.cookie`,
+cannot reach the parent DOM, and cannot phone home, because it cannot
+run.
 
-This satisfies the binding constraint recorded in the original decision —
-publication content never executes on the authenticated UI origin —
-because an opaque origin *is not* the UI origin, whatever host it was
-loaded from.
+The frame is same-origin rather than opaque, which is a change from what
+this ADR first decided. A paginating engine has to measure the laid-out
+document — column widths, page counts, where a CFI lands — and that means
+reading `contentDocument`, which an opaque origin forbids. The original
+design paid for opacity with a renderer that could only scroll.
+
+The `Content-Security-Policy` on the reader page is what confines the
+publication now, and it does so directly: a `srcdoc` or `blob:` document
+inherits its creator's policy container, so the one header covers both.
+`script-src 'self'` has no hole in it — no `unsafe-inline`, no
+`unsafe-eval`, no nonce — so even without the sandbox attribute a book's
+script has nowhere to run. `style-src` must admit `'unsafe-inline'`,
+because books carry style attributes, and `default-src 'none'` keeps the
+network shut.
+
+The binding constraint recorded in the original decision — publication
+content never executes on the authenticated UI origin — therefore
+survives in the only form that ever mattered: it does not execute at all.
+A browser check asserts this rather than trusting it. The test EPUB
+carries a hostile `<script>` that stamps `documentElement.dataset`, and
+the test fails if the stamp appears.
 
 A separately configured content origin remains the hardened deployment
 mode and is phase 3, not a precondition. It defends against browser
@@ -103,24 +120,33 @@ This makes the renderer a replaceable part rather than a protocol
 commitment, which is the point: **the renderer choice is the decision
 here most likely to be wrong, so it is the one made reversible.**
 
-Given that, the renderer is written here rather than vendored, and it is
-deliberately the least a reader can be: unpack the archive, lay out one
-spine item at a time, remember where you were.
+That reversibility was then used, which is the honest thing to record
+here. The first version of this decision wrote the renderer by hand —
+unpack the archive, lay out one spine item at a time — on the grounds
+that every mature EPUB engine assumes an npm bundler, and that this
+repository ships no build step. That reasoning was sound and the result
+was not: the hand-written renderer could not turn past the second page of
+a real book, and each fix revealed the next thing a reading engine is
+expected to already know.
 
-The reason is the constraint the repository already committed to —
-vendored assets, no CDN, no build pipeline beyond `templ generate`. Every
-mature EPUB engine assumes an npm bundler, so adopting one means adding
-a Node build to a Go project that has deliberately avoided one, and
-carrying a dependency an order of magnitude larger than the feature. The
-browser now supplies the one genuinely hard part: `DecompressionStream`
-inflates the archive, so what is left is a ZIP central directory reader,
-an OPF spine, and some arithmetic.
+So the engine is vendored. `epub.min.js` (BSD-3) and `jszip.min.js` (MIT)
+sit beside the other static assets, about 320 KB, pinned, with their
+licences next to them. The constraint that actually mattered is intact:
+**there is still no build step and still no CDN.** These are prebuilt
+single files, served from `/ui/static/vendor/` like everything else, and
+`go build` remains the whole toolchain. What was given up is "the
+repository writes all its own JavaScript", which was a preference, not a
+promise — and it bought pagination, a spine-wide progress model, CFI
+positions, and typography nobody here was going to write.
 
-What this reader does not do is real and worth stating: no pagination
-model beyond scrolling a chapter, no full-text search inside a book, no
-annotations, and no attempt at the typographic fidelity of a dedicated
-engine. Those are the reasons to adopt an engine later, and the locator
-envelope is what makes that a file swap rather than a migration.
+Neither library needs `unsafe-eval`: their `new Function` uses are in
+guarded fallback paths that the browser never reaches. This was checked
+before vendoring, because a CSP hole for a convenience path would have
+been a real cost.
+
+What the reader still does not do: no full-text search inside a book, no
+annotations, no read-aloud. The locator envelope means those remain
+additions rather than migrations.
 
 ### The reader is an ordinary API client with a derived, short-lived token
 
@@ -178,14 +204,19 @@ removes.
    independent of any renderer and is what any browser-side client of
    this server needs.
 
-2. **The reader itself.** Done.
+2. **The reader itself.** Done, then redone.
 
-   `GET /ui/books/{id}/read`, a renderer written in
-   `internal/webui/static/reader.js` with no dependency and no build
-   step, the sandboxed iframe and its CSP, and position round-tripping
-   through the locator envelope. A position written by another client is
-   restored from `progression` when its locator means nothing here,
-   since that fraction is the only field every client shares.
+   `GET /ui/books/{id}/read`, the unscripted iframe and its CSP, and
+   position round-tripping through the locator envelope. A position
+   written by another client is restored from `progression` when its
+   locator means nothing here, since that fraction is the only field
+   every client shares.
+
+   The hand-written renderer this phase first shipped was replaced by a
+   vendored engine after it proved unable to paginate a real book; see
+   the renderer section above. `internal/webui/static/reader-app.js` is
+   now the glue — credential, sync, locator translation — and the engine
+   underneath it is a vendored file.
 
 3. **Hardened content origin.** Optional, operator-configurable, not
    built.
@@ -200,6 +231,12 @@ removes.
   markup execute against the authenticated UI origin. Since no route
   serves publication resources at all, the test for this is that none is
   added.
+- A script inside a publication never runs. A browser check opens a book
+  whose first chapter tries to mark the document, and fails if the mark
+  appears.
+- The reader turns pages through a whole book. The same browser check
+  turns the page repeatedly and fails if the reader stalls, which is the
+  regression that cost the hand-written renderer its place.
 - A reader token carries exactly `library-read` and `sync`, expires, and
   is refused on a `library-manage` route.
 - The web device identity is stable across re-mints, so two tabs and two
