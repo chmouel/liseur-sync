@@ -147,9 +147,11 @@ External metadata cannot be a required ingest dependency.
    embedded snapshot and library path against the persisted rows and applies
    the result. A filename outranks the publication's own metadata, so a
    value recovered by splitting a single name is never applied, only the
-   ones a directory boundary settled: the two layouts that read every field
-   out of one name are therefore still parsed and graded but contribute
-   nothing on their own, pending a confirmation step an operator drives. The
+   ones a directory boundary settled, so a layout still contributes the
+   author or series it read from a directory of its own even when it could
+   not explain the rest of the name. The one layout that reads every field
+   out of a single name is therefore parsed and graded but contributes
+   nothing on its own, pending a confirmation step an operator drives. The
    materialization is not yet scheduled either, because the automatic
    promotion worker that would produce jobs for it to consume does not exist
    and no worker query returns promoted jobs.

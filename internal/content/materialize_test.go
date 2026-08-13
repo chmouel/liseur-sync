@@ -97,6 +97,12 @@ func (f *fakeMetadataStore) ApplyCatalogBookMetadata(
 	slices.SortFunc(applied.Series, func(a, b store.BookSeries) int {
 		return strings.Compare(a.NormalizedName, b.NormalizedName)
 	})
+	slices.SortFunc(applied.Identifiers, func(a, b store.BookIdentifier) int {
+		if scheme := strings.Compare(a.Scheme, b.Scheme); scheme != 0 {
+			return scheme
+		}
+		return strings.Compare(a.Value, b.Value)
+	})
 	slices.SortFunc(applied.Contributors, func(a, b store.BookContributor) int {
 		if role := strings.Compare(a.Role, b.Role); role != 0 {
 			return role
@@ -413,6 +419,20 @@ func TestMaterializeHoldsBackLowConfidencePaths(t *testing.T) {
 	if len(applied.Contributors) != 0 || len(applied.Series) != 0 {
 		t.Fatalf("guessed rows applied: %+v", applied)
 	}
+
+	// With nothing left to assert, such a path is not worth a catalog read.
+	pathOnly := materializeJob(t, epub.Metadata{}, path)
+	pathOnly.ExtractedEmbeddedMetadataJSON = nil
+	bare := &fakeMetadataStore{current: emptyMetadata()}
+	if _, changed, err := MaterializeBookMetadata(
+		context.Background(), bare, pathOnly, metadata.DefaultPathPatterns(),
+		clockAt(now)); err != nil || changed {
+		t.Fatalf("path-only job: changed=%v err=%v", changed, err)
+	}
+	if bare.reads != 0 {
+		t.Fatalf("read the catalog for a path that asserts nothing: %d",
+			bare.reads)
+	}
 }
 
 // The writer that wins the race is usually a person editing the book, not a
@@ -442,6 +462,39 @@ func TestMaterializeYieldsToAConcurrentEditor(t *testing.T) {
 	}
 	if resolved.Book.Title != "Dune" || !resolved.Book.TitleLocked {
 		t.Fatalf("returned metadata: %+v", resolved.Book)
+	}
+}
+
+// Roles are read back in their own order, so a second pass renumbers
+// positions over an order the first pass never wrote. Convergence has to
+// survive that, since it is what a real read-back does.
+func TestMaterializeConvergesAcrossReorderedRoles(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata()}
+	job := materializeJob(t, epub.Metadata{
+		Title: "Dune",
+		Contributors: []epub.Contributor{
+			{Name: "Alia Translator", Role: "translator"},
+			{Name: "Princess Irulan", Role: "editor"},
+		},
+	}, "Frank Herbert/Dune.epub")
+
+	for pass := 0; pass < 3; pass++ {
+		applied, changed, err := MaterializeBookMetadata(
+			context.Background(), st, job, metadata.DefaultPathPatterns(),
+			clockAt(now))
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if pass > 0 && changed {
+			t.Fatalf("pass %d rewrote the book: %+v", pass, applied.Contributors)
+		}
+	}
+	if len(st.applies) != 1 {
+		t.Fatalf("applies: %d", len(st.applies))
+	}
+	if len(st.current.Contributors) != 3 {
+		t.Fatalf("contributors: %+v", st.current.Contributors)
 	}
 }
 

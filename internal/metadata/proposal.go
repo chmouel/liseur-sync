@@ -30,9 +30,11 @@ type SeriesValue struct {
 
 // Proposal is everything one source claims about one book, expressed in the
 // vocabulary the precedence engine consumes. Confidence grades how much
-// structure the source relied on; the engine does not consult it, so a
-// caller that wants to hold back weakly parsed values must check it before
-// applying the proposal.
+// structure the source relied on and is reported for display; it is not a
+// gate. A source that had to guess at a value leaves that value out of its
+// proposal rather than proposing it weakly, so a proposal graded low still
+// asserts only what its source actually determined, and refusing it would
+// discard facts along with the guesses.
 //
 // PartialSets decides how the sets must be merged. A source that reads the
 // whole publication asserts complete sets and its proposal goes through
@@ -161,6 +163,18 @@ func FromPath(candidate PathCandidate) Proposal {
 		}}
 	}
 	return proposal
+}
+
+// AssertsNothing reports a proposal with nothing in it: every value its
+// source might have carried was one it could not determine. Applying it is
+// a no-op, so a caller can skip the work of resolving it at all.
+func (p Proposal) AssertsNothing() bool {
+	return p.Title.Value == "" && p.Subtitle.Value == "" &&
+		p.Description.Value == "" && p.Publisher.Value == "" &&
+		p.PublishedDate.Value == "" &&
+		len(p.Identifiers) == 0 && len(p.Languages) == 0 &&
+		len(p.Tags) == 0 && len(p.Series) == 0 &&
+		len(p.Contributors) == 0
 }
 
 func appendNamed(

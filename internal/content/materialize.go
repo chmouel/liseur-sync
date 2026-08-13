@@ -113,10 +113,11 @@ func MaterializeBookMetadata(
 // original filename alone would be guessing.
 //
 // A parsed path is used whatever its grade, because FromPath already leaves
-// out the values the layout had to guess at: a candidate that guessed
-// everything simply proposes nothing. Gating on the grade instead would
-// throw away the author a layout read from a directory of its own merely
-// because it could not explain the rest of the name.
+// out the values the layout had to guess at. Gating on the grade instead
+// would throw away the author a layout read from a directory of its own
+// merely because it could not explain the rest of the name. A layout that
+// guessed everything is left with nothing to assert, and is dropped here so
+// it does not cost a catalog read that could never produce a write.
 func bookMetadataProposals(
 	job store.IngestJob, patterns []metadata.PathPattern,
 ) ([]metadata.Proposal, error) {
@@ -132,7 +133,9 @@ func bookMetadataProposals(
 	if job.SourceRelativePath != nil && *job.SourceRelativePath != "" {
 		candidate := metadata.ParsePath(*job.SourceRelativePath, patterns)
 		if candidate.Confidence != metadata.ConfidenceNone {
-			proposals = append(proposals, metadata.FromPath(candidate))
+			if fromPath := metadata.FromPath(candidate); !fromPath.AssertsNothing() {
+				proposals = append(proposals, fromPath)
+			}
 		}
 	}
 	return proposals, nil
