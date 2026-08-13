@@ -79,3 +79,9 @@ fieldset { border: 1px solid var(--line); border-radius: .4em; margin: .8em 0; }
 .cell { width: 11px; height: 11px; border-radius: 2px; background: #eee; }
 .cell.c1 { background: var(--c1); } .cell.c2 { background: var(--c2); }
 .cell.c3 { background: var(--c3); } .cell.c4 { background: var(--c4); }
+
+/* Covers. The dimensions are set in the markup so the page does not jump
+   while they load; the ratio is free because covers are not all the same
+   shape. */
+.cover-thumb { width: 40px; height: auto; border-radius: 2px; display: block; }
+.cover-full { float: right; margin: 0 0 1em 1em; border-radius: 3px; max-width: 40%; }

@@ -285,6 +285,11 @@ func catalogBookJSON(b store.CatalogBook) map[string]any {
 		"status":     string(b.Status),
 		"created_at": b.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": b.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		// Offered for every book rather than only for books known to have
+		// one. Knowing in advance would mean recording it at ingest for
+		// every book ever uploaded; a client that asks and gets 404 has
+		// learned the same thing at the same cost.
+		"cover_url": "/v1/books/" + url.PathEscape(b.ID) + "/cover",
 	}
 	// Omit empty optional metadata rather than sending empty strings: a
 	// client showing "Publisher: " for every book is worse than one that

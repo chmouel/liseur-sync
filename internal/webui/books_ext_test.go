@@ -32,6 +32,7 @@ type booksFixture struct {
 	st      store.Store
 	cas     *content.CAS
 	api     *api.Server
+	cfg     config.Config
 	cookie  *http.Cookie
 	library string
 }
@@ -73,14 +74,14 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	ui := &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Uploads:      apiSrv, Downloads: apiSrv,
+		Uploads:      apiSrv, Downloads: apiSrv, Covers: apiSrv,
 	}
 	mux := http.NewServeMux()
 	ui.Mount(mux, func(h http.Handler) http.Handler { return h })
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	f := &booksFixture{ts: ts, st: st, cas: cas, api: apiSrv, library: "lib-web"}
+	f := &booksFixture{ts: ts, st: st, cas: cas, api: apiSrv, cfg: cfg, library: "lib-web"}
 	if err := st.CreateLibrary(t.Context(), store.Library{
 		ID: f.library, OwnerUserID: "u1", QuotaUserID: "u1",
 		Kind: store.LibraryManaged, Name: "Alice's Books", CreatedAt: time.Now().UTC(),
@@ -91,9 +92,27 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	return f
 }
 
+// uiWithoutCovers is the same UI on the same data with content storage
+// switched off, which is a supported configuration rather than an error.
+func (f *booksFixture) uiWithoutCovers() *webui.Server {
+	return &webui.Server{
+		St: f.st, Auth: auth.NewService(f.st), Cfg: f.cfg,
+		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
+	}
+}
+
 func (f *booksFixture) login(t *testing.T, user string) *http.Cookie {
 	t.Helper()
-	resp, err := noRedirectClient().PostForm(f.ts.URL+"/ui/login", url.Values{
+	return f.loginTo(t, f.ts, user)
+}
+
+// loginTo signs in against a specific server, so a test can exercise a
+// second instance over the same database.
+func (f *booksFixture) loginTo(
+	t *testing.T, server *httptest.Server, user string,
+) *http.Cookie {
+	t.Helper()
+	resp, err := noRedirectClient().PostForm(server.URL+"/ui/login", url.Values{
 		"username": {user}, "password": {"hunter2hunter"},
 	})
 	if err != nil {

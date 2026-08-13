@@ -47,6 +47,9 @@ type Server struct {
 	// one implementation of the staging and download rules.
 	Uploads   Uploader
 	Downloads Downloader
+	// Covers renders book covers. Nil shows the placeholder everywhere,
+	// which is a page that looks plain rather than a page that fails.
+	Covers CoverServer
 	// LoginLimiter throttles the login form. It is the same limiter
 	// the API's /v1/login uses, so the two surfaces share one budget
 	// per IP and the form cannot be used to sidestep the API's limit.
@@ -133,6 +136,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/books", sec(s.requireAuth(s.handleBooks)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
+	mux.Handle("GET /ui/books/{id}/cover", sec(s.requireAuth(s.handleBookCover)))
 	mux.Handle("POST /ui/books/upload", sec(s.requireAuth(s.handleUploadBook)))
 	mux.Handle("POST /ui/books/{id}/delete", sec(s.requireAuth(s.handleDeleteBook)))
 	mux.Handle("POST /ui/books/{id}/restore", sec(s.requireAuth(s.handleRestoreBook)))
