@@ -35,6 +35,16 @@ type TrashRow struct {
 	Until string
 }
 
+// ReviewRow is one watched book whose source file changed under it. The
+// server will not decide what that means — a replaced file may be a
+// better scan of the same book or a different book entirely — so it says
+// so here and keeps serving the copy it validated.
+type ReviewRow struct {
+	ID     string
+	Title  string
+	Reason string
+}
+
 // DuplicateGroup is a set of books in one library that are the same
 // bytes. The page reports them and leaves the deciding to the user: two
 // entries for one file may be exactly what somebody meant.
@@ -49,6 +59,7 @@ type BooksView struct {
 	Books     []BookRow
 	Uploads   []UploadRow
 	Trash      []TrashRow
+	Review     []ReviewRow
 	Duplicates []DuplicateGroup
 	NextURL    string
 	Notice    string
@@ -143,6 +154,34 @@ templ booksBody(prefix, csrf string, v BooksView) {
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<input type="hidden" name="library" value={ v.Selected }/>
 									<button type="submit">Put back</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			</section>
+		}
+		if len(v.Review) > 0 {
+			<section class="card">
+				<h2>Changed under us</h2>
+				<p class="muted">
+					The file behind each of these was replaced with something
+					different. The copy already stored is still what downloads,
+					because a new file at the same path is not proof that it is
+					the same book. Accept it to put the book back in the catalog,
+					or delete the book if the file is now something else.
+				</p>
+				<table>
+					<tr><th>Title</th><th>Why</th><th></th></tr>
+					for _, b := range v.Review {
+						<tr>
+							<td>{ orPlaceholder(b.Title) }</td>
+							<td class="muted">{ b.Reason }</td>
+							<td>
+								<form method="post" action={ prefix + "books/" + b.ID + "/accept" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<input type="hidden" name="library" value={ v.Selected }/>
+									<button type="submit">Accept this copy</button>
 								</form>
 							</td>
 						</tr>
