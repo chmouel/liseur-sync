@@ -576,7 +576,7 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
 
-**M1–M5 are done. M6 is nearly done, and M6–M8 are the first release**
+**M1–M8 are done, and M6–M8 are the first release**
 ([ADR-0001](adr/0001-content-server.md)): upload a book, list it, download
 it in a reader you already own. M8 comes before M9 and M10 because a
 catalog nobody can download from is not yet a product, however well
