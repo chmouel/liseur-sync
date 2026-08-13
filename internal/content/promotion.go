@@ -11,7 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/chmouel/liseur-sync/internal/catalog"
 	"github.com/chmouel/liseur-sync/internal/contentpath"
+	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -53,6 +55,7 @@ type ingestPromotionStore interface {
 
 type ingestPromotionQueue interface {
 	ingestPromotionStore
+	bookMetadataStore
 	ListIngestWorkerJobs(context.Context, store.IngestState, int) ([]store.IngestJob, error)
 }
 
@@ -76,11 +79,9 @@ type IngestPromotionReport struct {
 	Promoted    int
 	Quarantined int
 	Skipped     int
-	// Described counts promoted books that also had metadata resolved onto
-	// them. Deferred counts those whose metadata step failed after the book
-	// was already committed.
-	Described int
-	Deferred  int
+	// Undescribed counts books that were promoted with their titles intact
+	// but whose entity sets did not attach.
+	Undescribed int
 }
 
 // PromoteIngestJob publishes an extracted job's artifact into the CAS and
@@ -91,14 +92,18 @@ type IngestPromotionReport struct {
 // reconciler already knows how to find, while a row pointing at a blob that
 // was never published would be a catalog entry that cannot be read.
 //
-// The book is created bare. Filling it in is a separate step, because the
-// metadata a book ends up with is resolved against rows that only exist once
-// the book does.
+// The book is created already describing itself. Resolving metadata needs
+// rows to resolve against only when the book already exists; a new one has
+// nothing to reconcile with, so its scalar fields are a pure function of the
+// job and belong in the same transaction. That leaves no window in which a
+// book exists with no title, which matters because promoted is a terminal
+// state: nothing would ever list such a book to finish it.
 func PromoteIngestJob(
 	ctx context.Context,
 	st ingestPromotionStore,
 	blobs ingestBlobPromoter,
 	job store.IngestJob,
+	patterns []metadata.PathPattern,
 	clock func() time.Time,
 	failureRetention time.Duration,
 ) (IngestPromotionResult, error) {
@@ -145,7 +150,7 @@ func PromoteIngestJob(
 	}
 
 	promoted, err := st.CommitNewBookPromotion(ctx, job.UserID, job.ID,
-		newBookPromotion(job, blob))
+		newBookPromotion(job, blob, patterns))
 	if err != nil {
 		return result, fmt.Errorf(
 			"promote ingest job %q: %w", job.ID, err)
@@ -169,7 +174,7 @@ func PromoteIngestJob(
 // winner's rows, which leaves ErrPromotionConflict meaning what it says: two
 // different requests claimed the same job.
 func newBookPromotion(
-	job store.IngestJob, blob Blob,
+	job store.IngestJob, blob Blob, patterns []metadata.PathPattern,
 ) store.CommitNewBookPromotionRequest {
 	info := store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size}
 	bookID := promotionID("book", job)
@@ -177,13 +182,13 @@ func newBookPromotion(
 	return store.CommitNewBookPromotionRequest{
 		ExpectedRevision: job.Revision,
 		Blob:             info,
-		Book: store.CatalogBook{
+		Book: promotedBook(job, patterns, store.CatalogBook{
 			ID:        bookID,
 			LibraryID: job.LibraryID,
 			Status:    store.BookActive,
 			CreatedAt: updatedAt,
 			UpdatedAt: updatedAt,
-		},
+		}),
 		File: store.BookFile{
 			ID:                 promotionID("file", job),
 			LibraryID:          job.LibraryID,
@@ -199,6 +204,37 @@ func newBookPromotion(
 		},
 		UpdatedAt: updatedAt,
 	}
+}
+
+// promotedBook describes the new book from the job's own evidence. Only the
+// scalar fields are resolved here: the entity sets hang off rows the book
+// does not have yet, so they are applied once it exists.
+//
+// An unreadable snapshot is treated as evidence the server does not have
+// rather than a reason to refuse. That JSON is a cache the extraction pass
+// derived from a file that is itself validated and durable, so losing it must
+// not stop the book being published — the title can be corrected, an
+// unpublishable book cannot.
+//
+// The result stays a pure function of the job, which the promotion
+// fingerprint depends on. Two workers configured with different layout
+// patterns would describe the same job differently and the loser would see a
+// conflict rather than a replay; that is a misconfiguration reporting itself,
+// not a race.
+func promotedBook(
+	job store.IngestJob, patterns []metadata.PathPattern, book store.CatalogBook,
+) store.CatalogBook {
+	proposals, err := bookMetadataProposals(job, patterns)
+	if err != nil {
+		return book
+	}
+	resolved := store.BookMetadata{Book: book}
+	for _, proposal := range proposals {
+		if next, applied := catalog.Resolve(resolved, proposal); applied {
+			resolved = next
+		}
+	}
+	return resolved.Book
 }
 
 // promotionFilename recovers the name the file was found under. An upload
@@ -237,12 +273,20 @@ func classifyPromotionFailure(err error) (code, detail string, permanent bool) {
 	}
 }
 
-// RunIngestPromotionPass promotes one bounded snapshot of extracted jobs.
-// Later polls pick up jobs outside this batch.
+// RunIngestPromotionPass promotes one bounded snapshot of extracted jobs and
+// attaches each new book's entity sets. Later polls pick up jobs outside this
+// batch.
+//
+// The sets are applied after the promotion, not inside it, because they are
+// rows that hang off a book that has to exist first. A failure there is
+// counted rather than returned: the book, its file and its title are already
+// durable and correct, and undoing a good promotion because a tag did not
+// attach would be a worse outcome than a book that is briefly untagged.
 func RunIngestPromotionPass(
 	ctx context.Context,
 	st ingestPromotionQueue,
 	blobs ingestBlobPromoter,
+	patterns []metadata.PathPattern,
 	clock func() time.Time,
 	failureRetention time.Duration,
 	batchSize int,
@@ -258,7 +302,7 @@ func RunIngestPromotionPass(
 	}
 	for _, job := range jobs {
 		result, err := PromoteIngestJob(
-			ctx, st, blobs, job, clock, failureRetention)
+			ctx, st, blobs, job, patterns, clock, failureRetention)
 		if errors.Is(err, store.ErrStaleRevision) {
 			report.Skipped++
 			continue
@@ -269,6 +313,10 @@ func RunIngestPromotionPass(
 		switch result.Job.State {
 		case store.IngestPromoted:
 			report.Promoted++
+			if _, _, err := MaterializeBookMetadata(
+				ctx, st, result.Job, patterns, clock); err != nil {
+				report.Undescribed++
+			}
 		case store.IngestQuarantined:
 			report.Quarantined++
 		default:

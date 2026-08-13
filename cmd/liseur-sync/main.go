@@ -22,6 +22,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -170,7 +171,7 @@ func runIngestPromotionWorker(
 	interval := time.Duration(cfg.Content.IngestWorkerInterval) * time.Second
 	for {
 		report, err := content.RunIngestPromotionPass(
-			ctx, st, cas, time.Now,
+			ctx, st, cas, metadata.DefaultPathPatterns(), time.Now,
 			time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
 			cfg.Content.RecoveryBatchSize)
 		if err != nil {
