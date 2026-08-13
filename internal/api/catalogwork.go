@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
-	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 type catalogResolveRequest struct {
@@ -66,24 +66,13 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ids := catalogBookIdentifiers(meta, files)
 	workID, err := newID()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "id generation failed")
 		return
 	}
-	proposed := store.Work{
-		ID: workID, UserID: tok.UserID,
-		Title: meta.Book.Title, Author: firstAuthor(meta), CreatedAt: time.Now(),
-	}
-	var editions []store.Edition
-	for _, id := range ids {
-		if id.Kind == "sha256" {
-			editions = append(editions, store.Edition{
-				UserID: tok.UserID, SHA256: id.Value, WorkID: workID,
-			})
-		}
-	}
+	proposed, editions, ids := workident.Plan(tok.UserID, workID, meta, files)
+	proposed.CreatedAt = time.Now()
 
 	result, err := s.St.ResolveCatalogBookWork(r.Context(), tok.UserID, bookID,
 		proposed, editions, ids, req.Confirmed, time.Now())
@@ -119,71 +108,6 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 		Confidence: result.Confidence, Created: result.Created,
 		Identifiers: identifiersJSON(ids),
 	})
-}
-
-// catalogBookIdentifiers is the evidence the catalog holds about one book,
-// strongest first. Only available files contribute: a file whose blob is
-// missing cannot vouch for a digest, and registering an alias from it would
-// attach the reader's work graph to bytes nobody can produce.
-//
-// The stable "source:liseur-sync:<book_id>" alias is not added here. The
-// store appends it inside the resolution transaction, so it is present even
-// for a book with no files at all.
-func catalogBookIdentifiers(meta store.BookMetadata, files []store.BookFile) []store.Identifier {
-	var ids []store.Identifier
-	// Duplicates are not filtered here: orderIdentifiers, which every
-	// return path goes through, already collapses them. Empty values are,
-	// because nothing downstream does and "sha256:" would alias every
-	// book whose digest the catalog happens not to know.
-	add := func(kind, value string) {
-		if value == "" {
-			return
-		}
-		ids = append(ids, store.Identifier{Kind: kind, Value: value})
-	}
-	for _, f := range files {
-		if f.Availability != store.BookFileAvailable {
-			continue
-		}
-		add("sha256", f.BlobSHA256)
-		if f.PartialMD5 != nil {
-			add("partial-md5", *f.PartialMD5)
-		}
-		if f.DCIdentifier != nil {
-			add("dc", *f.DCIdentifier)
-		}
-	}
-	// Catalogued identifiers are richer than the one the ingest recorded
-	// on the file: a librarian may have corrected the ISBN.
-	for _, id := range meta.Identifiers {
-		add("dc", id.Value)
-	}
-	if fingerprint := titleAuthorFingerprint(meta); fingerprint != "" {
-		add("ta", fingerprint)
-	}
-	return orderIdentifiers(ids)
-}
-
-// titleAuthorFingerprint is the fuzzy fallback alias. It must fold exactly
-// the way a client's does or the two never meet, so it reuses the same
-// normalization the catalog uses to match contributor names.
-func titleAuthorFingerprint(meta store.BookMetadata) string {
-	title := metadata.NormalizeName(meta.Book.Title)
-	if title == "" {
-		return ""
-	}
-	return title + "|" + metadata.NormalizeName(firstAuthor(meta))
-}
-
-// firstAuthor is the book's primary author: contributors come back ordered,
-// so the first author role is the one a reader would name.
-func firstAuthor(meta store.BookMetadata) string {
-	for _, c := range meta.Contributors {
-		if c.Role == "author" {
-			return c.Name
-		}
-	}
-	return ""
 }
 
 func identifiersJSON(ids []store.Identifier) []identifierJSON {

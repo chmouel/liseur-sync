@@ -9,6 +9,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 // identifierJSON is one (kind, value) alias on the wire.
@@ -33,11 +34,7 @@ type resolveResponse struct {
 	Created    bool   `json:"created"`
 }
 
-// aliasOrder resolves in decreasing strength. "source" is the catalog
-// server's own id for the book (e.g. "komga:<id>"): two devices browsing
-// the same catalog hold the same one, so it identifies the book without
-// either of them having downloaded the file.
-var aliasOrder = []string{"sha256", "partial-md5", "source", "dc", "ta"}
+var aliasOrder = workident.AliasOrder
 
 // HandleResolve implements POST /v1/works/resolve. One store transaction
 // checks that all matching aliases agree, creates the work when none match,
@@ -127,16 +124,5 @@ func normalizeIdentifiers(inputs []identifierJSON) ([]store.Identifier, string) 
 func newID() (string, error) { return auth.NewSecret() }
 
 func orderIdentifiers(ids []store.Identifier) []store.Identifier {
-	ordered := make([]store.Identifier, 0, len(ids))
-	seen := make(map[string]bool, len(ids))
-	for _, kind := range aliasOrder {
-		for _, id := range ids {
-			key := id.Kind + ":" + id.Value
-			if id.Kind == kind && !seen[key] {
-				ordered = append(ordered, id)
-				seen[key] = true
-			}
-		}
-	}
-	return ordered
+	return workident.Order(ids)
 }

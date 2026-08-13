@@ -90,9 +90,13 @@ identity.
 2. Add an explicit catalog-book resolve operation for sync-capable clients.
    **Implemented** as `POST /v1/books/{id}/resolve`, which requires both
    `library-read` and `sync`.
-3. Add maintenance backfill and mapping repair for split/merge. Split and
-   merge repair are implemented, including unavailable current files;
-   maintenance backfill remains.
+3. Add maintenance backfill and mapping repair for split/merge. **Implemented.**
+   Split and merge repair cover unavailable current files, and
+   `liseur-sync admin backfill-works <user>` pre-resolves a user's whole
+   catalog through the same resolver the API uses. It never confirms a
+   title/author match: the operator running it is not the reader who can
+   say whether two similarly named books are the same one, so those are
+   counted and left for a client to confirm.
 
 ## Acceptance criteria
 
