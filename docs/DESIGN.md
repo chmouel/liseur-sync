@@ -593,9 +593,10 @@ grace-period orphan sweep run before the server accepts traffic, with active
 ingest holds treated as GC roots. A pure bounded EPUB validator now rejects
 unsafe ZIP structure, expansion bombs, malformed control XML, and unsupported
 content encryption before extraction. CAS-backed validation and the durable
-staged-to-validated worker transition are implemented; worker scheduling,
-metadata and cover extraction, catalog availability reconciliation,
-last-reference deletion/trash, backup verification, and administration remain.
+staged-to-validated worker transition are implemented with configurable
+bounded-validation limits. Worker scheduling, metadata and cover extraction,
+catalog availability reconciliation, last-reference deletion/trash, backup
+verification, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

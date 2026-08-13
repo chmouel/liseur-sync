@@ -77,6 +77,14 @@ func DefaultLimits() Limits {
 	}
 }
 
+// Validate checks that a limit set is safe for bounded arithmetic.
+func (l Limits) Validate() error {
+	if !l.valid() {
+		return ErrInvalidValidationInput
+	}
+	return nil
+}
+
 // Result identifies the validated package document and bounded XML assets.
 type Result struct {
 	PackagePath    string
@@ -91,7 +99,7 @@ func Validate(
 	size int64,
 	limits Limits,
 ) (Result, error) {
-	if ctx == nil || reader == nil || size < 0 || !limits.valid() {
+	if ctx == nil || reader == nil || size < 0 || limits.Validate() != nil {
 		return Result{}, ErrInvalidValidationInput
 	}
 	if err := ctx.Err(); err != nil {

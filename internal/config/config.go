@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/epub"
 )
 
 const maxDurationHours = int64((1<<63 - 1) / time.Hour)
@@ -25,6 +27,13 @@ type Config struct {
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
 		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
 		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
+		EPUBMaxEntries        int    `toml:"epub_max_entries"`
+		EPUBMaxDirectoryBytes int64  `toml:"epub_max_directory_bytes"`
+		EPUBMaxExpandedBytes  int64  `toml:"epub_max_expanded_bytes"`
+		EPUBMaxEntryBytes     int64  `toml:"epub_max_entry_bytes"`
+		EPUBMaxRatio          int64  `toml:"epub_max_compression_ratio"`
+		EPUBMaxMetadataBytes  int64  `toml:"epub_max_metadata_bytes"`
+		EPUBMaxXMLDepth       int    `toml:"epub_max_xml_depth"`
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -73,6 +82,14 @@ func Default() Config {
 	c.Content.FailureRetentionHours = 24
 	c.Content.OrphanGraceHours = 168
 	c.Content.RecoveryBatchSize = 100
+	epubLimits := epub.DefaultLimits()
+	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
+	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
+	c.Content.EPUBMaxExpandedBytes = epubLimits.MaxUncompressedBytes
+	c.Content.EPUBMaxEntryBytes = epubLimits.MaxEntryBytes
+	c.Content.EPUBMaxRatio = int64(epubLimits.MaxCompressionRatio)
+	c.Content.EPUBMaxMetadataBytes = epubLimits.MaxMetadataBytes
+	c.Content.EPUBMaxXMLDepth = epubLimits.MaxXMLDepth
 	c.Adapters.Kosync = true
 	c.Adapters.Koplugin = true
 	c.Ops.MaxBatch = 500
@@ -153,9 +170,16 @@ func (c *Config) Validate() error {
 	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
 		return fmt.Errorf("content.recovery_batch_size must be between 1 and 500")
 	}
+	if c.Content.EPUBMaxRatio < 1 {
+		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")
+	}
+	if err := c.EPUBLimits().Validate(); err != nil {
+		return fmt.Errorf("content EPUB limits are invalid: %w", err)
+	}
 	if c.Ops.MaxBatch < 1 {
 		return fmt.Errorf("ops.max_batch must be >= 1")
 	}
+
 	if c.Ops.RetentionDays < 1 {
 		return fmt.Errorf("ops.retention_days must be >= 1")
 	}
@@ -173,4 +197,21 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ops.inference_late_hours must cover ops.inference_gap_min")
 	}
 	return nil
+}
+
+// EPUBLimits returns the configured bounded validator limits.
+func (c Config) EPUBLimits() epub.Limits {
+	ratio := uint64(0)
+	if c.Content.EPUBMaxRatio > 0 {
+		ratio = uint64(c.Content.EPUBMaxRatio)
+	}
+	return epub.Limits{
+		MaxEntries:           c.Content.EPUBMaxEntries,
+		MaxDirectoryBytes:    c.Content.EPUBMaxDirectoryBytes,
+		MaxUncompressedBytes: c.Content.EPUBMaxExpandedBytes,
+		MaxEntryBytes:        c.Content.EPUBMaxEntryBytes,
+		MaxCompressionRatio:  ratio,
+		MaxMetadataBytes:     c.Content.EPUBMaxMetadataBytes,
+		MaxXMLDepth:          c.Content.EPUBMaxXMLDepth,
+	}
 }
