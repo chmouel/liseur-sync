@@ -150,7 +150,13 @@ func Validate(
 				CodeUnsafeArchive, fmt.Errorf("unsafe ZIP entry type %q", name))
 		}
 		if mode.IsDir() {
-			if file.UncompressedSize64 != 0 || file.CompressedSize64 != 0 {
+			// A directory must carry no content, which is a statement
+			// about its uncompressed size. Its compressed size is not
+			// zero in practice: deflating nothing still costs a couple
+			// of bytes, and common EPUB writers deflate directory
+			// entries, so testing that byte count rejects legitimate
+			// books.
+			if file.UncompressedSize64 != 0 {
 				return Result{}, validationError(
 					CodeUnsafeArchive,
 					fmt.Errorf("ZIP directory %q contains data", name))
@@ -670,8 +676,9 @@ func parseContainer(value []byte, maxDepth int) (string, error) {
 			stack = stack[:len(stack)-1]
 			depth--
 		case xml.Directive:
-			return "", validationError(
-				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
+			if err := checkDirective(typed); err != nil {
+				return "", err
+			}
 		}
 	}
 }
@@ -840,8 +847,9 @@ func parsePackage(
 			stack = stack[:len(stack)-1]
 			depth--
 		case xml.Directive:
-			return packageDetails{}, validationError(
-				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
+			if err := checkDirective(typed); err != nil {
+				return packageDetails{}, err
+			}
 		}
 	}
 }
@@ -923,8 +931,9 @@ func validateXMLDocument(
 		case xml.EndElement:
 			depth--
 		case xml.Directive:
-			return validationError(
-				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
+			if err := checkDirective(typed); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -1093,8 +1102,9 @@ func validateEncryption(
 			}
 			depth--
 		case xml.Directive:
-			return false, validationError(
-				CodeInvalidEPUB, errors.New("XML directives are not allowed"))
+			if err := checkDirective(typed); err != nil {
+				return false, err
+			}
 		}
 	}
 }
@@ -1128,11 +1138,19 @@ func isFontPath(name string) bool {
 
 func isFontMediaType(mediaType string) bool {
 	switch strings.ToLower(mediaType) {
+	// The registered types are font/*; everything else here is a legacy
+	// spelling that real EPUB writers still emit. They name the same
+	// bytes, and refusing them rejects the book over a label.
 	case "application/font-sfnt",
 		"application/font-woff",
 		"application/vnd.ms-opentype",
 		"application/x-font-opentype",
+		"application/x-font-truetype",
 		"application/x-font-ttf",
+		"application/x-truetype-font",
+		"application/x-font-otf",
+		"font/opentype",
+		"font/truetype",
 		"font/otf",
 		"font/ttf",
 		"font/woff",
@@ -1141,4 +1159,58 @@ func isFontMediaType(mediaType string) bool {
 	default:
 		return false
 	}
+}
+
+// checkDirective decides whether an XML directive is safe to ignore.
+//
+// A bare doctype is not a threat and is everywhere in real books: EPUB 3
+// navigation documents are XHTML5 and carry <!DOCTYPE html>, and EPUB 2
+// packages routinely carry a public doctype. Refusing all directives
+// rejected those books outright.
+//
+// What must still be refused is a document type definition that declares
+// entities. Entity declarations are how a parser is talked into expanding
+// a small document into a huge one, or into reading a file it was never
+// meant to see. Go's parser does not expand them, so this is a second
+// line of defence rather than the only one, but a book that tries has no
+// business in a library.
+func checkDirective(directive xml.Directive) error {
+	if !containsEntityDeclaration(directive) {
+		return nil
+	}
+	return validationError(
+		CodeInvalidEPUB, errors.New("XML entity declarations are not allowed"))
+}
+
+// containsEntityDeclaration reports whether a directive declares an
+// entity. The match is on the "<!ENTITY" that opens a declaration, case
+// insensitively, which is the only form XML allows.
+func containsEntityDeclaration(directive xml.Directive) bool {
+	const marker = "<!ENTITY"
+	body := directive
+	for i := 0; i+len(marker) <= len(body); i++ {
+		if body[i] != '<' {
+			continue
+		}
+		if asciiEqualFold(body[i:i+len(marker)], marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func asciiEqualFold(got []byte, want string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		c := got[i]
+		if 'a' <= c && c <= 'z' {
+			c -= 'a' - 'A'
+		}
+		if c != want[i] {
+			return false
+		}
+	}
+	return true
 }
