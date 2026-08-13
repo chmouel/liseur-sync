@@ -21,10 +21,13 @@ import (
 // Run dispatches an admin subcommand. args excludes "admin" itself.
 func Run(st store.Store, args []string) error {
 	if len(args) == 0 {
-		return errors.New(usage)
+		return errors.New(Usage)
 	}
 	ctx := context.Background()
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Print(Usage)
+		return nil
 	case "create-user":
 		return createUser(ctx, st, args[1:])
 	case "mint-token":
@@ -46,11 +49,14 @@ func Run(st store.Store, args []string) error {
 	case "revoke-library":
 		return revokeLibrary(ctx, st, args[1:])
 	default:
-		return fmt.Errorf("unknown admin subcommand %q\n%s", args[0], usage)
+		return fmt.Errorf("unknown admin subcommand %q\n%s", args[0], Usage)
 	}
 }
 
-const usage = `usage: liseur-sync admin <subcommand>
+// Usage lists every admin subcommand. It is exported so that the command
+// line has one list rather than a copy that drifts: an operator who is
+// told a command does not exist has no way to discover that it does.
+const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
 
   create-user <name>            create a user (password from TTY/stdin)
   mint-token <user> <name>      create a device token
