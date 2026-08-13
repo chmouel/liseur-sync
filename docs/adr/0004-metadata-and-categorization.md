@@ -73,14 +73,15 @@ candidates rather than applied, and TLS verified against the CA bundle
 shipped in the container image — with a smoke test, so a release cannot ship
 lookup code without usable trust roots. No background scan phones home.
 
-### Search — later
+### Search
 
 SQLite uses FTS5 and PostgreSQL uses `tsvector`, updated transactionally
-with metadata changes. One rule matters now because it constrains the API
-rather than the index: **a catalog-only credential must not be able to
-observe reading state.** Reading-state filters require `sync` on the same
-token, aggregate statistics require `read-insights`, and OPDS exposes
-neither regardless of what the authenticating token also carries.
+with metadata changes. One rule constrains the API rather than the index:
+**a catalog-only credential must not be able to observe reading state.**
+Reading-state filters require `sync` on the same token, aggregate
+statistics require `read-insights`, and OPDS exposes neither regardless
+of what the authenticating token also carries. The search route therefore
+has no vocabulary for reading state at all — an absent feature cannot leak.
 
 ## Consequences
 
@@ -192,8 +193,49 @@ External metadata cannot be a required ingest dependency.
    book is ordinary in a shared library and last-write-wins would discard
    the first person's work silently.
 
-   **Next for this ADR:** phase 3, search and facets.
-3. Full-text search and facets — later.
+3. **Full-text search and facets.** Done.
+
+   `GET /v1/libraries/{library}/search` matches words against everything a
+   book says about itself — title, subtitle, description, publisher, and
+   the names of the series, contributors, tags and genres it claims — and
+   returns the best matches first. `/ui/libraries/{library}/search` is the
+   same answer as a page, with facets rendered as narrowing links.
+
+   The decisions worth keeping visible:
+
+   - **The two backends must answer the same question**, which is this
+     ADR's acceptance criterion, and three choices exist only to keep that
+     true. PostgreSQL uses the `simple` text-search configuration rather
+     than `english`, because stemming would make "reading" find "Read" on
+     one backend and not the other. Diacritics are folded in Go rather
+     than by the `unaccent` extension, which a managed database may not
+     offer. And both backends split the query with the same shared
+     function, so neither can disagree about what a word is.
+   - **The query is words, never index syntax.** Splitting on anything
+     that is not a letter or digit is also the only sanitizing either
+     backend needs: no quote, wildcard or boolean operator can survive to
+     reach FTS5 or `to_tsquery`. A query made only of punctuation matches
+     nothing rather than erroring.
+   - **Reindexing is a call, not a trigger.** A book's searchable text is
+     spread over seven tables, so a trigger on `books` would silently miss
+     a contributor renamed two tables away. Every write that changes
+     indexed text calls the reindex inside its own transaction.
+   - **Search is unpaged, and says when it was cut.** A relevance order
+     has no stable cursor, and search answers "where is that book", a
+     question with a short answer; browsing is what the paged listings are
+     for. The result carries `truncated` so a client can ask the person to
+     narrow rather than implying it found everything.
+   - **Facets are computed from the books returned**, not by re-running
+     the search, so a count can never describe a different set than the
+     answer. A filter takes an entity id without its kind, because an id
+     already knows what it is.
+   - **Search is visible exactly as far as the listings are**: it shows
+     what `GET /books` shows, which includes a restored book with no
+     stored file, and it never reveals a library the caller cannot read.
+
+   **Next for this ADR:** phase 4, external provider lookup, which remains
+   optional forever.
+
 4. Explicit external-provider lookup and candidate review — later, and
    optional forever.
 

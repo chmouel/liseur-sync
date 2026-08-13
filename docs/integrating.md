@@ -373,6 +373,47 @@ a manual lock carries over, and so does a series position the surviving
 row does not have: dropping either would discard the only answer anybody
 gave. It is not reversible.
 
+### Finding a book
+
+`GET /v1/libraries/{library}/search?q=left+hand` matches against
+everything a book says about itself — title, subtitle, description,
+publisher, and the names of the series, contributors, tags and genres it
+claims — and returns the best matches first. A book *called* Dune ranks
+above one that only mentions it. It needs `library-read`.
+
+`q` is words, never index syntax. Punctuation and boolean operators are
+split away rather than interpreted, so nothing you can type changes how
+the query is read, and a query made only of punctuation matches nothing
+instead of erroring. Case and diacritics are folded, so `emile` finds
+`Émile`. Both storage backends answer the same question the same way:
+neither stems, so `reading` does not find `Read`.
+
+The answer is unpaged:
+
+```json
+{"books": [{"book_id": "...", "title": "The Left Hand of Darkness"}],
+ "facets": [{"kind": "tag", "id": "...", "name": "Fantasy", "book_count": 1}],
+ "truncated": false}
+```
+
+`truncated` says the answer was cut at `limit` (100 at most). There is no
+cursor on purpose — a relevance order has no stable one, and search
+answers "where is that book", a question with a short answer. When you
+see `truncated`, ask for a narrower query rather than another page;
+browsing a whole library is what `/books` is for.
+
+`facets` describe the books actually returned, counted over that set
+rather than over the library, so what they say can never be about a
+different set than the one you got. Pass any facet's `id` back as
+`?entity=` to narrow, without saying what kind it is — an id already
+knows. Repeat `entity` to stack filters; they are ANDed.
+
+There is no reading-state filter, and there will not be one. A
+catalog-only credential must not be able to observe reading state, and
+the surest way to keep that true is for this route to have no vocabulary
+for it. Ask the `sync` and `read-insights` surfaces about reading; they
+require their own scopes.
+
 ### Books that are the same file
 
 Uploading one file twice gives two books. That is allowed on purpose —
