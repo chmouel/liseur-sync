@@ -98,17 +98,15 @@ precedence engine. Each ADR records its own remaining edges.
 
 ### To the MVP
 
-1. **Ingest input.** `POST /v1/library/upload` and the htmx upload UI
-   ([ADR-0005](0005-upload-and-ingestion.md)). The pipeline runs end to end
-   but nothing creates jobs, so this is the one gap between the server and a
-   usable product.
-2. **Catalog output.** The `/v1/library/*` read and download API
+1. **Ingest input.** `POST /v1/library/{library}/upload` is done; the htmx
+   upload UI is not ([ADR-0005](0005-upload-and-ingestion.md)).
+2. **Admin.** Library creation and access grants from the `admin` subcommand.
+   Nothing else on this list is reachable without a library to put books in.
+3. **Catalog output.** The `/v1/library/*` read and download API
    ([ADR-0006](0006-catalog-api-and-opds.md)), plus catalog and book-detail
    pages in the web UI.
-3. **An existing reader.** OPDS 1.2 acquisition feeds, verified against
+4. **An existing reader.** OPDS 1.2 acquisition feeds, verified against
    KOReader ([ADR-0006](0006-catalog-api-and-opds.md)).
-4. **Admin.** Library creation and access grants from the `admin`
-   subcommand.
 
 ### After the MVP
 

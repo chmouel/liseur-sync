@@ -304,6 +304,7 @@ func cmdServe(args []string) error {
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
 		LoginLimiter: loginLimiter,
+		Content:      cas,
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,

@@ -122,12 +122,16 @@ unit.
 
 ### Upload interfaces
 
-`POST /v1/library/upload` accepts multipart uploads for a managed library and
-returns a job resource. API and web clients send a bounded client-generated
-`Idempotency-Key`, unique per user and target library. Replaying a key returns
-the original job; reusing it for a different content hash returns 409. A new
-key may intentionally create another catalog reference to an already
-deduplicated blob.
+`POST /v1/library/{library}/upload` accepts multipart uploads for a managed
+library and returns a job resource. API and web clients send a bounded
+client-generated `Idempotency-Key`, unique per user and target library.
+Replaying a key returns the original job *without reading the body*: staging
+is keyed by the job, so re-reading would either discard the new bytes
+silently or contradict a digest already committed. We do not detect a key
+reused for different content — that would mean staging to a scratch path and
+comparing, and the client is the one that broke its own promise. A new key
+may intentionally create another catalog reference to an already deduplicated
+blob.
 
 Request-envelope failures such as authentication, ACL, multipart,
 declared-size, and quota errors return precise 4xx responses.
@@ -179,13 +183,16 @@ name a stable job and reason instead of losing state when a request ends.
    validated`, `validated -> extracted`, `extracted -> promoted`) run on a
    configurable interval, each revision-checked, each quarantining content
    failures under a stable code.
-   **Not yet enforced:** request and archive size limits and the
-   instance-wide staging and per-principal caps, which belong to the upload
-   path in phase 4.
+   **Not yet enforced:** the instance-wide staging cap. Per-request and
+   per-user bounds arrived with the upload path in phase 4.
 3. **Metadata and cover extraction.** Metadata done — see ADR-0004 phase 1.
    **Remaining:** cover extraction and transcoding.
-4. **Upload API and htmx UI.** Not started, and the only thing between the
-   pipeline and a usable product: nothing currently creates a job.
+4. **Upload API and htmx UI.** API done: `POST /v1/library/{library}/upload`
+   streams a multipart body straight into CAS staging, bounded by
+   `max_upload_bytes` and the user's `quota_bytes`, and
+   `GET /v1/library/jobs/{id}` reports progress. **Remaining:** the htmx
+   upload UI, and an `admin` subcommand to create libraries and grant
+   access — without it there is no library to upload into.
 
 **Remaining elsewhere:** catalog availability reconciliation, and the
 watched-folder scanner in ADR-0002.

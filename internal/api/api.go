@@ -19,6 +19,9 @@ type Server struct {
 	Cfg  config.Config
 	// LoginLimiter rate-limits login and token-management endpoints.
 	LoginLimiter *auth.RateLimiter
+	// Content stages uploaded bytes. Nil disables the upload endpoint,
+	// which then reports 503 rather than panicking.
+	Content ContentStore
 	// Kosync is the kosync adapter (nil disables it regardless of
 	// config).
 	Kosync interface {
