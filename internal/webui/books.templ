@@ -28,12 +28,20 @@ type UploadRow struct {
 	Reason   string
 }
 
+// TrashRow is one deleted book that can still be brought back.
+type TrashRow struct {
+	ID    string
+	Title string
+	Until string
+}
+
 type BooksView struct {
 	Libraries []LibraryOption
 	Selected  string
 	CanWrite  bool
 	Books     []BookRow
 	Uploads   []UploadRow
+	Trash     []TrashRow
 	NextURL   string
 	Notice    string
 	Problem   string
@@ -109,13 +117,38 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				</table>
 			</section>
 		}
+		if len(v.Trash) > 0 {
+			<section class="card">
+				<h2>Recently deleted</h2>
+				<p class="muted">
+					These are kept for a while before their files are removed for
+					good. Until then they can be put back.
+				</p>
+				<table>
+					<tr><th>Title</th><th>Kept until</th><th></th></tr>
+					for _, b := range v.Trash {
+						<tr>
+							<td>{ orPlaceholder(b.Title) }</td>
+							<td>{ orPlaceholder(b.Until) }</td>
+							<td>
+								<form method="post" action={ prefix + "books/" + b.ID + "/restore" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<input type="hidden" name="library" value={ v.Selected }/>
+									<button type="submit">Put back</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			</section>
+		}
 		<section class="card">
 			<h2>In this library</h2>
 			if len(v.Books) == 0 {
 				<p class="muted">No books yet.</p>
 			} else {
 				<table>
-					<tr><th>Title</th><th>Added</th><th></th></tr>
+					<tr><th>Title</th><th>Added</th><th></th><th></th></tr>
 					for _, b := range v.Books {
 						<tr>
 							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
@@ -125,6 +158,15 @@ templ booksBody(prefix, csrf string, v BooksView) {
 									<a href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 								} else {
 									<span class="muted">no file</span>
+								}
+							</td>
+							<td>
+								if v.CanWrite {
+									<form method="post" action={ prefix + "books/" + b.ID + "/delete" }>
+										<input type="hidden" name="csrf" value={ csrf }/>
+										<input type="hidden" name="library" value={ v.Selected }/>
+										<button type="submit">Delete</button>
+									</form>
 								}
 							</td>
 						</tr>

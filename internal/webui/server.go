@@ -134,6 +134,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
 	mux.Handle("POST /ui/books/upload", sec(s.requireAuth(s.handleUploadBook)))
+	mux.Handle("POST /ui/books/{id}/delete", sec(s.requireAuth(s.handleDeleteBook)))
+	mux.Handle("POST /ui/books/{id}/restore", sec(s.requireAuth(s.handleRestoreBook)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
 	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
