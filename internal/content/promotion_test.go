@@ -25,6 +25,7 @@ type fakePromotionStore struct {
 	listErr   error
 	commitErr error
 	applyErr  error
+	replay    bool
 
 	listed    []store.IngestState
 	committed []store.CommitNewBookPromotionRequest
@@ -94,6 +95,7 @@ func (f *fakePromotionStore) CommitNewBookPromotion(
 	f.book.Book.Revision = 1
 	return store.IngestPromotionResult{
 		Job: f.job, Book: request.Book, File: request.File, Blob: request.Blob,
+		Replayed: f.replay,
 	}, nil
 }
 
@@ -613,6 +615,24 @@ func TestRunIngestPromotionPassSkipsAJobAnotherWorkerTook(t *testing.T) {
 		t.Fatalf("pass: %v", err)
 	}
 	if report.Skipped != 1 || report.Promoted != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+}
+
+// A worker that lost the race read back a book it did not create. Counting
+// that as a promotion would report two promotions for one book and hide the
+// contention entirely.
+func TestRunIngestPromotionPassCountsAReplaySeparately(t *testing.T) {
+	st := &fakePromotionStore{job: extractedJob()}
+	st.replay = true
+	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
+
+	report, err := RunIngestPromotionPass(context.Background(), st,
+		&fakeBlobPromoter{}, nil, fixedClock(now), time.Hour, 25)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if report.Replayed != 1 || report.Promoted != 0 {
 		t.Fatalf("report = %+v", report)
 	}
 }

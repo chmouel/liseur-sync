@@ -104,7 +104,10 @@ func runIngestValidationWorker(
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			if fatalWorkerError(err) {
+				return err
+			}
+			slog.Error("ingest pass failed, retrying next tick", "err", err)
 		}
 		if report.Validated != 0 || report.Quarantined != 0 ||
 			report.Skipped != 0 {
@@ -141,7 +144,10 @@ func runIngestMetadataExtractionWorker(
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			if fatalWorkerError(err) {
+				return err
+			}
+			slog.Error("ingest pass failed, retrying next tick", "err", err)
 		}
 		if report.Extracted != 0 || report.Quarantined != 0 ||
 			report.Skipped != 0 {
@@ -162,6 +168,22 @@ func runIngestMetadataExtractionWorker(
 	}
 }
 
+// fatalWorkerError reports whether an ingest pass failure should take the
+// server down with it.
+//
+// Almost none should. A pass writes to disk, so a full or failing volume makes
+// it fail every tick — and returning that error stops the process, taking the
+// sync API, the adapters and the web UI offline because one blob could not be
+// published. It also persists across a restart, so the supervisor gets a crash
+// loop rather than a server that still serves reads.
+//
+// A broken invariant is different: it means the code or the data is wrong in a
+// way the next tick cannot fix, and continuing would keep acting on it.
+func fatalWorkerError(err error) bool {
+	return errors.Is(err, store.ErrInvariantViolation) ||
+		errors.Is(err, store.ErrInvalidTransition)
+}
+
 func runIngestPromotionWorker(
 	ctx context.Context,
 	st store.Store,
@@ -178,14 +200,20 @@ func runIngestPromotionWorker(
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			if fatalWorkerError(err) {
+				return err
+			}
+			slog.Error("ingest pass failed, retrying next tick", "err", err)
 		}
 		if report.Promoted != 0 || report.Quarantined != 0 ||
-			report.Skipped != 0 {
+			report.Skipped != 0 || report.Replayed != 0 ||
+			report.Undescribed != 0 {
 			slog.Info("ingest promotion pass complete",
 				"promoted", report.Promoted,
 				"quarantined", report.Quarantined,
-				"skipped", report.Skipped)
+				"skipped", report.Skipped,
+				"replayed", report.Replayed,
+				"undescribed", report.Undescribed)
 		}
 		timer := time.NewTimer(interval)
 		select {
