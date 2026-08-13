@@ -331,6 +331,10 @@ func (s *Server) Routes() *http.ServeMux {
 	// clients probe with HEAD before fetching.
 	mux.Handle("GET /v1/books/{id}/download", readH(s.HandleBookDownload))
 	mux.Handle("HEAD /v1/books/{id}/download", readH(s.HandleBookDownload))
+	// A cover is catalog data, not content: it needs the same read scope
+	// as the book record it illustrates, and no more.
+	mux.Handle("GET /v1/books/{id}/cover", readH(s.HandleBookCover))
+	mux.Handle("HEAD /v1/books/{id}/cover", readH(s.HandleBookCover))
 
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog

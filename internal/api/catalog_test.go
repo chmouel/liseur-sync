@@ -250,6 +250,7 @@ func TestCatalogIsScopedToTheCallersLibraries(t *testing.T) {
 		"/v1/libraries/" + f.library + "/books",
 		"/v1/books/" + bookID,
 		"/v1/books/" + bookID + "/download",
+		"/v1/books/" + bookID + "/cover",
 	} {
 		t.Run(path, func(t *testing.T) {
 			resp, raw := f.get(t, path, stranger)
@@ -332,6 +333,7 @@ func TestCatalogRequiresTheLibraryReadScope(t *testing.T) {
 		"/v1/libraries/" + f.library + "/duplicates",
 		"/v1/books/" + bookID,
 		"/v1/books/" + bookID + "/download",
+		"/v1/books/" + bookID + "/cover",
 	} {
 		t.Run(path, func(t *testing.T) {
 			resp, _ := f.get(t, path, syncOnly)

@@ -25,6 +25,9 @@ type Server struct {
 	// Blobs serves promoted content for downloads. Nil disables the
 	// download route the same way.
 	Blobs BlobStore
+	// Covers caches rendered covers. Nil is not an error: covers are then
+	// rendered on every request, which is slow but correct.
+	Covers CoverCache
 	// Kosync is the kosync adapter (nil disables it regardless of
 	// config).
 	Kosync interface {
