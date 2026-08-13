@@ -24,6 +24,13 @@ release requires a browser reader.
 **Not now.** No renderer is vendored and no reader routes exist until the
 catalog API and OPDS are stable and in real use.
 
+That condition has since been met: the catalog API, OPDS, metadata
+editing, search and duplicate reporting are all built, and this is the
+next feature on ADR-0001's list. What is still missing is the decision
+itself — renderer, isolation, and token lifecycle — which this ADR says
+must be made deliberately rather than inherited from a placeholder. Until
+that replacement is written, "not now" still stands.
+
 Two constraints are recorded now, because they bind features that come
 earlier:
 
