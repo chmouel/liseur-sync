@@ -245,6 +245,11 @@ type CatalogBook struct {
 	Status              BookStatus
 	Revision            int64            `json:"-"`
 	SetLocks            MetadataSetLocks `json:"-"`
+	// ReviewReason says why the book needs an administrator's attention.
+	// It is set only alongside the review status and is empty otherwise,
+	// so a book in review always explains itself: a review item nobody can
+	// interpret is the same as no review item.
+	ReviewReason        string
 	Title               string
 	TitleSource         MetadataSource
 	TitleLocked         bool
@@ -638,6 +643,57 @@ type CatalogAvailabilityResult struct {
 func (r CatalogAvailabilityResult) Changed() bool {
 	return r.FilesMarkedMissing != 0 || r.FilesMarkedAvailable != 0 ||
 		r.BooksMarkedMissing != 0 || r.BooksMarkedActive != 0
+}
+
+// WatchedFile is what a sweep already knows about one watched source path:
+// the book it belongs to, the snapshot taken from it, and what the last
+// sweep observed. It is not a BookFile because a sweep needs the blob's
+// recorded size to decide whether a path is worth rehashing, and that lives
+// on the blob rather than the file.
+type WatchedFile struct {
+	FileID             string
+	LibraryID          string
+	BookID             string
+	BookStatus         BookStatus
+	SourceRelativePath string
+	BlobSHA256         string
+	// SizeBytes is the snapshot's size, which is also the size the source
+	// had when it was taken.
+	SizeBytes int64
+	// SourceModifiedAt is the modification time the source carried when it
+	// was last reconciled, or nil for a file no sweep has stat'ed yet.
+	SourceModifiedAt *time.Time
+	Availability     BookFileAvailability
+	SourceAbsent     bool
+}
+
+// WatchedObservation is one path a completed traversal found, as the
+// filesystem described it.
+type WatchedObservation struct {
+	SourceRelativePath string
+	SizeBytes          int64
+	ModifiedAt         time.Time
+}
+
+// MaxWatchedObservationBatch bounds one MarkWatchedSourcesSeen call. A
+// sweep of any size is expressed as several batches, so one enormous
+// library cannot build a single statement without bound.
+const MaxWatchedObservationBatch = 500
+
+// ValidateWatchedObservations checks a seen-batch before any backend
+// builds a statement from it.
+func ValidateWatchedObservations(paths []WatchedObservation) error {
+	if len(paths) == 0 || len(paths) > MaxWatchedObservationBatch {
+		return ErrInvalidTransition
+	}
+	for _, p := range paths {
+		if p.SourceRelativePath == "" ||
+			len(p.SourceRelativePath) > 4096 ||
+			p.SizeBytes < 0 || p.ModifiedAt.IsZero() {
+			return ErrInvalidTransition
+		}
+	}
+	return nil
 }
 
 // TrashPurgeResult counts one bounded permanent-deletion pass.
@@ -1323,6 +1379,55 @@ type Store interface {
 	// bounds each of the four updates, so a caller loops while Changed
 	// reports work was done.
 	ReconcileCatalogAvailability(ctx context.Context, at time.Time, limit int) (CatalogAvailabilityResult, error)
+	// ListWatchedLibraries is a global housekeeping query. The scanner
+	// runs on the server's behalf rather than any user's, so it is one of
+	// the documented cross-user lookups: it exists for a background job,
+	// and nothing user-facing may call it. Managed libraries are excluded
+	// because they have no root to sweep.
+	ListWatchedLibraries(ctx context.Context) ([]Library, error)
+	// WatchedFilesByPath reads what the catalog already holds for one
+	// watched source path. It is a global housekeeping query like the
+	// other reconciliation methods — a sweep runs on the server's behalf,
+	// not a user's — but it is still scoped to one library, so it can
+	// never report a path from a library the sweep was not asked about.
+	//
+	// It returns every match rather than one. Nothing stops two books
+	// referencing the same path, and a sweep that saw only the first would
+	// silently pick a winner; the ADR's rule is that ambiguity is
+	// reported, not resolved.
+	WatchedFilesByPath(ctx context.Context, libraryID, sourceRelativePath string) ([]WatchedFile, error)
+	// MarkWatchedSourcesSeen records that a traversal found these paths,
+	// with the size and modification time the filesystem reported. Seeing
+	// a path clears any absence recorded for it, which is what makes a
+	// returning file available again.
+	//
+	// Only the observation is written. Whether the bytes still match the
+	// snapshot is the caller's judgement, because answering it can cost a
+	// full read.
+	MarkWatchedSourcesSeen(ctx context.Context, libraryID string, paths []WatchedObservation, at time.Time) (int, error)
+	// MarkWatchedSourcesAbsent records that a **completed** full sweep of
+	// one library did not find these files' paths. It selects by absence
+	// of evidence — every watched file in the library not seen since the
+	// sweep began — so the caller must never call it after a traversal
+	// that ended early, and the store cannot check that for it.
+	//
+	// Files created after the sweep began are exempt. Such a row was
+	// promoted from content this sweep or a later one discovered, so the
+	// sweep never proved anything about it.
+	MarkWatchedSourcesAbsent(ctx context.Context, libraryID string, sweepStartedAt, at time.Time, limit int) (int, error)
+	// SetCatalogBookReview moves one book into review with the reason
+	// given, or, with an empty reason, out of review and back to missing —
+	// from where ReconcileCatalogAvailability restores it to active if it
+	// still has a servable file. It reports whether it changed anything.
+	//
+	// Review is deliberately not reversible into `active` here. Deciding a
+	// book is servable is that one pass's job, and a second writer with
+	// its own opinion is how the two end up disagreeing.
+	SetCatalogBookReview(ctx context.Context, libraryID, bookID, reason string, at time.Time) (bool, error)
+	// ListBooksInReview pages one library's books awaiting an
+	// administrator's decision, oldest first, under the manage role.
+	// Without it the review status is a dead end rather than a queue.
+	ListBooksInReview(ctx context.Context, userID, libraryID string, limit int) ([]CatalogBook, error)
 	// TrashCatalogBook moves one book out of the catalog under the manage
 	// role. Its files are retained, so the blobs stay referenced, stay GC
 	// roots, and keep counting against quota: that is what stops an

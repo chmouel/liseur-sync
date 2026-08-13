@@ -56,6 +56,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("BlobReconciliation", func(t *testing.T) {
 		testBlobReconciliation(t, open)
 	})
+	t.Run("WatchedSourceReconciliation", func(t *testing.T) {
+		testWatchedSourceReconciliation(t, open)
+	})
+	t.Run("WatchedStoreRejectsBadInput", func(t *testing.T) {
+		testWatchedStoreRejectsBadInput(t, open)
+	})
 	t.Run("CatalogAvailabilityReconciliation", func(t *testing.T) {
 		testCatalogAvailabilityReconciliation(t, open)
 	})
