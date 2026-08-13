@@ -74,7 +74,12 @@ location / {
 ```
 
 `insecure_http = true` exists only for LAN-only setups where TLS is
-genuinely out of scope.
+genuinely out of scope. It is a top-level key, so it must appear above
+the first `[table]` header in the config file — TOML binds a bare key to
+the table above it, and `insecure_http` written under `[content]` becomes
+`content.insecure_http`. The server refuses to start on an unrecognized
+key rather than ignoring one, so a misplaced setting is reported instead
+of silently doing nothing.
 
 ### Optional: extra auth at the proxy
 
