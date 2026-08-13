@@ -622,8 +622,7 @@ than silently becoming a new edition of the book that used to be there.
 `admin list-review` and `clear-review` are how that question gets
 answered.
 
-M10 is half done: editing and categorization have shipped, search has
-not. A librarian corrects any book from its page and browses a library by
+M10 has shipped. A librarian corrects any book from its page and browses a library by
 series, contributor, tag or genre; two spellings of one name can be
 folded together. Two rules run through the whole of it. A correction is
 kept as the person's own — it locks its field, so re-reading the file
@@ -632,6 +631,18 @@ book and pressing Save asserts nothing. Merges are explicit for the same
 reason renaming onto a taken name is refused rather than silently folded:
 deciding two names are one thing is a decision about identity, and only a
 person can make it.
+
+Search is how a large library stops needing to be browsed at all. One
+box matches words against everything a book says about itself, and what
+the matches have in common comes back as facets that narrow with a click.
+The words are only ever words: nothing typed into the box can change how
+the query is read. Both storage backends answer the same question the
+same way, which cost a deliberately plain configuration on PostgreSQL —
+no stemming, and diacritics folded in Go rather than by an extension a
+managed database might not have. Search has no way to ask about reading
+state, and that absence is the design: a catalog credential must not be
+able to observe what somebody has read, and a feature that does not exist
+cannot leak.
 
 ## 10. Future work (explicitly out of v1)
 
