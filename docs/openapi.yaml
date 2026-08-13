@@ -954,6 +954,48 @@ paths:
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
+  /v1/books/{id}/cover:
+    get:
+      tags: [library]
+      summary: Fetch a book's cover image
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Renders the cover declared by the publication and serves it as a
+        JPEG. The type is always `image/jpeg` regardless of what the book
+        contains, and `X-Content-Type-Options: nosniff` is set: covers are
+        publisher-supplied bytes, and this route decides what they are.
+
+        Rendered covers are cached, so the first request for a book pays
+        for the decode and later ones do not. The `ETag` combines the
+        content digest with the size, both of which are fixed for a given
+        book, so a client that has one may reuse it indefinitely.
+
+        A book whose publication declares no cover, or one this server
+        cannot decode, answers `404`. That answer is cached too, so it
+        stays cheap for a catalog full of coverless books.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: size
+          in: query
+          required: false
+          description: |
+            `thumbnail` is a catalog grid image and the default; `full` is
+            sized for a book page. Any other value is rejected rather than
+            treated as the default.
+          schema: { type: string, enum: [thumbnail, full], default: thumbnail }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The rendered cover
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "304": { description: The client's copy is current }
+        "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
   /opds/v1.2:
     get:
       tags: [opds]

@@ -400,6 +400,7 @@ func cmdServe(args []string) error {
 		LoginLimiter: loginLimiter,
 		Content:      cas,
 		Blobs:        cas,
+		Covers:       cas,
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,

@@ -66,6 +66,7 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Content:      cas,
 		Blobs:        cas,
+		Covers:       cas,
 	}
 	handler := srv.Routes()
 	ts := httptest.NewServer(handler)
@@ -640,6 +641,7 @@ func (f *uploadFixture) rebuild(t *testing.T, apply func(*config.Config)) {
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Content:      f.cas,
 		Blobs:        f.cas,
+		Covers:       f.cas,
 	}
 	f.ts.Close()
 	f.handler = srv.Routes()
