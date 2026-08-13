@@ -291,8 +291,10 @@ func CanTransitionIngest(from, to IngestState) bool {
 		return to == IngestExtracted || to == IngestQuarantined || to == IngestFailed
 	case IngestExtracted:
 		return to == IngestQuarantined || to == IngestFailed
-	case IngestQuarantined, IngestFailed:
+	case IngestQuarantined:
 		return to == IngestStaged
+	case IngestFailed:
+		return to == IngestReceived || to == IngestStaged
 	default:
 		return false
 	}
@@ -451,6 +453,10 @@ func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (Inges
 	}
 	if change.NextState == IngestStaged &&
 		(next.ContentSHA256 == nil || next.StagingPath == nil) {
+		return IngestJob{}, ErrInvalidTransition
+	}
+	if change.NextState == IngestReceived &&
+		(next.ContentSHA256 != nil || next.StagingPath != nil) {
 		return IngestJob{}, ErrInvalidTransition
 	}
 	next.State = change.NextState

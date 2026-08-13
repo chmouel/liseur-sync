@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -13,6 +14,19 @@ const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
 	j.book_id, j.error_code, j.error_detail, j.retry_count, j.revision,
 	j.created_at, j.updated_at, j.expires_at`
+
+const ingestTimeFormat = "2006-01-02T15:04:05.000000000Z"
+
+func formatIngestTime(value time.Time) string {
+	return value.UTC().Format(ingestTimeFormat)
+}
+
+func formatIngestTimePtr(value *time.Time) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: formatIngestTime(*value), Valid: true}
+}
 
 func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error) {
 	var job store.IngestJob
@@ -113,7 +127,7 @@ func (s *Store) CreateIngestJob(
 		 ON CONFLICT DO NOTHING`,
 		request.ID, actorUserID, string(request.Source), nullStr(request.ClientKey),
 		request.RequestFingerprint, nullStr(request.SourceRelativePath),
-		formatTime(request.CreatedAt), formatTime(request.CreatedAt),
+		formatIngestTime(request.CreatedAt), formatIngestTime(request.CreatedAt),
 		actorUserID, request.LibraryID, actorUserID,
 		string(request.Source), string(request.Source))
 	if err != nil {
@@ -221,7 +235,7 @@ func (s *Store) ListIngestJobs(
 	args := []any{actorUserID, libraryID, actorUserID}
 	if after != nil {
 		query += ` AND (j.created_at > ? OR (j.created_at = ? AND j.id > ?))`
-		cursorTime := formatTime(after.CreatedAt)
+		cursorTime := formatIngestTime(after.CreatedAt)
 		args = append(args, cursorTime, cursorTime, after.ID)
 	}
 	query += ` ORDER BY j.created_at, j.id LIMIT ?`
@@ -268,8 +282,8 @@ func (s *Store) TransitionIngestJob(
 		 WHERE user_id = ? AND id = ? AND state = ? AND revision = ?`,
 		string(next.State), next.BytesReceived, nullStr(next.ContentSHA256),
 		nullStr(next.StagingPath), nullStr(next.ErrorCode), nullStr(next.ErrorDetail),
-		next.RetryCount, next.Revision, formatTime(next.UpdatedAt),
-		formatTimePtr(next.ExpiresAt), userID, jobID,
+		next.RetryCount, next.Revision, formatIngestTime(next.UpdatedAt),
+		formatIngestTimePtr(next.ExpiresAt), userID, jobID,
 		string(change.ExpectedState), change.ExpectedRevision)
 	if err != nil {
 		return store.IngestJob{}, err

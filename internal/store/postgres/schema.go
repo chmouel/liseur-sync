@@ -656,4 +656,11 @@ ALTER TABLE ingest_jobs
     ADD COLUMN revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1);
 `
 
-var migrations = []string{schema, migration2, migration3, migration4, migration5, migration6, migration7}
+// Migration 8 is SQLite-only timestamp normalization. Keep an empty
+// PostgreSQL migration so schema version numbers stay aligned.
+const migration8 = `SELECT 1;`
+
+var migrations = []string{
+	schema, migration2, migration3, migration4, migration5, migration6,
+	migration7, migration8,
+}

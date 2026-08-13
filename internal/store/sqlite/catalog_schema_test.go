@@ -111,3 +111,53 @@ func TestSplitMovesMissingCatalogMapping(t *testing.T) {
 		t.Fatalf("catalog aliases after split: %v %v", aliases, err)
 	}
 }
+
+func TestMigration8NormalizesIngestTimestamps(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := s.CreateUser(ctx, store.User{
+		ID: "u1", Name: "alice", Argon2Hash: "x", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateLibrary(ctx, store.Library{
+		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
+		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO ingest_jobs
+		 (id, user_id, library_id, quota_user_id, source, state,
+		  request_fingerprint, revision, created_at, updated_at)
+		 VALUES ('job1', 'u1', 'lib1', 'u1', 'upload', 'received',
+		         'request', 1, '2026-01-02T03:04:05.1Z',
+		         '2026-01-02T03:04:05.11Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM schema_migrations WHERE version = 8`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var created, updated string
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT created_at, updated_at FROM ingest_jobs WHERE id = 'job1'`).
+		Scan(&created, &updated); err != nil {
+		t.Fatal(err)
+	}
+	if created != "2026-01-02T03:04:05.100000000Z" ||
+		updated != "2026-01-02T03:04:05.110000000Z" {
+		t.Fatalf("timestamps not normalized: %q %q", created, updated)
+	}
+}

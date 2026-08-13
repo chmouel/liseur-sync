@@ -18,7 +18,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	reader := MkUser(t, s, "ingest-reader")
 	manager := MkUser(t, s, "ingest-manager")
 	outsider := MkUser(t, s, "ingest-outsider")
-	now := time.Now().UTC()
+	now := time.Date(2026, time.January, 2, 3, 4, 5, 100_000_000, time.UTC)
 	managed := store.Library{
 		ID: "ingest-managed", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
 		Kind: store.LibraryManaged, Name: "Managed", CreatedAt: now,
@@ -119,7 +119,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		if _, created, err := s.CreateIngestJob(ctx, manager.ID, store.IngestJobRequest{
 			ID: fmt.Sprintf("job-%d", i), LibraryID: managed.ID,
 			Source: store.IngestUpload, RequestFingerprint: fmt.Sprintf("request-%d", i),
-			CreatedAt: now.Add(time.Duration(i-1) * time.Minute),
+			CreatedAt: now.Add(time.Duration(i-1) * 10 * time.Millisecond),
 		}); err != nil || !created {
 			t.Fatalf("create pagination job %d: %v %v", i, created, err)
 		}
@@ -190,6 +190,36 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		t.Fatalf("competing transitions: %d succeeded, %d stale", succeeded, stale)
 	}
 
+	prestage, created, err := s.CreateIngestJob(ctx, manager.ID, store.IngestJobRequest{
+		ID: "job-prestage-failure", LibraryID: managed.ID,
+		Source: store.IngestUpload, RequestFingerprint: "prestage-failure",
+		CreatedAt: now.Add(30 * time.Millisecond),
+	})
+	if err != nil || !created {
+		t.Fatalf("create pre-staging failure job: %+v %v %v", prestage, created, err)
+	}
+	expiry := now.Add(24 * time.Hour)
+	prestage, err = s.TransitionIngestJob(ctx, manager.ID, prestage.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
+			NextState: store.IngestFailed, ErrorCode: "upload_interrupted",
+			ExpiresAt: &expiry, UpdatedAt: now.Add(time.Minute),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prestage, err = s.TransitionIngestJob(ctx, manager.ID, prestage.ID,
+		store.IngestJobTransition{
+			ExpectedState: store.IngestFailed, ExpectedRevision: prestage.Revision,
+			NextState: store.IngestReceived, IncrementRetry: true,
+			UpdatedAt: now.Add(2 * time.Minute),
+		})
+	if err != nil || prestage.State != store.IngestReceived ||
+		prestage.RetryCount != 1 || prestage.ContentSHA256 != nil ||
+		prestage.StagingPath != nil || prestage.ErrorCode != nil {
+		t.Fatalf("pre-staging retry: %+v %v", prestage, err)
+	}
+
 	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
@@ -250,7 +280,6 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expiry := now.Add(24 * time.Hour)
 	retryJob, err = s.TransitionIngestJob(ctx, manager.ID, retryJob.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestStaged, ExpectedRevision: retryJob.Revision,

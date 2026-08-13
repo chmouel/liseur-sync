@@ -647,4 +647,39 @@ ALTER TABLE ingest_jobs
     ADD COLUMN revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1);
 `
 
-var migrations = []string{schema, migration2, migration3, migration4, migration5, migration6, migration7}
+const migration8 = `
+UPDATE ingest_jobs
+SET created_at =
+        CASE
+            WHEN instr(created_at, '.') = 0
+                THEN substr(created_at, 1, length(created_at) - 1) || '.000000000Z'
+            ELSE substr(created_at, 1, instr(created_at, '.')) ||
+                 substr(substr(created_at, instr(created_at, '.') + 1,
+                               length(created_at) - instr(created_at, '.') - 1) ||
+                        '000000000', 1, 9) || 'Z'
+        END,
+    updated_at =
+        CASE
+            WHEN instr(updated_at, '.') = 0
+                THEN substr(updated_at, 1, length(updated_at) - 1) || '.000000000Z'
+            ELSE substr(updated_at, 1, instr(updated_at, '.')) ||
+                 substr(substr(updated_at, instr(updated_at, '.') + 1,
+                               length(updated_at) - instr(updated_at, '.') - 1) ||
+                        '000000000', 1, 9) || 'Z'
+        END,
+    expires_at =
+        CASE
+            WHEN expires_at IS NULL THEN NULL
+            WHEN instr(expires_at, '.') = 0
+                THEN substr(expires_at, 1, length(expires_at) - 1) || '.000000000Z'
+            ELSE substr(expires_at, 1, instr(expires_at, '.')) ||
+                 substr(substr(expires_at, instr(expires_at, '.') + 1,
+                               length(expires_at) - instr(expires_at, '.') - 1) ||
+                        '000000000', 1, 9) || 'Z'
+        END;
+`
+
+var migrations = []string{
+	schema, migration2, migration3, migration4, migration5, migration6,
+	migration7, migration8,
+}
