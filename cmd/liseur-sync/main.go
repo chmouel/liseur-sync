@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -258,6 +260,77 @@ func runIngestPromotionWorker(
 	}
 }
 
+// runWatchedScanWorker sweeps every watched library on an interval.
+//
+// There is no filesystem-notification path. Only a completed full sweep
+// may conclude that a book is gone (ADR-0002), so a notification could
+// only ever reduce latency for additions, and a server that acts on them
+// has two code paths where one of them is not allowed to reach the
+// conclusion that matters.
+func runWatchedScanWorker(
+	ctx context.Context,
+	st store.Store,
+	cas *content.CAS,
+	cfg config.Config,
+) error {
+	interval := time.Duration(cfg.Content.WatchedScanInterval) * time.Second
+	if interval <= 0 {
+		return nil
+	}
+	opts := content.WatchedSyncOptions{
+		Scan: content.ScanLimits{
+			MaxFiles: cfg.Content.WatchedMaxFiles,
+			MaxDepth: cfg.Content.WatchedMaxDepth,
+		},
+		MaxFileBytes:    cfg.Content.MaxUploadBytes,
+		QuotaLimitBytes: watchedQuotaLimit(cfg),
+	}
+	for {
+		report, err := content.RunWatchedScanPass(ctx, st, cas, opts, time.Now)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if fatalWorkerError(err) {
+				return err
+			}
+			slog.Error("watched scan failed, retrying next tick", "err", err)
+		}
+		if report.Changed() {
+			slog.Info("watched scan pass complete",
+				"libraries", report.Libraries,
+				"swept", report.Swept,
+				"unavailable", report.Unavailable,
+				"ingested", report.Ingested,
+				"unchanged", report.Unchanged,
+				"rehashed", report.Rehashed,
+				"review", report.Review,
+				"marked_absent", report.MarkedAbsent,
+				"failed", report.Failed)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+// watchedQuotaLimit is the same ceiling uploads are charged against. A
+// watched snapshot costs its quota principal exactly what an upload of the
+// same file would (ADR-0002).
+func watchedQuotaLimit(cfg config.Config) *int64 {
+	if cfg.Content.QuotaBytes <= 0 {
+		return nil
+	}
+	limit := cfg.Content.QuotaBytes
+	return &limit
+}
+
 // trashPurgeInterval is how often expired trash is collected. Deletion is
 // not urgent — retention is measured in weeks — and each tick is bounded,
 // so an hour keeps the work small without letting the bytes linger.
@@ -306,10 +379,31 @@ func runTrashPurgeWorker(
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		slog.Error("fatal", "err", err)
-		os.Exit(1)
+	if code := runMain(os.Args[1:], os.Stderr); code != 0 {
+		os.Exit(code)
 	}
+}
+
+type usageExit struct {
+	text string
+	code int
+}
+
+func (e usageExit) Error() string {
+	return e.text
+}
+
+func runMain(args []string, stderr io.Writer) int {
+	if err := run(args); err != nil {
+		var usage usageExit
+		if errors.As(err, &usage) {
+			fmt.Fprint(stderr, usage.text)
+			return usage.code
+		}
+		slog.Error("fatal", "err", err)
+		return 1
+	}
+	return 0
 }
 
 const topUsage = `usage: liseur-sync <command> [flags]
@@ -321,26 +415,42 @@ const topUsage = `usage: liseur-sync <command> [flags]
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New(topUsage)
+		return usageExit{text: topUsage, code: 1}
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
-		fmt.Print(topUsage)
-		return nil
+		return usageExit{text: topUsage, code: 0}
 	case "serve":
 		return cmdServe(args[1:])
 	case "admin":
 		return cmdAdmin(args[1:])
 	default:
-		return fmt.Errorf("unknown subcommand %q (want serve|admin)", args[0])
+		return usageExit{
+			text: fmt.Sprintf("unknown subcommand %q (want serve|admin)\n%s",
+				args[0], topUsage),
+			code: 1,
+		}
 	}
+}
+
+func flagUsage(fs *flag.FlagSet) string {
+	var buf bytes.Buffer
+	old := fs.Output()
+	fs.SetOutput(&buf)
+	fs.Usage()
+	fs.SetOutput(old)
+	return buf.String()
 }
 
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	cfgPath := fs.String("config", "liseur-sync.toml", "path to TOML config file")
 	if err := fs.Parse(args); err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			return usageExit{text: flagUsage(fs), code: 0}
+		}
+		return usageExit{text: err.Error() + "\n" + flagUsage(fs), code: 1}
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -440,7 +550,7 @@ func cmdServe(args []string) error {
 
 	// Each producer sends at most one terminal error. Buffer all producers so
 	// no goroutine can block reporting while coordinated shutdown waits for it.
-	errCh := make(chan error, 5)
+	errCh := make(chan error, 6)
 	validationDone := make(chan struct{})
 	go func() {
 		defer close(validationDone)
@@ -468,6 +578,13 @@ func cmdServe(args []string) error {
 		defer close(trashDone)
 		if err := runTrashPurgeWorker(bgCtx, st, cfg); err != nil {
 			errCh <- fmt.Errorf("trash purge worker: %w", err)
+		}
+	}()
+	watchedDone := make(chan struct{})
+	go func() {
+		defer close(watchedDone)
+		if err := runWatchedScanWorker(bgCtx, st, cas, cfg); err != nil {
+			errCh <- fmt.Errorf("watched scan worker: %w", err)
 		}
 	}()
 	serverDone := make(chan struct{})
@@ -499,27 +616,37 @@ func cmdServe(args []string) error {
 	<-extractionDone
 	<-promotionDone
 	<-trashDone
+	<-watchedDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)
 }
 
 func cmdAdmin(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			return usageExit{text: admin.Usage, code: 0}
+		}
+	}
 	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	cfgPath := fs.String("config", "liseur-sync.toml", "path to TOML config file")
 	// Standard flag parsing: flags must precede the subcommand.
 	if err := fs.Parse(args); err != nil {
-		return err
+		if errors.Is(err, flag.ErrHelp) {
+			return usageExit{text: admin.Usage, code: 0}
+		}
+		return usageExit{text: err.Error() + "\n" + admin.Usage, code: 1}
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return errors.New(admin.Usage)
+		return usageExit{text: admin.Usage, code: 1}
 	}
 	// Help must not need a working database: an operator who cannot
 	// connect still has to be able to find out what the commands are.
 	switch rest[0] {
 	case "help", "-h", "--help":
-		fmt.Print(admin.Usage)
-		return nil
+		return usageExit{text: admin.Usage, code: 0}
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -533,5 +660,12 @@ func cmdAdmin(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	return admin.Run(st, contentRootFor(cfg), rest)
+	if err := admin.Run(st, contentRootFor(cfg), rest); err != nil {
+		var usage admin.UsageError
+		if errors.As(err, &usage) {
+			return usageExit{text: usage.Error(), code: usage.ExitCode}
+		}
+		return err
+	}
+	return nil
 }
