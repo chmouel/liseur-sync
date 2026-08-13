@@ -10,9 +10,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func digestOf(data []byte) string {
@@ -240,6 +244,97 @@ func TestConcurrentPromotionDeduplicates(t *testing.T) {
 			t.Fatalf("deduplicated stage remains: %v", err)
 		}
 	}
+}
+
+func TestListBlobsInventoriesOnlyVerifiedFinals(t *testing.T) {
+	cas := openTestCAS(t)
+	var want []Blob
+	for _, item := range []struct {
+		job  string
+		data string
+	}{
+		{job: "inventory-b", data: "second"},
+		{job: "inventory-a", data: "first"},
+	} {
+		staged, err := cas.Stage(context.Background(), item.job,
+			bytes.NewReader([]byte(item.data)), int64(len(item.data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, err := cas.Promote(
+			context.Background(), staged.Path, staged.SHA256, staged.Size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, Blob{
+			Path: blob.Path, SHA256: blob.SHA256, Size: blob.Size,
+		})
+	}
+	if _, err := cas.Stage(context.Background(), "inventory-staged",
+		bytes.NewReader([]byte("not final")), 9); err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(want, func(i, j int) bool { return want[i].SHA256 < want[j].SHA256 })
+	got, err := cas.ListBlobs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("blob inventory: got %+v want %+v", got, want)
+	}
+}
+
+func TestListBlobsRejectsCorruptionAndUnexpectedEntries(t *testing.T) {
+	t.Run("corrupt blob", func(t *testing.T) {
+		cas := openTestCAS(t)
+		data := []byte("original")
+		staged, err := cas.Stage(
+			context.Background(), "inventory-corrupt", bytes.NewReader(data), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blob, err := cas.Promote(
+			context.Background(), staged.Path, staged.SHA256, staged.Size)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(cas.Root(), filepath.FromSlash(blob.Path))
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("tampered"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cas.ListBlobs(context.Background()); !errors.Is(err, ErrCorruptBlob) {
+			t.Fatalf("corrupt inventory: %v", err)
+		}
+	})
+	t.Run("unexpected entry", func(t *testing.T) {
+		cas := openTestCAS(t)
+		if err := os.WriteFile(
+			filepath.Join(cas.Root(), "sha256", "unexpected"),
+			[]byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cas.ListBlobs(context.Background()); !errors.Is(err, ErrUnsafePath) {
+			t.Fatalf("unsafe inventory: %v", err)
+		}
+	})
+	t.Run("fifo blob", func(t *testing.T) {
+		cas := openTestCAS(t)
+		digest := digestOf([]byte("fifo"))
+		leaf := filepath.Join(
+			cas.Root(), "sha256", digest[:2], digest[2:])
+		if err := os.MkdirAll(leaf, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Mkfifo(filepath.Join(leaf, "file.epub"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cas.ListBlobs(context.Background()); !errors.Is(err, ErrCorruptBlob) {
+			t.Fatalf("FIFO inventory: %v", err)
+		}
+	})
 }
 
 func TestPromotionRejectsMutatedStage(t *testing.T) {
