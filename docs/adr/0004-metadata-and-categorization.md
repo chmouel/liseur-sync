@@ -111,9 +111,13 @@ External metadata cannot be a required ingest dependency.
    contributors, and cover references from EPUB2 and EPUB3 metadata. The
    ingestion worker now durably persists that bounded embedded result as a
    canonical JSON snapshot in the atomic `validated -> extracted` transition.
+   The pure scalar precedence and lock engine is implemented: a blank
+   candidate never clears a value, a locked field only accepts manual edits,
+   an unlocked field accepts a strictly higher-precedence candidate or a
+   refresh from its own source, and a manual edit locks the field.
    Materializing the snapshot into catalog fields and normalized metadata
-   entities, precedence, filename parsing, cover extraction, and automatic
-   promotion remain.
+   entities, entity-set precedence, filename parsing, cover extraction, and
+   automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.

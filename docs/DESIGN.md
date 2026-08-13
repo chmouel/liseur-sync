@@ -603,9 +603,13 @@ and EPUB3 metadata. An independent worker revalidates each immutable artifact
 and atomically persists the bounded embedded metadata as canonical JSON while
 advancing `validated -> extracted`; it supports lost-promotion final blobs,
 retains content failures, and uses the same revision-safe shutdown behavior.
+The shared scalar precedence and lock engine is implemented as a pure package:
+a blank candidate never clears a value, a locked field only accepts manual
+edits, an unlocked field accepts a strictly higher-precedence candidate or a
+refresh from its own source, and a manual edit locks the field.
 Materializing that snapshot into catalog fields and metadata entities,
-precedence and filename parsing, cover extraction/transcoding, automatic
-promotion, catalog availability reconciliation, last-reference
+entity-set precedence and filename parsing, cover extraction/transcoding,
+automatic promotion, catalog availability reconciliation, last-reference
 deletion/trash, backup verification, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
