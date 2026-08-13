@@ -181,7 +181,9 @@ server disk allocation.
    deletion, trash, blob GC, and backup verification remain. The configured
    private content root and persistent Docker/Podman volume wiring are
    implemented, together with strict descriptor-relative inventory and
-   verification of durable final blobs.
+   verification of durable final blobs. Database reconciliation records
+   missing blobs and grace-period orphan marks without mutating catalog
+   availability or deleting content.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

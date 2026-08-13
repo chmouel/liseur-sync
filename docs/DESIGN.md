@@ -587,8 +587,9 @@ stale stages, accepts an already-durable final blob after a lost promotion
 response, and terminalizes missing or corrupt artifacts. The server opens the
 configured private CAS and recovers every pre-existing nonterminal job before
 listening. The CAS also supports strict verified final-blob inventory.
-Database comparison, bounded extraction, the rest of the CAS lifecycle,
-ingest workers, and administration remain.
+Database reconciliation records missing content and grace-period orphan marks
+without deletion. Startup comparison, bounded extraction, the rest of the CAS
+lifecycle, ingest workers, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 
