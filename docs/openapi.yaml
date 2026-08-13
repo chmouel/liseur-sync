@@ -628,7 +628,7 @@ paths:
                         minutes: { type: number }
                         pages: { type: number }
 
-  /v1/library/{library}/upload:
+  /v1/libraries/{library}/upload:
     post:
       tags: [library]
       summary: Upload an EPUB into a library
@@ -638,7 +638,7 @@ paths:
         The response is `202`, not `201`: the bytes are stored, but the
         book does not exist yet. Validation, metadata extraction and
         promotion happen in background passes; poll
-        `/v1/library/jobs/{id}` until the state is `promoted` (the job
+        `/v1/ingest/jobs/{id}` until the state is `promoted` (the job
         then carries `book_id`) or `failed`/`quarantined`.
 
         The token scope is necessary but not sufficient — the caller
@@ -689,7 +689,126 @@ paths:
         "415": { $ref: "#/components/responses/Error", description: "Not multipart/form-data" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
-  /v1/library/jobs/{id}:
+  /v1/libraries:
+    get:
+      tags: [library]
+      summary: Libraries the caller can read
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Where a catalog client starts: every other route needs a library
+        id. `role` is the caller's effective role, so a client knows
+        whether to offer uploading.
+      responses:
+        "200":
+          description: Accessible libraries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  libraries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        library_id: { type: string, format: uuid }
+                        name: { type: string }
+                        kind: { type: string, enum: [managed, watched] }
+                        role: { type: string, enum: [read, manage] }
+                        created_at: { type: string, format: date-time }
+
+  /v1/libraries/{library}/books:
+    get:
+      tags: [library]
+      summary: Books in a library
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Oldest first, cursor-paginated. Trashed books are excluded.
+        `next_cursor` appears only when a further page exists, so a
+        client pages until it is absent. Treat the cursor as opaque.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: A `next_cursor` from a previous page.
+      responses:
+        "200":
+          description: One page of the catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [books]
+                properties:
+                  books:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogBook" }
+                  next_cursor:
+                    type: string
+                    description: Absent on the last page.
+        "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
+  /v1/books/{id}:
+    get:
+      tags: [library]
+      summary: One book, with its downloadable files
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The book
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CatalogBook"
+                  - type: object
+                    properties:
+                      files:
+                        type: array
+                        description: Available files only.
+                        items:
+                          type: object
+                          properties:
+                            file_id: { type: string }
+                            media_type: { type: string }
+                            sha256: { type: string }
+                            filename: { type: string }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+
+  /v1/books/{id}/download:
+    get:
+      tags: [library]
+      summary: Download a book's file
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Serves the newest available file. Supports `HEAD`, byte ranges
+        and conditional requests; the `ETag` is the content digest, so
+        it never changes for a given file. `Content-Disposition` carries
+        a sanitized filename that is a label, never a path.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The file
+          content:
+            application/epub+zip:
+              schema: { type: string, format: binary }
+        "206": { description: The requested byte range }
+        "304": { description: The client's copy is current }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
+  /v1/ingest/jobs/{id}:
     get:
       tags: [library]
       summary: Progress of one ingest job
@@ -739,6 +858,24 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    CatalogBook:
+      type: object
+      description: |
+        One book in a library. Optional metadata fields are omitted when
+        unknown rather than sent empty, so a client can tell "no
+        publisher recorded" from "publisher is blank".
+      required: [book_id, library_id, title, status, created_at, updated_at]
+      properties:
+        book_id: { type: string, format: uuid }
+        library_id: { type: string, format: uuid }
+        title: { type: string }
+        subtitle: { type: string }
+        description: { type: string }
+        publisher: { type: string }
+        published_date: { type: string }
+        status: { type: string, enum: [active, missing, trashed, review] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     IngestJob:
       type: object
       description: |

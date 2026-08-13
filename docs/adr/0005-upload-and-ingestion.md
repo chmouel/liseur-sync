@@ -122,7 +122,7 @@ unit.
 
 ### Upload interfaces
 
-`POST /v1/library/{library}/upload` accepts multipart uploads for a managed
+`POST /v1/libraries/{library}/upload` accepts multipart uploads for a managed
 library and returns a job resource. API and web clients send a bounded
 client-generated `Idempotency-Key`, unique per user and target library.
 Replaying a key returns the original job *without reading the body*: staging
@@ -187,12 +187,14 @@ name a stable job and reason instead of losing state when a request ends.
    per-user bounds arrived with the upload path in phase 4.
 3. **Metadata and cover extraction.** Metadata done — see ADR-0004 phase 1.
    **Remaining:** cover extraction and transcoding.
-4. **Upload API and htmx UI.** API done: `POST /v1/library/{library}/upload`
+4. **Upload API and htmx UI.** API done: `POST /v1/libraries/{library}/upload`
    streams a multipart body straight into CAS staging, bounded by
    `max_upload_bytes` and the user's `quota_bytes`, and
-   `GET /v1/library/jobs/{id}` reports progress. **Remaining:** the htmx
-   upload UI, and an `admin` subcommand to create libraries and grant
-   access — without it there is no library to upload into.
+   `GET /v1/ingest/jobs/{id}` reports progress. A commit that fails after
+   staging deletes its own bytes, since nothing in the database references
+   them; a crash in that same window still orphans one file per in-flight
+   request, which needs a sweep over abandoned `received` jobs.
+   **Remaining:** the htmx upload UI.
 
 **Remaining elsewhere:** catalog availability reconciliation, and the
 watched-folder scanner in ADR-0002.

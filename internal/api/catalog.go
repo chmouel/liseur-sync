@@ -1,0 +1,358 @@
+package api
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"mime"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/store"
+)
+
+// defaultCatalogPageSize is what a client gets when it does not ask. The
+// cap matches the store's own bound.
+const (
+	defaultCatalogPageSize = 50
+	maxCatalogPageSize     = 200
+)
+
+// BlobStore is the read side of the CAS: what a download needs and nothing
+// more.
+type BlobStore interface {
+	OpenBlob(ctx context.Context, sha256 string) (*os.File, int64, error)
+}
+
+// HandleLibraries implements GET /v1/libraries — every library the caller
+// can read, with the role they hold in each. This is where a client starts,
+// because every other catalog route needs a library id.
+func (s *Server) HandleLibraries(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	libs, err := s.St.ListLibraries(r.Context(), tok.UserID, store.LibraryRoleRead)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "library lookup failed")
+		return
+	}
+	out := make([]map[string]any, 0, len(libs))
+	for _, l := range libs {
+		out = append(out, map[string]any{
+			"library_id": l.Library.ID,
+			"name":       l.Library.Name,
+			"kind":       string(l.Library.Kind),
+			"role":       string(l.Role),
+			"created_at": l.Library.CreatedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraries": out})
+}
+
+// HandleLibraryBooks implements GET /v1/libraries/{library}/books.
+func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	libraryID := r.PathValue("library")
+	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	limit, err := catalogPageSize(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	after, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, libraryID, after, limit)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "library not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	out := make([]map[string]any, 0, len(books))
+	for _, b := range books {
+		out = append(out, catalogBookJSON(b))
+	}
+	body := map[string]any{"books": out}
+	// Only advertise a cursor on a full page. A short page is the end of
+	// the catalog, and handing back a cursor there invites a pointless
+	// round trip that returns nothing.
+	if len(books) == limit {
+		last := books[len(books)-1]
+		body["next_cursor"] = encodeCatalogCursor(store.CatalogBookCursor{
+			CreatedAt: last.CreatedAt, ID: last.ID,
+		})
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// HandleBook implements GET /v1/books/{id}, the detail view. It
+// includes the book's files so a client can choose what to download
+// without a second round trip.
+func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	bookID := r.PathValue("id")
+	book, err := s.St.CatalogBookByID(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		writeCatalogError(w, err, "book not found")
+		return
+	}
+	files, err := s.St.ListBookFiles(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "book lookup failed")
+		return
+	}
+	body := catalogBookJSON(book)
+	out := make([]map[string]any, 0, len(files))
+	for _, f := range files {
+		if f.Availability != store.BookFileAvailable {
+			continue
+		}
+		out = append(out, map[string]any{
+			"file_id":    f.ID,
+			"media_type": f.MediaType,
+			"sha256":     f.BlobSHA256,
+			"filename":   f.OriginalFilename,
+		})
+	}
+	body["files"] = out
+	writeJSON(w, http.StatusOK, body)
+}
+
+// HandleBookDownload implements GET and HEAD
+// /v1/books/{id}/download. It hands the open file to
+// http.ServeContent, which is what gives us range requests, conditional
+// requests and HEAD without writing any of that by hand.
+func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if s.Blobs == nil {
+		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
+		return
+	}
+	bookID := r.PathValue("id")
+	files, err := s.St.ListBookFiles(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		writeCatalogError(w, err, "book not found")
+		return
+	}
+	var file *store.BookFile
+	for i := range files {
+		if files[i].Availability == store.BookFileAvailable {
+			file = &files[i]
+			break
+		}
+	}
+	if file == nil {
+		// The book exists but its bytes do not — a file marked missing by
+		// reconciliation, or superseded by a newer one that has gone. That
+		// is not a 404 on the book; it is the content being gone.
+		writeError(w, http.StatusGone, "no downloadable file for this book")
+		return
+	}
+
+	// ServeContent finds the length by seeking, so the size the CAS
+	// reports is redundant here.
+	blob, _, err := s.Blobs.OpenBlob(r.Context(), file.BlobSHA256)
+	if err != nil {
+		if errors.Is(err, content.ErrStageMissing) {
+			writeError(w, http.StatusGone, "content is no longer stored")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "download failed")
+		return
+	}
+	defer blob.Close()
+
+	w.Header().Set("Content-Type", downloadMediaType(file.MediaType))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", contentDisposition(downloadFilename(*file)))
+	// The digest names the content, so it is a strong validator and the
+	// content behind it can never change.
+	w.Header().Set("ETag", `"`+file.BlobSHA256+`"`)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, "", file.UpdatedAt.UTC(), blob)
+}
+
+func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, notFound)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "catalog lookup failed")
+}
+
+func catalogBookJSON(b store.CatalogBook) map[string]any {
+	out := map[string]any{
+		"book_id":    b.ID,
+		"library_id": b.LibraryID,
+		"title":      b.Title,
+		"status":     string(b.Status),
+		"created_at": b.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at": b.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	// Omit empty optional metadata rather than sending empty strings: a
+	// client showing "Publisher: " for every book is worse than one that
+	// knows the field is absent.
+	for key, value := range map[string]string{
+		"subtitle":       b.Subtitle,
+		"description":    b.Description,
+		"publisher":      b.Publisher,
+		"published_date": b.PublishedDate,
+	} {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func catalogPageSize(raw string) (int, error) {
+	if raw == "" {
+		return defaultCatalogPageSize, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("limit must be a positive integer")
+	}
+	if n > maxCatalogPageSize {
+		return 0, fmt.Errorf("limit must be at most %d", maxCatalogPageSize)
+	}
+	return n, nil
+}
+
+// catalogCursor is the wire form of a page cursor. It is opaque on purpose:
+// clients must round-trip it rather than construct it, so the sort key can
+// change without breaking them.
+type catalogCursor struct {
+	CreatedAt string `json:"t"`
+	ID        string `json:"i"`
+}
+
+func encodeCatalogCursor(c store.CatalogBookCursor) string {
+	raw, _ := json.Marshal(catalogCursor{
+		CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339Nano),
+		ID:        c.ID,
+	})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeCatalogCursor(raw string) (*store.CatalogBookCursor, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, errors.New("malformed cursor")
+	}
+	var c catalogCursor
+	if err := json.Unmarshal(decoded, &c); err != nil {
+		return nil, errors.New("malformed cursor")
+	}
+	at, err := time.Parse(time.RFC3339Nano, c.CreatedAt)
+	if err != nil || c.ID == "" {
+		return nil, errors.New("malformed cursor")
+	}
+	return &store.CatalogBookCursor{CreatedAt: at, ID: c.ID}, nil
+}
+
+// downloadMediaType refuses to echo a stored media type that could make a
+// browser treat the download as something executable.
+func downloadMediaType(stored string) string {
+	parsed, _, err := mime.ParseMediaType(stored)
+	if err != nil || parsed == "" {
+		return "application/epub+zip"
+	}
+	switch parsed {
+	case "application/epub+zip", "application/octet-stream":
+		return parsed
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// downloadFilename derives a name for the saved file. The stored original
+// filename is attacker-influenced — it comes from a multipart header — so
+// it is never used as a path, only as a label, and only after being
+// stripped of anything that could act as one.
+func downloadFilename(f store.BookFile) string {
+	name := sanitizeFilename(f.OriginalFilename)
+	if name == "" {
+		name = "book.epub"
+	}
+	return name
+}
+
+func sanitizeFilename(raw string) string {
+	// Take the last path element under either separator, so neither
+	// "../../etc/passwd" nor a Windows path survives as a directory.
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	if idx := strings.LastIndex(raw, "/"); idx >= 0 {
+		raw = raw[idx+1:]
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			// Control characters, which could forge header lines.
+		case r == '"' || r == ';' || r == '%':
+			b.WriteRune('_')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	name := strings.Trim(b.String(), " .")
+	if name == "" || name == ".." {
+		return ""
+	}
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	return name
+}
+
+// contentDisposition emits both a plain and an RFC 5987 filename, because
+// the plain one cannot carry non-ASCII and older clients ignore the
+// encoded one.
+func contentDisposition(name string) string {
+	ascii := make([]rune, 0, len(name))
+	for _, r := range name {
+		if r > 0x7f {
+			ascii = append(ascii, '_')
+			continue
+		}
+		ascii = append(ascii, r)
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
+		string(ascii), url.PathEscape(name))
+}

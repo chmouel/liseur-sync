@@ -50,7 +50,7 @@ type ContentStore interface {
 // configured limit is never cut off by the transport bound.
 const uploadEnvelopeSlack = 1 << 20
 
-// HandleUpload implements POST /v1/library/{library}/upload.
+// HandleUpload implements POST /v1/libraries/{library}/upload.
 //
 // The handler's whole job is to get bytes onto disk durably and record that
 // it did. It does not validate the EPUB, read its metadata, or create a
@@ -166,7 +166,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, uploadJobJSON(result.Job))
 }
 
-// HandleIngestJob implements GET /v1/library/jobs/{id}, which is how a
+// HandleIngestJob implements GET /v1/ingest/jobs/{id}, which is how a
 // client learns that the book it uploaded became a book — or why it did
 // not.
 func (s *Server) HandleIngestJob(w http.ResponseWriter, r *http.Request) {

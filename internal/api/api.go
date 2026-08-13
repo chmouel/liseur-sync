@@ -22,6 +22,9 @@ type Server struct {
 	// Content stages uploaded bytes. Nil disables the upload endpoint,
 	// which then reports 503 rather than panicking.
 	Content ContentStore
+	// Blobs serves promoted content for downloads. Nil disables the
+	// download route the same way.
+	Blobs BlobStore
 	// Kosync is the kosync adapter (nil disables it regardless of
 	// config).
 	Kosync interface {

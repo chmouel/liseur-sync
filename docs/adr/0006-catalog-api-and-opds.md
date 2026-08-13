@@ -52,9 +52,15 @@ Routes remain exhaustively declared in `internal/api/routes.go`.
 
 ### Native API
 
-The `/v1/library/*` API covers accessible libraries, paginated and filtered
-books, book detail and metadata, covers, download and upload, ingestion job
-status, metadata edits, and managed-book trash/restore. Series, contributors,
+Collection and member routes live in separate namespaces — `/v1/libraries`,
+`/v1/books`, `/v1/ingest/jobs` — rather than under one `/v1/library/{id}/*`
+prefix. A single prefix cannot hold both `/v1/library/{library}/books` and
+`/v1/library/books/{id}`: `net/http` rejects the pair as ambiguous, because
+"books" is indistinguishable from a library id.
+
+The catalog API covers accessible libraries, paginated and filtered books,
+book detail and metadata, covers, download and upload, ingestion job status,
+metadata edits, and managed-book trash/restore. Series, contributors,
 tags, genres, collections, and reading lists appear as the catalog gains them
 (ADR-0004); the MVP subset is libraries, books, book detail, covers,
 download, upload, and job status.
@@ -110,9 +116,13 @@ metadata edits, work resolution, and rich sync remain native operations.
 
 1. Scope-set migration, in-place token update, API compatibility, implication
    matrix, and UI. **Implemented.**
-2. **Native catalog read and download API**, with the OpenAPI contract —
-   MVP.
-3. **OPDS 1.2 acquisition feeds**, verified against KOReader — MVP. Root
+2. **Native catalog read and download API.** Done: `GET /v1/libraries`,
+   `GET /v1/libraries/{library}/books` with opaque cursor pagination,
+   `GET /v1/books/{id}`, and `GET`/`HEAD /v1/books/{id}/download` with
+   ranges, `ETag` and conditional requests. **Remaining:** covers, and
+   filtering beyond a plain listing.
+3. **OPDS 1.2 acquisition feeds**, verified against KOReader — MVP, not
+   started. Root
    navigation, libraries, recently added, and paginated acquisition feeds
    are enough to browse and download; OpenSearch and series/contributor
    feeds are later.

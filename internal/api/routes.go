@@ -306,7 +306,7 @@ func (s *Server) Routes() *http.ServeMux {
 		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryManage, h))
 	}
-	mux.Handle("POST /v1/library/{library}/upload", manageH(s.HandleUpload))
+	mux.Handle("POST /v1/libraries/{library}/upload", manageH(s.HandleUpload))
 
 	// library-read scope: a job resource describes the caller's own
 	// upload, and is user-scoped in the store.
@@ -314,7 +314,18 @@ func (s *Server) Routes() *http.ServeMux {
 		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryRead, h))
 	}
-	mux.Handle("GET /v1/library/jobs/{id}", readH(s.HandleIngestJob))
+	// Collection and member paths are kept apart on purpose. A single
+	// /v1/library/{library}/... space cannot also hold /v1/library/jobs/{id}
+	// or /v1/library/books/{id}: net/http rejects the pair as ambiguous,
+	// because "jobs" and "books" are indistinguishable from a library id.
+	mux.Handle("GET /v1/ingest/jobs/{id}", readH(s.HandleIngestJob))
+	mux.Handle("GET /v1/libraries", readH(s.HandleLibraries))
+	mux.Handle("GET /v1/libraries/{library}/books", readH(s.HandleLibraryBooks))
+	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
+	// Download serves HEAD too: ServeContent handles it, and catalog
+	// clients probe with HEAD before fetching.
+	mux.Handle("GET /v1/books/{id}/download", readH(s.HandleBookDownload))
+	mux.Handle("HEAD /v1/books/{id}/download", readH(s.HandleBookDownload))
 
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {
