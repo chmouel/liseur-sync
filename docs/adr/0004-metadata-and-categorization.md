@@ -122,9 +122,16 @@ External metadata cannot be a required ingest dependency.
    a failure there leaves a correct but untagged book rather than undoing the
    promotion.
 
-   **Remaining:** per-library parser configuration (the pattern list is still
-   the built-in default), and cover extraction. **Next for this ADR:** cover
-   extraction, which is the most visible thing the catalog does without.
+   Covers are served rather than stored: `GET /v1/books/{id}/cover` reads
+   the cover the publication declares out of the immutable CAS blob,
+   transcodes it, and caches the result. Deriving it on demand is what
+   avoids a schema change, a promotion-path change and a backfill for
+   every book already in the catalog, and it works for those books from
+   the day it ships.
+
+   **Remaining:** per-library parser configuration — the pattern list is
+   still the built-in default, so a library whose filenames follow another
+   convention cannot say so. **Next for this ADR:** that configuration.
 
 2. Metadata edit UI, series/contributor/tag pages, and merge tools — later.
 3. Full-text search and facets — later.

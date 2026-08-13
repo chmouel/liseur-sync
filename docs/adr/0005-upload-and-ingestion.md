@@ -191,8 +191,15 @@ name a stable job and reason instead of losing state when a request ends.
    count; each upload reserves its worst case before reading a byte, and
    what does not fit is refused `503` with `Retry-After`. **Next for this
    ADR:** the sweep over abandoned `received` jobs in phase 4.
-3. **Metadata and cover extraction.** Metadata done — see ADR-0004 phase 1.
-   **Remaining:** cover extraction and transcoding.
+3. **Metadata and cover extraction.** Done. Metadata is ADR-0004 phase 1.
+   Covers are read from the CAS blob on demand rather than at ingest, and
+   transcoded to a bounded JPEG: the decoders the server registers are the
+   allowlist, so SVG and other non-raster sources simply fail to decode and
+   the book reports no cover. Dimensions are checked from the image header
+   before any pixels are decoded, because a few-kilobyte file declaring
+   30000x30000 is a memory bomb no byte cap catches. Rendered covers are
+   cached outside the blob tree, where a backup can skip them and an
+   operator can delete them (ADR-0002).
 4. **Upload API and htmx UI.** API done: `POST /v1/libraries/{library}/upload`
    streams a multipart body straight into CAS staging, bounded by
    `max_upload_bytes` and the user's `quota_bytes`, and

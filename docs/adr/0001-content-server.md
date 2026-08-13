@@ -125,34 +125,33 @@ rather than by how interesting it is to build.
 ([ADR-0003](0003-catalog-work-identity.md) phase 3), shipped as
 `liseur-sync admin backfill-works`.
 
+Cover extraction shipped since: `GET /v1/books/{id}/cover` renders the
+publication's own cover out of the CAS blob and caches the result, and
+the catalog JSON, the web UI and the OPDS feeds all point at it.
+
 **Features**, in order:
 
-1. **Cover extraction** ([ADR-0004](0004-metadata-and-categorization.md)
-   phase 1, [ADR-0005](0005-upload-and-ingestion.md) phase 3), then
-   surfacing them in the catalog and OPDS feeds
-   ([ADR-0006](0006-catalog-api-and-opds.md)). A catalog of titles is the
-   most visible thing the MVP does without.
-2. **Per-library parser configuration**
+1. **Per-library parser configuration**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 1). The pattern
    list is still the built-in default, so a library whose filenames follow
    another convention cannot say so.
-3. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
+2. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
    phase 3). The ingest pipeline already accepts a `watched` source; what
    is missing is the scanner and its reconciliation.
-4. **Metadata editing and categorization**
+3. **Metadata editing and categorization**
    ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3):
    the edit UI, series/contributor/tag pages, then search and facets. The
    store already applies locked fields and whole-set assertions, so this is
    surface over settled rules.
-5. **Richer catalog output**
+4. **Richer catalog output**
    ([ADR-0006](0006-catalog-api-and-opds.md) phases 2 and 3): filtering
    beyond a plain listing, and recently-added, OpenSearch and
    series/contributor OPDS feeds.
-6. **The web reader** ([ADR-0007](0007-web-reader.md)).
-7. **Similarity-based duplicate detection**
+5. **The web reader** ([ADR-0007](0007-web-reader.md)).
+6. **Similarity-based duplicate detection**
    ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
    normalization rule worth defending before it needs code.
-8. **External metadata providers**
+7. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
 
@@ -175,8 +174,8 @@ native work-resolution protocol instead of being joined by client-specific
 guessing.
 
 The cost of drawing the MVP line here is that the first release will look
-sparse next to Komga or calibre-web: no search, no tag browsing, no cover
-grid worth showing off. That is accepted. Those are additive and can land
+sparse next to Komga or calibre-web: no search, no tag browsing, no
+metadata editing. That is accepted. Those are additive and can land
 against a stable catalog; getting identity, durability, or the ownership
 model wrong cannot be fixed additively once real libraries exist.
 

@@ -146,7 +146,12 @@ future uploads cannot change the CAS:
    that preserves permissions (`cp -a`, `tar -p`, `rsync -a`). A copy that
    widens them is refused on restore: the CAS requires a private root
    (`chmod 700`), and a world-readable content directory is a library
-   anybody with a shell can read;
+   anybody with a shell can read.
+
+   `covers/` inside it may be skipped, and may be deleted at any time to
+   reclaim space: every file in it is a rendered copy of a cover that
+   lives inside a book, and the next request for one rebuilds it. Nothing
+   else in the content directory is regenerable;
 3. check the copy is restorable:
 
    ```

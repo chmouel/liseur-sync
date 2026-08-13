@@ -88,9 +88,14 @@ paginated acquisition feeds with EPUB acquisition links — enough for a
 reader to find a book and download it. The root feed *is* the library list:
 a separate libraries feed would be the same document behind another link.
 
-A "recently added" feed and cover thumbnails are deferred with the rest:
-neither is on the path from opening a reader to reading a book, and covers
-have no storage behind them yet. Search through OpenSearch and
+Cover links ship with the feeds: entries carry
+`http://opds-spec.org/image` and `.../image/thumbnail`, and the covers are
+reachable under `/opds` as well as `/v1`, because a reader fetches feed
+images with the Basic credential it used for the feed and the bearer route
+would refuse every one of them.
+
+A "recently added" feed is still deferred: it is not on the path from
+opening a reader to reading a book. Search through OpenSearch and
 series/contributor feeds follow later; OPDS 2.0 and OPDS-PSE are deferred
 entirely.
 
