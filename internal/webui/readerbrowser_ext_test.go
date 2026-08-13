@@ -70,8 +70,13 @@ func browserTestEPUB(t *testing.T) []byte {
   <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
 </package>`,
 		"OEBPS/style.css": `body { color: rgb(17, 34, 51); }`,
+		// The script is the test: a publication that tries to act must
+		// not be able to. It marks the document, and the browser check
+		// asserts the mark is absent.
 		"OEBPS/chapter1.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
-			`<head><link rel="stylesheet" href="style.css"/></head><body>` + body + `</body></html>`,
+			`<head><link rel="stylesheet" href="style.css"/>` +
+			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
+			`</head><body>` + body + `</body></html>`,
 		"OEBPS/chapter2.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<body><p>The Carpet-Bag.</p></body></html>`,
 	} {
@@ -89,12 +94,13 @@ func browserTestEPUB(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
-// TestReaderOpensInARealBrowser is the only test that can judge
-// ADR-0007's central bet, because the thing being judged is a browser
-// behaviour: a srcdoc document inherits the framing page's CSP on top of
-// declaring its own, so a page policy that is too strict blocks the
-// chapter's stylesheet and script and renders a blank frame. Nothing in
-// Go or Node observes that. Chromium does.
+// TestReaderOpensInARealBrowser is the only test that can judge whether
+// the reader works, because everything it does is a browser behaviour.
+// The bug that brought the vendored engine in — a book that would not go
+// past page two — was invisible to every unit test here and obvious
+// within seconds of opening a book. So this turns pages until the book
+// ends, reads the publication's own styling out of the frame, and checks
+// that the publication's script did not run.
 //
 // It skips where there is no Chromium, including CI, which makes it a
 // developer's check rather than a gate. That is the right trade: the

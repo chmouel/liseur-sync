@@ -7,16 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/auth"
-
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // handleReaderPage serves the browser reader for one book (ADR-0007).
 //
-// The page carries no publication bytes. It fetches the EPUB with the
-// session cookie and unpacks it in the browser, so the only thing this
-// handler decides is whether the caller may read the book at all.
+// The page carries no publication bytes. It fetches the EPUB and unpacks
+// it in the browser, so the only thing this handler decides is whether
+// the caller may read the book at all — and the only thing it
+// contributes to how the book is rendered is the policy below.
 func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	bookID := r.PathValue("id")
 	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
@@ -27,33 +26,36 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 	prefix := relPrefix(r.URL.Path)
 	escaped := url.PathEscape(bookID)
 
-	// The nonce is minted here, not in the page, because a chapter is
-	// shown to the sandboxed frame with srcdoc — and a srcdoc document
-	// inherits this policy as well as declaring its own. Both have to
-	// permit the one script the chapter carries, and only the server
-	// can put a nonce in this header.
+	// The policy has to admit two things the rendering engine needs, and
+	// nothing else.
 	//
-	// So this policy is the looser of the two by design: it is wide
-	// enough for a rendered chapter, and the chapter's own policy is
-	// what actually confines the publication. The page itself has no
-	// user content in it, and with default-src 'none' there is nowhere
-	// for anything here to send what it reads.
-	nonce, err := auth.NewSecret()
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	nonce = nonce[:24]
+	// `blob:` is how epub.js hands each chapter to its iframe and how it
+	// rewrites the publication's own images and stylesheets. A blob
+	// document inherits the policy of whatever created it, so this
+	// header is what confines the publication as well as the page.
+	//
+	// `style-src 'unsafe-inline'` is unavoidable: a book's own markup
+	// carries style attributes, and there is no nonce to give markup
+	// that arrived in a zip file. `script-src` deliberately has no such
+	// hole — the engine is served from here, and the publication's
+	// scripts never run at all, because the iframe is sandboxed without
+	// allow-scripts.
 	w.Header().Set("Content-Security-Policy", strings.Join([]string{
 		"default-src 'none'",
-		"script-src 'self' 'nonce-" + nonce + "'",
-		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data:",
-		"font-src data:",
-		"media-src data:",
-		"connect-src 'self'",
-		"frame-src 'self'",
-		"base-uri 'none'",
+		"script-src 'self'",
+		"style-src 'self' 'unsafe-inline' blob:",
+		"img-src 'self' data: blob:",
+		"font-src data: blob:",
+		"media-src data: blob:",
+		"connect-src 'self' blob:",
+		"frame-src blob:",
+		"child-src blob:",
+		// The engine gives each chapter a <base> so that the
+		// publication's own relative links resolve against where the
+		// document actually came from. 'self' permits that and still
+		// refuses a base pointing at somebody else's origin, which is
+		// the attack this directive exists for.
+		"base-uri 'self'",
 		"form-action 'none'",
 	}, "; "))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -67,7 +69,6 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 		TokenURL:    prefix + "reader/token",
 		APIBase:     prefix + "../",
 		StaticBase:  prefix + "static/",
-		Nonce:       nonce,
 	}, csrfFor(a)).Render(r.Context(), w)
 }
 

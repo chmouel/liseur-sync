@@ -1,10 +1,15 @@
-// The reader page's controller: fetch the book, put it on screen, and
-// keep the reading position in step with every other Liseur client.
+// The reader page's controller: open the book with epub.js, put it on
+// screen, and keep the reading position in step with every other Liseur
+// client.
 //
-// It talks to the same /v1 routes Android and desktop use, with the
-// short-lived token from POST /ui/reader/token (ADR-0007). It gets no
-// special treatment from the server, which is the point: if this file
-// can do it, so can anybody's client.
+// The rendering engine is vendored (ADR-0007). Pagination inside a
+// chapter is the part a reader lives or dies by, and a hand-written one
+// got it wrong in a way that stopped the book two pages in. epub.js is
+// what other self-hosted readers use, for the same reason.
+//
+// Sync is unchanged and deliberately so: this file talks to the same
+// /v1 routes Android and desktop use, with the short-lived token from
+// POST /ui/reader/token. It gets no special treatment from the server.
 
 'use strict';
 
@@ -18,27 +23,21 @@
     tokenURL: el.dataset.tokenUrl,
     downloadURL: el.dataset.downloadUrl,
     apiBase: el.dataset.apiBase,
-    nonce: el.dataset.nonce,
   };
-  const view = document.getElementById('reader-frame');
+  const stage = document.getElementById('reader-view');
   const status = document.getElementById('reader-status');
   const progressBar = document.getElementById('reader-progress-bar');
   const progressText = document.getElementById('reader-progress-text');
   const chapterText = document.getElementById('reader-chapter');
+  const titleText = document.getElementById('reader-title-text');
 
-  let epub = null;
+  let book = null;
+  let rendition = null;
   let workID = null;
   let token = null;
   let tokenExpiry = 0;
-  let place = { index: 0, fraction: 0 };
   let pending = null;
-  let seeking = null;
-
-  // The nonce comes from the server because the page's own policy
-  // carries it too: a srcdoc document inherits the framing page's CSP
-  // as well as declaring its own, so the chapter's script has to
-  // satisfy both.
-  const nonce = cfg.nonce;
+  let here = null;
 
   function say(message, isError) {
     status.textContent = message;
@@ -65,9 +64,8 @@
     return token;
   }
 
-  // api retries once on 401, which is the whole of the token lifecycle
-  // a client has to implement: expired means ask again, not sign in
-  // again.
+  // api retries once on 401, which is the whole of the token lifecycle a
+  // client has to implement: expired means ask again, not sign in again.
   async function api(path, options = {}, retry = true) {
     const secret = await credential();
     const resp = await fetch(cfg.apiBase + path, {
@@ -104,12 +102,60 @@
     return ops.length ? ops[0] : null;
   }
 
+  // bookTitle is read from the package document rather than from the
+  // catalog, so the page says what the file says even when the two have
+  // drifted.
+  function bookTitle() {
+    return (book && book.packaging && book.packaging.metadata &&
+      book.packaging.metadata.title) || '';
+  }
+
+  // locatorFor builds the Readium Locator the sync protocol carries. The
+  // server stores it verbatim and never reads it, so the shape is a
+  // promise to the other clients rather than to the server.
+  //
+  // The CFI goes in `fragments`, which is where Readium puts a format's
+  // own pointer, and `totalProgression` is beside it because that is the
+  // one field every client can act on: a phone that has never heard of a
+  // CFI still opens in the right place.
+  function locatorFor(location) {
+    const start = location.start || {};
+    return {
+      href: start.href || '',
+      type: 'application/xhtml+xml',
+      title: bookTitle(),
+      locations: {
+        fragments: start.cfi ? [start.cfi] : [],
+        progression: typeof start.percentage === 'number' ? start.percentage : 0,
+        totalProgression: totalProgression(location),
+        position: typeof start.index === 'number' ? start.index + 1 : undefined,
+      },
+    };
+  }
+
+  // totalProgression prefers the percentage epub.js computes once it has
+  // measured the book, and falls back to the spine position until then.
+  // Reporting the fallback is better than reporting nothing: a rough
+  // fraction still resumes on another device, and measuring a large book
+  // takes a moment.
+  function totalProgression(location) {
+    const start = location.start || {};
+    if (book.locations && book.locations.length() && start.cfi) {
+      const measured = book.locations.percentageFromCfi(start.cfi);
+      if (typeof measured === 'number' && !isNaN(measured)) return measured;
+    }
+    const count = (book.spine && book.spine.length) || 1;
+    const index = typeof start.index === 'number' ? start.index : 0;
+    const within = typeof start.percentage === 'number' ? start.percentage : 0;
+    return Math.min(1, (index + within) / count);
+  }
+
   // push records where we are. Failure is deliberately quiet: losing a
-  // position update is a smaller harm than an error banner over the
-  // page every time a laptop lid closes, and the next scroll retries.
+  // position update is a smaller harm than an error banner over the page
+  // every time a laptop lid closes, and the next page turn retries.
   async function push() {
-    if (!workID || !epub) return;
-    const locator = locatorFor(epub, place.index, place.fraction);
+    if (!workID || !here) return;
+    const locator = locatorFor(here);
     try {
       await api('v1/ops', {
         method: 'POST',
@@ -125,7 +171,7 @@
         }),
       });
     } catch (err) {
-      /* offline: the next scroll will carry the position instead */
+      /* offline: the next page turn will carry the position instead */
     }
   }
 
@@ -134,43 +180,53 @@
     pending = setTimeout(push, 1500);
   }
 
+  function cfiOf(op) {
+    const fragments = (op && op.locator && op.locator.locations &&
+      op.locator.locations.fragments) || [];
+    for (const fragment of fragments) {
+      if (typeof fragment === 'string' && fragment.indexOf('epubcfi(') === 0) {
+        return fragment;
+      }
+    }
+    return null;
+  }
+
+  // startFrom decides where to open. It prefers what the writing client
+  // actually said — a CFI from this reader, or the resource another one
+  // named — and falls back to the fraction every client agrees on, which
+  // is why a book started on a phone opens in roughly the right place
+  // here.
+  function startFrom(op) {
+    if (!op) return undefined;
+    const cfi = cfiOf(op);
+    if (cfi) return cfi;
+    const locations = (op.locator && op.locator.locations) || {};
+    const fraction = typeof locations.totalProgression === 'number'
+      ? locations.totalProgression : op.progression;
+    if (typeof fraction === 'number' && fraction > 0 && book.locations.length()) {
+      return book.locations.cfiFromPercentage(Math.min(0.999, fraction));
+    }
+    if (op.locator && op.locator.href) return op.locator.href;
+    return undefined;
+  }
+
   // ---------------------------------------------------------- render
 
-  async function show(index, fraction) {
-    if (index < 0 || index >= epub.spine.length) return;
-    place = { index: index, fraction: 0 };
-    view.srcdoc = await epub.document(index, nonce);
-    seeking = fraction > 0 ? fraction : null;
-    paint();
-  }
-
-  function paint() {
-    const total = (place.index + place.fraction) / epub.spine.length;
-    progressBar.style.width = (total * 100).toFixed(1) + '%';
-    progressText.textContent = Math.round(total * 100) + '%';
-    chapterText.textContent = 'Chapter ' + (place.index + 1) + ' of ' + epub.spine.length;
-  }
-
-  window.addEventListener('message', (event) => {
-    if (event.source !== view.contentWindow) return; // not our sandbox
-    const msg = event.data || {};
-    if (msg.type === 'ready' && seeking !== null) {
-      view.contentWindow.postMessage({ type: 'seek', fraction: seeking }, '*');
-      seeking = null;
-      return;
+  function paint(location) {
+    here = location;
+    const fraction = totalProgression(location);
+    progressBar.style.width = (fraction * 100).toFixed(1) + '%';
+    progressText.textContent = Math.round(fraction * 100) + '%';
+    const start = location.start || {};
+    if (typeof start.index === 'number' && book.spine && book.spine.length) {
+      chapterText.textContent =
+        'Chapter ' + (start.index + 1) + ' of ' + book.spine.length;
     }
-    if (msg.type === 'progress') {
-      place.fraction = msg.fraction;
-      paint();
-      schedulePush();
-    }
-  });
+  }
 
   function turn(direction) {
-    // At the end of a chapter, turning the page means the next one.
-    if (direction > 0 && place.fraction >= 0.999) return show(place.index + 1, 0);
-    if (direction < 0 && place.fraction <= 0.001) return show(place.index - 1, 0.999);
-    view.contentWindow.postMessage({ type: 'page', direction: direction }, '*');
+    if (!rendition) return undefined;
+    return direction > 0 ? rendition.next() : rendition.prev();
   }
 
   document.getElementById('reader-next').addEventListener('click', () => turn(1));
@@ -194,22 +250,64 @@
       const buf = await resp.arrayBuffer();
 
       say('Opening…');
-      epub = await Epub.open(buf);
+      book = ePub(buf);
+      await book.ready;
+
+      const title = bookTitle();
+      if (title) {
+        titleText.textContent = title;
+        document.title = title + ' · liseur-sync';
+      }
+
+      rendition = book.renderTo(stage, {
+        width: '100%',
+        height: '100%',
+        spread: 'none',
+        flow: 'paginated',
+        // The publication's own scripts never run. epub.js renders into
+        // a same-origin iframe so that it can measure the document and
+        // paginate it, and this is what keeps that from meaning the book
+        // can act: with no allow-scripts there is nothing to execute.
+        allowScriptedContent: false,
+        allowPopups: false,
+      });
+      rendition.on('relocated', (location) => {
+        paint(location);
+        schedulePush();
+      });
 
       // Sync is best-effort: a book still opens on a server that has
       // lost its work mapping, it just opens at the beginning.
+      let op = null;
       try {
         workID = await resolveWork();
-        const last = await lastPosition();
-        if (last) {
-          place = placeFromLocator(epub, last.locator, last.progression);
-        }
+        op = await lastPosition();
       } catch (err) {
         /* read on without sync */
       }
 
-      await show(place.index, place.fraction);
+      // Locations are what turn a fraction into a place. They are
+      // generated before the first paint only when there is a fraction
+      // to act on and no CFI, because measuring a large book takes a
+      // moment and a blank screen is a worse first impression than a
+      // percentage that arrives late.
+      const needsMeasure = !!op && !cfiOf(op);
+      if (needsMeasure) {
+        try {
+          await book.locations.generate(1024);
+        } catch (err) {
+          /* open at the beginning rather than not at all */
+        }
+      }
+
+      await rendition.display(startFrom(op));
       say('');
+
+      if (!needsMeasure) {
+        book.locations.generate(1024).then(() => {
+          if (here) paint(here);
+        }).catch(() => { /* progress stays approximate */ });
+      }
     } catch (err) {
       say(err.message || 'this book could not be opened', true);
     }

@@ -100,8 +100,9 @@ fieldset { border: 1px solid var(--line); border-radius: .4em; margin: .8em 0; }
 .reader-status{margin:0;padding:.5rem .9rem;font-size:.9rem;opacity:.8}
 .reader-status.problem{color:#b3261e;opacity:1}
 .reader-stage{flex:1;display:flex;min-height:0}
-#reader-frame{flex:1;border:0;width:100%;height:100%;background:#fff}
+#reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
+#reader-view iframe{border:0}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;
   padding:0 .6rem;opacity:.35;color:inherit}
 .reader-turn:hover{opacity:.9}
-@media (prefers-color-scheme:dark){#reader-frame{background:#16181d}}
+@media (prefers-color-scheme:dark){#reader-view{background:#fff}}
