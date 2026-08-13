@@ -347,3 +347,251 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 		t.Fatalf("merge left stale catalog mapping: %+v %v", readerMapping, err)
 	}
 }
+
+func testCatalogBookMetadata(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "metadata-owner")
+	reader := MkUser(t, s, "metadata-reader")
+	outsider := MkUser(t, s, "metadata-outsider")
+	now := time.Now().UTC()
+	library := store.Library{
+		ID: "lib-metadata", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Metadata", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(
+		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
+		t.Fatal(err)
+	}
+	book := store.CatalogBook{
+		ID: "book-metadata", LibraryID: library.ID, Status: store.BookActive,
+		Title: "Dune", TitleSource: store.MetadataEmbedded, CreatedAt: now,
+	}
+	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+		t.Fatal(err)
+	}
+
+	empty, err := s.CatalogBookMetadata(ctx, reader.ID, book.ID, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Book.Revision != 1 || len(empty.Tags) != 0 || len(empty.Series) != 0 ||
+		len(empty.Contributors) != 0 || len(empty.Identifiers) != 0 ||
+		len(empty.Languages) != 0 || len(empty.Genres) != 0 {
+		t.Fatalf("new book metadata: %+v", empty)
+	}
+	if _, err := s.CatalogBookMetadata(
+		ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
+		t.Fatalf("outsider read metadata: %v", err)
+	}
+
+	position := 1.0
+	resolved := empty
+	resolved.Book.Title = "Dune"
+	resolved.Book.Publisher = "Chilton"
+	resolved.Book.PublisherSource = store.MetadataEmbedded
+	resolved.Book.SetLocks.Genres = true
+	resolved.Identifiers = []store.BookIdentifier{
+		{Scheme: "isbn", Value: "9780441013593", Source: store.MetadataEmbedded},
+	}
+	resolved.Languages = []store.BookLanguage{
+		{Language: "en", Source: store.MetadataEmbedded},
+	}
+	resolved.Tags = []store.BookTaxon{
+		{ID: "tag-sf", Name: "Science Fiction",
+			NormalizedName: "science fiction", Source: store.MetadataEmbedded},
+		{ID: "tag-desert", Name: "Desert",
+			NormalizedName: "desert", Source: store.MetadataEmbedded},
+	}
+	resolved.Series = []store.BookSeries{
+		{SeriesID: "series-dune", Name: "Dune", NormalizedName: "dune",
+			Position: &position, Source: store.MetadataFilename},
+	}
+	resolved.Contributors = []store.BookContributor{
+		{ContributorID: "contrib-herbert", Name: "Frank Herbert",
+			NormalizedName: "frank herbert", Role: "author",
+			Source: store.MetadataEmbedded},
+	}
+	request := store.ApplyBookMetadataRequest{
+		Metadata: resolved, ExpectedRevision: 1, UpdatedAt: now,
+	}
+	if err := store.ValidateApplyBookMetadata(request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyCatalogBookMetadata(
+		ctx, reader.ID, request); err != store.ErrNotFound {
+		t.Fatalf("reader applied metadata: %v", err)
+	}
+	if _, err := s.ApplyCatalogBookMetadata(
+		ctx, outsider.ID, request); err != store.ErrNotFound {
+		t.Fatalf("outsider applied metadata: %v", err)
+	}
+	applied, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Book.Revision != 2 || applied.Book.Publisher != "Chilton" ||
+		!applied.Book.SetLocks.Genres {
+		t.Fatalf("applied book: %+v", applied.Book)
+	}
+	// Rows come back in a deterministic order, not in assertion order.
+	if len(applied.Tags) != 2 || applied.Tags[0].NormalizedName != "desert" ||
+		applied.Tags[1].NormalizedName != "science fiction" {
+		t.Fatalf("applied tags: %+v", applied.Tags)
+	}
+	if len(applied.Series) != 1 || applied.Series[0].Position == nil ||
+		*applied.Series[0].Position != 1 ||
+		applied.Series[0].Source != store.MetadataFilename {
+		t.Fatalf("applied series: %+v", applied.Series)
+	}
+	if len(applied.Contributors) != 1 ||
+		applied.Contributors[0].Name != "Frank Herbert" ||
+		applied.Contributors[0].Role != "author" {
+		t.Fatalf("applied contributors: %+v", applied.Contributors)
+	}
+	if len(applied.Identifiers) != 1 || applied.Identifiers[0].Value != "9780441013593" ||
+		len(applied.Languages) != 1 || applied.Languages[0].Language != "en" {
+		t.Fatalf("applied identifiers and languages: %+v", applied)
+	}
+	reread, err := s.CatalogBookMetadata(ctx, reader.ID, book.ID, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reread.Tags) != len(applied.Tags) || reread.Book.Revision != 2 {
+		t.Fatalf("reader reread: %+v", reread)
+	}
+
+	// The same expected revision cannot be applied twice.
+	if _, err := s.ApplyCatalogBookMetadata(
+		ctx, owner.ID, request); err != store.ErrStaleRevision {
+		t.Fatalf("stale apply: %v", err)
+	}
+
+	// A later apply asserting fewer rows removes what it omits, and reuses
+	// the entity rows created by the first apply rather than duplicating
+	// them under a new id.
+	second := applied
+	second.Tags = []store.BookTaxon{
+		{ID: "tag-other", Name: "science fiction",
+			NormalizedName: "science fiction", Source: store.MetadataManual,
+			Locked: true},
+	}
+	second.Series = nil
+	shrunk, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, store.ApplyBookMetadataRequest{
+		Metadata: second, ExpectedRevision: 2, UpdatedAt: now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shrunk.Book.Revision != 3 || len(shrunk.Series) != 0 ||
+		len(shrunk.Tags) != 1 || shrunk.Tags[0].ID != "tag-sf" ||
+		shrunk.Tags[0].Name != "Science Fiction" || !shrunk.Tags[0].Locked ||
+		shrunk.Tags[0].Source != store.MetadataManual {
+		t.Fatalf("shrunk metadata: %+v", shrunk)
+	}
+
+	// A rejected apply leaves nothing behind.
+	poisoned := shrunk
+	poisoned.Tags = []store.BookTaxon{
+		{ID: "tag-late", Name: "Late", NormalizedName: "late",
+			Source: store.MetadataEmbedded},
+	}
+	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, store.ApplyBookMetadataRequest{
+		Metadata: poisoned, ExpectedRevision: 1, UpdatedAt: now,
+	}); err != store.ErrStaleRevision {
+		t.Fatalf("second stale apply: %v", err)
+	}
+	after, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Book.Revision != 3 || len(after.Tags) != 1 ||
+		after.Tags[0].NormalizedName != "science fiction" {
+		t.Fatalf("rolled back apply leaked: %+v", after)
+	}
+}
+
+func testConcurrentCatalogMetadataApply(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "metadata-concurrent")
+	now := time.Now().UTC()
+	library := store.Library{
+		ID: "lib-metadata-concurrent", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Concurrent metadata", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	book := store.CatalogBook{
+		ID: "book-metadata-concurrent", LibraryID: library.ID,
+		Status: store.BookActive, Title: "Race", CreatedAt: now,
+	}
+	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	applied := make(chan store.BookMetadata, workers)
+	stale := make(chan struct{}, workers)
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resolved := current
+			resolved.Book.Title = fmt.Sprintf("Race %02d", i)
+			resolved.Tags = []store.BookTaxon{{
+				ID:             fmt.Sprintf("tag-race-%02d", i),
+				Name:           "Race",
+				NormalizedName: "race",
+				Source:         store.MetadataEmbedded,
+			}}
+			<-start
+			result, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+				store.ApplyBookMetadataRequest{
+					Metadata: resolved, ExpectedRevision: 1, UpdatedAt: now,
+				})
+			switch {
+			case err == store.ErrStaleRevision:
+				stale <- struct{}{}
+			case err != nil:
+				errs <- err
+			default:
+				applied <- result
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(applied)
+	close(stale)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent apply: %v", err)
+	}
+	if len(applied) != 1 || len(stale) != workers-1 {
+		t.Fatalf("concurrent apply: %d applied, %d stale", len(applied), len(stale))
+	}
+	winner := <-applied
+	if winner.Book.Revision != 2 || len(winner.Tags) != 1 {
+		t.Fatalf("winning apply: %+v", winner)
+	}
+	final, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Book.Revision != 2 || final.Book.Title != winner.Book.Title ||
+		len(final.Tags) != 1 || final.Tags[0].ID != winner.Tags[0].ID {
+		t.Fatalf("lost update: %+v want %+v", final, winner)
+	}
+}
