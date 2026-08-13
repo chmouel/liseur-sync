@@ -34,18 +34,25 @@ overwrite a newer result. The generic transition operation cannot enter
 `received`; failed or quarantined jobs that retain a complete staged artifact
 retry from `staged`.
 
-Managed uploads are streamed into a private staging file. After validation
-and extraction, the worker streams or copies the bytes into
-`<content>/.incoming/<job>.tmp`, fsyncs the file, then atomically renames it
-to the final content-addressed path. Before promotion, newly created
-hash-shard directories are made durable by fsyncing each directory and the
-parent in which its entry was created. After the rename, the worker fsyncs
-the destination directory and `.incoming`, and only then commits the
-blob/reference rows, quota reservation, and `promoted` job state in one
-database transaction. A crash before the database commit leaves a
-reconcilable orphan, never a database reference to a non-durable path.
-Atomic promotion therefore works even when initial staging is on another
-filesystem.
+Managed uploads are streamed into a private CAS-side
+`<content>/.incoming/<job-hash>.partial`, fsynced, and atomically renamed to
+the completed `.stage` name. Validation and extraction read that immutable
+stage. Promotion atomically renames it to the final content-addressed path.
+Before promotion, newly created hash-shard directories are made durable by
+fsyncing each directory and the parent in which its entry was created. After
+the rename, the worker fsyncs the destination directory and `.incoming`, and
+only then commits the blob/reference rows, quota reservation, and `promoted`
+job state in one database transaction. A crash before the database commit
+leaves a reconcilable orphan, never a database reference to a non-durable
+path.
+
+The Linux CAS implementation uses descriptor-relative operations,
+`O_NOFOLLOW`, private ownership and permissions, and
+`renameat2(RENAME_NOREPLACE)`. Incomplete `.partial` files are never treated
+as durable stages. A completed deterministic `.stage` can be rehashed and
+replayed after a lost result, and promotion can likewise be replayed after
+the final rename. Concurrent identical promotions verify and fsync the
+existing final blob rather than replacing it.
 
 Watched ingestion opens the source through `os.Root` and copies from that
 single descriptor into the same CAS-side staging path. Hashing, validation,
@@ -138,8 +145,9 @@ name a stable job and reason instead of losing state when a request ends.
 
 1. Job schema, worker loop, staging, CAS promotion, recovery, and
    reconciliation. The revisioned, idempotent durable job store and
-   blob/reference schema are implemented; workers, staging, atomic promotion,
-   recovery, and reconciliation remain.
+   blob/reference schema plus bounded, restart-safe filesystem staging and
+   promotion are implemented; workers, atomic database promotion, recovery,
+   and reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

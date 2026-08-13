@@ -74,9 +74,10 @@ Each phase is independently releasable. Route or payload changes update
   and backup verification.
 
 The scope-set migration, catalog schema, ACL store operations, atomic
-catalog-to-work resolution, and revisioned durable ingest-job store are
-implemented. CAS file handling, ingestion workers, metadata parsing, GC, and
-admin commands remain in Phase 1.
+catalog-to-work resolution, revisioned durable ingest-job store, and
+filesystem CAS staging/promotion primitive are implemented. Atomic database
+promotion, ingestion workers, metadata parsing, GC, and admin commands remain
+in Phase 1.
 
 ### Phase 2: managed uploads and management UI
 

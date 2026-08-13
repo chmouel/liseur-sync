@@ -174,8 +174,9 @@ server disk allocation.
 ## Implementation phases
 
 1. Schema, ACL queries, CAS, logical quota, trash, GC, and backup verifier.
-   The schema and ACL-scoped library/book queries are implemented; filesystem
-   CAS, quota accounting, trash, GC, and backup verification remain.
+   The schema, ACL-scoped library/book queries, and durable filesystem CAS
+   primitive are implemented; database promotion, quota accounting, trash,
+   GC, and backup verification remain.
 2. Managed-library upload and management UI.
 3. Watched-folder scanner and reconciliation.
 4. Export tooling, if later required.

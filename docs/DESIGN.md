@@ -577,8 +577,9 @@ M6 is in progress: compatible token scope sets and the shared catalog,
 metadata, blob, ingestion-job, ACL, and per-user work-mapping schema are
 implemented on SQLite and PostgreSQL, together with ACL-scoped store
 operations, atomic catalog resolution, and revision-checked idempotent ingest
-job transitions. Bounded extraction, CAS lifecycle, ingest workers, and
-administration remain.
+job transitions. Bounded restart-safe filesystem staging and no-replace CAS
+publication are also implemented. Database promotion, bounded extraction,
+the rest of the CAS lifecycle, ingest workers, and administration remain.
 
 ## 10. Future work (explicitly out of v1)
 
