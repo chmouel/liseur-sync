@@ -39,27 +39,45 @@ func TestNewSecretUnique(t *testing.T) {
 }
 
 func TestScopeAllowed(t *testing.T) {
-	if !scopeAllowed(store.ScopeSet{store.ScopeAdmin}, store.ScopeSync) {
+	if !scopeAllowed(store.ScopeSet{store.ScopeAdmin}, []store.Scope{store.ScopeSync}) {
 		t.Fatal("admin should imply sync")
 	}
-	if scopeAllowed(store.ScopeSet{store.ScopeSync}, store.ScopeAdmin) {
+	if scopeAllowed(store.ScopeSet{store.ScopeSync}, []store.Scope{store.ScopeAdmin}) {
 		t.Fatal("sync must not imply admin")
 	}
-	if scopeAllowed(store.ScopeSet{store.ScopeSync}, store.ScopeReadInsights) {
+	if scopeAllowed(store.ScopeSet{store.ScopeSync}, []store.Scope{store.ScopeReadInsights}) {
 		t.Fatal("sync must not read insights")
 	}
-	if !scopeAllowed(store.ScopeSet{store.ScopeReadInsights}, store.ScopeReadInsights) {
+	if !scopeAllowed(store.ScopeSet{store.ScopeReadInsights}, []store.Scope{store.ScopeReadInsights}) {
 		t.Fatal("exact scope should pass")
 	}
-	if !scopeAllowed(store.ScopeSet{store.ScopeLibraryManage}, store.ScopeLibraryRead) {
+	if !scopeAllowed(store.ScopeSet{store.ScopeLibraryManage}, []store.Scope{store.ScopeLibraryRead}) {
 		t.Fatal("library-manage should imply library-read")
 	}
-	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, store.ScopeLibraryManage) {
+	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, []store.Scope{store.ScopeLibraryManage}) {
 		t.Fatal("library-read must not imply library-manage")
 	}
 	multi := store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}
-	if !scopeAllowed(multi, store.ScopeSync) || !scopeAllowed(multi, store.ScopeLibraryRead) {
+	if !scopeAllowed(multi, []store.Scope{store.ScopeSync}) ||
+		!scopeAllowed(multi, []store.Scope{store.ScopeLibraryRead}) {
 		t.Fatal("multi-scope token should grant every explicit scope")
+	}
+	// The catalog resolve route names two scopes, and it means both.
+	both := []store.Scope{store.ScopeLibraryRead, store.ScopeSync}
+	if !scopeAllowed(multi, both) {
+		t.Fatal("token holding both scopes should pass a two-scope route")
+	}
+	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, both) {
+		t.Fatal("catalog-only token must not resolve a book to a work")
+	}
+	if scopeAllowed(store.ScopeSet{store.ScopeSync}, both) {
+		t.Fatal("sync-only token must not read the catalog")
+	}
+	if !scopeAllowed(store.ScopeSet{store.ScopeAdmin}, both) {
+		t.Fatal("admin should imply every scope in a set")
+	}
+	if !scopeAllowed(multi, nil) {
+		t.Fatal("a route naming no scope requires only authentication")
 	}
 }
 
