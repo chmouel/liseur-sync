@@ -56,6 +56,21 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("BlobReconciliation", func(t *testing.T) {
 		testBlobReconciliation(t, open)
 	})
+	t.Run("CatalogEntityListing", func(t *testing.T) {
+		testCatalogEntityListing(t, open)
+	})
+	t.Run("CatalogEntityMerge", func(t *testing.T) {
+		testCatalogEntityMerge(t, open)
+	})
+	t.Run("CatalogEntityMergeKeepsDistinctRoles", func(t *testing.T) {
+		testCatalogEntityMergeKeepsDistinctRoles(t, open)
+	})
+	t.Run("CatalogEntityRename", func(t *testing.T) {
+		testCatalogEntityRename(t, open)
+	})
+	t.Run("CatalogEntityRejectsBadInput", func(t *testing.T) {
+		testCatalogEntityRejectsBadInput(t, open)
+	})
 	t.Run("WatchedSourceReconciliation", func(t *testing.T) {
 		testWatchedSourceReconciliation(t, open)
 	})
