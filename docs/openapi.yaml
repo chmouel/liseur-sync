@@ -724,11 +724,21 @@ paths:
       summary: Books in a library
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Oldest first, cursor-paginated. Trashed books are excluded.
-        `next_cursor` appears only when a further page exists, so a
-        client pages until it is absent. Treat the cursor as opaque.
+        Cursor-paginated, oldest first unless `order=recent`. Trashed
+        books are excluded. `next_cursor` appears only when a further
+        page exists, so a client pages until it is absent. Treat the
+        cursor as opaque — it means "where the last page ended", which
+        is a different place in each order, so cursors do not carry
+        across a change of `order`.
       parameters:
         - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: order
+          in: query
+          description: |
+            `recent` is newest first, which is the "what arrived since
+            last time" listing. An unrecognized value is refused rather
+            than defaulted.
+          schema: { type: string, enum: [oldest, recent], default: oldest }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
@@ -1388,6 +1398,31 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Over-long query" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
+  /opds/v1.2/libraries/{library}/recent:
+    get:
+      tags: [opds]
+      summary: OPDS acquisition feed of a library's newest books
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The feed a reader opens to see what has arrived since last time,
+        reached from the `http://opds-spec.org/sort/new` link on the
+        library's own feed. It is `order=recent` on the native listing,
+        rendered as a feed.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An Atom acquisition feed, newest first
+          content:
+            application/atom+xml;profile=opds-catalog;kind=acquisition:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
 
   /opds/v1.2/libraries/{library}/{kind}:

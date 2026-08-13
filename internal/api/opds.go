@@ -159,6 +159,12 @@ func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
 				Title: "Search this library"},
 		},
 	}
+	feed.Links = append(feed.Links, opdsLink{
+		// `new` is the OPDS relation for it, so a reader that knows the
+		// spec finds this without being told the path.
+		Rel: "http://opds-spec.org/sort/new", Href: self + "/recent",
+		Type: opdsAcquisitionType, Title: "Recently added",
+	})
 	for _, segment := range []string{"series", "contributors", "tags", "genres"} {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel: "http://opds-spec.org/facet", Href: self + "/" + segment,

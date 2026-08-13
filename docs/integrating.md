@@ -258,6 +258,13 @@ page through `GET /v1/libraries/{library}/books`. The page carries
 stop when it is absent. Cursors are opaque — build a request from one,
 never parse it.
 
+`?order=recent` reads the same collection newest first, which is what a
+"what arrived since last time" screen wants. A cursor means "where the
+last page ended", which is a different place in each order, so do not
+carry one across a change of `order`. An unrecognized `order` is a `400`
+rather than a default: a typo that silently reverses a listing is worse
+than an error.
+
 `GET /v1/books/{id}/download` serves the file. It supports `HEAD`,
 byte ranges and conditional requests, and its `ETag` is the content
 digest, so a stored `ETag` stays valid forever: if the server answers
@@ -505,7 +512,8 @@ catalog-only — they never expose positions, sessions or statistics,
 even if the same token also carries `sync`. Pair OPDS with the kosync
 adapter above to get downloads and position sync on a stock device.
 
-A library's feed also carries a `search` link to an OpenSearch
+A library's feed also carries a `http://opds-spec.org/sort/new` link to
+its newest books, a `search` link to an OpenSearch
 description, and `http://opds-spec.org/facet` links to its series,
 contributors, tags and genres. A reader discovers both from the feed it
 already has; neither URL needs configuring. The search template offers

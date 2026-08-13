@@ -1401,6 +1401,12 @@ type Store interface {
 	// Trashed books are excluded: they are not part of the catalog a
 	// reader browses. A nil cursor starts at the beginning.
 	ListCatalogBooks(ctx context.Context, userID, libraryID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// ListRecentCatalogBooks pages the same books newest first. It is a
+	// separate method rather than a direction flag because the cursor
+	// means the opposite thing: `before` is where the last page ended
+	// going down, and a caller that mixed the two would silently page
+	// through a different order than it asked for.
+	ListRecentCatalogBooks(ctx context.Context, userID, libraryID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// ListBookFiles returns one book's files, newest first, so that a
 	// download can pick the current one. It requires read access to the
 	// book's library. Trashed books keep their files, because that is

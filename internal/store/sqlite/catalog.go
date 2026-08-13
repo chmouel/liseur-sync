@@ -372,6 +372,26 @@ func (s *Store) ListCatalogBooks(
 	after *store.CatalogBookCursor,
 	limit int,
 ) ([]store.CatalogBook, error) {
+	return s.listCatalogBooks(ctx, userID, libraryID, after, limit, false)
+}
+
+// ListRecentCatalogBooks is the same listing read from the other end.
+func (s *Store) ListRecentCatalogBooks(
+	ctx context.Context,
+	userID, libraryID string,
+	before *store.CatalogBookCursor,
+	limit int,
+) ([]store.CatalogBook, error) {
+	return s.listCatalogBooks(ctx, userID, libraryID, before, limit, true)
+}
+
+func (s *Store) listCatalogBooks(
+	ctx context.Context,
+	userID, libraryID string,
+	cursor *store.CatalogBookCursor,
+	limit int,
+	newestFirst bool,
+) ([]store.CatalogBook, error) {
 	if limit < 1 || limit > 500 {
 		return nil, store.ErrInvalidTransition
 	}
@@ -385,12 +405,19 @@ func (s *Store) ListCatalogBooks(
 		 WHERE l.id = ? AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
 		   AND b.status <> 'trashed'`
 	args := []any{userID, libraryID, userID}
-	if after != nil {
-		cursor := formatTime(after.CreatedAt)
-		query += ` AND (b.created_at > ? OR (b.created_at = ? AND b.id > ?))`
-		args = append(args, cursor, cursor, after.ID)
+	// The comparison and the order have to move together, or a cursor
+	// would skip the rows it was meant to resume before.
+	compare, order := ">", ""
+	if newestFirst {
+		compare, order = "<", " DESC"
 	}
-	query += ` ORDER BY b.created_at, b.id LIMIT ?`
+	if cursor != nil {
+		at := formatTime(cursor.CreatedAt)
+		query += ` AND (b.created_at ` + compare + ` ? OR (b.created_at = ? AND b.id ` +
+			compare + ` ?))`
+		args = append(args, at, at, cursor.ID)
+	}
+	query += ` ORDER BY b.created_at` + order + `, b.id` + order + ` LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

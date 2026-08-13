@@ -268,3 +268,55 @@ func plainPlural(n int, noun string) string {
 	}
 	return strconv.Itoa(n) + " " + noun + "s"
 }
+
+// HandleOPDSRecent serves the library's newest books, which is the feed a
+// reader opens to see what has arrived since last time. It is reached
+// from the library's own feed rather than the root, because "recent" only
+// means anything inside one library.
+func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	libraryID := r.PathValue("library")
+	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
+	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	limit := defaultCatalogPageSize
+	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, libraryID, before, limit)
+	if err != nil {
+		writeCatalogError(w, err, "library not found")
+		return
+	}
+	libraryHref := opdsPrefix + "/libraries/" + url.PathEscape(libraryID)
+	self := libraryHref + "/recent"
+	feed := opdsFeed{
+		ID:      "urn:liseur:library:" + libraryID + ":recent",
+		Title:   "Recently added",
+		Updated: opdsTime(time.Now()),
+		Links: []opdsLink{
+			{Rel: "self", Href: self, Type: opdsAcquisitionType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "up", Href: libraryHref, Type: opdsAcquisitionType},
+		},
+	}
+	for _, b := range books {
+		feed.Entries = append(feed.Entries, opdsBookEntry(b))
+	}
+	if len(books) == limit {
+		last := books[len(books)-1]
+		feed.Links = append(feed.Links, opdsLink{
+			Rel: "next", Type: opdsAcquisitionType,
+			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
+				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
+		})
+	}
+	writeOPDS(w, r, opdsAcquisitionType, feed)
+}

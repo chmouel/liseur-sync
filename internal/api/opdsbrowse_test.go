@@ -159,3 +159,47 @@ func TestOPDSBrowsingRefusesWhatTheCredentialMayNotSee(t *testing.T) {
 		t.Fatalf("unknown kind: %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestRecentlyAddedIsTheCatalogFromTheOtherEnd(t *testing.T) {
+	f := newUploadFixture(t)
+	f.publishAs(t, "first", "The Older One", []byte("older bytes"))
+	f.publishAs(t, "second", "The Newer One", []byte("newer bytes"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	path := "/v1/libraries/" + f.library + "/books?order=recent"
+	code, page := getJSON(t, f.ts.URL+path, read)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d: %v", code, page)
+	}
+	books, _ := page["books"].([]any)
+	if len(books) != 2 {
+		t.Fatalf("books = %v", page["books"])
+	}
+	first, _ := books[0].(map[string]any)
+	if first["title"] != "The Newer One" {
+		t.Fatalf("newest first put %v first", first["title"])
+	}
+
+	// A typo must not silently read the catalog backwards.
+	code, _ = getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books?order=newest", read)
+	if code != http.StatusBadRequest {
+		t.Fatalf("unknown order: %d, want 400", code)
+	}
+
+	// The same order is a feed a reader finds from the library's own.
+	_, raw := f.opds(t, "/opds/v1.2", "token", read)
+	libHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
+	_, raw = f.opds(t, libHref, "token", read)
+	recent := linkHref(t, parseFeed(t, raw).Links, "http://opds-spec.org/sort/new")
+	if recent == "" {
+		t.Fatalf("no recently-added link:\n%s", raw)
+	}
+	resp, raw := f.opds(t, recent, "token", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("recent: %d %s", resp.StatusCode, raw)
+	}
+	feed := parseFeed(t, raw)
+	if len(feed.Entries) != 2 || feed.Entries[0].Title != "The Newer One" {
+		t.Fatalf("recent feed = %+v", feed.Entries)
+	}
+}
