@@ -19,11 +19,21 @@ type BookRow struct {
 	FileSize string
 }
 
+// UploadRow is one upload that has not become a book: still working, or
+// stopped for a reason the person who uploaded it deserves to see.
+type UploadRow struct {
+	When     string
+	State    string
+	Pending  bool
+	Reason   string
+}
+
 type BooksView struct {
 	Libraries []LibraryOption
 	Selected  string
 	CanWrite  bool
 	Books     []BookRow
+	Uploads   []UploadRow
 	NextURL   string
 	Notice    string
 	Problem   string
@@ -69,7 +79,9 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				<h2>Upload an EPUB</h2>
 				<p class="muted">
 					The file is stored straight away; the book appears once a
-					background pass has read its metadata. Reload to see it.
+					background pass has read its metadata, usually within a
+					minute. Reload to see it — an upload that cannot be read
+					is listed below with the reason.
 				</p>
 				<form method="post" action={ prefix + "books/upload" } enctype="multipart/form-data">
 					<input type="hidden" name="csrf" value={ csrf }/>
@@ -77,6 +89,24 @@ templ booksBody(prefix, csrf string, v BooksView) {
 					<input type="file" name="file" accept=".epub,application/epub+zip" required/>
 					<button type="submit">Upload</button>
 				</form>
+			</section>
+		}
+		if len(v.Uploads) > 0 {
+			<section class="card">
+				<h2>Uploads in progress</h2>
+				<table>
+					<tr><th>Uploaded</th><th>Status</th></tr>
+					for _, up := range v.Uploads {
+						<tr>
+							<td>{ up.When }</td>
+							if up.Pending {
+								<td class="muted">{ up.State }</td>
+							} else {
+								<td class="error">{ up.Reason }</td>
+							}
+						</tr>
+					}
+				</table>
 			</section>
 		}
 		<section class="card">

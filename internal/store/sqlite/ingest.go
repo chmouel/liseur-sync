@@ -264,6 +264,46 @@ func (s *Store) ListIngestJobs(
 	return jobs, rows.Err()
 }
 
+// ListIngestActivity answers "what happened to the file I just
+// uploaded". Promoted jobs are excluded because a promoted job is a book
+// — the catalog already shows it — which keeps this to the handful of
+// rows that are still working or have gone wrong.
+func (s *Store) ListIngestActivity(
+	ctx context.Context,
+	actorUserID, libraryID string,
+	limit int,
+) ([]store.IngestJob, error) {
+	if limit < 1 || limit > 500 {
+		return nil, errors.New("ingest activity limit must be between 1 and 500")
+	}
+	if _, err := s.LibraryByID(ctx, actorUserID, libraryID, store.LibraryRoleManage); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+ingestJobColumns+`
+		FROM ingest_jobs j
+		JOIN libraries l ON l.id = j.library_id
+		LEFT JOIN library_access a
+		  ON a.library_id = l.id AND a.user_id = ?
+		WHERE j.library_id = ?
+		  AND (l.owner_user_id = ? OR a.role = 'manage')
+		  AND j.state <> 'promoted'
+		ORDER BY j.created_at DESC, j.id DESC
+		LIMIT ?`, actorUserID, libraryID, actorUserID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []store.IngestJob
+	for rows.Next() {
+		job, err := scanIngestJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
 func (s *Store) ListIngestRecoveryJobs(
 	ctx context.Context,
 	before time.Time,

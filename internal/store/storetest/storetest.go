@@ -58,6 +58,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogAvailabilityRespectsItsLimit", func(t *testing.T) {
 		testCatalogAvailabilityRespectsItsLimit(t, open)
 	})
+	t.Run("IngestActivityShowsWhatNeverBecameABook", func(t *testing.T) {
+		testIngestActivityShowsWhatNeverBecameABook(t, open)
+	})
 	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
 		testTrashRestoreAndPurge(t, open)
 	})

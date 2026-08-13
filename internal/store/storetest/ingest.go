@@ -980,3 +980,113 @@ func testIngestRecoveryList(t *testing.T, open OpenFunc) {
 		t.Fatalf("invalid worker state: %v", err)
 	}
 }
+
+// testIngestActivityShowsWhatNeverBecameABook covers the question a user
+// asks after an upload vanishes: the job that failed must be findable,
+// newest first, without paging past every upload that worked.
+func testIngestActivityShowsWhatNeverBecameABook(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "activity-owner")
+	reader := MkUser(t, s, "activity-reader")
+	outsider := MkUser(t, s, "activity-outsider")
+	now := time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
+	if err := s.CreateLibrary(ctx, store.Library{
+		ID: "lib-activity", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Activity", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(
+		ctx, owner.ID, "lib-activity", reader.ID, store.LibraryRoleRead, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// One job that goes bad, and a newer one still working. Ordering is
+	// newest first, so the newer job leads.
+	bad := createIngestJob(t, s, owner.ID, "lib-activity", "job-bad", now)
+	stagedBad, err := s.CommitIngestStage(ctx, owner.ID, bad.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: bad.Revision,
+			Artifact:         ingestBlob("activity-bad", 43),
+			StagingPath:      contentpath.StagingPath(bad.ID),
+			UpdatedAt:        now.Add(30 * time.Second),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad = stagedBad.Job
+	code, detail := "invalid_epub", "not an epub"
+	quarantineExpiry := now.Add(72 * time.Hour)
+	if _, err := s.TransitionIngestJob(ctx, owner.ID, bad.ID,
+		store.IngestJobTransition{
+			ExpectedState: bad.State, ExpectedRevision: bad.Revision,
+			NextState: store.IngestQuarantined, ErrorCode: code,
+			ErrorDetail: detail, ExpiresAt: &quarantineExpiry,
+			UpdatedAt: now.Add(time.Minute),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	working := createIngestJob(
+		t, s, owner.ID, "lib-activity", "job-working", now.Add(time.Hour))
+
+	activity, err := s.ListIngestActivity(ctx, owner.ID, "lib-activity", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activity) != 2 ||
+		activity[0].ID != working.ID || activity[1].ID != bad.ID {
+		t.Fatalf("activity order: %+v", activity)
+	}
+	if activity[1].ErrorCode == nil || *activity[1].ErrorCode != code {
+		t.Fatalf("failure reason lost: %+v", activity[1])
+	}
+
+	// A promoted job is a book; the catalog is where it belongs.
+	promoteForActivity(t, s, working, now.Add(2*time.Hour))
+	activity, err = s.ListIngestActivity(ctx, owner.ID, "lib-activity", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activity) != 1 || activity[0].ID != bad.ID {
+		t.Fatalf("promoted job still listed as activity: %+v", activity)
+	}
+
+	// Uploading is a manage capability, so seeing why an upload failed is
+	// too: a reader is not a librarian.
+	for _, id := range []string{reader.ID, outsider.ID} {
+		if _, err := s.ListIngestActivity(
+			ctx, id, "lib-activity", 50); err != store.ErrNotFound {
+			t.Fatalf("non-manager read ingest activity: %v", err)
+		}
+	}
+	for _, limit := range []int{0, 501} {
+		if _, err := s.ListIngestActivity(
+			ctx, owner.ID, "lib-activity", limit); err == nil {
+			t.Fatalf("activity limit %d accepted", limit)
+		}
+	}
+}
+
+func promoteForActivity(
+	t *testing.T, s store.Store, job store.IngestJob, at time.Time,
+) {
+	t.Helper()
+	ctx := context.Background()
+	blob := ingestBlob("activity-"+job.ID, 41)
+	staged, err := s.CommitIngestStage(ctx, job.UserID, job.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: job.Revision, Artifact: blob,
+			StagingPath: contentpath.StagingPath(job.ID), UpdatedAt: at,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted := extractIngestJob(t, s, staged.Job, at.Add(time.Minute))
+	if _, err := s.CommitNewBookPromotion(ctx, promoted.UserID, promoted.ID,
+		promotionRequest(promoted, blob, "book-"+promoted.ID,
+			"file-"+promoted.ID, at.Add(2*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+}
