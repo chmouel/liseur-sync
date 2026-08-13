@@ -15,7 +15,9 @@ it is validated, stored once whatever its name, and served back to any
 reader that speaks OPDS 1.2 — KOReader included — so one server supplies
 the file and the reading position that goes with it. Or read it in the
 browser: the reader unpacks the publication client-side, so no route ever
-serves publisher markup, and it reports position like any other client.
+serves publisher markup, no script inside a book is allowed to run, and
+it reports position like any other client. Operators who want a harder
+line can serve the reader from a second hostname that holds no cookie.
 
 A librarian can correct any book, browse by series, contributor, tag or
 genre, search the lot, and — if the operator turns it on — ask

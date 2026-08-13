@@ -660,6 +660,15 @@ hand-written one failed to paginate past the second page of a real book.
 That keeps the promise that mattered, which was no build step and no CDN,
 and drops the one that was only a preference.
 
+An operator who would rather not lay out publisher markup on the origin
+that holds the session cookie sets `reader_origin` to a second hostname
+pointed at the same server. That hostname serves the reader page and the
+static assets and returns 404 for everything else; the main origin
+authorises the book and redirects there with a short-lived reader token
+in the URL fragment, which no server, log or proxy ever sees. It is off
+by default, because it costs a second certificate to defend against a
+browser bug rather than against a book.
+
 M12 has shipped, and it is the one feature that makes this server talk
 to somebody else. A librarian on a book's page can ask OpenLibrary and
 Google Books what they know about it. It is off until an operator names a
