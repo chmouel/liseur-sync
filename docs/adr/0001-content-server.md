@@ -118,16 +118,66 @@ taken from the catalog sync its reading position
 
 ### After the MVP
 
-Ordered by how much a real library misses them, not by how interesting they
-are to build: cover extraction and per-library parser configuration
-([ADR-0004](0004-metadata-and-categorization.md)); watched folders
-([ADR-0002](0002-library-storage-and-ownership.md)); metadata editing;
-categorization and search
-([ADR-0004](0004-metadata-and-categorization.md)); the web reader
-([ADR-0007](0007-web-reader.md)); external metadata providers; and the
-client work in [ADR-0008](0008-liseur-android-client.md) and
-[ADR-0009](0009-liseur-desktop-client.md), which depends only on the MVP
-API surface being stable.
+Two kinds of work remain, and they are not interchangeable. The loose ends
+are small, known, and bounded by decisions already made. The features are
+new surface, ordered by how much a real library misses them rather than by
+how interesting they are to build.
+
+**Loose ends in shipped work.** Each is a gap inside something that already
+works, and each has an owning ADR:
+
+1. **An instance-wide staging cap**
+   ([ADR-0005](0005-upload-and-ingestion.md) phase 2). Per-request and
+   per-user bounds exist; nothing bounds the sum. Concurrent uploads from
+   users who are each inside quota can still fill the disk.
+2. **A sweep over abandoned `received` jobs**
+   ([ADR-0005](0005-upload-and-ingestion.md) phase 4). A crash between
+   staging bytes and committing the job orphans one file per in-flight
+   request. Reconciliation does not collect them, because no job reached a
+   state that says they are garbage.
+3. **Mapping backfill** ([ADR-0003](0003-catalog-work-identity.md) phase 3).
+   Resolution backfills lazily and correctly; there is no maintenance
+   command to pre-resolve a user's existing works.
+
+The first two are durability, not polish, and should come before any
+feature below.
+
+**Features**, in order:
+
+1. **Cover extraction** ([ADR-0004](0004-metadata-and-categorization.md)
+   phase 1, [ADR-0005](0005-upload-and-ingestion.md) phase 3), then
+   surfacing them in the catalog and OPDS feeds
+   ([ADR-0006](0006-catalog-api-and-opds.md)). A catalog of titles is the
+   most visible thing the MVP does without.
+2. **Per-library parser configuration**
+   ([ADR-0004](0004-metadata-and-categorization.md) phase 1). The pattern
+   list is still the built-in default, so a library whose filenames follow
+   another convention cannot say so.
+3. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
+   phase 3). The ingest pipeline already accepts a `watched` source; what
+   is missing is the scanner and its reconciliation.
+4. **Metadata editing and categorization**
+   ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3):
+   the edit UI, series/contributor/tag pages, then search and facets. The
+   store already applies locked fields and whole-set assertions, so this is
+   surface over settled rules.
+5. **Richer catalog output**
+   ([ADR-0006](0006-catalog-api-and-opds.md) phases 2 and 3): filtering
+   beyond a plain listing, and recently-added, OpenSearch and
+   series/contributor OPDS feeds.
+6. **The web reader** ([ADR-0007](0007-web-reader.md)).
+7. **Similarity-based duplicate detection**
+   ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
+   normalization rule worth defending before it needs code.
+8. **External metadata providers**
+   ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
+   forever.
+
+The client work in [ADR-0008](0008-liseur-android-client.md) and
+[ADR-0009](0009-liseur-desktop-client.md) is independent of all of the
+above: it depends only on the MVP API surface, which is now stable and
+includes `POST /v1/books/{id}/resolve`, the route a downloaded book needs
+before it can sync.
 
 ## Consequences
 

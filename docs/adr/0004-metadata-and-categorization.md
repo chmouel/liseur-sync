@@ -123,7 +123,8 @@ External metadata cannot be a required ingest dependency.
    promotion.
 
    **Remaining:** per-library parser configuration (the pattern list is still
-   the built-in default), and cover extraction.
+   the built-in default), and cover extraction. **Next for this ADR:** cover
+   extraction, which is the most visible thing the catalog does without.
 
 2. Metadata edit UI, series/contributor/tag pages, and merge tools — later.
 3. Full-text search and facets — later.
