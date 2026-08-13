@@ -10,7 +10,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +35,7 @@ type uploadFixture struct {
 	other   store.User
 	token   string
 	library string
+	root    string
 }
 
 func newUploadFixture(t *testing.T) *uploadFixture {
@@ -64,7 +68,8 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 	t.Cleanup(ts.Close)
 
 	f := &uploadFixture{
-		ts: ts, st: st, cas: cas,
+		root: root,
+		ts:   ts, st: st, cas: cas,
 		user:    storetest.MkUser(t, st, "uploader"),
 		other:   storetest.MkUser(t, st, "stranger"),
 		library: "lib-1",
@@ -386,6 +391,194 @@ func TestUploadRejectsAQuotaOverrun(t *testing.T) {
 		bytes.Repeat([]byte("y"), 512))
 	if code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("code = %d, want 413: %v", code, out)
+	}
+	// The rejected bytes must not stay on disk. Nothing in the database
+	// points at them once the commit fails, so if they survive here no
+	// recovery or GC pass will ever find them, and a user already at
+	// quota could fill the disk by looping with fresh keys.
+	if n := stagedFiles(t, f.root); n != 0 {
+		t.Fatalf("%d staged file(s) left behind by a rejected upload", n)
+	}
+}
+
+// TestUploadAfterAQuotaRejectionStoresTheNewFile is the reason the leak
+// above matters beyond disk: a surviving stage is keyed by job id, and
+// CAS.Stage replays it without reading the body. The retry would be
+// answered 202 while storing the *first* upload's bytes.
+func TestUploadAfterAQuotaRejectionStoresTheNewFile(t *testing.T) {
+	f := newUploadFixture(t)
+	f.setQuota(t, 32)
+	first := bytes.Repeat([]byte("y"), 512)
+	if code, _ := f.upload(t, f.token, f.library, "recover", first); code != http.StatusRequestEntityTooLarge {
+		t.Fatal("expected the first upload to be refused")
+	}
+
+	f.setQuota(t, 0)
+	second := []byte("a different book")
+	code, out := f.upload(t, f.token, f.library, "recover", second)
+	if code != http.StatusAccepted {
+		t.Fatalf("retry: %d %v", code, out)
+	}
+	sum := sha256.Sum256(second)
+	if got := out["sha256"]; got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("stored the wrong content: sha256 = %v, want the retry's %s",
+			got, hex.EncodeToString(sum[:]))
+	}
+}
+
+// stagedFiles counts artifacts sitting in the CAS staging directory.
+func stagedFiles(t *testing.T, root string) int {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, "content", ".incoming"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		// Lock files are permanent fixtures, not artifacts.
+		if strings.HasPrefix(e.Name(), ".lock-") {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// TestUploadNeverAnswers5xxForMalformedInput covers the repo rule that
+// malformed input is always a precise 4xx. The long-library-id case is the
+// one that broke it: the id goes into the request fingerprint, which the
+// store rejects with an error the handler cannot classify.
+func TestUploadNeverAnswers5xxForMalformedInput(t *testing.T) {
+	f := newUploadFixture(t)
+	for _, tc := range []struct {
+		name    string
+		library string
+		want    int
+	}{
+		{"unknown library", "no-such-library", http.StatusNotFound},
+		{"absurdly long library id", strings.Repeat("a", 600), http.StatusNotFound},
+		{"library id just over the bound", strings.Repeat("b", 129), http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := f.upload(t, f.token, tc.library, "malformed", []byte("x"))
+			if code != tc.want {
+				t.Fatalf("code = %d, want %d: %v", code, tc.want, out)
+			}
+		})
+	}
+
+	// A body that is not multipart at all, and one whose boundary lies.
+	req, _ := http.NewRequest(http.MethodPost,
+		f.ts.URL+"/v1/library/"+f.library+"/upload",
+		strings.NewReader("--nope\r\nnot really multipart"))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=nope")
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	req.Header.Set("Idempotency-Key", "truncated")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		t.Fatalf("truncated multipart body answered %d", resp.StatusCode)
+	}
+}
+
+// TestUploadBoundsWhatItReadsFromTheNetwork pins that max_upload_bytes
+// bounds the transport and not merely the stored file. multipart.Part.Close
+// drains the remainder of a part, and skipping a non-file part reads all of
+// it, so without a transport bound a client could make the server read an
+// unlimited number of bytes it had already refused to store.
+func TestUploadBoundsWhatItReadsFromTheNetwork(t *testing.T) {
+	f := newUploadFixture(t)
+	f.setMaxUpload(t, 1024)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	// A junk part the handler skips, far larger than the file bound.
+	junk, err := mw.CreateFormField("junk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := junk.Write(bytes.Repeat([]byte("j"), 4<<20)); err != nil {
+		t.Fatal(err)
+	}
+	file, err := mw.CreateFormFile("file", "book.epub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("tiny")); err != nil {
+		t.Fatal(err)
+	}
+	mw.Close()
+
+	req, _ := http.NewRequest(http.MethodPost,
+		f.ts.URL+"/v1/library/"+f.library+"/upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	req.Header.Set("Idempotency-Key", "junk-parts")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("a 4 MiB envelope under a 1 KiB limit answered %d", resp.StatusCode)
+	}
+	if n := stagedFiles(t, f.root); n != 0 {
+		t.Fatalf("%d staged file(s) left behind", n)
+	}
+}
+
+// TestConcurrentUploadsOfOneKeyKeepTheirBytes is the race the commit-error
+// cleanup has to survive. Two requests carrying the same idempotency key
+// enter the same job and stage the same path; one commits, the other loses
+// on revision. The loser must not delete the stage, because it is the very
+// file the winner just recorded.
+func TestConcurrentUploadsOfOneKeyKeepTheirBytes(t *testing.T) {
+	f := newUploadFixture(t)
+	body := bytes.Repeat([]byte("concurrent"), 512)
+	sum := sha256.Sum256(body)
+	want := hex.EncodeToString(sum[:])
+
+	const racers = 4
+	var wg sync.WaitGroup
+	codes := make([]int, racers)
+	start := make(chan struct{})
+	for i := range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			codes[i], _ = f.upload(t, f.token, f.library, "raced", body)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, code := range codes {
+		if code < 200 || code >= 300 {
+			t.Fatalf("racer %d got %d, want a 2xx", i, code)
+		}
+	}
+
+	job, err := f.st.IngestJobByID(t.Context(), f.user.ID,
+		uploadJobID(f.user.ID, f.library, "raced"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ContentSHA256 == nil || *job.ContentSHA256 != want {
+		t.Fatalf("digest = %v, want %s", job.ContentSHA256, want)
+	}
+	if job.StagingPath == nil {
+		t.Fatal("committed job has no staging path")
+	}
+	// The recorded bytes must still be there and still be what we sent.
+	if _, err := f.cas.InspectArtifact(t.Context(), *job.StagingPath, want, job.BytesReceived); err != nil {
+		t.Fatalf("a losing racer destroyed the winner's content: %v", err)
 	}
 }
 
