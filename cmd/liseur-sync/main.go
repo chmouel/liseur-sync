@@ -243,11 +243,21 @@ func main() {
 	}
 }
 
+const topUsage = `usage: liseur-sync <command> [flags]
+
+  serve [-config <file>]   run the sync and content server
+  admin [-config <file>]   manage users, tokens, and libraries;
+                           run "liseur-sync admin help" for subcommands
+`
+
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: liseur-sync <serve|admin> [flags]")
+		return errors.New(topUsage)
 	}
 	switch args[0] {
+	case "help", "-h", "--help":
+		fmt.Print(topUsage)
+		return nil
 	case "serve":
 		return cmdServe(args[1:])
 	case "admin":
@@ -421,7 +431,14 @@ func cmdAdmin(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return errors.New("usage: liseur-sync admin [-config f] <create-user|mint-token|list-tokens|revoke-token>")
+		return errors.New(admin.Usage)
+	}
+	// Help must not need a working database: an operator who cannot
+	// connect still has to be able to find out what the commands are.
+	switch rest[0] {
+	case "help", "-h", "--help":
+		fmt.Print(admin.Usage)
+		return nil
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
