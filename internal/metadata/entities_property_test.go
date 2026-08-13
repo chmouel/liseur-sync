@@ -121,6 +121,17 @@ func TestMergeSetProperties(t *testing.T) {
 					row, got, context())
 			}
 		}
+		for _, assertion := range incoming {
+			got, ok := partialByKey[assertion.Key]
+			if !ok {
+				t.Fatalf("a partial merge dropped asserted key %q: %s",
+					assertion.Key, context())
+			}
+			if !got.Locked && Rank(got.Source) < Rank(source) {
+				t.Fatalf("a partial merge ignored an asserted key %q: %s",
+					assertion.Key, context())
+			}
+		}
 		replayedPartial, partialChanged := MergeEntries(
 			partial, incoming, source, setLocked)
 		if partialChanged || !equalSets(partial, replayedPartial) {
