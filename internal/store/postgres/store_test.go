@@ -34,6 +34,27 @@ func TestStore(t *testing.T) {
 	storetest.Run(t, open)
 }
 
+func (s *Store) InsertBookFileForTest(ctx context.Context, file store.BookFile, sizeBytes int64) error {
+	if _, err := s.db.ExecContext(ctx, q(
+		`INSERT INTO blobs (sha256, size_bytes, created_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(sha256) DO NOTHING`),
+		file.BlobSHA256, sizeBytes, file.CreatedAt.UTC()); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, q(
+		`INSERT INTO book_files
+		 (id, library_id, book_id, blob_sha256, source,
+		  source_relative_path, original_filename, media_type,
+		  partial_md5, dc_identifier, availability, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		file.ID, file.LibraryID, file.BookID, file.BlobSHA256,
+		string(file.Source), file.SourceRelativePath, file.OriginalFilename,
+		file.MediaType, file.PartialMD5, file.DCIdentifier,
+		string(file.Availability), file.CreatedAt.UTC(), file.UpdatedAt.UTC())
+	return err
+}
+
 // reset drops all tables so each test starts from an empty schema.
 func reset(t *testing.T, s *Store) {
 	t.Helper()

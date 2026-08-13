@@ -692,6 +692,14 @@ type BookFile struct {
 	UpdatedAt          time.Time
 }
 
+// CatalogBookCursor is the exclusive cursor for catalog listings. It pairs
+// the sort key with the id so that books created in the same instant still
+// page deterministically.
+type CatalogBookCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
 // CommitNewBookPromotionRequest atomically creates one new catalog book and
 // file from an extracted job after its CAS blob is durable.
 type CommitNewBookPromotionRequest struct {
@@ -1181,7 +1189,14 @@ type Store interface {
 	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
 	CatalogBookByID(ctx context.Context, userID, bookID string, required LibraryRole) (CatalogBook, error)
-	ListCatalogBooks(ctx context.Context, userID, libraryID string) ([]CatalogBook, error)
+	// ListCatalogBooks pages one library's readable books, oldest first.
+	// Trashed books are excluded: they are not part of the catalog a
+	// reader browses. A nil cursor starts at the beginning.
+	ListCatalogBooks(ctx context.Context, userID, libraryID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// ListBookFiles returns one book's files, newest first, so that a
+	// download can pick the current one. It requires read access to the
+	// book's library.
+	ListBookFiles(ctx context.Context, userID, bookID string, required LibraryRole) ([]BookFile, error)
 	// CatalogBookMetadata reads one book's scalar fields and every metadata
 	// entity set attached to it in a single transaction, so a caller can run
 	// the precedence engine against a consistent snapshot.

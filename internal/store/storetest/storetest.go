@@ -21,6 +21,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })
+	t.Run("CatalogListingsPageAndIsolate", func(t *testing.T) {
+		testCatalogListingsPageAndIsolate(t, open)
+	})
+	t.Run("CatalogFilesOrderAndIsolate", func(t *testing.T) {
+		testCatalogFilesOrderAndIsolate(t, open)
+	})
 	t.Run("AtomicCatalogWorkResolution", func(t *testing.T) {
 		testAtomicCatalogWorkResolution(t, open)
 	})

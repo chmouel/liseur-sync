@@ -324,18 +324,33 @@ func (s *Store) CatalogBookByID(ctx context.Context, userID, bookID string, requ
 	return book, err
 }
 
-func (s *Store) ListCatalogBooks(ctx context.Context, userID, libraryID string) ([]store.CatalogBook, error) {
+func (s *Store) ListCatalogBooks(
+	ctx context.Context,
+	userID, libraryID string,
+	after *store.CatalogBookCursor,
+	limit int,
+) ([]store.CatalogBook, error) {
+	if limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
 	if _, err := s.LibraryByID(ctx, userID, libraryID, store.LibraryRoleRead); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+bookColumns+`
+	query := `SELECT ` + bookColumns + `
 		 FROM books b
 		 JOIN libraries l ON l.id = b.library_id
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
 		 WHERE l.id = ? AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
-		 ORDER BY b.created_at, b.id`,
-		userID, libraryID, userID)
+		   AND b.status <> 'trashed'`
+	args := []any{userID, libraryID, userID}
+	if after != nil {
+		cursor := formatTime(after.CreatedAt)
+		query += ` AND (b.created_at > ? OR (b.created_at = ? AND b.id > ?))`
+		args = append(args, cursor, cursor, after.ID)
+	}
+	query += ` ORDER BY b.created_at, b.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -349,6 +364,49 @@ func (s *Store) ListCatalogBooks(ctx context.Context, userID, libraryID string) 
 		out = append(out, book)
 	}
 	return out, rows.Err()
+}
+
+// ListBookFiles is ACL-scoped through the book's library, like every other
+// catalog read. Newest first, so a caller wanting "the" file can take the
+// first available one without sorting.
+func (s *Store) ListBookFiles(
+	ctx context.Context,
+	userID, bookID string,
+	required store.LibraryRole,
+) ([]store.BookFile, error) {
+	if err := checkLibraryRole(required); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+bookFileColumns+`
+		 FROM book_files f
+		 JOIN libraries l ON l.id = f.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE f.book_id = ?
+		   AND (l.owner_user_id = ? OR a.role = 'manage' OR a.role = ?)
+		 ORDER BY f.created_at DESC, f.id DESC`,
+		userID, bookID, userID, string(required))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.BookFile
+	for rows.Next() {
+		file, err := scanBookFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		// Distinguishing "no such book" from "no access" would let a
+		// caller probe for book ids.
+		return nil, store.ErrNotFound
+	}
+	return out, nil
 }
 
 func (s *Store) ResolveCatalogBookWork(
