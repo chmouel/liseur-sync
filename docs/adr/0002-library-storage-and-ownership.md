@@ -173,9 +173,14 @@ server disk allocation.
    files whose blob is recorded missing stop being served, books with no
    servable file become missing, and both reverse when the blob returns.
    Superseded files are exempt, because supersession is not a statement
-   about bytes.
-   **Remaining:** last-reference deletion, trash and restore, and the backup
-   verifier.
+   about bytes. Trash and restore are in place: trashing retains the files
+   so the blob stays a GC root and stays charged, restore relinks them and
+   returns the book to `missing` when nothing servable remains, and a
+   bounded hourly pass permanently deletes what has outlived its retention
+   window, releasing quota and orphan-marking blobs that lose their last
+   reference. `admin verify-backup` checks that every referenced blob is
+   present in a backup at the size the database recorded, and reports
+   unreferenced content without touching it. **Implemented.**
 2. Managed-library upload and management UI — the MVP path.
 3. Watched-folder scanner and reconciliation — later.
 

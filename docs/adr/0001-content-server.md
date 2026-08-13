@@ -110,17 +110,16 @@ precedence engine. Each ADR records its own remaining edges.
    ([ADR-0006](0006-catalog-api-and-opds.md)).
 
 All four are in place: the MVP definition above is satisfied end to end.
-What is left before a release is operational rather than functional —
-catalog availability reconciliation, deletion and trash, and backup
-verification (M6), none of which stand between a user and their book.
+The operational work behind it is done too — catalog availability
+reconciliation, deletion and trash, and backup verification (M6).
 
 ### After the MVP
 
 Ordered by how much a real library misses them, not by how interesting they
 are to build: cover extraction and per-library parser configuration
 ([ADR-0004](0004-metadata-and-categorization.md)); watched folders
-([ADR-0002](0002-library-storage-and-ownership.md)); metadata editing and
-trash/restore UI; categorization and search
+([ADR-0002](0002-library-storage-and-ownership.md)); metadata editing;
+categorization and search
 ([ADR-0004](0004-metadata-and-categorization.md)); the web reader
 ([ADR-0007](0007-web-reader.md)); external metadata providers; and the
 client work in [ADR-0008](0008-liseur-android-client.md) and
