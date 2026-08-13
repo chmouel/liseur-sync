@@ -102,61 +102,46 @@ External metadata cannot be a required ingest dependency.
 
 ## Implementation phases
 
-1. Define the pure bounded-extraction result, metadata entities, provenance,
-   locks, precedence engine, and filename parser. ADR-0005's ingestion worker
-   calls this interface after structural EPUB validation. The relational
-   entities, field provenance, and lock schema are implemented. The pure OPF
-   extractor now returns bounded embedded title, subtitle, description,
-   publisher, publication date, identifiers, languages, subjects, series,
-   contributors, and cover references from EPUB2 and EPUB3 metadata. The
-   ingestion worker now durably persists that bounded embedded result as a
-   canonical JSON snapshot in the atomic `validated -> extracted` transition.
-   The pure scalar precedence and lock engine is implemented: a blank
-   candidate never clears a value, a locked field only accepts manual edits,
-   an unlocked field accepts a strictly higher-precedence candidate or a
-   refresh from its own source, and a manual edit locks the field. Entity-set
-   merging uses the same rules with whole-set assertions: an empty assertion
-   is never treated as a request to empty a set, a source drops the unlocked
-   rows it owns or outranks and no longer asserts, and locked rows and rows
-   owned by a stronger source are left alone. Merging also accepts a
-   set-level lock that rejects an assertion outright, which is what will keep
-   a deliberately emptied set empty once that lock is persisted and raised by
-   the edit path. Entity names match on a case- and whitespace-insensitive
-   key while keeping their display spelling.
-   The filename and folder parser is implemented as a pure per-library
-   pattern list: the four documented layouts, conservative " - " splitting,
-   plain decimal series positions only, a confidence grade recording whether
-   the layout accounted for the whole name or had to guess where one field
-   ended, the original path retained, and unusable or ambiguous names left
-   unset. The grade is per candidate but it also records which fields were
-   guessed, because the reason for it is per field: a layout can read an
-   unambiguous author from a directory and still fail to explain the rest of
-   the name.
-   Both the embedded snapshot and a parsed path are mapped to one
-   source-neutral proposal that the engine consumes; EPUB subjects become
-   tags rather than genres, since a subject list mixes both and inventing a
-   genre would be guessing. A proposal declares whether its sets are complete
-   or partial: an extraction reads the whole publication and may therefore
-   drop what it no longer claims, while a path names at most one author and
-   one series and may only add or take over the rows it names.
-   Persisting a resolved proposal is implemented: a book carries a revision
-   and six set-level locks, and one transaction replaces all six sets from
-   the complete resolved metadata under an expected revision, so a caller
-   resolves against what it read and a concurrent editor's writes are never
-   silently overwritten. One materialization step resolves a promoted job's
-   embedded snapshot and library path against the persisted rows and applies
-   the result. A filename outranks the publication's own metadata, so a
-   value recovered by splitting a single name is never applied, only the
-   ones a directory boundary settled, so a layout still contributes the
-   author or series it read from a directory of its own even when it could
-   not explain the rest of the name. The one layout that reads every field
-   out of a single name is therefore parsed and graded but contributes
-   nothing on its own, pending a confirmation step an operator drives. The
-   materialization is not yet scheduled either, because the automatic
-   promotion worker that would produce jobs for it to consume does not exist
-   and no worker query returns promoted jobs.
-   Wiring the parser to per-library configuration, cover extraction, and
-   automatic promotion remain.
+1. **Extraction, precedence, and ingest wiring.** Done, except where noted.
+
+   The OPF extractor returns bounded title, subtitle, description, publisher,
+   date, identifiers, languages, subjects, series, contributors, and cover
+   references from EPUB2 and EPUB3. The ingest worker persists that as a
+   canonical JSON snapshot in the `validated -> extracted` transition.
+
+   The precedence engine, entity schema, provenance, and locks are
+   implemented. A blank candidate never clears a value; a locked field takes
+   manual edits only; a manual edit locks the field. Set merges use the same
+   rules on whole-set assertions, so an empty assertion never empties a set,
+   and locked or stronger-owned rows are left alone. Names match case- and
+   whitespace-insensitively while keeping their display spelling.
+
+   The filename parser handles the four documented layouts per library. It
+   records which fields a layout had to guess at, and those are dropped rather
+   than applied — so a layout still contributes an author it read from a
+   directory of its own even when it could not explain the rest of the name.
+   The one layout that reads every field out of a single name therefore
+   contributes nothing until a confirmation step exists.
+
+   Both sources map to one source-neutral proposal. Subjects become tags, not
+   genres: a subject list mixes both and picking one would be guessing. A
+   proposal declares whether its sets are complete or partial, since an
+   extraction reads the whole publication but a path names at most one author
+   and one series.
+
+   The promotion worker runs `extracted -> promoted`: it publishes the blob,
+   then creates the book and its file in one revision-checked transaction.
+   The book's scalar metadata is resolved into that same transaction, because
+   a new book has no persisted rows to reconcile against and `promoted` is
+   terminal — a book created without a title could never be listed again to
+   receive one. Entity sets are applied immediately afterwards, against an
+   expected revision so a concurrent editor is never overwritten; a failure
+   there leaves a correct but untagged book rather than undoing the
+   promotion.
+
+   **Remaining:** per-library parser configuration (the pattern list is still
+   the built-in default), and cover extraction.
+
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.
