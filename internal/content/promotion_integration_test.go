@@ -90,7 +90,7 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 	}
 
 	report, err := content.RunIngestPromotionPass(
-		ctx, st, cas, func() time.Time { return now.Add(5 * time.Minute) },
+		ctx, st, cas, nil, func() time.Time { return now.Add(5 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
 		t.Fatalf("promotion pass: %v", err)
@@ -114,11 +114,16 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 	if book.LibraryID != library.ID || book.Status != store.BookActive {
 		t.Fatalf("book = %+v", book)
 	}
+	// The title is committed with the book, not after it, so no crash can
+	// leave a title-less book that no worker is able to list again.
+	if book.Title != "Dune" || book.TitleSource != store.MetadataEmbedded {
+		t.Fatalf("title = %q from %q", book.Title, book.TitleSource)
+	}
 
 	// A second pass has nothing to list: the job left extracted, so the pass
 	// cannot create a second book for the same artifact.
 	again, err := content.RunIngestPromotionPass(
-		ctx, st, cas, func() time.Time { return now.Add(9 * time.Minute) },
+		ctx, st, cas, nil, func() time.Time { return now.Add(9 * time.Minute) },
 		48*time.Hour, 10)
 	if err != nil {
 		t.Fatalf("second pass: %v", err)

@@ -20,8 +20,11 @@ import (
 type fakePromotionStore struct {
 	job store.IngestJob
 
+	book store.BookMetadata
+
 	listErr   error
 	commitErr error
+	applyErr  error
 
 	listed    []store.IngestState
 	committed []store.CommitNewBookPromotionRequest
@@ -87,9 +90,39 @@ func (f *fakePromotionStore) CommitNewBookPromotion(
 	f.job.Revision++
 	f.job.UpdatedAt = request.UpdatedAt
 	f.job.BookID = &request.Book.ID
+	f.book = store.BookMetadata{Book: request.Book}
+	f.book.Book.Revision = 1
 	return store.IngestPromotionResult{
 		Job: f.job, Book: request.Book, File: request.File, Blob: request.Blob,
 	}, nil
+}
+
+// The pass attaches entity sets after promoting. These model just enough for
+// that call: a book the store knows about, and a revision-checked apply.
+func (f *fakePromotionStore) CatalogBookMetadata(
+	_ context.Context, userID, bookID string, _ store.LibraryRole,
+) (store.BookMetadata, error) {
+	if userID != f.job.UserID || f.book.Book.ID != bookID {
+		return store.BookMetadata{}, store.ErrNotFound
+	}
+	return f.book, nil
+}
+
+func (f *fakePromotionStore) ApplyCatalogBookMetadata(
+	_ context.Context, userID string, request store.ApplyBookMetadataRequest,
+) (store.BookMetadata, error) {
+	if userID != f.job.UserID {
+		return store.BookMetadata{}, store.ErrNotFound
+	}
+	if f.applyErr != nil {
+		return store.BookMetadata{}, f.applyErr
+	}
+	if request.ExpectedRevision != f.book.Book.Revision {
+		return store.BookMetadata{}, store.ErrStaleRevision
+	}
+	f.book = request.Metadata
+	f.book.Book.Revision++
+	return f.book, nil
 }
 
 func samePath(a, b *string) bool {
@@ -153,7 +186,7 @@ func TestPromoteIngestJobCreatesTheBookTheJobBecomes(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	result, err := PromoteIngestJob(
-		context.Background(), st, blobs, st.job, fixedClock(now), time.Hour)
+		context.Background(), st, blobs, st.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
@@ -186,28 +219,56 @@ func TestPromoteIngestJobCreatesTheBookTheJobBecomes(t *testing.T) {
 	}
 }
 
-// A book is created with nothing asserted about the publication. Anything the
-// server claims about a book has to be resolved against rows that only exist
-// once the book does, so promotion states no title, author or language it
-// would later have to take back.
-func TestPromoteIngestJobClaimsNothingAboutThePublication(t *testing.T) {
+// A promoted book already knows what it is. Resolving metadata only needs
+// rows to resolve against when the book already exists, so a new one's scalar
+// fields belong in the promotion itself — and must be, because promoted is
+// terminal and nothing would list a title-less book to finish it.
+func TestPromoteIngestJobDescribesTheBookItCreates(t *testing.T) {
 	st := &fakePromotionStore{job: extractedJob()}
-	st.job.ExtractedEmbeddedMetadataJSON = []byte(`{"title":"Dune"}`)
-	blobs := &fakeBlobPromoter{}
+	st.job.ExtractedEmbeddedMetadataJSON = []byte(
+		`{"title":"Dune","publisher":"Chilton"}`)
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
-	result, err := PromoteIngestJob(
-		context.Background(), st, blobs, st.job, fixedClock(now), time.Hour)
+	result, err := PromoteIngestJob(context.Background(), st,
+		&fakeBlobPromoter{}, st.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	if result.Book.Title != "" || result.Book.Subtitle != "" ||
-		result.Book.Description != "" || result.Book.Publisher != "" ||
-		result.Book.PublishedDate != "" || result.Book.RawMetadataJSON != nil {
-		t.Fatalf("book asserted metadata: %+v", result.Book)
+	if result.Book.Title != "Dune" ||
+		result.Book.TitleSource != store.MetadataEmbedded {
+		t.Fatalf("title = %q from %q", result.Book.Title, result.Book.TitleSource)
+	}
+	if result.Book.Publisher != "Chilton" {
+		t.Fatalf("publisher = %q", result.Book.Publisher)
+	}
+	// Fields the publication never mentioned stay empty rather than guessed.
+	if result.Book.Subtitle != "" || result.Book.Description != "" ||
+		result.Book.PublishedDate != "" {
+		t.Fatalf("book invented a field: %+v", result.Book)
 	}
 	if result.File.PartialMD5 != nil || result.File.DCIdentifier != nil {
 		t.Fatalf("file asserted fingerprints: %+v", result.File)
+	}
+}
+
+// A snapshot the server cannot read is a cache it derived from a file that is
+// itself valid and durable. Losing the cache must not stop the book being
+// published: a title can be corrected later, an unpublished book cannot.
+func TestPromoteIngestJobPublishesDespiteAnUnreadableSnapshot(t *testing.T) {
+	st := &fakePromotionStore{job: extractedJob()}
+	st.job.ExtractedEmbeddedMetadataJSON = []byte(`{"title":`)
+	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
+
+	result, err := PromoteIngestJob(context.Background(), st,
+		&fakeBlobPromoter{}, st.job, nil, fixedClock(now), time.Hour)
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if result.Job.State != store.IngestPromoted {
+		t.Fatalf("state = %q, want promoted", result.Job.State)
+	}
+	if result.Book.Title != "" {
+		t.Fatalf("title = %q, want empty", result.Book.Title)
 	}
 }
 
@@ -219,12 +280,12 @@ func TestPromoteIngestJobDerivesStableIdentifiers(t *testing.T) {
 	second := &fakePromotionStore{job: extractedJob()}
 
 	a, err := PromoteIngestJob(context.Background(), first,
-		&fakeBlobPromoter{}, first.job, fixedClock(now), time.Hour)
+		&fakeBlobPromoter{}, first.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
 	b, err := PromoteIngestJob(context.Background(), second,
-		&fakeBlobPromoter{}, second.job, fixedClock(now.Add(time.Hour)), time.Hour)
+		&fakeBlobPromoter{}, second.job, nil, fixedClock(now.Add(time.Hour)), time.Hour)
 	if err != nil {
 		t.Fatalf("promote again: %v", err)
 	}
@@ -242,7 +303,7 @@ func TestPromoteIngestJobDerivesStableIdentifiers(t *testing.T) {
 	elsewhere := &fakePromotionStore{job: extractedJob()}
 	elsewhere.job.LibraryID = "lib-2"
 	d, err := PromoteIngestJob(context.Background(), elsewhere,
-		&fakeBlobPromoter{}, elsewhere.job, fixedClock(now), time.Hour)
+		&fakeBlobPromoter{}, elsewhere.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote elsewhere: %v", err)
 	}
@@ -254,7 +315,7 @@ func TestPromoteIngestJobDerivesStableIdentifiers(t *testing.T) {
 	other.job.ID = "job-2"
 	other.job.StagingPath = strptr(contentpath.StagingPath("job-2"))
 	c, err := PromoteIngestJob(context.Background(), other,
-		&fakeBlobPromoter{}, other.job, fixedClock(now), time.Hour)
+		&fakeBlobPromoter{}, other.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote other: %v", err)
 	}
@@ -271,7 +332,7 @@ func TestPromoteIngestJobKeepsAWatchedFilesOrigin(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	result, err := PromoteIngestJob(
-		context.Background(), st, blobs, st.job, fixedClock(now), time.Hour)
+		context.Background(), st, blobs, st.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
@@ -296,7 +357,7 @@ func TestPromoteIngestJobLeavesAnUploadUnnamed(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	result, err := PromoteIngestJob(
-		context.Background(), st, blobs, st.job, fixedClock(now), time.Hour)
+		context.Background(), st, blobs, st.job, nil, fixedClock(now), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
@@ -317,7 +378,7 @@ func TestPromoteIngestJobPublishesTheBlobBeforeCommitting(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	_, err := PromoteIngestJob(
-		context.Background(), st, blobs, st.job, fixedClock(now), time.Hour)
+		context.Background(), st, blobs, st.job, nil, fixedClock(now), time.Hour)
 	if err == nil {
 		t.Fatal("want error")
 	}
@@ -350,7 +411,7 @@ func TestPromoteIngestJobQuarantinesAnArtifactItCannotPromote(t *testing.T) {
 			now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 			result, err := PromoteIngestJob(context.Background(), st, blobs,
-				st.job, fixedClock(now), 48*time.Hour)
+				st.job, nil, fixedClock(now), 48*time.Hour)
 			if err != nil {
 				t.Fatalf("promote: %v", err)
 			}
@@ -389,7 +450,7 @@ func TestPromoteIngestJobRetriesAnOperationalFailure(t *testing.T) {
 			now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 			_, err := PromoteIngestJob(context.Background(), st, blobs,
-				st.job, fixedClock(now), time.Hour)
+				st.job, nil, fixedClock(now), time.Hour)
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("err = %v, want %v", err, tc.err)
 			}
@@ -430,7 +491,7 @@ func TestPromoteIngestJobRejectsAJobItCannotPromote(t *testing.T) {
 			st := &fakePromotionStore{job: tc.job(extractedJob())}
 			blobs := &fakeBlobPromoter{}
 			_, err := PromoteIngestJob(context.Background(), st, blobs,
-				st.job, fixedClock(now), time.Hour)
+				st.job, nil, fixedClock(now), time.Hour)
 			if !errors.Is(err, store.ErrInvalidTransition) {
 				t.Fatalf("err = %v, want invalid transition", err)
 			}
@@ -449,7 +510,7 @@ func TestPromoteIngestJobNeverMovesTimeBackwards(t *testing.T) {
 	st.job.UpdatedAt = ahead
 
 	result, err := PromoteIngestJob(context.Background(), st,
-		&fakeBlobPromoter{err: ErrDigestMismatch}, st.job,
+		&fakeBlobPromoter{err: ErrDigestMismatch}, st.job, nil,
 		fixedClock(ahead.Add(-30*time.Minute)), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
@@ -475,8 +536,8 @@ func TestPromoteIngestJobBuildsTheSameRequestOnEveryClock(t *testing.T) {
 		}
 		return got
 	}
-	first := newBookPromotion(job, blob)
-	if fingerprint(first) != fingerprint(newBookPromotion(job, blob)) {
+	first := newBookPromotion(job, blob, nil)
+	if fingerprint(first) != fingerprint(newBookPromotion(job, blob, nil)) {
 		t.Fatal("identical inputs produced different fingerprints")
 	}
 	// Pin the values, not just their agreement: two workers agreeing on the
@@ -491,7 +552,7 @@ func TestPromoteIngestJobBuildsTheSameRequestOnEveryClock(t *testing.T) {
 
 	st := &fakePromotionStore{job: job}
 	if _, err := PromoteIngestJob(context.Background(), st,
-		&fakeBlobPromoter{}, job,
+		&fakeBlobPromoter{}, job, nil,
 		fixedClock(job.UpdatedAt.Add(97*time.Minute)), time.Hour); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
@@ -510,7 +571,7 @@ func TestPromoteIngestJobRefusesAForeignStagingPath(t *testing.T) {
 	st.job.StagingPath = strptr(contentpath.StagingPath("someone-elses-job"))
 	blobs := &fakeBlobPromoter{}
 
-	_, err := PromoteIngestJob(context.Background(), st, blobs, st.job,
+	_, err := PromoteIngestJob(context.Background(), st, blobs, st.job, nil,
 		fixedClock(time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)), time.Hour)
 	if !errors.Is(err, store.ErrInvariantViolation) {
 		t.Fatalf("err = %v, want invariant violation", err)
@@ -526,7 +587,7 @@ func TestRunIngestPromotionPassCountsWhatItDid(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -547,7 +608,7 @@ func TestRunIngestPromotionPassSkipsAJobAnotherWorkerTook(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -562,7 +623,7 @@ func TestRunIngestPromotionPassReportsAQuarantine(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	report, err := RunIngestPromotionPass(
-		context.Background(), st, blobs, fixedClock(now), time.Hour, 25)
+		context.Background(), st, blobs, nil, fixedClock(now), time.Hour, 25)
 	if err != nil {
 		t.Fatalf("pass: %v", err)
 	}
@@ -590,7 +651,7 @@ func TestRunIngestPromotionPassRejectsAnUnusableRequest(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := RunIngestPromotionPass(context.Background(),
-				tc.st, tc.blobs, tc.clock, tc.retention, tc.batch)
+				tc.st, tc.blobs, nil, tc.clock, tc.retention, tc.batch)
 			if !errors.Is(err, store.ErrInvalidTransition) {
 				t.Fatalf("err = %v, want invalid transition", err)
 			}
@@ -604,7 +665,7 @@ func TestRunIngestPromotionPassPropagatesAListingFailure(t *testing.T) {
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	_, err := RunIngestPromotionPass(context.Background(), st,
-		&fakeBlobPromoter{}, fixedClock(now), time.Hour, 25)
+		&fakeBlobPromoter{}, nil, fixedClock(now), time.Hour, 25)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want %v", err, sentinel)
 	}
