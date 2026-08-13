@@ -1,6 +1,6 @@
 # ADR-0007: Web reader
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-13
 - **Supersedes:** the deferral recorded in this file on 2026-08-12
 - **Depends on:** [ADR-0005](0005-upload-and-ingestion.md),
@@ -103,14 +103,24 @@ This makes the renderer a replaceable part rather than a protocol
 commitment, which is the point: **the renderer choice is the decision
 here most likely to be wrong, so it is the one made reversible.**
 
-Given that, the first renderer is chosen on the constraint the repository
-has already committed to — vendored assets, no CDN, no build pipeline
-beyond `templ generate`. A renderer that ships a usable prebuilt bundle
-can be vendored next to `htmx.min.js`; one that assumes an npm bundler
-cannot, without introducing a Node build to a Go project that has
-deliberately avoided one. That constraint, not rendering quality, decides
-phase 2, and the locator envelope means a later change of mind costs a
-file swap rather than a migration.
+Given that, the renderer is written here rather than vendored, and it is
+deliberately the least a reader can be: unpack the archive, lay out one
+spine item at a time, remember where you were.
+
+The reason is the constraint the repository already committed to —
+vendored assets, no CDN, no build pipeline beyond `templ generate`. Every
+mature EPUB engine assumes an npm bundler, so adopting one means adding
+a Node build to a Go project that has deliberately avoided one, and
+carrying a dependency an order of magnitude larger than the feature. The
+browser now supplies the one genuinely hard part: `DecompressionStream`
+inflates the archive, so what is left is a ZIP central directory reader,
+an OPF spine, and some arithmetic.
+
+What this reader does not do is real and worth stating: no pagination
+model beyond scrolling a chapter, no full-text search inside a book, no
+annotations, and no attempt at the typographic fidelity of a dedicated
+engine. Those are the reasons to adopt an engine later, and the locator
+envelope is what makes that a file swap rather than a migration.
 
 ### The reader is an ordinary API client with a derived, short-lived token
 
@@ -168,17 +178,17 @@ removes.
    independent of any renderer and is what any browser-side client of
    this server needs.
 
-2. **The reader itself.** Next, and the one part of this ADR that needs
-   explicit sign-off, because it means vendoring a third-party renderer
-   into a repository that vendors almost nothing.
+2. **The reader itself.** Done.
 
-   A `/ui/books/{id}/read` page, the renderer vendored beside `htmx`, the
-   sandboxed iframe and its CSP, and position round-tripping through the
-   locator envelope. It must restore a position written by another
-   client from `progression` alone, since that is the only field every
-   client shares.
+   `GET /ui/books/{id}/read`, a renderer written in
+   `internal/webui/static/reader.js` with no dependency and no build
+   step, the sandboxed iframe and its CSP, and position round-tripping
+   through the locator envelope. A position written by another client is
+   restored from `progression` when its locator means nothing here,
+   since that fraction is the only field every client shares.
 
-3. **Hardened content origin.** Optional, operator-configurable.
+3. **Hardened content origin.** Optional, operator-configurable, not
+   built.
 
    Serves the reader document from a second origin so that a sandbox
    escape still lands somewhere with no credentials. This is where

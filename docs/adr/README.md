@@ -23,13 +23,13 @@ loose ends that must come before any of it, are in
 
 | ADR | Title | Scope | State | Next |
 |---|---|---|---|---|
-| [0001](0001-content-server.md) | Become a content server | — | MVP implemented | The web reader ([ADR-0007](0007-web-reader.md) phase 2) |
+| [0001](0001-content-server.md) | Become a content server | — | MVP implemented | External metadata providers, optional forever |
 | [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Implemented | Nothing outstanding |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Phases 1-3 complete | External providers, optional forever |
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
 | [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Implemented | Nothing outstanding |
-| [0007](0007-web-reader.md) | Web reader | Later | Phase 1 complete | Phase 2, the reader itself: needs sign-off to vendor a renderer |
+| [0007](0007-web-reader.md) | Web reader | Later | Phases 1-2 complete | A hardened second content origin, if an operator wants one |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |
 | [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Implemented | Nothing outstanding |
