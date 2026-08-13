@@ -24,13 +24,12 @@ import (
 // commands that inspect stored bytes rather than database rows.
 func Run(st store.Store, contentRoot string, args []string) error {
 	if len(args) == 0 {
-		return errors.New(Usage)
+		return UsageError{ExitCode: 1}
 	}
 	ctx := context.Background()
 	switch args[0] {
 	case "help", "-h", "--help":
-		fmt.Print(Usage)
-		return nil
+		return UsageError{ExitCode: 0}
 	case "create-user":
 		return createUser(ctx, st, args[1:])
 	case "mint-token":
@@ -45,6 +44,12 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return kopluginDevice(ctx, st, args[1:])
 	case "create-library":
 		return createLibrary(ctx, st, args[1:])
+	case "watch-library":
+		return watchLibrary(ctx, st, args[1:])
+	case "list-review":
+		return listReview(ctx, st, args[1:])
+	case "clear-review":
+		return clearReview(ctx, st, args[1:])
 	case "list-libraries":
 		return listLibraries(ctx, st, args[1:])
 	case "grant-library":
@@ -58,8 +63,25 @@ func Run(st store.Store, contentRoot string, args []string) error {
 	case "verify-backup":
 		return verifyBackup(ctx, st, contentRoot, args[1:])
 	default:
-		return fmt.Errorf("unknown admin subcommand %q\n%s", args[0], Usage)
+		return UsageError{
+			Message:  fmt.Sprintf("unknown admin subcommand %q", args[0]),
+			ExitCode: 1,
+		}
 	}
+}
+
+// UsageError marks an admin usage path so the command line can print it
+// directly instead of logging it as an operational failure.
+type UsageError struct {
+	Message  string
+	ExitCode int
+}
+
+func (e UsageError) Error() string {
+	if e.Message == "" {
+		return Usage
+	}
+	return e.Message + "\n" + Usage
 }
 
 // Usage lists every admin subcommand. It is exported so that the command
@@ -76,6 +98,10 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   koplugin-device <user> <name> create a statistics-plugin capability URL
 
   create-library <owner> <name> create a managed library
+  watch-library <owner> <name> <root>
+                                create a watched library over an existing
+                                read-only directory; the server never
+                                writes below <root>
   list-libraries <user>         list libraries the user can read
   grant-library <actor> <library-id> <user> read|manage
                                 grant access; actor must own or manage it
@@ -85,6 +111,13 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 show or set how a library's filenames are
                                 read; <layouts> is a comma-separated list,
                                 "default", or "none"
+  list-review <actor> <library-id>
+                                list watched books whose source file
+                                changed, which the server will not
+                                reinterpret on its own
+  clear-review <actor> <library-id> <book-id>
+                                accept the copy being served and take one
+                                book back out of review
 
   backfill-works <user>         map every catalog book the user can
                                 read to a sync work, so statistics do
@@ -307,9 +340,10 @@ func readPassword(prompt string) (string, error) {
 	return "", errors.New("no TTY and no piped stdin for password input")
 }
 
-// createLibrary makes a managed library. Managed is the only kind the
-// MVP can fill: watched libraries need the folder scanner, which does
-// not exist yet, so a watched library would be permanently empty.
+// createLibrary makes a managed library, whose content the server owns.
+// A library over a directory the server must not write to is a different
+// command, because the two differ in what an administrator is promising
+// rather than in a flag.
 func createLibrary(ctx context.Context, st store.Store, args []string) error {
 	if len(args) != 2 {
 		return errors.New("usage: create-library <owner> <name>")
