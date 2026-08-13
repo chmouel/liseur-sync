@@ -285,6 +285,32 @@ A restored book comes back with `status: "missing"` rather than
 not a failure to report; the catalog entry and its metadata are back,
 and the file needs uploading again.
 
+### Books that are the same file
+
+Uploading one file twice gives two books. That is allowed on purpose —
+the bytes are stored once, so it costs nothing, and a client that wants
+two entries for one file may have a reason. What the server will not do
+is leave you guessing about it.
+
+`GET /v1/libraries/{library}/duplicates` groups the library's books by
+content digest and returns the groups holding more than one book:
+
+```json
+{"duplicates": [
+  {"sha256": "9797d5f3...", "books": [{"book_id": "...", "title": "Morning Star"},
+                                      {"book_id": "...", "title": "Morning Star"}]}
+]}
+```
+
+It needs `library-read`, and it never changes anything. Resolve a group
+by deleting whichever entry you do not want, with the ordinary delete
+above — there is no merge, because merging would mean the server picking
+which title and metadata survive.
+
+Only books that differ byte for byte are missed by this: two EPUB builds
+of one novel are two different files and are reported as two books,
+because that is what they are.
+
 ## KOReader through OPDS
 
 KOReader can browse the catalog with no plugin at all. Add an OPDS

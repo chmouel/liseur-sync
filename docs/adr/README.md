@@ -14,14 +14,15 @@ made now, and is not a commitment to build yet.
 | ADR | Title | Scope | State |
 |---|---|---|---|
 | [0001](0001-content-server.md) | Become a content server | — | Accepted |
-| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Storage built, no trash or backup |
+| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built; watched folders later |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Store built, no route |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction built, no covers |
-| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Pipeline built, no input |
+| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Built, upload and web UI |
 | [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Scopes built |
 | [0007](0007-web-reader.md) | Web reader | Later | Deferred |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository |
+| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Exact content built |
 
 ## Convention
 
