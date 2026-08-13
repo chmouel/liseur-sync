@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/chmouel/liseur-sync/internal/contentpath"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -20,11 +21,24 @@ import (
 // instead of a second set nothing refers to.
 var promotionNS = uuid.MustParse("7e0a3b10-5f2e-4c3a-9b6d-2f6f6c1a0004")
 
-// codeMissingArtifact reports an artifact that can no longer be promoted:
-// the staged bytes are gone or no longer hash to what was validated. It is a
-// failure of that job's content, not of the server, and a re-upload moves
-// the quarantined job back to staged.
-const codeMissingArtifact = "missing_artifact"
+// Promotion failure codes share recovery's vocabulary, so an operator reads
+// one dictionary rather than two.
+const (
+	// codeArtifactMissing is the job's own staged bytes being gone. Nothing
+	// on the server can bring them back; a re-upload can.
+	codeArtifactMissing = "artifact_missing"
+	// codeArtifactCorrupt is the job's own staged bytes no longer hashing to
+	// what was validated, or a staging path that is not the one this job was
+	// staged under. Both are permanent for these bytes.
+	codeArtifactCorrupt = "artifact_corrupt"
+	// codeStoredBlobCorrupt is a blob already in the store failing its own
+	// digest. The upload is blameless: its stage verified moments earlier,
+	// and the damage is to shared content other books may also reference.
+	// Re-uploading the same bytes hits the same blob, so this needs an
+	// operator, and saying so is the difference between a fixable alarm and
+	// a user retrying forever.
+	codeStoredBlobCorrupt = "stored_blob_corrupt"
+)
 
 // mediaTypeEPUB is the only publication type this server accepts, so a
 // promoted file always carries it.
@@ -62,6 +76,11 @@ type IngestPromotionReport struct {
 	Promoted    int
 	Quarantined int
 	Skipped     int
+	// Described counts promoted books that also had metadata resolved onto
+	// them. Deferred counts those whose metadata step failed after the book
+	// was already committed.
+	Described int
+	Deferred  int
 }
 
 // PromoteIngestJob publishes an extracted job's artifact into the CAS and
@@ -86,28 +105,36 @@ func PromoteIngestJob(
 	var result IngestPromotionResult
 	if st == nil || blobs == nil || job.State != store.IngestExtracted ||
 		job.ContentSHA256 == nil || job.StagingPath == nil ||
-		clock == nil || failureRetention <= 0 {
+		job.UpdatedAt.IsZero() || clock == nil || failureRetention <= 0 {
 		return result, store.ErrInvalidTransition
 	}
-	updatedAt, err := ingestPostProcessTime(job, clock)
+	// A job can only be promoted from the path it was staged under. Anything
+	// else is a row the server did not write, and handing it to the CAS turns
+	// a corrupted record into a filesystem argument.
+	if *job.StagingPath != contentpath.StagingPath(job.ID) {
+		return result, fmt.Errorf(
+			"promote ingest job %q: %w", job.ID, store.ErrInvariantViolation)
+	}
+	failedAt, err := ingestPostProcessTime(job, clock)
 	if err != nil {
 		return result, err
 	}
 	blob, err := blobs.Promote(
 		ctx, *job.StagingPath, *job.ContentSHA256, job.BytesReceived)
 	if err != nil {
-		if !promotionContentFailure(err) {
+		code, detail, permanent := classifyPromotionFailure(err)
+		if !permanent {
 			return result, fmt.Errorf(
 				"promote artifact for ingest job %q: %w", job.ID, err)
 		}
-		expiresAt := updatedAt.Add(failureRetention)
+		expiresAt := failedAt.Add(failureRetention)
 		quarantined, transitionErr := st.TransitionIngestJob(
 			ctx, job.UserID, job.ID, store.IngestJobTransition{
 				ExpectedState: job.State, ExpectedRevision: job.Revision,
 				NextState:   store.IngestQuarantined,
-				ErrorCode:   codeMissingArtifact,
-				ErrorDetail: "staged artifact no longer matches what was validated",
-				ExpiresAt:   &expiresAt, UpdatedAt: updatedAt,
+				ErrorCode:   code,
+				ErrorDetail: detail,
+				ExpiresAt:   &expiresAt, UpdatedAt: failedAt,
 			})
 		if transitionErr != nil {
 			return result, fmt.Errorf(
@@ -118,7 +145,7 @@ func PromoteIngestJob(
 	}
 
 	promoted, err := st.CommitNewBookPromotion(ctx, job.UserID, job.ID,
-		newBookPromotion(job, blob, updatedAt))
+		newBookPromotion(job, blob))
 	if err != nil {
 		return result, fmt.Errorf(
 			"promote ingest job %q: %w", job.ID, err)
@@ -132,11 +159,21 @@ func PromoteIngestJob(
 // newBookPromotion describes the book and file one job becomes. Every value
 // comes from the job or the published blob: nothing about the publication is
 // read here, so a book is never created carrying a claim no source made.
+//
+// The timestamps are the job's own, not the wall clock, and that is
+// load-bearing rather than cosmetic. The backend fingerprints this request to
+// recognise a replay, so two workers racing the same job must build byte-
+// identical requests; a clock reading would differ between them and the loser
+// would get ErrPromotionConflict for what is ordinary contention. Deriving
+// from the job makes the loser replay the winner's commit and read back the
+// winner's rows, which leaves ErrPromotionConflict meaning what it says: two
+// different requests claimed the same job.
 func newBookPromotion(
-	job store.IngestJob, blob Blob, updatedAt time.Time,
+	job store.IngestJob, blob Blob,
 ) store.CommitNewBookPromotionRequest {
 	info := store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size}
-	bookID := promotionID("book", job.ID)
+	bookID := promotionID("book", job)
+	updatedAt := job.UpdatedAt
 	return store.CommitNewBookPromotionRequest{
 		ExpectedRevision: job.Revision,
 		Blob:             info,
@@ -148,7 +185,7 @@ func newBookPromotion(
 			UpdatedAt: updatedAt,
 		},
 		File: store.BookFile{
-			ID:                 promotionID("file", job.ID),
+			ID:                 promotionID("file", job),
 			LibraryID:          job.LibraryID,
 			BookID:             bookID,
 			BlobSHA256:         blob.SHA256,
@@ -174,18 +211,30 @@ func promotionFilename(job store.IngestJob) string {
 	return path.Base(*job.SourceRelativePath)
 }
 
-func promotionID(kind, jobID string) string {
-	return uuid.NewSHA1(promotionNS, []byte(kind+"|"+jobID)).String()
+func promotionID(kind string, job store.IngestJob) string {
+	return uuid.NewSHA1(promotionNS,
+		[]byte(job.LibraryID+"|"+kind+"|"+job.ID)).String()
 }
 
-// promotionContentFailure separates an artifact this job can never promote
-// from a server that is temporarily unable to promote it. Only the former
-// may be quarantined: quarantining the latter would strand a job whose next
-// attempt would have worked.
-func promotionContentFailure(err error) bool {
-	return errors.Is(err, ErrStageMissing) ||
-		errors.Is(err, ErrDigestMismatch) ||
-		errors.Is(err, ErrCorruptBlob)
+// classifyPromotionFailure separates a job that can never be promoted from a
+// server that is temporarily unable to promote it, and names which of the two
+// went wrong. Only a permanent failure may be quarantined: quarantining a
+// transient one strands work whose next attempt would have succeeded, while
+// retrying a permanent one puts the same job at the head of every batch.
+func classifyPromotionFailure(err error) (code, detail string, permanent bool) {
+	switch {
+	case errors.Is(err, ErrStageMissing):
+		return codeArtifactMissing,
+			"staged content is no longer on disk", true
+	case errors.Is(err, ErrDigestMismatch), errors.Is(err, ErrUnsafePath):
+		return codeArtifactCorrupt,
+			"staged content failed promotion verification", true
+	case errors.Is(err, ErrCorruptBlob):
+		return codeStoredBlobCorrupt,
+			"stored content for this digest failed its own verification", true
+	default:
+		return "", "", false
+	}
 }
 
 // RunIngestPromotionPass promotes one bounded snapshot of extracted jobs.
