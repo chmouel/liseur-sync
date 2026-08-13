@@ -373,3 +373,373 @@ func (s *Store) UserBookWork(ctx context.Context, userID, bookID string) (store.
 	}
 	return mapping, err
 }
+
+// Metadata entity sets are read in one transaction and in a deterministic
+// order, so a caller merging a proposal always sees a consistent snapshot
+// and produces the same result for the same inputs.
+const (
+	bookIdentifierQuery = `SELECT scheme, value, source, locked
+	 FROM book_identifiers
+	 WHERE library_id = ? AND book_id = ?
+	 ORDER BY scheme, value`
+	bookLanguageQuery = `SELECT language, source, locked
+	 FROM book_languages
+	 WHERE library_id = ? AND book_id = ?
+	 ORDER BY language`
+	bookTagQuery = `SELECT t.id, t.name, t.normalized_name, bt.source, bt.locked
+	 FROM book_tags bt
+	 JOIN tags t ON t.library_id = bt.library_id AND t.id = bt.tag_id
+	 WHERE bt.library_id = ? AND bt.book_id = ?
+	 ORDER BY t.normalized_name, t.id`
+	bookGenreQuery = `SELECT g.id, g.name, g.normalized_name, bg.source, bg.locked
+	 FROM book_genres bg
+	 JOIN genres g ON g.library_id = bg.library_id AND g.id = bg.genre_id
+	 WHERE bg.library_id = ? AND bg.book_id = ?
+	 ORDER BY g.normalized_name, g.id`
+	bookSeriesQuery = `SELECT s.id, s.name, s.normalized_name, bs.position,
+	        bs.source, bs.locked
+	 FROM book_series bs
+	 JOIN series s ON s.library_id = bs.library_id AND s.id = bs.series_id
+	 WHERE bs.library_id = ? AND bs.book_id = ?
+	 ORDER BY s.normalized_name, s.id`
+	bookContributorQuery = `SELECT c.id, c.name, c.normalized_name, bc.role,
+	        bc.position, bc.source, bc.locked
+	 FROM book_contributors bc
+	 JOIN contributors c
+	   ON c.library_id = bc.library_id AND c.id = bc.contributor_id
+	 WHERE bc.library_id = ? AND bc.book_id = ?
+	 ORDER BY bc.role, bc.position, c.normalized_name, c.id`
+)
+
+func (s *Store) CatalogBookMetadata(
+	ctx context.Context, userID, bookID string, required store.LibraryRole,
+) (store.BookMetadata, error) {
+	var out store.BookMetadata
+	if err := checkLibraryRole(required); err != nil {
+		return out, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback()
+	out, err = catalogBookMetadataTx(ctx, tx, userID, bookID, required)
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.BookMetadata{}, err
+	}
+	return out, nil
+}
+
+func catalogBookMetadataTx(
+	ctx context.Context, tx *sql.Tx, userID, bookID string,
+	required store.LibraryRole,
+) (store.BookMetadata, error) {
+	var out store.BookMetadata
+	book, err := scanCatalogBook(tx.QueryRowContext(ctx, q(
+		`SELECT `+bookColumns+`
+		 FROM books b
+		 JOIN libraries l ON l.id = b.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE b.id = ?
+		   AND (l.owner_user_id = ? OR a.role = 'manage' OR (? = 'read' AND a.role = 'read'))`),
+		userID, bookID, userID, string(required)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, store.ErrNotFound
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Book = book
+
+	if err := queryRows(ctx, tx, bookIdentifierQuery, book.LibraryID, bookID,
+		func(scan func(...any) error) error {
+			var row store.BookIdentifier
+			if err := scan(&row.Scheme, &row.Value, &row.Source, &row.Locked); err != nil {
+				return err
+			}
+			out.Identifiers = append(out.Identifiers, row)
+			return nil
+		}); err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := queryRows(ctx, tx, bookLanguageQuery, book.LibraryID, bookID,
+		func(scan func(...any) error) error {
+			var row store.BookLanguage
+			if err := scan(&row.Language, &row.Source, &row.Locked); err != nil {
+				return err
+			}
+			out.Languages = append(out.Languages, row)
+			return nil
+		}); err != nil {
+		return store.BookMetadata{}, err
+	}
+	scanTaxon := func(target *[]store.BookTaxon) func(func(...any) error) error {
+		return func(scan func(...any) error) error {
+			var row store.BookTaxon
+			if err := scan(&row.ID, &row.Name, &row.NormalizedName,
+				&row.Source, &row.Locked); err != nil {
+				return err
+			}
+			*target = append(*target, row)
+			return nil
+		}
+	}
+	if err := queryRows(ctx, tx, bookTagQuery, book.LibraryID, bookID,
+		scanTaxon(&out.Tags)); err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := queryRows(ctx, tx, bookGenreQuery, book.LibraryID, bookID,
+		scanTaxon(&out.Genres)); err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := queryRows(ctx, tx, bookSeriesQuery, book.LibraryID, bookID,
+		func(scan func(...any) error) error {
+			var row store.BookSeries
+			var position sql.NullFloat64
+			if err := scan(&row.SeriesID, &row.Name, &row.NormalizedName,
+				&position, &row.Source, &row.Locked); err != nil {
+				return err
+			}
+			if position.Valid {
+				value := position.Float64
+				row.Position = &value
+			}
+			out.Series = append(out.Series, row)
+			return nil
+		}); err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := queryRows(ctx, tx, bookContributorQuery, book.LibraryID, bookID,
+		func(scan func(...any) error) error {
+			var row store.BookContributor
+			if err := scan(&row.ContributorID, &row.Name, &row.NormalizedName,
+				&row.Role, &row.Position, &row.Source, &row.Locked); err != nil {
+				return err
+			}
+			out.Contributors = append(out.Contributors, row)
+			return nil
+		}); err != nil {
+		return store.BookMetadata{}, err
+	}
+	return out, nil
+}
+
+func queryRows(
+	ctx context.Context, tx *sql.Tx, query, libraryID, bookID string,
+	each func(scan func(...any) error) error,
+) error {
+	rows, err := tx.QueryContext(ctx, q(query), libraryID, bookID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows.Scan); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) ApplyCatalogBookMetadata(
+	ctx context.Context, userID string, request store.ApplyBookMetadataRequest,
+) (store.BookMetadata, error) {
+	book := request.Metadata.Book
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	defer tx.Rollback()
+
+	// The revision-checked UPDATE runs first so concurrent applies to the
+	// same book serialize on its row: the loser sees no updated row and
+	// stops before touching any entity table.
+	res, err := tx.ExecContext(ctx, q(
+		`UPDATE books SET
+		     title = ?, title_source = ?, title_locked = ?,
+		     subtitle = ?, subtitle_source = ?, subtitle_locked = ?,
+		     description = ?, description_source = ?, description_locked = ?,
+		     publisher = ?, publisher_source = ?, publisher_locked = ?,
+		     published_date = ?, published_date_source = ?, published_date_locked = ?,
+		     identifiers_locked = ?, languages_locked = ?, tags_locked = ?,
+		     genres_locked = ?, series_locked = ?, contributors_locked = ?,
+		     updated_at = ?, revision = revision + 1
+		 WHERE id = ? AND revision = ?
+		   AND EXISTS (
+		       SELECT 1 FROM libraries l
+		       LEFT JOIN library_access a
+		         ON a.library_id = l.id AND a.user_id = ?
+		       WHERE l.id = books.library_id
+		         AND (l.owner_user_id = ? OR a.role = 'manage')
+		   )`),
+		book.Title, string(book.TitleSource), book.TitleLocked,
+		book.Subtitle, string(book.SubtitleSource), book.SubtitleLocked,
+		book.Description, string(book.DescriptionSource), book.DescriptionLocked,
+		book.Publisher, string(book.PublisherSource), book.PublisherLocked,
+		book.PublishedDate, string(book.PublishedDateSource), book.PublishedDateLocked,
+		book.SetLocks.Identifiers, book.SetLocks.Languages,
+		book.SetLocks.Tags, book.SetLocks.Genres,
+		book.SetLocks.Series, book.SetLocks.Contributors,
+		request.UpdatedAt.UTC(), book.ID, request.ExpectedRevision,
+		userID, userID)
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	if updated == 0 {
+		// Either the caller cannot manage this book or another writer
+		// already advanced it. Only a book the caller can manage is stale.
+		if _, err := catalogBookMetadataTx(
+			ctx, tx, userID, book.ID, store.LibraryRoleManage); err != nil {
+			return store.BookMetadata{}, err
+		}
+		return store.BookMetadata{}, store.ErrStaleRevision
+	}
+	// The library id comes from the row, never from the request.
+	current, err := catalogBookMetadataTx(
+		ctx, tx, userID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	libraryID := current.Book.LibraryID
+
+	if err := replaceBookMetadataSetsTx(
+		ctx, tx, libraryID, book.ID, request); err != nil {
+		return store.BookMetadata{}, err
+	}
+	out, err := catalogBookMetadataTx(
+		ctx, tx, userID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		return store.BookMetadata{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.BookMetadata{}, err
+	}
+	return out, nil
+}
+
+func replaceBookMetadataSetsTx(
+	ctx context.Context, tx *sql.Tx, libraryID, bookID string,
+	request store.ApplyBookMetadataRequest,
+) error {
+	createdAt := request.UpdatedAt.UTC()
+	for _, table := range []string{
+		"book_identifiers", "book_languages", "book_tags", "book_genres",
+		"book_series", "book_contributors",
+	} {
+		if _, err := tx.ExecContext(ctx, q(
+			`DELETE FROM `+table+` WHERE library_id = ? AND book_id = ?`),
+			libraryID, bookID); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Identifiers {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_identifiers
+			     (library_id, book_id, scheme, value, source, locked)
+			 VALUES (?, ?, ?, ?, ?, ?)`),
+			libraryID, bookID, row.Scheme, row.Value,
+			string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Languages {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_languages
+			     (library_id, book_id, language, source, locked)
+			 VALUES (?, ?, ?, ?, ?)`),
+			libraryID, bookID, row.Language,
+			string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Tags {
+		id, err := resolveMetadataEntityTx(ctx, tx, "tags", libraryID,
+			row.ID, row.Name, row.NormalizedName, createdAt)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_tags (library_id, book_id, tag_id, source, locked)
+			 VALUES (?, ?, ?, ?, ?)`),
+			libraryID, bookID, id, string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Genres {
+		id, err := resolveMetadataEntityTx(ctx, tx, "genres", libraryID,
+			row.ID, row.Name, row.NormalizedName, createdAt)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_genres (library_id, book_id, genre_id, source, locked)
+			 VALUES (?, ?, ?, ?, ?)`),
+			libraryID, bookID, id, string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Series {
+		id, err := resolveMetadataEntityTx(ctx, tx, "series", libraryID,
+			row.SeriesID, row.Name, row.NormalizedName, createdAt)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_series
+			     (library_id, book_id, series_id, position, source, locked)
+			 VALUES (?, ?, ?, ?, ?, ?)`),
+			libraryID, bookID, id, row.Position,
+			string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Contributors {
+		id, err := resolveMetadataEntityTx(ctx, tx, "contributors", libraryID,
+			row.ContributorID, row.Name, row.NormalizedName, createdAt)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_contributors
+			     (library_id, book_id, contributor_id, role, position, source, locked)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`),
+			libraryID, bookID, id, row.Role, row.Position,
+			string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveMetadataEntityTx returns the id of the library's entity with this
+// normalized name, creating it with the caller's candidate id when it does
+// not exist yet. Display spelling of an existing entity is left alone: the
+// first spelling wins until an explicit rename, so a rescan cannot flip a
+// shared entity's name under every other book that references it.
+func resolveMetadataEntityTx(
+	ctx context.Context, tx *sql.Tx, table, libraryID, candidateID, name,
+	normalizedName string, createdAt time.Time,
+) (string, error) {
+	if _, err := tx.ExecContext(ctx, q(
+		`INSERT INTO `+table+` (id, library_id, name, normalized_name, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (library_id, normalized_name) DO NOTHING`),
+		candidateID, libraryID, name, normalizedName, createdAt); err != nil {
+		return "", err
+	}
+	var id string
+	err := tx.QueryRowContext(ctx, q(
+		`SELECT id FROM `+table+` WHERE library_id = ? AND normalized_name = ?`),
+		libraryID, normalizedName).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", store.ErrConflict
+	}
+	return id, err
+}

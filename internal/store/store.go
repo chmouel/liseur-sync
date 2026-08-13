@@ -213,6 +213,12 @@ const (
 	MetadataManual   MetadataSource = "manual"
 )
 
+// Valid reports whether the source is one of the four precedence stages.
+func (s MetadataSource) Valid() bool {
+	return s == MetadataEmbedded || s == MetadataFilename ||
+		s == MetadataExternal || s == MetadataManual
+}
+
 // MetadataSetLocks records the set-level manual locks of one book. A row
 // lock cannot express a deliberately emptied set, because removing the last
 // row leaves nothing behind to carry the lock, so the set-level flag is what
@@ -259,6 +265,177 @@ type CatalogBook struct {
 	UpdatedAt           time.Time
 	TrashedAt           *time.Time
 	TrashExpiresAt      *time.Time
+}
+
+// BookIdentifier is one publication identifier row. Values are compared
+// verbatim; only the scheme is folded, because identifier values are
+// case-sensitive in general.
+type BookIdentifier struct {
+	Scheme string
+	Value  string
+	Source MetadataSource
+	Locked bool
+}
+
+// BookLanguage is one language row of a book.
+type BookLanguage struct {
+	Language string
+	Source   MetadataSource
+	Locked   bool
+}
+
+// BookTaxon is one tag or genre membership. ID and NormalizedName identify
+// the shared library-wide entity; Name is its display spelling.
+type BookTaxon struct {
+	ID             string
+	Name           string
+	NormalizedName string
+	Source         MetadataSource
+	Locked         bool
+}
+
+// BookSeries is one series membership. Position is absent when the source
+// named a series without a place in it; a missing position is never
+// invented.
+type BookSeries struct {
+	SeriesID       string
+	Name           string
+	NormalizedName string
+	Position       *float64
+	Source         MetadataSource
+	Locked         bool
+}
+
+// BookContributor is one contributor in one role. A person credited twice
+// in different roles is two rows over one contributor entity.
+type BookContributor struct {
+	ContributorID  string
+	Name           string
+	NormalizedName string
+	Role           string
+	Position       int
+	Source         MetadataSource
+	Locked         bool
+}
+
+// BookMetadata is one book's scalar fields together with every metadata
+// entity set attached to it, read in one transaction so the precedence
+// engine merges against a consistent snapshot. Rows come back in a
+// deterministic order so repeated merges of the same proposal are
+// reproducible.
+type BookMetadata struct {
+	Book         CatalogBook
+	Identifiers  []BookIdentifier
+	Languages    []BookLanguage
+	Tags         []BookTaxon
+	Genres       []BookTaxon
+	Series       []BookSeries
+	Contributors []BookContributor
+}
+
+// ApplyBookMetadataRequest replaces one book's scalar metadata fields and
+// every metadata entity set attached to it. The caller resolves the new
+// state first — the precedence engine lives outside the store — and the
+// store writes it atomically under ExpectedRevision, so a concurrent writer
+// loses with ErrStaleRevision rather than silently overwriting.
+//
+// Metadata carries the complete resolved sets, not a delta: rows the caller
+// omits are removed. Entity rows are matched by normalized name within the
+// library; the supplied ID is used only when no such entity exists yet, so
+// ID generation stays at the edge like every other identifier in the store.
+type ApplyBookMetadataRequest struct {
+	Metadata         BookMetadata
+	ExpectedRevision int64
+	UpdatedAt        time.Time
+}
+
+// ValidateApplyBookMetadata checks the invariants a backend trusts. Handlers
+// and workers call it at the edge; the store does not revalidate.
+func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
+	book := request.Metadata.Book
+	if book.ID == "" || book.LibraryID == "" || request.ExpectedRevision < 1 ||
+		request.UpdatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	for _, source := range []MetadataSource{
+		book.TitleSource, book.SubtitleSource, book.DescriptionSource,
+		book.PublisherSource, book.PublishedDateSource,
+	} {
+		if source != "" && !source.Valid() {
+			return ErrInvalidTransition
+		}
+	}
+	identifiers := make(map[IdentifierKey]struct{}, len(request.Metadata.Identifiers))
+	for _, row := range request.Metadata.Identifiers {
+		if row.Scheme == "" || row.Value == "" || !row.Source.Valid() {
+			return ErrInvalidTransition
+		}
+		key := IdentifierKey{Scheme: row.Scheme, Value: row.Value}
+		if _, duplicate := identifiers[key]; duplicate {
+			return ErrInvalidTransition
+		}
+		identifiers[key] = struct{}{}
+	}
+	languages := make(map[string]struct{}, len(request.Metadata.Languages))
+	for _, row := range request.Metadata.Languages {
+		if row.Language == "" || !row.Source.Valid() {
+			return ErrInvalidTransition
+		}
+		if _, duplicate := languages[row.Language]; duplicate {
+			return ErrInvalidTransition
+		}
+		languages[row.Language] = struct{}{}
+	}
+	for _, set := range [][]BookTaxon{request.Metadata.Tags, request.Metadata.Genres} {
+		seen := make(map[string]struct{}, len(set))
+		for _, row := range set {
+			if row.ID == "" || row.Name == "" || row.NormalizedName == "" ||
+				!row.Source.Valid() {
+				return ErrInvalidTransition
+			}
+			if _, duplicate := seen[row.NormalizedName]; duplicate {
+				return ErrInvalidTransition
+			}
+			seen[row.NormalizedName] = struct{}{}
+		}
+	}
+	series := make(map[string]struct{}, len(request.Metadata.Series))
+	for _, row := range request.Metadata.Series {
+		if row.SeriesID == "" || row.Name == "" || row.NormalizedName == "" ||
+			!row.Source.Valid() {
+			return ErrInvalidTransition
+		}
+		if _, duplicate := series[row.NormalizedName]; duplicate {
+			return ErrInvalidTransition
+		}
+		series[row.NormalizedName] = struct{}{}
+	}
+	contributors := make(map[ContributorRoleKey]struct{}, len(request.Metadata.Contributors))
+	for _, row := range request.Metadata.Contributors {
+		if row.ContributorID == "" || row.Name == "" || row.NormalizedName == "" ||
+			row.Role == "" || row.Position < 0 || !row.Source.Valid() {
+			return ErrInvalidTransition
+		}
+		key := ContributorRoleKey{NormalizedName: row.NormalizedName, Role: row.Role}
+		if _, duplicate := contributors[key]; duplicate {
+			return ErrInvalidTransition
+		}
+		contributors[key] = struct{}{}
+	}
+	return nil
+}
+
+// IdentifierKey and ContributorRoleKey are the composite primary keys of the
+// identifier and contributor set rows, used to reject duplicates before the
+// store has to.
+type IdentifierKey struct {
+	Scheme string
+	Value  string
+}
+
+type ContributorRoleKey struct {
+	NormalizedName string
+	Role           string
 }
 
 // UserBookWork is the privacy boundary between a shared catalog book and
@@ -984,6 +1161,14 @@ type Store interface {
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
 	CatalogBookByID(ctx context.Context, userID, bookID string, required LibraryRole) (CatalogBook, error)
 	ListCatalogBooks(ctx context.Context, userID, libraryID string) ([]CatalogBook, error)
+	// CatalogBookMetadata reads one book's scalar fields and every metadata
+	// entity set attached to it in a single transaction, so a caller can run
+	// the precedence engine against a consistent snapshot.
+	CatalogBookMetadata(ctx context.Context, userID, bookID string, required LibraryRole) (BookMetadata, error)
+	// ApplyCatalogBookMetadata atomically replaces one book's resolved
+	// metadata under an expected revision. It requires the manage role and
+	// returns ErrStaleRevision when another writer got there first.
+	ApplyCatalogBookMetadata(ctx context.Context, userID string, request ApplyBookMetadataRequest) (BookMetadata, error)
 	// ResolveCatalogBookWork resolves the user's work graph and inserts the
 	// catalog mapping in the same transaction. Low-confidence and conflicting
 	// resolutions do not mutate the graph or create a mapping.
