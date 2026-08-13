@@ -136,9 +136,16 @@ External metadata cannot be a required ingest dependency.
    or partial: an extraction reads the whole publication and may therefore
    drop what it no longer claims, while a path names at most one author and
    one series and may only add or take over the rows it names.
-   Persisting a proposal into catalog fields and normalized metadata
-   entities, persisting the set-level lock, wiring the parser to per-library
-   configuration, cover extraction, and automatic promotion remain.
+   Persisting a resolved proposal is implemented: a book carries a revision
+   and six set-level locks, and one transaction replaces the sets a proposal
+   claims under an expected revision, so a concurrent editor's writes are
+   never silently overwritten. One materialization step resolves a promoted
+   job's embedded snapshot and library path against the persisted rows and
+   applies the result; it is not yet scheduled, because the automatic
+   promotion worker that would produce jobs for it to consume does not exist
+   and no worker query returns promoted jobs.
+   Wiring the parser to per-library configuration, cover extraction, and
+   automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.
