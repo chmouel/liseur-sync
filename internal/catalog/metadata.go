@@ -202,6 +202,10 @@ func entityIDFor(
 // and be corrected by the next pass; only the library-wide row the store
 // alone can see would avoid that, and one extra write on first link is
 // cheaper than reading the whole library here.
+//
+// This applies to a person too, so renaming an entity is not something a
+// proposal can express: it is a library-wide operation on the entity row,
+// not a claim about one book.
 
 func adoptNamed(
 	incoming []metadata.Assertion[string, string], persisted map[string]string,
