@@ -20,11 +20,11 @@ const opdsSearchType = "application/opensearchdescription+xml"
 // the same reason every feed is: the library name it carries came out of
 // a database a person types into.
 type opdsSearchDescription struct {
-	XMLName     xml.Name `xml:"OpenSearchDescription"`
-	Xmlns       string   `xml:"xmlns,attr"`
-	ShortName   string   `xml:"ShortName"`
-	Description string   `xml:"Description"`
-	InputEnc    string   `xml:"InputEncoding"`
+	XMLName     xml.Name        `xml:"OpenSearchDescription"`
+	Xmlns       string          `xml:"xmlns,attr"`
+	ShortName   string          `xml:"ShortName"`
+	Description string          `xml:"Description"`
+	InputEnc    string          `xml:"InputEncoding"`
 	URLs        []opdsSearchURL `xml:"Url"`
 }
 

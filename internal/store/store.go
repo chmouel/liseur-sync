@@ -240,11 +240,11 @@ type MetadataSetLocks struct {
 // NewBookPromotionFingerprint hashes; including them would change the
 // fingerprint of every in-flight promotion across an upgrade.
 type CatalogBook struct {
-	ID                  string
-	LibraryID           string
-	Status              BookStatus
-	Revision            int64            `json:"-"`
-	SetLocks            MetadataSetLocks `json:"-"`
+	ID        string
+	LibraryID string
+	Status    BookStatus
+	Revision  int64            `json:"-"`
+	SetLocks  MetadataSetLocks `json:"-"`
 	// ReviewReason says why the book needs an administrator's attention.
 	// It is set only alongside the review status and is empty otherwise,
 	// so a book in review always explains itself: a review item nobody can

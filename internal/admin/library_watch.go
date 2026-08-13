@@ -92,4 +92,3 @@ func watchedRoot(path string) (string, error) {
 	}
 	return absolute, nil
 }
-

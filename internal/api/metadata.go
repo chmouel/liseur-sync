@@ -255,8 +255,8 @@ func bookMetadataJSON(m store.BookMetadata) map[string]any {
 		"identifiers": identifiers,
 		"set_locks": map[string]any{
 			"tags": m.Book.SetLocks.Tags, "genres": m.Book.SetLocks.Genres,
-			"languages": m.Book.SetLocks.Languages,
-			"series":    m.Book.SetLocks.Series,
+			"languages":    m.Book.SetLocks.Languages,
+			"series":       m.Book.SetLocks.Series,
 			"contributors": m.Book.SetLocks.Contributors,
 			"identifiers":  m.Book.SetLocks.Identifiers,
 		},

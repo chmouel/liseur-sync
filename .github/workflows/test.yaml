@@ -34,6 +34,17 @@ jobs:
             git diff --stat internal/webui
             exit 1
           fi
+      - name: Check formatting
+        run: |
+          # gofmt is not a style opinion here: a file nobody reformatted
+          # produces diff noise in the next unrelated change, which is
+          # where review attention goes missing.
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change these files:"
+            echo "$unformatted"
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test (SQLite + PostgreSQL, race detector)
