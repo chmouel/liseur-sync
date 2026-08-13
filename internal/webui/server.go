@@ -164,6 +164,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
+	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }
@@ -264,6 +265,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	a, _, ok := s.session(r)
 	if ok && s.checkCSRF(r, a) {
+		// Reader tokens are derived from the session, so they end with
+		// it. This revokes them for every session the user has open,
+		// not just this one: a tab still signed in re-mints on its next
+		// call, whereas a token left alive after a sign-out elsewhere
+		// would be exactly the access the user thought they revoked.
+		_ = s.Auth.RevokeReaderTokens(r.Context(), a.UserID)
 		_ = s.St.RevokeAuthSession(r.Context(), a.UserID, a.ID)
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1})
