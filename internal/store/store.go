@@ -1397,6 +1397,11 @@ type Store interface {
 	// pick which entry survives. Read access is enough to see it;
 	// resolving it is an ordinary deletion, which is not.
 	ListDuplicateContentBooks(ctx context.Context, userID, libraryID string, limit int) ([]DuplicateContentBook, error)
+	// ListSimilarBooks reports the weaker kind of duplicate: books that
+	// look like one book without being one file. It is a question put to
+	// a librarian rather than a finding, and the rule it applies is
+	// GroupSimilarBooks, shared so both backends answer alike.
+	ListSimilarBooks(ctx context.Context, userID, libraryID string, limit int) ([]SimilarBookGroup, error)
 	// ListCatalogBooks pages one library's readable books, oldest first.
 	// Trashed books are excluded: they are not part of the catalog a
 	// reader browses. A nil cursor starts at the beginning.

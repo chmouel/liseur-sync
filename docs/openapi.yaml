@@ -770,12 +770,21 @@ paths:
       summary: Books in a library that are the same file
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Groups the library's active books by content digest, returning
-        only the digests more than one book holds. Uploading a file twice
-        is allowed and costs no extra storage, so this reports the
-        coincidence and never resolves it: a client resolves a group by
-        deleting whichever entry it chooses. A group split by `limit` is
-        omitted rather than returned with a single book in it.
+        Two reports on one route, because a caller asking about
+        duplicates wants both.
+
+        `duplicates` groups the library's active books by content digest,
+        returning only the digests more than one book holds. Uploading a
+        file twice is allowed and costs no extra storage, so this reports
+        the coincidence and never resolves it: a client resolves a group
+        by deleting whichever entry it chooses. A group split by `limit`
+        is omitted rather than returned with a single book in it.
+
+        `similar` is a guess, not a finding: books whose normalized
+        titles match and which name a contributor in common, minus any
+        pair already reported above, minus books placed at different
+        positions in one series. Present it as a question. Nothing on
+        this route ever changes anything.
       parameters:
         - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
         - name: limit
@@ -789,8 +798,25 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [duplicates]
+                required: [duplicates, similar]
                 properties:
+                  similar:
+                    type: array
+                    description: Possible duplicates. A guess; nothing was changed.
+                    items:
+                      type: object
+                      required: [normalized_title, books]
+                      properties:
+                        normalized_title:
+                          type: string
+                          description: |
+                            The folded title the group was built on, which
+                            is what its members have in common rather than
+                            any one member's spelling.
+                        books:
+                          type: array
+                          minItems: 2
+                          items: { $ref: "#/components/schemas/CatalogBook" }
                   duplicates:
                     type: array
                     items:

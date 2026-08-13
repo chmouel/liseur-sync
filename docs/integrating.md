@@ -443,9 +443,31 @@ by deleting whichever entry you do not want, with the ordinary delete
 above — there is no merge, because merging would mean the server picking
 which title and metadata survive.
 
-Only books that differ byte for byte are missed by this: two EPUB builds
-of one novel are two different files and are reported as two books,
-because that is what they are.
+The same response carries a weaker report:
+
+```json
+{"similar": [
+  {"normalized_title": "dune",
+   "books": [{"book_id": "…", "title": "Dune"}, {"book_id": "…", "title": "DUNE!"}]}
+]}
+```
+
+These are books whose titles match once case, diacritics and punctuation
+are folded away — the same folding search uses — and which name at least
+one contributor in common. Two builds of one novel, most likely. It is a
+guess, so show it as a question rather than a finding: nothing has been
+changed, and the decision is the person's.
+
+Contributors are compared as library entities rather than as strings, so
+the folding of names is whatever the library already decided. A book
+naming nobody is never matched, an exact-duplicate pair is never repeated
+here, and two numbered volumes of one series are never grouped even when
+they share a title.
+
+Titles differing by an article or an edition word — "The Tower" against
+"Tower", "Dune" against "Dune: Revised" — are left alone deliberately.
+Stripping those works in English and mangles other languages, and an
+edition word is often the difference somebody meant to keep.
 
 ### Syncing a book you downloaded from the catalog
 

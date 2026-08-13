@@ -107,6 +107,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
 		testTrashRestoreAndPurge(t, open)
 	})
+	t.Run("SimilarBooksAreAskedAboutNotAsserted", func(t *testing.T) {
+		testSimilarBooksAreAskedAboutNotAsserted(t, open)
+	})
 	t.Run("DuplicateContentIsReportedNotResolved", func(t *testing.T) {
 		testDuplicateContentIsReportedNotResolved(t, open)
 	})

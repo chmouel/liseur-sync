@@ -52,6 +52,14 @@ type DuplicateGroup struct {
 	Titles []string
 }
 
+// SimilarGroup is the weaker report: books that look like one book
+// without being one file. Each entry links, unlike a digest group, because
+// deciding this one needs looking at the books rather than trusting the
+// server.
+type SimilarGroup struct {
+	Books []BookRow
+}
+
 type BooksView struct {
 	Libraries []LibraryOption
 	Selected  string
@@ -61,6 +69,7 @@ type BooksView struct {
 	Trash      []TrashRow
 	Review     []ReviewRow
 	Duplicates []DuplicateGroup
+	Similar    []SimilarGroup
 	NextURL    string
 	Notice    string
 	Problem   string
@@ -214,6 +223,30 @@ templ booksBody(prefix, csrf string, v BooksView) {
 					<ul>
 						for _, title := range group.Titles {
 							<li>{ orPlaceholder(title) }</li>
+						}
+					</ul>
+				}
+			</section>
+		}
+		if len(v.Similar) > 0 {
+			<section class="card">
+				<h2>Possibly the same book</h2>
+				<p class="muted">
+					These have the same title and an author in common, but they
+					are different files — two builds of one book, most likely.
+					This is a guess, so nothing has been changed: open them and
+					decide.
+				</p>
+				for _, group := range v.Similar {
+					<ul>
+						for _, b := range group.Books {
+							<li>
+								<a href={ prefix + "books/" + b.ID }>
+									{ orPlaceholder(b.Title) }
+								</a>
+								{ " · added " }
+								{ b.Added }
+							</li>
 						}
 					</ul>
 				}

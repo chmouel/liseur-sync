@@ -107,3 +107,39 @@ func TestSearchIsOfferedOnTheLibraryPageAndScopedToTheLibrary(t *testing.T) {
 		t.Fatalf("an unreadable library answered %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestBooksPageAsksAboutBooksThatLookAlike(t *testing.T) {
+	f := newBooksFixture(t)
+	first := bookWithMetadata(t, f, "buildone")
+	second := bookWithMetadata(t, f, "buildtwo")
+	for _, id := range []string{first, second} {
+		_, html := f.get(t, "/ui/books/"+id, f.cookie)
+		resp := saveMetadata(t, f, f.cookie, id, url.Values{
+			"csrf":             {csrfFrom(t, html)},
+			"title":            {"Dune"},
+			"title_was":        {""},
+			"contributors":     {"Frank Herbert (author)"},
+			"contributors_was": {""},
+		})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("save %s: %d", id, resp.StatusCode)
+		}
+	}
+
+	_, page := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if !strings.Contains(page, "Possibly the same book") {
+		t.Fatalf("the librarian was not told:\n%s", page)
+	}
+	// It is a guess, so it must link rather than assert: deciding needs
+	// looking at the books.
+	if !strings.Contains(page, "books/"+first) || !strings.Contains(page, "books/"+second) {
+		t.Fatalf("the group did not link to both books:\n%s", page)
+	}
+
+	// A reader is shown neither report, for the same reason they are
+	// shown no trash: it is a list of things only a librarian can act on.
+	_, readerPage := f.get(t, "/ui/books?library="+f.library, f.readerCookie(t))
+	if strings.Contains(readerPage, "Possibly the same book") {
+		t.Fatalf("a reader was shown the duplicate report:\n%s", readerPage)
+	}
+}
