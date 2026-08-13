@@ -1,0 +1,112 @@
+package webui
+
+// SearchFacetRow is one thing the found books have in common, with the
+// link that narrows to it. The count is over the answer rather than the
+// library: a facet's job is to describe what was found.
+type SearchFacetRow struct {
+	// Kind is the URL segment (`tags`, `series`, …), used only as a
+	// label so a person can tell a series named Dune from a tag.
+	Kind      string
+	Name      string
+	BookCount int
+	URL       string
+}
+
+type SearchView struct {
+	LibraryID   string
+	LibraryName string
+	Query       string
+	// Filters are the entity ids in force, kept so each facet link can
+	// carry the others along.
+	Filters []string
+	Books   []BookRow
+	Facets  []SearchFacetRow
+	// Applied are the filters in force, each linking to itself removed.
+	Applied []SearchFacetRow
+	// Blank means nothing was asked, which is not the same as nothing
+	// being found.
+	Blank     bool
+	Truncated bool
+}
+
+templ searchPage(prefix string, u userCtx, csrf string, v SearchView) {
+	@layout("Search", prefix, u.User, csrf, searchBody(prefix, v))
+}
+
+templ searchBody(prefix string, v SearchView) {
+	<h1>Search { v.LibraryName }</h1>
+	<section class="card">
+		@searchForm(prefix, v)
+	</section>
+	if len(v.Applied) > 0 {
+		<section class="card">
+			<h2>Narrowed to</h2>
+			<ul>
+				for _, f := range v.Applied {
+					<li>
+						{ f.Name }
+						{ " " }
+						<a href={ prefix + f.URL }>remove</a>
+					</li>
+				}
+			</ul>
+		</section>
+	}
+	if !v.Blank {
+		<section class="card">
+			if len(v.Books) == 0 {
+				<p class="muted">Nothing matched. Try fewer words.</p>
+			} else {
+				<table>
+					<tr><th>Title</th><th>Added</th></tr>
+					for _, b := range v.Books {
+						<tr>
+							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
+							<td>{ b.Added }</td>
+						</tr>
+					}
+				</table>
+				if v.Truncated {
+					<p class="muted">
+						There are more than these. Narrow the search rather than
+						looking further down — the best matches are already here.
+					</p>
+				}
+			}
+		</section>
+	}
+	if len(v.Facets) > 0 {
+		<section class="card">
+			<h2>What these have in common</h2>
+			<ul>
+				for _, f := range v.Facets {
+					<li>
+						<a href={ prefix + f.URL }>{ f.Name }</a>
+						{ " " }
+						<span class="muted">{ plural(f.BookCount, "book") }</span>
+					</li>
+				}
+			</ul>
+		</section>
+	}
+	<p><a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a></p>
+}
+
+// searchForm is its own template because the books page shows it too:
+// somebody looking at a library is the person most likely to be looking
+// for something in it.
+templ searchForm(prefix string, v SearchView) {
+	<form method="get" action={ prefix + "libraries/" + v.LibraryID + "/search" }>
+		<label for="search-q">Find a book</label>
+		<input
+			id="search-q"
+			type="search"
+			name="q"
+			value={ v.Query }
+			placeholder="title, author, series, tag"/>
+		for _, id := range v.Filters {
+			<input type="hidden" name="entity" value={ id }/>
+		}
+		<button type="submit">Search</button>
+	</form>
+}

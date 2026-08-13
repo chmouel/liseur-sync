@@ -140,6 +140,9 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/books/upload", sec(s.requireAuth(s.handleUploadBook)))
 	mux.Handle("POST /ui/books/{id}/delete", sec(s.requireAuth(s.handleDeleteBook)))
 	mux.Handle("POST /ui/books/{id}/restore", sec(s.requireAuth(s.handleRestoreBook)))
+	// Registered ahead of the {kind} pattern only for the reader's sake;
+	// the router prefers the literal segment either way.
+	mux.Handle("GET /ui/libraries/{library}/search", sec(s.requireAuth(s.handleSearch)))
 	mux.Handle("GET /ui/libraries/{library}/{kind}", sec(s.requireAuth(s.handleEntities)))
 	mux.Handle("GET /ui/libraries/{library}/{kind}/{entity}", sec(s.requireAuth(s.handleEntityBooks)))
 	mux.Handle("POST /ui/libraries/{library}/{kind}/merge", sec(s.requireAuth(s.handleMergeEntities)))
