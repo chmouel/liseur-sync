@@ -146,6 +146,36 @@ func (s *Store) ListLibraries(ctx context.Context, userID string, required store
 	return out, rows.Err()
 }
 
+// SetLibraryConfig replaces the configuration document of a library the
+// actor manages. The UPDATE carries the ACL rather than checking it first,
+// so a grant revoked between a check and a write cannot be raced.
+//
+// Last write wins. The document describes how the library should be read,
+// not what it holds, and two administrators editing it in the same instant
+// is not a case worth a revision column and a retry loop in every caller.
+func (s *Store) SetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE libraries
+		 SET config_json = ?, updated_at = ?
+		 WHERE id = ?
+		   AND (owner_user_id = ?
+		        OR EXISTS (SELECT 1 FROM library_access a
+		                   WHERE a.library_id = libraries.id
+		                     AND a.user_id = ? AND a.role = 'manage'))`),
+		configJSON, at.UTC(), libraryID, actorUserID, actorUserID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role store.LibraryRole, at time.Time) error {
 	if err := checkLibraryRole(role); err != nil {
 		return err

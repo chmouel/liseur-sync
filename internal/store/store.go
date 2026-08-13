@@ -1226,6 +1226,11 @@ type Store interface {
 	CreateLibrary(ctx context.Context, library Library) error
 	LibraryByID(ctx context.Context, userID, libraryID string, required LibraryRole) (AccessibleLibrary, error)
 	ListLibraries(ctx context.Context, userID string, required LibraryRole) ([]AccessibleLibrary, error)
+	// SetLibraryConfig replaces one library's configuration document under
+	// the manage role. The store does not interpret the document: it is
+	// opaque here and parsed by whichever package owns each key, so a
+	// setting added later needs no schema change and no store change.
+	SetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
 	GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role LibraryRole, at time.Time) error
 	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
