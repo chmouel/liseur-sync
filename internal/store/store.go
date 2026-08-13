@@ -955,6 +955,9 @@ type Store interface {
 	// ListIngestRecoveryJobs is a global housekeeping query for stale jobs
 	// whose durable artifacts must be verified before workers resume them.
 	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)
+	// ListIngestWorkerJobs snapshots one bounded internal worker batch.
+	// Revision-checked transitions resolve concurrent workers.
+	ListIngestWorkerJobs(ctx context.Context, state IngestState, limit int) ([]IngestJob, error)
 	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
 	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
 	// ListBlobRecords and ReconcileBlob are global housekeeping operations.

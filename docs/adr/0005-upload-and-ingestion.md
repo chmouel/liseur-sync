@@ -186,8 +186,14 @@ name a stable job and reason instead of losing state when a request ends.
    revision-checked worker step advances valid jobs or retains content failures
    as quarantined jobs with stable codes. All ZIP, expansion, metadata, and
    XML bounds have explicit `[content]` configuration with conservative
-   defaults. Worker scheduling and catalog availability reconciliation remain.
+   defaults. The server now runs one database-snapshotted, size-capped
+   validation batch on each configurable polling interval after startup
+   recovery and GC. It timestamps state changes after validation finishes,
+   skips revision races for a later pass, and surfaces operational validation
+   or store failures by coordinating worker cancellation and HTTP shutdown.
+   Catalog availability reconciliation remains.
 2. EPUB security validator fixture expansion and worker scheduling.
+   Implemented.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
 

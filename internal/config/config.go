@@ -27,6 +27,7 @@ type Config struct {
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
 		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
 		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
+		IngestWorkerInterval  int    `toml:"ingest_worker_interval_seconds"`
 		EPUBMaxEntries        int    `toml:"epub_max_entries"`
 		EPUBMaxDirectoryBytes int64  `toml:"epub_max_directory_bytes"`
 		EPUBMaxExpandedBytes  int64  `toml:"epub_max_expanded_bytes"`
@@ -82,6 +83,7 @@ func Default() Config {
 	c.Content.FailureRetentionHours = 24
 	c.Content.OrphanGraceHours = 168
 	c.Content.RecoveryBatchSize = 100
+	c.Content.IngestWorkerInterval = 5
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
 	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
@@ -169,6 +171,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
 		return fmt.Errorf("content.recovery_batch_size must be between 1 and 500")
+	}
+	if c.Content.IngestWorkerInterval < 1 ||
+		c.Content.IngestWorkerInterval > 3600 {
+		return fmt.Errorf(
+			"content.ingest_worker_interval_seconds must be between 1 and 3600")
 	}
 	if c.Content.EPUBMaxRatio < 1 {
 		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")

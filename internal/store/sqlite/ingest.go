@@ -300,6 +300,40 @@ func (s *Store) ListIngestRecoveryJobs(
 	return jobs, rows.Err()
 }
 
+func (s *Store) ListIngestWorkerJobs(
+	ctx context.Context,
+	state store.IngestState,
+	limit int,
+) ([]store.IngestJob, error) {
+	if (state != store.IngestStaged &&
+		state != store.IngestValidated &&
+		state != store.IngestExtracted) ||
+		limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	query := `SELECT ` + ingestJobColumns + `
+		FROM ingest_jobs j
+		WHERE j.state = ?
+		  AND j.artifacts_expired = 0
+		ORDER BY j.updated_at, j.id
+		LIMIT ?`
+	args := []any{state, limit}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []store.IngestJob
+	for rows.Next() {
+		job, err := scanIngestJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
 func (s *Store) TransitionIngestJob(
 	ctx context.Context,
 	userID, jobID string,

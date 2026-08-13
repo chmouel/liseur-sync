@@ -904,4 +904,30 @@ func testIngestRecoveryList(t *testing.T, open OpenFunc) {
 	if _, err := s.ListIngestRecoveryJobs(ctx, time.Time{}, nil, 10); err != store.ErrInvalidTransition {
 		t.Fatalf("zero recovery cutoff: %v", err)
 	}
+
+	workerPage, err := s.ListIngestWorkerJobs(
+		ctx, store.IngestStaged, 2)
+	if err != nil || len(workerPage) != 2 ||
+		workerPage[0].ID != first.ID || workerPage[1].ID != second.ID {
+		t.Fatalf("staged worker page: %+v %v", workerPage, err)
+	}
+	validated, err := s.TransitionIngestJob(ctx, user.ID, second.ID,
+		store.IngestJobTransition{
+			ExpectedState: second.State, ExpectedRevision: second.Revision,
+			NextState: store.IngestValidated,
+			UpdatedAt: now.Add(11 * time.Minute),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerPage, err = s.ListIngestWorkerJobs(
+		ctx, store.IngestValidated, 10)
+	if err != nil || len(workerPage) != 1 ||
+		workerPage[0].ID != validated.ID {
+		t.Fatalf("validated worker page: %+v %v", workerPage, err)
+	}
+	if _, err := s.ListIngestWorkerJobs(
+		ctx, store.IngestPromoted, 10); err != store.ErrInvalidTransition {
+		t.Fatalf("invalid worker state: %v", err)
+	}
 }

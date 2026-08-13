@@ -31,6 +31,7 @@ func TestContentDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.Content.Root == "" || cfg.Content.FailureRetentionHours < 1 ||
 		cfg.Content.OrphanGraceHours < 1 || cfg.Content.RecoveryBatchSize < 1 ||
+		cfg.Content.IngestWorkerInterval < 1 ||
 		cfg.EPUBLimits().Validate() != nil {
 		t.Fatalf("invalid content defaults: %+v", cfg.Content)
 	}
@@ -48,6 +49,11 @@ func TestContentDefaultsAndValidation(t *testing.T) {
 		t.Fatal("invalid EPUB limits accepted")
 	}
 	cfg.Content.EPUBMaxXMLDepth = epub.DefaultLimits().MaxXMLDepth
+	cfg.Content.IngestWorkerInterval = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid ingest worker interval accepted")
+	}
+	cfg.Content.IngestWorkerInterval = 5
 	cfg.Content.RecoveryBatchSize = 501
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("oversized recovery batch accepted")

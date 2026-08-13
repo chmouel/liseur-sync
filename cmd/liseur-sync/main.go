@@ -87,6 +87,43 @@ func openContentAndRecover(
 	return cas, report, nil
 }
 
+func runIngestValidationWorker(
+	ctx context.Context,
+	st store.Store,
+	cas *content.CAS,
+	cfg config.Config,
+) error {
+	interval := time.Duration(cfg.Content.IngestWorkerInterval) * time.Second
+	for {
+		report, err := content.RunIngestValidationPass(
+			ctx, st, cas, time.Now,
+			time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
+			cfg.EPUBLimits(), cfg.Content.RecoveryBatchSize)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if report.Validated != 0 || report.Quarantined != 0 ||
+			report.Skipped != 0 {
+			slog.Info("ingest validation pass complete",
+				"validated", report.Validated,
+				"quarantined", report.Quarantined,
+				"skipped", report.Skipped)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("fatal", "err", err)
@@ -180,8 +217,11 @@ func cmdServe(args []string) error {
 
 	// Inferred-session materializer (idempotent; safe to always run).
 	bgCtx, bgStop := context.WithCancel(context.Background())
-	defer bgStop()
-	go apiSrv.RunMaterializer(bgCtx)
+	materializerDone := make(chan struct{})
+	go func() {
+		defer close(materializerDone)
+		apiSrv.RunMaterializer(bgCtx)
+	}()
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -192,24 +232,42 @@ func cmdServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	validationDone := make(chan struct{})
 	go func() {
+		defer close(validationDone)
+		if err := runIngestValidationWorker(bgCtx, st, cas, cfg); err != nil {
+			errCh <- fmt.Errorf("ingest validation worker: %w", err)
+		}
+	}()
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
 		slog.Info("listening", "addr", cfg.ListenAddr, "driver", cfg.Database.Driver)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+			errCh <- fmt.Errorf("serve HTTP: %w", err)
 		}
 	}()
 
+	var runErr error
 	select {
 	case err := <-errCh:
-		return err
+		runErr = err
 	case <-ctx.Done():
 	}
 
+	bgStop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	slog.Info("shutting down")
-	return srv.Shutdown(shutdownCtx)
+	shutdownErr := srv.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(shutdownErr, srv.Close())
+	}
+	<-serverDone
+	<-validationDone
+	<-materializerDone
+	return errors.Join(runErr, shutdownErr)
 }
 
 func cmdAdmin(args []string) error {
