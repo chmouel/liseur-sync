@@ -105,9 +105,13 @@ precedence engine. Each ADR records its own remaining edges.
 3. **Catalog output.** API done: libraries, paginated books, book detail and
    download ([ADR-0006](0006-catalog-api-and-opds.md)). Catalog and
    book-detail pages in the web UI are not.
-4. **An existing reader.** OPDS 1.2 acquisition feeds, verified against
-   KOReader ([ADR-0006](0006-catalog-api-and-opds.md)). This is the last
-   step that the MVP definition above actually requires.
+4. **An existing reader.** Done: OPDS 1.2 navigation and acquisition feeds
+   under `/opds/v1.2`, authenticated with HTTP Basic
+   ([ADR-0006](0006-catalog-api-and-opds.md)).
+
+With those four in place the MVP definition above is satisfied end to end.
+What remains before a release is the web UI: uploading and browsing from a
+browser rather than from `curl` and a reader.
 
 ### After the MVP
 

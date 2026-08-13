@@ -327,6 +327,26 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/books/{id}/download", readH(s.HandleBookDownload))
 	mux.Handle("HEAD /v1/books/{id}/download", readH(s.HandleBookDownload))
 
+	// OPDS 1.2. Same catalog, same library-read scope, different
+	// credential: e-reader catalog clients speak HTTP Basic and nothing
+	// else, so the bearer middleware is swapped for the Basic one. The
+	// feeds are deliberately catalog-only — they expose no sync state
+	// even when the token also carries `sync`, because a reader given a
+	// catalog credential should not be able to read reading history.
+	opdsH := func(h http.HandlerFunc) http.Handler {
+		return auth.RequireSecureTransport(s.Cfg,
+			auth.RateLimitIP(s.LoginLimiter,
+				auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead, h)))
+	}
+	mux.Handle("GET /opds/v1.2", opdsH(s.HandleOPDSRoot))
+	// {$} rather than a bare trailing slash: a prefix pattern would
+	// answer every unknown path under /opds/v1.2 with the root feed,
+	// which hides client typos instead of reporting them.
+	mux.Handle("GET /opds/v1.2/{$}", opdsH(s.HandleOPDSRoot))
+	mux.Handle("GET /opds/v1.2/libraries/{library}", opdsH(s.HandleOPDSLibrary))
+	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
+	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
+
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,

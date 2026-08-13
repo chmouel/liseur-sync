@@ -594,11 +594,11 @@ What M6 still needs: catalog availability reconciliation, last-reference
 deletion and trash, and backup verification. Cover extraction and per-library parser configuration are
 tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
 
-M7 and most of M8 are now in place: uploads create ingest jobs, the admin
-subcommand creates libraries and grants access, and the catalog API lists
-and downloads books. What the first release still needs is OPDS 1.2, so an
-existing reader can browse and fetch, and the web UI pages for uploading and
-browsing.
+M7 and M8 are now in place: uploads create ingest jobs, the admin subcommand
+creates libraries and grants access, the catalog API lists and downloads
+books, and OPDS 1.2 puts that same catalog in front of readers that speak
+nothing else. What the first release still needs is the web UI — uploading
+and browsing from a browser rather than from `curl` and a reader.
 
 ## 10. Future work (explicitly out of v1)
 
