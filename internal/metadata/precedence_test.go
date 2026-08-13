@@ -76,6 +76,11 @@ func TestApply(t *testing.T) {
 		candidate: Candidate{Value: "Dune: A Novel", Source: store.MetadataExternal},
 		want:      Field{Value: "Dune", Source: store.MetadataEmbedded, Locked: true},
 	}, {
+		name:      "lock survives a rescan from its own source",
+		current:   Field{Value: "Dune", Source: store.MetadataEmbedded, Locked: true},
+		candidate: Candidate{Value: "dune", Source: store.MetadataEmbedded},
+		want:      Field{Value: "Dune", Source: store.MetadataEmbedded, Locked: true},
+	}, {
 		name:      "manual edit overrides a lock",
 		current:   Field{Value: "Dune", Source: store.MetadataEmbedded, Locked: true},
 		candidate: Candidate{Value: "Dune Messiah", Source: store.MetadataManual},

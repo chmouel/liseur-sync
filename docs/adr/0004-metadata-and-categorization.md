@@ -114,10 +114,16 @@ External metadata cannot be a required ingest dependency.
    The pure scalar precedence and lock engine is implemented: a blank
    candidate never clears a value, a locked field only accepts manual edits,
    an unlocked field accepts a strictly higher-precedence candidate or a
-   refresh from its own source, and a manual edit locks the field.
+   refresh from its own source, and a manual edit locks the field. Entity-set
+   merging uses the same rules with whole-set assertions: an empty assertion
+   is never treated as a request to empty a set, a source drops only the rows
+   it owns and no longer asserts, locked rows and stronger sources are left
+   alone, and a set-level manual lock keeps a deliberately emptied set empty
+   across rescans. Entity names match on a case- and whitespace-insensitive
+   key while keeping their display spelling.
    Materializing the snapshot into catalog fields and normalized metadata
-   entities, entity-set precedence, filename parsing, cover extraction, and
-   automatic promotion remain.
+   entities, filename parsing, cover extraction, and automatic promotion
+   remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
 3. Full-text search and facets.
 4. Explicit external-provider lookup and candidate review.
