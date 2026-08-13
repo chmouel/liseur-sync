@@ -13,7 +13,7 @@ made now, and is not a commitment to build yet.
 
 | ADR | Title | Scope | State |
 |---|---|---|---|
-| [0001](0001-content-server.md) | Become a content server | — | Accepted |
+| [0001](0001-content-server.md) | Become a content server | — | MVP implemented |
 | [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built; watched folders later |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Built; backfill later |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction built, no covers |

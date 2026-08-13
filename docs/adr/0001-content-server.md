@@ -111,7 +111,10 @@ precedence engine. Each ADR records its own remaining edges.
 
 All four are in place: the MVP definition above is satisfied end to end.
 The operational work behind it is done too — catalog availability
-reconciliation, deletion and trash, and backup verification (M6).
+reconciliation, deletion and trash, backup verification (M6), duplicate
+reporting, and `POST /v1/books/{id}/resolve`, which is what lets a book
+taken from the catalog sync its reading position
+([ADR-0003](0003-catalog-work-identity.md)).
 
 ### After the MVP
 
