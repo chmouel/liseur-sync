@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -27,14 +28,27 @@ var uploadNS = uuid.MustParse("7e0a3b10-5f2e-4c3a-9b6d-2f6f6c1a0005")
 // precise 400.
 const maxIdempotencyKeyBytes = 256
 
+// maxLibraryIDBytes bounds the {library} path value. Ids are uuids; this
+// leaves room for other id shapes without letting the fingerprint overflow.
+const maxLibraryIDBytes = 128
+
 // uploadFormField is the multipart field carrying the publication.
 const uploadFormField = "file"
 
 // ContentStore is the subset of the CAS the API needs. Uploads stage bytes;
-// everything after that belongs to the ingest workers.
+// everything after that belongs to the ingest workers. RemoveStage is here
+// because a stage that is never committed is unreachable from the database:
+// no recovery or GC pass can find it, so the request that created it has to
+// clean it up.
 type ContentStore interface {
 	Stage(ctx context.Context, jobID string, src io.Reader, maxBytes int64) (content.StagedBlob, error)
+	RemoveStage(ctx context.Context, stagingPath string) error
 }
+
+// uploadEnvelopeSlack allows for multipart boundaries, part headers and any
+// non-file parts on top of the file itself, so that a body within the
+// configured limit is never cut off by the transport bound.
+const uploadEnvelopeSlack = 1 << 20
 
 // HandleUpload implements POST /v1/library/{library}/upload.
 //
@@ -58,6 +72,14 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "library id required")
 		return
 	}
+	// Bound the path value. It goes into the request fingerprint, which
+	// the store rejects past 512 bytes with an error we cannot classify —
+	// so an over-long library id would answer 500 where every other
+	// unknown library answers 404.
+	if len(libraryID) > maxLibraryIDBytes {
+		writeError(w, http.StatusNotFound, "library not found")
+		return
+	}
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
 		writeError(w, http.StatusBadRequest, "Idempotency-Key header required")
@@ -72,6 +94,12 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			"multipart/form-data body required")
 		return
 	}
+	// Bound the transport, not just the file. Without this a client can
+	// make the server read forever: multipart.Part.Close drains the rest
+	// of a part, and skipping a non-file part reads all of it, so both
+	// happen before and after the size check that is supposed to stop them.
+	r.Body = http.MaxBytesReader(w, r.Body,
+		s.Cfg.Content.MaxUploadBytes+uploadEnvelopeSlack)
 
 	now := time.Now().UTC()
 	jobID := uploadJobID(tok.UserID, libraryID, key)
@@ -103,13 +131,15 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	defer part.Close()
 
 	staged, err := s.Content.Stage(r.Context(), job.ID, part, s.Cfg.Content.MaxUploadBytes)
 	if err != nil {
+		// Do not close the part: Close drains what is left of it, which
+		// for an oversized upload is exactly the data we just refused.
 		writeStageError(w, err)
 		return
 	}
+	part.Close()
 
 	result, err := s.St.CommitIngestStage(r.Context(), tok.UserID, job.ID,
 		store.CommitIngestStageRequest{
@@ -120,7 +150,17 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:        time.Now().UTC(),
 		})
 	if err != nil {
-		s.writeCommitError(w, r, tok.UserID, job.ID, err)
+		// The bytes are on disk but the database does not point at them.
+		// Unless someone else won the race and committed this very stage,
+		// nothing will ever find them again, so drop them here — otherwise
+		// a user sitting at their quota could fill the disk by retrying
+		// with a fresh key each time. Removing it also keeps the next
+		// attempt honest: Stage replays an existing stage without reading
+		// the body, so a leftover would answer a later upload with the
+		// wrong file's digest.
+		if s.writeCommitError(w, r, tok.UserID, job.ID, err) {
+			s.removeStage(r.Context(), staged.Path)
+		}
 		return
 	}
 	writeJSON(w, http.StatusAccepted, uploadJobJSON(result.Job))
@@ -231,26 +271,44 @@ func writeStageError(w http.ResponseWriter, err error) {
 // record. Losing this race is normal — two tabs, or a retry arriving while
 // the first request still runs — and it is not an error for the caller:
 // the bytes are staged either way, so we report the job the winner created.
+// writeCommitError answers a failed commit and reports whether the staged
+// bytes are now orphaned and should be deleted.
 func (s *Server) writeCommitError(
 	w http.ResponseWriter,
 	r *http.Request,
 	userID, jobID string,
 	err error,
-) {
+) bool {
 	var quota *store.QuotaExceededError
 	if errors.As(err, &quota) {
 		// 413 rather than 507: the request is refused because of its size,
 		// and ADR-0005 requires envelope failures to be 4xx.
 		writeError(w, http.StatusRequestEntityTooLarge, "storage quota exceeded")
-		return
+		return true
 	}
 	if errors.Is(err, store.ErrStaleRevision) || errors.Is(err, store.ErrInvalidTransition) {
 		if job, lookupErr := s.St.IngestJobByID(r.Context(), userID, jobID); lookupErr == nil {
+			// A concurrent request committed first. The stage it committed
+			// is the one we just wrote — the path is a function of the job
+			// id — so it is referenced now and must not be removed.
 			writeJSON(w, http.StatusOK, uploadJobJSON(job))
-			return
+			return job.StagingPath == nil
 		}
 	}
 	writeError(w, http.StatusInternalServerError, "upload failed")
+	return true
+}
+
+// removeStage drops staged bytes that no database row references. It runs
+// on a context detached from the request, because a client that hangs up
+// mid-upload is exactly the case that leaves an orphan behind.
+func (s *Server) removeStage(ctx context.Context, path string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.Content.RemoveStage(ctx, path); err != nil {
+		slog.Error("orphaned upload stage left on disk",
+			"path", path, "error", err)
+	}
 }
 
 func uploadJobJSON(job store.IngestJob) map[string]any {
