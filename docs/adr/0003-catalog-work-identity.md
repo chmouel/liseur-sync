@@ -88,6 +88,8 @@ identity.
 1. Add the mapping table, composite constraints, atomic resolver transaction,
    and tenant-isolation/concurrency tests. **Implemented.**
 2. Add an explicit catalog-book resolve operation for sync-capable clients.
+   **Implemented** as `POST /v1/books/{id}/resolve`, which requires both
+   `library-read` and `sync`.
 3. Add maintenance backfill and mapping repair for split/merge. Split and
    merge repair are implemented, including unavailable current files;
    maintenance backfill remains.

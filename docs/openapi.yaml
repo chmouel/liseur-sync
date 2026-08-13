@@ -869,6 +869,65 @@ paths:
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
         "409": { $ref: "#/components/responses/Error", description: "Not in the trash, or its retention window has closed" }
 
+  /v1/books/{id}/resolve:
+    post:
+      tags: [library, sync]
+      summary: Join a catalog book to your own work
+      security: [{ deviceToken: [] }]  # requires BOTH library-read and sync
+      description: |
+        Returns the `work_id` to report positions and sessions against for a
+        book that came from the catalog, creating it on first call.
+
+        Send no identifiers: the server collects them from the catalog. A
+        client that has only browsed has not seen the bytes, and two devices
+        should resolve the same book from the same evidence.
+
+        The mapping is per user. Two readers of one shared book get two
+        different works, which is what keeps reading history private.
+
+        A title/author-only match is a guess: it answers `confidence: low`
+        and stores nothing. Repeat with `confirmed: true` to accept it.
+
+        This is the one route that needs two scopes. It reads the catalog
+        and writes the caller's work graph, so a catalog-only credential
+        cannot perform it and neither can a sync-only one.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirmed:
+                  type: boolean
+                  description: Accept a low-confidence title/author match.
+      responses:
+        "200":
+          description: The existing work, or a low-confidence proposal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogResolution" }
+        "201":
+          description: A work was created for this book
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogResolution" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-read or sync" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409":
+          description: The book's identifiers resolve to more than one work, and nothing was changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, works]
+                properties:
+                  error: { type: string }
+                  works: { type: array, items: { type: string } }
+
   /v1/books/{id}/download:
     get:
       tags: [library]
@@ -1021,6 +1080,35 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    CatalogResolution:
+      type: object
+      description: |
+        The join between a catalog book and the caller's own sync work,
+        plus the identifiers the server used to make it, so a client can
+        show why two books were treated as one.
+      required: [book_id, work_id, confidence, created, identifiers]
+      properties:
+        book_id: { type: string }
+        work_id: { type: string }
+        confidence:
+          type: string
+          enum: [high, low]
+          description: |
+            `low` means the match rests on title and author alone. Nothing
+            was stored; resend with `confirmed: true` to accept it.
+        created:
+          type: boolean
+          description: Whether this call created the work.
+        identifiers:
+          type: array
+          description: The catalog's evidence, strongest first.
+          items:
+            type: object
+            required: [kind, value]
+            properties:
+              kind: { type: string, enum: [sha256, partial-md5, source, dc, ta] }
+              value: { type: string }
+
     CatalogBook:
       type: object
       description: |

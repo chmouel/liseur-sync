@@ -88,8 +88,17 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 
 func (f *uploadFixture) mintToken(t *testing.T, userID string, scope store.Scope) string {
 	t.Helper()
+	return f.mintScopes(t, userID, string(scope), scope)
+}
+
+// mintScopes issues a token carrying more than one capability, which is
+// what a real client holds: the same device browses the catalog and syncs.
+func (f *uploadFixture) mintScopes(
+	t *testing.T, userID, name string, scopes ...store.Scope,
+) string {
+	t.Helper()
 	secret, _, err := auth.NewService(f.st).MintToken(t.Context(), userID,
-		"device-"+string(scope)+"-"+userID, store.ScopeSet{scope}, nil)
+		"device-"+name+"-"+userID, store.ScopeSet(scopes), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

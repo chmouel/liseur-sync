@@ -311,6 +311,53 @@ Only books that differ byte for byte are missed by this: two EPUB builds
 of one novel are two different files and are reported as two books,
 because that is what they are.
 
+### Syncing a book you downloaded from the catalog
+
+Positions and sessions attach to a work, not to a catalog book, so a
+reader that fetched a book from the catalog needs a `work_id` before it
+can sync. Ask for one:
+
+```json
+POST /v1/books/{id}/resolve
+{}
+```
+
+```json
+{
+  "book_id": "…",
+  "work_id": "…",
+  "confidence": "high",
+  "created": true,
+  "identifiers": [{"kind": "sha256", "value": "…"},
+                  {"kind": "source", "value": "liseur-sync:…"}]
+}
+```
+
+Send no identifiers of your own. The server reads them off the catalog,
+which knows the file's digests and embedded ids even when you have only
+browsed and not downloaded. It answers with the evidence it used, so you
+can show a reader why two books were treated as one.
+
+Call it again whenever you need the mapping — a reinstalled client, for
+instance. It is idempotent, returning `200` and the same work instead of
+`201`.
+
+The mapping is yours alone. Two people reading one shared book get two
+different `work_id`s, which is what stops one reader's position from
+becoming the other's.
+
+A `confidence: "low"` answer means the only thing that matched was the
+title and author. Nothing was stored. Ask the reader whether it really
+is the same book and repeat with `{"confirmed": true}` to accept it.
+
+A `409` means the book's identifiers already point at more than one of
+your works, and it lists them; nothing was changed. Repair it with
+`POST /v1/works/merge` or `POST /v1/works/{id}/split`.
+
+This route needs **both** `library-read` and `sync`, the only one that
+does: it reads the catalog and writes your work graph. A catalog-only
+token gets `403`, and so does a sync-only one.
+
 ## KOReader through OPDS
 
 KOReader can browse the catalog with no plugin at all. Add an OPDS

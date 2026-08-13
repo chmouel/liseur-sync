@@ -131,8 +131,9 @@ metadata edits, work resolution, and rich sync remain native operations.
    acquisition feeds, and `GET /opds/v1.2/books/{id}/download`, all behind
    HTTP Basic. **Remaining:** recently added, covers, OpenSearch, and
    series/contributor feeds.
-4. Mutation API and ingestion job resources — the upload endpoint in
-   ADR-0005 phase 4 is MVP; metadata edits and trash/restore are later.
+4. Mutation API and ingestion job resources. Done: the ADR-0005 upload
+   endpoint, the job resource, and `DELETE`/`POST .../restore` for
+   reversible deletion. **Remaining:** metadata edits.
 
 ## Acceptance criteria
 
