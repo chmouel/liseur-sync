@@ -30,6 +30,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ConcurrentCatalogMetadataApply", func(t *testing.T) {
 		testConcurrentCatalogMetadataApply(t, open)
 	})
+	t.Run("CatalogMetadataRejectsDuplicateEntityIDs", func(t *testing.T) {
+		testCatalogMetadataRejectsDuplicateEntityIDs(t, open)
+	})
+	t.Run("ConcurrentCatalogMetadataEntityCreation", func(t *testing.T) {
+		testConcurrentCatalogMetadataEntityCreation(t, open)
+	})
 	t.Run("IngestJobs", func(t *testing.T) { testIngestJobs(t, open) })
 	t.Run("ConcurrentIngestJobCreate", func(t *testing.T) {
 		testConcurrentIngestJobCreate(t, open)

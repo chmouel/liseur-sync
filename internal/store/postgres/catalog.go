@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -418,7 +419,12 @@ func (s *Store) CatalogBookMetadata(
 	if err := checkLibraryRole(required); err != nil {
 		return out, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	// READ COMMITTED takes a fresh snapshot per statement, so an apply
+	// committing between these seven reads would return a torn book: a
+	// revision from before the write with entity sets from after it.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead, ReadOnly: true,
+	})
 	if err != nil {
 		return out, err
 	}
@@ -639,6 +645,10 @@ func replaceBookMetadataSetsTx(
 			return err
 		}
 	}
+	entities, err := resolveMetadataEntitiesTx(ctx, tx, libraryID, request, createdAt)
+	if err != nil {
+		return err
+	}
 	for _, row := range request.Metadata.Identifiers {
 		if _, err := tx.ExecContext(ctx, q(
 			`INSERT INTO book_identifiers
@@ -660,57 +670,41 @@ func replaceBookMetadataSetsTx(
 		}
 	}
 	for _, row := range request.Metadata.Tags {
-		id, err := resolveMetadataEntityTx(ctx, tx, "tags", libraryID,
-			row.ID, row.Name, row.NormalizedName, createdAt)
-		if err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, q(
 			`INSERT INTO book_tags (library_id, book_id, tag_id, source, locked)
 			 VALUES (?, ?, ?, ?, ?)`),
-			libraryID, bookID, id, string(row.Source), row.Locked); err != nil {
-			return err
-		}
-	}
-	for _, row := range request.Metadata.Genres {
-		id, err := resolveMetadataEntityTx(ctx, tx, "genres", libraryID,
-			row.ID, row.Name, row.NormalizedName, createdAt)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, q(
-			`INSERT INTO book_genres (library_id, book_id, genre_id, source, locked)
-			 VALUES (?, ?, ?, ?, ?)`),
-			libraryID, bookID, id, string(row.Source), row.Locked); err != nil {
-			return err
-		}
-	}
-	for _, row := range request.Metadata.Series {
-		id, err := resolveMetadataEntityTx(ctx, tx, "series", libraryID,
-			row.SeriesID, row.Name, row.NormalizedName, createdAt)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, q(
-			`INSERT INTO book_series
-			     (library_id, book_id, series_id, position, source, locked)
-			 VALUES (?, ?, ?, ?, ?, ?)`),
-			libraryID, bookID, id, row.Position,
+			libraryID, bookID, entities[entityKey("tags", row.NormalizedName)],
 			string(row.Source), row.Locked); err != nil {
 			return err
 		}
 	}
-	for _, row := range request.Metadata.Contributors {
-		id, err := resolveMetadataEntityTx(ctx, tx, "contributors", libraryID,
-			row.ContributorID, row.Name, row.NormalizedName, createdAt)
-		if err != nil {
+	for _, row := range request.Metadata.Genres {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_genres (library_id, book_id, genre_id, source, locked)
+			 VALUES (?, ?, ?, ?, ?)`),
+			libraryID, bookID, entities[entityKey("genres", row.NormalizedName)],
+			string(row.Source), row.Locked); err != nil {
 			return err
 		}
+	}
+	for _, row := range request.Metadata.Series {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO book_series
+			     (library_id, book_id, series_id, position, source, locked)
+			 VALUES (?, ?, ?, ?, ?, ?)`),
+			libraryID, bookID, entities[entityKey("series", row.NormalizedName)],
+			row.Position, string(row.Source), row.Locked); err != nil {
+			return err
+		}
+	}
+	for _, row := range request.Metadata.Contributors {
 		if _, err := tx.ExecContext(ctx, q(
 			`INSERT INTO book_contributors
 			     (library_id, book_id, contributor_id, role, position, source, locked)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			libraryID, bookID, id, row.Role, row.Position,
+			libraryID, bookID,
+			entities[entityKey("contributors", row.NormalizedName)],
+			row.Role, row.Position,
 			string(row.Source), row.Locked); err != nil {
 			return err
 		}
@@ -718,28 +712,98 @@ func replaceBookMetadataSetsTx(
 	return nil
 }
 
+func entityKey(table, normalizedName string) string {
+	return table + "\x00" + normalizedName
+}
+
+// resolveMetadataEntitiesTx resolves every entity this request needs before
+// any of them is inserted, in one canonical order. Two applies to different
+// books that create the same new names must take their insertion locks in
+// the same order, or PostgreSQL deadlocks one of them.
+func resolveMetadataEntitiesTx(
+	ctx context.Context, tx *sql.Tx, libraryID string,
+	request store.ApplyBookMetadataRequest, createdAt time.Time,
+) (map[string]string, error) {
+	type entityRequest struct{ table, candidateID, name, normalizedName string }
+	var wanted []entityRequest
+	for _, row := range request.Metadata.Tags {
+		wanted = append(wanted, entityRequest{
+			"tags", row.ID, row.Name, row.NormalizedName})
+	}
+	for _, row := range request.Metadata.Genres {
+		wanted = append(wanted, entityRequest{
+			"genres", row.ID, row.Name, row.NormalizedName})
+	}
+	for _, row := range request.Metadata.Series {
+		wanted = append(wanted, entityRequest{
+			"series", row.SeriesID, row.Name, row.NormalizedName})
+	}
+	for _, row := range request.Metadata.Contributors {
+		wanted = append(wanted, entityRequest{
+			"contributors", row.ContributorID, row.Name, row.NormalizedName})
+	}
+	sort.Slice(wanted, func(i, j int) bool {
+		if wanted[i].table != wanted[j].table {
+			return wanted[i].table < wanted[j].table
+		}
+		return wanted[i].normalizedName < wanted[j].normalizedName
+	})
+	resolved := make(map[string]string, len(wanted))
+	for _, want := range wanted {
+		key := entityKey(want.table, want.normalizedName)
+		if _, done := resolved[key]; done {
+			continue
+		}
+		id, err := resolveMetadataEntityTx(ctx, tx, want.table, libraryID,
+			want.candidateID, want.name, want.normalizedName, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		resolved[key] = id
+	}
+	return resolved, nil
+}
+
 // resolveMetadataEntityTx returns the id of the library's entity with this
 // normalized name, creating it with the caller's candidate id when it does
 // not exist yet. Display spelling of an existing entity is left alone: the
 // first spelling wins until an explicit rename, so a rescan cannot flip a
 // shared entity's name under every other book that references it.
+//
+// The candidate id is only a proposal. Entity ids are unique table-wide, so
+// one that is already taken by another name is a caller conflict, not a
+// reason to fail the request with a driver error.
 func resolveMetadataEntityTx(
 	ctx context.Context, tx *sql.Tx, table, libraryID, candidateID, name,
 	normalizedName string, createdAt time.Time,
 ) (string, error) {
+	id, err := lookupMetadataEntityTx(ctx, tx, table, libraryID, normalizedName)
+	if err == nil || !errors.Is(err, sql.ErrNoRows) {
+		return id, err
+	}
 	if _, err := tx.ExecContext(ctx, q(
 		`INSERT INTO `+table+` (id, library_id, name, normalized_name, created_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT (library_id, normalized_name) DO NOTHING`),
 		candidateID, libraryID, name, normalizedName, createdAt); err != nil {
+		if isUniqueErr(err) {
+			return "", store.ErrConflict
+		}
 		return "", err
 	}
+	id, err = lookupMetadataEntityTx(ctx, tx, table, libraryID, normalizedName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", store.ErrConflict
+	}
+	return id, err
+}
+
+func lookupMetadataEntityTx(
+	ctx context.Context, tx *sql.Tx, table, libraryID, normalizedName string,
+) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, q(
 		`SELECT id FROM `+table+` WHERE library_id = ? AND normalized_name = ?`),
 		libraryID, normalizedName).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", store.ErrConflict
-	}
 	return id, err
 }
