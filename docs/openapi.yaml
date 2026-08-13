@@ -754,6 +754,50 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
 
+  /v1/libraries/{library}/duplicates:
+    get:
+      tags: [library]
+      summary: Books in a library that are the same file
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Groups the library's active books by content digest, returning
+        only the digests more than one book holds. Uploading a file twice
+        is allowed and costs no extra storage, so this reports the
+        coincidence and never resolves it: a client resolves a group by
+        deleting whichever entry it chooses. A group split by `limit` is
+        omitted rather than returned with a single book in it.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: limit
+          in: query
+          description: Maximum books surveyed, not groups returned.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: The duplicate groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [duplicates]
+                properties:
+                  duplicates:
+                    type: array
+                    items:
+                      type: object
+                      required: [sha256, books]
+                      properties:
+                        sha256:
+                          type: string
+                          description: The digest every book in the group holds.
+                          pattern: "^[0-9a-f]{64}$"
+                        books:
+                          type: array
+                          minItems: 2
+                          items: { $ref: "#/components/schemas/CatalogBook" }
+        "400": { $ref: "#/components/responses/Error", description: "Bad limit" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+
   /v1/books/{id}:
     get:
       tags: [library]
