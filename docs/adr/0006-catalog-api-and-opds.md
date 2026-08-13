@@ -1,6 +1,6 @@
 # ADR-0006: Catalog API and OPDS
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0003](0003-catalog-work-identity.md),
   [ADR-0004](0004-metadata-and-categorization.md)
@@ -52,16 +52,12 @@ Routes remain exhaustively declared in `internal/api/routes.go`.
 
 ### Native API
 
-The `/v1/library/*` API includes:
-
-- accessible libraries;
-- paginated and filtered books;
-- book detail and metadata;
-- series, contributors, tags, genres, collections, and reading lists;
-- covers;
-- download and upload;
-- ingestion job status;
-- metadata edits and managed-book trash/restore.
+The `/v1/library/*` API covers accessible libraries, paginated and filtered
+books, book detail and metadata, covers, download and upload, ingestion job
+status, metadata edits, and managed-book trash/restore. Series, contributors,
+tags, genres, collections, and reading lists appear as the catalog gains them
+(ADR-0004); the MVP subset is libraries, books, book detail, covers,
+download, upload, and job status.
 
 List endpoints use stable cursor pagination. Responses can include the
 current user's optional `work_id`, position, completion, or reading-state
@@ -81,15 +77,11 @@ where possible and explicit MIME types with `nosniff`.
 
 ### OPDS 1.2
 
-OPDS is served below `/opds/v1.2/` with:
-
-- root navigation;
-- libraries;
-- recently added;
-- series and contributors;
-- search through OpenSearch;
-- paginated acquisition feeds;
-- EPUB acquisition links and cover thumbnails.
+OPDS is served below `/opds/v1.2/`. The MVP feeds are root navigation,
+libraries, recently added, and paginated acquisition feeds with EPUB
+acquisition links and cover thumbnails — enough for a reader to find a book
+and download it. Search through OpenSearch and series/contributor feeds
+follow later; OPDS 2.0 and OPDS-PSE are deferred entirely.
 
 XML is generated through an encoder, never string interpolation, and has
 escaping and pagination tests. OPDS 2.0 and OPDS-PSE are deferred.
@@ -118,9 +110,14 @@ metadata edits, work resolution, and rich sync remain native operations.
 
 1. Scope-set migration, in-place token update, API compatibility, implication
    matrix, and UI. **Implemented.**
-2. Native catalog read/download API and OpenAPI contract.
-3. Mutation API and ingestion job resources.
-4. OPDS 1.2 and KOReader conformance fixtures.
+2. **Native catalog read and download API**, with the OpenAPI contract —
+   MVP.
+3. **OPDS 1.2 acquisition feeds**, verified against KOReader — MVP. Root
+   navigation, libraries, recently added, and paginated acquisition feeds
+   are enough to browse and download; OpenSearch and series/contributor
+   feeds are later.
+4. Mutation API and ingestion job resources — the upload endpoint in
+   ADR-0005 phase 4 is MVP; metadata edits and trash/restore are later.
 
 ## Acceptance criteria
 

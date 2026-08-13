@@ -1,6 +1,6 @@
 # ADR-0001: Become a content server
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Owners:** liseur-sync maintainers
 
@@ -40,7 +40,9 @@ The content server is EPUB-only initially. Other formats require separate
 ADRs because comics, PDFs, and audiobooks have different metadata, serving,
 and reading models.
 
-The complete direction is split into focused ADRs:
+The complete direction is split into focused ADRs. Those marked *later* are
+recorded so their constraints are known before storage decisions harden;
+they are not commitments to build in the first release.
 
 - [ADR-0002](0002-library-storage-and-ownership.md): storage, access, GC,
   watched folders, and backups.
@@ -50,97 +52,99 @@ The complete direction is split into focused ADRs:
   search, and manual overrides.
 - [ADR-0005](0005-upload-and-ingestion.md): durable and secure ingestion.
 - [ADR-0006](0006-catalog-api-and-opds.md): native catalog API and OPDS.
-- [ADR-0007](0007-web-reader.md): isolated browser reading with native sync.
-- [ADR-0008](0008-liseur-android-client.md): Android integration.
-- [ADR-0009](0009-liseur-desktop-client.md): desktop integration.
+- [ADR-0007](0007-web-reader.md): isolated browser reading — *later*.
+- [ADR-0008](0008-liseur-android-client.md): Android integration — *later*,
+  and in another repository.
+- [ADR-0009](0009-liseur-desktop-client.md): desktop integration — *later*,
+  and in another repository.
 
-## Implementation roadmap
+## The minimum viable server
 
-Each phase is independently releasable. Route or payload changes update
-`docs/openapi.yaml` in the same commit.
+One sentence: **a user can put an EPUB on the server and read it, at the
+right page, in the reader they already use.**
 
-### Phase 0: decisions
+That is the whole first release. It is done when someone can:
 
-- Add ADR-0001 through ADR-0009 and this index.
-- Update every affected section of `DESIGN.md`.
+1. create a managed library and grant a second account read access;
+2. upload an EPUB through the web UI or the API and watch it become a book;
+3. list and download that book from Liseur or KOReader;
+4. read it and have the position sync, as it already does today.
 
-### Phase 1: catalog identity, authorization, and ingestion core
+Nothing else is in the first release. A library that cannot be searched,
+tagged, or read in a browser is still a working library; one that cannot be
+downloaded is not.
 
-- Add catalog, ACL, blob, job, metadata, and catalog-to-work mapping tables.
-- Migrate token scopes from a scalar to a compatible scope set.
-- Implement the content-addressed store, durable ingestion state machine,
-  metadata precedence engine, and grace-period garbage collector.
-- Add admin commands for library creation, access grants, scans, maintenance,
-  and backup verification.
+Two rules keep the scope honest:
 
-The scope-set migration, catalog schema, ACL store operations, atomic
-catalog-to-work resolution, revisioned durable ingest-job store, and
-filesystem CAS staging/promotion primitive are implemented. Atomic database
-promotion now commits blob identity, logical quota, catalog book/file rows,
-and job state together, with replay-safe request fingerprints and expiring
-artifact holds. The recovery coordinator verifies stale staged artifacts,
-recognizes lost filesystem-promotion responses, and terminalizes missing or
-corrupt content with retryable two-phase cleanup. `serve` opens the configured
-private CAS and recovers every pre-existing nonterminal job before listening.
-The CAS can also produce a strict verified inventory for reconciliation.
-Database blob state can now mark missing content and filesystem-only or
-unreferenced orphans without deletion. Startup comparison, ingestion workers,
-metadata parsing, GC sweep, and admin commands remain in Phase 1.
+- **A feature is in the MVP only if one of those four steps fails without
+  it.** Tags, series pages, full-text search, external metadata lookup,
+  collections, and the web reader all fail this test. They are listed under
+  "after the MVP", and their ADRs are not commitments to build until then.
+- **Storage decisions are settled; presentation decisions are not.**
+  Anything that writes durable bytes or defines identity is expensive to
+  change later and is decided now. Anything that only reads those bytes back
+  can be redesigned cheaply and is deliberately left open.
 
-### Phase 2: managed uploads and management UI
+## Roadmap
 
-- Add bounded upload endpoints and htmx drag-and-drop upload.
-- Show ingest progress, errors, quarantine state, and retry actions.
-- Add catalog, book-detail, metadata-edit, trash, and restore pages.
+Route or payload changes update `docs/openapi.yaml` in the same commit.
 
-### Phase 3: watched folders
+### Foundations — done
 
-- Add recursive, read-only watched libraries.
-- Feed filesystem discoveries through the same ingestion state machine.
-- Detect renames by hash and mark unavailable roots as missing without
-  deleting catalog history.
+Catalog, ACL, blob, ingest-job, metadata, and catalog-to-work mapping
+schema; scope sets; the content-addressed store; the durable ingest state
+machine with crash recovery and grace-period collection; and the metadata
+precedence engine. Each ADR records its own remaining edges.
 
-### Phase 4: categorization and search
+### To the MVP
 
-- Add series, contributors, tags, genres, collections, and reading lists.
-- Add SQLite FTS5 and PostgreSQL full-text search.
-- Add explicitly invoked external metadata lookup.
+1. **Ingest input.** `POST /v1/library/upload` and the htmx upload UI
+   ([ADR-0005](0005-upload-and-ingestion.md)). The pipeline runs end to end
+   but nothing creates jobs, so this is the one gap between the server and a
+   usable product.
+2. **Catalog output.** The `/v1/library/*` read and download API
+   ([ADR-0006](0006-catalog-api-and-opds.md)), plus catalog and book-detail
+   pages in the web UI.
+3. **An existing reader.** OPDS 1.2 acquisition feeds, verified against
+   KOReader ([ADR-0006](0006-catalog-api-and-opds.md)).
+4. **Admin.** Library creation and access grants from the `admin`
+   subcommand.
 
-### Phase 5: catalog clients
+### After the MVP
 
-- Add the native `/v1/library/*` API.
-- Add OPDS 1.2 acquisition feeds and OpenSearch.
-- Verify download, pagination, cache, and authentication behavior against
-  real client expectations, including KOReader.
-
-### Phase 6: web reader
-
-- Vendor an EPUB renderer.
-- Isolate all active book content from the authenticated UI origin.
-- Use the native sync and session APIs as an ordinary client.
-
-### Phase 7: Liseur clients
-
-- Execute the Android plan in ADR-0008.
-- Execute the desktop plan in ADR-0009.
+Ordered by how much a real library misses them, not by how interesting they
+are to build: cover extraction and per-library parser configuration
+([ADR-0004](0004-metadata-and-categorization.md)); watched folders
+([ADR-0002](0002-library-storage-and-ownership.md)); metadata editing and
+trash/restore UI; categorization and search
+([ADR-0004](0004-metadata-and-categorization.md)); the web reader
+([ADR-0007](0007-web-reader.md)); external metadata providers; and the
+client work in [ADR-0008](0008-liseur-android-client.md) and
+[ADR-0009](0009-liseur-desktop-client.md), which depends only on the MVP
+API surface being stable.
 
 ## Consequences
 
 The binary now owns durable content as well as a database. Deployment,
 backup, quota, and security documentation must reflect that larger
-responsibility. File parsers and browser rendering substantially enlarge the
-attack surface, so phases must not bypass the bounds in ADR-0005 or the
-isolation in ADR-0007.
+responsibility. File parsers substantially enlarge the attack surface, so no
+feature may bypass the bounds in ADR-0005.
 
 The advantage is one coherent identity and sync system from upload to every
 reader. A catalog book and its reading history converge through the same
 native work-resolution protocol instead of being joined by client-specific
 guessing.
 
+The cost of drawing the MVP line here is that the first release will look
+sparse next to Komga or calibre-web: no search, no tag browsing, no cover
+grid worth showing off. That is accepted. Those are additive and can land
+against a stable catalog; getting identity, durability, or the ownership
+model wrong cannot be fixed additively once real libraries exist.
+
 ## Acceptance criteria
 
 - The project documents no contradictory "not a library server" assumption.
 - The roadmap preserves all existing sync, tenant-isolation, and adapter
   guarantees.
-- Every implementation phase points to a focused decision and a testable
-  completion condition.
+- Every item on the path to the MVP is required by the four-step definition
+  above, and everything else is listed after it.

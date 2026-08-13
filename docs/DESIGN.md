@@ -442,13 +442,12 @@ before promotion. Covers are rasterized and served with fixed MIME types and
 `nosniff`. Details and the required hostile-input corpus are in
 [ADR-0005](adr/0005-upload-and-ingestion.md).
 
-The planned browser reader never executes publication content as an ordinary
-document on the authenticated UI origin. It uses sandboxed documents without
-`allow-same-origin`, a restrictive CSP, and optionally a separate content
-origin. Each reader tab gets a short-lived `sync + library-read` device token
-linked to the UI session; tabs do not revoke each other, and all linked
-tokens are revoked with the session. See
-[ADR-0007](adr/0007-web-reader.md).
+A browser reader is deferred ([ADR-0007](adr/0007-web-reader.md)): Liseur's
+Android and desktop clients already read and sync, so it buys little and
+costs the attack surface of rendering hostile publisher markup. The
+constraint it leaves behind applies to every extracted asset the server
+serves today: publication content never executes as an ordinary document on
+the authenticated UI origin.
 
 ## 9. Implementation shape
 
@@ -486,7 +485,7 @@ sessions         user_id, session_id, work_id, device_id,
                  idle_ms, origin, received_at  PK (user_id, session_id)
 kosync_devices   user_id, device_slot, key_sha256, label, revoked_at
 
-# Planned catalog tables (ADRs 0002–0006)
+# Catalog tables (ADRs 0002–0006); built unless marked otherwise
 libraries        id, owner_user_id, quota_user_id, kind, name, root?, config
 library_access   library_id, user_id, role(read|manage)
 books            id, library_id, status, metadata fields + source/lock data
@@ -495,9 +494,13 @@ blob_reservations quota_user_id, blob_sha256, bytes
 book_files       id, book_id, blob_sha256, source_relative_path?, availability
 user_book_works  user_id, book_id, work_id
 ingest_jobs      id, user_id, library_id, source, state, bytes, error, timestamps
-series           id, library_id, name
-contributors     id, library_id, name
-book_contributors/book_tags/collections/reading_lists ...
+ingest_blob_holds  job_id, blob_sha256, quota_user_id, expires_at
+token_scopes     token_id, scope                       # ADR-0006 scope sets
+series, contributors, tags, genres                     # entities
+book_series, book_contributors, book_tags, book_genres,
+book_identifiers, book_languages                       # joins
+collections, reading_lists, collection_books,
+reading_list_books                                     # tables only, no API
 ```
 
 Works are per-user in v1 (no cross-user shared works): simpler privacy
@@ -567,64 +570,33 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M5 | Admin CLI + minimal web UI (tokens, pairing, insights) | Self-host UX complete |
 | M6 | Catalog identity, ACLs, scope sets, bounded metadata extraction, and durable ingestion core | Shared catalog without cross-user sync leakage |
 | M7 | Managed upload and library-management UI | Books can be safely added without filesystem access |
-| M8 | Read-only watched libraries | Existing EPUB folders can be indexed without mutation |
-| M9 | Metadata editing, categorization UI, external lookup, and search | A large library is organized and discoverable |
-| M10 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
+| M8 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
+| M9 | Read-only watched libraries | Existing EPUB folders can be indexed without mutation |
+| M10 | Metadata editing, categorization UI, and search | A large library is organized and discoverable |
 | M11 | Isolated web reader | Browser reading uses the same position/session protocol safely |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
 
-M6 is in progress: compatible token scope sets and the shared catalog,
-metadata, blob, ingestion-job, ACL, and per-user work-mapping schema are
-implemented on SQLite and PostgreSQL, together with ACL-scoped store
-operations, atomic catalog resolution, and revision-checked idempotent ingest
-job transitions. Bounded restart-safe filesystem staging and no-replace CAS
-publication are also implemented. Database promotion now atomically installs
-blob identity, logical quota reservations, catalog book/file rows, and job
-state; transient holds cover staged artifacts, full request fingerprints make
-promotion replay-safe, and expired failed artifacts use terminal tombstones
-with retryable two-phase filesystem cleanup. A recovery coordinator verifies
-stale stages, accepts an already-durable final blob after a lost promotion
-response, and terminalizes missing or corrupt artifacts. The server opens the
-configured private CAS and recovers every pre-existing nonterminal job before
-listening. The CAS also supports strict verified final-blob inventory.
-Database reconciliation records missing content and grace-period orphan marks
-without changing catalog availability. The complete comparison and verified
-grace-period orphan sweep run before the server accepts traffic, with active
-ingest holds treated as GC roots. A pure bounded EPUB validator now rejects
-unsafe ZIP structure, expansion bombs, malformed control XML, and unsupported
-content encryption before extraction. CAS-backed validation and the durable
-staged-to-validated worker transition are implemented with configurable
-bounded-validation limits. After startup recovery and GC, the server polls one
-database-snapshotted, size-capped validation batch at a time, timestamps
-transitions after validation, skips only revision races, and surfaces
-operational worker failures through coordinated shutdown. A pure bounded OPF
-extractor now returns embedded catalog fields and cover references from EPUB2
-and EPUB3 metadata. An independent worker revalidates each immutable artifact
-and atomically persists the bounded embedded metadata as canonical JSON while
-advancing `validated -> extracted`; it supports lost-promotion final blobs,
-retains content failures, and uses the same revision-safe shutdown behavior.
-The shared scalar precedence and lock engine is implemented as a pure package:
-a blank candidate never clears a value, a locked field only accepts manual
-edits, an unlocked field accepts a strictly higher-precedence candidate or a
-refresh from its own source, and a manual edit locks the field. The same
-rules cover multi-valued entity sets through whole-set assertions, where a
-source drops the unlocked rows it owns or outranks and no longer asserts,
-with case- and whitespace-insensitive entity matching and a set-level lock
-that a caller can raise to reject an assertion outright. A pure filename and
-folder parser
-recognizes the four documented library layouts from an ordered per-library
-pattern list, grades each candidate by whether the layout accounted for the
-whole name, keeps the original path, and leaves ambiguous names unset.
-Both the embedded snapshot and a parsed path map to one source-neutral
-proposal the engine consumes, and a proposal declares whether its sets are
-complete, and so may drop what the source no longer claims, or partial, and
-so may only add or take over the rows the source can actually see.
-Resolved proposals are persisted into catalog fields and metadata entities,
-and the promotion worker creates a book together with its scalar metadata in
-one transaction. Persisting the set-level lock, per-library parser
-configuration, cover extraction/transcoding, catalog availability
-reconciliation, last-reference deletion/trash, backup verification, and
-administration remain.
+**M1–M5 are done. M6 is nearly done, and M6–M8 are the first release**
+([ADR-0001](adr/0001-content-server.md)): upload a book, list it, download
+it in a reader you already own. M8 comes before M9 and M10 because a
+catalog nobody can download from is not yet a product, however well
+organized it is.
+
+What M6 has: catalog, ACL, blob, ingest-job, metadata, and work-mapping
+schema on both backends; scope sets; ACL-scoped queries and atomic catalog
+resolution; a restart-safe content-addressed store whose promotion commits
+blob identity, quota, catalog rows, and job state in one transaction; crash
+recovery and grace-period collection; a bounded EPUB validator; and a
+three-pass ingest worker that carries an upload through to a published book
+with its title.
+
+What M6 still needs: catalog availability reconciliation, last-reference
+deletion and trash, backup verification, and admin commands for libraries
+and grants. Cover extraction and per-library parser configuration are
+tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
+
+Nothing yet creates an ingest job, so M7's upload endpoint is the gap
+between a working pipeline and a usable server.
 
 ## 10. Future work (explicitly out of v1)
 

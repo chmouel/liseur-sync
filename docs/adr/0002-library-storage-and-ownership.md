@@ -1,6 +1,6 @@
 # ADR-0002: Library storage and ownership
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0001](0001-content-server.md)
 
@@ -95,37 +95,30 @@ set.
 
 ### Watched folders
 
-The scanner combines filesystem notifications with a periodic full sweep.
-Notifications reduce latency; only a complete sweep may declare a file
-missing.
+Watched libraries are post-MVP. The decisions recorded here are the ones
+that constrain storage and identity, so they are settled before the scanner
+is built; the scanner's own mechanics are deliberately left open until then.
 
-- The scanner copies from one descriptor into CAS-side staging; hashing,
-  validation, and extraction operate on that immutable snapshot. The
-  source's descriptor metadata and hash are recorded only for later
-  reconciliation.
-- Downloads and covers always use the recorded CAS blob, so an in-place
-  source mutation can never serve unvalidated bytes. A later notification or
-  sweep creates and validates a new snapshot, then reconciles identity before
-  changing the catalog:
-  - the same hash at another path is a rename only when a paired filesystem
-    rename event proves continuity or a complete sweep finds an unambiguous
-    one-missing-path to one-new-path match for that hash; zero-to-many,
-    many-to-one, and many-to-many matches are flagged for review and do not
-    transfer identity; if both paths exist, they remain distinct catalog
-    references that deduplicate to the same blob;
-  - a new hash preserves `book_id` only when a stable embedded identifier
-    agrees with the existing book or an administrator confirms the match;
-  - an ambiguous replacement leaves the old snapshot available, records a
-    review item, and does not change user work mappings;
-  - a confirmed different publication marks the old path missing and creates
-    a new catalog book with no inherited mappings.
-- Rename detection uses content hash, preserving book identity.
-- A disappeared root marks its books `missing`; it never deletes rows.
-- Files reappearing with the same hash restore availability.
-- Traversal uses descriptor-relative `os.Root` operations to keep reads
-  beneath the configured root.
-- Symlinked entries are skipped by a separate, explicit policy. Beneath-root
-  containment does not itself mean "no symlinks."
+- The server never writes, renames, moves, trashes, or deletes anything
+  below a watched root.
+- Ingest copies from one descriptor into CAS-side staging. Downloads and
+  covers always serve the recorded CAS blob, so mutating a source in place
+  can never serve unvalidated bytes.
+- Traversal uses descriptor-relative `os.Root` operations, and symlinked
+  entries are skipped by explicit policy — staying beneath a root is not by
+  itself a decision about symlinks.
+- A disappeared root marks its books `missing`, and only a **completed full
+  sweep** may do so — a dropped or coalesced filesystem notification, or a
+  traversal that ended early, must never flip a book to `missing`.
+  Notifications only reduce latency. Nothing is ever deleted, and a file
+  returning with the same hash restores availability.
+- **Identity is never transferred on hash equality alone.** Two live paths
+  holding identical bytes are two catalog references that happen to
+  deduplicate. Preserving a `book_id` across a content change requires
+  either proof of continuity from the filesystem or an administrator's
+  confirmation; anything ambiguous keeps the existing snapshot and records a
+  review item rather than guessing. A confirmed different publication gets a
+  new `book_id` and inherits no user work mappings.
 
 Watched roots are semi-trusted administrator-configured paths. The guarantee
 is that the server does not escape the configured root, not that it can
@@ -148,23 +141,20 @@ volumes and watched roots read-only.
 
 ### Backup and restore
 
-The database and content-addressed directory form one backup unit. A
-consistent backup either uses coordinated filesystem/database snapshots or:
-
-1. enters maintenance mode, pausing ingest promotion, deletion, and GC;
-2. backs up the database;
-3. backs up the content directory;
-4. verifies that every database-referenced blob exists in the backup;
-5. leaves maintenance mode.
-
-Restore runs the same verification before normal service and marks extra
-blobs for grace-period reconciliation instead of deleting them.
+The database and the content directory are one backup unit and must be
+captured consistently — either by coordinated snapshots, or by pausing
+ingest promotion, deletion, and GC while both are copied. A backup is only
+valid if every database-referenced blob is present in it, so the verifier
+that checks this is part of the feature, not an optional extra. Restore runs
+the same check first, and treats extra blobs as candidates for the ordinary
+grace-period reconciliation rather than deleting them.
 
 ## Consequences
 
 Content-addressed paths make metadata edits cheap and avoid unsafe path
 construction, at the cost of a separate export operation for users who want
-a human-readable directory tree.
+a human-readable directory tree. No such export is planned; the content
+directory plus the database is the supported representation.
 
 Instance-wide physical dedup saves disk without conflating ownership.
 Logical reservations may charge two quota principals for the same physical
@@ -173,22 +163,17 @@ server disk allocation.
 
 ## Implementation phases
 
-1. Schema, ACL queries, CAS, logical quota, trash, GC, and backup verifier.
-   The schema, ACL-scoped library/book queries, and durable filesystem CAS
-   primitive are implemented. Atomic database promotion and per-principal
-   quota holds/reservations are implemented, including concurrent
-   deduplication and two-phase expiry release/cleanup; last-reference
-   deletion, trash, and backup verification remain. The configured
-   private content root and persistent Docker/Podman volume wiring are
-   implemented, together with strict descriptor-relative inventory and
-   verification of durable final blobs. Database reconciliation records
-   missing blobs and grace-period orphan marks without mutating catalog
-   availability. The full comparison and a configurable grace-period sweep
-   run before the server accepts traffic; active catalog references and ingest
-   holds remain GC roots, and deletion verifies the immutable blob first.
-2. Managed-library upload and management UI.
-3. Watched-folder scanner and reconciliation.
-4. Export tooling, if later required.
+1. **Schema, ACL queries, CAS, quota, and GC.** Done, except where noted.
+   Library and book queries are ACL-scoped, the durable CAS and atomic
+   database promotion commit blob identity and per-principal quota together,
+   and startup reconciles the database against a strict descriptor-relative
+   inventory before a configurable grace-period sweep runs. Active catalog
+   references and ingest holds are GC roots, and deletion verifies the
+   immutable blob first.
+   **Remaining:** last-reference deletion, trash and restore, and the backup
+   verifier.
+2. Managed-library upload and management UI — the MVP path.
+3. Watched-folder scanner and reconciliation — later.
 
 ## Acceptance criteria
 
