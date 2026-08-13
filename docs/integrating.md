@@ -45,6 +45,37 @@ The design rationale (why the API looks like this) is in
 
 All API calls then use `Authorization: Bearer <token secret>`.
 
+### A credential for code running in the browser
+
+A reader or dashboard running as a page inside the web UI does not go
+through the two steps above; it already has the user's session cookie.
+`POST /ui/reader/token`, sent with that cookie and the page's `csrf`
+field, returns a token to use as an ordinary bearer credential:
+
+```json
+{
+  "token": "...",
+  "device_id": "...",
+  "expires_at": "2026-08-13T18:21:00Z",
+  "scopes": ["sync", "library-read"]
+}
+```
+
+Four things about it are worth knowing before building on it:
+
+- **The scopes are fixed.** It can read the catalog and sync positions,
+  whatever else its owner is allowed to do. Upload, delete, metadata
+  editing and insights all answer `403`.
+- **It expires in an hour, and there is no refresh token.** Ask for
+  another the same way; the session cookie is what proves you may. Treat
+  a `401` as "mint again and retry", not as "sign in again".
+- **The device id is stable.** Every mint for the same user returns the
+  same one, so all browser reading is one device in the op log rather
+  than one per tab. Minting does not invalidate a token another tab is
+  still using.
+- **Signing out revokes it.** A token derived from a session does not
+  outlive it.
+
 ## Position sync
 
 ### Resolving books

@@ -155,7 +155,11 @@ which is now complete).
 **Features**, in order:
 
 1. **The web reader** ([ADR-0007](0007-web-reader.md)). It was waiting
-   for a catalog worth reading from, and now it is not.
+   for a catalog worth reading from, and now it is not: that ADR's
+   deferral has been replaced by a decision, and its phase 1 — the
+   short-lived credential a browser client authenticates with — is
+   built. What remains is the reader page itself, which is the one
+   thing on this list that adds a vendored third-party dependency.
 2. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
