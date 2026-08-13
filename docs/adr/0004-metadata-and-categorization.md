@@ -233,11 +233,49 @@ External metadata cannot be a required ingest dependency.
      what `GET /books` shows, which includes a restored book with no
      stored file, and it never reveals a library the caller cannot read.
 
-   **Next for this ADR:** phase 4, external provider lookup, which remains
-   optional forever.
+4. **Explicit external-provider lookup and candidate review — done.**
+   Optional forever, and off unless an operator names a provider, because
+   a self-hosted server that contacts a third party without being told to
+   is not self-hosted in the sense that matters. Decisions made building
+   it:
 
-4. Explicit external-provider lookup and candidate review — later, and
-   optional forever.
+   - **The allowlist and the dialer are two checks, because each alone
+     has a hole.** The allowlist is re-checked on every redirect hop, as
+     the constraint above required: a 302 is a URL this server never
+     chose. Separately, the dialer refuses any non-public address, and it
+     checks the address actually being dialled rather than the one in the
+     URL — which is what defeats DNS rebinding and the cloud-metadata
+     attack, where the URL is perfectly ordinary.
+   - **Proxy settings are ignored.** `HTTP_PROXY` would send every lookup
+     to a host of the environment's choosing, which is the allowlist
+     defeated by a variable nobody was thinking about.
+   - **The allowlist is built from the providers this build ships**,
+     never from configuration and never from a request, so there is no
+     path by which a user names a host. A misspelled provider name stops
+     the server at startup rather than silently disabling the feature.
+   - **An oversize response is refused rather than truncated**, because
+     half a JSON document parses into a book with fields quietly missing.
+   - **A lookup has no code path to the catalog.** Accepting a candidate
+     is a separate request that goes through the same precedence engine
+     as every other source, so "shown rather than applied" is structural
+     rather than a rule somebody has to keep.
+   - **The candidate travels back through the client.** Looking again
+     could return something else, and a person would then accept what
+     they read and get what they did not. It costs nothing: the values
+     are written with external provenance, and accepting needs the same
+     capability that lets the caller type them into the edit form.
+   - **Identifiers are never proposed.** They decide work identity
+     (ADR-0003), so accepting one would move a reader's history between
+     books as a side effect of tidying a title. They are shown so a
+     person can check they are being offered the right edition.
+   - **Lookup requires `library-manage`,** not `library-read`: the result
+     is only useful to somebody who could apply it, and a read-only
+     credential should not be able to make this server talk to a third
+     party. The web UI's lookup is a POST with a CSRF token for the same
+     reason — it writes nothing here, but it does cause an outbound
+     request about somebody's book.
+   - Lookups are rate limited per user. OpenLibrary runs on donations;
+     this is the server's manners rather than its security.
 
 ## Acceptance criteria
 

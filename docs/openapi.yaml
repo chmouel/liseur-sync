@@ -1210,6 +1210,123 @@ paths:
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
         "409": { $ref: "#/components/responses/Error", description: "The book changed while it was being edited" }
 
+  /v1/books/{id}/metadata/lookup:
+    post:
+      tags: [library]
+      summary: Ask external services about a book
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Asks the metadata services this server was configured to use what
+        they know about a book, and reports what they said. Nothing is
+        written: there is no code path from a lookup to the catalog, and
+        accepting a candidate is a separate request.
+
+        It needs `library-manage` rather than `library-read` for two
+        reasons that point the same way. The result is only useful to
+        somebody who could apply it, and a lookup makes this server send
+        a request to a third party about one of the operator's books,
+        which is not something a read-only credential should cause.
+
+        There is no request body. The query is built from the book — its
+        title, its first author, its identifiers — so nothing a client
+        sends reaches a provider.
+
+        External lookup is off unless the operator turned it on, and a
+        server that was told to contact nobody answers `501`. That is a
+        different problem from an empty result and is fixed somewhere
+        else entirely.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: |
+            What the services said, best match first. An empty list is a
+            normal answer: nobody had heard of the book.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers, candidates]
+                properties:
+                  providers:
+                    type: array
+                    description: The services that were asked.
+                    items: { type: string }
+                  candidates:
+                    type: array
+                    items: { $ref: "#/components/schemas/MetadataCandidate" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
+        "429": { $ref: "#/components/responses/Error", description: "Too many lookups; see Retry-After" }
+        "501": { $ref: "#/components/responses/Error", description: "No metadata provider is configured" }
+        "502": { $ref: "#/components/responses/Error", description: "No metadata service could be reached" }
+
+  /v1/books/{id}/metadata/apply:
+    post:
+      tags: [library]
+      summary: Accept one external candidate
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Merges one candidate into a book. This is an ordinary metadata
+        write: the values are recorded with `external` provenance, which
+        ranks above a filename and below a person, so a field somebody
+        edited or locked keeps its value and the rest are filled in.
+
+        The candidate is sent back by the client rather than looked up
+        again here, because a second lookup can return something else — a
+        person would then accept what they read and get what they did
+        not. This costs nothing: every value is written with external
+        provenance, and the caller already holds the capability that lets
+        them type the same thing into the edit form.
+
+        `revision` is required and must be the one the client read, for
+        the same reason it is on an edit.
+
+        Identifiers cannot be applied. They decide work identity
+        (ADR-0003), so accepting one would move a reader's history
+        between books as a side effect of tidying a title. They are
+        reported by the lookup only so a person can check they are being
+        offered the right edition.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: { type: integer, minimum: 1 }
+                provider:
+                  type: string
+                  description: |
+                    Recorded for the person reading the page later, so a
+                    value can be traced back to the service that gave it.
+                by_identifier: { type: boolean }
+                title: { type: string }
+                subtitle: { type: string }
+                description: { type: string }
+                publisher: { type: string }
+                published_date: { type: string }
+                languages: { type: array, items: { type: string } }
+                tags: { type: array, items: { type: string } }
+                authors: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: The metadata after the merge.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookMetadata" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body, or missing revision" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
+        "409":
+          $ref: "#/components/responses/Error"
+          description: |
+            The book changed while it was being looked at, or the
+            candidate would change nothing because every field it offers
+            is blank, already right, or locked.
+        "501": { $ref: "#/components/responses/Error", description: "No metadata provider is configured" }
+
   /v1/books/{id}/resolve:
     post:
       tags: [library, sync]
@@ -1705,6 +1822,53 @@ components:
         value: { type: string }
         source: { type: string, enum: ["", embedded, filename, external, manual] }
         locked: { type: boolean }
+
+    MetadataCandidate:
+      type: object
+      description: |
+        One suggestion from one external service. Everything needed to
+        judge it is here: which service said it, whether it matched on
+        this book's identifier or only on a similar title, and a link to
+        the record, because a suggestion nobody can check is one somebody
+        accepts on faith.
+      required: [provider, score, by_identifier]
+      properties:
+        provider: { type: string }
+        url:
+          type: string
+          description: The service's own page for this record.
+        score:
+          type: number
+          description: |
+            How well it matched, between 0 and 1. An identifier match
+            scores highest; a title guess is the caller's judgement to
+            make.
+        by_identifier:
+          type: boolean
+          description: |
+            True when the service was answering about this book's ISBN
+            rather than about a book with a similar title.
+        title: { type: string }
+        subtitle: { type: string }
+        description: { type: string }
+        publisher: { type: string }
+        published_date: { type: string }
+        languages: { type: array, items: { type: string } }
+        tags: { type: array, items: { type: string } }
+        authors: { type: array, items: { type: string } }
+        cover_url: { type: string }
+        identifiers:
+          type: array
+          description: |
+            Reported so a person can check they are being offered the
+            right edition. They cannot be applied: identifiers decide
+            work identity (ADR-0003).
+          items:
+            type: object
+            required: [scheme, value]
+            properties:
+              scheme: { type: string }
+              value: { type: string }
 
     BookMetadata:
       type: object

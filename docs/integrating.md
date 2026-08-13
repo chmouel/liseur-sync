@@ -391,6 +391,42 @@ Identifiers are returned but not editable. They feed work identity, so
 changing one moves a reader's reading history from one book to another;
 that needs to be a deliberate, separate act.
 
+### Asking somebody else about a book
+
+`POST /v1/books/{id}/metadata/lookup` asks the metadata services the
+operator configured what they know about a book, and reports what they
+said. It needs `library-manage`, has no request body, and writes nothing.
+
+It is off unless the operator turned it on, and a server that was told to
+contact nobody answers `501`. Handle that separately from an empty
+result: one is fixed in a config file, the other means nobody had heard
+of the book.
+
+```json
+{"providers": ["openlibrary", "googlebooks"],
+ "candidates": [
+   {"provider": "openlibrary", "url": "https://openlibrary.org/works/OL1W",
+    "score": 1, "by_identifier": true, "title": "Moby-Dick",
+    "authors": ["Herman Melville"], "tags": ["Whaling"]}]}
+```
+
+Show `provider`, `url` and `by_identifier` to whoever is deciding.
+`by_identifier: false` means the service matched a similar title rather
+than this book's ISBN, which is exactly the case where a person needs to
+look before accepting.
+
+`POST /v1/books/{id}/metadata/apply` accepts one. Send the candidate back
+as you received it, plus the `revision` you read — the server does not
+look it up again, because a second lookup can return something else and
+you would be accepting what you did not read.
+
+What you get is an ordinary metadata write: the values are recorded as
+`external`, which ranks above a filename and below a person, so a field
+somebody edited or locked keeps its value. A candidate that would change
+nothing is answered with `409` rather than advancing the revision.
+Identifiers cannot be applied — they decide work identity, and tidying a
+title must not move a reader's history to another book.
+
 ### Browsing by series, contributor, tag or genre
 
 `GET /v1/libraries/{library}/entities/{kind}` lists them, where `kind`
