@@ -114,6 +114,7 @@ func (s *Store) ReconcileBlob(
 		}
 		return result, nil
 	}
+
 	if err != nil {
 		return result, err
 	}
@@ -159,4 +160,102 @@ func (s *Store) ReconcileBlob(
 		return store.BlobReconcileResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) PurgeOrphanedBlobRecords(
+	ctx context.Context,
+	before time.Time,
+	limit int,
+) ([]store.BlobRecord, error) {
+	if before.IsZero() || limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx,
+		`SELECT b.sha256, b.size_bytes, b.orphaned_at, b.missing_at
+		 FROM blobs b
+		 WHERE b.orphaned_at IS NOT NULL
+		   AND (
+		       CAST(strftime('%s', b.orphaned_at) AS INTEGER) < ?
+		       OR (
+		           CAST(strftime('%s', b.orphaned_at) AS INTEGER) = ?
+		           AND CASE
+		               WHEN instr(b.orphaned_at, '.') = 0 THEN 0
+		               ELSE CAST(substr(
+		                   substr(
+		                       b.orphaned_at,
+		                       instr(b.orphaned_at, '.') + 1,
+		                       instr(b.orphaned_at, 'Z') -
+		                           instr(b.orphaned_at, '.') - 1
+		                   ) || '000000000',
+		                   1, 9
+		               ) AS INTEGER)
+		           END <= ?
+		       )
+		   )
+		   AND NOT EXISTS (
+		       SELECT 1 FROM book_files f WHERE f.blob_sha256 = b.sha256
+		   )
+		   AND NOT EXISTS (
+		       SELECT 1 FROM ingest_blob_holds h
+		       WHERE h.blob_sha256 = b.sha256
+		   )
+		 ORDER BY b.sha256
+		 LIMIT ?`,
+		before.UTC().Unix(), before.UTC().Unix(), before.UTC().Nanosecond(), limit)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []store.BlobRecord
+	for rows.Next() {
+		record, err := scanBlobRecord(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, record)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	purged := make([]store.BlobRecord, 0, len(candidates))
+	for _, record := range candidates {
+		if record.OrphanedAt == nil {
+			return nil, store.ErrInvariantViolation
+		}
+		result, err := tx.ExecContext(ctx,
+			`DELETE FROM blobs
+			 WHERE sha256 = ?
+			   AND orphaned_at = ?
+			   AND NOT EXISTS (
+			       SELECT 1 FROM book_files f
+			       WHERE f.blob_sha256 = blobs.sha256
+			   )
+			   AND NOT EXISTS (
+			       SELECT 1 FROM ingest_blob_holds h
+			       WHERE h.blob_sha256 = blobs.sha256
+			   )`,
+			record.SHA256, formatTime(*record.OrphanedAt))
+		if err != nil {
+			return nil, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected == 1 {
+			purged = append(purged, record)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return purged, nil
 }

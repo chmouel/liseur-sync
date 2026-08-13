@@ -76,7 +76,8 @@ func testBlobReconciliation(t *testing.T, open OpenFunc) {
 	}
 
 	orphan := ingestBlob("orphan-blob", 9)
-	inserted, err := s.ReconcileBlob(ctx, orphan, true, now.Add(10*time.Minute))
+	orphanedAt := now.Add(10*time.Minute + 120*time.Millisecond)
+	inserted, err := s.ReconcileBlob(ctx, orphan, true, orphanedAt)
 	if err != nil || !inserted.Inserted || !inserted.OrphanMarked ||
 		inserted.Record.OrphanedAt == nil || inserted.Record.MissingAt != nil {
 		t.Fatalf("insert orphan blob: %+v %v", inserted, err)
@@ -113,5 +114,58 @@ func testBlobReconciliation(t *testing.T, open OpenFunc) {
 	if _, err := s.ReconcileBlob(ctx,
 		ingestBlob("unknown-blob", 1), false, now.Add(13*time.Minute)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unknown missing blob: %v", err)
+	}
+	held := ingestBlob("held-blob", 7)
+	heldJob := createIngestJob(
+		t, s, user.ID, library.ID, "held-blob-job", now.Add(13*time.Minute))
+	if _, err := s.CommitIngestStage(ctx, user.ID, heldJob.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: heldJob.Revision, Artifact: held,
+			StagingPath: contentpath.StagingPath(heldJob.ID),
+			UpdatedAt:   now.Add(14 * time.Minute),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := s.ReconcileBlob(
+		ctx, held, true, now.Add(15*time.Minute)); err != nil ||
+		!result.Inserted || !result.OrphanMarked {
+		t.Fatalf("held orphan reconciliation: %+v %v", result, err)
+	}
+	if purged, err := s.PurgeOrphanedBlobRecords(
+		ctx, now.Add(10*time.Minute+100*time.Millisecond), 10); err != nil || len(purged) != 0 {
+		t.Fatalf("premature orphan purge: %+v %v", purged, err)
+	}
+	purged, err := s.PurgeOrphanedBlobRecords(
+		ctx, now.Add(20*time.Minute), 10)
+	if err != nil || len(purged) != 1 ||
+		purged[0].SHA256 != orphan.SHA256 ||
+		purged[0].OrphanedAt == nil {
+		t.Fatalf("orphan purge: %+v %v", purged, err)
+	}
+	remaining, err := s.ListBlobRecords(ctx, "", 10)
+	if err != nil || len(remaining) != 2 {
+		t.Fatalf("protected blobs survived purge: %+v %v", remaining, err)
+	}
+	remainingBySHA := make(map[string]store.BlobRecord, len(remaining))
+	for _, record := range remaining {
+		remainingBySHA[record.SHA256] = record
+	}
+	if _, ok := remainingBySHA[blob.SHA256]; !ok {
+		t.Fatalf("referenced blob was purged: %+v", remaining)
+	}
+	if _, ok := remainingBySHA[held.SHA256]; !ok {
+		t.Fatalf("held blob was purged: %+v", remaining)
+	}
+	if purged, err := s.PurgeOrphanedBlobRecords(
+		ctx, now.Add(20*time.Minute), 10); err != nil || len(purged) != 0 {
+		t.Fatalf("orphan purge replay: %+v %v", purged, err)
+	}
+	if _, err := s.PurgeOrphanedBlobRecords(
+		ctx, time.Time{}, 10); err != store.ErrInvalidTransition {
+		t.Fatalf("zero orphan cutoff: %v", err)
+	}
+	if _, err := s.PurgeOrphanedBlobRecords(
+		ctx, now, 0); err != store.ErrInvalidTransition {
+		t.Fatalf("invalid orphan purge limit: %v", err)
 	}
 }
