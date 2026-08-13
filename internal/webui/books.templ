@@ -16,6 +16,9 @@ type BookRow struct {
 	Author   string
 	Added    string
 	CanGet   bool
+	// CanRead is set when there is an EPUB to open in the browser
+	// reader. A book stored as something else is still downloadable.
+	CanRead  bool
 	FileSize string
 }
 
@@ -275,9 +278,12 @@ templ booksBody(prefix, csrf string, v BooksView) {
 							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
 							<td>{ b.Added }</td>
 							<td>
+								if b.CanRead {
+									<a href={ prefix + "books/" + b.ID + "/read" }>Read</a>
+								}
 								if b.CanGet {
 									<a href={ prefix + "books/" + b.ID + "/download" }>Download</a>
-								} else {
+								} else if !b.CanRead {
 									<span class="muted">no file</span>
 								}
 							</td>
@@ -317,6 +323,7 @@ type BookView struct {
 	Added       string
 	LibraryID   string
 	Files       []BookFileRow
+	CanRead     bool
 	Notice      string
 	Problem     string
 	// CanWrite gates the edit form. A reader sees the book exactly as
@@ -440,6 +447,9 @@ templ bookBody(prefix, csrf string, b BookView) {
 	</section>
 	<section class="card">
 		<h2>Files</h2>
+		if b.CanRead {
+			<p><a class="button" href={ prefix + "books/" + b.ID + "/read" }>Read in the browser</a></p>
+		}
 		if len(b.Files) == 0 {
 			<p class="muted">
 				This book is catalogued but its content is no longer stored.
