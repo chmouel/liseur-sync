@@ -24,18 +24,26 @@ received -> staged -> validated -> extracted -> promoted
                     \-> failed
 ```
 
-Jobs record owner, library, source, client idempotency key, state, byte
-counts, timestamps, safe error code, and retry count. Managed uploads are
-streamed into a private staging file. After validation and extraction, the
-worker streams or copies the bytes into `<content>/.incoming/<job>.tmp`,
-fsyncs the file, then atomically renames it to the final content-addressed
-path. Before promotion, newly created hash-shard directories are made durable
-by fsyncing each directory and the parent in which its entry was created.
-After the rename, the worker fsyncs the destination directory and
-`.incoming`, and only then commits the blob/reference rows and `promoted` job
-state. A crash before the database commit leaves a reconcilable orphan, never
-a database reference to a non-durable path. Atomic promotion therefore works
-even when initial staging is on another filesystem.
+Jobs record owner, library, source, client idempotency key, an immutable
+request fingerprint, state, revision, byte counts, timestamps, safe error
+code, and retry count. Creation replays the original job only when the
+idempotency key and request fingerprint agree. State changes compare both the
+expected state and revision, so retries and concurrent workers cannot
+overwrite a newer result. The generic transition operation cannot enter
+`promoted`.
+
+Managed uploads are streamed into a private staging file. After validation
+and extraction, the worker streams or copies the bytes into
+`<content>/.incoming/<job>.tmp`, fsyncs the file, then atomically renames it
+to the final content-addressed path. Before promotion, newly created
+hash-shard directories are made durable by fsyncing each directory and the
+parent in which its entry was created. After the rename, the worker fsyncs
+the destination directory and `.incoming`, and only then commits the
+blob/reference rows, quota reservation, and `promoted` job state in one
+database transaction. A crash before the database commit leaves a
+reconcilable orphan, never a database reference to a non-durable path.
+Atomic promotion therefore works even when initial staging is on another
+filesystem.
 
 Watched ingestion opens the source through `os.Root` and copies from that
 single descriptor into the same CAS-side staging path. Hashing, validation,
@@ -127,8 +135,9 @@ name a stable job and reason instead of losing state when a request ends.
 ## Implementation phases
 
 1. Job schema, worker loop, staging, CAS promotion, recovery, and
-   reconciliation. The durable job and blob/reference schema is implemented;
-   workers, staging, promotion, recovery, and reconciliation remain.
+   reconciliation. The revisioned, idempotent durable job store and
+   blob/reference schema are implemented; workers, staging, atomic promotion,
+   recovery, and reconciliation remain.
 2. EPUB security validator and fixture corpus.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.

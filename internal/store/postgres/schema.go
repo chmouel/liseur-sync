@@ -649,4 +649,11 @@ CREATE INDEX ingest_jobs_state ON ingest_jobs(state, updated_at);
 CREATE INDEX ingest_jobs_library ON ingest_jobs(library_id, created_at);
 `
 
-var migrations = []string{schema, migration2, migration3, migration4, migration5, migration6}
+const migration7 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE ingest_jobs
+    ADD COLUMN revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1);
+`
+
+var migrations = []string{schema, migration2, migration3, migration4, migration5, migration6, migration7}
