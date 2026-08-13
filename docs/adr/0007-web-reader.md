@@ -1,106 +1,63 @@
 # ADR-0007: Web reader
 
-- **Status:** Proposed
+- **Status:** Deferred
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0005](0005-upload-and-ingestion.md),
   [ADR-0006](0006-catalog-api-and-opds.md)
 
 ## Context
 
-A browser reader completes the self-hosted product, but an EPUB is an archive
-of publisher-controlled HTML, CSS, images, fonts, and sometimes scripts.
-Serving that content on the authenticated UI origin would let a malicious
-book attack cookies, CSRF state, and API access.
+A browser reader would complete the self-hosted product, but it is the
+largest and most dangerous feature on the list. An EPUB is an archive of
+publisher-controlled HTML, CSS, images, fonts, and sometimes scripts.
+Serving that on the authenticated UI origin would let a malicious book
+attack cookies, CSRF state, and API access.
 
-Browser reading must also use the same position and session semantics as
-Android and desktop rather than create a privileged web-only sync path.
+It is also the feature the product needs least. Liseur on Android and
+desktop already read EPUBs and sync positions; a user who can download from
+the catalog can already read the book. Nothing in
+[ADR-0001](0001-content-server.md)'s four-step definition of the first
+release requires a browser reader.
 
 ## Decision
 
-The web reader is the final server feature, after ingestion and catalog APIs
-are stable.
+**Not now.** No renderer is vendored and no reader routes exist until the
+catalog API and OPDS are stable and in real use.
 
-### Renderer
+Two constraints are recorded now, because they bind features that come
+earlier:
 
-Vendor a FOSS renderer with no CDN dependency. The first implementation will
-evaluate foliate-js (MIT) as the preferred engine; epub.js remains the
-fallback if foliate-js cannot be integrated without importing an unsuitable
-build pipeline. The chosen revision and license are committed with the
-vendored assets.
+- **Publication content never executes on the authenticated UI origin.**
+  When a reader is built it renders inside sandboxed iframes without
+  `allow-same-origin`, under a policy that blocks external network access,
+  with a separately configured content origin as the hardened deployment
+  mode. This is why cover extraction (ADR-0004) transcodes to a bounded
+  raster format and serves fixed MIME types with `nosniff` instead of
+  passing publisher SVG or HTML through: that rule is needed as soon as the
+  server serves any extracted asset, reader or not.
+- **The reader is an ordinary API client.** It uses `/v1/ops`,
+  `/v1/changes`, and `/v1/sessions` exactly as Android and desktop do, with
+  short-lived scoped tokens bound to a web device identity, and gets no
+  privileged access to another user's work, session, or catalog mapping.
+  Positions must round-trip the same Readium-compatible locator the other
+  clients use; progression alone is not lossless.
 
-### Content isolation
-
-The authenticated shell may live at `/ui/read/{book_id}`, but publication
-documents do not execute as ordinary same-origin UI documents.
-
-- Render book documents in sandboxed iframes without `allow-same-origin`.
-- Apply a strict content security policy that blocks external network access
-  and script escalation.
-- Use blob/document isolation supported by the chosen renderer.
-- Offer a separately configured content origin as the hardened deployment
-  mode.
-- Serve extracted assets with fixed MIME types and `nosniff`; never pass
-  publisher SVG or HTML through as a cover.
-
-The browser security model and CSP are integration-tested with a hostile EPUB
-fixture that attempts cookie, parent DOM, storage, and network access.
-
-### Authentication and device identity
-
-The reader is an ordinary native API client. An authenticated UI session may
-transactionally mint short-lived tokens with `sync` and `library-read`,
-bound to `web:<session-id>:<token-id>` devices.
-
-- A `web_session_tokens(session_id, token_id)` relation stores only token
-  IDs; secrets remain hashed in the token table.
-- Each loaded reader document receives its own secret once into memory, never
-  local storage, session storage, or a cookie. Reloading or opening another
-  tab mints another linked token and does not revoke tokens used by other
-  tabs.
-- Tokens have a short expiry and a bounded active count per UI session.
-  Expired tokens are pruned before minting. If the bound is reached, minting
-  fails clearly rather than silently revoking an active tab.
-- A live tab refreshes its token before expiry and revokes its previous token
-  only after the replacement is ready in that tab.
-- Logout, session expiry, explicit session revocation, and password change
-  revoke all linked tokens before deleting or invalidating sessions.
-- The devices UI groups linked tokens as one web session while retaining
-  individual revocation and audit records.
-
-### Sync and statistics
-
-Positions use the native `/v1/ops` and `/v1/changes` APIs. The web locator
-shape must round-trip the same Readium-compatible locator used by Liseur;
-progression alone is not considered lossless.
-
-Reading stretches are submitted through `/v1/sessions`, with idle handling
-and deterministic idempotency matching native clients. The server gives its
-own reader no privileged access to another user's work, session, or catalog
-mapping.
+How those tokens are minted, refreshed, and revoked across tabs is a real
+design problem with several defensible answers. It is deliberately left open
+rather than settled years before anyone writes the code.
 
 ## Consequences
 
-Sandboxing may limit publisher scripting and some unusual EPUB features.
-Security wins over perfect compatibility; unsupported active content is
-reported rather than silently granted more privilege.
-
-A short-lived browser token adds lifecycle work but keeps the web reader on
-the same authorization and audit path as every other client.
-
-## Implementation phases
-
-1. Renderer spike and recorded engine decision.
-2. Isolated content-serving layer and hostile-book security suite.
-3. Reader shell, navigation, typography, and accessibility.
-4. Device-token lifecycle, position sync, and reading sessions.
+Users who want to read in a browser must wait, or use a Liseur client. In
+exchange, the MVP does not carry the attack surface of rendering hostile
+publisher markup, and the token-lifecycle design is made when there is a
+reader to test it against.
 
 ## Acceptance criteria
 
-- Publication content cannot read UI cookies, storage, CSRF data, or the
-  parent DOM and cannot make arbitrary network requests.
-- CSP, sandbox attributes, MIME, and `nosniff` headers are asserted by tests.
-- Multiple tabs can read and sync concurrently without revoking each other.
-- Per-tab refresh and collective session revocation are atomic, and active
-  token bounds are enforced without evicting an unknown live tab.
-- A position set in web, Android, or desktop opens at the same logical
-  location in the others, subject to edition compatibility.
+When this ADR is revisited, it must be replaced by a full decision covering
+renderer choice, content isolation, and token lifecycle. Until then the only
+binding criterion is:
+
+- No extracted publication asset is served in a way that lets publisher
+  markup execute against the authenticated UI origin.

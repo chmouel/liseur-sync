@@ -1,6 +1,6 @@
 # ADR-0003: Catalog and sync work identity
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0002](0002-library-storage-and-ownership.md)
 

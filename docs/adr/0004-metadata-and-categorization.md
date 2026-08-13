@@ -1,6 +1,6 @@
 # ADR-0004: Metadata and categorization
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0003](0003-catalog-work-identity.md)
 
@@ -51,46 +51,36 @@ cases are table-driven tests.
 
 ### Catalog entities
 
-The catalog supports:
+The catalog supports series with an optional fractional sequence number,
+contributors with roles, tags, genres, languages, and publishers. Entity
+normalization matches case-insensitively but preserves display spelling, and
+merges are explicit.
 
-- series with an optional fractional sequence number;
-- contributors with roles such as author, editor, translator, and
-  illustrator;
-- tags and genres;
-- languages and publishers;
-- user-created collections and ordered reading lists.
+User-created collections and ordered reading lists have schema but no
+operations or UI, and stay that way for now: they are organization on top of
+a catalog, not part of describing a book.
 
-Entity normalization is case-insensitive for matching but preserves display
-spelling. Merges are explicit and reversible where practical.
+### External providers — later
 
-### External providers
+No external service is contacted in the MVP, and nothing in the ingest path
+may ever depend on one. If provider lookup is built later, OpenLibrary and
+Google Books are the candidates, and these constraints are already settled:
+disabled unless configured, contacted only when an authorized user asks for
+a specific book, fixed allowlisted hosts with bounded timeouts and response
+sizes, **the allowlist re-checked on every redirect hop** so a 302 to a
+link-local or internal address cannot defeat it, results shown as attributed
+candidates rather than applied, and TLS verified against the CA bundle
+shipped in the container image — with a smoke test, so a release cannot ship
+lookup code without usable trust roots. No background scan phones home.
 
-OpenLibrary and Google Books are optional providers. They are disabled
-unless enabled in instance configuration and are contacted only after an
-authorized user explicitly requests a lookup for a book.
+### Search — later
 
-Requests use fixed allowlisted hosts, short timeouts, response-size limits,
-and redirect validation. Results are cached and shown as candidates with
-provider attribution before application. No background scan phones home.
-
-The official container image includes a maintained CA certificate bundle
-copied into the scratch image. External lookup does not disable TLS
-verification or add provider-specific trust exceptions. The provider phase
-adds a container-level HTTPS smoke test so a release cannot ship lookup code
-without usable trust roots.
-
-### Search
-
-SQLite uses FTS5 and PostgreSQL uses `tsvector`. Search covers title,
-subtitle, contributors, series, identifiers, tags, genres, and publisher.
-Indexes are updated transactionally with metadata changes. Results support
-filters for library, availability, series, contributor, language, tag,
-and genre. The native catalog API adds reading-state filters only when the
-requesting token also has `sync`; aggregated statistics require
-`read-insights`. OPDS never exposes sync-derived filters or fields,
-regardless of the authenticating token's additional scopes. A
-`library-read`-only native API token likewise cannot infer positions,
-mappings, completion, or reading history.
+SQLite uses FTS5 and PostgreSQL uses `tsvector`, updated transactionally
+with metadata changes. One rule matters now because it constrains the API
+rather than the index: **a catalog-only credential must not be able to
+observe reading state.** Reading-state filters require `sync` on the same
+token, aggregate statistics require `read-insights`, and OPDS exposes
+neither regardless of what the authenticating token also carries.
 
 ## Consequences
 
@@ -104,56 +94,50 @@ External metadata cannot be a required ingest dependency.
 
 1. **Extraction, precedence, and ingest wiring.** Done, except where noted.
 
-   The OPF extractor returns bounded title, subtitle, description, publisher,
-   date, identifiers, languages, subjects, series, contributors, and cover
-   references from EPUB2 and EPUB3. The ingest worker persists that as a
-   canonical JSON snapshot in the `validated -> extracted` transition.
+   The OPF extractor and the filename parser both feed one source-neutral
+   proposal, which the precedence engine applies: a blank candidate never
+   clears a value, a locked field takes manual edits only, and a manual edit
+   locks the field. The same rules apply to whole-set assertions, so an empty
+   assertion never empties a set.
 
-   The precedence engine, entity schema, provenance, and locks are
-   implemented. A blank candidate never clears a value; a locked field takes
-   manual edits only; a manual edit locks the field. Set merges use the same
-   rules on whole-set assertions, so an empty assertion never empties a set,
-   and locked or stronger-owned rows are left alone. Names match case- and
-   whitespace-insensitively while keeping their display spelling.
+   Three decisions there are worth keeping visible, because each one is a
+   place where guessing would have been easier than being right:
 
-   The filename parser handles the four documented layouts per library. It
-   records which fields a layout had to guess at, and those are dropped rather
-   than applied — so a layout still contributes an author it read from a
-   directory of its own even when it could not explain the rest of the name.
-   The one layout that reads every field out of a single name therefore
-   contributes nothing until a confirmation step exists.
+   - A parser drops the fields its layout had to guess at rather than
+     applying them, so a layout still contributes an author it read from a
+     directory of its own even when it could not explain the rest of the
+     name. The layout that reads every field out of a single filename
+     therefore contributes nothing until a confirmation step exists.
+   - Subjects become tags, never genres. A subject list mixes both, and
+     picking one would be inventing information.
+   - A proposal declares whether its sets are complete or partial: an
+     extraction reads the whole publication, but a path names at most one
+     author and one series.
 
-   Both sources map to one source-neutral proposal. Subjects become tags, not
-   genres: a subject list mixes both and picking one would be guessing. A
-   proposal declares whether its sets are complete or partial, since an
-   extraction reads the whole publication but a path names at most one author
-   and one series.
-
-   The promotion worker runs `extracted -> promoted`: it publishes the blob,
-   then creates the book and its file in one revision-checked transaction.
-   The book's scalar metadata is resolved into that same transaction, because
-   a new book has no persisted rows to reconcile against and `promoted` is
-   terminal — a book created without a title could never be listed again to
-   receive one. Entity sets are applied immediately afterwards, against an
-   expected revision so a concurrent editor is never overwritten; a failure
-   there leaves a correct but untagged book rather than undoing the
+   The promotion worker publishes the blob, then creates the book, its file
+   and its resolved scalar metadata in one revision-checked transaction —
+   the title cannot be a later step, because `promoted` is terminal and a
+   book created without one could never be listed again to receive it.
+   Entity sets are applied immediately after against an expected revision, so
+   a failure there leaves a correct but untagged book rather than undoing the
    promotion.
 
    **Remaining:** per-library parser configuration (the pattern list is still
    the built-in default), and cover extraction.
 
-2. Metadata edit UI, series/contributor/tag pages, and merge tools.
-3. Full-text search and facets.
-4. Explicit external-provider lookup and candidate review.
+2. Metadata edit UI, series/contributor/tag pages, and merge tools — later.
+3. Full-text search and facets — later.
+4. Explicit external-provider lookup and candidate review — later, and
+   optional forever.
 
 ## Acceptance criteria
 
 - Managed uploads and watched scans produce identical metadata for identical
   files and parser settings.
 - Manual locks survive rescans and external lookups.
+- Ingest never depends on an external service.
 - External hosts are never contacted without both configuration and a user
-  action.
-- The official container verifies HTTPS provider connections with its shipped
-  CA bundle.
+  action, and the official container verifies those connections with its
+  shipped CA bundle.
 - SQLite and PostgreSQL search return equivalent results for shared fixtures.
 - Catalog-only search responses and filters expose no sync-derived state.

@@ -1,6 +1,6 @@
 # ADR-0005: Upload and ingestion pipeline
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0002](0002-library-storage-and-ownership.md),
   [ADR-0004](0004-metadata-and-categorization.md)
@@ -54,14 +54,14 @@ replayed after a lost result, and promotion can likewise be replayed after
 the final rename. Concurrent identical promotions verify and fsync the
 existing final blob rather than replacing it.
 
-Watched ingestion opens the source through `os.Root` and copies from that
-single descriptor into the same CAS-side staging path. Hashing, validation,
-metadata extraction, covers, and downloads all use the immutable copied
-snapshot, never a path that can change after validation. The source path and
-fingerprint remain reconciliation inputs; the server never mutates them.
-Successful validation does not prove catalog identity: a hash-changing
-watched snapshot enters ADR-0002's identity reconciliation before it may
-replace a book's current file reference.
+Watched ingestion (later; see ADR-0002) opens the source through `os.Root`
+and copies from that single descriptor into the same CAS-side staging path.
+Hashing, validation, metadata extraction, covers, and downloads all use the
+immutable copied snapshot, never a path that can change after validation.
+The source path and fingerprint remain reconciliation inputs; the server
+never mutates them. Successful validation does not prove catalog identity: a
+hash-changing watched snapshot enters ADR-0002's identity reconciliation
+before it may replace a book's current file reference.
 
 On startup, stale jobs are resumed when safe or moved to a clear failed
 state. Reconciliation detects missing rows, missing blobs, and unreferenced
@@ -166,46 +166,29 @@ name a stable job and reason instead of losing state when a request ends.
 
 ## Implementation phases
 
-1. Job schema, worker loop, staging, CAS promotion, recovery, and
-   reconciliation. The revisioned, idempotent durable job store and
-   blob/reference schema plus bounded, restart-safe filesystem staging and
-   promotion are implemented. Atomic database promotion, logical quota
-   holds/reservations, full-payload replay detection, and terminal artifact
-   expiry are also implemented. Stale-artifact verification, lost-promotion
-   detection, and retryable two-phase filesystem cleanup are implemented;
-   `serve` recovers every pre-existing nonterminal job before accepting
-   traffic. Strict final-blob filesystem inventory is implemented; workers
-   remain. Database blob reconciliation can mark missing content and
-   filesystem-only or unreferenced orphans, and startup performs the complete
-   comparison followed by a configurable grace-period sweep. Active ingest
-   holds prevent collection. The pure EPUB validator now performs a bounded
-   central-directory preflight, streams every entry under expansion and ratio
-   limits, rejects unsafe entry types and paths, bounds control XML, and
-   accepts only manifest-declared font obfuscation. The CAS can validate either
-   the immutable stage or an already-promoted lost-response artifact, and the
-   revision-checked worker step advances valid jobs or retains content failures
-   as quarantined jobs with stable codes. All ZIP, expansion, metadata, and
-   XML bounds have explicit `[content]` configuration with conservative
-   defaults. The server now runs one database-snapshotted, size-capped
-   validation batch and one independent metadata-extraction batch on each
-   configurable polling interval after startup recovery and GC. Extraction
-   revalidates the immutable stage or lost-promotion final artifact, persists
-   the bounded embedded metadata JSON in the revision-checked
-   `validated -> extracted` transition, timestamps after processing, and
-   quarantines content failures with stable validator codes. Both passes skip
-   revision races for a later pass and surface operational failures by
-   coordinating worker cancellation and HTTP shutdown. Catalog availability
-   reconciliation remains.
-2. EPUB security validator fixture expansion and worker scheduling.
-   Implemented.
-3. Metadata and cover extraction. Done except covers. The bounded OPF
-   extractor persists a canonical snapshot in the atomic
-   `validated -> extracted` transition; the promotion worker then runs
-   `extracted -> promoted`, creating the book, its file and its resolved
-   scalar metadata in one transaction and attaching entity sets immediately
-   after. Cover extraction and transcoding remain, as does per-library
-   parser configuration. See ADR-0004 phase 1.
-4. API upload and htmx upload UI.
+1. **Job store, staging, promotion, recovery, and reconciliation.** Done.
+   The revisioned idempotent job store, the bounded restart-safe CAS staging
+   and promotion path, logical quota holds and reservations, full-payload
+   replay detection, and terminal artifact expiry with retryable two-phase
+   cleanup all work; `serve` recovers every nonterminal job and reconciles
+   blobs against the filesystem before it accepts traffic.
+2. **EPUB validator and worker scheduling.** Done. The validator enforces
+   the bounds it owns — ZIP structure, entry count, expansion and ratio
+   limits, and metadata XML size and depth — each configurable under
+   `[content]` with conservative defaults. Three passes (`staged ->
+   validated`, `validated -> extracted`, `extracted -> promoted`) run on a
+   configurable interval, each revision-checked, each quarantining content
+   failures under a stable code.
+   **Not yet enforced:** request and archive size limits and the
+   instance-wide staging and per-principal caps, which belong to the upload
+   path in phase 4.
+3. **Metadata and cover extraction.** Metadata done — see ADR-0004 phase 1.
+   **Remaining:** cover extraction and transcoding.
+4. **Upload API and htmx UI.** Not started, and the only thing between the
+   pipeline and a usable product: nothing currently creates a job.
+
+**Remaining elsewhere:** catalog availability reconciliation, and the
+watched-folder scanner in ADR-0002.
 
 ## Acceptance criteria
 
