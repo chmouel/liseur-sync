@@ -315,7 +315,7 @@ func (s *Store) CatalogBookByID(ctx context.Context, userID, bookID string, requ
 		 FROM books b
 		 JOIN libraries l ON l.id = b.library_id
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
-		 WHERE b.id = ?
+		 WHERE b.id = ? AND b.status <> 'trashed'
 		   AND (l.owner_user_id = ? OR a.role = 'manage' OR (? = 'read' AND a.role = 'read'))`,
 		userID, bookID, userID, string(required)))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -926,4 +926,47 @@ func lookupMetadataEntityTx(
 		`SELECT id FROM `+table+` WHERE library_id = ? AND normalized_name = ?`,
 		libraryID, normalizedName).Scan(&id)
 	return id, err
+}
+
+// ListTrashedBooks is the trash view. It is manage-only and deliberately
+// separate from ListCatalogBooks: the catalog is what a reader browses,
+// and a deleted book is not part of it. Most recently trashed first,
+// because that is the one an operator is most likely to want back.
+func (s *Store) ListTrashedBooks(
+	ctx context.Context,
+	userID, libraryID string,
+	limit int,
+) ([]store.CatalogBook, error) {
+	if limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	if _, err := s.LibraryByID(ctx, userID, libraryID, store.LibraryRoleManage); err != nil {
+		return nil, err
+	}
+	// The ACL is repeated inside the query, as in every other catalog
+	// read here, even though the check above already settled it. It is
+	// deliberate belt and braces: a query that can only return rows the
+	// caller may see stays safe if a future caller forgets the gate.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+bookColumns+`
+		 FROM books b
+		 JOIN libraries l ON l.id = b.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE l.id = ? AND b.status = 'trashed'
+		   AND (l.owner_user_id = ? OR a.role = 'manage')
+		 ORDER BY b.trashed_at DESC, b.id LIMIT ?`,
+		userID, libraryID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.CatalogBook
+	for rows.Next() {
+		book, err := scanCatalogBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, book)
+	}
+	return out, rows.Err()
 }

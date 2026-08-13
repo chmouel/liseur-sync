@@ -1220,14 +1220,25 @@ type Store interface {
 	GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role LibraryRole, at time.Time) error
 	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
+	// CatalogBookByID reads one book the caller may see. Trashed books are
+	// not visible through it at any role: a deleted book is deleted as far
+	// as every reader is concerned, and the way back is ListTrashedBooks
+	// plus RestoreCatalogBook, not an ordinary catalog read.
 	CatalogBookByID(ctx context.Context, userID, bookID string, required LibraryRole) (CatalogBook, error)
+	// ListTrashedBooks lists one library's trashed books, most recently
+	// trashed first, under the manage role. It is what makes deletion
+	// reversible in practice: without a way to see the trash, the
+	// retention window is only a delay.
+	ListTrashedBooks(ctx context.Context, userID, libraryID string, limit int) ([]CatalogBook, error)
 	// ListCatalogBooks pages one library's readable books, oldest first.
 	// Trashed books are excluded: they are not part of the catalog a
 	// reader browses. A nil cursor starts at the beginning.
 	ListCatalogBooks(ctx context.Context, userID, libraryID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// ListBookFiles returns one book's files, newest first, so that a
 	// download can pick the current one. It requires read access to the
-	// book's library.
+	// book's library. Trashed books keep their files, because that is
+	// what makes restore a relink; deciding whether they may be served is
+	// the catalog's job, not this one's.
 	ListBookFiles(ctx context.Context, userID, bookID string, required LibraryRole) ([]BookFile, error)
 	// CatalogBookMetadata reads one book's scalar fields and every metadata
 	// entity set attached to it in a single transaction, so a caller can run

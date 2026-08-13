@@ -64,6 +64,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
 		testTrashRestoreAndPurge(t, open)
 	})
+	t.Run("TrashedBooksLeaveTheCatalogAndAppearInTheTrash", func(t *testing.T) {
+		testTrashedBooksLeaveTheCatalogAndAppearInTheTrash(t, open)
+	})
 	t.Run("PurgeKeepsQuotaForRemainingReferences", func(t *testing.T) {
 		testPurgeKeepsQuotaForRemainingReferences(t, open)
 	})
