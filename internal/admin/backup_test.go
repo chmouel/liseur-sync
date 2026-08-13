@@ -262,3 +262,59 @@ func removeOneBlob(t *testing.T, root string) {
 		t.Fatal("no blob to remove")
 	}
 }
+
+// TestVerifyBackupReportsRottedBytesRatherThanDying is the fault a backup
+// check is most needed for and the easiest one to report badly: media
+// that returns the file at the right name with the wrong bytes. The
+// command has to name the digest and exit non-zero, not fail with an
+// error about the content store that tells the operator nothing about
+// which blob to re-copy.
+func TestVerifyBackupReportsRottedBytesRatherThanDying(t *testing.T) {
+	st := newAdminStore(t)
+	root := seedBackup(t, st)
+	rotted := t.TempDir() + "/rotted"
+	copyTree(t, root, rotted)
+	rotOneBlob(t, rotted)
+
+	out, err := captureIn(t, st, rotted, "verify-backup")
+	if err == nil {
+		t.Fatalf("a backup of damaged bytes was reported restorable:\n%s", out)
+	}
+	if !strings.Contains(out, "corrupt:           1") {
+		t.Fatalf("output does not count the damage:\n%s", out)
+	}
+	if !strings.Contains(out, "does not match its digest") {
+		t.Fatalf("output does not say what is wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "referenced blobs:  1") {
+		t.Fatalf("output does not name the blob:\n%s", out)
+	}
+}
+
+// rotOneBlob rewrites the first durable blob it finds with different
+// bytes, leaving it filed under its original digest — media rot, or a
+// copy that damaged the file in flight.
+func rotOneBlob(t *testing.T, root string) {
+	t.Helper()
+	found := false
+	err := filepath.WalkDir(filepath.Join(root, "sha256"),
+		func(path string, d fs.DirEntry, err error) error {
+			if err != nil || found || d.IsDir() {
+				return err
+			}
+			if err := os.Chmod(path, 0o600); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, []byte("rot"), 0o400); err != nil {
+				return err
+			}
+			found = true
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("no blob to damage")
+	}
+}

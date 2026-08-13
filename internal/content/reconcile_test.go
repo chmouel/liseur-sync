@@ -15,12 +15,26 @@ import (
 )
 
 type blobInventoryFake struct {
-	blobs []Blob
-	err   error
+	blobs   []Blob
+	damaged []DamagedBlob
+	err     error
 }
 
 func (f *blobInventoryFake) ListBlobs(context.Context) ([]Blob, error) {
-	return append([]Blob(nil), f.blobs...), f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.damaged) > 0 {
+		return nil, ErrCorruptBlob
+	}
+	return append([]Blob(nil), f.blobs...), nil
+}
+
+func (f *blobInventoryFake) InventoryBlobs(
+	context.Context,
+) ([]Blob, []DamagedBlob, error) {
+	return append([]Blob(nil), f.blobs...),
+		append([]DamagedBlob(nil), f.damaged...), f.err
 }
 
 type blobReconciliationStoreFake struct {

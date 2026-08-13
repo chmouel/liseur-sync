@@ -256,3 +256,61 @@ func TestVerifyBackupPropagatesStoreErrors(t *testing.T) {
 		t.Fatalf("inventory error swallowed: %v", err)
 	}
 }
+
+// TestVerifyBackupNamesTheBlobWhoseBytesRotted is the case the command
+// exists for and the one a strict inventory cannot report: a copy that
+// holds a blob under the right digest whose bytes are not that digest.
+// Verification must name it, count it apart from a blob that was never
+// copied, and still refuse the backup.
+func TestVerifyBackupNamesTheBlobWhoseBytesRotted(t *testing.T) {
+	st := &referencedBlobStoreFake{blobs: []store.BlobInfo{
+		{SHA256: digest("a"), SizeBytes: 10},
+		{SHA256: digest("b"), SizeBytes: 20},
+	}}
+	inventory := &blobInventoryFake{
+		blobs:   []Blob{{SHA256: digest("a"), Size: 10}},
+		damaged: []DamagedBlob{{SHA256: digest("b"), Size: 7}},
+	}
+	report, err := VerifyBackup(context.Background(), st, inventory, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Valid() {
+		t.Fatal("a backup holding a corrupt blob was reported restorable")
+	}
+	if report.CorruptBlobs != 1 || report.MissingBlobs != 0 ||
+		report.MismatchedBlobs != 0 || report.PresentBlobs != 1 ||
+		report.ExtraBlobs != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+	if len(report.Problems) != 1 ||
+		report.Problems[0].SHA256 != digest("b") ||
+		!strings.Contains(report.Problems[0].Detail, "does not match its digest") {
+		t.Fatalf("problems = %+v", report.Problems)
+	}
+}
+
+// TestVerifyBackupIgnoresRotInBlobsNothingReferences: unreferenced bytes
+// are reconciliation's business whatever state they are in. A backup is
+// not unrestorable because it carries a bad copy of a file no book points
+// at, but the operator is still told it is there.
+func TestVerifyBackupIgnoresRotInBlobsNothingReferences(t *testing.T) {
+	st := &referencedBlobStoreFake{blobs: []store.BlobInfo{
+		{SHA256: digest("a"), SizeBytes: 10},
+	}}
+	inventory := &blobInventoryFake{
+		blobs:   []Blob{{SHA256: digest("a"), Size: 10}},
+		damaged: []DamagedBlob{{SHA256: digest("d"), Size: 3}},
+	}
+	report, err := VerifyBackup(context.Background(), st, inventory, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Valid() {
+		t.Fatalf("unreferenced rot made the backup invalid: %+v", report)
+	}
+	if report.ExtraBlobs != 1 || report.CorruptBlobs != 0 ||
+		len(report.Problems) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+}

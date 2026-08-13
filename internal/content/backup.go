@@ -13,6 +13,13 @@ type backupVerificationStore interface {
 	ListReferencedBlobs(context.Context, string, int) ([]store.BlobInfo, error)
 }
 
+// backupInventory is the tolerant inventory: verification must survey all
+// of the damage in a copy, so it cannot use the strict ListBlobs, which
+// stops at the first bad blob and cannot say which one it was.
+type backupInventory interface {
+	InventoryBlobs(context.Context) ([]Blob, []DamagedBlob, error)
+}
+
 // maxBackupProblemsReported keeps a report readable when a backup is
 // wholly wrong. The count is exact whatever happens; only the list of
 // digests is cut, because ten thousand of them help nobody.
@@ -36,6 +43,12 @@ type BackupVerificationReport struct {
 	// because they mean something different to whoever has to fix it: a
 	// missing blob was not copied, a mismatched one is not the same file.
 	MismatchedBlobs int
+	// CorruptBlobs counts referenced blobs the backup holds under the
+	// right digest whose bytes do not hash to it. A third category
+	// because it points at different culprits again: not a copy taken at
+	// the wrong moment but one that damaged the bytes in flight, or media
+	// that has since rotted.
+	CorruptBlobs int
 	// ExtraBlobs counts content the database does not reference. It is
 	// reported and never acted on: after a restore these are exactly what
 	// ordinary grace-period reconciliation is for, and a verifier that
@@ -48,7 +61,7 @@ type BackupVerificationReport struct {
 // not make a backup invalid; a single referenced blob that is absent or
 // the wrong size does.
 func (r BackupVerificationReport) Valid() bool {
-	return r.MissingBlobs == 0 && r.MismatchedBlobs == 0
+	return r.MissingBlobs == 0 && r.MismatchedBlobs == 0 && r.CorruptBlobs == 0
 }
 
 // VerifyBackup checks that a database and a content directory are a
@@ -56,22 +69,24 @@ func (r BackupVerificationReport) Valid() bool {
 // size the database recorded. It reads both and changes neither, so it
 // is safe to run against a live server as well as a copy.
 //
-// It deliberately does not re-hash the content. Digests are verified when
-// bytes are promoted and again by reconciliation; what a backup gets
-// wrong is not corruption of individual files but capturing the database
-// and the content directory at different moments, which shows up as a
-// referenced blob that was never copied.
+// Content is re-hashed, because a backup is the one place where that is
+// worth the read: a live store's digests were checked when the bytes were
+// promoted and are checked again by reconciliation, but nothing has ever
+// verified the copy, and a backup that cannot be trusted to hold the
+// bytes it claims is worse than none. The commoner fault is still a
+// database and a content directory captured at different moments, which
+// shows up as a referenced blob that was never copied.
 func VerifyBackup(
 	ctx context.Context,
 	st backupVerificationStore,
-	inventory blobInventory,
+	inventory backupInventory,
 	pageSize int,
 ) (BackupVerificationReport, error) {
 	var report BackupVerificationReport
 	if st == nil || inventory == nil || pageSize < 1 || pageSize > 500 {
 		return report, store.ErrInvalidTransition
 	}
-	blobs, err := inventory.ListBlobs(ctx)
+	blobs, damagedBlobs, err := inventory.InventoryBlobs(ctx)
 	if err != nil {
 		return report, fmt.Errorf("inventory content blobs: %w", err)
 	}
@@ -82,6 +97,14 @@ func VerifyBackup(
 				"inventory blob %q: %w", blob.SHA256, store.ErrInvariantViolation)
 		}
 		physical[blob.SHA256] = blob.Size
+	}
+	damaged := make(map[string]int64, len(damagedBlobs))
+	for _, blob := range damagedBlobs {
+		if _, duplicate := physical[blob.SHA256]; duplicate {
+			return report, fmt.Errorf(
+				"inventory blob %q: %w", blob.SHA256, store.ErrInvariantViolation)
+		}
+		damaged[blob.SHA256] = blob.Size
 	}
 
 	cursor := ""
@@ -105,7 +128,14 @@ func VerifyBackup(
 			previous = record.SHA256
 			report.ReferencedBlobs++
 			size, present := physical[record.SHA256]
+			damagedSize, isDamaged := damaged[record.SHA256]
 			switch {
+			case isDamaged:
+				report.CorruptBlobs++
+				delete(damaged, record.SHA256)
+				report.note(record.SHA256, fmt.Sprintf(
+					"is in the backup at %d bytes but its content does not "+
+						"match its digest", damagedSize))
 			case !present:
 				report.MissingBlobs++
 				report.note(record.SHA256, "not in the backup")
@@ -136,7 +166,11 @@ func VerifyBackup(
 		}
 		cursor = previous
 	}
-	report.ExtraBlobs = len(physical)
+	// Damaged blobs nothing references are extra content like any other:
+	// unreferenced bytes are reconciliation's business, and a backup is
+	// not unrestorable because it carries a bad copy of a file no book
+	// points at.
+	report.ExtraBlobs = len(physical) + len(damaged)
 	return report, nil
 }
 
