@@ -615,7 +615,9 @@ folder parser
 recognizes the four documented library layouts from an ordered per-library
 pattern list, grades each candidate's confidence, keeps the original path,
 and leaves ambiguous names unset.
-Materializing that snapshot into catalog fields and metadata entities,
+Both the embedded snapshot and a parsed path map to one source-neutral
+proposal the engine consumes.
+Persisting a proposal into catalog fields and metadata entities,
 persisting the set-level lock, per-library parser configuration,
 cover extraction/transcoding,
 automatic promotion, catalog availability reconciliation, last-reference

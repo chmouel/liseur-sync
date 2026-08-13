@@ -128,7 +128,11 @@ External metadata cannot be a required ingest dependency.
    plain decimal series positions only, a confidence grade that marks values
    recovered from a single name rather than a directory boundary, the
    original path retained, and unusable or ambiguous names left unset.
-   Materializing the snapshot into catalog fields and normalized metadata
+   Both the embedded snapshot and a parsed path are mapped to one
+   source-neutral proposal that the engine consumes; EPUB subjects become
+   tags rather than genres, since a subject list mixes both and inventing a
+   genre would be guessing.
+   Persisting a proposal into catalog fields and normalized metadata
    entities, persisting the set-level lock, wiring the parser to per-library
    configuration, cover extraction, and automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
