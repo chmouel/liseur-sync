@@ -175,6 +175,21 @@ repository writes all its own JavaScript", which was a preference, not a
 promise — and it bought pagination, a spine-wide progress model, CFI
 positions, and typography nobody here was going to write.
 
+Vendoring an engine buys its bugs too, and one surfaced immediately.
+epub.js sizes a chapter from the bounding box of everything in the
+document, and most publications — every Standard Ebooks title, among
+others — park a heading at `left: -9999px` so a screen reader announces
+what an eye does not see. That one element made a title page measure
+thirty-two thousand pixels wide: the reader turned the page correctly,
+onto forty-five blank columns, and looked exactly like the hand-written
+renderer it replaced. The fix is a `rendition.hooks.content` hook that
+measures only what is laid out on the page. It is worth being plain
+about the trade this exposes: Komga, which does the same job, does not
+use epub.js — it runs a fork of R2D2BC, a Readium engine, which
+paginates inside the frame's own viewport and so has nothing to measure
+wrongly. That is the escape hatch if epub.js's sizing defeats us again;
+it costs an npm build step, which is why it is not the choice today.
+
 Neither library needs `unsafe-eval`: their `new Function` uses are in
 guarded fallback paths that the browser never reaches. This was checked
 before vendoring, because a CSP hole for a convenience path would have
@@ -273,7 +288,12 @@ removes.
   appears.
 - The reader turns pages through a whole book. The same browser check
   turns the page repeatedly and fails if the reader stalls, which is the
-  regression that cost the hand-written renderer its place.
+  regression that cost the hand-written renderer its place. The fixture
+  is shaped to provoke it: twelve spine documents and a heading parked
+  off-screen, the combination that made a real book unreadable while a
+  two-chapter fixture reported everything well. The check counts
+  chapters left behind, not clicks survived, because a book laid out too
+  wide turns the page and goes nowhere.
 - With `reader_origin` set, no authenticated route and no cookie answer
   on that hostname, and the reader still opens a book and syncs a
   position from it. Both halves are checked in a real browser, because
@@ -294,3 +314,10 @@ removes.
   drives Chromium over CDP and skips where there is none, including CI —
   a developer's check rather than a gate, since the alternative is a
   browser in CI for one test or a renderer nobody ever ran.
+  `TestReaderOpensInFirefox` runs the same judgement over WebDriver BiDi,
+  because the two engines disagree about the things this reader leans on:
+  the page-turn bug was reported from Firefox, and Firefox reports a
+  refused script as a policy violation that never reaches BiDi's log
+  channel at all, so the refusal is asserted structurally there — the
+  frame is sandboxed without `allow-scripts` and the publication's script
+  did not run.

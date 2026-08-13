@@ -266,6 +266,41 @@
     }
   }
 
+  // Many publications park text off to the left — `left: -9999px` — so that
+  // a screen reader announces it and an eye never sees it. epub.js sizes a
+  // chapter by the bounding box of everything in it, so one such heading
+  // makes the column strip tens of thousands of pixels wide, and the reader
+  // spends forty blank pages getting out of the title page. Measure the
+  // bounding box of what is laid out on the page, ignoring anything that
+  // ends before the page begins.
+  function measureOnlyWhatIsOnThePage(rend) {
+    rend.hooks.content.register((contents) => {
+      const box = (axis) => {
+        const doc = contents.document;
+        const range = doc.createRange();
+        range.selectNodeContents(doc.body);
+        let low = Infinity;
+        let high = -Infinity;
+        for (const rect of range.getClientRects()) {
+          const near = axis === 'x' ? rect.left : rect.top;
+          const far = axis === 'x' ? rect.right : rect.bottom;
+          if (far <= 0) continue;
+          if (near < low) low = near;
+          if (far > high) high = far;
+        }
+        if (high === -Infinity) return 0;
+        const style = contents.window.getComputedStyle(doc.body);
+        const pad =
+          axis === 'x'
+            ? parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+            : parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+        return Math.round(high - low + (pad || 0));
+      };
+      contents.textWidth = () => box('x');
+      contents.textHeight = () => box('y');
+    });
+  }
+
   function turn(direction) {
     if (!rendition) return undefined;
     return direction > 0 ? rendition.next() : rendition.prev();
@@ -318,6 +353,7 @@
         allowScriptedContent: false,
         allowPopups: false,
       });
+      measureOnlyWhatIsOnThePage(rendition);
       rendition.on('relocated', (location) => {
         paint(location);
         schedulePush();
