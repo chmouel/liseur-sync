@@ -1039,6 +1039,35 @@ func validateDirectoryFD(fd int) error {
 	return nil
 }
 
+// validateRootFD applies the same rules as validateDirectoryFD to the
+// configured content root, but says which one was broken and how to fix
+// it. The root is the one directory an operator creates by hand — and
+// `mkdir` gives it 0755, which this rightly refuses because books are
+// private. Answering that with "unsafe path or file type" sends them
+// looking for a bad path instead of a chmod.
+func validateRootFD(fd int, path string) error {
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return err
+	}
+	switch {
+	case stat.Mode&unix.S_IFMT != unix.S_IFDIR:
+		return fmt.Errorf("%w: content root %q is not a directory",
+			ErrUnsafePath, path)
+	case stat.Uid != uint32(os.Geteuid()):
+		return fmt.Errorf(
+			"%w: content root %q is owned by uid %d, not the uid %d "+
+				"running this server; chown it",
+			ErrUnsafePath, path, stat.Uid, os.Geteuid())
+	case stat.Mode&0o077 != 0:
+		return fmt.Errorf(
+			"%w: content root %q is mode %04o and readable by other "+
+				"users, which would expose every stored book; chmod 700 it",
+			ErrUnsafePath, path, stat.Mode&0o777)
+	}
+	return nil
+}
+
 func openOrCreateRoot(path string) (int, error) {
 	if !filepath.IsAbs(path) {
 		return -1, ErrUnsafePath
@@ -1068,6 +1097,11 @@ func openOrCreateRoot(path string) (int, error) {
 		}
 		if openErr != nil {
 			unix.Close(parentFD)
+			if errors.Is(openErr, unix.ENOTDIR) {
+				return -1, fmt.Errorf(
+					"%w: %q on the way to content root %q is not a directory",
+					ErrUnsafePath, component, path)
+			}
 			return -1, classifyPathError(openErr)
 		}
 		var stat unix.Stat_t
@@ -1094,7 +1128,7 @@ func openOrCreateRoot(path string) (int, error) {
 		unix.Close(parentFD)
 		parentFD = nextFD
 		if index == len(components)-1 {
-			if err := validateDirectoryFD(parentFD); err != nil {
+			if err := validateRootFD(parentFD, path); err != nil {
 				unix.Close(parentFD)
 				return -1, err
 			}
