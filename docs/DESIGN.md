@@ -619,11 +619,12 @@ Both the embedded snapshot and a parsed path map to one source-neutral
 proposal the engine consumes, and a proposal declares whether its sets are
 complete, and so may drop what the source no longer claims, or partial, and
 so may only add or take over the rows the source can actually see.
-Persisting a proposal into catalog fields and metadata entities,
-persisting the set-level lock, per-library parser configuration,
-cover extraction/transcoding,
-automatic promotion, catalog availability reconciliation, last-reference
-deletion/trash, backup verification, and administration remain.
+Resolved proposals are persisted into catalog fields and metadata entities,
+and the promotion worker creates a book together with its scalar metadata in
+one transaction. Persisting the set-level lock, per-library parser
+configuration, cover extraction/transcoding, catalog availability
+reconciliation, last-reference deletion/trash, backup verification, and
+administration remain.
 
 ## 10. Future work (explicitly out of v1)
 

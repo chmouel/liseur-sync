@@ -198,11 +198,13 @@ name a stable job and reason instead of losing state when a request ends.
    reconciliation remains.
 2. EPUB security validator fixture expansion and worker scheduling.
    Implemented.
-3. Metadata and cover extraction. The pure bounded OPF extractor and durable
-   canonical embedded-metadata snapshot in the atomic
-   `validated -> extracted` transition are implemented. Catalog-field/entity
-   materialization, precedence and filename parsing, cover extraction and
-   transcoding, and the automatic promotion worker remain.
+3. Metadata and cover extraction. Done except covers. The bounded OPF
+   extractor persists a canonical snapshot in the atomic
+   `validated -> extracted` transition; the promotion worker then runs
+   `extracted -> promoted`, creating the book, its file and its resolved
+   scalar metadata in one transaction and attaching entity sets immediately
+   after. Cover extraction and transcoding remain, as does per-library
+   parser configuration. See ADR-0004 phase 1.
 4. API upload and htmx upload UI.
 
 ## Acceptance criteria
