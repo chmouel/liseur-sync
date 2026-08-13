@@ -265,6 +265,17 @@ digest, so a stored `ETag` stays valid forever: if the server answers
 still catalogued but its content is gone, which is different from a
 `404` — resolve it by re-uploading, not by forgetting the book.
 
+`GET /v1/books/{id}/cover` serves the publication's own cover, rendered
+as a JPEG. `?size=full` is sized for a book page; the default,
+`thumbnail`, is sized for a grid. Every book record carries a
+`cover_url`, and it is offered whether or not the book turns out to have
+one — a `404` is the answer for a book whose EPUB declares no cover, or
+declares one this server cannot decode, and it is as cheap as any other.
+Show your own placeholder for those rather than a broken image.
+
+The `ETag` combines the content digest with the size, so a cover a
+client has fetched once never needs fetching again.
+
 All of these need a token with `library-read`. Uploading needs
 `library-manage` *and* manage access to that specific library; the two
 are separate, so a token cannot reach a library its owner was never

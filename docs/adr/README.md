@@ -26,9 +26,9 @@ loose ends that must come before any of it, are in
 | [0001](0001-content-server.md) | Become a content server | — | MVP implemented | Cover extraction |
 | [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Built | Watched-folder scanner |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
-| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction built | Cover extraction, per-library parsers |
+| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Extraction and covers built | Per-library parsers |
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
-| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built | Covers in feeds; filtering and search |
+| [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Built | Filtering and search |
 | [0007](0007-web-reader.md) | Web reader | Later | Deferred | Nothing until the catalog is richer |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |
