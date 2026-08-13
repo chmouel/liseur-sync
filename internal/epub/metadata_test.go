@@ -119,6 +119,30 @@ func TestValidateExtractsLegacyPublicationDateEvent(t *testing.T) {
 	}
 }
 
+func TestValidateIgnoresNonPublicationDates(t *testing.T) {
+	data := epubWithPackage(t, `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:opf="http://www.idpf.org/2007/opf">
+ <metadata>
+  <dc:date opf:event="creation">2020-01-01</dc:date>
+  <dc:date>2021-02-02</dc:date>
+ </metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="font" href="font.otf" media-type="font/otf"/>
+ </manifest>
+</package>`)
+	result, err := validateBytes(data, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Metadata.PublishedDate != "2021-02-02" {
+		t.Fatalf("publication date: %+v", result.Metadata)
+	}
+}
+
 func TestIdentifierTypeSchemeUsesCorrectONIXMappings(t *testing.T) {
 	for value, want := range map[string]string{
 		"05": "ismn",
@@ -186,6 +210,9 @@ func TestValidateBoundsMetadataEntries(t *testing.T) {
   <dc:subject>one</dc:subject>
   <dc:subject>two</dc:subject>
   <dc:subject>three</dc:subject>
+  <dc:subject>four</dc:subject>
+  <dc:subject>five</dc:subject>
+  <dc:subject>six</dc:subject>
  </metadata>
  <manifest>
   <item href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -193,7 +220,7 @@ func TestValidateBoundsMetadataEntries(t *testing.T) {
  </manifest>
 </package>`)
 	limits := DefaultLimits()
-	limits.MaxEntries = 2
+	limits.MaxEntries = 5
 	_, err := validateBytes(data, limits)
 	requireCode(t, err, CodeArchiveLimits)
 }
@@ -230,6 +257,27 @@ func TestValidateExtractsOnlyDirectOPFMetadata(t *testing.T) {
 	}
 	if result.Metadata.Title != "Actual Title" {
 		t.Fatalf("extracted nested metadata: %+v", result.Metadata)
+	}
+}
+
+func TestValidateIgnoresNestedPackageMetadata(t *testing.T) {
+	data := epubWithPackage(t, `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata><dc:title>Actual Title</dc:title></metadata>
+ <package><metadata><dc:title>Spoofed Title</dc:title></metadata></package>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="font" href="font.otf" media-type="font/otf"/>
+ </manifest>
+</package>`)
+	result, err := validateBytes(data, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Metadata.Title != "Actual Title" {
+		t.Fatalf("extracted nested package metadata: %+v", result.Metadata)
 	}
 }
 
