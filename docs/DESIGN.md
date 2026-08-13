@@ -602,7 +602,7 @@ the orphan sweep. `liseur-sync admin verify-backup` answers whether a
 database and content directory are a restorable pair. Cover extraction
 and per-library filename layouts are built; the rest of
 [ADR-0004](adr/0004-metadata-and-categorization.md) — metadata editing,
-then search — is not.
+search, and external providers — followed in M10 and M12.
 
 M7 and M8 are now in place: uploads create ingest jobs, the admin subcommand
 creates libraries and grants access, the catalog API lists and downloads
@@ -656,6 +656,25 @@ carrying only `library-read` and `sync`, derived from the web session
 and revoked with it, and it reports position as a Readium locator like
 every other client. The renderer is written here rather than vendored,
 so the server still ships no JavaScript build step.
+
+M12 has shipped, and it is the one feature that makes this server talk
+to somebody else. A librarian on a book's page can ask OpenLibrary and
+Google Books what they know about it. It is off until an operator names a
+provider, because a self-hosted server that contacts a third party
+without being told to is not self-hosted in the sense that matters.
+
+Two properties hold it together. The fetcher is the only network a
+provider gets, so the allowlist, the per-hop redirect re-check, the byte
+budget and the refusal to dial any non-public address are properties of
+every provider rather than of each one separately — and the address check
+looks at what is actually being dialled, which is what defeats DNS
+rebinding and the cloud-metadata address, where the URL itself is
+perfectly ordinary. And a lookup has no code path to the catalog:
+accepting a candidate is a separate request that runs through the same
+precedence engine as an extractor or a person, so a locked field keeps
+its value, an accepted one is recorded as `external`, and identifiers are
+never applied at all — they decide work identity, and tidying a title
+must not move somebody's reading history to another book.
 
 ## 10. Future work (explicitly out of v1)
 
