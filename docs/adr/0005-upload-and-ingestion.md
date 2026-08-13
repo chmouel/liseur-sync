@@ -178,9 +178,12 @@ name a stable job and reason instead of losing state when a request ends.
    remain. Database blob reconciliation can mark missing content and
    filesystem-only or unreferenced orphans, and startup performs the complete
    comparison followed by a configurable grace-period sweep. Active ingest
-   holds prevent collection. Catalog availability reconciliation and workers
-   remain.
-2. EPUB security validator and fixture corpus.
+   holds prevent collection. The pure EPUB validator now performs a bounded
+   central-directory preflight, streams every entry under expansion and ratio
+   limits, rejects unsafe entry types and paths, bounds control XML, and
+   accepts only manifest-declared font obfuscation. Worker/config wiring and
+   catalog availability reconciliation remain.
+2. EPUB security validator fixture expansion and worker integration.
 3. Metadata and cover extraction.
 4. API upload and htmx upload UI.
 
