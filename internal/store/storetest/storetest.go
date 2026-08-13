@@ -67,6 +67,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
 		testTrashRestoreAndPurge(t, open)
 	})
+	t.Run("DuplicateContentIsReportedNotResolved", func(t *testing.T) {
+		testDuplicateContentIsReportedNotResolved(t, open)
+	})
 	t.Run("TrashedBooksLeaveTheCatalogAndAppearInTheTrash", func(t *testing.T) {
 		testTrashedBooksLeaveTheCatalogAndAppearInTheTrash(t, open)
 	})

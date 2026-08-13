@@ -732,6 +732,15 @@ type CatalogBookCursor struct {
 	ID        string
 }
 
+// DuplicateContentBook is one catalog book that shares its bytes with
+// another book in the same library. SHA256 is what they have in common
+// and is what groups them: books carrying the same digest are the same
+// file, whatever their titles say.
+type DuplicateContentBook struct {
+	Book   CatalogBook
+	SHA256 string
+}
+
 // CommitNewBookPromotionRequest atomically creates one new catalog book and
 // file from an extracted job after its CAS blob is durable.
 type CommitNewBookPromotionRequest struct {
@@ -1230,6 +1239,16 @@ type Store interface {
 	// reversible in practice: without a way to see the trash, the
 	// retention window is only a delay.
 	ListTrashedBooks(ctx context.Context, userID, libraryID string, limit int) ([]CatalogBook, error)
+	// ListDuplicateContentBooks lists the library's active books whose
+	// bytes another active book in the same library also has, ordered so
+	// that the ones sharing a digest arrive together.
+	//
+	// It reports and never merges. Two catalog entries for one blob are a
+	// thing a user may have meant — the same file filed twice on purpose
+	// — so the server's job is to make the coincidence visible, not to
+	// pick which entry survives. Read access is enough to see it;
+	// resolving it is an ordinary deletion, which is not.
+	ListDuplicateContentBooks(ctx context.Context, userID, libraryID string, limit int) ([]DuplicateContentBook, error)
 	// ListCatalogBooks pages one library's readable books, oldest first.
 	// Trashed books are excluded: they are not part of the catalog a
 	// reader browses. A nil cursor starts at the beginning.

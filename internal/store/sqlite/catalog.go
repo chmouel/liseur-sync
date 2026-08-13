@@ -970,3 +970,77 @@ func (s *Store) ListTrashedBooks(
 	}
 	return out, rows.Err()
 }
+
+func (s *Store) ListDuplicateContentBooks(
+	ctx context.Context,
+	userID, libraryID string,
+	limit int,
+) ([]store.DuplicateContentBook, error) {
+	if limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	if _, err := s.LibraryByID(ctx, userID, libraryID, store.LibraryRoleRead); err != nil {
+		return nil, err
+	}
+	// Only active books count. A trashed book still references its blob —
+	// that is what makes restore a relink — but reporting it as a
+	// duplicate would tell the user to resolve something they already
+	// resolved by deleting it.
+	//
+	// The ACL is repeated inside the query, as in every other catalog read
+	// here, even though the check above already settled it.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+bookColumns+`, f.blob_sha256
+		 FROM books b
+		 JOIN libraries l ON l.id = b.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 JOIN book_files f ON f.book_id = b.id
+		 WHERE l.id = ? AND b.status = 'active'
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		   AND EXISTS (
+		     SELECT 1 FROM book_files o
+		     JOIN books ob ON ob.id = o.book_id
+		     WHERE o.blob_sha256 = f.blob_sha256
+		       AND ob.library_id = b.library_id
+		       AND ob.status = 'active'
+		       AND o.book_id <> f.book_id)
+		 GROUP BY b.id, f.blob_sha256
+		 ORDER BY f.blob_sha256, b.created_at, b.id LIMIT ?`,
+		userID, libraryID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.DuplicateContentBook
+	for rows.Next() {
+		duplicate, err := scanDuplicateContentBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, duplicate)
+	}
+	return out, rows.Err()
+}
+
+// appendedScan lets a row carrying one extra trailing column reuse the
+// book scanner rather than restate thirty fields that would then have to
+// be kept in step with it.
+type appendedScan struct {
+	row   interface{ Scan(...any) error }
+	extra []any
+}
+
+func (a appendedScan) Scan(dest ...any) error {
+	return a.row.Scan(append(dest, a.extra...)...)
+}
+
+func scanDuplicateContentBook(
+	row interface{ Scan(...any) error },
+) (store.DuplicateContentBook, error) {
+	var sha string
+	book, err := scanCatalogBook(appendedScan{row: row, extra: []any{&sha}})
+	if err != nil {
+		return store.DuplicateContentBook{}, err
+	}
+	return store.DuplicateContentBook{Book: book, SHA256: sha}, nil
+}
