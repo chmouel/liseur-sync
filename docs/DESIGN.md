@@ -622,6 +622,17 @@ than silently becoming a new edition of the book that used to be there.
 `admin list-review` and `clear-review` are how that question gets
 answered.
 
+M10 is half done: editing and categorization have shipped, search has
+not. A librarian corrects any book from its page and browses a library by
+series, contributor, tag or genre; two spellings of one name can be
+folded together. Two rules run through the whole of it. A correction is
+kept as the person's own — it locks its field, so re-reading the file
+cannot undo it — and a field nobody touched is left alone, so opening a
+book and pressing Save asserts nothing. Merges are explicit for the same
+reason renaming onto a taken name is refused rather than silently folded:
+deciding two names are one thing is a decision about identity, and only a
+person can make it.
+
 ## 10. Future work (explicitly out of v1)
 
 - **E2E mode**: encrypt `locator`/`foreign_pos` client-side; server keeps

@@ -144,11 +144,55 @@ External metadata cannot be a required ingest dependency.
    nothing afterwards lists the books that were misfiled; failing the pass
    would let one library's typo stop every other library's uploads.
 
-   **Next for this ADR:** phase 2, the metadata edit UI, which is also
-   what makes a book promoted under the wrong layout correctable without
-   deleting and re-adding it.
+2. **Metadata edit UI, entity pages, and merge tools — done.** A
+   librarian corrects a book from its page, browses a library by series,
+   contributor, tag or genre, and folds two spellings of one name
+   together. This is also what makes a book promoted under the wrong
+   layout correctable without deleting and re-adding it.
 
-2. Metadata edit UI, series/contributor/tag pages, and merge tools — later.
+   The rules the implementation had to settle, all of them places where
+   the easy answer is the wrong one:
+
+   - **An edit is only an edit if something moved.** Every input carries
+     a hidden copy of what was rendered, and a field whose text is
+     unchanged is left alone. Without that, opening a book and pressing
+     Save would lock every field on it — turning a glance into an
+     assertion and stopping the file from ever being re-read.
+   - **A blank value from a person is an assertion**, unlike a blank
+     candidate from an extractor, which is only ignorance. Deleting a
+     wrong title clears *and locks* it. Unlocking is the separate,
+     exclusive gesture that hands a field back to the extractors.
+   - **Sets are replaced whole**, because that is what a form does: an
+     entry the user removed is one they left out. An empty set is
+     therefore how a set is emptied, and the set lock is what keeps it
+     empty across rescans, since no row survives to carry a row lock.
+   - **Renaming and merging are different operations.** A rename onto a
+     name another entity already holds is refused with an offer to merge
+     rather than quietly becoming one: folding two things into one is a
+     decision about identity and deserves to be made on purpose.
+   - **A merge keeps what people said.** A book that claimed both
+     entities keeps its existing row, but a manual lock carries over, and
+     so does a series position the surviving row does not have. Dropping
+     either would discard the only answer anyone gave. Every affected
+     book's revision is bumped, so a concurrent edit holding a pre-merge
+     snapshot loses on a stale revision rather than resurrecting the
+     entity it just lost.
+   - **Identifiers are not editable here.** They feed work identity
+     (ADR-0003), so changing one moves a reader's reading history between
+     books; that is a different operation with different consequences.
+   - **Provenance is librarian's information.** The edit form and the
+     "where this came from" labels are built only for somebody who could
+     submit them, so a reader learns nothing from the page they could not
+     learn from the book.
+
+   The native API carries the same operations
+   (`GET`/`PUT /v1/books/{id}/metadata` and the
+   `/v1/libraries/{library}/entities/{kind}` family), with the write
+   gated on the revision the client read, because two people editing one
+   book is ordinary in a shared library and last-write-wins would discard
+   the first person's work silently.
+
+   **Next for this ADR:** phase 3, search and facets.
 3. Full-text search and facets — later.
 4. Explicit external-provider lookup and candidate review — later, and
    optional forever.
