@@ -143,11 +143,7 @@ func TestMigration8NormalizesIngestTimestamps(t *testing.T) {
 		         '2026-01-02T03:04:05.11Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM schema_migrations WHERE version = 8`); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Migrate(ctx); err != nil {
+	if _, err := s.db.ExecContext(ctx, migration8); err != nil {
 		t.Fatal(err)
 	}
 	var created, updated string

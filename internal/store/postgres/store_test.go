@@ -38,6 +38,7 @@ func TestStore(t *testing.T) {
 func reset(t *testing.T, s *Store) {
 	t.Helper()
 	tables := []string{
+		"ingest_blob_holds",
 		"reading_list_books", "reading_lists", "collection_books", "collections",
 		"book_languages", "book_genres", "genres", "book_tags", "tags",
 		"book_contributors", "contributors", "book_series", "series",

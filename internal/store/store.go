@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -22,6 +23,10 @@ var (
 	ErrIdempotencyConflict = errors.New("store: idempotency key reused with different request")
 	ErrInvalidTransition   = errors.New("store: invalid state transition")
 	ErrStaleRevision       = errors.New("store: stale revision")
+	ErrQuotaExceeded       = errors.New("store: quota exceeded")
+	ErrContentMismatch     = errors.New("store: content mismatch")
+	ErrPromotionConflict   = errors.New("store: promotion conflict")
+	ErrInvariantViolation  = errors.New("store: invariant violation")
 )
 
 // TokenPurgeGrace is how long expired or revoked tokens remain listed
@@ -284,7 +289,7 @@ func (s IngestState) Valid() bool {
 func CanTransitionIngest(from, to IngestState) bool {
 	switch from {
 	case IngestReceived:
-		return to == IngestStaged || to == IngestFailed
+		return to == IngestFailed
 	case IngestStaged:
 		return to == IngestValidated || to == IngestQuarantined || to == IngestFailed
 	case IngestValidated:
@@ -303,26 +308,28 @@ func CanTransitionIngest(from, to IngestState) bool {
 // IngestJob is the persisted ingestion state. RequestFingerprint describes
 // immutable request metadata, not the uploaded content digest.
 type IngestJob struct {
-	ID                 string
-	UserID             string
-	LibraryID          string
-	QuotaUserID        string
-	Source             IngestSource
-	ClientKey          *string
-	RequestFingerprint string
-	State              IngestState
-	BytesReceived      int64
-	ContentSHA256      *string
-	StagingPath        *string
-	SourceRelativePath *string
-	BookID             *string
-	ErrorCode          *string
-	ErrorDetail        *string
-	RetryCount         int64
-	Revision           int64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	ExpiresAt          *time.Time
+	ID                   string
+	UserID               string
+	LibraryID            string
+	QuotaUserID          string
+	Source               IngestSource
+	ClientKey            *string
+	RequestFingerprint   string
+	PromotionFingerprint *string
+	ArtifactsExpired     bool
+	State                IngestState
+	BytesReceived        int64
+	ContentSHA256        *string
+	StagingPath          *string
+	SourceRelativePath   *string
+	BookID               *string
+	ErrorCode            *string
+	ErrorDetail          *string
+	RetryCount           int64
+	Revision             int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	ExpiresAt            *time.Time
 }
 
 // IngestJobRequest contains the immutable fields used to create or replay a
@@ -350,14 +357,204 @@ type IngestJobTransition struct {
 	ExpectedState    IngestState
 	ExpectedRevision int64
 	NextState        IngestState
-	BytesReceived    *int64
-	ContentSHA256    *string
-	StagingPath      *string
 	ErrorCode        string
 	ErrorDetail      string
 	ExpiresAt        *time.Time
 	IncrementRetry   bool
 	UpdatedAt        time.Time
+}
+
+// BlobInfo identifies one verified durable CAS object.
+type BlobInfo struct {
+	SHA256    string
+	SizeBytes int64
+}
+
+// QuotaUsage is the logical per-principal usage after an operation.
+type QuotaUsage struct {
+	UsedBytes       int64
+	AdditionalBytes int64
+}
+
+// QuotaExceededError reports an atomic quota rejection.
+type QuotaExceededError struct {
+	LimitBytes      int64
+	UsedBytes       int64
+	AdditionalBytes int64
+}
+
+func (e *QuotaExceededError) Error() string {
+	return fmt.Sprintf(
+		"%v: limit=%d used=%d additional=%d",
+		ErrQuotaExceeded, e.LimitBytes, e.UsedBytes, e.AdditionalBytes)
+}
+
+func (e *QuotaExceededError) Unwrap() error {
+	return ErrQuotaExceeded
+}
+
+// CommitIngestStageRequest records a durable filesystem stage and its
+// transient logical quota hold in one transaction.
+type CommitIngestStageRequest struct {
+	ExpectedRevision int64
+	Artifact         BlobInfo
+	StagingPath      string
+	QuotaLimitBytes  *int64
+	UpdatedAt        time.Time
+}
+
+type CommitIngestStageResult struct {
+	Job   IngestJob
+	Quota QuotaUsage
+}
+
+// BookFileAvailability is the current catalog visibility of one file.
+type BookFileAvailability string
+
+const (
+	BookFileAvailable  BookFileAvailability = "available"
+	BookFileMissing    BookFileAvailability = "missing"
+	BookFileSuperseded BookFileAvailability = "superseded"
+)
+
+func (a BookFileAvailability) Valid() bool {
+	return a == BookFileAvailable || a == BookFileMissing ||
+		a == BookFileSuperseded
+}
+
+// BookFile is one immutable blob reference in a catalog book.
+type BookFile struct {
+	ID                 string
+	LibraryID          string
+	BookID             string
+	BlobSHA256         string
+	Source             IngestSource
+	SourceRelativePath *string
+	OriginalFilename   string
+	MediaType          string
+	PartialMD5         *string
+	DCIdentifier       *string
+	Availability       BookFileAvailability
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// CommitNewBookPromotionRequest atomically creates one new catalog book and
+// file from an extracted job after its CAS blob is durable.
+type CommitNewBookPromotionRequest struct {
+	ExpectedRevision int64
+	Blob             BlobInfo
+	Book             CatalogBook
+	File             BookFile
+	UpdatedAt        time.Time
+}
+
+type IngestPromotionResult struct {
+	Job      IngestJob
+	Book     CatalogBook
+	File     BookFile
+	Blob     BlobInfo
+	Replayed bool
+}
+
+// NewBookPromotionFingerprint identifies the immutable request payload that
+// produced a promoted job. ExpectedRevision is intentionally excluded so a
+// caller can replay after losing the successful response.
+func NewBookPromotionFingerprint(request CommitNewBookPromotionRequest) (string, error) {
+	normalizeTime := func(value time.Time) time.Time {
+		return value.UTC().Truncate(time.Microsecond)
+	}
+	normalizeTimePtr := func(value *time.Time) *time.Time {
+		if value == nil {
+			return nil
+		}
+		normalized := normalizeTime(*value)
+		return &normalized
+	}
+	request.UpdatedAt = normalizeTime(request.UpdatedAt)
+	request.Book.CreatedAt = normalizeTime(request.Book.CreatedAt)
+	if request.Book.UpdatedAt.IsZero() {
+		request.Book.UpdatedAt = request.Book.CreatedAt
+	} else {
+		request.Book.UpdatedAt = normalizeTime(request.Book.UpdatedAt)
+	}
+	request.Book.TrashedAt = normalizeTimePtr(request.Book.TrashedAt)
+	request.Book.TrashExpiresAt = normalizeTimePtr(request.Book.TrashExpiresAt)
+	request.File.CreatedAt = normalizeTime(request.File.CreatedAt)
+	request.File.UpdatedAt = normalizeTime(request.File.UpdatedAt)
+	if request.File.MediaType == "" {
+		request.File.MediaType = "application/epub+zip"
+	}
+	payload, err := json.Marshal(struct {
+		Blob      BlobInfo    `json:"blob"`
+		Book      CatalogBook `json:"book"`
+		File      BookFile    `json:"file"`
+		UpdatedAt time.Time   `json:"updated_at"`
+	}{
+		Blob: request.Blob, Book: request.Book, File: request.File,
+		UpdatedAt: request.UpdatedAt,
+	})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func ValidateBlobInfo(blob BlobInfo) error {
+	if blob.SizeBytes < 0 || len(blob.SHA256) != sha256.Size*2 {
+		return ErrContentMismatch
+	}
+	decoded, err := hex.DecodeString(blob.SHA256)
+	if err != nil || hex.EncodeToString(decoded) != blob.SHA256 {
+		return ErrContentMismatch
+	}
+	return nil
+}
+
+func ValidateCommitIngestStage(request CommitIngestStageRequest) error {
+	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() ||
+		request.StagingPath == "" || len(request.StagingPath) > 4096 {
+		return ErrInvalidTransition
+	}
+	if err := ValidateBlobInfo(request.Artifact); err != nil {
+		return err
+	}
+	if request.QuotaLimitBytes != nil && *request.QuotaLimitBytes < 0 {
+		return ErrInvalidTransition
+	}
+	return nil
+}
+
+func ValidateNewBookPromotion(request CommitNewBookPromotionRequest) error {
+	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if err := ValidateBlobInfo(request.Blob); err != nil {
+		return err
+	}
+	if request.Book.ID == "" || request.Book.LibraryID == "" ||
+		request.Book.Status != BookActive || request.Book.CreatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if request.Book.UpdatedAt.IsZero() {
+		request.Book.UpdatedAt = request.Book.CreatedAt
+	}
+	file := request.File
+	if file.ID == "" || file.LibraryID == "" || file.BookID == "" ||
+		file.BlobSHA256 == "" || !file.Source.Valid() ||
+		!file.Availability.Valid() || file.Availability != BookFileAvailable ||
+		file.CreatedAt.IsZero() || file.UpdatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if file.Source == IngestUpload && file.SourceRelativePath != nil {
+		return ErrInvalidTransition
+	}
+	if file.Source == IngestWatched &&
+		(file.SourceRelativePath == nil || *file.SourceRelativePath == "") {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 // ValidateIngestJobRequest checks invariants shared by every backend.
@@ -395,6 +592,9 @@ func ValidateIngestJobRequest(request IngestJobRequest) error {
 // ApplyIngestTransition validates and applies a transition without mutating
 // immutable job fields.
 func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (IngestJob, error) {
+	if current.ArtifactsExpired {
+		return IngestJob{}, ErrInvalidTransition
+	}
 	if current.State != change.ExpectedState ||
 		current.Revision != change.ExpectedRevision {
 		return IngestJob{}, ErrStaleRevision
@@ -408,26 +608,6 @@ func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (Inges
 	retrying := change.ExpectedState == IngestFailed ||
 		change.ExpectedState == IngestQuarantined
 	if change.IncrementRetry != retrying {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if change.BytesReceived != nil && *change.BytesReceived < 0 {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	contentUpdate := change.ContentSHA256 != nil || change.StagingPath != nil ||
-		change.BytesReceived != nil
-	if contentUpdate && change.ExpectedState != IngestReceived {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if (change.ContentSHA256 == nil) != (change.StagingPath == nil) {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if change.ContentSHA256 != nil &&
-		(*change.ContentSHA256 == "" || len(*change.ContentSHA256) > 128 ||
-			*change.StagingPath == "" || len(*change.StagingPath) > 4096) {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if change.ExpectedState == IngestReceived &&
-		change.NextState == IngestStaged && change.BytesReceived == nil {
 		return IngestJob{}, ErrInvalidTransition
 	}
 	failing := change.NextState == IngestFailed ||
@@ -444,13 +624,6 @@ func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (Inges
 	}
 
 	next := current
-	if change.BytesReceived != nil {
-		next.BytesReceived = *change.BytesReceived
-	}
-	if change.ContentSHA256 != nil {
-		next.ContentSHA256 = change.ContentSHA256
-		next.StagingPath = change.StagingPath
-	}
 	if change.NextState == IngestStaged &&
 		(next.ContentSHA256 == nil || next.StagingPath == nil) {
 		return IngestJob{}, ErrInvalidTransition
@@ -746,6 +919,13 @@ type Store interface {
 	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
 	IngestJobByID(ctx context.Context, actorUserID, jobID string) (IngestJob, error)
 	ListIngestJobs(ctx context.Context, actorUserID, libraryID string, after *IngestJobCursor, limit int) ([]IngestJob, error)
+	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
+	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
+	// PurgeExpiredIngestArtifacts is a global housekeeping operation. It
+	// releases quota and returns staging paths for filesystem cleanup, while
+	// retaining permanent job tombstones so deterministic paths cannot be
+	// reused by a later job with the same ID.
+	PurgeExpiredIngestArtifacts(ctx context.Context, before time.Time, limit int) ([]IngestJob, error)
 	// TransitionIngestJob is an internal worker/upload operation scoped by the
 	// initiating user, not by their current library ACL.
 	TransitionIngestJob(ctx context.Context, userID, jobID string, transition IngestJobTransition) (IngestJob, error)

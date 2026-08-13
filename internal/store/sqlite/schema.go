@@ -679,7 +679,38 @@ SET created_at =
         END;
 `
 
+const migration9 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN promotion_fingerprint TEXT;
+ALTER TABLE ingest_jobs
+    ADD COLUMN artifacts_expired INTEGER NOT NULL DEFAULT 0
+        CHECK (artifacts_expired IN (0, 1));
+
+CREATE UNIQUE INDEX ingest_jobs_id_quota
+    ON ingest_jobs(id, quota_user_id);
+
+CREATE TABLE ingest_blob_holds (
+    job_id        TEXT PRIMARY KEY,
+    quota_user_id TEXT NOT NULL,
+    blob_sha256   TEXT NOT NULL,
+    bytes         INTEGER NOT NULL CHECK (bytes >= 0),
+    created_at    TEXT NOT NULL,
+    FOREIGN KEY (job_id, quota_user_id)
+        REFERENCES ingest_jobs(id, quota_user_id) ON DELETE CASCADE
+);
+CREATE INDEX ingest_blob_holds_principal_blob
+    ON ingest_blob_holds(quota_user_id, blob_sha256);
+
+INSERT INTO ingest_blob_holds
+    (job_id, quota_user_id, blob_sha256, bytes, created_at)
+SELECT id, quota_user_id, content_sha256, bytes_received, updated_at
+FROM ingest_jobs
+WHERE state <> 'promoted'
+  AND content_sha256 IS NOT NULL
+  AND staging_path IS NOT NULL;
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
-	migration7, migration8,
+	migration7, migration8, migration9,
 }

@@ -2,6 +2,8 @@ package storetest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,6 +12,82 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+func ingestBlob(label string, size int64) store.BlobInfo {
+	sum := sha256.Sum256([]byte(label))
+	return store.BlobInfo{SHA256: hex.EncodeToString(sum[:]), SizeBytes: size}
+}
+
+func createIngestJob(
+	t *testing.T,
+	s store.Store,
+	userID, libraryID, jobID string,
+	at time.Time,
+) store.IngestJob {
+	t.Helper()
+	job, created, err := s.CreateIngestJob(context.Background(), userID,
+		store.IngestJobRequest{
+			ID: jobID, LibraryID: libraryID, Source: store.IngestUpload,
+			RequestFingerprint: "request-" + jobID, CreatedAt: at,
+		})
+	if err != nil || !created {
+		t.Fatalf("create job %s: %+v %v %v", jobID, job, created, err)
+	}
+	return job
+}
+
+func extractIngestJob(
+	t *testing.T,
+	s store.Store,
+	job store.IngestJob,
+	at time.Time,
+) store.IngestJob {
+	t.Helper()
+	ctx := context.Background()
+	var err error
+	job, err = s.TransitionIngestJob(ctx, job.UserID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: job.State, ExpectedRevision: job.Revision,
+			NextState: store.IngestValidated, UpdatedAt: at,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err = s.TransitionIngestJob(ctx, job.UserID, job.ID,
+		store.IngestJobTransition{
+			ExpectedState: job.State, ExpectedRevision: job.Revision,
+			NextState: store.IngestExtracted, UpdatedAt: at.Add(time.Second),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+func promotionRequest(
+	job store.IngestJob,
+	blob store.BlobInfo,
+	bookID, fileID string,
+	at time.Time,
+) store.CommitNewBookPromotionRequest {
+	return store.CommitNewBookPromotionRequest{
+		ExpectedRevision: job.Revision,
+		Blob:             blob,
+		Book: store.CatalogBook{
+			ID: bookID, LibraryID: job.LibraryID, Status: store.BookActive,
+			Title: "Promoted " + bookID, TitleSource: store.MetadataEmbedded,
+			CreatedAt: at, UpdatedAt: at,
+		},
+		File: store.BookFile{
+			ID: fileID, LibraryID: job.LibraryID, BookID: bookID,
+			BlobSHA256: blob.SHA256, Source: job.Source,
+			OriginalFilename: bookID + ".epub",
+			MediaType:        "application/epub+zip", Availability: store.BookFileAvailable,
+			CreatedAt: at, UpdatedAt: at,
+		},
+		UpdatedAt: at,
+	}
+}
 
 func testIngestJobs(t *testing.T, open OpenFunc) {
 	s := open(t)
@@ -142,18 +220,17 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	}
 
 	bytesReceived := int64(123)
-	contentSHA := "content-sha"
 	stagingPath := ".incoming/job.tmp"
-	job3, err := s.TransitionIngestJob(ctx, manager.ID, "job-3",
-		store.IngestJobTransition{
-			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
-			NextState: store.IngestStaged, BytesReceived: &bytesReceived,
-			ContentSHA256: &contentSHA, StagingPath: &stagingPath,
+	artifact := ingestBlob("content", bytesReceived)
+	stagedJob3, err := s.CommitIngestStage(ctx, manager.ID, "job-3",
+		store.CommitIngestStageRequest{
+			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
 			UpdatedAt: now.Add(3 * time.Minute),
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
+	job3 := stagedJob3.Job
 	start := make(chan struct{})
 	transitionErrors := make(chan error, 2)
 	var transitionWG sync.WaitGroup
@@ -227,18 +304,358 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		}); err != store.ErrInvalidTransition {
 		t.Fatalf("invalid transition accepted: %v", err)
 	}
-	stagingPath = ".incoming/job-1.tmp"
-	job, err = s.TransitionIngestJob(ctx, manager.ID, job.ID,
+	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
-			NextState: store.IngestStaged, BytesReceived: &bytesReceived,
-			ContentSHA256: &contentSHA, StagingPath: &stagingPath,
+			NextState: store.IngestStaged, UpdatedAt: now.Add(time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("generic staging accepted: %v", err)
+	}
+	stagingPath = ".incoming/job-1.tmp"
+	if _, err := s.CommitIngestStage(ctx, manager.ID, job.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
+			UpdatedAt: now.Add(-time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("backward staging timestamp: %v", err)
+	}
+	stagedJob, err := s.CommitIngestStage(ctx, manager.ID, job.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
 			UpdatedAt: now.Add(time.Minute),
 		})
+	job = stagedJob.Job
 	if err != nil || job.State != store.IngestStaged || job.Revision != 2 ||
-		job.ContentSHA256 == nil || *job.ContentSHA256 != contentSHA {
+		job.ContentSHA256 == nil || *job.ContentSHA256 != artifact.SHA256 {
 		t.Fatalf("staged transition: %+v %v", job, err)
 	}
+
+	func() {
+		ctx := context.Background()
+		now := time.Date(2026, time.February, 3, 4, 5, 6, 0, time.UTC)
+
+		boundaryUser := MkUser(t, s, "quota-boundary")
+		boundaryLibrary := store.Library{
+			ID: "quota-boundary", OwnerUserID: boundaryUser.ID,
+			QuotaUserID: boundaryUser.ID, Kind: store.LibraryManaged,
+			Name: "Boundary", CreatedAt: now,
+		}
+		if err := s.CreateLibrary(ctx, boundaryLibrary); err != nil {
+			t.Fatal(err)
+		}
+		first := createIngestJob(t, s, boundaryUser.ID, boundaryLibrary.ID, "boundary-1", now)
+		second := createIngestJob(t, s, boundaryUser.ID, boundaryLibrary.ID, "boundary-2", now)
+		limit := int64(10)
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		var wg sync.WaitGroup
+		for index, job := range []store.IngestJob{first, second} {
+			wg.Add(1)
+			go func(index int, job store.IngestJob) {
+				defer wg.Done()
+				<-start
+				_, err := s.CommitIngestStage(ctx, job.UserID, job.ID,
+					store.CommitIngestStageRequest{
+						ExpectedRevision: job.Revision,
+						Artifact:         ingestBlob(fmt.Sprintf("boundary-%d", index), 6),
+						StagingPath:      fmt.Sprintf(".incoming/boundary-%d.stage", index),
+						QuotaLimitBytes:  &limit, UpdatedAt: now.Add(time.Minute),
+					})
+				results <- err
+			}(index, job)
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		var staged, rejected int
+		for err := range results {
+			switch {
+			case err == nil:
+				staged++
+			case errors.Is(err, store.ErrQuotaExceeded):
+				rejected++
+			default:
+				t.Fatalf("boundary staging: %v", err)
+			}
+		}
+		if staged != 1 || rejected != 1 {
+			t.Fatalf("quota boundary: %d staged, %d rejected", staged, rejected)
+		}
+
+		dedupUser := MkUser(t, s, "quota-dedup")
+		dedupLibrary := store.Library{
+			ID: "quota-dedup", OwnerUserID: dedupUser.ID,
+			QuotaUserID: dedupUser.ID, Kind: store.LibraryManaged,
+			Name: "Dedup", CreatedAt: now,
+		}
+		if err := s.CreateLibrary(ctx, dedupLibrary); err != nil {
+			t.Fatal(err)
+		}
+		blob := ingestBlob("deduplicated", 6)
+		var stagedJobs []store.IngestJob
+		for index := 1; index <= 2; index++ {
+			job := createIngestJob(t, s, dedupUser.ID, dedupLibrary.ID,
+				fmt.Sprintf("dedup-%d", index), now)
+			result, err := s.CommitIngestStage(ctx, job.UserID, job.ID,
+				store.CommitIngestStageRequest{
+					ExpectedRevision: job.Revision, Artifact: blob,
+					StagingPath:     fmt.Sprintf(".incoming/dedup-%d.stage", index),
+					QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(time.Minute),
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if index == 1 && result.Quota.AdditionalBytes != blob.SizeBytes {
+				t.Fatalf("first dedup charge: %+v", result.Quota)
+			}
+			if index == 2 && result.Quota.AdditionalBytes != 0 {
+				t.Fatalf("second dedup charge: %+v", result.Quota)
+			}
+			stagedJobs = append(stagedJobs, result.Job)
+		}
+		expiry := now.Add(24 * time.Hour)
+		failed, err := s.TransitionIngestJob(ctx, dedupUser.ID, stagedJobs[1].ID,
+			store.IngestJobTransition{
+				ExpectedState:    stagedJobs[1].State,
+				ExpectedRevision: stagedJobs[1].Revision,
+				NextState:        store.IngestFailed, ErrorCode: "validation_failed",
+				ExpiresAt: &expiry, UpdatedAt: now.Add(2 * time.Minute),
+			})
+		if err != nil || failed.State != store.IngestFailed {
+			t.Fatalf("held failure: %+v %v", failed, err)
+		}
+		third := createIngestJob(t, s, dedupUser.ID, dedupLibrary.ID, "dedup-3", now)
+		thirdStage, err := s.CommitIngestStage(ctx, third.UserID, third.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: third.Revision, Artifact: blob,
+				StagingPath:     ".incoming/dedup-3.stage",
+				QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(2 * time.Minute),
+			})
+		if err != nil || thirdStage.Quota.AdditionalBytes != 0 {
+			t.Fatalf("failed hold not counted as dedup: %+v %v", thirdStage, err)
+		}
+
+		cleanupUser := MkUser(t, s, "quota-cleanup")
+		cleanupLibrary := store.Library{
+			ID: "quota-cleanup", OwnerUserID: cleanupUser.ID,
+			QuotaUserID: cleanupUser.ID, Kind: store.LibraryManaged,
+			Name: "Cleanup", CreatedAt: now,
+		}
+		if err := s.CreateLibrary(ctx, cleanupLibrary); err != nil {
+			t.Fatal(err)
+		}
+		cleanupBlob := ingestBlob("cleanup-held", 6)
+		cleanupJob := createIngestJob(t, s, cleanupUser.ID,
+			cleanupLibrary.ID, "cleanup-held", now)
+		cleanupStage, err := s.CommitIngestStage(ctx, cleanupJob.UserID,
+			cleanupJob.ID, store.CommitIngestStageRequest{
+				ExpectedRevision: cleanupJob.Revision, Artifact: cleanupBlob,
+				StagingPath:     ".incoming/cleanup-held.stage",
+				QuotaLimitBytes: &cleanupBlob.SizeBytes,
+				UpdatedAt:       now.Add(time.Minute),
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cleanupExpiry := now.Add(time.Hour)
+		if _, err := s.TransitionIngestJob(ctx, cleanupJob.UserID, cleanupJob.ID,
+			store.IngestJobTransition{
+				ExpectedState:    cleanupStage.Job.State,
+				ExpectedRevision: cleanupStage.Job.Revision,
+				NextState:        store.IngestFailed, ErrorCode: "retained_failure",
+				ExpiresAt: &cleanupExpiry, UpdatedAt: now.Add(2 * time.Minute),
+			}); err != nil {
+			t.Fatal(err)
+		}
+		blockedJob := createIngestJob(t, s, cleanupUser.ID,
+			cleanupLibrary.ID, "cleanup-blocked", now)
+		blockedRequest := store.CommitIngestStageRequest{
+			ExpectedRevision: blockedJob.Revision,
+			Artifact:         ingestBlob("cleanup-blocked", 1),
+			StagingPath:      ".incoming/cleanup-blocked.stage",
+			QuotaLimitBytes:  &cleanupBlob.SizeBytes,
+			UpdatedAt:        now.Add(3 * time.Minute),
+		}
+		if _, err := s.CommitIngestStage(ctx, blockedJob.UserID,
+			blockedJob.ID, blockedRequest); !errors.Is(err, store.ErrQuotaExceeded) {
+			t.Fatalf("retained failure did not consume quota: %v", err)
+		}
+		if purged, err := s.PurgeExpiredIngestArtifacts(ctx, now.Add(30*time.Minute), 10); err != nil || len(purged) != 0 {
+			t.Fatalf("premature ingest purge: %+v %v", purged, err)
+		}
+		purged, err := s.PurgeExpiredIngestArtifacts(ctx, now.Add(2*time.Hour), 10)
+		if err != nil || len(purged) != 1 ||
+			purged[0].ID != cleanupJob.ID ||
+			purged[0].StagingPath == nil ||
+			*purged[0].StagingPath != ".incoming/cleanup-held.stage" {
+			t.Fatalf("expired ingest purge: %+v %v", purged, err)
+		}
+		blockedStage, err := s.CommitIngestStage(ctx, blockedJob.UserID,
+			blockedJob.ID, blockedRequest)
+		if err != nil || blockedStage.Job.State != store.IngestStaged {
+			t.Fatalf("purge did not release quota: %+v %v", blockedStage, err)
+		}
+		tombstone, err := s.IngestJobByID(ctx, cleanupJob.UserID, cleanupJob.ID)
+		if err != nil || tombstone.State != store.IngestFailed ||
+			!tombstone.ArtifactsExpired ||
+			tombstone.StagingPath != nil || tombstone.ContentSHA256 != nil ||
+			tombstone.BytesReceived != 0 {
+			t.Fatalf("expired ingest tombstone: %+v %v", tombstone, err)
+		}
+		replayedTombstone, created, err := s.CreateIngestJob(ctx,
+			cleanupJob.UserID, store.IngestJobRequest{
+				ID: cleanupJob.ID, LibraryID: cleanupLibrary.ID,
+				Source:             store.IngestUpload,
+				RequestFingerprint: "request-" + cleanupJob.ID,
+				CreatedAt:          now,
+			})
+		if err != nil || created || replayedTombstone.State != store.IngestFailed {
+			t.Fatalf("expired job ID was reusable: %+v %v %v",
+				replayedTombstone, created, err)
+		}
+		if _, err := s.TransitionIngestJob(ctx, tombstone.UserID, tombstone.ID,
+			store.IngestJobTransition{
+				ExpectedState: tombstone.State, ExpectedRevision: tombstone.Revision,
+				NextState: store.IngestReceived, IncrementRetry: true,
+				UpdatedAt: now.Add(3 * time.Hour),
+			}); err != store.ErrInvalidTransition {
+			t.Fatalf("expired tombstone was retryable: %v", err)
+		}
+		if purged, err := s.PurgeExpiredIngestArtifacts(
+			ctx, now.Add(2*time.Hour), 10); err != nil || len(purged) != 0 {
+			t.Fatalf("tombstone artifact purged twice: %+v %v", purged, err)
+		}
+
+		otherUser := MkUser(t, s, "quota-other")
+		otherLibrary := store.Library{
+			ID: "quota-other", OwnerUserID: otherUser.ID,
+			QuotaUserID: otherUser.ID, Kind: store.LibraryManaged,
+			Name: "Other", CreatedAt: now,
+		}
+		if err := s.CreateLibrary(ctx, otherLibrary); err != nil {
+			t.Fatal(err)
+		}
+		otherJob := createIngestJob(t, s, otherUser.ID, otherLibrary.ID, "other-1", now)
+		otherStage, err := s.CommitIngestStage(ctx, otherJob.UserID, otherJob.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: otherJob.Revision, Artifact: blob,
+				StagingPath:     ".incoming/other.stage",
+				QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(time.Minute),
+			})
+		if err != nil || otherStage.Quota.AdditionalBytes != blob.SizeBytes {
+			t.Fatalf("other principal charge: %+v %v", otherStage, err)
+		}
+
+		promoteJobs := []store.IngestJob{
+			extractIngestJob(t, s, stagedJobs[0], now.Add(3*time.Minute)),
+			extractIngestJob(t, s, thirdStage.Job, now.Add(3*time.Minute)),
+		}
+		promotionResults := make(chan store.IngestPromotionResult, 2)
+		promotionErrors := make(chan error, 2)
+		start = make(chan struct{})
+		wg = sync.WaitGroup{}
+		requests := make([]store.CommitNewBookPromotionRequest, 2)
+		for index, job := range promoteJobs {
+			requests[index] = promotionRequest(job, blob,
+				fmt.Sprintf("promoted-book-%d", index),
+				fmt.Sprintf("promoted-file-%d", index),
+				now.Add(5*time.Minute))
+			wg.Add(1)
+			go func(job store.IngestJob, request store.CommitNewBookPromotionRequest) {
+				defer wg.Done()
+				<-start
+				result, err := s.CommitNewBookPromotion(ctx, job.UserID, job.ID, request)
+				if err != nil {
+					promotionErrors <- err
+					return
+				}
+				promotionResults <- result
+			}(job, requests[index])
+		}
+		close(start)
+		wg.Wait()
+		close(promotionResults)
+		close(promotionErrors)
+		for err := range promotionErrors {
+			t.Fatalf("concurrent promotion: %v", err)
+		}
+		promoted := 0
+		for result := range promotionResults {
+			if result.Job.State != store.IngestPromoted || result.Replayed {
+				t.Fatalf("promotion result: %+v", result)
+			}
+			promoted++
+		}
+		if promoted != 2 {
+			t.Fatalf("want two promoted jobs, got %d", promoted)
+		}
+		replayed, err := s.CommitNewBookPromotion(ctx, promoteJobs[0].UserID,
+			promoteJobs[0].ID, requests[0])
+		if err != nil || !replayed.Replayed {
+			t.Fatalf("promotion replay: %+v %v", replayed, err)
+		}
+		conflictingReplay := requests[0]
+		conflictingReplay.File.ID = "different-file"
+		if _, err := s.CommitNewBookPromotion(ctx, promoteJobs[0].UserID,
+			promoteJobs[0].ID, conflictingReplay); err != store.ErrPromotionConflict {
+			t.Fatalf("promotion replay conflict: %v", err)
+		}
+		conflictingReplay = requests[0]
+		conflictingReplay.Book.Title = "Different title"
+		if _, err := s.CommitNewBookPromotion(ctx, promoteJobs[0].UserID,
+			promoteJobs[0].ID, conflictingReplay); err != store.ErrPromotionConflict {
+			t.Fatalf("promotion metadata replay conflict: %v", err)
+		}
+
+		mismatchJob := createIngestJob(t, s, dedupUser.ID, dedupLibrary.ID,
+			"dedup-size-mismatch", now)
+		mismatchBlob := blob
+		mismatchBlob.SizeBytes++
+		if _, err := s.CommitIngestStage(ctx, mismatchJob.UserID, mismatchJob.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: mismatchJob.Revision, Artifact: mismatchBlob,
+				StagingPath: ".incoming/mismatch.stage",
+				UpdatedAt:   now.Add(6 * time.Minute),
+			}); err != store.ErrInvariantViolation {
+			t.Fatalf("blob size mismatch: %v", err)
+		}
+
+		existingBook := store.CatalogBook{
+			ID: "promotion-collision", LibraryID: dedupLibrary.ID,
+			Status: store.BookActive, Title: "Existing",
+			TitleSource: store.MetadataManual, CreatedAt: now,
+		}
+		if err := s.CreateCatalogBook(ctx, dedupUser.ID, existingBook); err != nil {
+			t.Fatal(err)
+		}
+		collisionJob := createIngestJob(t, s, dedupUser.ID, dedupLibrary.ID,
+			"promotion-collision-job", now)
+		collisionBlob := ingestBlob("collision", 7)
+		collisionStage, err := s.CommitIngestStage(ctx, collisionJob.UserID,
+			collisionJob.ID, store.CommitIngestStageRequest{
+				ExpectedRevision: collisionJob.Revision, Artifact: collisionBlob,
+				StagingPath: ".incoming/collision.stage",
+				UpdatedAt:   now.Add(7 * time.Minute),
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		collisionJob = extractIngestJob(t, s, collisionStage.Job, now.Add(8*time.Minute))
+		collisionRequest := promotionRequest(collisionJob, collisionBlob,
+			existingBook.ID, "collision-file", now.Add(10*time.Minute))
+		if _, err := s.CommitNewBookPromotion(ctx, collisionJob.UserID,
+			collisionJob.ID, collisionRequest); err != store.ErrConflict {
+			t.Fatalf("promotion collision: %v", err)
+		}
+		collisionRequest.Book.ID = "promotion-retry"
+		collisionRequest.File.BookID = collisionRequest.Book.ID
+		collisionRequest.File.ID = "promotion-retry-file"
+		result, err := s.CommitNewBookPromotion(ctx, collisionJob.UserID,
+			collisionJob.ID, collisionRequest)
+		if err != nil || result.Job.State != store.IngestPromoted {
+			t.Fatalf("promotion rollback lost hold/job: %+v %v", result, err)
+		}
+	}()
 	if _, err := s.TransitionIngestJob(ctx, manager.ID, job.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
@@ -270,16 +687,15 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		t.Fatalf("generic promotion accepted: %v", err)
 	}
 
-	retryJob, err := s.TransitionIngestJob(ctx, manager.ID, "job-2",
-		store.IngestJobTransition{
-			ExpectedState: store.IngestReceived, ExpectedRevision: 1,
-			NextState: store.IngestStaged, BytesReceived: &bytesReceived,
-			ContentSHA256: &contentSHA, StagingPath: &stagingPath,
+	stagedRetry, err := s.CommitIngestStage(ctx, manager.ID, "job-2",
+		store.CommitIngestStageRequest{
+			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
 			UpdatedAt: now.Add(3 * time.Minute),
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
+	retryJob := stagedRetry.Job
 	retryJob, err = s.TransitionIngestJob(ctx, manager.ID, retryJob.ID,
 		store.IngestJobTransition{
 			ExpectedState: store.IngestStaged, ExpectedRevision: retryJob.Revision,
