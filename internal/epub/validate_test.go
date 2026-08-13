@@ -298,6 +298,20 @@ func TestValidateHonorsCancellation(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidLimitsAsCallerError(t *testing.T) {
+	data := makeEPUB(t, validEntries()...)
+	limits := DefaultLimits()
+	limits.MaxEntries = 0
+	_, err := Validate(
+		context.Background(), bytes.NewReader(data), int64(len(data)), limits)
+	if !errors.Is(err, ErrInvalidValidationInput) {
+		t.Fatalf("invalid limits: %v", err)
+	}
+	if _, ok := ErrorCode(err); ok {
+		t.Fatalf("invalid limits were classified as content: %v", err)
+	}
+}
+
 func TestValidateRequiresSingleDocumentRoots(t *testing.T) {
 	t.Run("empty package", func(t *testing.T) {
 		entries := validEntries()

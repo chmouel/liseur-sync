@@ -27,6 +27,10 @@ const (
 	CodeUnsupportedDRM Code = "unsupported_drm"
 )
 
+// ErrInvalidValidationInput indicates an invalid caller-supplied reader,
+// size, context, or limit set rather than invalid publication content.
+var ErrInvalidValidationInput = errors.New("epub: invalid validation input")
+
 // ValidationError classifies content failures without exposing parser details
 // to API clients.
 type ValidationError struct {
@@ -88,8 +92,7 @@ func Validate(
 	limits Limits,
 ) (Result, error) {
 	if ctx == nil || reader == nil || size < 0 || !limits.valid() {
-		return Result{}, validationError(
-			CodeArchiveLimits, errors.New("invalid validation limits"))
+		return Result{}, ErrInvalidValidationInput
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
