@@ -595,3 +595,158 @@ func testConcurrentCatalogMetadataApply(t *testing.T, open OpenFunc) {
 		t.Fatalf("lost update: %+v want %+v", final, winner)
 	}
 }
+
+// A candidate entity id is unique table-wide, so two rows offering the same
+// id for different names must be rejected at the edge rather than reaching
+// the backend as a driver-level constraint violation.
+func testCatalogMetadataRejectsDuplicateEntityIDs(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "metadata-duplicate")
+	now := time.Now().UTC()
+	library := store.Library{
+		ID: "lib-metadata-duplicate", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Duplicate", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	book := store.CatalogBook{
+		ID: "book-metadata-duplicate", LibraryID: library.ID,
+		Status: store.BookActive, Title: "Duplicate", CreatedAt: now,
+	}
+	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Tags = []store.BookTaxon{
+		{ID: "tag-collide", Name: "First", NormalizedName: "first",
+			Source: store.MetadataEmbedded},
+		{ID: "tag-collide", Name: "Second", NormalizedName: "second",
+			Source: store.MetadataEmbedded},
+	}
+	request := store.ApplyBookMetadataRequest{
+		Metadata: current, ExpectedRevision: 1, UpdatedAt: now,
+	}
+	if err := store.ValidateApplyBookMetadata(request); err != store.ErrInvalidTransition {
+		t.Fatalf("duplicate candidate id accepted: %v", err)
+	}
+
+	// An id already taken by another name is a conflict, never a raw
+	// constraint error the handler edge cannot map.
+	current.Tags = current.Tags[:1]
+	applied, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+		store.ApplyBookMetadataRequest{
+			Metadata: current, ExpectedRevision: 1, UpdatedAt: now,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied.Tags = []store.BookTaxon{
+		{ID: applied.Tags[0].ID, Name: "Second", NormalizedName: "second",
+			Source: store.MetadataEmbedded},
+	}
+	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+		store.ApplyBookMetadataRequest{
+			Metadata: applied, ExpectedRevision: 2, UpdatedAt: now,
+		}); err != store.ErrConflict {
+		t.Fatalf("reused entity id: want conflict, got %v", err)
+	}
+	after, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Book.Revision != 2 || len(after.Tags) != 1 ||
+		after.Tags[0].NormalizedName != "first" {
+		t.Fatalf("rejected apply leaked: %+v", after)
+	}
+}
+
+// Two books in one library creating the same new entity names must resolve
+// them in the same order: opposite orders deadlock PostgreSQL on the
+// speculative index insertions it takes for ON CONFLICT. The window is
+// narrow enough that this test does not reliably reproduce the deadlock
+// without the canonical ordering, so it stands as a smoke test that
+// concurrent entity creation converges on one row per name rather than as
+// proof of the ordering itself.
+func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "metadata-entity-race")
+	now := time.Now().UTC()
+	library := store.Library{
+		ID: "lib-entity-race", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Entity race", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"alpha", "beta", "gamma", "delta"}
+	const books = 6
+	current := make([]store.BookMetadata, books)
+	for i := 0; i < books; i++ {
+		id := fmt.Sprintf("book-entity-race-%02d", i)
+		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
+			ID: id, LibraryID: library.ID, Status: store.BookActive,
+			Title: id, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		metadata, err := s.CatalogBookMetadata(ctx, owner.ID, id, store.LibraryRoleManage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every book asserts the same names in a different rotation.
+		for j := range names {
+			name := names[(i+j)%len(names)]
+			metadata.Tags = append(metadata.Tags, store.BookTaxon{
+				ID:             "tag-" + name,
+				Name:           name,
+				NormalizedName: name,
+				Source:         store.MetadataEmbedded,
+			})
+		}
+		current[i] = metadata
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, books)
+	var wg sync.WaitGroup
+	for i := 0; i < books; i++ {
+		wg.Add(1)
+		go func(metadata store.BookMetadata) {
+			defer wg.Done()
+			<-start
+			if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+				store.ApplyBookMetadataRequest{
+					Metadata: metadata, ExpectedRevision: 1, UpdatedAt: now,
+				}); err != nil {
+				errs <- err
+			}
+		}(current[i])
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent entity creation: %v", err)
+	}
+	for i := 0; i < books; i++ {
+		final, err := s.CatalogBookMetadata(
+			ctx, owner.ID, current[i].Book.ID, store.LibraryRoleManage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(final.Tags) != len(names) {
+			t.Fatalf("book %d tags: %+v", i, final.Tags)
+		}
+		// Every book shares one entity row per name.
+		if final.Tags[0].ID != current[0].Tags[0].ID &&
+			final.Tags[0].NormalizedName == current[0].Tags[0].NormalizedName {
+			t.Fatalf("duplicate entity rows for %q", final.Tags[0].NormalizedName)
+		}
+	}
+}

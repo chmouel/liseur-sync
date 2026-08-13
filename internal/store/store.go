@@ -388,6 +388,7 @@ func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
 	}
 	for _, set := range [][]BookTaxon{request.Metadata.Tags, request.Metadata.Genres} {
 		seen := make(map[string]struct{}, len(set))
+		ids := make(map[string]struct{}, len(set))
 		for _, row := range set {
 			if row.ID == "" || row.Name == "" || row.NormalizedName == "" ||
 				!row.Source.Valid() {
@@ -396,10 +397,18 @@ func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
 			if _, duplicate := seen[row.NormalizedName]; duplicate {
 				return ErrInvalidTransition
 			}
+			// Entity ids are unique table-wide, so two rows offering the
+			// same candidate id for different names would reach the store
+			// as a raw constraint violation instead of a clean rejection.
+			if _, duplicate := ids[row.ID]; duplicate {
+				return ErrInvalidTransition
+			}
 			seen[row.NormalizedName] = struct{}{}
+			ids[row.ID] = struct{}{}
 		}
 	}
 	series := make(map[string]struct{}, len(request.Metadata.Series))
+	seriesIDs := make(map[string]struct{}, len(request.Metadata.Series))
 	for _, row := range request.Metadata.Series {
 		if row.SeriesID == "" || row.Name == "" || row.NormalizedName == "" ||
 			!row.Source.Valid() {
@@ -408,9 +417,14 @@ func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
 		if _, duplicate := series[row.NormalizedName]; duplicate {
 			return ErrInvalidTransition
 		}
+		if _, duplicate := seriesIDs[row.SeriesID]; duplicate {
+			return ErrInvalidTransition
+		}
 		series[row.NormalizedName] = struct{}{}
+		seriesIDs[row.SeriesID] = struct{}{}
 	}
 	contributors := make(map[ContributorRoleKey]struct{}, len(request.Metadata.Contributors))
+	contributorIDs := make(map[string]string, len(request.Metadata.Contributors))
 	for _, row := range request.Metadata.Contributors {
 		if row.ContributorID == "" || row.Name == "" || row.NormalizedName == "" ||
 			row.Role == "" || row.Position < 0 || !row.Source.Valid() {
@@ -420,7 +434,14 @@ func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
 		if _, duplicate := contributors[key]; duplicate {
 			return ErrInvalidTransition
 		}
+		// One contributor credited in several roles is several rows over one
+		// entity, so an id may repeat only for its own normalized name.
+		if name, seen := contributorIDs[row.ContributorID]; seen &&
+			name != row.NormalizedName {
+			return ErrInvalidTransition
+		}
 		contributors[key] = struct{}{}
+		contributorIDs[row.ContributorID] = row.NormalizedName
 	}
 	return nil
 }
