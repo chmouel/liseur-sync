@@ -19,7 +19,6 @@ type Config struct {
 
 	Content struct {
 		Root                  string `toml:"root"`                    // default ./content
-		RecoveryStaleMinutes  int    `toml:"recovery_stale_minutes"`  // default 5
 		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
 		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // default 100
 	} `toml:"content"`
@@ -67,7 +66,6 @@ func Default() Config {
 	c.Database.Driver = "sqlite"
 	c.Database.URL = "liseur-sync.db"
 	c.Content.Root = "content"
-	c.Content.RecoveryStaleMinutes = 5
 	c.Content.FailureRetentionHours = 24
 	c.Content.RecoveryBatchSize = 100
 	c.Adapters.Kosync = true
@@ -134,9 +132,6 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Content.Root) == "" {
 		return fmt.Errorf("content.root is required")
-	}
-	if c.Content.RecoveryStaleMinutes < 1 {
-		return fmt.Errorf("content.recovery_stale_minutes must be >= 1")
 	}
 	if c.Content.FailureRetentionHours < 1 {
 		return fmt.Errorf("content.failure_retention_hours must be >= 1")

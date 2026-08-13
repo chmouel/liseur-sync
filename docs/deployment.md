@@ -34,7 +34,7 @@ database setups, all covered by `compose.yaml`:
 Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
 `content.root` defaults to `./content`; it must be owned by the server user
 and have mode `0700`. Startup refuses unsafe ownership or permissions and
-runs stale-ingest recovery before listening.
+runs recovery for every pre-existing nonterminal ingest before listening.
 When SQLite uses an absolute database path, a relative content root resolves
 beside that database; container deployments still set `/data/content`
 explicitly.

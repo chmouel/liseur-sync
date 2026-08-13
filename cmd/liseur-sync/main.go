@@ -56,8 +56,7 @@ func openContentAndRecover(
 			"open content store: %w", err)
 	}
 	recovery, err := content.RecoverIngest(
-		ctx, st, cas, now,
-		now.Add(-time.Duration(cfg.Content.RecoveryStaleMinutes)*time.Minute),
+		ctx, st, cas, now, now,
 		time.Duration(cfg.Content.FailureRetentionHours)*time.Hour,
 		cfg.Content.RecoveryBatchSize,
 	)

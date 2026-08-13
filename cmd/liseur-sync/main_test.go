@@ -67,7 +67,7 @@ func TestOpenContentAndRecoverBeforeServe(t *testing.T) {
 				SHA256: staged.SHA256, SizeBytes: staged.Size,
 			},
 			StagingPath: staged.Path,
-			UpdatedAt:   now.Add(-10 * time.Minute),
+			UpdatedAt:   now,
 		}); err != nil {
 		t.Fatal(err)
 	}

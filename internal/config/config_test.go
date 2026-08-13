@@ -24,8 +24,7 @@ func TestInferenceLatenessMustCoverGap(t *testing.T) {
 
 func TestContentDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
-	if cfg.Content.Root == "" || cfg.Content.RecoveryStaleMinutes < 1 ||
-		cfg.Content.FailureRetentionHours < 1 ||
+	if cfg.Content.Root == "" || cfg.Content.FailureRetentionHours < 1 ||
 		cfg.Content.RecoveryBatchSize < 1 {
 		t.Fatalf("invalid content defaults: %+v", cfg.Content)
 	}
