@@ -133,25 +133,29 @@ Per-library parser configuration shipped since: a library states the
 filename layouts its files are read with, and `liseur-sync admin
 library-layout` is how an operator sets it.
 
+Watched folders shipped since
+([ADR-0002](0002-library-storage-and-ownership.md) phase 3): a library
+can be a read-only directory the server scans, and a file whose bytes
+changed underneath it is put to an administrator rather than silently
+reinterpreted.
+
+Metadata editing, categorization, search and facets shipped since
+([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3), and
+with them the OPDS discovery surface they made possible: an OpenSearch
+description and browse feeds for series, contributors, tags and genres
+([ADR-0006](0006-catalog-api-and-opds.md) phase 3).
+
 **Features**, in order:
 
-1. **Watched folders** ([ADR-0002](0002-library-storage-and-ownership.md)
-   phase 3). The ingest pipeline already accepts a `watched` source; what
-   is missing is the scanner and its reconciliation.
-2. **Metadata editing and categorization**
-   ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3):
-   the edit UI, series/contributor/tag pages, then search and facets. The
-   store already applies locked fields and whole-set assertions, so this is
-   surface over settled rules.
-3. **Richer catalog output**
-   ([ADR-0006](0006-catalog-api-and-opds.md) phases 2 and 3): filtering
-   beyond a plain listing, and recently-added, OpenSearch and
-   series/contributor OPDS feeds.
-4. **The web reader** ([ADR-0007](0007-web-reader.md)).
-5. **Similarity-based duplicate detection**
+1. **The web reader** ([ADR-0007](0007-web-reader.md)). It was waiting
+   for a catalog worth reading from, and now it is not.
+2. **Similarity-based duplicate detection**
    ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
    normalization rule worth defending before it needs code.
-6. **External metadata providers**
+3. **A recently-added OPDS feed**
+   ([ADR-0006](0006-catalog-api-and-opds.md)), the last small thing on
+   that surface.
+4. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
 
