@@ -797,6 +797,45 @@ type DuplicateContentBook struct {
 	SHA256 string
 }
 
+// EntityKind names one of the four library-wide metadata entity tables.
+// It is a closed set because it selects a table: a caller cannot ask for
+// a kind the schema does not have, and the store never interpolates a
+// caller's string into SQL.
+type EntityKind string
+
+const (
+	EntitySeries      EntityKind = "series"
+	EntityContributor EntityKind = "contributor"
+	EntityTag         EntityKind = "tag"
+	EntityGenre       EntityKind = "genre"
+)
+
+// Valid reports whether the kind names a table the store knows.
+func (k EntityKind) Valid() bool {
+	return k == EntitySeries || k == EntityContributor ||
+		k == EntityTag || k == EntityGenre
+}
+
+// CatalogEntity is one library-wide series, contributor, tag or genre,
+// together with how many of the library's active books claim it.
+//
+// The count is what makes the list usable: an entity with one book is
+// usually a typo of one with forty, and that is exactly the pair somebody
+// is looking for when they open a merge tool.
+type CatalogEntity struct {
+	ID             string
+	Kind           EntityKind
+	Name           string
+	NormalizedName string
+	BookCount      int
+	CreatedAt      time.Time
+}
+
+// MaxEntityListLimit bounds one entity listing. Entity lists are browsed
+// by a person, and a library with more distinct tags than this has a
+// problem no page size can fix.
+const MaxEntityListLimit = 500
+
 // CommitNewBookPromotionRequest atomically creates one new catalog book and
 // file from an extracted job after its CAS blob is durable.
 type CommitNewBookPromotionRequest struct {
@@ -1328,6 +1367,36 @@ type Store interface {
 	// metadata under an expected revision. It requires the manage role and
 	// returns ErrStaleRevision when another writer got there first.
 	ApplyCatalogBookMetadata(ctx context.Context, userID string, request ApplyBookMetadataRequest) (BookMetadata, error)
+	// ListCatalogEntities pages one library's entities of one kind by
+	// name, with the number of active books claiming each. Read access is
+	// enough: an entity list is how a reader browses a library.
+	//
+	// after is the normalized name to resume from, exclusive, so paging
+	// is stable while books are added — an offset would skip or repeat
+	// entities as counts change underneath it.
+	ListCatalogEntities(ctx context.Context, userID, libraryID string, kind EntityKind, after string, limit int) ([]CatalogEntity, error)
+	// CatalogEntityByID reads one entity under read access, so a page can
+	// name what it is showing without listing the whole library.
+	CatalogEntityByID(ctx context.Context, userID, libraryID, entityID string, kind EntityKind) (CatalogEntity, error)
+	// ListBooksByEntity pages the library's active books claiming one
+	// entity, oldest first, under read access. Trashed books are
+	// excluded for the same reason ListCatalogBooks excludes them.
+	ListBooksByEntity(ctx context.Context, userID, libraryID, entityID string, kind EntityKind, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// RenameCatalogEntity changes one entity's display spelling under the
+	// manage role. It returns ErrConflict when another entity of the same
+	// kind already holds the new normalized name, because that is a merge
+	// — folding two entities into one is a decision about identity, and
+	// silently doing it under the name of a rename would hide it.
+	RenameCatalogEntity(ctx context.Context, userID, libraryID, entityID string, kind EntityKind, name string) (CatalogEntity, error)
+	// MergeCatalogEntities folds one entity into another of the same kind
+	// in the same library, under the manage role, and reports how many
+	// book memberships moved.
+	//
+	// Merges are explicit by design (ADR-0004): normalization matches
+	// case and spacing only, so "Le Guin, Ursula K." and "Ursula K. Le
+	// Guin" are two entities until somebody says otherwise, and only a
+	// person can say it.
+	MergeCatalogEntities(ctx context.Context, userID, libraryID, fromID, intoID string, kind EntityKind, at time.Time) (int, error)
 	// ResolveCatalogBookWork resolves the user's work graph and inserts the
 	// catalog mapping in the same transaction. Low-confidence and conflicting
 	// resolutions do not mutate the graph or create a mapping.
