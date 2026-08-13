@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/contentpath"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -135,7 +136,7 @@ func extractedJob() store.IngestJob {
 		State:         store.IngestExtracted,
 		BytesReceived: 4096,
 		ContentSHA256: strptr("3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b"),
-		StagingPath:   strptr("incoming/3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b"),
+		StagingPath:   strptr(contentpath.StagingPath("job-1")),
 		Revision:      3,
 		CreatedAt:     created,
 		UpdatedAt:     created,
@@ -165,11 +166,12 @@ func TestPromoteIngestJobCreatesTheBookTheJobBecomes(t *testing.T) {
 	if result.Book.LibraryID != "lib-1" || result.Book.Status != store.BookActive {
 		t.Fatalf("book = %+v", result.Book)
 	}
-	if !result.Book.CreatedAt.Equal(now) || !result.Book.UpdatedAt.Equal(now) ||
-		!result.File.CreatedAt.Equal(now) || !result.File.UpdatedAt.Equal(now) {
+	at := st.job.UpdatedAt
+	if !result.Book.CreatedAt.Equal(at) || !result.Book.UpdatedAt.Equal(at) ||
+		!result.File.CreatedAt.Equal(at) || !result.File.UpdatedAt.Equal(at) {
 		t.Fatalf("promotion timestamps = %v/%v and %v/%v, want %v",
 			result.Book.CreatedAt, result.Book.UpdatedAt,
-			result.File.CreatedAt, result.File.UpdatedAt, now)
+			result.File.CreatedAt, result.File.UpdatedAt, at)
 	}
 	if result.File.BookID != result.Book.ID ||
 		result.File.BlobSHA256 != "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b" ||
@@ -177,8 +179,9 @@ func TestPromoteIngestJobCreatesTheBookTheJobBecomes(t *testing.T) {
 		result.File.Availability != store.BookFileAvailable {
 		t.Fatalf("file = %+v", result.File)
 	}
-	if len(blobs.calls) != 1 ||
-		blobs.calls[0] != "incoming/3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b|3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b|4096" {
+	want := contentpath.StagingPath("job-1") +
+		"|3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b|4096"
+	if len(blobs.calls) != 1 || blobs.calls[0] != want {
 		t.Fatalf("promote calls = %v", blobs.calls)
 	}
 }
@@ -233,8 +236,23 @@ func TestPromoteIngestJobDerivesStableIdentifiers(t *testing.T) {
 		t.Fatalf("book and file share id %q", a.Book.ID)
 	}
 
+	// The same job id in a different library must not name the same book.
+	// Job ids are globally unique today, so nothing else enforces this, and
+	// the ids are the only thing keeping two tenants' promotions apart.
+	elsewhere := &fakePromotionStore{job: extractedJob()}
+	elsewhere.job.LibraryID = "lib-2"
+	d, err := PromoteIngestJob(context.Background(), elsewhere,
+		&fakeBlobPromoter{}, elsewhere.job, fixedClock(now), time.Hour)
+	if err != nil {
+		t.Fatalf("promote elsewhere: %v", err)
+	}
+	if d.Book.ID == a.Book.ID || d.File.ID == a.File.ID {
+		t.Fatalf("a job id names the same rows in two libraries")
+	}
+
 	other := &fakePromotionStore{job: extractedJob()}
 	other.job.ID = "job-2"
+	other.job.StagingPath = strptr(contentpath.StagingPath("job-2"))
 	c, err := PromoteIngestJob(context.Background(), other,
 		&fakeBlobPromoter{}, other.job, fixedClock(now), time.Hour)
 	if err != nil {
@@ -315,10 +333,16 @@ func TestPromoteIngestJobQuarantinesAnArtifactItCannotPromote(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
+		code string
 	}{
-		{"missing stage", ErrStageMissing},
-		{"digest mismatch", ErrDigestMismatch},
-		{"corrupt blob", ErrCorruptBlob},
+		{"missing stage", ErrStageMissing, codeArtifactMissing},
+		{"digest mismatch", ErrDigestMismatch, codeArtifactCorrupt},
+		// A staging path the CAS refuses is deterministic for these bytes:
+		// the next attempt reads the same row and fails identically.
+		{"unsafe path", ErrUnsafePath, codeArtifactCorrupt},
+		// The upload is blameless here, and the code has to say so or an
+		// operator reads it as a bad file and never repairs the blob.
+		{"corrupt stored blob", ErrCorruptBlob, codeStoredBlobCorrupt},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &fakePromotionStore{job: extractedJob()}
@@ -334,7 +358,7 @@ func TestPromoteIngestJobQuarantinesAnArtifactItCannotPromote(t *testing.T) {
 				t.Fatalf("state = %q, want quarantined", result.Job.State)
 			}
 			if result.Job.ErrorCode == nil ||
-				*result.Job.ErrorCode != codeMissingArtifact {
+				*result.Job.ErrorCode != tc.code {
 				t.Fatalf("error code = %v", result.Job.ErrorCode)
 			}
 			if result.Job.ExpiresAt == nil ||
@@ -356,7 +380,6 @@ func TestPromoteIngestJobRetriesAnOperationalFailure(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"unsafe path", ErrUnsafePath},
 		{"unsupported filesystem", ErrUnsupportedFilesystem},
 		{"unknown", errors.New("no space left on device")},
 	} {
@@ -418,21 +441,82 @@ func TestPromoteIngestJobRejectsAJobItCannotPromote(t *testing.T) {
 	}
 }
 
-// A job whose clock has already run past the worker's keeps its own time, so
-// a promoted book never predates the job that produced it.
+// A quarantine records when the failure was seen, but never before the job's
+// own last write, so a job's timeline only ever moves forward.
 func TestPromoteIngestJobNeverMovesTimeBackwards(t *testing.T) {
 	st := &fakePromotionStore{job: extractedJob()}
 	ahead := st.job.UpdatedAt.Add(time.Hour)
 	st.job.UpdatedAt = ahead
 
 	result, err := PromoteIngestJob(context.Background(), st,
-		&fakeBlobPromoter{}, st.job,
+		&fakeBlobPromoter{err: ErrDigestMismatch}, st.job,
 		fixedClock(ahead.Add(-30*time.Minute)), time.Hour)
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	if !result.Book.CreatedAt.Equal(ahead) {
-		t.Fatalf("created at = %v, want %v", result.Book.CreatedAt, ahead)
+	if !result.Job.UpdatedAt.Equal(ahead) {
+		t.Fatalf("updated at = %v, want %v", result.Job.UpdatedAt, ahead)
+	}
+}
+
+// Two workers racing the same job must build byte-identical requests. The
+// backend fingerprints the request to recognise a replay, so a clock reading
+// anywhere in it would turn ordinary contention into a promotion conflict and
+// the loser would fail instead of reading back the winner's book.
+func TestPromoteIngestJobBuildsTheSameRequestOnEveryClock(t *testing.T) {
+	job := extractedJob()
+	blob := Blob{SHA256: *job.ContentSHA256, Size: job.BytesReceived}
+
+	fingerprint := func(r store.CommitNewBookPromotionRequest) string {
+		t.Helper()
+		got, err := store.NewBookPromotionFingerprint(r)
+		if err != nil {
+			t.Fatalf("fingerprint: %v", err)
+		}
+		return got
+	}
+	first := newBookPromotion(job, blob)
+	if fingerprint(first) != fingerprint(newBookPromotion(job, blob)) {
+		t.Fatal("identical inputs produced different fingerprints")
+	}
+	// Pin the values, not just their agreement: two workers agreeing on the
+	// same wrong-but-derived time would still pass the comparison above.
+	if !first.UpdatedAt.Equal(job.UpdatedAt) ||
+		!first.Book.CreatedAt.Equal(job.UpdatedAt) ||
+		!first.Book.UpdatedAt.Equal(job.UpdatedAt) ||
+		!first.File.CreatedAt.Equal(job.UpdatedAt) ||
+		!first.File.UpdatedAt.Equal(job.UpdatedAt) {
+		t.Fatalf("request carries a time the job did not: %+v", first)
+	}
+
+	st := &fakePromotionStore{job: job}
+	if _, err := PromoteIngestJob(context.Background(), st,
+		&fakeBlobPromoter{}, job,
+		fixedClock(job.UpdatedAt.Add(97*time.Minute)), time.Hour); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if len(st.committed) != 1 {
+		t.Fatalf("committed %d requests", len(st.committed))
+	}
+	if fingerprint(st.committed[0]) != fingerprint(first) {
+		t.Fatalf("a later clock changed the request fingerprint")
+	}
+}
+
+// A staging path the server did not write is a corrupted record, not a file
+// to hand to the CAS.
+func TestPromoteIngestJobRefusesAForeignStagingPath(t *testing.T) {
+	st := &fakePromotionStore{job: extractedJob()}
+	st.job.StagingPath = strptr(contentpath.StagingPath("someone-elses-job"))
+	blobs := &fakeBlobPromoter{}
+
+	_, err := PromoteIngestJob(context.Background(), st, blobs, st.job,
+		fixedClock(time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)), time.Hour)
+	if !errors.Is(err, store.ErrInvariantViolation) {
+		t.Fatalf("err = %v, want invariant violation", err)
+	}
+	if len(blobs.calls) != 0 {
+		t.Fatalf("handed a foreign path to the CAS")
 	}
 }
 
