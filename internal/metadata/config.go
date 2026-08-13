@@ -156,3 +156,19 @@ func validatePathPatterns(names []string) ([]PathPattern, error) {
 	}
 	return patterns, nil
 }
+
+// PathPatternsConfigured reports whether a library states a layout list of
+// its own. It is the difference between a library that happens to agree
+// with the defaults and one that has never been configured, which is what
+// an operator needs to know before changing it.
+func PathPatternsConfigured(raw []byte) (bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return false, nil
+	}
+	fields, err := decodeLibraryConfig(raw)
+	if err != nil {
+		return false, err
+	}
+	value, ok := fields[pathPatternsKey]
+	return ok && string(bytes.TrimSpace(value)) != "null", nil
+}
