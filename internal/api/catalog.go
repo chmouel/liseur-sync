@@ -82,7 +82,22 @@ func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, libraryID, after, limit)
+	// The order is a parameter rather than a second route because it is
+	// the same collection either way; only "which end" changes. An
+	// unrecognized value is refused rather than defaulted, so a client
+	// with a typo learns about it instead of silently reading the
+	// catalog backwards.
+	list := s.St.ListCatalogBooks
+	switch order := r.URL.Query().Get("order"); order {
+	case "", "oldest":
+	case "recent":
+		list = s.St.ListRecentCatalogBooks
+	default:
+		writeError(w, http.StatusBadRequest, "order must be oldest or recent")
+		return
+	}
+
+	books, err := list(r.Context(), tok.UserID, libraryID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "library not found")

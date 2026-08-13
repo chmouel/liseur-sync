@@ -142,8 +142,9 @@ reinterpreted.
 Metadata editing, categorization, search and facets shipped since
 ([ADR-0004](0004-metadata-and-categorization.md) phases 2 and 3), and
 with them the OPDS discovery surface they made possible: an OpenSearch
-description and browse feeds for series, contributors, tags and genres
-([ADR-0006](0006-catalog-api-and-opds.md) phase 3).
+description, browse feeds for series, contributors, tags and genres, and
+a recently-added feed ([ADR-0006](0006-catalog-api-and-opds.md) phase 3,
+which is now complete).
 
 **Features**, in order:
 
@@ -152,10 +153,7 @@ description and browse feeds for series, contributors, tags and genres
 2. **Similarity-based duplicate detection**
    ([ADR-0010](0010-duplicate-detection.md) phase 2), which needs a
    normalization rule worth defending before it needs code.
-3. **A recently-added OPDS feed**
-   ([ADR-0006](0006-catalog-api-and-opds.md)), the last small thing on
-   that surface.
-4. **External metadata providers**
+3. **External metadata providers**
    ([ADR-0004](0004-metadata-and-categorization.md) phase 4) — optional
    forever.
 

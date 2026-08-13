@@ -101,9 +101,14 @@ from configuration. The search template offers `searchTerms` and nothing
 else: a term a reader could substitute is a question this surface can be
 asked, and reading state must not be one of them.
 
-A "recently added" feed is still deferred: it is not on the path from
-opening a reader to reading a book. OPDS 2.0 and OPDS-PSE are deferred
-entirely.
+A library's newest books are a feed of their own, linked with
+`http://opds-spec.org/sort/new`, and the same listing read from the other
+end on the native side (`?order=recent`). The order is a parameter rather
+than a second route because it is one collection either way; only which
+end changes. An unrecognized order is refused rather than defaulted,
+because a typo that silently reverses a listing is worse than an error.
+
+OPDS 2.0 and OPDS-PSE are deferred entirely.
 
 XML is generated through an encoder, never string interpolation, and has
 escaping and pagination tests. OPDS 2.0 and OPDS-PSE are deferred.
@@ -143,8 +148,9 @@ metadata edits, work resolution, and rich sync remain native operations.
    acquisition feeds, and `GET /opds/v1.2/books/{id}/download`, all behind
    HTTP Basic, with covers, an OpenSearch description and search results
    feed, and navigation feeds for series, contributors, tags and genres,
-   all discovered through links rather than configuration.
-   **Remaining:** a recently-added feed.
+   plus a recently-added feed, all discovered through links rather than
+   configuration. **Nothing outstanding** short of OPDS 2.0, which is
+   deferred.
 4. Mutation API and ingestion job resources. Done: the ADR-0005 upload
    endpoint, the job resource, `DELETE`/`POST .../restore` for reversible
    deletion, and the metadata edit and entity routes from ADR-0004 phase

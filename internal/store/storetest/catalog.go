@@ -422,6 +422,44 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("paged books: got %v want %v", got, want)
 	}
+
+	// Newest first must be the same set in the opposite order, and page
+	// the same way. A cursor that skipped a row here would drop books
+	// out of a "recently added" feed, which is the one listing where a
+	// missing book is the whole point of looking.
+	var recent []string
+	cursor = nil
+	for {
+		page, err := s.ListRecentCatalogBooks(ctx, owner.ID, library.ID, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, book := range page {
+			if book.Status == store.BookTrashed {
+				t.Fatalf("trashed book listed: %+v", book)
+			}
+			recent = append(recent, book.ID)
+		}
+		last := page[len(page)-1]
+		cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+		if len(page) < 2 {
+			break
+		}
+	}
+	reversed := make([]string, 0, len(want))
+	for i := len(want) - 1; i >= 0; i-- {
+		reversed = append(reversed, want[i])
+	}
+	if fmt.Sprint(recent) != fmt.Sprint(reversed) {
+		t.Fatalf("recent books: got %v want %v", recent, reversed)
+	}
+	if _, err := s.ListRecentCatalogBooks(
+		ctx, outsider.ID, library.ID, nil, 50); err != store.ErrNotFound {
+		t.Fatalf("outsider listed private catalog by recency: %v", err)
+	}
 }
 
 func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
