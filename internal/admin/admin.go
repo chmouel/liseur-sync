@@ -16,6 +16,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 // Run dispatches an admin subcommand. args excludes "admin" itself.
@@ -50,6 +51,8 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return grantLibrary(ctx, st, args[1:])
 	case "revoke-library":
 		return revokeLibrary(ctx, st, args[1:])
+	case "backfill-works":
+		return backfillWorks(ctx, st, args[1:])
 	case "verify-backup":
 		return verifyBackup(ctx, st, contentRoot, args[1:])
 	default:
@@ -76,6 +79,10 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 grant access; actor must own or manage it
   revoke-library <actor> <library-id> <user>
                                 remove a grant
+
+  backfill-works <user>         map every catalog book the user can
+                                read to a sync work, so statistics do
+                                not wait for each book to be opened
 
   verify-backup                 check that the database and content
                                 directory named by -config are a
@@ -347,6 +354,48 @@ func listLibraries(ctx context.Context, st store.Store, args []string) error {
 			l.Library.ID, l.Library.Kind, l.Role, owner, l.Library.Name)
 	}
 	return nil
+}
+
+// backfillWorks exists because the book-to-work mapping is created
+// lazily, on first resolve. A reader who uploads a library and then looks
+// at their statistics sees an empty catalog until they have opened every
+// book one by one; this maps the lot in a single pass.
+func backfillWorks(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: backfill-works <user>")
+	}
+	u, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	report, err := workident.Backfill(ctx, st, u.ID, newWorkID, time.Now)
+	// The report is printed even on failure: a run that stops halfway has
+	// still committed everything it counted, and the operator needs to
+	// know what was done before deciding whether to re-run it.
+	fmt.Printf("books=%d created=%d linked=%d needs-confirmation=%d conflicted=%d skipped=%d\n",
+		report.Books, report.Created, report.Linked,
+		report.Fuzzy, report.Conflicted, report.Skipped)
+	if err != nil {
+		return err
+	}
+	if report.Fuzzy > 0 {
+		fmt.Printf("%d book(s) matched an existing work on title and author alone "+
+			"and were left unmapped; a reader can confirm them from a client.\n",
+			report.Fuzzy)
+	}
+	if report.Conflicted > 0 {
+		fmt.Printf("%d book(s) carry identifiers naming more than one work "+
+			"and were left unmapped.\n", report.Conflicted)
+	}
+	return nil
+}
+
+func newWorkID() (string, error) {
+	id, err := auth.NewSecret()
+	if err != nil {
+		return "", err
+	}
+	return id[:16], nil
 }
 
 // grantLibrary goes through the same ACL-checked store call the API

@@ -118,18 +118,12 @@ taken from the catalog sync its reading position
 
 ### After the MVP
 
-Two kinds of work remain, and they are not interchangeable. The loose ends
-are small, known, and bounded by decisions already made. The features are
-new surface, ordered by how much a real library misses them rather than by
-how interesting they are to build.
+What remains is new surface, ordered by how much a real library misses it
+rather than by how interesting it is to build.
 
-**Loose ends in shipped work.** Each is a gap inside something that already
-works, and each has an owning ADR:
-
-1. **Mapping backfill** ([ADR-0003](0003-catalog-work-identity.md) phase 3).
-   Resolution backfills lazily and correctly; there is no maintenance
-   command to pre-resolve a user's existing works. It is convenience, not
-   durability, so it need not come before the features below.
+**Loose ends in shipped work.** None. The last one, mapping backfill
+([ADR-0003](0003-catalog-work-identity.md) phase 3), shipped as
+`liseur-sync admin backfill-works`.
 
 **Features**, in order:
 

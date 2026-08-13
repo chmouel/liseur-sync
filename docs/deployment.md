@@ -103,6 +103,21 @@ liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReade
 liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
 ```
 
+## Reading statistics for books nobody has opened yet
+
+A book is joined to a reader's sync work the first time a client resolves
+it, so a freshly imported library reports no reading statistics until each
+book has been opened at least once. To map a whole catalog in one pass:
+
+```
+liseur-sync admin -config liseur-sync.toml backfill-works alice
+```
+
+It is safe to re-run and reports what it did. Books that match an existing
+work on title and author alone are counted as `needs-confirmation` and
+left unmapped — only the reader can say whether two similarly titled books
+are the same one, and a wrong guess merges two reading histories.
+
 ## Sizing the content disk
 
 Uploads land in `content.root/.incoming` while they are received and
