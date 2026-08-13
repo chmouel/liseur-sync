@@ -24,6 +24,16 @@ func TokenFrom(r *http.Request) (store.Token, bool) {
 // "Authorization: Bearer <secret>", authenticates the token, and checks
 // its scope. Admin implies every other scope.
 func RequireScope(svc *Service, scope store.Scope, next http.Handler) http.Handler {
+	return RequireAllScopes(svc, []store.Scope{scope}, next)
+}
+
+// RequireAllScopes authenticates the bearer token and requires every
+// listed scope, not any of them. A route needs this when it joins two
+// capabilities that are deliberately separable: resolving a catalog book
+// to a sync work reads the catalog *and* writes the reader's work graph,
+// so a catalog-only credential must not perform it, and neither must a
+// sync-only one.
+func RequireAllScopes(svc *Service, scopes []store.Scope, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := r.Header.Get("Authorization")
 		secret, ok := strings.CutPrefix(h, "Bearer ")
@@ -36,7 +46,7 @@ func RequireScope(svc *Service, scope store.Scope, next http.Handler) http.Handl
 			http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 			return
 		}
-		if !scopeAllowed(tok.Scopes, scope) {
+		if !scopeAllowed(tok.Scopes, scopes) {
 			http.Error(w, `{"error":"insufficient scope"}`, http.StatusForbidden)
 			return
 		}
@@ -44,8 +54,13 @@ func RequireScope(svc *Service, scope store.Scope, next http.Handler) http.Handl
 	})
 }
 
-func scopeAllowed(have store.ScopeSet, want store.Scope) bool {
-	return have.Allows(want)
+func scopeAllowed(have store.ScopeSet, want []store.Scope) bool {
+	for _, scope := range want {
+		if !have.Allows(scope) {
+			return false
+		}
+	}
+	return true
 }
 
 // BasicRealm is what a client is told to prompt for. OPDS readers show
@@ -78,7 +93,7 @@ func RequireBasicScope(svc *Service, scope store.Scope, next http.Handler) http.
 			challengeBasic(w, "invalid credentials")
 			return
 		}
-		if !scopeAllowed(tok.Scopes, scope) {
+		if !scopeAllowed(tok.Scopes, []store.Scope{scope}) {
 			// Not a challenge: the credential is good and retrying with
 			// the same one will not help. The token needs a wider scope.
 			http.Error(w, `{"error":"insufficient scope"}`, http.StatusForbidden)
