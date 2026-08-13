@@ -141,3 +141,85 @@ func (s *Store) ReconcileBlob(
 	}
 	return result, nil
 }
+
+func (s *Store) PurgeOrphanedBlobRecords(
+	ctx context.Context,
+	before time.Time,
+	limit int,
+) ([]store.BlobRecord, error) {
+	if before.IsZero() || limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, q(
+		`SELECT b.sha256, b.size_bytes, b.orphaned_at, b.missing_at
+		 FROM blobs b
+		 WHERE b.orphaned_at IS NOT NULL
+		   AND b.orphaned_at <= ?
+		   AND NOT EXISTS (
+		       SELECT 1 FROM book_files f WHERE f.blob_sha256 = b.sha256
+		   )
+		   AND NOT EXISTS (
+		       SELECT 1 FROM ingest_blob_holds h
+		       WHERE h.blob_sha256 = b.sha256
+		   )
+		 ORDER BY b.sha256
+		 LIMIT ?
+		 FOR UPDATE SKIP LOCKED`),
+		before.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []store.BlobRecord
+	for rows.Next() {
+		record, err := scanBlobRecord(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		candidates = append(candidates, record)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	purged := make([]store.BlobRecord, 0, len(candidates))
+	for _, record := range candidates {
+		if record.OrphanedAt == nil {
+			return nil, store.ErrInvariantViolation
+		}
+		result, err := tx.ExecContext(ctx, q(
+			`DELETE FROM blobs
+			 WHERE sha256 = ?
+			   AND orphaned_at = ?
+			   AND NOT EXISTS (
+			       SELECT 1 FROM book_files f
+			       WHERE f.blob_sha256 = blobs.sha256
+			   )
+			   AND NOT EXISTS (
+			       SELECT 1 FROM ingest_blob_holds h
+			       WHERE h.blob_sha256 = blobs.sha256
+			   )`),
+			record.SHA256, record.OrphanedAt.UTC())
+		if err != nil {
+			return nil, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected == 1 {
+			purged = append(purged, record)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return purged, nil
+}

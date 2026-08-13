@@ -960,6 +960,13 @@ type Store interface {
 	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
 	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
 	ReconcileBlob(ctx context.Context, blob BlobInfo, present bool, at time.Time) (BlobReconcileResult, error)
+	// PurgeOrphanedBlobRecords atomically removes database rows that have
+	// remained orphaned through the supplied cutoff and still have no retained
+	// book-file references or active ingest holds. The caller must keep content
+	// writers paused until it removes the returned physical blobs idempotently;
+	// a cleanup failure is rediscovered and re-marked by the next filesystem
+	// reconciliation pass.
+	PurgeOrphanedBlobRecords(ctx context.Context, before time.Time, limit int) ([]BlobRecord, error)
 	// PurgeExpiredIngestArtifacts is a global housekeeping operation. It
 	// releases quota and returns staging paths for filesystem cleanup, while
 	// retaining permanent job tombstones so deterministic paths cannot be
