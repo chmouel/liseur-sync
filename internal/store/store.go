@@ -640,6 +640,21 @@ func (r CatalogAvailabilityResult) Changed() bool {
 		r.BooksMarkedMissing != 0 || r.BooksMarkedActive != 0
 }
 
+// TrashPurgeResult counts one bounded permanent-deletion pass.
+type TrashPurgeResult struct {
+	BookIDs []string
+	// FilesPurged counts catalog references removed, not blobs: several
+	// references can share one deduplicated blob.
+	FilesPurged int
+	// ReservationsReleased counts quota charges returned to a principal,
+	// which happens only when that principal's last reference to a blob
+	// goes away.
+	ReservationsReleased int
+	// BlobsOrphaned counts blobs that lost their last reference and so
+	// became eligible for the separate orphan grace period.
+	BlobsOrphaned int
+}
+
 // QuotaUsage is the logical per-principal usage after an operation.
 type QuotaUsage struct {
 	UsedBytes       int64
@@ -1253,6 +1268,22 @@ type Store interface {
 	// bounds each of the four updates, so a caller loops while Changed
 	// reports work was done.
 	ReconcileCatalogAvailability(ctx context.Context, at time.Time, limit int) (CatalogAvailabilityResult, error)
+	// TrashCatalogBook moves one book out of the catalog under the manage
+	// role. Its files are retained, so the blobs stay referenced, stay GC
+	// roots, and keep counting against quota: that is what stops an
+	// upload/delete cycle from growing the disk without bound, and what
+	// makes restore a relink rather than a re-upload.
+	TrashCatalogBook(ctx context.Context, userID, bookID string, at, expiresAt time.Time) (CatalogBook, error)
+	// RestoreCatalogBook returns a trashed book to the catalog. It restores
+	// to missing rather than active when the book has no servable file, so
+	// restore cannot advertise a download that is not there.
+	RestoreCatalogBook(ctx context.Context, userID, bookID string, at time.Time) (CatalogBook, error)
+	// PurgeExpiredTrash is a global housekeeping operation. It permanently
+	// removes books whose trash retention has passed, releases the quota
+	// reservations that lose their last reference, and orphan-marks blobs
+	// that lose their last reference so the existing grace-period sweep
+	// reclaims the bytes. It never deletes content itself.
+	PurgeExpiredTrash(ctx context.Context, before time.Time, limit int) (TrashPurgeResult, error)
 	// PurgeOrphanedBlobRecords atomically removes database rows that have
 	// remained orphaned through the supplied cutoff and still have no retained
 	// book-file references or active ingest holds. The caller must keep content

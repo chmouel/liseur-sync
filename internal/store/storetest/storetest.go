@@ -58,6 +58,21 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogAvailabilityRespectsItsLimit", func(t *testing.T) {
 		testCatalogAvailabilityRespectsItsLimit(t, open)
 	})
+	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
+		testTrashRestoreAndPurge(t, open)
+	})
+	t.Run("PurgeKeepsQuotaForRemainingReferences", func(t *testing.T) {
+		testPurgeKeepsQuotaForRemainingReferences(t, open)
+	})
+	t.Run("RestoreReflectsWhatTheBytesSupport", func(t *testing.T) {
+		testRestoreReflectsWhatTheBytesSupport(t, open)
+	})
+	t.Run("PurgeSparesBlobsHeldByIngest", func(t *testing.T) {
+		testPurgeSparesBlobsHeldByIngest(t, open)
+	})
+	t.Run("PurgeRespectsItsLimit", func(t *testing.T) {
+		testPurgeRespectsItsLimit(t, open)
+	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })
