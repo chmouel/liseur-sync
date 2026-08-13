@@ -664,7 +664,9 @@ func (s *Store) CommitNewBookPromotion(
 		return store.IngestPromotionResult{}, store.ErrInvariantViolation
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE blobs SET orphaned_at = NULL WHERE sha256 = ?`,
+		`UPDATE blobs
+		 SET orphaned_at = NULL, missing_at = NULL
+		 WHERE sha256 = ?`,
 		request.Blob.SHA256); err != nil {
 		return store.IngestPromotionResult{}, err
 	}
