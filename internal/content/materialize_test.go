@@ -19,6 +19,9 @@ type fakeMetadataStore struct {
 	reads     int
 	spellings map[string]string
 	applies   []store.ApplyBookMetadataRequest
+	// concurrentWrite models the writer that won the revision race doing
+	// something to the book, not merely bumping its number.
+	concurrentWrite func(*store.BookMetadata)
 	// staleFor makes the first n applies lose the revision race, as a
 	// concurrent writer would.
 	staleFor int
@@ -47,6 +50,12 @@ func (f *fakeMetadataStore) ApplyCatalogBookMetadata(
 		f.staleFor--
 		// A losing writer sees the winner's revision on its next read.
 		f.current.Book.Revision++
+		if f.concurrentWrite != nil {
+			f.concurrentWrite(&f.current)
+		}
+		return store.BookMetadata{}, store.ErrStaleRevision
+	}
+	if request.ExpectedRevision != f.current.Book.Revision {
 		return store.BookMetadata{}, store.ErrStaleRevision
 	}
 	applied := request.Metadata
@@ -128,16 +137,22 @@ func TestMaterializeAppliesEmbeddedThenPath(t *testing.T) {
 		t.Fatalf("title: %+v", applied.Book)
 	}
 	// The path names one author and must not remove the translator the file
-	// declared.
+	// declared. Applying the path second is also the one observable
+	// difference between the two orders: rows already known keep their
+	// index and the later proposal's rows are appended after them.
 	if len(applied.Contributors) != 2 {
 		t.Fatalf("contributors: %+v", applied.Contributors)
 	}
-	var roles []string
-	for _, row := range applied.Contributors {
-		roles = append(roles, row.Role)
+	if applied.Contributors[0].Role != "translator" ||
+		applied.Contributors[0].Position != 0 ||
+		applied.Contributors[0].Source != store.MetadataEmbedded {
+		t.Fatalf("translator: %+v", applied.Contributors[0])
 	}
-	if roles[0] != "translator" && roles[1] != "translator" {
-		t.Fatalf("translator lost: %+v", applied.Contributors)
+	if applied.Contributors[1].Role != "author" ||
+		applied.Contributors[1].Name != "Frank Herbert" ||
+		applied.Contributors[1].Position != 1 ||
+		applied.Contributors[1].Source != store.MetadataFilename {
+		t.Fatalf("author: %+v", applied.Contributors[1])
 	}
 }
 
@@ -272,13 +287,23 @@ func TestMaterializeIgnoresUnusablePath(t *testing.T) {
 func TestMaterializeRequiresAPromotedBook(t *testing.T) {
 	now := time.Now().UTC()
 	st := &fakeMetadataStore{current: emptyMetadata()}
-	job := materializeJob(t, epub.Metadata{Title: "Dune"}, "")
-	job.BookID = nil
 
+	noBook := materializeJob(t, epub.Metadata{Title: "Dune"}, "")
+	noBook.BookID = nil
 	if _, _, err := MaterializeBookMetadata(
-		context.Background(), st, job, metadata.DefaultPathPatterns(),
+		context.Background(), st, noBook, metadata.DefaultPathPatterns(),
 		clockAt(now)); !errors.Is(err, store.ErrInvalidTransition) {
 		t.Fatalf("job without a book: %v", err)
+	}
+
+	// Only promotion sets a book id, so a job in any other state carrying
+	// one is a caller mistake rather than work to do.
+	unpromoted := materializeJob(t, epub.Metadata{Title: "Dune"}, "")
+	unpromoted.State = store.IngestExtracted
+	if _, _, err := MaterializeBookMetadata(
+		context.Background(), st, unpromoted, metadata.DefaultPathPatterns(),
+		clockAt(now)); !errors.Is(err, store.ErrInvalidTransition) {
+		t.Fatalf("unpromoted job: %v", err)
 	}
 }
 
@@ -329,5 +354,63 @@ func TestMaterializeConvergesAgainstLibrarySpelling(t *testing.T) {
 	}
 	if len(st.applies) != 1 {
 		t.Fatalf("applies: %d", len(st.applies))
+	}
+}
+
+// A layout that had to guess where one field ended is not allowed to
+// overwrite what the publication itself declared: a filename outranks
+// embedded metadata, and the provenance it stamps cannot be taken back by a
+// later extraction.
+func TestMaterializeHoldsBackLowConfidencePaths(t *testing.T) {
+	path := "Frank Herbert - Dune 1 - Dune Messiah.epub"
+	if got := metadata.ParsePath(path, metadata.DefaultPathPatterns()).Confidence; got != metadata.ConfidenceLow {
+		t.Fatalf("fixture no longer parses as a guess: %q", got)
+	}
+
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata()}
+	job := materializeJob(t, epub.Metadata{Title: "Dune"}, path)
+
+	applied, changed, err := MaterializeBookMetadata(
+		context.Background(), st, job, metadata.DefaultPathPatterns(), clockAt(now))
+	if err != nil || !changed {
+		t.Fatalf("materialize: changed=%v err=%v", changed, err)
+	}
+	if applied.Book.Title != "Dune" ||
+		applied.Book.TitleSource != store.MetadataEmbedded {
+		t.Fatalf("a guessed title overwrote the file's own: %+v", applied.Book)
+	}
+	if len(applied.Contributors) != 0 || len(applied.Series) != 0 {
+		t.Fatalf("guessed rows applied: %+v", applied)
+	}
+}
+
+// The writer that wins the race is usually a person editing the book, not a
+// bare revision bump. When they have already supplied what this pass
+// learned, the retry must find nothing left to do and write nothing.
+func TestMaterializeYieldsToAConcurrentEditor(t *testing.T) {
+	now := time.Now().UTC()
+	st := &fakeMetadataStore{current: emptyMetadata(), staleFor: 1}
+	st.concurrentWrite = func(current *store.BookMetadata) {
+		current.Book.Title = "Dune"
+		current.Book.TitleSource = store.MetadataManual
+		current.Book.TitleLocked = true
+	}
+	job := materializeJob(t, epub.Metadata{Title: "Dune Messiah"}, "")
+
+	resolved, changed, err := MaterializeBookMetadata(
+		context.Background(), st, job, metadata.DefaultPathPatterns(), clockAt(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatalf("overwrote a manual edit: %+v", resolved.Book)
+	}
+	if len(st.applies) != 1 {
+		t.Fatalf("retried a write it no longer had reason to make: %d",
+			len(st.applies))
+	}
+	if resolved.Book.Title != "Dune" || !resolved.Book.TitleLocked {
+		t.Fatalf("returned metadata: %+v", resolved.Book)
 	}
 }

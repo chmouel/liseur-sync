@@ -27,17 +27,20 @@ type bookMetadataStore interface {
 const metadataApplyAttempts = 3
 
 // ErrMetadataSnapshotInvalid reports an extracted metadata snapshot that
-// cannot be decoded. It is a content failure of that job, not an operational
-// failure of the worker.
+// cannot be decoded. The snapshot was written by this server from a parsed
+// publication, so an undecodable one is a corrupt row rather than hostile
+// input, and retrying decodes it exactly as badly: a scheduler must surface
+// it for an operator rather than treat it as a transient failure.
 var ErrMetadataSnapshotInvalid = errors.New("content: invalid extracted metadata snapshot")
 
 // MaterializeBookMetadata resolves a promoted job's extracted snapshot and
 // library path into the catalog book the job produced.
 //
-// Sources are applied in precedence order, embedded first: the engine lets a
-// filename take over a field the file itself supplied, but not the reverse,
-// and applying them the other way round would leave the weaker source's
-// provenance on a field the stronger one owns.
+// Sources are applied in precedence order, embedded first: a filename
+// outranks the file's own metadata, so applying them the other way round
+// would leave the weaker source's provenance on a field the stronger one
+// owns. The order also decides a set's row indices, since rows already
+// known keep their place and a later proposal's rows are appended.
 //
 // Applying nothing is a normal outcome. A pass that learned nothing writes
 // nothing, so repeated passes over the same job are idempotent and leave the
@@ -50,7 +53,7 @@ func MaterializeBookMetadata(
 	clock func() time.Time,
 ) (store.BookMetadata, bool, error) {
 	if st == nil || clock == nil || job.BookID == nil || *job.BookID == "" ||
-		job.UserID == "" {
+		job.UserID == "" || job.State != store.IngestPromoted {
 		return store.BookMetadata{}, false, store.ErrInvalidTransition
 	}
 	proposals, err := bookMetadataProposals(job, patterns)
@@ -108,6 +111,13 @@ func MaterializeBookMetadata(
 // precedence order. A job carries a path only when it came from a watched
 // library; an upload has no meaningful one, and inventing a layout from the
 // original filename alone would be guessing.
+//
+// Only a layout that accounted for the whole name is used. The engine does
+// not consult confidence, and a filename outranks the file's own metadata,
+// so admitting a guess about where one field ended would let it overwrite
+// what the publication declared and stamp filename provenance on it, which
+// no later re-extraction can take back. A weaker grade is left for the
+// operator to accept by naming the library's real layout.
 func bookMetadataProposals(
 	job store.IngestJob, patterns []metadata.PathPattern,
 ) ([]metadata.Proposal, error) {
@@ -122,7 +132,7 @@ func bookMetadataProposals(
 	}
 	if job.SourceRelativePath != nil && *job.SourceRelativePath != "" {
 		candidate := metadata.ParsePath(*job.SourceRelativePath, patterns)
-		if candidate.Confidence != metadata.ConfidenceNone {
+		if candidate.Confidence == metadata.ConfidenceHigh {
 			proposals = append(proposals, metadata.FromPath(candidate))
 		}
 	}
