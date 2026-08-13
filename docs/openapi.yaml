@@ -869,6 +869,254 @@ paths:
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
         "409": { $ref: "#/components/responses/Error", description: "Not in the trash, or its retention window has closed" }
 
+  /v1/libraries/{library}/entities/{kind}:
+    get:
+      tags: [library]
+      summary: The series, contributors, tags or genres in a library
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Entities are library-wide and shared by every book that claims
+        them. `book_count` counts only active books, so an entity whose
+        books are all in the trash reads as empty rather than leading to a
+        blank page.
+
+        Paging resumes after a name rather than at an offset, because an
+        offset would skip or repeat entities as books are added
+        underneath it.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/EntityKind" }
+        - name: after
+          in: query
+          description: The `next_after` of the previous page.
+          schema: { type: string, maxLength: 512 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: One page of entities, ordered by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entities]
+                properties:
+                  entities:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogEntity" }
+                  next_after:
+                    type: string
+                    description: Absent on the last page.
+        "400": { $ref: "#/components/responses/Error", description: "Bad limit or cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library or kind, or no access" }
+
+  /v1/libraries/{library}/entities/{kind}/merge:
+    post:
+      tags: [library]
+      summary: Fold two entities into one
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Moves every book claiming `from` onto `into` and deletes `from`.
+        Matching folds case and spacing only, so two spellings of one
+        author stay two entities until somebody says otherwise — which is
+        what this route is for, and why it is not a side effect of
+        renaming.
+
+        A book that claimed both keeps the row it already had for `into`,
+        because a merge decides which entities are the same and not what
+        any book asserts. Two things carry over from the losing row, since
+        dropping them would discard something a person said: a manual
+        lock, and, for a series, a position the surviving row does not
+        have.
+
+        This is not reversible.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/EntityKind" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, into]
+              properties:
+                from: { type: string, format: uuid, description: The entity that disappears. }
+                into: { type: string, format: uuid, description: The entity that survives. }
+      responses:
+        "200":
+          description: The merge was applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [moved]
+                properties:
+                  moved:
+                    type: integer
+                    description: |
+                      Memberships moved. A book that claimed both entities
+                      is not counted, because its membership was folded
+                      rather than moved.
+        "400": { $ref: "#/components/responses/Error", description: "The same entity twice, or a missing id" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no manage access" }
+
+  /v1/libraries/{library}/entities/{kind}/{entity}:
+    patch:
+      tags: [library]
+      summary: Respell an entity
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Changes the display spelling every book sharing this entity shows.
+        A name already held by another entity of the same kind is refused
+        with `409` rather than silently merging the two, because that is a
+        decision about identity and it has its own route.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The renamed entity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogEntity" }
+        "400": { $ref: "#/components/responses/Error", description: "A blank name" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no manage access" }
+        "409": { $ref: "#/components/responses/Error", description: "Another entity already has that name; merge them instead" }
+
+  /v1/libraries/{library}/entities/{kind}/{entity}/books:
+    get:
+      tags: [library]
+      summary: The books claiming one entity
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Active books only. A series returns its books in reading order,
+        with books that have no position last, because an unplaced book is
+        an unanswered question rather than book zero. Every other kind
+        returns them oldest first.
+      parameters:
+        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: The entity and one page of its books
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entity, books]
+                properties:
+                  entity: { $ref: "#/components/schemas/CatalogEntity" }
+                  books:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogBook" }
+                  next_cursor:
+                    type: string
+                    description: Absent on the last page.
+        "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
+        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no access" }
+
+  /v1/books/{id}/metadata:
+    get:
+      tags: [library]
+      summary: One book's metadata with its provenance
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Everything an edit form needs: each field's value, which
+        precedence stage supplied it, and whether a person has locked it.
+
+        This is separate from `GET /v1/books/{id}` because provenance is
+        editor data — a catalog client wants the title, not where the
+        title came from.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookMetadata" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+    put:
+      tags: [library]
+      summary: Correct a book's metadata
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Every accepted change is recorded as `manual` and locks its field
+        or set, so the next rescan cannot undo it. That is the point of
+        the operation, not a side effect.
+
+        Each field is optional, and an absent field is silence rather than
+        a request to clear: a form may submit one field without asserting
+        anything about the rest. A field sent with a blank `value` *is* an
+        assertion — the user deleted a wrong title — and is honoured,
+        unlike a blank from an extractor, which is only ignorance. Sending
+        `unlock` instead hands the field back to the extractors without
+        asserting a value.
+
+        Sets are replaced whole, because that is what a form does: an
+        entry the request omits is one the user removed. An empty set is
+        therefore how a set is emptied, and the set lock is what keeps it
+        empty, since no row survives to carry a row lock.
+
+        `revision` is required and must be the one the client read.
+        Two people editing one book is ordinary in a shared library, and
+        last-write-wins would discard the first person's work silently.
+
+        Identifiers are read-only here. They feed work identity, so
+        editing one moves a reader's reading history between books; that
+        is a different operation with different consequences.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: { type: integer, minimum: 1 }
+                title: { $ref: "#/components/schemas/ScalarEdit" }
+                subtitle: { $ref: "#/components/schemas/ScalarEdit" }
+                description: { $ref: "#/components/schemas/ScalarEdit" }
+                publisher: { $ref: "#/components/schemas/ScalarEdit" }
+                published_date: { $ref: "#/components/schemas/ScalarEdit" }
+                tags: { $ref: "#/components/schemas/SetEdit" }
+                genres: { $ref: "#/components/schemas/SetEdit" }
+                languages: { $ref: "#/components/schemas/SetEdit" }
+                series: { $ref: "#/components/schemas/SetEdit" }
+                contributors: { $ref: "#/components/schemas/SetEdit" }
+      responses:
+        "200":
+          description: |
+            The metadata after the edit. An edit that changed nothing is
+            answered with the current state and does not advance the
+            revision, so a resubmitted form does not invalidate the editor
+            that sent it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookMetadata" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body, missing revision, or invalid metadata" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
+        "409": { $ref: "#/components/responses/Error", description: "The book changed while it was being edited" }
+
   /v1/books/{id}/resolve:
     post:
       tags: [library, sync]
@@ -1105,6 +1353,18 @@ components:
         Account passwords are rejected — a reader stores its credential
         in plain text on the device.
 
+  parameters:
+    EntityKind:
+      name: kind
+      in: path
+      required: true
+      description: |
+        Which kind of library-wide entity. The set is closed, and a kind
+        outside it is a 404 rather than a 400: it names no resource.
+      schema:
+        type: string
+        enum: [series, contributors, tags, genres]
+
   responses:
     Error:
       description: Error with a human-readable reason
@@ -1169,6 +1429,164 @@ components:
         status: { type: string, enum: [active, missing, trashed, review] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    CatalogEntity:
+      type: object
+      description: |
+        One library-wide series, contributor, tag or genre. Matching folds
+        case and spacing while the display spelling is preserved, so
+        "Frank  Herbert" and "frank herbert" are one entity spelled one
+        way.
+      required: [id, name, book_count]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, description: The display spelling. }
+        book_count:
+          type: integer
+          description: Active books claiming it. Trashed books do not count.
+
+    MetadataField:
+      type: object
+      description: |
+        One scalar value with its provenance. `source` is the precedence
+        stage that supplied it; `locked` means a person asserted it and no
+        rescan may overwrite it.
+      required: [value, source, locked]
+      properties:
+        value: { type: string }
+        source: { type: string, enum: ["", embedded, filename, external, manual] }
+        locked: { type: boolean }
+
+    BookMetadata:
+      type: object
+      required: [book_id, library_id, revision, title]
+      properties:
+        book_id: { type: string, format: uuid }
+        library_id: { type: string, format: uuid }
+        revision:
+          type: integer
+          description: |
+            Send this back to write. Without it an editor cannot tell a
+            conflict from a success.
+        title: { $ref: "#/components/schemas/MetadataField" }
+        subtitle: { $ref: "#/components/schemas/MetadataField" }
+        description: { $ref: "#/components/schemas/MetadataField" }
+        publisher: { $ref: "#/components/schemas/MetadataField" }
+        published_date: { $ref: "#/components/schemas/MetadataField" }
+        tags:
+          type: array
+          items: { $ref: "#/components/schemas/MetadataEntityRow" }
+        genres:
+          type: array
+          items: { $ref: "#/components/schemas/MetadataEntityRow" }
+        series:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/MetadataEntityRow"
+              - type: object
+                properties:
+                  position:
+                    type: number
+                    description: |
+                      Omitted when the book has no place in the series. It
+                      is never invented, so absent means unknown rather
+                      than first.
+        contributors:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/MetadataEntityRow"
+              - type: object
+                required: [role]
+                properties:
+                  role:
+                    type: string
+                    description: |
+                      One person credited twice in different roles is two
+                      rows over one entity.
+        languages:
+          type: array
+          items:
+            type: object
+            required: [language, source, locked]
+            properties:
+              language: { type: string }
+              source: { type: string }
+              locked: { type: boolean }
+        identifiers:
+          type: array
+          description: |
+            Read-only. Identifiers feed work identity, so changing one
+            moves a reader's reading history between books.
+          items:
+            type: object
+            required: [scheme, value, source, locked]
+            properties:
+              scheme: { type: string }
+              value: { type: string }
+              source: { type: string }
+              locked: { type: boolean }
+        set_locks:
+          type: object
+          description: |
+            Per-set manual locks. A row lock cannot express a
+            deliberately emptied set, because removing the last row
+            leaves nothing to carry the lock.
+          properties:
+            tags: { type: boolean }
+            genres: { type: boolean }
+            languages: { type: boolean }
+            series: { type: boolean }
+            contributors: { type: boolean }
+            identifiers: { type: boolean }
+
+    MetadataEntityRow:
+      type: object
+      required: [id, name, source, locked]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        source: { type: string, enum: [embedded, filename, external, manual] }
+        locked: { type: boolean }
+
+    ScalarEdit:
+      type: object
+      description: |
+        A change to one scalar field. A blank `value` clears the field and
+        locks it, which is how a user suppresses a wrong embedded value.
+        `unlock` is exclusive with editing: it clears the lock and leaves
+        the value alone.
+      properties:
+        value: { type: string }
+        unlock: { type: boolean, default: false }
+
+    SetEdit:
+      type: object
+      description: |
+        A replacement for one whole set. `entries` is the complete new
+        membership; an entry that is absent is one the user removed. As
+        with a scalar, `unlock` is exclusive with editing.
+      properties:
+        unlock: { type: boolean, default: false }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [name]
+            properties:
+              name:
+                type: string
+                description: |
+                  The display spelling. An entry whose name matches one
+                  the library already has rejoins that entity rather than
+                  creating a second one under the same name.
+              position:
+                type: number
+                description: Series only. Omit it rather than sending 0.
+              role:
+                type: string
+                description: Contributors only. Defaults to `author`.
+
     IngestJob:
       type: object
       description: |

@@ -311,6 +311,14 @@ func (s *Server) Routes() *http.ServeMux {
 	// retention window closes.
 	mux.Handle("DELETE /v1/books/{id}", manageH(s.HandleTrashBook))
 	mux.Handle("POST /v1/books/{id}/restore", manageH(s.HandleRestoreBook))
+	// Correcting a book and reshaping the entities its library shares are
+	// the same capability: both change what every reader of that library
+	// sees.
+	mux.Handle("PUT /v1/books/{id}/metadata", manageH(s.HandleUpdateBookMetadata))
+	mux.Handle("PATCH /v1/libraries/{library}/entities/{kind}/{entity}",
+		manageH(s.HandleRenameEntity))
+	mux.Handle("POST /v1/libraries/{library}/entities/{kind}/merge",
+		manageH(s.HandleMergeEntities))
 
 	// library-read scope: a job resource describes the caller's own
 	// upload, and is user-scoped in the store.
@@ -327,6 +335,14 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/libraries/{library}/books", readH(s.HandleLibraryBooks))
 	mux.Handle("GET /v1/libraries/{library}/duplicates", readH(s.HandleLibraryDuplicates))
 	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
+	// Provenance is editor data, so it is a resource of its own rather
+	// than more fields on the book: a catalog client wants the title, not
+	// where the title came from.
+	mux.Handle("GET /v1/books/{id}/metadata", readH(s.HandleBookMetadata))
+	mux.Handle("GET /v1/libraries/{library}/entities/{kind}",
+		readH(s.HandleLibraryEntities))
+	mux.Handle("GET /v1/libraries/{library}/entities/{kind}/{entity}/books",
+		readH(s.HandleEntityBooks))
 	// Download serves HEAD too: ServeContent handles it, and catalog
 	// clients probe with HEAD before fetching.
 	mux.Handle("GET /v1/books/{id}/download", readH(s.HandleBookDownload))
