@@ -606,9 +606,12 @@ retains content failures, and uses the same revision-safe shutdown behavior.
 The shared scalar precedence and lock engine is implemented as a pure package:
 a blank candidate never clears a value, a locked field only accepts manual
 edits, an unlocked field accepts a strictly higher-precedence candidate or a
-refresh from its own source, and a manual edit locks the field.
+refresh from its own source, and a manual edit locks the field. The same
+rules cover multi-valued entity sets through whole-set assertions, with
+case- and whitespace-insensitive entity matching and a set-level lock so a
+deliberately emptied set stays empty.
 Materializing that snapshot into catalog fields and metadata entities,
-entity-set precedence and filename parsing, cover extraction/transcoding,
+filename parsing, cover extraction/transcoding,
 automatic promotion, catalog availability reconciliation, last-reference
 deletion/trash, backup verification, and administration remain.
 
