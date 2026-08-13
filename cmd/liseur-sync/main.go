@@ -46,6 +46,20 @@ type contentStartupReport struct {
 	GC             content.BlobGCReport
 }
 
+// contentRootFor resolves the configured content directory. A relative
+// root is taken as relative to a SQLite database's directory, so that a
+// config naming both by relative path still works whatever directory the
+// server is started from.
+func contentRootFor(cfg config.Config) string {
+	root := cfg.Content.Root
+	if !filepath.IsAbs(root) &&
+		cfg.Database.Driver == "sqlite" &&
+		filepath.IsAbs(cfg.Database.URL) {
+		return filepath.Join(filepath.Dir(cfg.Database.URL), root)
+	}
+	return root
+}
+
 func openContentAndRecover(
 	ctx context.Context,
 	st store.Store,
@@ -53,13 +67,7 @@ func openContentAndRecover(
 	now time.Time,
 ) (*content.CAS, contentStartupReport, error) {
 	var report contentStartupReport
-	contentRoot := cfg.Content.Root
-	if !filepath.IsAbs(contentRoot) &&
-		cfg.Database.Driver == "sqlite" &&
-		filepath.IsAbs(cfg.Database.URL) {
-		contentRoot = filepath.Join(filepath.Dir(cfg.Database.URL), contentRoot)
-	}
-	cas, err := content.Open(contentRoot)
+	cas, err := content.Open(contentRootFor(cfg))
 	if err != nil {
 		return nil, report, fmt.Errorf("open content store: %w", err)
 	}
@@ -507,5 +515,5 @@ func cmdAdmin(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	return admin.Run(st, rest)
+	return admin.Run(st, contentRootFor(cfg), rest)
 }

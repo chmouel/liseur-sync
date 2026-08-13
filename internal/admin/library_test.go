@@ -51,7 +51,7 @@ func capture(t *testing.T, st store.Store, args ...string) (string, error) {
 	}
 	saved := os.Stdout
 	os.Stdout = w
-	runErr := Run(st, args)
+	runErr := Run(st, t.TempDir(), args)
 	os.Stdout = saved
 	w.Close()
 	var sb strings.Builder

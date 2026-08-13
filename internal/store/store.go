@@ -1275,6 +1275,12 @@ type Store interface {
 	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
 	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
 	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
+	// ListReferencedBlobs pages the blobs the database says must exist,
+	// ordered by digest. It is what makes a backup checkable: a backup is
+	// only valid if every referenced blob is in it. Trashed books count,
+	// because their files are what a restore relinks; unreferenced blobs
+	// do not, because they are the orphan sweep's business.
+	ListReferencedBlobs(ctx context.Context, afterSHA256 string, limit int) ([]BlobInfo, error)
 	ReconcileBlob(ctx context.Context, blob BlobInfo, present bool, at time.Time) (BlobReconcileResult, error)
 	// ReconcileCatalogAvailability is a global housekeeping operation that
 	// propagates blob presence into the catalog: a file whose blob is
