@@ -170,6 +170,16 @@ func (s *Server) ServeBookDownload(
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
 		return
 	}
+	// The book is looked up before its files because a trashed book keeps
+	// its files — that is what makes restore a relink — while the catalog
+	// is what decides whether anything may be served. Asking the files
+	// alone would happily hand back a deleted book's bytes.
+	if _, err := s.St.CatalogBookByID(
+		r.Context(), userID, bookID, store.LibraryRoleRead,
+	); err != nil {
+		writeCatalogError(w, err, "book not found")
+		return
+	}
 	files, err := s.St.ListBookFiles(r.Context(), userID, bookID, store.LibraryRoleRead)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
@@ -410,4 +420,52 @@ func contentDisposition(name string) string {
 	}
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
 		string(ascii), url.PathEscape(name))
+}
+
+// HandleTrashBook implements DELETE /v1/books/{id}. Deletion is a two
+// step operation: this moves the book out of the catalog and starts its
+// retention window, and the bytes go only when that window closes. A
+// caller who deleted the wrong book has until then to say so.
+func (s *Server) HandleTrashBook(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	now := time.Now().UTC()
+	retention := time.Duration(s.Cfg.Content.TrashRetentionHours) * time.Hour
+	book, err := s.St.TrashCatalogBook(
+		r.Context(), tok.UserID, r.PathValue("id"), now, now.Add(retention))
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidTransition) {
+			writeError(w, http.StatusConflict, "book is already deleted")
+			return
+		}
+		writeCatalogError(w, err, "book not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, catalogBookJSON(book))
+}
+
+// HandleRestoreBook implements POST /v1/books/{id}/restore, the undo for
+// HandleTrashBook. It works only inside the retention window: past it the
+// book is waiting to be purged and its bytes may already be gone.
+func (s *Server) HandleRestoreBook(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	book, err := s.St.RestoreCatalogBook(
+		r.Context(), tok.UserID, r.PathValue("id"), time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidTransition) {
+			writeError(w, http.StatusConflict,
+				"book is not in the trash, or its retention window has closed")
+			return
+		}
+		writeCatalogError(w, err, "book not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, catalogBookJSON(book))
 }

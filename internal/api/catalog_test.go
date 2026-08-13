@@ -628,3 +628,89 @@ func TestReconciliationHidesABookWhoseBytesAreGone(t *testing.T) {
 		t.Fatalf("kept download = %d: %s", resp.StatusCode, raw)
 	}
 }
+
+func (f *uploadFixture) req(
+	t *testing.T, method, path, token string,
+) (*http.Response, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(method, f.ts.URL+path, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, raw
+}
+
+// TestDeleteTakesABookOutOfTheCatalogAndRestorePutsItBack is the deletion
+// path as a caller sees it: gone from the catalog and undownloadable
+// immediately, and recoverable until retention closes.
+func TestDeleteTakesABookOutOfTheCatalogAndRestorePutsItBack(t *testing.T) {
+	f := newUploadFixture(t)
+	bookID, _ := f.publish(t, "doomed", []byte("doomed book"))
+	manage := f.mintToken(t, f.user.ID, store.ScopeLibraryManage)
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	if resp, raw := f.req(t, http.MethodDelete, "/v1/books/"+bookID, manage); resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete: %d %s", resp.StatusCode, raw)
+	}
+	if resp, _ := f.get(t, "/v1/books/"+bookID, read); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted book still readable: %d", resp.StatusCode)
+	}
+	if resp, _ := f.get(t, "/v1/books/"+bookID+"/download", read); resp.StatusCode == http.StatusOK {
+		t.Fatal("deleted book is still downloadable")
+	}
+	// Deleting twice would silently extend the retention window.
+	if resp, _ := f.req(t, http.MethodDelete, "/v1/books/"+bookID, manage); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("double delete: %d", resp.StatusCode)
+	}
+
+	if resp, raw := f.req(
+		t, http.MethodPost, "/v1/books/"+bookID+"/restore", manage,
+	); resp.StatusCode != http.StatusOK {
+		t.Fatalf("restore: %d %s", resp.StatusCode, raw)
+	}
+	if resp, _ := f.get(t, "/v1/books/"+bookID+"/download", read); resp.StatusCode != http.StatusOK {
+		t.Fatalf("restored book is not downloadable: %d", resp.StatusCode)
+	}
+	// Restoring what is not in the trash is not an undo.
+	if resp, _ := f.req(
+		t, http.MethodPost, "/v1/books/"+bookID+"/restore", manage,
+	); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("restore of a live book: %d", resp.StatusCode)
+	}
+}
+
+// TestDeleteRequiresTheManageScope: reading a library must never be
+// enough to destroy what is in it, and an anonymous caller must not learn
+// whether the book exists.
+func TestDeleteRequiresTheManageScope(t *testing.T) {
+	f := newUploadFixture(t)
+	bookID, _ := f.publish(t, "protected", []byte("protected book"))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodDelete, "/v1/books/" + bookID},
+		{http.MethodPost, "/v1/books/" + bookID + "/restore"},
+	} {
+		if resp, _ := f.req(t, tc.method, tc.path, read); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s with read scope: %d", tc.method, resp.StatusCode)
+		}
+		if resp, _ := f.req(t, tc.method, tc.path, ""); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s unauthenticated: %d", tc.method, resp.StatusCode)
+		}
+	}
+	// The book is untouched by all that.
+	if resp, _ := f.get(t, "/v1/books/"+bookID, read); resp.StatusCode != http.StatusOK {
+		t.Fatalf("book damaged by refused deletes: %d", resp.StatusCode)
+	}
+}

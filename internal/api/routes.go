@@ -307,6 +307,10 @@ func (s *Server) Routes() *http.ServeMux {
 			auth.RequireScope(s.Auth, store.ScopeLibraryManage, h))
 	}
 	mux.Handle("POST /v1/libraries/{library}/upload", manageH(s.HandleUpload))
+	// Deleting is a manage capability, and it is reversible until the
+	// retention window closes.
+	mux.Handle("DELETE /v1/books/{id}", manageH(s.HandleTrashBook))
+	mux.Handle("POST /v1/books/{id}/restore", manageH(s.HandleRestoreBook))
 
 	// library-read scope: a job resource describes the caller's own
 	// upload, and is user-scoped in the store.
