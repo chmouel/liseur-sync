@@ -47,6 +47,9 @@ type Server struct {
 	// one implementation of the staging and download rules.
 	Uploads   Uploader
 	Downloads Downloader
+	// Lookup asks external metadata services about a book. Nil is the
+	// default and means the page does not offer to ask anybody.
+	Lookup Lookup
 	// Covers renders book covers. Nil shows the placeholder everywhere,
 	// which is a page that looks plain rather than a page that fails.
 	Covers CoverServer
@@ -148,6 +151,10 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/libraries/{library}/{kind}/merge", sec(s.requireAuth(s.handleMergeEntities)))
 	mux.Handle("POST /ui/libraries/{library}/{kind}/{entity}/rename", sec(s.requireAuth(s.handleRenameEntity)))
 	mux.Handle("POST /ui/books/{id}/metadata", sec(s.requireAuth(s.handleEditBookMetadata)))
+	mux.Handle("POST /ui/books/{id}/metadata/lookup",
+		sec(s.requireAuth(s.handleBookMetadataLookup)))
+	mux.Handle("POST /ui/books/{id}/metadata/apply",
+		sec(s.requireAuth(s.handleApplyBookMetadataCandidate)))
 	mux.Handle("POST /ui/books/{id}/accept", sec(s.requireAuth(s.handleAcceptBook)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))

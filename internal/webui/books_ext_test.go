@@ -32,6 +32,7 @@ type booksFixture struct {
 	st      store.Store
 	cas     *content.CAS
 	api     *api.Server
+	ui      *webui.Server
 	cfg     config.Config
 	cookie  *http.Cookie
 	library string
@@ -81,7 +82,9 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	f := &booksFixture{ts: ts, st: st, cas: cas, api: apiSrv, cfg: cfg, library: "lib-web"}
+	f := &booksFixture{
+		ts: ts, st: st, cas: cas, api: apiSrv, ui: ui, cfg: cfg, library: "lib-web",
+	}
 	if err := st.CreateLibrary(t.Context(), store.Library{
 		ID: f.library, OwnerUserID: "u1", QuotaUserID: "u1",
 		Kind: store.LibraryManaged, Name: "Alice's Books", CreatedAt: time.Now().UTC(),

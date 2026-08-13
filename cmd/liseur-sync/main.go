@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/metadata/provider"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -503,14 +505,31 @@ func cmdServe(args []string) error {
 	// offering an unthrottled way around the other.
 	loginLimiter := auth.NewRateLimiter(10, time.Minute)
 
+	// External metadata lookup, off unless an operator listed providers.
+	// Validate already refused an unknown name, so this cannot fail
+	// here; it is checked anyway rather than ignored.
+	providers, err := provider.New(cfg.Metadata.Providers, cfg.MetadataLimits())
+	if err != nil {
+		return err
+	}
+	if providers.Enabled() {
+		slog.Info("external metadata lookup enabled",
+			"providers", strings.Join(providers.Names(), ","))
+	}
+
 	apiSrv := &api.Server{
 		St:           st,
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
 		LoginLimiter: loginLimiter,
-		Content:      cas,
-		Blobs:        cas,
-		Covers:       cas,
+		// One budget per user across the whole server, so the web UI and
+		// the API cannot each spend it: the limit exists to be a good
+		// neighbour to a free service, and two of them is not a limit.
+		Providers:     providers,
+		LookupLimiter: auth.NewRateLimiter(20, time.Minute),
+		Content:       cas,
+		Blobs:         cas,
+		Covers:        cas,
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,
@@ -525,6 +544,7 @@ func cmdServe(args []string) error {
 	apiSrv.WebUI = &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: loginLimiter,
+		Lookup:       apiSrv,
 		Uploads:      apiSrv,
 		Downloads:    apiSrv,
 		Covers:       apiSrv,

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -201,19 +202,30 @@ func (s *Server) listBooksPage(
 }
 
 func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
-	if err != nil {
+	v, ok := s.bookView(r, u, r.PathValue("id"))
+	if !ok {
 		http.NotFound(w, r)
 		return
+	}
+	v.Notice = r.URL.Query().Get("notice")
+	v.Problem = r.URL.Query().Get("problem")
+	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+		Render(r.Context(), w)
+}
+
+// bookView assembles the book page. It is separate from the handler
+// because the lookup panel renders the same page with an extra section
+// on it, and a second assembly would drift from this one.
+func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookView, bool) {
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		return BookView{}, false
 	}
 	v := BookView{
 		ID: book.ID, Title: book.Title, Subtitle: book.Subtitle,
 		Description: book.Description, Publisher: book.Publisher,
 		Published: book.PublishedDate, LibraryID: book.LibraryID,
-		Added:   book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
-		Notice:  r.URL.Query().Get("notice"),
-		Problem: r.URL.Query().Get("problem"),
+		Added: book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
 	}
 	// The edit form is only built for somebody who could submit it. A
 	// reader asking for this page must not be told a value's provenance,
@@ -223,6 +235,10 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 	); err == nil {
 		v.CanWrite = true
 		v.Edit = metadataEditView(full)
+		v.Lookup = LookupView{
+			Offered:  s.Lookup != nil,
+			Revision: strconv.FormatInt(full.Book.Revision, 10),
+		}
 	}
 	files, err := s.St.ListBookFiles(r.Context(), u.ID, bookID, store.LibraryRoleRead)
 	if err == nil {
@@ -236,8 +252,7 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 			v.CanRead = v.CanRead || isEPUB(f.MediaType)
 		}
 	}
-	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
-		Render(r.Context(), w)
+	return v, true
 }
 
 // handleBookDownload hands off to the API's download, which owns the

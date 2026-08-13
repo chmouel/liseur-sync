@@ -97,3 +97,35 @@ func TestContentRootEnvironmentOverride(t *testing.T) {
 		t.Fatalf("content root override: %q", cfg.Content.Root)
 	}
 }
+
+// TestExternalLookupIsOffUntilAskedFor. A self-hosted server that talks
+// to nobody is the posture an operator gets without choosing it, and
+// ADR-0004 keeps it that way: no default configuration may cause an
+// outbound request.
+func TestExternalLookupIsOffUntilAskedFor(t *testing.T) {
+	c := Default()
+	if len(c.Metadata.Providers) != 0 {
+		t.Errorf("a default install would contact %v", c.Metadata.Providers)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("the defaults do not validate: %v", err)
+	}
+
+	// The bounds are set even though the feature is off, so turning it
+	// on is one line rather than four.
+	limits := c.MetadataLimits()
+	if limits.Timeout <= 0 || limits.MaxBytes <= 0 || limits.MaxRedirects <= 0 {
+		t.Errorf("lookup limits are unset: %+v", limits)
+	}
+
+	// A misspelled provider stops the server rather than being ignored.
+	c.Metadata.Providers = []string{"openlibary"}
+	if err := c.Validate(); err == nil {
+		t.Error("an unknown provider was accepted")
+	}
+
+	c.Metadata.Providers = []string{"openlibrary"}
+	if err := c.Validate(); err != nil {
+		t.Errorf("a known provider was refused: %v", err)
+	}
+}

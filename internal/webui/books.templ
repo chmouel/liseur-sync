@@ -330,6 +330,7 @@ type BookView struct {
 	// before; nothing about how it was catalogued is theirs to change.
 	CanWrite bool
 	Edit     MetadataEditView
+	Lookup   LookupView
 }
 
 // MetadataFieldView is one editable field: its current text, where that
@@ -415,6 +416,80 @@ templ bookEditForm(prefix, csrf string, b BookView) {
 	</section>
 }
 
+// bookLookupPanel offers to ask elsewhere, and shows what came back.
+// Each suggestion is a form of its own carrying the answer it displays,
+// so accepting one applies what was read rather than whatever a second
+// lookup would return.
+templ bookLookupPanel(prefix, csrf string, b BookView) {
+	<section class="card">
+		<h2>Ask elsewhere</h2>
+		<p class="muted">
+			This sends the book's title and ISBN to the metadata services
+			this server is set up to use. Nothing is changed until you
+			accept an answer, and nothing you have edited by hand is
+			overwritten when you do.
+		</p>
+		if b.Lookup.Problem != "" {
+			<p class="error" role="alert">{ b.Lookup.Problem }</p>
+		}
+		<form method="post" action={ prefix + "books/" + b.ID + "/metadata/lookup" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit">Look this book up</button>
+		</form>
+		if b.Lookup.Ran {
+			for _, c := range b.Lookup.Candidates {
+				@lookupCandidate(prefix, csrf, b, c)
+			}
+		}
+	</section>
+}
+
+templ lookupCandidate(prefix, csrf string, b BookView, c CandidateView) {
+	<article class="card">
+		<h3>{ orPlaceholder(c.Title) }</h3>
+		if c.Subtitle != "" {
+			<p class="muted">{ c.Subtitle }</p>
+		}
+		<p class="muted">
+			{ c.Provider }
+			if c.ByIdentifier {
+				— matched on this book's ISBN
+			} else {
+				— matched on a similar title, so check it
+			}
+			if c.URL != "" {
+				<a href={ templ.SafeURL(c.URL) } rel="noreferrer noopener" target="_blank">see the record</a>
+			}
+		</p>
+		<table>
+			if c.Authors != "" {
+				<tr><th>Contributors</th><td>{ c.Authors }</td></tr>
+			}
+			if c.Publisher != "" {
+				<tr><th>Publisher</th><td>{ c.Publisher }</td></tr>
+			}
+			if c.Published != "" {
+				<tr><th>Published</th><td>{ c.Published }</td></tr>
+			}
+			if c.Languages != "" {
+				<tr><th>Languages</th><td>{ c.Languages }</td></tr>
+			}
+			if c.Tags != "" {
+				<tr><th>Tags</th><td>{ c.Tags }</td></tr>
+			}
+		</table>
+		if c.Description != "" {
+			<p>{ c.Description }</p>
+		}
+		<form method="post" action={ prefix + "books/" + b.ID + "/metadata/apply" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<input type="hidden" name="candidate" value={ c.Payload }/>
+			<input type="hidden" name="revision" value={ b.Lookup.Revision }/>
+			<button type="submit">Use this</button>
+		</form>
+	</article>
+}
+
 templ bookBody(prefix, csrf string, b BookView) {
 	<h1>{ orPlaceholder(b.Title) }</h1>
 	if b.Problem != "" {
@@ -469,6 +544,9 @@ templ bookBody(prefix, csrf string, b BookView) {
 	</section>
 	if b.CanWrite {
 		@bookEditForm(prefix, csrf, b)
+		if b.Lookup.Offered {
+			@bookLookupPanel(prefix, csrf, b)
+		}
 	}
 	<p><a href={ prefix + "books?library=" + b.LibraryID }>Back to the library</a></p>
 }
