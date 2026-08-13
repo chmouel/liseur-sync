@@ -428,3 +428,70 @@ func TestBooksUIUploadHonoursTheACLNotJustTheForm(t *testing.T) {
 		t.Fatalf("read-only grantee created %d ingest jobs", len(jobs))
 	}
 }
+
+// TestBooksUIExplainsAnUploadThatNeverBecameABook is the regression for
+// the reported bug: a file was accepted, quarantined by validation, and
+// the page then showed nothing at all — indistinguishable from the server
+// losing it. The upload must be listed with a reason a person can act on.
+func TestBooksUIExplainsAnUploadThatNeverBecameABook(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	if up := f.uploadForm(
+		t, f.cookie, csrf, f.library, "broken.epub", []byte("not an epub"),
+	); up.StatusCode != http.StatusSeeOther {
+		t.Fatalf("upload: %d", up.StatusCode)
+	}
+
+	// While it is working, the page says so rather than staying silent.
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if !strings.Contains(html, "Uploads in progress") {
+		t.Fatalf("an upload in flight is invisible:\n%s", html)
+	}
+
+	f.quarantine(t, "invalid_epub")
+
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if !strings.Contains(html, "Not a readable EPUB") {
+		t.Fatalf("a rejected upload is invisible:\n%s", html)
+	}
+	// The reason is for the librarian who can do something about it, not
+	// for everyone who can read the library.
+	_, readerHTML := f.get(t, "/ui/books?library="+f.library, f.readerCookie(t))
+	if strings.Contains(readerHTML, "Not a readable EPUB") ||
+		strings.Contains(readerHTML, "Uploads in progress") {
+		t.Fatalf("a reader was shown ingest internals:\n%s", readerHTML)
+	}
+}
+
+// quarantine drives the newest job to quarantined, the way the validation
+// worker does when a file turns out not to be an EPUB.
+func (f *booksFixture) quarantine(t *testing.T, code string) {
+	t.Helper()
+	jobs, err := f.st.ListIngestActivity(t.Context(), "u1", f.library, 100)
+	if err != nil || len(jobs) == 0 {
+		t.Fatalf("no job to quarantine: %v %v", jobs, err)
+	}
+	job := jobs[0]
+	at := time.Now().UTC()
+	expires := at.Add(72 * time.Hour)
+	if _, err := f.st.TransitionIngestJob(t.Context(), "u1", job.ID,
+		store.IngestJobTransition{
+			ExpectedState: job.State, ExpectedRevision: job.Revision,
+			NextState: store.IngestQuarantined, ErrorCode: code,
+			ErrorDetail: "validation refused it", ExpiresAt: &expires,
+			UpdatedAt: at,
+		}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// readerCookie signs in a user granted read access to the fixture library.
+func (f *booksFixture) readerCookie(t *testing.T) *http.Cookie {
+	t.Helper()
+	if err := f.st.GrantLibraryAccess(t.Context(), "u1", f.library, "u2",
+		store.LibraryRoleRead, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	return f.login(t, "bob")
+}

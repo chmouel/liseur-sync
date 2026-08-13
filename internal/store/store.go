@@ -1247,6 +1247,13 @@ type Store interface {
 	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
 	IngestJobByID(ctx context.Context, actorUserID, jobID string) (IngestJob, error)
 	ListIngestJobs(ctx context.Context, actorUserID, libraryID string, after *IngestJobCursor, limit int) ([]IngestJob, error)
+	// ListIngestActivity returns the jobs in one library that have not
+	// reached the catalog — still in flight, quarantined or failed —
+	// newest first. ListIngestJobs is the paginated audit view and runs
+	// oldest-first, which is the wrong end for answering "what happened
+	// to the file I just uploaded": promoted jobs are the bulk, and a
+	// failure would sit pages deep. Manage role, like ListIngestJobs.
+	ListIngestActivity(ctx context.Context, actorUserID, libraryID string, limit int) ([]IngestJob, error)
 	// ListIngestRecoveryJobs is a global housekeeping query for stale jobs
 	// whose durable artifacts must be verified before workers resume them.
 	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)

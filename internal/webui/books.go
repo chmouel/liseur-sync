@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -95,8 +96,71 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		v.NextURL = "books?library=" + url.QueryEscape(v.Selected) +
 			"&cursor=" + url.QueryEscape(next)
 	}
+	// Only a librarian uploads, so only a librarian is shown what became
+	// of an upload. Without this the page is silent about a file that was
+	// accepted and then rejected, which looks exactly like losing it.
+	if v.CanWrite {
+		v.Uploads = s.uploadActivity(r, u.ID, v.Selected, loc)
+	}
 	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
 		Render(r.Context(), w)
+}
+
+// uploadActivityLimit keeps the section a status list rather than a log.
+const uploadActivityLimit = 10
+
+// uploadActivity reports uploads that have not reached the catalog. A
+// failure here is not the page's failure: the books still render.
+func (s *Server) uploadActivity(
+	r *http.Request, userID, libraryID string, loc *time.Location,
+) []UploadRow {
+	jobs, err := s.St.ListIngestActivity(
+		r.Context(), userID, libraryID, uploadActivityLimit)
+	if err != nil {
+		// Swallowing this silently is what made the original problem so
+		// hard to see, so it is at least recorded.
+		slog.Error("upload activity unavailable",
+			"library", libraryID, "err", err)
+		return nil
+	}
+	rows := make([]UploadRow, 0, len(jobs))
+	for _, job := range jobs {
+		row := UploadRow{
+			When:  job.CreatedAt.In(loc).Format("Jan 2, 2006 15:04"),
+			State: "still being read",
+		}
+		switch job.State {
+		case store.IngestQuarantined, store.IngestFailed:
+			row.Reason = uploadFailureReason(job)
+		default:
+			row.Pending = true
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// uploadFailureReason turns an ingest error code into an explanation with
+// something to do about it. The codes come from EPUB validation, so they
+// describe the file, not the server.
+func uploadFailureReason(job store.IngestJob) string {
+	code := ""
+	if job.ErrorCode != nil {
+		code = *job.ErrorCode
+	}
+	switch code {
+	case "invalid_epub":
+		return "Not a readable EPUB. Re-export it, or convert it first."
+	case "unsupported_drm":
+		return "This EPUB is DRM-protected and cannot be stored."
+	case "unsafe_archive":
+		return "The archive is malformed and was refused."
+	case "archive_limits":
+		return "The EPUB is too large or too complex for this server."
+	case "":
+		return "The upload could not be processed."
+	}
+	return "The upload could not be processed (" + code + ")."
 }
 
 // listBooksPage returns one page and the cursor for the next, or "" when
