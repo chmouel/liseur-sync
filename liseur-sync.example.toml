@@ -76,6 +76,26 @@ watched_scan_interval_seconds = 300
 watched_max_files = 200000
 watched_max_depth = 32
 
+# Optional lookups against external metadata services. Off unless you
+# list a provider here: nothing else in the server makes an outbound
+# request, and no scan or ingest ever does — lookup happens only when a
+# person asks about one book they can already read.
+#
+# Results are shown as attributed candidates for somebody to accept or
+# ignore; nothing is written to the catalog on their own. Accepting one
+# records it as an "external" value, which loses to a field you locked
+# and beats one read out of a filename.
+#
+# Hostnames are fixed in the code (openlibrary.org, www.googleapis.com),
+# the allowlist is re-checked on every redirect hop, and only public
+# addresses are dialled — a provider cannot be redirected at your LAN or
+# your cloud metadata service. HTTP_PROXY is deliberately not honoured.
+[metadata]
+# providers = ["openlibrary", "googlebooks"]
+lookup_timeout_seconds = 8
+lookup_max_bytes = 4194304        # 4 MiB, refused rather than truncated
+lookup_max_redirects = 3
+
 [adapters]
 kosync = true
 koplugin = true

@@ -29,7 +29,11 @@ import (
 // uploadFixture is a server with a real store and a real CAS, because the
 // upload path's whole purpose is to move bytes between the two.
 type uploadFixture struct {
-	ts      *httptest.Server
+	ts *httptest.Server
+	// srv is kept so a test can turn on something the default fixture
+	// leaves off. Routes() closes over the pointer, so a field set after
+	// the server is up is read on the next request.
+	srv     *Server
 	handler http.Handler
 	st      store.Store
 	cas     *content.CAS
@@ -74,7 +78,7 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 
 	f := &uploadFixture{
 		root: root,
-		ts:   ts, handler: handler, st: st, cas: cas,
+		ts:   ts, srv: srv, handler: handler, st: st, cas: cas,
 		user:    storetest.MkUser(t, st, "uploader"),
 		other:   storetest.MkUser(t, st, "stranger"),
 		library: "lib-1",

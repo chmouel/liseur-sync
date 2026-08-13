@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/epub"
+	"github.com/chmouel/liseur-sync/internal/metadata/provider"
 )
 
 const maxDurationHours = int64((1<<63 - 1) / time.Hour)
@@ -98,6 +99,31 @@ type Config struct {
 		InferenceLateHours int   `toml:"inference_late_hours"` // default 24
 	} `toml:"ops"`
 
+	// Metadata configures optional lookups against external services.
+	// Everything here is off by default: a self-hosted server that talks
+	// to nobody is the posture an operator gets without asking, and
+	// ADR-0004 keeps it that way. Nothing in the ingest path uses these
+	// — a scan that phoned home would make a library's contents visible
+	// to a third party as a side effect of having files on disk.
+	Metadata struct {
+		// Providers names the services that may be queried. Empty
+		// disables external lookup entirely. Known values are
+		// "openlibrary" and "googlebooks"; an unknown one is refused at
+		// startup rather than ignored, because silence looks exactly
+		// like a service being down.
+		Providers []string `toml:"providers"`
+		// LookupTimeoutSeconds bounds one whole lookup, redirects
+		// included.
+		LookupTimeoutSeconds int `toml:"lookup_timeout_seconds"`
+		// LookupMaxBytes bounds one provider response. A response over
+		// it is refused rather than truncated: half a JSON document is
+		// a book with fields silently missing.
+		LookupMaxBytes int64 `toml:"lookup_max_bytes"`
+		// LookupMaxRedirects bounds the redirect chain. The allowlist is
+		// re-checked on every hop regardless.
+		LookupMaxRedirects int `toml:"lookup_max_redirects"`
+	} `toml:"metadata"`
+
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
 }
 
@@ -145,6 +171,12 @@ func Default() Config {
 	c.Ops.CompactionEnabled = true
 	c.Ops.InferenceGapMin = 15
 	c.Ops.InferenceLateHours = 24
+	// Metadata.Providers stays empty: external lookup is opt-in. The
+	// bounds have defaults anyway, so turning it on is one line rather
+	// than four.
+	c.Metadata.LookupTimeoutSeconds = int(provider.DefaultTimeout / time.Second)
+	c.Metadata.LookupMaxBytes = provider.DefaultMaxBytes
+	c.Metadata.LookupMaxRedirects = provider.DefaultMaxRedirects
 	c.PairingCodeTTLMin = 15
 	return c
 }
@@ -153,7 +185,7 @@ func Default() Config {
 // LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER, LISEUR_DATABASE_URL,
 // LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
-// (comma-separated).
+// (comma-separated), LISEUR_METADATA_PROVIDERS (comma-separated).
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -186,6 +218,7 @@ func (c *Config) applyEnv() {
 	setBool(&c.OpenRegistration, "LISEUR_OPEN_REGISTRATION")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
+	setList(&c.Metadata.Providers, "LISEUR_METADATA_PROVIDERS")
 }
 
 // Validate checks the config is coherent.
@@ -280,7 +313,34 @@ func (c *Config) Validate() error {
 	if c.Ops.InferenceLateHours < minLateHours {
 		return fmt.Errorf("ops.inference_late_hours must cover ops.inference_gap_min")
 	}
+	// A provider this build does not have is refused here rather than
+	// dropped, because an operator who wrote "openlibary" and got
+	// nothing back would conclude the service was down and go looking
+	// in the wrong place.
+	if _, err := provider.New(c.Metadata.Providers, c.MetadataLimits()); err != nil {
+		return fmt.Errorf("metadata.providers: %w", err)
+	}
+	if c.Metadata.LookupTimeoutSeconds < 0 {
+		return fmt.Errorf("metadata.lookup_timeout_seconds must be >= 0")
+	}
+	if c.Metadata.LookupMaxBytes < 0 {
+		return fmt.Errorf("metadata.lookup_max_bytes must be >= 0")
+	}
+	if c.Metadata.LookupMaxRedirects < 0 {
+		return fmt.Errorf("metadata.lookup_max_redirects must be >= 0")
+	}
 	return nil
+}
+
+// MetadataLimits is the bound on one external lookup. A zero in any
+// field takes the package default rather than meaning "no limit", since
+// an unbounded external call is the one thing this must never be.
+func (c *Config) MetadataLimits() provider.Limits {
+	return provider.Limits{
+		Timeout:      time.Duration(c.Metadata.LookupTimeoutSeconds) * time.Second,
+		MaxBytes:     c.Metadata.LookupMaxBytes,
+		MaxRedirects: c.Metadata.LookupMaxRedirects,
+	}
 }
 
 // EPUBLimits returns the configured bounded validator limits.

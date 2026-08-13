@@ -315,6 +315,17 @@ func (s *Server) Routes() *http.ServeMux {
 	// the same capability: both change what every reader of that library
 	// sees.
 	mux.Handle("PUT /v1/books/{id}/metadata", manageH(s.HandleUpdateBookMetadata))
+	// Asking an external service about a book is a manage capability
+	// even though it writes nothing: the answer is only useful to
+	// somebody who could apply it, and a read-only credential should not
+	// be able to make this server talk to a third party about a book.
+	mux.Handle("POST /v1/books/{id}/metadata/lookup",
+		manageH(s.HandleBookMetadataLookup))
+	// Accepting a candidate is an ordinary metadata write that happens
+	// to name its source, so it lives beside the edit route and obeys
+	// the same revision check and the same locks.
+	mux.Handle("POST /v1/books/{id}/metadata/apply",
+		manageH(s.HandleApplyBookMetadataCandidate))
 	mux.Handle("PATCH /v1/libraries/{library}/entities/{kind}/{entity}",
 		manageH(s.HandleRenameEntity))
 	mux.Handle("POST /v1/libraries/{library}/entities/{kind}/merge",
