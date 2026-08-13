@@ -137,13 +137,16 @@ External metadata cannot be a required ingest dependency.
    drop what it no longer claims, while a path names at most one author and
    one series and may only add or take over the rows it names.
    Persisting a resolved proposal is implemented: a book carries a revision
-   and six set-level locks, and one transaction replaces the sets a proposal
-   claims under an expected revision, so a concurrent editor's writes are
-   never silently overwritten. One materialization step resolves a promoted
-   job's embedded snapshot and library path against the persisted rows and
-   applies the result; it is not yet scheduled, because the automatic
-   promotion worker that would produce jobs for it to consume does not exist
-   and no worker query returns promoted jobs.
+   and six set-level locks, and one transaction replaces all six sets from
+   the complete resolved metadata under an expected revision, so a caller
+   resolves against what it read and a concurrent editor's writes are never
+   silently overwritten. One materialization step resolves a promoted job's
+   embedded snapshot and library path against the persisted rows and applies
+   the result; a layout that had to guess where one field ended is held
+   back, since a filename outranks the file's own metadata. The step is not
+   yet scheduled, because the automatic promotion worker that would produce
+   jobs for it to consume does not exist and no worker query returns
+   promoted jobs.
    Wiring the parser to per-library configuration, cover extraction, and
    automatic promotion remain.
 2. Metadata edit UI, series/contributor/tag pages, and merge tools.
