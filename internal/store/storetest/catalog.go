@@ -702,8 +702,11 @@ func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
 		// Every book asserts the same names in a different rotation.
 		for j := range names {
 			name := names[(i+j)%len(names)]
+			// Distinct candidate ids per book: only the store deciding
+			// which one wins can make the books agree, so a per-name
+			// duplicate row would be observable rather than impossible.
 			metadata.Tags = append(metadata.Tags, store.BookTaxon{
-				ID:             "tag-" + name,
+				ID:             fmt.Sprintf("tag-%s-%d", name, i),
 				Name:           name,
 				NormalizedName: name,
 				Source:         store.MetadataEmbedded,
@@ -734,6 +737,7 @@ func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
 	for err := range errs {
 		t.Fatalf("concurrent entity creation: %v", err)
 	}
+	winners := make(map[string]string, len(names))
 	for i := 0; i < books; i++ {
 		final, err := s.CatalogBookMetadata(
 			ctx, owner.ID, current[i].Book.ID, store.LibraryRoleManage)
@@ -743,10 +747,18 @@ func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
 		if len(final.Tags) != len(names) {
 			t.Fatalf("book %d tags: %+v", i, final.Tags)
 		}
-		// Every book shares one entity row per name.
-		if final.Tags[0].ID != current[0].Tags[0].ID &&
-			final.Tags[0].NormalizedName == current[0].Tags[0].NormalizedName {
-			t.Fatalf("duplicate entity rows for %q", final.Tags[0].NormalizedName)
+		// Every book converges on one entity row per name, whichever
+		// book's candidate id happened to create it.
+		for _, tag := range final.Tags {
+			winner, seen := winners[tag.NormalizedName]
+			if !seen {
+				winners[tag.NormalizedName] = tag.ID
+				continue
+			}
+			if winner != tag.ID {
+				t.Fatalf("duplicate entity rows for %q: %q and %q",
+					tag.NormalizedName, winner, tag.ID)
+			}
 		}
 	}
 }

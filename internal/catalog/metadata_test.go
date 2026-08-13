@@ -181,3 +181,71 @@ func TestResolveDropsRowsACompleteAssertionNoLongerNames(t *testing.T) {
 		t.Fatalf("complete assertion kept a dropped row: %+v", resolved.Contributors)
 	}
 }
+
+// The entity row owns an entity's display spelling: the store resolves by
+// normalized name and deliberately never renames, so a read-back returns the
+// library's first spelling rather than the one just proposed. Resolve must
+// agree, or a book whose spelling differs from the library's is rewritten on
+// every pass and never reaches a fixed point.
+func TestResolveConvergesOnThePersistedSpelling(t *testing.T) {
+	stored := emptyBook()
+	stored.Tags = []store.BookTaxon{{
+		ID:             EntityID("lib-1", "tag", "science fiction"),
+		Name:           "Science Fiction",
+		NormalizedName: "science fiction",
+		Source:         store.MetadataEmbedded,
+	}}
+	stored.Contributors = []store.BookContributor{{
+		ContributorID:  EntityID("lib-1", "contributor", "frank herbert"),
+		Name:           "Frank Herbert",
+		NormalizedName: "frank herbert",
+		Role:           "author",
+		Source:         store.MetadataEmbedded,
+	}}
+	stored.Series = []store.BookSeries{{
+		SeriesID:       EntityID("lib-1", "series", "dune"),
+		Name:           "Dune",
+		NormalizedName: "dune",
+		Source:         store.MetadataEmbedded,
+	}}
+
+	proposal := metadata.FromEmbedded(epub.Metadata{
+		Subjects:     []string{"science fiction"},
+		Series:       []epub.Series{{Name: "DUNE"}},
+		Contributors: []epub.Contributor{{Name: "frank herbert", Role: "author"}},
+	})
+	resolved, changed := Resolve(stored, proposal)
+	if changed {
+		t.Fatalf("a spelling the library already owns was treated as news: %+v",
+			resolved)
+	}
+}
+
+// A path that names a series but no position within it has determined
+// nothing about that position. Treating the absence as a value would erase
+// the number the file itself declared.
+func TestResolvePathKeepsAnUnclaimedSeriesPosition(t *testing.T) {
+	position := 2.0
+	stored := emptyBook()
+	stored.Series = []store.BookSeries{{
+		SeriesID:       EntityID("lib-1", "series", "dune"),
+		Name:           "Dune",
+		NormalizedName: "dune",
+		Position:       &position,
+		Source:         store.MetadataEmbedded,
+	}}
+
+	resolved, _ := Resolve(stored, metadata.FromPath(metadata.PathCandidate{
+		Confidence: metadata.ConfidenceHigh,
+		Title:      "Dune Messiah",
+		Series:     "Dune",
+		Author:     "Frank Herbert",
+	}))
+	if len(resolved.Series) != 1 {
+		t.Fatalf("series: %+v", resolved.Series)
+	}
+	if resolved.Series[0].Position == nil || *resolved.Series[0].Position != 2 {
+		t.Fatalf("path erased the position the file declared: %+v",
+			resolved.Series[0])
+	}
+}

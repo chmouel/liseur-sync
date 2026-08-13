@@ -91,7 +91,9 @@ func Resolve(
 	}
 
 	tags, tagsChanged := mergeSet(
-		taxonEntries(current.Tags), proposal.Tags, proposal, locks.Tags)
+		taxonEntries(current.Tags),
+		adoptNamed(proposal.Tags, taxonDisplay(current.Tags)),
+		proposal, locks.Tags)
 	if tagsChanged {
 		next.Tags = taxonRows(tags, current.Tags, libraryID, "tag")
 		changed = true
@@ -108,7 +110,9 @@ func Resolve(
 	}
 
 	series, seriesChanged := mergeSet(
-		seriesEntries(current.Series), proposal.Series, proposal, locks.Series)
+		seriesEntries(current.Series),
+		adoptSeries(proposal.Series, current.Series),
+		proposal, locks.Series)
 	if seriesChanged {
 		existing := make(map[string]string, len(current.Series))
 		for _, row := range current.Series {
@@ -133,7 +137,8 @@ func Resolve(
 	}
 
 	contributors, contributorsChanged := mergeSet(
-		contributorEntries(current.Contributors), proposal.Contributors,
+		contributorEntries(current.Contributors),
+		adoptContributors(proposal.Contributors, current.Contributors),
 		proposal, locks.Contributors)
 	if contributorsChanged {
 		existing := make(map[string]string, len(current.Contributors))
@@ -184,6 +189,95 @@ func entityIDFor(
 		return id
 	}
 	return EntityID(libraryID, kind, normalizedName)
+}
+
+// An entity row owns its display spelling: the store resolves an entity by
+// normalized name and never renames it, so a read-back returns whichever
+// spelling the library saw first. The helpers below make an assertion adopt
+// what the library already owns, so a proposal that differs only in spelling
+// is not mistaken for news — otherwise the book would be rewritten, and its
+// revision bumped, on every pass without ever reaching a fixed point.
+//
+// A book that does not yet link an entity can still propose a new spelling
+// and be corrected by the next pass; only the library-wide row the store
+// alone can see would avoid that, and one extra write on first link is
+// cheaper than reading the whole library here.
+
+func adoptNamed(
+	incoming []metadata.Assertion[string, string], persisted map[string]string,
+) []metadata.Assertion[string, string] {
+	if len(incoming) == 0 || len(persisted) == 0 {
+		return incoming
+	}
+	out := make([]metadata.Assertion[string, string], 0, len(incoming))
+	for _, assertion := range incoming {
+		if display, ok := persisted[assertion.Key]; ok {
+			assertion.Value = display
+		}
+		out = append(out, assertion)
+	}
+	return out
+}
+
+func adoptContributors(
+	incoming []metadata.Assertion[metadata.ContributorKey, string],
+	current []store.BookContributor,
+) []metadata.Assertion[metadata.ContributorKey, string] {
+	if len(incoming) == 0 || len(current) == 0 {
+		return incoming
+	}
+	persisted := make(map[string]string, len(current))
+	for _, row := range current {
+		persisted[row.NormalizedName] = row.Name
+	}
+	out := make([]metadata.Assertion[metadata.ContributorKey, string], 0, len(incoming))
+	for _, assertion := range incoming {
+		if display, ok := persisted[assertion.Key.Name]; ok {
+			assertion.Value = display
+		}
+		out = append(out, assertion)
+	}
+	return out
+}
+
+// adoptSeries also carries over a position the assertion never claimed. A
+// path that names a series but no number within it has determined nothing
+// about that number, and a source may only take over what it determined:
+// replacing the whole payload would erase the position the file declared.
+func adoptSeries(
+	incoming []metadata.Assertion[string, metadata.SeriesValue],
+	current []store.BookSeries,
+) []metadata.Assertion[string, metadata.SeriesValue] {
+	if len(incoming) == 0 || len(current) == 0 {
+		return incoming
+	}
+	persisted := make(map[string]store.BookSeries, len(current))
+	for _, row := range current {
+		persisted[row.NormalizedName] = row
+	}
+	out := make([]metadata.Assertion[string, metadata.SeriesValue], 0, len(incoming))
+	for _, assertion := range incoming {
+		if row, ok := persisted[assertion.Key]; ok {
+			assertion.Value.Display = row.Name
+			if !assertion.Value.HasPosition && row.Position != nil {
+				assertion.Value.Position = *row.Position
+				assertion.Value.HasPosition = true
+			}
+		}
+		out = append(out, assertion)
+	}
+	return out
+}
+
+func taxonDisplay(rows []store.BookTaxon) map[string]string {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.NormalizedName] = row.Name
+	}
+	return out
 }
 
 func identifierEntries(
