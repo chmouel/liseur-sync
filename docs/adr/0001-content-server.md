@@ -98,15 +98,16 @@ precedence engine. Each ADR records its own remaining edges.
 
 ### To the MVP
 
-1. **Ingest input.** `POST /v1/library/{library}/upload` is done; the htmx
-   upload UI is not ([ADR-0005](0005-upload-and-ingestion.md)).
-2. **Admin.** Library creation and access grants from the `admin` subcommand.
-   Nothing else on this list is reachable without a library to put books in.
-3. **Catalog output.** The `/v1/library/*` read and download API
-   ([ADR-0006](0006-catalog-api-and-opds.md)), plus catalog and book-detail
-   pages in the web UI.
+1. **Ingest input.** Done: `POST /v1/libraries/{library}/upload`
+   ([ADR-0005](0005-upload-and-ingestion.md)). The htmx upload UI is not.
+2. **Admin.** Done: `create-library`, `grant-library`, `revoke-library` and
+   `list-libraries` in the `admin` subcommand.
+3. **Catalog output.** API done: libraries, paginated books, book detail and
+   download ([ADR-0006](0006-catalog-api-and-opds.md)). Catalog and
+   book-detail pages in the web UI are not.
 4. **An existing reader.** OPDS 1.2 acquisition feeds, verified against
-   KOReader ([ADR-0006](0006-catalog-api-and-opds.md)).
+   KOReader ([ADR-0006](0006-catalog-api-and-opds.md)). This is the last
+   step that the MVP definition above actually requires.
 
 ### After the MVP
 

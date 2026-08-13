@@ -591,13 +591,14 @@ three-pass ingest worker that carries an upload through to a published book
 with its title.
 
 What M6 still needs: catalog availability reconciliation, last-reference
-deletion and trash, backup verification, and admin commands for libraries
-and grants. Cover extraction and per-library parser configuration are
+deletion and trash, and backup verification. Cover extraction and per-library parser configuration are
 tracked in [ADR-0004](adr/0004-metadata-and-categorization.md).
 
-M7's upload endpoint now creates ingest jobs, so the pipeline finally has an
-input. What M7 still needs is the htmx upload UI, and the admin commands
-above — without a way to create a library, there is nowhere to upload to.
+M7 and most of M8 are now in place: uploads create ingest jobs, the admin
+subcommand creates libraries and grants access, and the catalog API lists
+and downloads books. What the first release still needs is OPDS 1.2, so an
+existing reader can browse and fetch, and the web UI pages for uploading and
+browsing.
 
 ## 10. Future work (explicitly out of v1)
 

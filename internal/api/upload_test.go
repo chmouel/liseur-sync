@@ -63,6 +63,7 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 		Cfg:          cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Content:      cas,
+		Blobs:        cas,
 	}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)
@@ -111,7 +112,7 @@ func (f *uploadFixture) upload(
 	mw.Close()
 
 	req, _ := http.NewRequest(http.MethodPost,
-		f.ts.URL+"/v1/library/"+library+"/upload", &buf)
+		f.ts.URL+"/v1/libraries/"+library+"/upload", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -303,7 +304,7 @@ func TestUploadRejectsUnauthorizedAndMalformedRequests(t *testing.T) {
 	})
 	t.Run("not multipart", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodPost,
-			f.ts.URL+"/v1/library/"+f.library+"/upload", bytes.NewReader(body))
+			f.ts.URL+"/v1/libraries/"+f.library+"/upload", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+f.token)
 		req.Header.Set("Idempotency-Key", "k")
@@ -322,7 +323,7 @@ func TestUploadRejectsUnauthorizedAndMalformedRequests(t *testing.T) {
 		_ = mw.WriteField("notthefile", "x")
 		mw.Close()
 		req, _ := http.NewRequest(http.MethodPost,
-			f.ts.URL+"/v1/library/"+f.library+"/upload", &buf)
+			f.ts.URL+"/v1/libraries/"+f.library+"/upload", &buf)
 		req.Header.Set("Content-Type", mw.FormDataContentType())
 		req.Header.Set("Authorization", "Bearer "+f.token)
 		req.Header.Set("Idempotency-Key", "no-file")
@@ -472,7 +473,7 @@ func TestUploadNeverAnswers5xxForMalformedInput(t *testing.T) {
 
 	// A body that is not multipart at all, and one whose boundary lies.
 	req, _ := http.NewRequest(http.MethodPost,
-		f.ts.URL+"/v1/library/"+f.library+"/upload",
+		f.ts.URL+"/v1/libraries/"+f.library+"/upload",
 		strings.NewReader("--nope\r\nnot really multipart"))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=nope")
 	req.Header.Set("Authorization", "Bearer "+f.token)
@@ -516,7 +517,7 @@ func TestUploadBoundsWhatItReadsFromTheNetwork(t *testing.T) {
 	mw.Close()
 
 	req, _ := http.NewRequest(http.MethodPost,
-		f.ts.URL+"/v1/library/"+f.library+"/upload", &buf)
+		f.ts.URL+"/v1/libraries/"+f.library+"/upload", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+f.token)
 	req.Header.Set("Idempotency-Key", "junk-parts")
@@ -588,7 +589,7 @@ func TestIngestJobRequiresLibraryAccess(t *testing.T) {
 	jobID, _ := out["job_id"].(string)
 
 	readToken := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	code, got := getJSON(t, f.ts.URL+"/v1/library/jobs/"+jobID, readToken)
+	code, got := getJSON(t, f.ts.URL+"/v1/ingest/jobs/"+jobID, readToken)
 	if code != http.StatusOK {
 		t.Fatalf("job status: %d %v", code, got)
 	}
@@ -599,7 +600,7 @@ func TestIngestJobRequiresLibraryAccess(t *testing.T) {
 	// A token with the right scope but no access to the job's library
 	// must not see it: the capability and the ACL are separate checks.
 	strangerToken := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
-	code, _ = getJSON(t, f.ts.URL+"/v1/library/jobs/"+jobID, strangerToken)
+	code, _ = getJSON(t, f.ts.URL+"/v1/ingest/jobs/"+jobID, strangerToken)
 	if code != http.StatusNotFound {
 		t.Fatalf("a user outside the library read the job: %d", code)
 	}
@@ -626,6 +627,7 @@ func (f *uploadFixture) rebuild(t *testing.T, apply func(*config.Config)) {
 		St: f.st, Auth: auth.NewService(f.st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Content:      f.cas,
+		Blobs:        f.cas,
 	}
 	f.ts.Close()
 	f.ts = httptest.NewServer(srv.Routes())
