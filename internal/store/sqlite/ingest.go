@@ -11,7 +11,7 @@ import (
 
 const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
 	j.source, j.client_key, j.request_fingerprint, j.promotion_fingerprint,
-	j.artifacts_expired, j.state,
+	j.artifacts_expired, j.artifact_cleanup_pending, j.state,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
 	j.book_id, j.error_code, j.error_detail, j.retry_count, j.revision,
 	j.created_at, j.updated_at, j.expires_at`
@@ -33,12 +33,12 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 	var job store.IngestJob
 	var clientKey, promotionFingerprint, contentSHA, stagingPath, sourcePath sql.NullString
 	var bookID, errorCode, errorDetail, expires sql.NullString
-	var artifactsExpired int
+	var artifactsExpired, cleanupPending int
 	var created, updated string
 	err := row.Scan(
 		&job.ID, &job.UserID, &job.LibraryID, &job.QuotaUserID,
 		&job.Source, &clientKey, &job.RequestFingerprint, &promotionFingerprint,
-		&artifactsExpired, &job.State,
+		&artifactsExpired, &cleanupPending, &job.State,
 		&job.BytesReceived, &contentSHA, &stagingPath, &sourcePath,
 		&bookID, &errorCode, &errorDetail, &job.RetryCount, &job.Revision,
 		&created, &updated, &expires,
@@ -55,6 +55,7 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 	job.ClientKey = assign(clientKey)
 	job.PromotionFingerprint = assign(promotionFingerprint)
 	job.ArtifactsExpired = artifactsExpired != 0
+	job.ArtifactCleanupPending = cleanupPending != 0
 	job.ContentSHA256 = assign(contentSHA)
 	job.StagingPath = assign(stagingPath)
 	job.SourceRelativePath = assign(sourcePath)
@@ -261,6 +262,44 @@ func (s *Store) ListIngestJobs(
 	return jobs, rows.Err()
 }
 
+func (s *Store) ListIngestRecoveryJobs(
+	ctx context.Context,
+	before time.Time,
+	after *store.IngestRecoveryCursor,
+	limit int,
+) ([]store.IngestJob, error) {
+	if before.IsZero() || limit < 1 || limit > 500 {
+		return nil, store.ErrInvalidTransition
+	}
+	query := `SELECT ` + ingestJobColumns + `
+		FROM ingest_jobs j
+		WHERE j.state IN ('staged', 'validated', 'extracted')
+		  AND j.artifacts_expired = 0
+		  AND j.updated_at <= ?`
+	args := []any{formatIngestTime(before)}
+	if after != nil {
+		cursorTime := formatIngestTime(after.UpdatedAt)
+		query += ` AND (j.updated_at > ? OR (j.updated_at = ? AND j.id > ?))`
+		args = append(args, cursorTime, cursorTime, after.ID)
+	}
+	query += ` ORDER BY j.updated_at, j.id LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []store.IngestJob
+	for rows.Next() {
+		job, err := scanIngestJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
 func (s *Store) TransitionIngestJob(
 	ctx context.Context,
 	userID, jobID string,
@@ -383,7 +422,7 @@ func (s *Store) CommitIngestStage(
 	userID, jobID string,
 	request store.CommitIngestStageRequest,
 ) (store.CommitIngestStageResult, error) {
-	if err := store.ValidateCommitIngestStage(request); err != nil {
+	if err := store.ValidateCommitIngestStage(jobID, request); err != nil {
 		return store.CommitIngestStageResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -728,9 +767,11 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 	rows, err := tx.QueryContext(ctx,
 		`SELECT `+ingestJobColumns+`
 		 FROM ingest_jobs j
-		 WHERE j.state IN ('failed', 'quarantined')
-		   AND j.expires_at IS NOT NULL AND j.expires_at <= ?
-		   AND j.staging_path IS NOT NULL
+		 WHERE j.artifact_cleanup_pending = 1
+		    OR (j.artifacts_expired = 0
+		        AND j.state IN ('failed', 'quarantined')
+		        AND j.expires_at IS NOT NULL AND j.expires_at <= ?
+		        AND j.staging_path IS NOT NULL)
 		 ORDER BY j.expires_at, j.id
 		 LIMIT ?`,
 		formatIngestTime(before), limit)
@@ -749,15 +790,18 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for _, job := range jobs {
+	for i, job := range jobs {
+		if job.ArtifactCleanupPending {
+			continue
+		}
 		res, err := tx.ExecContext(ctx,
 			`UPDATE ingest_jobs
-			 SET bytes_received = 0, content_sha256 = NULL,
-			     staging_path = NULL, artifacts_expired = 1,
+			 SET artifacts_expired = 1, artifact_cleanup_pending = 1,
 			     revision = revision + 1
 			 WHERE id = ? AND user_id = ? AND state = ? AND revision = ?
 			   AND expires_at IS NOT NULL AND expires_at <= ?
-			   AND staging_path IS NOT NULL`,
+			   AND staging_path IS NOT NULL AND artifacts_expired = 0
+			   AND artifact_cleanup_pending = 0`,
 			job.ID, job.UserID, string(job.State), job.Revision,
 			formatIngestTime(before))
 		if err != nil {
@@ -780,9 +824,54 @@ func (s *Store) PurgeExpiredIngestArtifacts(
 		} else if n != 1 {
 			return nil, store.ErrInvariantViolation
 		}
+		jobs[i].ArtifactsExpired = true
+		jobs[i].ArtifactCleanupPending = true
+		jobs[i].Revision++
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return jobs, nil
+}
+
+func (s *Store) CompleteIngestArtifactCleanup(
+	ctx context.Context,
+	jobID, stagingPath string,
+) error {
+	if jobID == "" || stagingPath == "" {
+		return store.ErrInvalidTransition
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE ingest_jobs
+		 SET bytes_received = 0, content_sha256 = NULL, staging_path = NULL,
+		     artifact_cleanup_pending = 0, revision = revision + 1
+		 WHERE id = ? AND staging_path = ?
+		   AND artifacts_expired = 1 AND artifact_cleanup_pending = 1`,
+		jobID, stagingPath)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	var expired, pending int
+	var currentPath sql.NullString
+	err = s.db.QueryRowContext(ctx,
+		`SELECT artifacts_expired, artifact_cleanup_pending, staging_path
+		 FROM ingest_jobs WHERE id = ?`, jobID).
+		Scan(&expired, &pending, &currentPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if expired != 0 && pending == 0 && !currentPath.Valid {
+		return nil
+	}
+	return store.ErrStaleRevision
 }

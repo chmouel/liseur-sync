@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/contentpath"
 )
 
 // Common sentinel errors.
@@ -308,28 +310,29 @@ func CanTransitionIngest(from, to IngestState) bool {
 // IngestJob is the persisted ingestion state. RequestFingerprint describes
 // immutable request metadata, not the uploaded content digest.
 type IngestJob struct {
-	ID                   string
-	UserID               string
-	LibraryID            string
-	QuotaUserID          string
-	Source               IngestSource
-	ClientKey            *string
-	RequestFingerprint   string
-	PromotionFingerprint *string
-	ArtifactsExpired     bool
-	State                IngestState
-	BytesReceived        int64
-	ContentSHA256        *string
-	StagingPath          *string
-	SourceRelativePath   *string
-	BookID               *string
-	ErrorCode            *string
-	ErrorDetail          *string
-	RetryCount           int64
-	Revision             int64
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
-	ExpiresAt            *time.Time
+	ID                     string
+	UserID                 string
+	LibraryID              string
+	QuotaUserID            string
+	Source                 IngestSource
+	ClientKey              *string
+	RequestFingerprint     string
+	PromotionFingerprint   *string
+	ArtifactsExpired       bool
+	ArtifactCleanupPending bool
+	State                  IngestState
+	BytesReceived          int64
+	ContentSHA256          *string
+	StagingPath            *string
+	SourceRelativePath     *string
+	BookID                 *string
+	ErrorCode              *string
+	ErrorDetail            *string
+	RetryCount             int64
+	Revision               int64
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	ExpiresAt              *time.Time
 }
 
 // IngestJobRequest contains the immutable fields used to create or replay a
@@ -347,6 +350,14 @@ type IngestJobRequest struct {
 // IngestJobCursor is the exclusive cursor for stable job pagination.
 type IngestJobCursor struct {
 	CreatedAt time.Time
+	ID        string
+}
+
+// IngestRecoveryCursor is the exclusive cursor for global recovery scans.
+// Recovery is an internal housekeeping operation, not an authorization
+// surface.
+type IngestRecoveryCursor struct {
+	UpdatedAt time.Time
 	ID        string
 }
 
@@ -512,9 +523,12 @@ func ValidateBlobInfo(blob BlobInfo) error {
 	return nil
 }
 
-func ValidateCommitIngestStage(request CommitIngestStageRequest) error {
-	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() ||
+func ValidateCommitIngestStage(jobID string, request CommitIngestStageRequest) error {
+	if jobID == "" || request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() ||
 		request.StagingPath == "" || len(request.StagingPath) > 4096 {
+		return ErrInvalidTransition
+	}
+	if request.StagingPath != contentpath.StagingPath(jobID) {
 		return ErrInvalidTransition
 	}
 	if err := ValidateBlobInfo(request.Artifact); err != nil {
@@ -919,6 +933,9 @@ type Store interface {
 	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
 	IngestJobByID(ctx context.Context, actorUserID, jobID string) (IngestJob, error)
 	ListIngestJobs(ctx context.Context, actorUserID, libraryID string, after *IngestJobCursor, limit int) ([]IngestJob, error)
+	// ListIngestRecoveryJobs is a global housekeeping query for stale jobs
+	// whose durable artifacts must be verified before workers resume them.
+	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)
 	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
 	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
 	// PurgeExpiredIngestArtifacts is a global housekeeping operation. It
@@ -926,6 +943,9 @@ type Store interface {
 	// retaining permanent job tombstones so deterministic paths cannot be
 	// reused by a later job with the same ID.
 	PurgeExpiredIngestArtifacts(ctx context.Context, before time.Time, limit int) ([]IngestJob, error)
+	// CompleteIngestArtifactCleanup acknowledges idempotent filesystem removal
+	// and clears the retained artifact identity from its terminal tombstone.
+	CompleteIngestArtifactCleanup(ctx context.Context, jobID, stagingPath string) error
 	// TransitionIngestJob is an internal worker/upload operation scoped by the
 	// initiating user, not by their current library ACL.
 	TransitionIngestJob(ctx context.Context, userID, jobID string, transition IngestJobTransition) (IngestJob, error)

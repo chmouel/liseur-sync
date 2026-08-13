@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/contentpath"
 	"golang.org/x/sys/unix"
 )
 
@@ -42,6 +43,14 @@ type Blob struct {
 	Size           int64
 	AlreadyPresent bool
 }
+
+// ArtifactLocation reports where a verified ingest artifact currently lives.
+type ArtifactLocation string
+
+const (
+	ArtifactStaged   ArtifactLocation = "staged"
+	ArtifactPromoted ArtifactLocation = "promoted"
+)
 
 // CAS owns a private content root. Close it after use.
 type CAS struct {
@@ -287,6 +296,44 @@ func (c *CAS) Promote(
 		Size:           expectedSize,
 		AlreadyPresent: !published,
 	}, nil
+}
+
+// InspectArtifact verifies a persisted ingest artifact without moving it.
+// When the stage is absent, a matching final blob is accepted as evidence
+// that filesystem promotion completed before the database response was lost.
+func (c *CAS) InspectArtifact(
+	ctx context.Context,
+	stagingPath, expectedSHA string,
+	expectedSize int64,
+) (ArtifactLocation, error) {
+	prefix, stageName, err := parseStagingPath(stagingPath)
+	if err != nil || !validSHA256(expectedSHA) || expectedSize < 0 {
+		return "", ErrUnsafePath
+	}
+	unlock, err := c.lockStage(ctx, prefix)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	stageFD, err := unix.Openat(c.incomingFD, stageName,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if errors.Is(err, unix.ENOENT) {
+		if _, replayErr := c.replayPromoted(ctx, expectedSHA, expectedSize); replayErr != nil {
+			return "", replayErr
+		}
+		return ArtifactPromoted, nil
+	}
+	if err != nil {
+		return "", classifyPathError(err)
+	}
+	defer unix.Close(stageFD)
+	if err := verifyFD(ctx, stageFD, expectedSHA, expectedSize); err != nil {
+		if errors.Is(err, ErrCorruptBlob) {
+			return "", ErrDigestMismatch
+		}
+		return "", err
+	}
+	return ArtifactStaged, nil
 }
 
 // RemoveStage removes completed or partial staging state for one job. It is
@@ -658,8 +705,7 @@ func unlinkIfExists(dirFD int, name string) error {
 }
 
 func stagePrefix(jobID string) string {
-	sum := sha256.Sum256([]byte(jobID))
-	return hex.EncodeToString(sum[:])
+	return contentpath.JobDigest(jobID)
 }
 
 func parseStagingPath(path string) (string, string, error) {

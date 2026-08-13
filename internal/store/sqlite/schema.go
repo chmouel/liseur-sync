@@ -710,7 +710,13 @@ WHERE state <> 'promoted'
   AND staging_path IS NOT NULL;
 `
 
+const migration10 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN artifact_cleanup_pending INTEGER NOT NULL DEFAULT 0
+        CHECK (artifact_cleanup_pending IN (0, 1));
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
-	migration7, migration8, migration9,
+	migration7, migration8, migration9, migration10,
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/contentpath"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -220,7 +221,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	}
 
 	bytesReceived := int64(123)
-	stagingPath := ".incoming/job.tmp"
+	stagingPath := contentpath.StagingPath("job-3")
 	artifact := ingestBlob("content", bytesReceived)
 	stagedJob3, err := s.CommitIngestStage(ctx, manager.ID, "job-3",
 		store.CommitIngestStageRequest{
@@ -311,7 +312,15 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		}); err != store.ErrInvalidTransition {
 		t.Fatalf("generic staging accepted: %v", err)
 	}
-	stagingPath = ".incoming/job-1.tmp"
+	stagingPath = contentpath.StagingPath(job.ID)
+	if _, err := s.CommitIngestStage(ctx, manager.ID, job.ID,
+		store.CommitIngestStageRequest{
+			ExpectedRevision: 1, Artifact: artifact,
+			StagingPath: contentpath.StagingPath("different-job"),
+			UpdatedAt:   now.Add(time.Minute),
+		}); err != store.ErrInvalidTransition {
+		t.Fatalf("mismatched staging path: %v", err)
+	}
 	if _, err := s.CommitIngestStage(ctx, manager.ID, job.ID,
 		store.CommitIngestStageRequest{
 			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
@@ -358,7 +367,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 					store.CommitIngestStageRequest{
 						ExpectedRevision: job.Revision,
 						Artifact:         ingestBlob(fmt.Sprintf("boundary-%d", index), 6),
-						StagingPath:      fmt.Sprintf(".incoming/boundary-%d.stage", index),
+						StagingPath:      contentpath.StagingPath(job.ID),
 						QuotaLimitBytes:  &limit, UpdatedAt: now.Add(time.Minute),
 					})
 				results <- err
@@ -399,7 +408,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 			result, err := s.CommitIngestStage(ctx, job.UserID, job.ID,
 				store.CommitIngestStageRequest{
 					ExpectedRevision: job.Revision, Artifact: blob,
-					StagingPath:     fmt.Sprintf(".incoming/dedup-%d.stage", index),
+					StagingPath:     contentpath.StagingPath(job.ID),
 					QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(time.Minute),
 				})
 			if err != nil {
@@ -428,7 +437,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		thirdStage, err := s.CommitIngestStage(ctx, third.UserID, third.ID,
 			store.CommitIngestStageRequest{
 				ExpectedRevision: third.Revision, Artifact: blob,
-				StagingPath:     ".incoming/dedup-3.stage",
+				StagingPath:     contentpath.StagingPath(third.ID),
 				QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(2 * time.Minute),
 			})
 		if err != nil || thirdStage.Quota.AdditionalBytes != 0 {
@@ -450,7 +459,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		cleanupStage, err := s.CommitIngestStage(ctx, cleanupJob.UserID,
 			cleanupJob.ID, store.CommitIngestStageRequest{
 				ExpectedRevision: cleanupJob.Revision, Artifact: cleanupBlob,
-				StagingPath:     ".incoming/cleanup-held.stage",
+				StagingPath:     contentpath.StagingPath(cleanupJob.ID),
 				QuotaLimitBytes: &cleanupBlob.SizeBytes,
 				UpdatedAt:       now.Add(time.Minute),
 			})
@@ -472,7 +481,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		blockedRequest := store.CommitIngestStageRequest{
 			ExpectedRevision: blockedJob.Revision,
 			Artifact:         ingestBlob("cleanup-blocked", 1),
-			StagingPath:      ".incoming/cleanup-blocked.stage",
+			StagingPath:      contentpath.StagingPath(blockedJob.ID),
 			QuotaLimitBytes:  &cleanupBlob.SizeBytes,
 			UpdatedAt:        now.Add(3 * time.Minute),
 		}
@@ -487,7 +496,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		if err != nil || len(purged) != 1 ||
 			purged[0].ID != cleanupJob.ID ||
 			purged[0].StagingPath == nil ||
-			*purged[0].StagingPath != ".incoming/cleanup-held.stage" {
+			*purged[0].StagingPath != contentpath.StagingPath(cleanupJob.ID) {
 			t.Fatalf("expired ingest purge: %+v %v", purged, err)
 		}
 		blockedStage, err := s.CommitIngestStage(ctx, blockedJob.UserID,
@@ -495,9 +504,33 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		if err != nil || blockedStage.Job.State != store.IngestStaged {
 			t.Fatalf("purge did not release quota: %+v %v", blockedStage, err)
 		}
+		pending, err := s.IngestJobByID(ctx, cleanupJob.UserID, cleanupJob.ID)
+		if err != nil || pending.State != store.IngestFailed ||
+			!pending.ArtifactsExpired || !pending.ArtifactCleanupPending ||
+			pending.StagingPath == nil || pending.ContentSHA256 == nil ||
+			pending.BytesReceived != cleanupBlob.SizeBytes {
+			t.Fatalf("pending ingest cleanup: %+v %v", pending, err)
+		}
+		if retry, err := s.PurgeExpiredIngestArtifacts(
+			ctx, now.Add(2*time.Hour), 10); err != nil || len(retry) != 1 ||
+			retry[0].ID != cleanupJob.ID {
+			t.Fatalf("pending cleanup was not retryable: %+v %v", retry, err)
+		}
+		if err := s.CompleteIngestArtifactCleanup(
+			ctx, cleanupJob.ID, contentpath.StagingPath("wrong-job")); err != store.ErrStaleRevision {
+			t.Fatalf("cleanup accepted wrong path: %v", err)
+		}
+		if err := s.CompleteIngestArtifactCleanup(
+			ctx, cleanupJob.ID, contentpath.StagingPath(cleanupJob.ID)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CompleteIngestArtifactCleanup(
+			ctx, cleanupJob.ID, contentpath.StagingPath(cleanupJob.ID)); err != nil {
+			t.Fatalf("cleanup acknowledgement was not idempotent: %v", err)
+		}
 		tombstone, err := s.IngestJobByID(ctx, cleanupJob.UserID, cleanupJob.ID)
 		if err != nil || tombstone.State != store.IngestFailed ||
-			!tombstone.ArtifactsExpired ||
+			!tombstone.ArtifactsExpired || tombstone.ArtifactCleanupPending ||
 			tombstone.StagingPath != nil || tombstone.ContentSHA256 != nil ||
 			tombstone.BytesReceived != 0 {
 			t.Fatalf("expired ingest tombstone: %+v %v", tombstone, err)
@@ -523,7 +556,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		}
 		if purged, err := s.PurgeExpiredIngestArtifacts(
 			ctx, now.Add(2*time.Hour), 10); err != nil || len(purged) != 0 {
-			t.Fatalf("tombstone artifact purged twice: %+v %v", purged, err)
+			t.Fatalf("completed artifact cleanup repeated: %+v %v", purged, err)
 		}
 
 		otherUser := MkUser(t, s, "quota-other")
@@ -539,7 +572,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		otherStage, err := s.CommitIngestStage(ctx, otherJob.UserID, otherJob.ID,
 			store.CommitIngestStageRequest{
 				ExpectedRevision: otherJob.Revision, Artifact: blob,
-				StagingPath:     ".incoming/other.stage",
+				StagingPath:     contentpath.StagingPath(otherJob.ID),
 				QuotaLimitBytes: &blob.SizeBytes, UpdatedAt: now.Add(time.Minute),
 			})
 		if err != nil || otherStage.Quota.AdditionalBytes != blob.SizeBytes {
@@ -614,7 +647,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		if _, err := s.CommitIngestStage(ctx, mismatchJob.UserID, mismatchJob.ID,
 			store.CommitIngestStageRequest{
 				ExpectedRevision: mismatchJob.Revision, Artifact: mismatchBlob,
-				StagingPath: ".incoming/mismatch.stage",
+				StagingPath: contentpath.StagingPath(mismatchJob.ID),
 				UpdatedAt:   now.Add(6 * time.Minute),
 			}); err != store.ErrInvariantViolation {
 			t.Fatalf("blob size mismatch: %v", err)
@@ -634,7 +667,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		collisionStage, err := s.CommitIngestStage(ctx, collisionJob.UserID,
 			collisionJob.ID, store.CommitIngestStageRequest{
 				ExpectedRevision: collisionJob.Revision, Artifact: collisionBlob,
-				StagingPath: ".incoming/collision.stage",
+				StagingPath: contentpath.StagingPath(collisionJob.ID),
 				UpdatedAt:   now.Add(7 * time.Minute),
 			})
 		if err != nil {
@@ -689,8 +722,9 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 
 	stagedRetry, err := s.CommitIngestStage(ctx, manager.ID, "job-2",
 		store.CommitIngestStageRequest{
-			ExpectedRevision: 1, Artifact: artifact, StagingPath: stagingPath,
-			UpdatedAt: now.Add(3 * time.Minute),
+			ExpectedRevision: 1, Artifact: artifact,
+			StagingPath: contentpath.StagingPath("job-2"),
+			UpdatedAt:   now.Add(3 * time.Minute),
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -752,6 +786,7 @@ func testConcurrentIngestJobCreate(t *testing.T, open OpenFunc) {
 		ID: "ingest-concurrent", OwnerUserID: user.ID, QuotaUserID: user.ID,
 		Kind: store.LibraryManaged, Name: "Concurrent", CreatedAt: now,
 	}
+
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
 	}
@@ -809,5 +844,64 @@ func testConcurrentIngestJobCreate(t *testing.T, open OpenFunc) {
 	listed, err := s.ListIngestJobs(ctx, user.ID, library.ID, nil, 20)
 	if err != nil || len(listed) != 1 || listed[0].ID != jobID {
 		t.Fatalf("concurrent ingest jobs: %+v %v", listed, err)
+	}
+}
+
+func testIngestRecoveryList(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	user := MkUser(t, s, "ingest-recovery")
+	now := time.Date(2026, time.February, 3, 4, 5, 6, 0, time.UTC)
+	library := store.Library{
+		ID: "ingest-recovery", OwnerUserID: user.ID, QuotaUserID: user.ID,
+		Kind: store.LibraryManaged, Name: "Recovery", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	stage := func(id string, at time.Time) store.IngestJob {
+		job := createIngestJob(t, s, user.ID, library.ID, id, now)
+		blob := ingestBlob(id, 10)
+		result, err := s.CommitIngestStage(ctx, user.ID, job.ID,
+			store.CommitIngestStageRequest{
+				ExpectedRevision: job.Revision, Artifact: blob,
+				StagingPath: contentpath.StagingPath(job.ID),
+				UpdatedAt:   at,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Job
+	}
+	first := stage("recovery-a", now.Add(time.Minute))
+	second := stage("recovery-b", now.Add(2*time.Minute))
+	recent := stage("recovery-recent", now.Add(10*time.Minute))
+	failed := stage("recovery-failed", now.Add(3*time.Minute))
+	expiry := now.Add(time.Hour)
+	if _, err := s.TransitionIngestJob(ctx, user.ID, failed.ID,
+		store.IngestJobTransition{
+			ExpectedState: failed.State, ExpectedRevision: failed.Revision,
+			NextState: store.IngestFailed, ErrorCode: "failed",
+			ExpiresAt: &expiry, UpdatedAt: now.Add(4 * time.Minute),
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := s.ListIngestRecoveryJobs(ctx, now.Add(5*time.Minute), nil, 1)
+	if err != nil || len(page) != 1 || page[0].ID != first.ID {
+		t.Fatalf("first recovery page: %+v %v", page, err)
+	}
+	cursor := &store.IngestRecoveryCursor{
+		UpdatedAt: page[0].UpdatedAt, ID: page[0].ID,
+	}
+	page, err = s.ListIngestRecoveryJobs(ctx, now.Add(5*time.Minute), cursor, 10)
+	if err != nil || len(page) != 1 || page[0].ID != second.ID {
+		t.Fatalf("second recovery page: %+v %v", page, err)
+	}
+	if page[0].ID == recent.ID || page[0].ID == failed.ID {
+		t.Fatalf("recovery list included ineligible job: %+v", page)
+	}
+	if _, err := s.ListIngestRecoveryJobs(ctx, time.Time{}, nil, 10); err != store.ErrInvalidTransition {
+		t.Fatalf("zero recovery cutoff: %v", err)
 	}
 }

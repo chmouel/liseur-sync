@@ -78,8 +78,10 @@ catalog-to-work resolution, revisioned durable ingest-job store, and
 filesystem CAS staging/promotion primitive are implemented. Atomic database
 promotion now commits blob identity, logical quota, catalog book/file rows,
 and job state together, with replay-safe request fingerprints and expiring
-artifact holds. Ingestion workers, metadata parsing, GC, and admin commands
-remain in Phase 1.
+artifact holds. The recovery coordinator verifies stale staged artifacts,
+recognizes lost filesystem-promotion responses, and terminalizes missing or
+corrupt content with retryable two-phase cleanup. Startup scheduling,
+ingestion workers, metadata parsing, GC, and admin commands remain in Phase 1.
 
 ### Phase 2: managed uploads and management UI
 
