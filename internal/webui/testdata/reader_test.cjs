@@ -13,7 +13,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const reader = require(path.join(__dirname, '..', 'static', 'reader.js'));
-const { Zip, resolvePath, placeFromProgression, placeFromLocator, locatorFor, mediaType } = reader;
+const {
+  Zip, resolvePath, placeFromProgression, placeFromLocator, locatorFor, mediaType, wrapChapter,
+} = reader;
 
 let failures = 0;
 async function test(name, fn) {
@@ -120,6 +122,23 @@ function archive(file) {
     // The property that matters: what we write, we can read back.
     const back = placeFromLocator(epub, loc, loc.locations.totalProgression);
     assert.deepStrictEqual(back, { index: 1, fraction: 0.5 });
+  });
+
+  await test('a chapter carries the publication\'s own stylesheet', () => {
+    // Only the body survives the wrap, so a publisher stylesheet that
+    // is left in the head is thrown away and the book loses its
+    // typography with nothing to show for it. It has to be passed in.
+    const html = wrapChapter('<p>text</p>', 'p { text-indent: 2em }', 'abc123');
+    assert.ok(html.includes('text-indent: 2em'), 'publication CSS was dropped');
+
+    // After the reader's own, so a book still looks like itself.
+    assert.ok(html.indexOf('text-indent: 2em') > html.indexOf('Georgia'),
+      'publication CSS must come after the reader\'s defaults, not before');
+
+    // The confinement travels with the document, not just the frame.
+    assert.ok(html.includes("script-src 'nonce-abc123'"), 'chapter CSP lost its nonce');
+    assert.ok(html.includes("default-src 'none'"), 'chapter CSP lost its default-src');
+    assert.ok(!/connect-src/.test(html), 'a book must not be able to call home');
   });
 
   await test('media types come from the extension, unknown ones stay opaque', () => {

@@ -186,9 +186,6 @@ class Epub {
       style.textContent = await this.#css(resolvePath(item.path, href));
       link.replaceWith(style);
     }
-    for (const style of doc.querySelectorAll('style')) {
-      style.textContent = await this.#inlineURLs(style.textContent, item.path);
-    }
     for (const el of doc.querySelectorAll('img[src]')) {
       el.setAttribute('src', await this.#dataURL(resolvePath(item.path, el.getAttribute('src'))));
     }
@@ -200,8 +197,18 @@ class Epub {
       el.setAttribute('href', url);
     }
 
+    // The publication's own CSS is collected rather than left where it
+    // was found, because only the body survives the wrap: a stylesheet
+    // in the head would otherwise be dropped, and a book would lose its
+    // typography without anything reporting an error.
+    const sheets = [];
+    for (const style of [...doc.querySelectorAll('style')]) {
+      sheets.push(await this.#inlineURLs(style.textContent || '', item.path));
+      style.remove();
+    }
+
     const body = doc.querySelector('body');
-    return wrapChapter(body ? body.innerHTML : '', nonce);
+    return wrapChapter(body ? body.innerHTML : '', sheets.join('\n'), nonce);
   }
 
   async #css(path) {
@@ -254,16 +261,21 @@ function mediaType(path) {
 //   - the iframe is sandboxed without allow-same-origin, so this
 //     document has an opaque origin with no cookies and no access to
 //     the page that framed it;
+// The publication's stylesheet goes second so a book still looks like
+// itself; the reader's own CSS is a floor, not a house style.
+//
 //   - this CSP allows exactly the inlined data: resources and one
 //     nonced script (ours). There is no connect-src, so a book cannot
 //     call home; there is no script-src for the publisher, so a book
 //     that shipped scripts does not run them.
-function wrapChapter(bodyHTML, nonce) {
+function wrapChapter(bodyHTML, publicationCSS, nonce) {
   const csp = "default-src 'none'; img-src data:; media-src data:; " +
     "font-src data:; style-src 'unsafe-inline'; script-src 'nonce-" + nonce + "'";
   return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<meta http-equiv="Content-Security-Policy" content="' + csp + '">' +
-    '<style>' + READER_CSS + '</style></head><body>' + bodyHTML +
+    '<style>' + READER_CSS + '</style>' +
+    (publicationCSS ? '<style>' + publicationCSS + '</style>' : '') +
+    '</head><body>' + bodyHTML +
     '<script nonce="' + nonce + '">' + CHAPTER_SCRIPT + '</scr' + 'ipt>' +
     '</body></html>';
 }
@@ -359,5 +371,8 @@ function placeFromLocator(epub, locator, progression) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolvePath, placeFromProgression, placeFromLocator, locatorFor, mediaType, Zip };
+  module.exports = {
+    resolvePath, placeFromProgression, placeFromLocator, locatorFor, mediaType, Zip,
+    wrapChapter,
+  };
 }

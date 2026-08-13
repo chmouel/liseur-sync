@@ -208,3 +208,10 @@ removes.
   client, and a position written by them is resumable by the reader —
   exactly when the fragment is understood, approximately by progression
   when it is not.
+- A chapter renders in a real browser. This one cannot be checked
+  anywhere else: a `srcdoc` document inherits the framing page's CSP in
+  addition to declaring its own, so a page policy that is too strict
+  produces a blank frame and no error. `TestReaderOpensInARealBrowser`
+  drives Chromium over CDP and skips where there is none, including CI —
+  a developer's check rather than a gate, since the alternative is a
+  browser in CI for one test or a renderer nobody ever ran.
