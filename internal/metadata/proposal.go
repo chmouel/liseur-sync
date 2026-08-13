@@ -121,13 +121,28 @@ func FromEmbedded(metadata epub.Metadata) Proposal {
 // Its sets are partial for the same reason: a path names at most one author
 // and one series and knows nothing of the other contributors or series the
 // file declared, so the result must be merged with MergeEntries.
+//
+// A value the layout recovered by splitting one name component is left out
+// entirely. A filename outranks the publication's own metadata, so a guess
+// about where one field ended would overwrite what the file declared and
+// stamp filename provenance on it, which no later extraction can take back.
+// A field read from a directory of its own is unaffected by a guess made
+// elsewhere in the same name.
 func FromPath(candidate PathCandidate) Proposal {
 	proposal := Proposal{
 		Source:      store.MetadataFilename,
 		Confidence:  candidate.Confidence,
 		PartialSets: true,
-		Title: Candidate{
-			Value: candidate.Title, Source: store.MetadataFilename},
+	}
+	if !candidate.Guessed.Title {
+		proposal.Title = Candidate{
+			Value: candidate.Title, Source: store.MetadataFilename}
+	}
+	if candidate.Guessed.Series {
+		candidate.Series = ""
+	}
+	if candidate.Guessed.Author {
+		candidate.Author = ""
 	}
 	if series := strings.TrimSpace(candidate.Series); series != "" {
 		proposal.Series = []Assertion[string, SeriesValue]{{

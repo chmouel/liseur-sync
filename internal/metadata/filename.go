@@ -68,6 +68,19 @@ const (
 	ConfidenceHigh Confidence = "high"
 )
 
+// PathFields marks which of a candidate's values were recovered by
+// splitting a single name component rather than read from a directory
+// boundary. The grade is per candidate but the reason for it is per field:
+// a layout can read an unambiguous author from a directory and still have
+// to guess where the title ended.
+type PathFields struct {
+	Title  bool
+	Series bool
+	Author bool
+}
+
+func (f PathFields) any() bool { return f.Title || f.Series || f.Author }
+
 // PathCandidate is what one library layout claims about a file. Every field
 // is optional: a value the layout could not determine unambiguously is left
 // unset rather than guessed. RelativePath is always the untouched input, so
@@ -76,6 +89,7 @@ type PathCandidate struct {
 	RelativePath   string
 	Pattern        PathPattern
 	Confidence     Confidence
+	Guessed        PathFields
 	Title          string
 	Series         string
 	SeriesPosition float64
@@ -121,14 +135,12 @@ func applyPathPattern(
 		}
 		candidate.Author = parts[0]
 		candidate.Title = leaf
-		candidate.Confidence = ConfidenceHigh
 	case PatternAuthorSeriesTitle:
 		if len(parts) != 3 {
 			return candidate, false
 		}
 		candidate.Author = parts[0]
 		candidate.Series = parts[1]
-		candidate.Confidence = ConfidenceHigh
 		leafTitle, usable := splitPositionPrefix(leaf)
 		if !usable {
 			return PathCandidate{}, false
@@ -147,7 +159,8 @@ func applyPathPattern(
 		candidate.Series = parts[0]
 		candidate.Author = fields[0]
 		candidate.Title = fields[1]
-		candidate.Confidence = ConfidenceLow
+		candidate.Guessed.Author = true
+		candidate.Guessed.Title = true
 	case PatternFlatAuthorSeriesTitle:
 		if len(parts) != 1 {
 			return candidate, false
@@ -165,7 +178,7 @@ func applyPathPattern(
 		candidate.SeriesPosition = position
 		candidate.HasPosition = true
 		candidate.Title = fields[2]
-		candidate.Confidence = ConfidenceLow
+		candidate.Guessed = PathFields{Title: true, Series: true, Author: true}
 	default:
 		return candidate, false
 	}
@@ -173,8 +186,13 @@ func applyPathPattern(
 		return PathCandidate{}, false
 	}
 	// A separator left inside the title is a field boundary the layout could
-	// not explain, whichever layout matched.
+	// not explain, whichever layout matched. It says nothing about a value
+	// that came from a directory of its own.
 	if strings.Contains(candidate.Title, nameSeparator) {
+		candidate.Guessed.Title = true
+	}
+	candidate.Confidence = ConfidenceHigh
+	if candidate.Guessed.any() {
 		candidate.Confidence = ConfidenceLow
 	}
 	return candidate, true
