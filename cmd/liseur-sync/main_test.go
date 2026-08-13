@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,36 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 )
+
+func TestAdminUsageNoSubcommandPlainStderr(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runMain([]string{"admin", "-config", "unused.toml"}, &stderr)
+	if code == 0 {
+		t.Fatal("runMain exited 0, want non-zero")
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "usage: liseur-sync admin [-config <file>] <subcommand>\n\n") {
+		t.Fatalf("stderr did not contain plain multi-line admin usage:\n%s", got)
+	}
+	if strings.Contains(got, `\n`) {
+		t.Fatalf("stderr contains escaped newline sequence: %q", got)
+	}
+	if strings.Contains(got, "ERROR") || strings.Contains(got, "err=") {
+		t.Fatalf("stderr contains slog output: %q", got)
+	}
+}
+
+func TestAdminUsageHelpFlagExitsZero(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runMain([]string{"admin", "-h"}, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain exited %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(),
+		"usage: liseur-sync admin [-config <file>] <subcommand>\n\n") {
+		t.Fatalf("stderr did not contain admin usage:\n%s", stderr.String())
+	}
+}
 
 func TestOpenContentAndRecoverBeforeServe(t *testing.T) {
 	ctx := context.Background()
