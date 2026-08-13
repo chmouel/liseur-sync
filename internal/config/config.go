@@ -50,6 +50,19 @@ type Config struct {
 		EPUBMaxRatio          int64 `toml:"epub_max_compression_ratio"`
 		EPUBMaxMetadataBytes  int64 `toml:"epub_max_metadata_bytes"`
 		EPUBMaxXMLDepth       int   `toml:"epub_max_xml_depth"`
+		// WatchedScanInterval is how often each watched library is swept,
+		// in seconds, or 0 to run no sweeps at all. Notifications are not
+		// used: a sweep is the only thing allowed to conclude that a book
+		// is gone (ADR-0002), so the interval is the real latency budget
+		// rather than a fallback for a missed event.
+		WatchedScanInterval int `toml:"watched_scan_interval_seconds"`
+		// WatchedMaxFiles and WatchedMaxDepth bound one traversal. A
+		// sweep that meets either is incomplete, and an incomplete sweep
+		// never marks anything missing, so raising them is how an
+		// operator with a very large library keeps absence detection
+		// working rather than a tuning knob.
+		WatchedMaxFiles int `toml:"watched_max_files"`
+		WatchedMaxDepth int `toml:"watched_max_depth"`
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -117,6 +130,12 @@ func Default() Config {
 	c.Content.EPUBMaxRatio = int64(epubLimits.MaxCompressionRatio)
 	c.Content.EPUBMaxMetadataBytes = epubLimits.MaxMetadataBytes
 	c.Content.EPUBMaxXMLDepth = epubLimits.MaxXMLDepth
+	// Five minutes is short enough that a book dropped into a folder is
+	// there before anybody goes looking for it, and long enough that a
+	// spinning disk is not read continuously.
+	c.Content.WatchedScanInterval = 300
+	c.Content.WatchedMaxFiles = 200_000
+	c.Content.WatchedMaxDepth = 32
 	c.Adapters.Kosync = true
 	c.Adapters.Koplugin = true
 	c.Ops.MaxBatch = 500
@@ -223,6 +242,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.QuotaBytes < 0 {
 		return fmt.Errorf("content.quota_bytes must be >= 0 (0 disables the quota)")
+	}
+	if c.Content.WatchedScanInterval < 0 ||
+		c.Content.WatchedScanInterval > 86400 {
+		return fmt.Errorf(
+			"content.watched_scan_interval_seconds must be between 0 and 86400 (0 disables scanning)")
+	}
+	if c.Content.WatchedMaxFiles < 1 {
+		return fmt.Errorf("content.watched_max_files must be >= 1")
+	}
+	if c.Content.WatchedMaxDepth < 1 || c.Content.WatchedMaxDepth > 256 {
+		return fmt.Errorf("content.watched_max_depth must be between 1 and 256")
 	}
 	if c.Content.EPUBMaxRatio < 1 {
 		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")
