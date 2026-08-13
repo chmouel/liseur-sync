@@ -22,6 +22,15 @@ import (
 // really stored.
 func (f *uploadFixture) publish(t *testing.T, name string, body []byte) (string, string) {
 	t.Helper()
+	return f.publishAs(t, name, "Title of "+name, body)
+}
+
+// publishAs is publish with the title spelled out, for tests that care
+// what the metadata says rather than only that a book exists.
+func (f *uploadFixture) publishAs(
+	t *testing.T, name, title string, body []byte,
+) (string, string) {
+	t.Helper()
 	code, out := f.upload(t, f.token, f.library, "publish-"+name, body)
 	if code != http.StatusAccepted {
 		t.Fatalf("upload %s: %d %v", name, code, out)
@@ -64,7 +73,7 @@ func (f *uploadFixture) publish(t *testing.T, name string, body []byte) (string,
 			Blob:             store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size},
 			Book: store.CatalogBook{
 				ID: bookID, LibraryID: f.library, Status: store.BookActive,
-				Title: "Title of " + name, TitleSource: store.MetadataEmbedded,
+				Title: title, TitleSource: store.MetadataEmbedded,
 				Publisher: "A Publisher", PublisherSource: store.MetadataEmbedded,
 				CreatedAt: at, UpdatedAt: at,
 			},
@@ -470,5 +479,79 @@ func TestDownloadRefusesAMisleadingMediaType(t *testing.T) {
 		if got := downloadMediaType(tc.stored); got != tc.want {
 			t.Errorf("downloadMediaType(%q) = %q, want %q", tc.stored, got, tc.want)
 		}
+	}
+}
+
+// TestDownloadRejectsABadRangeInJSON: a malformed or unsatisfiable Range
+// is client input, and this package's contract is that client input never
+// produces a body outside the JSON error shape. http.ServeContent would
+// answer with plain text and leave the attachment headers on, so the
+// wrapper that corrects it needs pinning.
+func TestDownloadRejectsABadRangeInJSON(t *testing.T) {
+	f := newUploadFixture(t)
+	body := bytes.Repeat([]byte("x"), 64)
+	bookID, _ := f.publish(t, "badrange", body)
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	for _, rng := range []string{"bytes=abc", "chunks=0-1", "bytes=999-1200", "bytes=-"} {
+		req, _ := http.NewRequest(http.MethodGet,
+			f.ts.URL+"/v1/books/"+bookID+"/download", nil)
+		req.Header.Set("Authorization", "Bearer "+read)
+		req.Header.Set("Range", rng)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+			t.Fatalf("range %q: status %d", rng, resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Fatalf("range %q: content-type %q body %s", rng, ct, raw)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("range %q: body is not JSON: %s", rng, raw)
+		}
+		if out["error"] == nil || out["error"] == "" {
+			t.Fatalf("range %q: no error message: %s", rng, raw)
+		}
+		if got := resp.Header.Get("Content-Disposition"); got != "" {
+			t.Fatalf("range %q: failed request still an attachment: %q", rng, got)
+		}
+		if bytes.Contains(raw, body[:8]) {
+			t.Fatalf("range %q: content leaked into the error", rng)
+		}
+	}
+}
+
+// TestDownloadStillServesGoodRanges guards the wrapper from over-reaching:
+// resuming a partial download is the normal case and must keep working.
+func TestDownloadStillServesGoodRanges(t *testing.T) {
+	f := newUploadFixture(t)
+	body := []byte("0123456789abcdefghij")
+	bookID, _ := f.publish(t, "goodrange", body)
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	req, _ := http.NewRequest(http.MethodGet,
+		f.ts.URL+"/v1/books/"+bookID+"/download", nil)
+	req.Header.Set("Authorization", "Bearer "+read)
+	req.Header.Set("Range", "bytes=4-8")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206 (%s)", resp.StatusCode, raw)
+	}
+	if string(raw) != "456789"[:5] {
+		t.Fatalf("range body = %q", raw)
+	}
+	if got := resp.Header.Get("Content-Disposition"); got == "" {
+		t.Fatal("206 lost its attachment header")
 	}
 }
