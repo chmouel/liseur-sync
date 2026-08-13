@@ -10,6 +10,11 @@ last-write-wins), collects honest reading statistics, and recognises a
 book across calibre re-encodes and library moves. One static Go binary.
 SQLite by default, PostgreSQL optional. Multi-user.
 
+It also holds the books. Upload an EPUB through the web UI or the API and
+it is validated, stored once whatever its name, and served back to any
+reader that speaks OPDS 1.2 — KOReader included — so one server supplies
+the file and the reading position that goes with it.
+
 ## Quick start
 
 The easiest way is the installer — it detects Docker (or sets up
@@ -30,8 +35,12 @@ curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/in
 go build ./cmd/liseur-sync
 ./liseur-sync admin create-user alice        # password via prompt
 ./liseur-sync admin mint-token alice "Boox Palma"
+./liseur-sync admin create-library alice "Books"
 ./liseur-sync serve
 ```
+
+Then sign in at `/ui/books` to upload one, or point a reader at
+`/opds/v1.2`.
 
 Or with Docker Compose, three database postures:
 

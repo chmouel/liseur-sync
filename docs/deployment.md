@@ -110,8 +110,24 @@ future uploads cannot change the CAS:
    - **SQLite:** use `sqlite3 liseur-sync.db '.backup /backups/ls.db'`;
      never copy live `.db`/`.wal` files;
    - **Postgres:** use `pg_dump` as usual;
-2. copy the content directory while the app remains stopped;
-3. verify that the backup preserves owner-only permissions before restore.
+2. copy the content directory while the app remains stopped, with a tool
+   that preserves permissions (`cp -a`, `tar -p`, `rsync -a`). A copy that
+   widens them is refused on restore: the CAS requires a private root
+   (`chmod 700`), and a world-readable content directory is a library
+   anybody with a shell can read;
+3. check the copy is restorable:
+
+   ```
+   liseur-sync admin -config backup-copy.toml verify-backup
+   ```
+
+   Point the config at the copy — its database and its content directory.
+   The command compares the two and reports any blob the database
+   references that the backup does not hold, holds at the wrong size, or
+   holds with damaged bytes, naming each digest. It exits non-zero when
+   the backup cannot be restored from, so a backup script can act on it.
+   It changes neither side, so it is also safe to run against the live
+   server.
 
 ## Upgrades
 
