@@ -434,7 +434,7 @@ func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
 	owner := MkUser(t, s, "catalog-files-owner")
 	reader := MkUser(t, s, "catalog-files-reader")
 	outsider := MkUser(t, s, "catalog-files-outsider")
-	now := time.Date(2026, time.August, 13, 10, 0, 0, 654321000, time.UTC)
+	now := time.Date(2026, time.August, 13, 10, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-catalog-files", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
 		Kind: store.LibraryManaged, Name: "Files", CreatedAt: now,
@@ -452,8 +452,15 @@ func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
 	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
 		t.Fatal(err)
 	}
+	// The sub-second offsets are chosen to catch a text-encoded backend
+	// that compares timestamps byte by byte. RFC3339Nano trims trailing
+	// zeros, so ".5" and ".55" and a whole second have different widths,
+	// and byte order puts them in the wrong sequence: a naive encoding
+	// reports file-half as the newest.
 	files := []store.BookFile{
 		{ID: "file-old", CreatedAt: now},
+		{ID: "file-half", CreatedAt: now.Add(500 * time.Millisecond)},
+		{ID: "file-later", CreatedAt: now.Add(550 * time.Millisecond)},
 		{ID: "file-new-a", CreatedAt: now.Add(time.Second)},
 		{ID: "file-new-z", CreatedAt: now.Add(time.Second)},
 	}
@@ -479,7 +486,7 @@ func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
 	for i, file := range gotFiles {
 		got[i] = file.ID
 	}
-	want := []string{"file-new-z", "file-new-a", "file-old"}
+	want := []string{"file-new-z", "file-new-a", "file-later", "file-half", "file-old"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("book files: got %v want %v", got, want)
 	}
