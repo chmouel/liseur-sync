@@ -19,6 +19,24 @@ type OpenFunc func(t *testing.T) store.Store
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
+	t.Run("AdminRole", func(t *testing.T) { testAdminRole(t, open) })
+	t.Run("ConcurrentAdminDemotion", func(t *testing.T) {
+		testConcurrentAdminDemotion(t, open)
+	})
+	t.Run("ConcurrentAdminTokenMint", func(t *testing.T) {
+		testConcurrentAdminTokenMint(t, open)
+	})
+	t.Run("CreateFirstAdmin", func(t *testing.T) { testCreateFirstAdmin(t, open) })
+	t.Run("ConcurrentFirstAdmin", func(t *testing.T) {
+		testConcurrentFirstAdmin(t, open)
+	})
+	t.Run("AdminCounts", func(t *testing.T) { testAdminCounts(t, open) })
+	t.Run("UserCredentialOperations", func(t *testing.T) {
+		testUserCredentialOperations(t, open)
+	})
+	t.Run("ListUsersPage", func(t *testing.T) { testListUsersPage(t, open) })
+	t.Run("AdminLibraries", func(t *testing.T) { testAdminLibraries(t, open) })
+	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })
 	t.Run("LibraryConfig", func(t *testing.T) { testLibraryConfig(t, open) })

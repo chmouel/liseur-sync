@@ -196,9 +196,18 @@ func (s *Store) RedeemInvite(ctx context.Context, codeSHA256 string, at time.Tim
 	return inv, tx.Commit()
 }
 
-// UpdateUserPassword replaces a user's argon2id hash.
-func (s *Store) UpdateUserPassword(ctx context.Context, userID, argon2Hash string) error {
-	res, err := s.db.ExecContext(ctx, q(
+// SetUserPassword replaces a user's argon2id hash and revokes their
+// auth sessions in the same transaction, sparing keepSessionID. A
+// password change that left an old session usable is not a password
+// change, and a revocation that happened without the write would sign
+// somebody out for nothing.
+func (s *Store) SetUserPassword(ctx context.Context, userID, argon2Hash, keepSessionID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, q(
 		`UPDATE users SET argon2_hash = ? WHERE id = ?`), argon2Hash, userID)
 	if err != nil {
 		return err
@@ -206,5 +215,44 @@ func (s *Store) UpdateUserPassword(ctx context.Context, userID, argon2Hash strin
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return store.ErrNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE auth_sessions SET revoked_at = ?
+		 WHERE user_id = ? AND revoked_at IS NULL AND id <> ?`),
+		time.Now().UTC(), userID, keepSessionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RevokeAllUserCredentials cuts every way into the account at once.
+func (s *Store) RevokeAllUserCredentials(ctx context.Context, userID string, at time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err := tx.QueryRowContext(ctx, q(
+		`SELECT 1 FROM users WHERE id = ?`), userID).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		return err
+	}
+	stamp := at.UTC()
+	for _, stmt := range []string{
+		`UPDATE tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		`UPDATE kosync_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		`UPDATE koplugin_devices SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		// An unredeemed pairing code is a credential in waiting: it
+		// mints a kosync device slot on first use. Marking it used is
+		// how this schema spells "spent".
+		`UPDATE pairing_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL`,
+	} {
+		if _, err := tx.ExecContext(ctx, q(stmt), stamp, userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }

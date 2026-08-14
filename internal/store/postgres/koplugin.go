@@ -24,7 +24,9 @@ func (s *Store) KopluginDeviceByToken(ctx context.Context, tokenSHA256 string) (
 	var d store.KopluginDevice
 	err := s.db.QueryRowContext(ctx, q(
 		`SELECT id, user_id, token_sha256, label, device_id, created_at, revoked_at
-		 FROM koplugin_devices WHERE token_sha256 = ?`), tokenSHA256).
+		 FROM koplugin_devices WHERE token_sha256 = ?
+		   AND EXISTS (SELECT 1 FROM users u
+		               WHERE u.id = koplugin_devices.user_id AND u.disabled_at IS NULL)`), tokenSHA256).
 		Scan(&d.ID, &d.UserID, &d.TokenSHA256, &d.Label, &d.DeviceID, &d.CreatedAt, &d.RevokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, store.ErrNotFound

@@ -56,6 +56,15 @@ func (s *Service) Login(ctx context.Context, username, password string) (secret 
 	if err != nil || !ok {
 		return "", errors.New("invalid credentials")
 	}
+	// The one explicit check (ADR-0013): every other way in resolves
+	// through a credential lookup that joins against users, but a login
+	// starts from UserByName, which must keep returning disabled
+	// accounts so the admin panel can render them. The password is
+	// verified first so that a disabled account is not an oracle for
+	// which names exist.
+	if !u.Enabled() {
+		return "", errors.New("invalid credentials")
+	}
 	return s.issueAuthSession(ctx, u.ID, "login", "")
 }
 
@@ -207,7 +216,11 @@ func (s *Service) mintToken(ctx context.Context, userID, name string, requested 
 }
 
 // CheckScopeGrant applies the privilege-escalation rule shared by the
-// token API and web UI. The admin CLI intentionally bypasses it.
+// token API and web UI. It is the early check that produces a good
+// error message; the rule itself is enforced by the store, inside the
+// transaction that writes the token, where it cannot race a demotion.
+// The admin CLI intentionally bypasses this pre-check — and is caught
+// by the store anyway.
 func (s *Service) CheckScopeGrant(ctx context.Context, userID string, scopes store.ScopeSet) error {
 	normalized, err := store.NormalizeScopes(scopes)
 	if err != nil {
@@ -226,32 +239,38 @@ func (s *Service) CheckScopeGrant(ctx context.Context, userID string, scopes sto
 	return nil
 }
 
-// IsAdmin reports whether the user holds an active admin-scope token.
+// IsAdmin reports whether the account is an enabled administrator.
 // This is the single definition of "is an admin" — the API's admin
-// scope gate and the web UI's admin pages both go through it, so a
-// user can never bootstrap admin rights for themselves. Admin tokens
-// are minted out of band by `liseur-sync admin mint-token -scope
-// admin`.
+// scope gate and the web UI's admin pages both go through it.
+//
+// It reads `users.is_admin` (ADR-0013): the role belongs to the
+// account, not to a credential, so granting it hands nobody a bearer
+// secret, revoking it cannot maim a multi-scope token, and the
+// last-admin guard can be a condition inside the transaction that
+// writes rather than a scan that races. A disabled account is never an
+// admin, whatever its flag says. The role is moved with
+// `store.SetUserAdmin`, or out of band with `liseur-sync admin
+// grant-admin`.
 func (s *Service) IsAdmin(ctx context.Context, userID string) (bool, error) {
-	toks, err := s.St.ListTokens(ctx, userID)
+	u, err := s.St.UserByID(ctx, userID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
-	now := s.Now()
-	for _, t := range toks {
-		if !t.Scopes.Contains(store.ScopeAdmin) || t.RevokedAt != nil {
-			continue
-		}
-		if t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
-			continue
-		}
-		return true, nil
-	}
-	return false, nil
+	return u.IsAdmin && u.Enabled(), nil
 }
 
 // AuthenticateToken validates a bearer secret and returns its token.
 // Revoked and expired tokens are rejected; last_used is touched.
+//
+// An admin-scoped token is additionally checked against its owner's
+// account. Demotion revokes those tokens in the same transaction that
+// clears the role, so this should never fire — it is the second fence,
+// for a token minted through some future path that forgets, and it
+// costs one indexed row read on the only tokens that carry authority
+// over the whole instance.
 func (s *Service) AuthenticateToken(ctx context.Context, secret string) (store.Token, error) {
 	t, err := s.tokenByHashGlobal(ctx, HashSecret(secret))
 	if err != nil {
@@ -259,6 +278,15 @@ func (s *Service) AuthenticateToken(ctx context.Context, secret string) (store.T
 	}
 	if t.RevokedAt != nil || (t.ExpiresAt != nil && s.Now().After(*t.ExpiresAt)) {
 		return t, errors.New("token revoked or expired")
+	}
+	if t.Scopes.Contains(store.ScopeAdmin) {
+		isAdmin, err := s.IsAdmin(ctx, t.UserID)
+		if err != nil {
+			return t, err
+		}
+		if !isAdmin {
+			return t, errors.New("admin scope on a non-admin account")
+		}
 	}
 	_ = s.St.TouchToken(ctx, t.UserID, t.ID, s.Now())
 	return t, nil

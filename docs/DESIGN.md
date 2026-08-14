@@ -386,9 +386,18 @@ outside kosync, `cors({origin:'*'})`, MD5 password-equivalents).
   `library-manage` implies `library-read`; `admin` implies
   all scopes. Existing singleton tokens remain wire-compatible, and explicit
   in-place scope updates preserve a token's device identity and secret.
-  `admin` is never self-grantable: minting or adding it requires an existing
-  admin token or the admin CLI, so a login credential alone can never
-  escalate.
+  `admin` is never self-grantable: minting or adding it requires that the
+  owning account already carry the administrator role (`users.is_admin`,
+  [ADR-0013](adr/0013-admin-panel.md)), which is granted by another
+  administrator or by `liseur-sync admin grant-admin`. A login credential
+  alone can never escalate, and demoting an account revokes its
+  admin-scoped tokens in the same transaction.
+- An account can be **disabled** (`users.disabled_at`) rather than
+  deleted. Every credential that resolves to a user — password, web
+  session, API token, kosync device key, kosync pairing code, koplugin
+  device token — checks the flag, so one write closes every door at
+  once and enabling reopens exactly the same ones. The last enabled
+  administrator can be neither demoted nor disabled.
 
 ### 8.2 Instance posture
 

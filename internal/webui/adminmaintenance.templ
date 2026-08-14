@@ -1,0 +1,78 @@
+package webui
+
+// The maintenance page: aggregate state only. Nothing here identifies a
+// book, a file or an account — the question it answers is "is anything
+// stuck?", and a count with an age answers it (ADR-0013).
+
+templ adminMaintenanceBody(prefix string, v maintenanceView) {
+	<h1>Maintenance</h1>
+	<p class="muted">
+		What the background workers have left to do, as the database sees it.
+		There is nothing to press: every worker runs on its own schedule and
+		is safe to repeat, so a button here would only start a second pass
+		over the same rows.
+	</p>
+	<section class="card">
+		<h2>Ingest</h2>
+		<table>
+			<tr><th>State</th><th>Jobs</th><th>Oldest</th></tr>
+			for _, row := range v.Jobs {
+				<tr>
+					<td>{ row.State }</td>
+					<td>{ i2s(row.Count) }</td>
+					<td>
+						if row.Oldest != "" {
+							{ row.Oldest }
+						} else {
+							<span class="muted">—</span>
+						}
+					</td>
+				</tr>
+			}
+		</table>
+		<p class="muted">
+			An oldest age is shown only for the states a job can sit in. A
+			pending or running job that keeps getting older is the shape of a
+			stuck worker.
+		</p>
+	</section>
+	<section class="card">
+		<h2>Review and trash</h2>
+		<dl class="facts">
+			<dt>Held for review</dt>
+			<dd>{ i2s(v.Counts.BooksByStatus["review"]) }</dd>
+			<dt>In trash</dt>
+			<dd>{ i2s(v.Counts.BooksByStatus["trashed"]) }</dd>
+			<dt>Next expiry</dt>
+			<dd>
+				if until(v.Counts.TrashNextExpiry, v.Now) != "" {
+					{ until(v.Counts.TrashNextExpiry, v.Now) }
+				} else {
+					<span class="muted">nothing pending</span>
+				}
+			</dd>
+			<dt>Retention</dt>
+			<dd>{ v.TrashRetention }</dd>
+			<dt>Missing files</dt>
+			<dd>{ i2s(v.Counts.BooksByStatus["missing"]) }</dd>
+		</dl>
+	</section>
+	<section class="card">
+		<h2>Stored files</h2>
+		<dl class="facts">
+			<dt>Blobs</dt>
+			<dd>{ i2s(v.Counts.Blobs) } <span class="muted">{ "(" + humanBytes(v.Counts.BlobBytes) + ")" }</span></dd>
+			<dt>Reserved, not yet promoted</dt>
+			<dd>{ i2s(v.Counts.BlobsPending) }</dd>
+			<dt>Orphaned</dt>
+			<dd>{ i2s(v.Counts.OrphanBlobs) }</dd>
+			<dt>Orphan grace</dt>
+			<dd>{ v.OrphanGrace }</dd>
+		</dl>
+		<p class="muted">
+			An orphaned blob is one no book file points at any more. They are
+			kept for the grace period above, so a number here is not a
+			problem until it stops going back down.
+		</p>
+	</section>
+}

@@ -43,10 +43,18 @@ curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/in
 
 ```
 go build ./cmd/liseur-sync
+./liseur-sync serve
+```
+
+Then open `/ui/`: a server with no accounts offers a one-time setup
+page, and the account you make there is the first administrator. From a
+shell instead:
+
+```
 ./liseur-sync admin create-user alice        # password via prompt
+./liseur-sync admin grant-admin alice        # first administrator
 ./liseur-sync admin mint-token alice "Boox Palma"
 ./liseur-sync admin create-library alice "Books"
-./liseur-sync serve
 ```
 
 Then sign in at `/ui/library` — one dark cover grid with a left rail, a
@@ -55,6 +63,11 @@ what you have read on it — to upload a book, or point a reader at
 `/opds/v1.2`. To index EPUBs you already have instead of uploading them,
 `admin watch-library alice "Calibre" /srv/books` — the server reads that
 directory and never writes to it.
+
+An administrator also gets `/ui/admin`: accounts (create, reset a
+password, grant the role, disable), libraries and who may read them,
+and what the background jobs are doing. It administers accounts, not
+their contents — it never shows what anybody is reading.
 
 Or with Docker Compose, three database postures:
 

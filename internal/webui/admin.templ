@@ -1,0 +1,112 @@
+package webui
+
+import (
+	"github.com/chmouel/liseur-sync/internal/buildinfo"
+	"github.com/chmouel/liseur-sync/internal/store"
+)
+
+// The admin section (ADR-0013). One rail entry, several pages behind a
+// sub-navigation: the panel administers accounts and instance-wide
+// infrastructure, and each of those is a page rather than a tab on a
+// settings form.
+//
+// Nothing here renders another account's data. There is no book title,
+// author, filename, source path or error string from somebody else's
+// library on any of these pages — that boundary is what lets an
+// administrator page exist at all, and it is asserted in the tests
+// rather than left to reviewers.
+
+templ adminPage(title string, prefix string, u userCtx, csrf string, current string, body templ.Component) {
+	@layout(title, prefix, u, csrf, adminShell(prefix, current, body))
+}
+
+templ adminShell(prefix string, current string, body templ.Component) {
+	<nav class="subnav" aria-label="Admin sections">
+		@subnavLink(prefix+"admin", "Overview", current == "overview")
+		@subnavLink(prefix+"admin/users", "Users", current == "users")
+		@subnavLink(prefix+"admin/libraries", "Libraries", current == "libraries")
+		@subnavLink(prefix+"admin/maintenance", "Maintenance", current == "maintenance")
+	</nav>
+	@body
+}
+
+templ subnavLink(href string, label string, current bool) {
+	if current {
+		<a href={ href } aria-current="page">{ label }</a>
+	} else {
+		<a href={ href }>{ label }</a>
+	}
+}
+
+// adminOverview is the page an operator lands on: what this build is,
+// how much of everything there is, and how the server was configured.
+templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo.Info, cfg configFacts) {
+	<h1>Overview</h1>
+	<section class="card">
+		<h2>This build</h2>
+		<dl class="facts">
+			<dt>Version</dt>
+			<dd>{ build.Short() }</dd>
+			if build.ShortRevision() != "" {
+				<dt>Revision</dt>
+				<dd><code>{ build.ShortRevision() }</code></dd>
+			}
+			if build.Go != "" {
+				<dt>Go</dt>
+				<dd>{ build.Go }</dd>
+			}
+		</dl>
+	</section>
+	<section class="card">
+		<h2>Instance</h2>
+		<dl class="facts">
+			<dt>Accounts</dt>
+			<dd>
+				{ i2s(counts.Users) }
+				<span class="muted">
+					{ "(" + i2s(counts.AdminUsers) + " admin, " +
+						i2s(counts.DisabledUsers) + " disabled)" }
+				</span>
+			</dd>
+			<dt>Libraries</dt>
+			<dd>
+				{ i2s(counts.Libraries) }
+				<span class="muted">
+					{ "(" + i2s(counts.ManagedLibraries) + " managed, " +
+						i2s(counts.WatchedLibraries) + " watched)" }
+				</span>
+			</dd>
+			<dt>Books</dt>
+			<dd>
+				{ i2s(counts.BooksByStatus["active"]) } active
+				<span class="muted">
+					{ "(" + i2s(counts.BooksByStatus["review"]) + " in review, " +
+						i2s(counts.BooksByStatus["missing"]) + " missing, " +
+						i2s(counts.BooksByStatus["trashed"]) + " in trash)" }
+				</span>
+			</dd>
+			<dt>Stored files</dt>
+			<dd>{ i2s(counts.Blobs) } <span class="muted">{ "(" + humanBytes(counts.BlobBytes) + ")" }</span></dd>
+		</dl>
+		<p class="muted">
+			<a href={ prefix + "admin/maintenance" }>Maintenance</a> has the
+			ingest, review and trash detail.
+		</p>
+	</section>
+	<section class="card">
+		<h2>Configuration</h2>
+		<p class="muted">
+			Read from the configuration file at startup. There is no reload:
+			changing any of these means restarting the server. The database
+			connection string is deliberately not shown — it carries a
+			password.
+		</p>
+		<dl class="facts">
+			for _, f := range cfg.Fields {
+				<dt>{ f.Label }</dt>
+				<dd>{ f.Value }</dd>
+			}
+		</dl>
+	</section>
+}
+

@@ -656,8 +656,10 @@ func TestAdminScopeNotSelfMintable(t *testing.T) {
 		t.Fatalf("sync token: want 201, got %d %v", code, out)
 	}
 
-	// An existing admin may mint another admin token.
-	if _, _, err := auth.NewService(st).MintToken(ctx, "u1", "cli", store.ScopeSet{store.ScopeAdmin}, nil); err != nil {
+	// An admin account may mint an admin token. Admin is a property of
+	// the account (ADR-0013), so the way to become one is the flag, not
+	// a token that would have to exist before it could be granted.
+	if err := st.SetUserAdmin(ctx, "u1", true); err != nil {
 		t.Fatal(err)
 	}
 	if code, out = post(t, ts.URL+"/v1/tokens", login(), map[string]string{

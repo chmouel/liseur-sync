@@ -199,10 +199,35 @@ func TestAuthFlowAndPages(t *testing.T) {
 	if !strings.Contains(body, "heatmap") || !strings.Contains(body, "day streak") {
 		t.Fatal("dashboard missing heatmap/stats")
 	}
-	// Admin page is forbidden without an admin token.
-	code, _ = page(t, ts, cookie, "/ui/admin")
-	if code != 403 {
-		t.Fatalf("admin without admin token: want 403, got %d", code)
+	// Every admin page is forbidden to an ordinary account, and the
+	// rail does not advertise the section in the first place.
+	code, body = page(t, ts, cookie, "/ui")
+	if strings.Contains(body, `>Admin<`) {
+		t.Fatal("rail offers Admin to a non-admin")
+	}
+	for _, p := range []string{
+		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
+		"/ui/admin/maintenance",
+	} {
+		code, body = page(t, ts, cookie, p)
+		if code != 403 {
+			t.Fatalf("GET %s as a non-admin: want 403, got %d", p, code)
+		}
+		if !strings.Contains(body, "Not allowed") {
+			t.Fatalf("GET %s denial is not the rendered page: %q", p, body)
+		}
+	}
+	for _, p := range []string{
+		"/ui/admin/invites", "/ui/admin/users", "/ui/admin/users/u1/password",
+		"/ui/admin/users/u1/admin", "/ui/admin/users/u1/disabled",
+		"/ui/admin/users/u1/credentials/revoke",
+		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
+		"/ui/admin/users/u1/koplugin/k1/revoke", "/ui/admin/libraries",
+		"/ui/admin/libraries/l1/access", "/ui/admin/libraries/l1/layout",
+	} {
+		if code, _ := postForm(t, ts, cookie, p, url.Values{}); code != 403 {
+			t.Fatalf("POST %s as a non-admin: want 403, got %d", p, code)
+		}
 	}
 }
 
@@ -296,15 +321,17 @@ func TestSettingsSave(t *testing.T) {
 
 func TestAdminInvites(t *testing.T) {
 	ts, st := testServer(t)
-	// Grant the user an admin token so admin pages unlock.
-	svc := auth.NewService(st)
-	if _, _, err := svc.MintToken(t.Context(), "u1", "adm", store.ScopeSet{store.ScopeAdmin}, nil); err != nil {
+	// Admin is an account property (ADR-0013), not a token.
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/admin")
+	code, body := page(t, ts, cookie, "/ui/admin/users")
 	if code != 200 || !strings.Contains(body, "Invite codes") {
-		t.Fatalf("admin page: %d", code)
+		t.Fatalf("admin users page: %d", code)
+	}
+	if !strings.Contains(body, `>Admin<`) {
+		t.Fatal("rail hides Admin from an admin")
 	}
 	csrf := extractCSRF(t, body)
 	code, body = postForm(t, ts, cookie, "/ui/admin/invites", url.Values{"csrf": {csrf}})
@@ -314,6 +341,49 @@ func TestAdminInvites(t *testing.T) {
 	invs, _ := st.ListInvites(t.Context(), "u1")
 	if len(invs) != 1 {
 		t.Fatalf("invites: %+v", invs)
+	}
+}
+
+// adminTestDatabaseURL is the planted secret: if the config card ever
+// walks the config struct instead of naming its fields, this string
+// lands on a web page and the test below says so.
+const adminTestDatabaseURL = "postgres://liseur:hunter2secret@db.example/liseur?sslmode=require"
+
+// TestAdminOverview covers the section's landing page: it names the
+// build, it counts what the instance holds, and it shows configuration
+// without ever showing the database URL — which carries the PostgreSQL
+// password and is the one field the card is written by hand to exclude
+// (ADR-0013).
+func TestAdminOverview(t *testing.T) {
+	ts, st := testServerCfg(t, func(c *config.Config) {
+		c.Database.Driver = "postgres"
+		c.Database.URL = adminTestDatabaseURL
+	}, nil)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/admin")
+	if code != 200 {
+		t.Fatalf("admin overview: %d", code)
+	}
+	for _, want := range []string{
+		"Overview", "This build", "Accounts", "Libraries", "Configuration",
+		"Database driver", "postgres",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("overview is missing %q", want)
+		}
+	}
+	// Sub-navigation reaches every page of the section.
+	for _, want := range []string{`"admin/users"`, `"admin/libraries"`, `"admin/maintenance"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("subnav is missing %s", want)
+		}
+	}
+	if strings.Contains(body, adminTestDatabaseURL) ||
+		strings.Contains(strings.ToLower(body), "password=") {
+		t.Fatal("the overview rendered the database connection string")
 	}
 }
 
@@ -420,7 +490,9 @@ func TestCrossUserIsolation(t *testing.T) {
 func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
-		"/ui/", "/ui/login", "/ui/library", "/ui/devices", "/ui/settings", "/ui/admin",
+		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/devices", "/ui/settings",
+		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
+		"/ui/admin/maintenance",
 		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
@@ -429,9 +501,16 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		}
 	}
 	for _, p := range []string{
-		"/ui/login", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
+		"/ui/login", "/ui/setup", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
 		"/ui/tokens/example/scopes", "/ui/settings", "/ui/settings/password",
-		"/ui/admin/invites", "/ui/books/upload", "/ui/reader/token",
+		"/ui/admin/invites", "/ui/admin/users", "/ui/admin/users/u1/password",
+		"/ui/admin/users/u1/admin", "/ui/admin/users/u1/disabled",
+		"/ui/admin/users/u1/credentials/revoke",
+		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
+		"/ui/admin/users/u1/koplugin/k1/revoke",
+		"/ui/admin/libraries", "/ui/admin/libraries/l1/access",
+		"/ui/admin/libraries/l1/layout",
+		"/ui/books/upload", "/ui/reader/token",
 		"/ui/preferences",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {

@@ -13,6 +13,10 @@ type Flash struct {
 	Secret      string
 	SecretLabel string
 	Notice      string
+	// Error is a refusal the reader has to read: a wrong password, a
+	// name already taken, a guard that fired. It renders in the danger
+	// colour above the page's forms.
+	Error string
 }
 
 templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {

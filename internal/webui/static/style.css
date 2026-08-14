@@ -280,6 +280,33 @@ details.card[open] > summary::before { content: "−"; }
 
 .narrow { max-width: 23rem; margin: 4rem auto; }
 
+/* The admin section's own navigation: one rail entry, several pages. */
+.subnav {
+	display: flex; flex-wrap: wrap; gap: .3rem;
+	margin: 0 0 var(--gap); padding-bottom: .5rem;
+	border-bottom: 1px solid var(--line);
+}
+.subnav a {
+	padding: .3rem .7rem; border-radius: 2rem; text-decoration: none;
+	color: var(--ink-dim); font-size: .9rem;
+}
+.subnav a:hover { background: var(--surface-3); color: var(--ink); }
+.subnav a[aria-current="page"] {
+	background: var(--primary); color: var(--on-primary);
+}
+
+/* A labelled list of read-only facts: config, build, counts. */
+dl.facts {
+	display: grid; grid-template-columns: minmax(10rem, auto) 1fr;
+	gap: .35rem 1rem; margin: 0;
+}
+dl.facts dt { color: var(--muted); font-size: .85rem; }
+dl.facts dd { margin: 0; }
+@media (max-width: 30rem) {
+	dl.facts { grid-template-columns: 1fr; gap: 0 0; }
+	dl.facts dd { margin: 0 0 .5rem; }
+}
+
 .cards { display: flex; gap: var(--gap); flex-wrap: wrap; margin: 0 0 var(--gap); }
 .stat {
 	background: var(--surface); border: 1px solid var(--line);
