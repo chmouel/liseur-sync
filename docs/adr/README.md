@@ -36,6 +36,7 @@ loose ends that must come before any of it, are in
 | [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Implemented | Nothing outstanding |
 | [0012](0012-reader-engine-foliate.md) | Replace the reader engine with foliate-js | Later | Implemented | Nothing outstanding |
 | [0013](0013-admin-panel.md) | The admin panel | Later | Implemented | Nothing outstanding |
+| [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Proposed | Phase 1: the three axes |
 
 ## Convention
 
