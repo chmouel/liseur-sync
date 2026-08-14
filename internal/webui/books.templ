@@ -349,6 +349,13 @@ templ booksFragment(prefix, csrf string, v BooksView) {
 	}
 }
 
+// ChipLink is one entity a book claims, with the page listing everything
+// else that claims it.
+type ChipLink struct {
+	Name string
+	URL  string
+}
+
 type BookFileRow struct {
 	Name      string
 	MediaType string
@@ -368,6 +375,14 @@ type BookView struct {
 	CanRead     bool
 	Notice      string
 	Problem     string
+	// Chips are the book's entities as links: the fastest way from one
+	// book to the rest of its author, its series or its subject.
+	Authors []ChipLink
+	Series  []ChipLink
+	Tags    []ChipLink
+	Genres  []ChipLink
+	// Byline is the authors as one line, for the hero and the title tag.
+	Byline string
 	// CanWrite gates the edit form. A reader sees the book exactly as
 	// before; nothing about how it was catalogued is theirs to change.
 	CanWrite bool
@@ -533,40 +548,75 @@ templ lookupCandidate(prefix, csrf string, b BookView, c CandidateView) {
 }
 
 templ bookBody(prefix, csrf string, b BookView) {
-	<h1>{ orPlaceholder(b.Title) }</h1>
 	if b.Problem != "" {
 		<p class="error" role="alert">{ b.Problem }</p>
 	}
 	if b.Notice != "" {
 		<p class="notice" role="status">{ b.Notice }</p>
 	}
-	if b.Subtitle != "" {
-		<p class="muted">{ b.Subtitle }</p>
-	}
-	<img
-		class="cover-full"
-		src={ prefix + "books/" + b.ID + "/cover?size=full" }
-		alt=""
-		width="180"/>
-	<section class="card">
-		<table>
-			if b.Publisher != "" {
-				<tr><th>Publisher</th><td>{ b.Publisher }</td></tr>
+	<section class="hero">
+		<div class="art">
+			<img
+				src={ prefix + "books/" + b.ID + "/cover?size=full" }
+				alt=""
+				width="333"
+				height="500"
+			/>
+		</div>
+		<div class="facts">
+			<h1>{ orPlaceholder(b.Title) }</h1>
+			if b.Subtitle != "" {
+				<p class="byline">{ b.Subtitle }</p>
 			}
-			if b.Published != "" {
-				<tr><th>Published</th><td>{ b.Published }</td></tr>
+			if b.Byline != "" {
+				<p class="byline">{ b.Byline }</p>
 			}
-			<tr><th>Added</th><td>{ b.Added }</td></tr>
-		</table>
-		if b.Description != "" {
-			<p>{ b.Description }</p>
-		}
+			<div class="cta">
+				if b.CanRead {
+					<a class="btn primary" href={ prefix + "books/" + b.ID + "/read" }>Read</a>
+				}
+				if len(b.Files) > 0 {
+					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
+				}
+			</div>
+			if len(b.Series) > 0 || len(b.Authors) > 0 || len(b.Tags) > 0 || len(b.Genres) > 0 {
+				<div class="chips">
+					for _, c := range b.Series {
+						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
+					}
+					for _, c := range b.Authors {
+						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
+					}
+					for _, c := range b.Genres {
+						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
+					}
+					for _, c := range b.Tags {
+						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
+					}
+				</div>
+			}
+			<dl class="kv">
+				if b.Publisher != "" {
+					<dt>Publisher</dt>
+					<dd>{ b.Publisher }</dd>
+				}
+				if b.Published != "" {
+					<dt>Published</dt>
+					<dd>{ b.Published }</dd>
+				}
+				<dt>Added</dt>
+				<dd>{ b.Added }</dd>
+			</dl>
+		</div>
 	</section>
+	if b.Description != "" {
+		<section class="card">
+			<h2>About</h2>
+			<p>{ b.Description }</p>
+		</section>
+	}
 	<section class="card">
 		<h2>Files</h2>
-		if b.CanRead {
-			<p><a class="button" href={ prefix + "books/" + b.ID + "/read" }>Read in the browser</a></p>
-		}
 		if len(b.Files) == 0 {
 			<p class="muted">
 				This book is catalogued but its content is no longer stored.

@@ -27,35 +27,48 @@ type SearchView struct {
 	// being found.
 	Blank     bool
 	Truncated bool
+	// View is the grid/list preference; results are books, so they look
+	// like books.
+	View string
 }
 
 templ searchPage(prefix string, u userCtx, csrf string, v SearchView) {
-	@layout("Search", prefix, u, csrf, searchBody(prefix, v))
+	@layout("Search", prefix, u, csrf, searchBody(prefix, csrf, v))
 }
 
-templ searchBody(prefix string, v SearchView) {
+templ searchBody(prefix, csrf string, v SearchView) {
 	<h1>Search { v.LibraryName }</h1>
 	<section class="card">
 		@searchForm(prefix, v)
 	</section>
 	if len(v.Applied) > 0 {
-		<section class="card">
-			<h2>Narrowed to</h2>
-			<ul>
-				for _, f := range v.Applied {
-					<li>
-						{ f.Name }
-						{ " " }
-						<a href={ prefix + f.URL }>remove</a>
-					</li>
-				}
-			</ul>
-		</section>
+		<div class="chips">
+			<span class="muted">Narrowed to</span>
+			for _, f := range v.Applied {
+				<a class="chip on" href={ prefix + f.URL }>
+					{ f.Name }
+					<span aria-hidden="true">×</span>
+					<span class="visually-hidden">remove this filter</span>
+				</a>
+			}
+		</div>
 	}
 	if !v.Blank {
 		<section class="card">
 			if len(v.Books) == 0 {
 				<p class="muted">Nothing matched. Try fewer words.</p>
+			} else if v.View == viewGrid {
+				<div class="grid">
+					for _, b := range v.Books {
+						@bookCard(prefix, csrf, v.LibraryID, false, b)
+					}
+				</div>
+				if v.Truncated {
+					<p class="muted">
+						There are more than these. Narrow the search rather than
+						looking further down — the best matches are already here.
+					</p>
+				}
 			} else {
 				<table>
 					<tr><th>Title</th><th>Added</th></tr>
@@ -78,15 +91,15 @@ templ searchBody(prefix string, v SearchView) {
 	if len(v.Facets) > 0 {
 		<section class="card">
 			<h2>What these have in common</h2>
-			<ul>
+			<div class="chips">
 				for _, f := range v.Facets {
-					<li>
-						<a href={ prefix + f.URL }>{ f.Name }</a>
+					<a class="chip" href={ prefix + f.URL }>
+						{ f.Name }
 						{ " " }
-						<span class="muted">{ plural(f.BookCount, "book") }</span>
-					</li>
+						<span class="muted">{ i2s(f.BookCount) }</span>
+					</a>
 				}
-			</ul>
+			</div>
 		</section>
 	}
 	<p><a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a></p>

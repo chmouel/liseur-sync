@@ -250,6 +250,30 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 		Published: book.PublishedDate, LibraryID: book.LibraryID,
 		Added: book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
 	}
+	// Chips are a reader's fact about the book, so they are read with
+	// read access. The same rows serve the edit form below, but only for
+	// somebody who could submit it.
+	if meta, err := s.St.CatalogBookMetadata(
+		r.Context(), u.ID, bookID, store.LibraryRoleRead,
+	); err == nil {
+		v.Authors, v.Byline = contributorChips(book.LibraryID, meta.Contributors)
+		for _, ser := range meta.Series {
+			v.Series = append(v.Series, ChipLink{
+				Name: ser.Name,
+				URL:  entityURL(book.LibraryID, "series", ser.SeriesID),
+			})
+		}
+		for _, t := range meta.Tags {
+			v.Tags = append(v.Tags, ChipLink{
+				Name: t.Name, URL: entityURL(book.LibraryID, "tags", t.ID),
+			})
+		}
+		for _, g := range meta.Genres {
+			v.Genres = append(v.Genres, ChipLink{
+				Name: g.Name, URL: entityURL(book.LibraryID, "genres", g.ID),
+			})
+		}
+	}
 	// The edit form is only built for somebody who could submit it. A
 	// reader asking for this page must not be told a value's provenance,
 	// which is librarian's information rather than a fact about the book.
@@ -276,6 +300,37 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 		}
 	}
 	return v, true
+}
+
+// entityURL is the page listing everything else that claims an entity.
+func entityURL(libraryID, kind, entityID string) string {
+	return "libraries/" + url.PathEscape(libraryID) + "/" + kind + "/" +
+		url.PathEscape(entityID)
+}
+
+// contributorChips returns the links and the byline. The byline names
+// authors only when the file said who they are, and falls back to every
+// contributor when it did not: a book credited solely to a translator
+// should still say so rather than say nothing.
+func contributorChips(libraryID string, rows []store.BookContributor) ([]ChipLink, string) {
+	chips := make([]ChipLink, 0, len(rows))
+	var authors []string
+	var everyone []string
+	for _, c := range rows {
+		chips = append(chips, ChipLink{
+			Name: c.Name,
+			URL:  entityURL(libraryID, "contributors", c.ContributorID),
+		})
+		everyone = append(everyone, c.Name)
+		if c.Role == "" || strings.EqualFold(c.Role, "author") ||
+			strings.EqualFold(c.Role, "aut") {
+			authors = append(authors, c.Name)
+		}
+	}
+	if len(authors) == 0 {
+		authors = everyone
+	}
+	return chips, strings.Join(authors, ", ")
 }
 
 // handleBookDownload hands off to the API's download, which owns the

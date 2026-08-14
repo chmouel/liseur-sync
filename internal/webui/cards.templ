@@ -93,3 +93,33 @@ templ viewToggle(prefix string, csrf string, back string, current string) {
 		}
 	</form>
 }
+
+// entityCard is an author, a series or a tag: no cover of its own, so
+// the tile says the name and how much of it there is. Rename stays on
+// the card rather than moving to a separate page, because renaming is
+// what a librarian came here to do.
+templ entityCard(prefix, csrf string, v EntitiesView, e EntityRow) {
+	<article class="bookcard entitycard">
+		<a class="art" href={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID }>
+			<span class="name">{ e.Name }</span>
+			<span class="count">{ plural(e.BookCount, "book") }</span>
+		</a>
+		if v.CanWrite {
+			<form
+				class="rename"
+				method="post"
+				action={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID + "/rename" }
+			>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input
+					type="text"
+					name="name"
+					value={ e.Name }
+					aria-label={ "Rename this " + v.Singular }
+					required
+				/>
+				<button type="submit">Rename</button>
+			</form>
+		}
+	</article>
+}
