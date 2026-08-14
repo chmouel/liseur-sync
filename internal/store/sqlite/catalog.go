@@ -1189,7 +1189,7 @@ func (s *Store) ListDuplicateContentBooks(
 	// The ACL is repeated inside the query, as in every other catalog read
 	// here, even though the check above already settled it.
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+bookColumns+`, f.blob_sha256
+		`SELECT `+bookColumns+`, f.content_sha256
 		 FROM books b
 		 JOIN libraries l ON l.id = b.library_id
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
@@ -1199,12 +1199,12 @@ func (s *Store) ListDuplicateContentBooks(
 		   AND EXISTS (
 		     SELECT 1 FROM book_files o
 		     JOIN books ob ON ob.id = o.book_id
-		     WHERE o.blob_sha256 = f.blob_sha256
+		     WHERE o.content_sha256 = f.content_sha256
 		       AND ob.library_id = b.library_id
 		       AND ob.status = 'active'
 		       AND o.book_id <> f.book_id)
-		 GROUP BY b.id, f.blob_sha256
-		 ORDER BY f.blob_sha256, b.created_at, b.id LIMIT ?`,
+		 GROUP BY b.id, f.content_sha256
+		 ORDER BY f.content_sha256, b.created_at, b.id LIMIT ?`,
 		userID, libraryID, userID, limit)
 	if err != nil {
 		return nil, err

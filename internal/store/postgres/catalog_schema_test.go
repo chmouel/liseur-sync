@@ -100,10 +100,11 @@ func TestSplitMovesMissingCatalogMapping(t *testing.T) {
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO book_files
-		 (id, library_id, book_id, blob_sha256, source, source_relative_path,
+		 (id, library_id, book_id, storage, content_sha256,
+		  content_size_bytes, blob_sha256, source, source_relative_path,
 		  availability, created_at, updated_at)
-		 VALUES ('file1', $1, $2, 'book-sha', 'watched', 'missing.epub',
-		         'missing', $3, $3)`,
+		 VALUES ('file1', $1, $2, 'cas', 'book-sha', 1, 'book-sha',
+		         'scanned', 'missing.epub', 'missing', $3, $3)`,
 		library.ID, book.ID, now); err != nil {
 		t.Fatal(err)
 	}

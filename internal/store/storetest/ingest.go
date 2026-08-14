@@ -164,7 +164,7 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		t.Fatalf("upload job accepted by watched library: %v", err)
 	}
 	if _, _, err := s.CreateIngestJob(ctx, manager.ID, store.IngestJobRequest{
-		ID: "missing-path", LibraryID: watched.ID, Source: store.IngestWatched,
+		ID: "missing-path", LibraryID: watched.ID, Source: store.IngestScanned,
 		RequestFingerprint: "missing-path", CreatedAt: now,
 	}); err == nil {
 		t.Fatal("watched job without a relative path was accepted")

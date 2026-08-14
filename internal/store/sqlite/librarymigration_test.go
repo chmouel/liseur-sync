@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,8 +24,11 @@ func TestLibraryAxesMigrationKeepsExistingLibraries(t *testing.T) {
 	ctx := context.Background()
 
 	// Migrate to the version before the axes split, then populate it the
-	// way a running instance would have.
-	before := len(migrations) - 1
+	// way a running instance would have. The number is pinned rather
+	// than counted from the end: this test is about one migration, and a
+	// later one must not quietly move it out of scope.
+	const axesMigration = 17
+	before := axesMigration - 1
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +72,9 @@ func TestLibraryAxesMigrationKeepsExistingLibraries(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Migrate the rest of the way: the axes split and everything after
+	// it, which is where a later rebuild of the same table would show up
+	// as the books going missing again.
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("axes migration: %v", err)
 	}
@@ -135,4 +142,111 @@ func TestLibraryAxesMigrationKeepsExistingLibraries(t *testing.T) {
 	if books != 1 {
 		t.Fatalf("the migrated library holds %d books, want 1", books)
 	}
+}
+
+// TestRebuiltTablesKeepEveryColumn is the guard for the other half of
+// the SQLite rebuild footgun. A rebuild writes the table definition out
+// by hand, so it silently drops any column a later migration added and
+// the loss only shows up as a query failing somewhere else. Every table
+// this schema rebuilds is compared column by column against the version
+// before the rebuild.
+func TestRebuiltTablesKeepEveryColumn(t *testing.T) {
+	rebuilt := []string{"libraries", "book_files", "ingest_jobs"}
+
+	// The schema as it stood before the first rebuild, migration by
+	// migration, is the baseline: whatever columns a table had at any
+	// point, it must still have.
+	want := map[string]map[string]bool{}
+	// One entry per rebuild: the schema just before each one.
+	for _, upTo := range []int{16, 17} {
+		s, err := Open(filepath.Join(t.TempDir(), "before.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx,
+			`PRAGMA legacy_alter_table = ON`); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < upTo; i++ {
+			if _, err := conn.ExecContext(ctx, migrations[i]); err != nil {
+				t.Fatalf("migration %d: %v", i+1, err)
+			}
+		}
+		for _, table := range rebuilt {
+			if want[table] == nil {
+				want[table] = map[string]bool{}
+			}
+			for _, c := range columnsOf(t, ctx, conn, table) {
+				want[table][c] = true
+			}
+		}
+		conn.Close()
+		s.Close()
+	}
+
+	s, err := Open(filepath.Join(t.TempDir(), "after.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, table := range rebuilt {
+		have := map[string]bool{}
+		for _, c := range columnsOf(t, ctx, conn, table) {
+			have[c] = true
+		}
+		for column := range want[table] {
+			// `kind` is the one column deliberately removed, by the
+			// migration that replaced it with three.
+			if table == "libraries" && column == "kind" {
+				continue
+			}
+			if !have[column] {
+				t.Errorf("a rebuild dropped %s.%s", table, column)
+			}
+		}
+	}
+}
+
+func columnsOf(
+	t *testing.T, ctx context.Context, conn *sql.Conn, table string,
+) []string {
+	t.Helper()
+	rows, err := conn.QueryContext(ctx,
+		`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s has no columns", table)
+	}
+	return out
 }

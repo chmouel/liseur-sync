@@ -328,7 +328,7 @@ func TestPromoteIngestJobDerivesStableIdentifiers(t *testing.T) {
 
 func TestPromoteIngestJobKeepsAWatchedFilesOrigin(t *testing.T) {
 	st := &fakePromotionStore{job: extractedJob()}
-	st.job.Source = store.IngestWatched
+	st.job.Source = store.IngestScanned
 	st.job.SourceRelativePath = strptr("Herbert, Frank/Dune.epub")
 	blobs := &fakeBlobPromoter{}
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -338,7 +338,7 @@ func TestPromoteIngestJobKeepsAWatchedFilesOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	if result.File.Source != store.IngestWatched {
+	if result.File.Source != store.IngestScanned {
 		t.Fatalf("source = %q", result.File.Source)
 	}
 	if result.File.SourceRelativePath == nil ||

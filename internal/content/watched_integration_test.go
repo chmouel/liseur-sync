@@ -228,7 +228,7 @@ func TestWatchedSweepIngestsDiscoveredPublications(t *testing.T) {
 	if file.Availability != store.BookFileAvailable || file.SourceAbsent {
 		t.Fatalf("unexpected file state: %+v", file)
 	}
-	if file.BlobSHA256 == "" {
+	if file.ContentSHA256 == "" {
 		t.Fatal("a watched book must reference a CAS snapshot")
 	}
 }
@@ -287,9 +287,9 @@ func TestWatchedChangedPathNeverInheritsTheBook(t *testing.T) {
 	if after.BookID != original.BookID {
 		t.Fatal("the file row was rebound to a different book")
 	}
-	if after.BlobSHA256 != original.BlobSHA256 {
+	if after.ContentSHA256 != original.ContentSHA256 {
 		t.Fatalf("the existing snapshot was replaced: %q became %q",
-			original.BlobSHA256, after.BlobSHA256)
+			original.ContentSHA256, after.ContentSHA256)
 	}
 	books, err := f.store.ListBooksInReview(
 		f.ctx, f.library.OwnerUserID, f.library.ID, 10)
@@ -326,7 +326,7 @@ func TestWatchedTouchedFileIsNotAChange(t *testing.T) {
 		t.Fatalf("a touched file was treated as a change: %+v", report)
 	}
 	if after := f.bookAt("book.epub"); after.BookID != before.BookID ||
-		after.BlobSHA256 != before.BlobSHA256 {
+		after.ContentSHA256 != before.ContentSHA256 {
 		t.Fatalf("a touched file changed the catalog: %+v -> %+v", before, after)
 	}
 	// The new modification time is recorded, so the next sweep is free.
@@ -494,7 +494,7 @@ func TestWatchedIdenticalFilesAtTwoPathsStayDistinct(t *testing.T) {
 	if left.BookID == right.BookID {
 		t.Fatal("two live paths were collapsed into one book")
 	}
-	if left.BlobSHA256 != right.BlobSHA256 {
+	if left.ContentSHA256 != right.ContentSHA256 {
 		t.Fatal("identical bytes should deduplicate onto one blob")
 	}
 }
@@ -525,7 +525,7 @@ func TestWatchedRenameIsNotAnIdentityTransfer(t *testing.T) {
 	if after.BookID == before.BookID {
 		t.Fatal("a rename transferred a book id on hash equality alone")
 	}
-	if after.BlobSHA256 != before.BlobSHA256 {
+	if after.ContentSHA256 != before.ContentSHA256 {
 		t.Fatal("the same bytes should still deduplicate")
 	}
 	if gone := f.bookAt("before.epub"); !gone.SourceAbsent {
@@ -572,7 +572,7 @@ func TestWatchedSweepNeverMutatesTheRoot(t *testing.T) {
 	}
 	// And the bytes it serves are the CAS snapshot, not the source.
 	file := f.bookAt("a/book.epub")
-	blob, size, err := f.cas.OpenBlob(f.ctx, file.BlobSHA256)
+	blob, size, err := f.cas.OpenBlob(f.ctx, file.ContentSHA256)
 	if err != nil {
 		t.Fatalf("open blob: %v", err)
 	}

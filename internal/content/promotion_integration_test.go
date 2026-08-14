@@ -254,7 +254,7 @@ func TestConfiguredLayoutReachesTheCatalog(t *testing.T) {
 	for _, library := range []string{"lib-default", "lib-series"} {
 		id := "job-" + library
 		job, created, err := st.CreateIngestJob(ctx, user.ID, store.IngestJobRequest{
-			ID: id, LibraryID: library, Source: store.IngestWatched,
+			ID: id, LibraryID: library, Source: store.IngestScanned,
 			SourceRelativePath: &[]string{relative}[0],
 			RequestFingerprint: "request-" + id, CreatedAt: now,
 		})

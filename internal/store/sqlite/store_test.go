@@ -29,6 +29,7 @@ func TestStore(t *testing.T) {
 }
 
 func (s *Store) InsertBookFileForTest(ctx context.Context, file store.BookFile, sizeBytes int64) error {
+	normalized := file.Normalized()
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO blobs (sha256, size_bytes, created_at)
 		 VALUES (?, ?, ?)
@@ -38,12 +39,14 @@ func (s *Store) InsertBookFileForTest(ctx context.Context, file store.BookFile, 
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO book_files
-		 (id, library_id, book_id, blob_sha256, source,
+		 (id, library_id, book_id, storage, content_sha256,
+		  content_size_bytes, blob_sha256, source,
 		  source_relative_path, original_filename, media_type,
 		  partial_md5, dc_identifier, availability, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		file.ID, file.LibraryID, file.BookID, file.BlobSHA256,
-		string(file.Source), file.SourceRelativePath, file.OriginalFilename,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		file.ID, file.LibraryID, file.BookID,
+		string(normalized.Storage), normalized.ContentSHA256, sizeBytes,
+		normalized.BlobRef(), string(file.Source), file.SourceRelativePath, file.OriginalFilename,
 		file.MediaType, file.PartialMD5, file.DCIdentifier,
 		string(file.Availability), formatTime(file.CreatedAt),
 		formatTime(file.UpdatedAt))

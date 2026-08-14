@@ -270,7 +270,7 @@ func reconcileWatchedFile(
 		}
 		return err
 	}
-	if digest == existing.BlobSHA256 {
+	if digest == existing.ContentSHA256 {
 		// A touched file. MarkWatchedSourcesSeen records the new
 		// modification time, so the next sweep does not read it again.
 		report.Rehashed++
@@ -333,7 +333,7 @@ func ingestWatchedFile(
 		store.IngestJobRequest{
 			ID:                 jobID,
 			LibraryID:          library.ID,
-			Source:             store.IngestWatched,
+			Source:             store.IngestScanned,
 			SourceRelativePath: &relativePath,
 			RequestFingerprint: watchedFingerprint(library.ID, file),
 			CreatedAt:          now,

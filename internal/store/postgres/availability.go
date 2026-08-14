@@ -8,10 +8,16 @@ import (
 )
 
 // markFilesMissing hides files whose bytes the blob reconciliation pass
-// could not find, or whose watched source a completed sweep proved gone.
-// Those are separate axes: a watched book's snapshot stays in the CAS
-// after the file it was copied from is deleted, so blob presence alone
-// would keep offering a book the library no longer contains.
+// could not find, or whose source a completed sweep proved gone. Those
+// are separate axes: a scanned book's snapshot stays in the CAS after
+// the file it was copied from is deleted, so blob presence alone would
+// keep offering a book the library no longer contains.
+//
+// The join is a left join because an in-place file has no blob to join
+// to (ADR-0014): the server keeps no copy of it, so the only evidence
+// about its bytes is what the sweep saw at its source path. An inner
+// join would leave every such file frozen at whatever availability it
+// was created with.
 //
 // Superseded files are excluded because supersession already means "do
 // not serve this", and restoring the blob must not resurrect a file a
@@ -20,9 +26,10 @@ const markFilesMissing = `
 UPDATE book_files SET availability = 'missing', updated_at = ?
 WHERE id IN (
     SELECT f.id FROM book_files f
-    JOIN blobs b ON b.sha256 = f.blob_sha256
+    LEFT JOIN blobs b ON b.sha256 = f.blob_sha256
     WHERE f.availability = 'available'
-      AND (b.missing_at IS NOT NULL OR f.source_absent_at IS NOT NULL)
+      AND ((f.storage = 'cas' AND b.missing_at IS NOT NULL)
+           OR f.source_absent_at IS NOT NULL)
     ORDER BY f.id
     LIMIT ?
 )`
@@ -31,8 +38,9 @@ const markFilesAvailable = `
 UPDATE book_files SET availability = 'available', updated_at = ?
 WHERE id IN (
     SELECT f.id FROM book_files f
-    JOIN blobs b ON b.sha256 = f.blob_sha256
-    WHERE f.availability = 'missing' AND b.missing_at IS NULL
+    LEFT JOIN blobs b ON b.sha256 = f.blob_sha256
+    WHERE f.availability = 'missing'
+      AND (f.storage <> 'cas' OR b.missing_at IS NULL)
       AND f.source_absent_at IS NULL
     ORDER BY f.id
     LIMIT ?
