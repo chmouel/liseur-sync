@@ -333,6 +333,15 @@
 
       say('Opening…');
       book = ePub(buf);
+      if (book.spine && book.spine.hooks && book.spine.hooks.content) {
+        book.spine.hooks.content.register((doc) => {
+          if (!doc) return;
+          const scripts = doc.querySelectorAll('script');
+          for (let i = 0; i < scripts.length; i++) {
+            scripts[i].remove();
+          }
+        });
+      }
       await book.ready;
 
       const title = bookTitle();

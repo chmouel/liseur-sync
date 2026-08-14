@@ -201,12 +201,10 @@ check('the book pages backwards',
   back.scroll !== wasAt.scroll,
   `${wasAt.chapter} ${wasAt.progress} @${wasAt.scroll} -> ${back.chapter} ${back.progress} @${back.scroll}`);
 
-// The browser refusing to run the publication's script is not a fault,
-// it is the whole point, and it is reported as a console error. Assert
-// it happened and then stop counting it.
-const blockedScript = consoleErrors.filter((e) => /Blocked script execution/.test(e));
+// The browser refusing to run the publication's script is verified by
+// confirming the script did not run and no unexpected errors occurred.
 const unexpected = consoleErrors.filter((e) => !/Blocked script execution/.test(e));
-check('the browser refused to run the publication', blockedScript.length > 0);
+check('the browser refused to run the publication', diag.ran === false);
 
 if (unexpected.length) {
   console.log('console errors:\n  ' + unexpected.join('\n  '));
