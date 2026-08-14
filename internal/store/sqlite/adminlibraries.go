@@ -21,8 +21,8 @@ import (
 const plainLibraryColumns = `id, owner_user_id, quota_user_id, source,
 	storage, refresh, refresh_interval_seconds, name, root_path,
 	config_json, created_at, updated_at, last_refresh_at,
-	last_refresh_attempt_at, last_refresh_error, refresh_requested_at,
-	last_inventory_digest`
+	last_refresh_attempt_at, last_refresh_code, refresh_requested_at,
+	last_inventory_digest, refresh_lease_owner, refresh_lease_until`
 
 func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int) ([]store.Library, error) {
 	name, id := store.SplitLibraryCursor(after)
@@ -149,24 +149,23 @@ func affectedOne(res sql.Result, err error) error {
 // scanPlainLibrary reads a library row with no role column.
 func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error) {
 	var l store.Library
-	var root, refreshError, digest sql.NullString
-	var lastRefresh, lastAttempt, requested sql.NullString
+	var root, refreshCode, digest, leaseOwner sql.NullString
+	var lastRefresh, lastAttempt, requested, leaseUntil sql.NullString
 	var created, updated string
 	var refreshSeconds int64
 	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID,
 		&l.Source, &l.Storage, &l.Refresh, &refreshSeconds, &l.Name,
 		&root, &l.ConfigJSON, &created, &updated,
-		&lastRefresh, &lastAttempt, &refreshError, &requested,
-		&digest); err != nil {
+		&lastRefresh, &lastAttempt, &refreshCode, &requested,
+		&digest, &leaseOwner, &leaseUntil); err != nil {
 		return l, err
 	}
 	if root.Valid {
 		l.RootPath = &root.String
 	}
-	if refreshError.Valid {
-		l.LastRefreshError = &refreshError.String
-	}
+	l.LastRefreshCode = store.RefreshCode(refreshCode.String)
 	l.LastInventoryDigest = digest.String
+	l.RefreshLeaseOwner = leaseOwner.String
 	l.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	var err error
 	if l.CreatedAt, err = parseTime(created); err != nil {
@@ -182,6 +181,9 @@ func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error
 		return l, err
 	}
 	if l.RefreshRequestedAt, err = parseTimePtr(requested); err != nil {
+		return l, err
+	}
+	if l.RefreshLeaseUntil, err = parseTimePtr(leaseUntil); err != nil {
 		return l, err
 	}
 	return l, nil

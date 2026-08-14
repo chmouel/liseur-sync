@@ -65,9 +65,10 @@ func (s *Server) ServeBookCover(
 	if !ok {
 		return
 	}
+	key := coverCacheKey(file)
 
 	if s.Covers != nil {
-		cached, _, err := s.Covers.OpenCover(r.Context(), file.ContentSHA256, string(size))
+		cached, _, err := s.Covers.OpenCover(r.Context(), key, string(size))
 		switch {
 		case err == nil:
 			defer cached.Close()
@@ -86,14 +87,14 @@ func (s *Server) ServeBookCover(
 		if errors.Is(err, content.ErrSourceChanged) {
 			s.flagChangedSource(r.Context(), file)
 		}
-		s.writeCoverError(r.Context(), w, file.ContentSHA256, err)
+		s.writeCoverError(r.Context(), w, key, err)
 		return
 	}
 	if s.Covers != nil {
 		// A cache that cannot be written still serves: the bytes are in
 		// hand, and a full disk should cost the next request a re-render
 		// rather than cost this one its answer.
-		_ = s.Covers.StoreCover(r.Context(), file.ContentSHA256, string(size), rendered)
+		_ = s.Covers.StoreCover(r.Context(), key, string(size), rendered)
 	}
 	s.writeCover(w, r, file, size,
 		bytes.NewReader(rendered), file.UpdatedAt)
@@ -125,11 +126,30 @@ func (s *Server) coverBookFile(
 	return store.BookFile{}, false
 }
 
-// renderCover produces one variant from the book's own bytes, wherever
-// they live.
+// coverCacheKey names the rendered image exactly.
+//
+// It is the publication's digest for a book whose cover comes out of the
+// EPUB, and the cover's own digest for one whose library holds a chosen
+// cover beside it. The distinction is load-bearing: two Calibre books can
+// share one EPUB and have different covers, so a publication-keyed cache
+// would serve one book's cover for the other, and would cache "this book
+// has no cover" for both (ADR-0014).
+func coverCacheKey(file store.BookFile) string {
+	if file.CoverSHA256 != "" {
+		return file.CoverSHA256
+	}
+	return file.ContentSHA256
+}
+
+// renderCover produces one variant from whichever image this book's
+// cover is: the one its library holds beside it, or the one the
+// publication declares.
 func (s *Server) renderCover(
 	ctx context.Context, file store.BookFile, size cover.Size,
 ) ([]byte, error) {
+	if file.CoverSHA256 != "" && file.CoverRelativePath != nil {
+		return s.renderStoredCover(ctx, file, size)
+	}
 	blob, blobSize, err := s.Blobs.OpenBookFile(ctx, file)
 	if err != nil {
 		return nil, err
@@ -146,6 +166,30 @@ func (s *Server) renderCover(
 		return nil, err
 	}
 	return rendered, nil
+}
+
+// renderStoredCover renders the image the library itself holds. A cover
+// that has gone away falls back to the publication's own, because the
+// book is still there and a missing side file is not a reason to stop
+// showing it.
+func (s *Server) renderStoredCover(
+	ctx context.Context, file store.BookFile, size cover.Size,
+) ([]byte, error) {
+	image, imageSize, err := s.Blobs.OpenBookFileCover(ctx, file)
+	if err != nil {
+		stripped := file
+		stripped.CoverSHA256, stripped.CoverRelativePath = "", nil
+		return s.renderCover(ctx, stripped, size)
+	}
+	defer image.Close()
+	if imageSize > maxCoverSourceBytes {
+		return nil, cover.ErrUnsupported
+	}
+	data, err := io.ReadAll(io.LimitReader(image, maxCoverSourceBytes))
+	if err != nil {
+		return nil, err
+	}
+	return cover.Render(data, size, cover.DefaultLimits())
 }
 
 // writeCoverError maps a failed render onto a status, and remembers the
@@ -185,7 +229,7 @@ func (s *Server) writeCover(
 	w http.ResponseWriter, r *http.Request, file store.BookFile,
 	size cover.Size, body io.ReadSeeker, modified time.Time,
 ) {
-	digest := file.ContentSHA256
+	digest := coverCacheKey(file)
 	// The type is what this server chose to produce, never what the
 	// publication claimed. With nosniff, that is what stops a cover from
 	// being interpreted as anything else.

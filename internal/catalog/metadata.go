@@ -79,7 +79,7 @@ func Resolve(
 
 	identifiers, identifiersChanged := mergeSet(
 		identifierEntries(current.Identifiers), proposal.Identifiers,
-		proposal, locks.Identifiers)
+		proposal, proposal.StatedSets.Identifiers, locks.Identifiers)
 	if identifiersChanged {
 		next.Identifiers = make([]store.BookIdentifier, 0, len(identifiers))
 		for _, entry := range identifiers {
@@ -93,7 +93,7 @@ func Resolve(
 
 	languages, languagesChanged := mergeSet(
 		languageEntries(current.Languages), proposal.Languages,
-		proposal, locks.Languages)
+		proposal, proposal.StatedSets.Languages, locks.Languages)
 	if languagesChanged {
 		next.Languages = make([]store.BookLanguage, 0, len(languages))
 		for _, entry := range languages {
@@ -107,7 +107,7 @@ func Resolve(
 	tags, tagsChanged := mergeSet(
 		taxonEntries(current.Tags),
 		adoptNamed(proposal.Tags, taxonDisplay(current.Tags)),
-		proposal, locks.Tags)
+		proposal, proposal.StatedSets.Tags, locks.Tags)
 	if tagsChanged {
 		next.Tags = taxonRows(tags, current.Tags, libraryID, "tag")
 		changed = true
@@ -117,7 +117,8 @@ func Resolve(
 	// genres freely and inventing one would be guessing. The merge still
 	// runs so a locked or stronger row behaves identically once one does.
 	genres, genresChanged := mergeSet(
-		taxonEntries(current.Genres), nil, proposal, locks.Genres)
+		taxonEntries(current.Genres), nil,
+		proposal, proposal.StatedSets.Genres, locks.Genres)
 	if genresChanged {
 		next.Genres = taxonRows(genres, current.Genres, libraryID, "genre")
 		changed = true
@@ -126,7 +127,7 @@ func Resolve(
 	series, seriesChanged := mergeSet(
 		seriesEntries(current.Series),
 		adoptSeries(proposal.Series, current.Series, proposal.Source),
-		proposal, locks.Series)
+		proposal, proposal.StatedSets.Series, locks.Series)
 	if seriesChanged {
 		existing := make(map[string]string, len(current.Series))
 		for _, row := range current.Series {
@@ -153,7 +154,7 @@ func Resolve(
 	contributors, contributorsChanged := mergeSet(
 		contributorEntries(current.Contributors),
 		adoptContributors(proposal.Contributors, current.Contributors),
-		proposal, locks.Contributors)
+		proposal, proposal.StatedSets.Contributors, locks.Contributors)
 	if contributorsChanged {
 		existing := make(map[string]string, len(current.Contributors))
 		for _, row := range current.Contributors {
@@ -184,14 +185,25 @@ func Resolve(
 // mergeSet dispatches on the proposal's own declaration. A partial proposal
 // may only add and take over rows; treating it as complete would delete the
 // rows its source never saw.
+//
+// A complete proposal that clears what it does not state goes further, but
+// only for the sets it says it speaks for: there, an assertion with nothing
+// in it empties the set, because a curated record with no tags is a book
+// with no tags. A set the source cannot express — Calibre has no genres —
+// is merged as before and survives untouched.
 func mergeSet[K comparable, V comparable](
 	current []metadata.SetEntry[K, V],
 	incoming []metadata.Assertion[K, V],
 	proposal metadata.Proposal,
+	stated bool,
 	setLocked bool,
 ) ([]metadata.SetEntry[K, V], bool) {
 	if proposal.PartialSets {
 		return metadata.MergeEntries(current, incoming, proposal.Source, setLocked)
+	}
+	if proposal.ClearsUnstated && stated {
+		return metadata.MergeStatedSet(
+			current, incoming, proposal.Source, setLocked)
 	}
 	return metadata.MergeSet(current, incoming, proposal.Source, setLocked)
 }

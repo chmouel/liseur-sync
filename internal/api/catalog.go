@@ -33,6 +33,11 @@ const (
 // storage layer, not to the handler (ADR-0014).
 type BlobStore interface {
 	OpenBookFile(ctx context.Context, file store.BookFile) (*os.File, int64, error)
+	// OpenBookFileCover opens the cover a library's curator chose for
+	// this file, where there is one. It is separate from OpenBookFile
+	// because the cover is not the publication: it lives beside it under
+	// the library root and has its own digest.
+	OpenBookFileCover(ctx context.Context, file store.BookFile) (*os.File, int64, error)
 }
 
 // HandleLibraries implements GET /v1/libraries — every library the caller

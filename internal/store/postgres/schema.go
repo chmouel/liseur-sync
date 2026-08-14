@@ -882,7 +882,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19, migration20,
+	migration18, migration19, migration20, migration21,
 }
 
 // migration19 is the PostgreSQL half of the refresh history. See the
@@ -924,4 +924,15 @@ CREATE TABLE library_calibre_books (
 ALTER TABLE book_files
     ADD COLUMN cover_relative_path TEXT,
     ADD COLUMN cover_sha256 TEXT;
+`
+
+// migration21 is the PostgreSQL half of the refresh lease and the
+// bounded failure code. See the SQLite migration for what each column
+// is for.
+const migration21 = `
+ALTER TABLE libraries
+    ADD COLUMN refresh_lease_owner TEXT,
+    ADD COLUMN refresh_lease_until TIMESTAMPTZ,
+    ADD COLUMN last_refresh_code TEXT,
+    DROP COLUMN last_refresh_error;
 `

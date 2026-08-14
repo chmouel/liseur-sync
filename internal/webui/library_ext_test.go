@@ -272,3 +272,28 @@ func TestLibraryCardsNameTheAuthor(t *testing.T) {
 		t.Error("a translator was printed where the author goes")
 	}
 }
+
+// TestAnEmptyLibraryPointsAdminsAtTheAdminPanel: an administrator with
+// no libraries yet is one click from creating one; anybody else is only
+// told to ask an administrator, since the page they would land on is
+// closed to them.
+func TestAnEmptyLibraryPointsAdminsAtTheAdminPanel(t *testing.T) {
+	f := newBooksFixture(t)
+	bob := f.login(t, "bob")
+
+	_, html := f.get(t, "/ui/library", bob)
+	if !strings.Contains(html, "You have no libraries yet") {
+		t.Fatalf("empty shelf not shown: %s", html)
+	}
+	if strings.Contains(html, `href="admin/libraries"`) {
+		t.Fatal("a plain reader was offered the admin libraries page")
+	}
+
+	if err := f.st.SetUserAdmin(t.Context(), "u2", true); err != nil {
+		t.Fatal(err)
+	}
+	_, html = f.get(t, "/ui/library", bob)
+	if !strings.Contains(html, `href="admin/libraries"`) {
+		t.Fatalf("an administrator was not offered the admin libraries page: %s", html)
+	}
+}

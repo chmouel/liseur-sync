@@ -320,6 +320,8 @@ func runLibraryRefreshWorker(
 				"rehashed", report.Rehashed,
 				"review", report.Review,
 				"marked_absent", report.MarkedAbsent,
+				"unavailable_files", report.FilesUnavailable,
+				"restored_files", report.FilesRestored,
 				"failed", report.Failed)
 		}
 		timer := time.NewTimer(interval)

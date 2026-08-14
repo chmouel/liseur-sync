@@ -232,3 +232,64 @@ func quarantineInPlaceJob(
 }
 
 func ptr[T any](value T) *T { return &value }
+
+// readInPlaceReplacement reads bytes that are to replace a book's
+// current file, with exactly the checks an in-place ingest makes: one
+// descriptor, bounded, structurally validated, and stat'ed again at the
+// end so a file that moved while it was being read is refused rather
+// than catalogued.
+//
+// It returns only what a file row needs. The metadata is deliberately
+// not extracted: a book whose file was replaced keeps the description
+// its library is the source of truth for, and re-extracting it here
+// would have the EPUB argue with Calibre on every conversion.
+func readInPlaceReplacement(
+	ctx context.Context,
+	root *os.Root,
+	relativePath string,
+	opts WatchedSyncOptions,
+) (store.BookFile, error) {
+	var read store.BookFile
+	src, err := openWatchedSource(root, relativePath)
+	if err != nil {
+		return read, err
+	}
+	defer src.Close()
+
+	before, err := src.Stat()
+	if err != nil {
+		return read, err
+	}
+	if !before.Mode().IsRegular() {
+		return read, fmt.Errorf("read in-place path %q: %w",
+			relativePath, ErrUnsafePath)
+	}
+	if before.Size() > opts.MaxFileBytes {
+		return read, fmt.Errorf("read in-place path %q: %w",
+			relativePath, ErrTooLarge)
+	}
+	digest := sha256.New()
+	if _, err := copyBounded(
+		ctx, io.Discard, digest, src, opts.MaxFileBytes); err != nil {
+		return read, fmt.Errorf("read in-place path %q: %w", relativePath, err)
+	}
+	if _, err := epub.Validate(
+		ctx, src, before.Size(), opts.epubLimits()); err != nil {
+		return read, fmt.Errorf(
+			"validate in-place path %q: %w", relativePath, err)
+	}
+	after, err := src.Stat()
+	if err != nil {
+		return read, err
+	}
+	if after.Size() != before.Size() ||
+		!after.ModTime().Equal(before.ModTime()) {
+		return read, fmt.Errorf("read in-place path %q: %w",
+			relativePath, ErrSourceRaced)
+	}
+	return store.BookFile{
+		ContentSHA256:    hex.EncodeToString(digest.Sum(nil)),
+		ContentSizeBytes: before.Size(),
+		SourceModifiedAt: ptr(before.ModTime().UTC()),
+	}, nil
+}

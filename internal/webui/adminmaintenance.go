@@ -107,7 +107,7 @@ func (s *Server) libraryRefreshHealth(r *http.Request, now time.Time) refreshHea
 				continue
 			}
 			health.Sources++
-			if l.LastRefreshError != nil {
+			if l.LastRefreshCode != store.RefreshCodeNone {
 				health.Failing++
 			}
 			if l.RefreshRequestedAt != nil {

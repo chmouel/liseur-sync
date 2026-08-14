@@ -5,10 +5,10 @@ package webui
 // one, and for what each chip means.
 
 templ libraryPage(prefix string, u userCtx, csrf string, v LibraryView) {
-	@layout("Library", prefix, u, csrf, libraryBody(prefix, csrf, v))
+	@layout("Library", prefix, u, csrf, libraryBody(prefix, csrf, u.IsAdmin, v))
 }
 
-templ libraryBody(prefix, csrf string, v LibraryView) {
+templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	if v.Problem != "" {
 		<p class="error" role="alert">{ v.Problem }</p>
 	}
@@ -18,10 +18,19 @@ templ libraryBody(prefix, csrf string, v LibraryView) {
 	if len(v.Libraries) == 0 {
 		<h1>Library</h1>
 		<section class="card">
-			<p class="muted">
-				You have no libraries yet. An administrator creates one with
-				<code>liseur-sync admin create-library</code> and grants you access.
-			</p>
+			if admin {
+				<p class="muted">
+					You have no libraries yet. Create one and grant yourself
+					access from <a href={ prefix + "admin/libraries" }>Libraries</a>
+					in the admin panel, or with
+					<code>liseur-sync admin create-library</code>.
+				</p>
+			} else {
+				<p class="muted">
+					You have no libraries yet. An administrator creates one with
+					<code>liseur-sync admin create-library</code> and grants you access.
+				</p>
+			}
 		</section>
 	} else {
 		<div class="toolbar">

@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/contentpath"
 )
@@ -39,6 +38,12 @@ var (
 	// account that is not an enabled admin. It is enforced inside the
 	// transaction that writes the token, so it cannot race a demotion.
 	ErrAdminGrantRequiresAdmin = errors.New("store: admin scope requires an admin account")
+	// ErrRefreshLeaseLost refuses a write from a worker that no longer
+	// holds the library it is refreshing: the lease expired and somebody
+	// else took it, or a second worker was already there. The refresh is
+	// convergent, so the answer is to stop, not to retry — the holder
+	// finishes what this worker started.
+	ErrRefreshLeaseLost = errors.New("store: refresh lease lost")
 )
 
 // TokenPurgeGrace is how long expired or revoked tokens remain listed
@@ -283,27 +288,86 @@ func RefreshIntervalFrom(seconds int64) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// MaxRefreshErrorLen bounds what a failed refresh may write back. The
-// message is somebody else's filesystem talking, and an administrator
-// reading a library page needs the shape of the failure, not a
-// megabyte of it.
-const MaxRefreshErrorLen = 500
+// RefreshCode is why a library's last refresh did not work, from a
+// closed set.
+//
+// It is a code rather than an error string because the admin panel
+// renders it, and a refresh failure's message is somebody's filesystem
+// talking: a path, a mount point, a database URL. ADR-0013 keeps those
+// out of the browser, so the underlying error goes to the log and this
+// is what the catalog remembers (ADR-0014).
+type RefreshCode string
 
-// TruncateRefreshError trims a refresh failure to what is worth
-// storing.
-func TruncateRefreshError(msg string) string {
-	if len(msg) <= MaxRefreshErrorLen {
-		return msg
+const (
+	// RefreshCodeNone is a library whose last refresh worked.
+	RefreshCodeNone RefreshCode = ""
+	// RefreshCodeRootUnavailable is a root that could not be opened at
+	// all: unmounted, renamed, or no longer readable by this server.
+	RefreshCodeRootUnavailable RefreshCode = "root_unavailable"
+	// RefreshCodeNoRootPath is a library with nothing to refresh, which
+	// only a hand-edited database produces.
+	RefreshCodeNoRootPath RefreshCode = "no_root_path"
+	// RefreshCodeUnreadableDatabase is a metadata.db that is missing,
+	// truncated, locked or not a Calibre database at all.
+	RefreshCodeUnreadableDatabase RefreshCode = "unreadable_database"
+	// RefreshCodeUnsupportedSchema is a Calibre database whose shape
+	// this server does not understand well enough to read it.
+	RefreshCodeUnsupportedSchema RefreshCode = "unsupported_schema"
+	// RefreshCodeIncompleteScan is a traversal that ended early — a
+	// limit, an unreadable subdirectory — so absence could not be
+	// concluded and the library is only partly accounted for.
+	RefreshCodeIncompleteScan RefreshCode = "incomplete_scan"
+	// RefreshCodeLeaseLost is a refresh another worker took over while
+	// this one was running. Nothing is wrong with the library; the next
+	// refresh finishes what this one started.
+	RefreshCodeLeaseLost RefreshCode = "lease_lost"
+	// RefreshCodeFailed is everything else, and exists so that an
+	// unexpected error is still recorded as *something* an operator can
+	// see next to the log line that has the detail.
+	RefreshCodeFailed RefreshCode = "failed"
+)
+
+// Valid reports whether a code is one this server writes. The store
+// enforces it, because an unknown code would reach a page that has no
+// wording for it.
+func (c RefreshCode) Valid() bool {
+	switch c {
+	case RefreshCodeNone, RefreshCodeRootUnavailable, RefreshCodeNoRootPath,
+		RefreshCodeUnreadableDatabase, RefreshCodeUnsupportedSchema,
+		RefreshCodeIncompleteScan, RefreshCodeLeaseLost, RefreshCodeFailed:
+		return true
 	}
-	// Cut on a rune boundary: the message is somebody's file name, and
-	// half a rune is not a shorter file name, it is a broken string.
-	// The ellipsis is three bytes, and the whole point of the limit is
-	// that what comes back fits in it.
-	cut := MaxRefreshErrorLen - len("…")
-	for cut > 0 && !utf8.RuneStart(msg[cut]) {
-		cut--
-	}
-	return msg[:cut] + "…"
+	return false
+}
+
+// DefaultRefreshLease is how long a claimed library stays claimed
+// without being renewed. It is short, because its only job is to
+// outlive the gap between two renewals: a worker that dies must not
+// lock a library out for longer than an operator would wait.
+const DefaultRefreshLease = 2 * time.Minute
+
+// RefreshLeaseRenewAfter is when a holder should renew. Half the lease
+// leaves a whole one for a slow statement to finish in before another
+// worker may take over.
+const RefreshLeaseRenewAfter = DefaultRefreshLease / 2
+
+// RefreshLease is one worker's claim on one library: a random token
+// nobody else can guess, and the moment the claim lapses if it is not
+// renewed.
+//
+// The token is what makes expiry safe. Expiry alone does not stop the
+// worker that held the lease — a slow refresh can still be running when
+// a second one takes over — so every write that concludes a refresh
+// names its owner, and a dispossessed worker's writes are refused
+// rather than racing the new holder's.
+type RefreshLease struct {
+	Owner string
+	Until time.Time
+}
+
+// Valid reports a usable lease.
+func (l RefreshLease) Valid() bool {
+	return l.Owner != "" && len(l.Owner) <= 128 && !l.Until.IsZero()
 }
 
 // LibraryRole is an ACL capability. Manage implies read.
@@ -345,9 +409,16 @@ type Library struct {
 	// in a loop.
 	LastRefreshAt        *time.Time
 	LastRefreshAttemptAt *time.Time
-	// LastRefreshError is what went wrong the last time, and is cleared
-	// by the next refresh that succeeds.
-	LastRefreshError *string
+	// LastRefreshCode is why the last refresh did not work, as a bounded
+	// code the admin panel has wording for. It is cleared by the next
+	// refresh that succeeds, and the error behind it is in the log.
+	LastRefreshCode RefreshCode
+	// RefreshLeaseOwner and RefreshLeaseUntil are the claim a worker
+	// currently holds on this library, if any. A lease that has lapsed
+	// is left behind rather than cleared: the next claim overwrites it,
+	// and reading it afterwards says who was last in here.
+	RefreshLeaseOwner string
+	RefreshLeaseUntil *time.Time
 	// RefreshRequestedAt is an administrator asking for a refresh now. It
 	// is cleared by the claim that honours it, which is what lets a
 	// library with no schedule at all be refreshed on demand.
@@ -1060,8 +1131,19 @@ type BookFile struct {
 	// ContentSizeBytes it is the cheap proof that an in-place file is
 	// still the one that was catalogued.
 	SourceModifiedAt *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// CoverRelativePath is the cover somebody chose for this book,
+	// relative to the library root — Calibre's cover.jpg. It is empty
+	// for a file whose cover is whatever the publication itself
+	// declares, which is extracted rather than stored.
+	CoverRelativePath *string
+	// CoverSHA256 is the digest of those cover bytes, and is what the
+	// rendered-cover cache is keyed by. The publication digest will not
+	// do: two Calibre books can share one EPUB and have different
+	// covers, and a digest-keyed cache would serve one book's cover for
+	// the other (ADR-0014).
+	CoverSHA256 string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	// LibraryRoot is the directory an in-place file's bytes live under.
 	// It is not a column: it comes from the library row, and it is
 	// filled in by the ACL-scoped reads that resolve both, so that
@@ -2011,13 +2093,35 @@ type Store interface {
 	// a refresh while one is running is asking for the next one, and gets
 	// it, because the request they made lands after this claim took the
 	// one it cleared.
-	ClaimLibraryRefresh(ctx context.Context, now time.Time) (Library, bool, error)
-	// FinishLibraryRefresh records the outcome of a claimed refresh. An
-	// empty refreshErr means it worked, which stamps last_refresh_at and
-	// clears the previous error; a non-empty one leaves last_refresh_at
+	// A claim is also a lease. The caller names a random owner token and
+	// an expiry, both of which are written on the row it takes: a
+	// library somebody else still holds is not claimed, a lease left
+	// behind by a killed process expires and is taken over, and every
+	// write that concludes the refresh has to prove it still owns it.
+	ClaimLibraryRefresh(ctx context.Context, now time.Time, lease RefreshLease) (Library, bool, error)
+	// RenewLibraryRefreshLease extends a claim this worker still holds,
+	// and returns ErrRefreshLeaseLost when it does not. A refresh of a
+	// large library outlives any sane lease, so the holder renews while
+	// it works, and the renewal is also how it finds out it was taken
+	// over.
+	RenewLibraryRefreshLease(ctx context.Context, libraryID string, lease RefreshLease, now time.Time) error
+	// CheckLibraryRefreshLease is the same question without the write,
+	// for the per-book check a refresh makes before each unit of work.
+	CheckLibraryRefreshLease(ctx context.Context, libraryID, owner string, now time.Time) error
+	// FinishLibraryRefresh records the outcome of a claimed refresh and
+	// releases the lease, both under a lock on the lease row: a worker
+	// that was dispossessed records nothing and gets ErrRefreshLeaseLost.
+	//
+	// An empty code means it worked, which stamps last_refresh_at and
+	// clears the previous code; any other code leaves last_refresh_at
 	// where it was, because a refresh that failed did not refresh
 	// anything.
-	FinishLibraryRefresh(ctx context.Context, libraryID string, at time.Time, refreshErr string) error
+	//
+	// An empty owner is a caller running without a lease — a one-off
+	// index of a library nothing schedules — and matches only a library
+	// nobody holds, so it can no more write over a running refresh than
+	// a stale worker can.
+	FinishLibraryRefresh(ctx context.Context, libraryID, owner string, at time.Time, code RefreshCode) error
 	// AdminRequestLibraryRefresh asks for a refresh of one library now. It
 	// is an administrator's operation (ADR-0013): the ACL-scoped reads in
 	// this interface do not have a counterpart, because deciding when the
@@ -2052,8 +2156,33 @@ type Store interface {
 	DeleteCalibreBooks(ctx context.Context, libraryID string, calibreIDs []int64, at time.Time) (TrashPurgeResult, error)
 	// SetLibraryInventoryDigest records the change gate a Calibre refresh
 	// computed, so the next one can stop without reading a catalog row.
-	// It is written only by a refresh that completed.
-	SetLibraryInventoryDigest(ctx context.Context, libraryID, digest string, at time.Time) error
+	// It is written only by a refresh that completed, and only by the
+	// worker that still owns the lease: a dispossessed one leaves the
+	// digest where it was, so the next refresh does the work again
+	// rather than skipping it on the strength of a pass that stopped.
+	SetLibraryInventoryDigest(ctx context.Context, libraryID, owner, digest string, at time.Time) error
+	// RelocateWatchedFile moves one catalogued file to the path its
+	// source now has, without changing anything else about it. It is a
+	// book Calibre renamed: the same bytes at a new path, which must
+	// keep its catalog row rather than be catalogued a second time and
+	// have the first marked absent.
+	RelocateWatchedFile(ctx context.Context, libraryID, fileID, sourceRelativePath string, modifiedAt, at time.Time) error
+	// SupersedeInPlaceBookFile replaces the file a book is served from,
+	// keeping the book. Calibre converted or replaced the format: the
+	// publication is different, the book is the same, and the old row
+	// becomes `superseded` rather than being deleted, so the earlier
+	// edition's identity stays where it was (ADR-0014).
+	//
+	// It is idempotent on the replacement's id, and refuses a
+	// replacement naming a different book than the row it supersedes.
+	SupersedeInPlaceBookFile(ctx context.Context, libraryID, supersededFileID string, replacement BookFile, at time.Time) (BookFile, error)
+	// SetBookFileCover records the cover a library's curator chose for
+	// one file — Calibre's cover.jpg — or, with an empty path and
+	// digest, that there is none. The digest keys the rendered-cover
+	// cache, because two books sharing one EPUB can have two covers and
+	// a publication-keyed cache would serve one for the other. It
+	// reports whether it changed anything.
+	SetBookFileCover(ctx context.Context, libraryID, fileID, relativePath, coverSHA256 string, at time.Time) (bool, error)
 	// WatchedFilesByPath reads what the catalog already holds for one
 	// watched source path. It is a global housekeeping query like the
 	// other reconciliation methods — a sweep runs on the server's behalf,

@@ -3,6 +3,7 @@
 package content
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,8 +62,8 @@ func TestRefreshPassOnlyTouchesLibrariesThatAreDue(t *testing.T) {
 	if lib.LastRefreshAt == nil {
 		t.Fatal("a refresh that worked recorded no success")
 	}
-	if lib.LastRefreshError != nil {
-		t.Fatalf("a refresh that worked recorded the error %q", *lib.LastRefreshError)
+	if lib.LastRefreshCode != store.RefreshCodeNone {
+		t.Fatalf("a refresh that worked recorded the code %q", lib.LastRefreshCode)
 	}
 
 	// Immediately afterwards nothing is due again, however many times
@@ -103,8 +104,12 @@ func TestRefreshNowIsHonouredWithoutASchedule(t *testing.T) {
 	}
 	// The scheduled fixture library must not interfere, so put its next
 	// refresh out of reach by claiming and finishing it here.
-	if _, ok, err := f.store.ClaimLibraryRefresh(
-		f.ctx, f.now.Add(store.DefaultRefreshInterval+time.Minute)); err != nil {
+	claimAt := f.now.Add(store.DefaultRefreshInterval + time.Minute)
+	if _, ok, err := f.store.ClaimLibraryRefresh(f.ctx, claimAt,
+		store.RefreshLease{
+			Owner: "test-claim",
+			Until: claimAt.Add(store.DefaultRefreshLease),
+		}); err != nil {
 		t.Fatal(err)
 	} else if !ok {
 		t.Fatal("the fixture library was expected to be due")
@@ -187,11 +192,79 @@ func TestRefreshRecordsAnUnreachableRootAgainstItsLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lib.LastRefreshError == nil {
-		t.Fatal("an unreachable root recorded no error on its library")
+	if lib.LastRefreshCode != store.RefreshCodeRootUnavailable {
+		t.Fatalf("an unreachable root recorded %q on its library, "+
+			"want %q", lib.LastRefreshCode, store.RefreshCodeRootUnavailable)
 	}
 	if lib.LastRefreshAt != nil {
 		t.Fatalf("a refresh that never read the root claimed success at %s",
 			lib.LastRefreshAt)
+	}
+}
+
+// TestARefreshInProgressIsNotClaimedBySecondWorker is the exclusion
+// ADR-0014 asks for. A refresh that outlives its interval, or a "refresh
+// now" arriving while one runs, must not put two workers on one library:
+// the claim is a lease with an owner, and only an expired one is taken
+// over.
+func TestARefreshInProgressIsNotClaimedBySecondWorker(t *testing.T) {
+	f := newWatchedFixture(t)
+	f.write("Dickens - Bleak House.epub", minimalEPUB(t))
+	f.now = f.now.Add(store.DefaultRefreshInterval + time.Minute)
+
+	held := store.RefreshLease{
+		Owner: "worker-one",
+		Until: f.now.Add(store.DefaultRefreshLease),
+	}
+	if _, ok, err := f.store.ClaimLibraryRefresh(
+		f.ctx, f.now, held); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("the library was expected to be due")
+	}
+
+	// An administrator asks for a refresh while that one is running,
+	// which is what makes the library due again immediately.
+	if err := f.store.AdminRequestLibraryRefresh(
+		f.ctx, f.library.OwnerUserID, f.library.ID, f.now); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Minute)
+	report, err := RunRefreshPass(
+		f.ctx, f.store, f.cas, refreshOptions(f), f.clock())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Libraries != 0 {
+		t.Fatalf("a second worker claimed a library somebody holds: %+v",
+			report)
+	}
+
+	// The holder is what decides when it is over. A dispossessed worker
+	// cannot record its outcome, so the library keeps the state of the
+	// pass that is actually running.
+	if err := f.store.FinishLibraryRefresh(f.ctx, f.library.ID, "worker-two",
+		f.now, store.RefreshCodeNone); !errors.Is(
+		err, store.ErrRefreshLeaseLost) {
+		t.Fatalf("a stranger finished somebody's refresh: %v", err)
+	}
+
+	// Once the lease expires, the library is taken over rather than
+	// stranded: a worker that was killed must not hold it forever.
+	f.now = f.now.Add(store.DefaultRefreshLease + time.Minute)
+	report, err = RunRefreshPass(
+		f.ctx, f.store, f.cas, refreshOptions(f), f.clock())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Libraries != 1 || report.Ingested != 1 {
+		t.Fatalf("an expired lease was not taken over: %+v", report)
+	}
+	lib, err := f.store.AdminLibraryByID(f.ctx, f.library.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lib.RefreshLeaseOwner != "" || lib.LastRefreshCode != store.RefreshCodeNone {
+		t.Fatalf("a finished refresh left %+v", lib)
 	}
 }

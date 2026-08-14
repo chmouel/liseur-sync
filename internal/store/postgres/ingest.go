@@ -595,7 +595,7 @@ const bookFileColumns = `f.id, f.library_id, f.book_id, f.storage,
 	f.content_sha256, f.content_size_bytes, f.blob_sha256,
 	f.source, f.source_relative_path, f.original_filename, f.media_type,
 	f.partial_md5, f.dc_identifier, f.availability, f.source_modified_at,
-	f.created_at, f.updated_at`
+	f.cover_relative_path, f.cover_sha256, f.created_at, f.updated_at`
 
 // bookFileColumnsWithRoot is what a reader that intends to open the
 // bytes selects. The root travels with the file because an in-place
@@ -619,13 +619,14 @@ func scanBookFileInto(
 	row interface{ Scan(...any) error }, root *sql.NullString,
 ) (store.BookFile, error) {
 	var file store.BookFile
-	var blob sql.NullString
+	var blob, coverSHA sql.NullString
 	targets := []any{
 		&file.ID, &file.LibraryID, &file.BookID, &file.Storage,
 		&file.ContentSHA256, &file.ContentSizeBytes, &blob,
 		&file.Source, &file.SourceRelativePath, &file.OriginalFilename,
 		&file.MediaType, &file.PartialMD5, &file.DCIdentifier,
 		&file.Availability, &file.SourceModifiedAt,
+		&file.CoverRelativePath, &coverSHA,
 		&file.CreatedAt, &file.UpdatedAt,
 	}
 	if root != nil {
@@ -633,6 +634,10 @@ func scanBookFileInto(
 	}
 	err := row.Scan(targets...)
 	file.BlobSHA256 = blob.String
+	file.CoverSHA256 = coverSHA.String
+	if file.CoverRelativePath != nil && *file.CoverRelativePath == "" {
+		file.CoverRelativePath = nil
+	}
 	if file.SourceModifiedAt != nil {
 		at := file.SourceModifiedAt.UTC()
 		file.SourceModifiedAt = &at

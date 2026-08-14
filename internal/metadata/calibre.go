@@ -21,6 +21,16 @@ func FromCalibre(book calibre.Book) Proposal {
 		Source:         store.MetadataCalibre,
 		Confidence:     ConfidenceHigh,
 		ClearsUnstated: true,
+		// Every set Calibre curates, and only those. Genres are absent
+		// because Calibre has no such notion: clearing them would delete
+		// rows over an opinion it never expressed.
+		StatedSets: SetFields{
+			Identifiers:  true,
+			Languages:    true,
+			Tags:         true,
+			Series:       true,
+			Contributors: true,
+		},
 		Title: Candidate{
 			Value: book.Title, Source: store.MetadataCalibre},
 		Description: Candidate{

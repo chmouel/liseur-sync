@@ -136,6 +136,13 @@ func (l *Library) readBooks(
 		   FROM books
 		  ORDER BY id`)
 	if err != nil {
+		if isMissingRelation(err) {
+			// Without books there is no library to read, which is a
+			// different failure from a version that spells a field
+			// differently: it is reported as the schema being one this
+			// server does not understand.
+			return nil, nil, fmt.Errorf("%w: %w", ErrUnsupportedSchema, err)
+		}
 		return nil, nil, fmt.Errorf("calibre: read books: %w", err)
 	}
 	defer rows.Close()
@@ -181,6 +188,9 @@ func (l *Library) readFormats(
 		`SELECT book, format, name, uncompressed_size
 		   FROM data ORDER BY book, format`)
 	if err != nil {
+		if isMissingRelation(err) {
+			return fmt.Errorf("%w: %w", ErrUnsupportedSchema, err)
+		}
 		return fmt.Errorf("calibre: read formats: %w", err)
 	}
 	defer rows.Close()

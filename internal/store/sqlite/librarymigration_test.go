@@ -212,9 +212,11 @@ func TestRebuiltTablesKeepEveryColumn(t *testing.T) {
 			have[c] = true
 		}
 		for column := range want[table] {
-			// `kind` is the one column deliberately removed, by the
-			// migration that replaced it with three.
-			if table == "libraries" && column == "kind" {
+			// Columns a later migration deliberately removed: `kind`,
+			// replaced by three columns, and `last_refresh_error`,
+			// replaced by a bounded code.
+			if table == "libraries" &&
+				(column == "kind" || column == "last_refresh_error") {
 				continue
 			}
 			if !have[column] {

@@ -40,7 +40,10 @@ type Inventory struct {
 
 // InventoryBook is one book as the gate sees it.
 type InventoryBook struct {
-	ID           int64
+	ID int64
+	// LastModified is Calibre's own last_modified, at the precision it
+	// stored it: the digest hashes all of it, so an edit made in the
+	// same second as the one before it still moves the gate.
 	LastModified time.Time
 	// Files are the book's formats and its cover, as they are on the
 	// disk right now.
@@ -148,7 +151,12 @@ func writeInventory(h interface{ Write([]byte) (int, error) }, b InventoryBook) 
 		_, _ = h.Write([]byte{0})
 	}
 	write(strconv.FormatInt(b.ID, 10))
-	write(strconv.FormatInt(b.LastModified.UTC().Unix(), 10))
+	// The whole timestamp, not its whole seconds: Calibre records
+	// last_modified with fractional precision, and two metadata edits
+	// within one second are two changes. Truncating here would hash
+	// them the same and leave the second one invisible to the gate for
+	// as long as no file stat moved.
+	write(b.LastModified.UTC().Format(time.RFC3339Nano))
 	for _, f := range b.Files {
 		write(f.RelativePath)
 		if !f.Present {

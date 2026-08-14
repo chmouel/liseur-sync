@@ -13,7 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/chmouel/liseur-sync/internal/calibre"
 	"github.com/chmouel/liseur-sync/internal/catalog"
@@ -26,10 +29,23 @@ import (
 type calibreStore interface {
 	watchedStore
 	CalibreBookMappings(context.Context, string) (map[int64]string, error)
+	ListBookFiles(context.Context, string, string, store.LibraryRole) ([]store.BookFile, error)
+	SetBookFileCover(context.Context, string, string, string, string, time.Time) (bool, error)
 	MapCalibreBook(context.Context, string, int64, string, time.Time) error
 	DeleteCalibreBooks(context.Context, string, []int64, time.Time) (store.TrashPurgeResult, error)
-	SetLibraryInventoryDigest(context.Context, string, string, time.Time) error
+	SetLibraryInventoryDigest(context.Context, string, string, string, time.Time) error
+	RelocateWatchedFile(context.Context, string, string, string, time.Time, time.Time) error
+	SupersedeInPlaceBookFile(context.Context, string, string, store.BookFile, time.Time) (store.BookFile, error)
 }
+
+// ErrCalibreUnreadable says metadata.db could not be read: it is not a
+// Calibre library, it is not the file that was checked at the root, or a
+// query against it failed. It is a fact about the database rather than
+// about any book, so the whole refresh stops on it — degrading into a
+// tree walk is the discovery mechanism this design rejected, arriving
+// through a side door.
+var ErrCalibreUnreadable = errors.New(
+	"content: calibre metadata.db could not be read")
 
 // CalibreSyncReport totals one Calibre refresh, on top of what the file
 // reconciliation did.
@@ -49,9 +65,14 @@ type CalibreSyncReport struct {
 	// Deleted counts catalog books removed because Calibre no longer has
 	// them.
 	Deleted int
+	// CoversUpdated counts books whose recorded cover moved to the
+	// cover.jpg Calibre now has, or lost one Calibre no longer has.
+	CoversUpdated int
 	// Unresolved counts Calibre books with no catalog row yet — queued
 	// this pass and not promoted until a worker gets to them, so their
-	// metadata lands on the next refresh rather than this one.
+	// metadata lands on the next refresh rather than this one. While any
+	// remain, the inventory digest is not recorded, so that next refresh
+	// happens whether or not anybody touches Calibre again.
 	Unresolved int
 }
 
@@ -88,14 +109,21 @@ func SyncCalibreLibrary(
 		// at all, is a configuration or mount problem. It is reported and
 		// changes nothing: an unmounted volume must never take a
 		// household's catalog away.
+		if errors.Is(err, calibre.ErrNotCalibre) ||
+			errors.Is(err, calibre.ErrUnsafeRoot) {
+			return report, fmt.Errorf("%w: %s: %w",
+				ErrCalibreUnreadable, library.RootPath, err)
+		}
 		return report, fmt.Errorf("%w: %s: %w",
 			ErrRootUnavailable, library.RootPath, err)
 	}
 	defer db.Close()
 
+	lease := newRefreshLease(st, library, clock().UTC())
+
 	inventory, err := db.Inventory(ctx)
 	if err != nil {
-		return report, fmt.Errorf("read calibre inventory: %w", err)
+		return report, calibreReadError("read calibre inventory", err)
 	}
 	report.Books = len(inventory.Books)
 	if !inventory.Changed(library.InventoryDigest) {
@@ -106,18 +134,18 @@ func SyncCalibreLibrary(
 
 	books, err := db.Books(ctx)
 	if err != nil {
-		return report, fmt.Errorf("read calibre books: %w", err)
+		return report, calibreReadError("read calibre books", err)
 	}
 
 	sync, err := syncCalibreFiles(
-		ctx, st, blobs, library, books, inventory, opts, clock)
+		ctx, st, blobs, library, books, inventory, opts, clock, lease)
 	report.Sync = sync
 	if err != nil {
 		return report, err
 	}
 
 	if err := applyCalibreMetadata(
-		ctx, st, db, library, books, clock, &report); err != nil {
+		ctx, st, db, library, books, clock, lease, &report); err != nil {
 		return report, err
 	}
 
@@ -130,11 +158,31 @@ func SyncCalibreLibrary(
 		ctx, st, library, inventory, clock, &report); err != nil {
 		return report, err
 	}
-	if err := st.SetLibraryInventoryDigest(
-		ctx, library.ID, inventory.Digest, clock().UTC()); err != nil {
+	if report.Unresolved > 0 {
+		// Some of Calibre's books have no catalog row yet: this pass
+		// queued their files and a promotion worker will create them.
+		// Recording the digest now would gate every later refresh on an
+		// inventory that has not changed since, and those books would
+		// stay unmapped and undescribed for as long as nobody edits the
+		// library. The gate stays dirty until there is nothing left to
+		// resolve.
+		return report, nil
+	}
+	if err := st.SetLibraryInventoryDigest(ctx, library.ID, lease.owner(),
+		inventory.Digest, clock().UTC()); err != nil {
 		return report, fmt.Errorf("record calibre inventory digest: %w", err)
 	}
 	return report, nil
+}
+
+// calibreReadError separates a schema this server does not understand
+// from a database it could not read at all, because the two get
+// different codes and an administrator does different things about them.
+func calibreReadError(what string, err error) error {
+	if errors.Is(err, calibre.ErrUnsupportedSchema) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%s: %w: %w", what, ErrCalibreUnreadable, err)
 }
 
 // syncCalibreFiles reconciles the publications metadata.db names, using
@@ -150,11 +198,16 @@ func syncCalibreFiles(
 	inventory calibre.Inventory,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
+	lease *refreshLease,
 ) (WatchedSyncReport, error) {
 	var report WatchedSyncReport
 	sweepStartedAt := clock().UTC()
 	if sweepStartedAt.IsZero() {
 		return report, store.ErrInvalidTransition
+	}
+	mappings, err := st.CalibreBookMappings(ctx, library.ID)
+	if err != nil {
+		return report, fmt.Errorf("read calibre mappings: %w", err)
 	}
 	stamps := make(map[string]calibre.FileStamp)
 	for _, book := range inventory.Books {
@@ -174,6 +227,10 @@ func syncCalibreFiles(
 	observations := make([]store.WatchedObservation, 0, len(books))
 	for _, book := range books {
 		if err := ctx.Err(); err != nil {
+			report.Scan.Complete = false
+			return report, err
+		}
+		if err := lease.hold(ctx, clock().UTC()); err != nil {
 			report.Scan.Complete = false
 			return report, err
 		}
@@ -206,6 +263,21 @@ func syncCalibreFiles(
 			SizeBytes:          scanned.SizeBytes,
 			ModifiedAt:         scanned.ModifiedAt,
 		})
+		if bookID, mapped := mappings[book.ID]; mapped {
+			// A book Calibre already knows this catalog's row for is
+			// reconciled against that row, not against the path. Calibre
+			// renames directories when a title or an author is edited,
+			// and resolving by path would catalog the renamed book a
+			// second time and mark the first absent (ADR-0014).
+			handled, err := reconcileCalibreBookFile(
+				ctx, st, root, library, bookID, scanned, opts, clock, &report)
+			if err != nil {
+				return report, err
+			}
+			if handled {
+				continue
+			}
+		}
 		if err := reconcileWatchedFile(
 			ctx, st, blobs, root, library, scanned, opts, clock, &report,
 		); err != nil {
@@ -240,14 +312,24 @@ func applyCalibreMetadata(
 	library ScannedLibrary,
 	books []calibre.Book,
 	clock func() time.Time,
+	lease *refreshLease,
 	report *CalibreSyncReport,
 ) error {
 	mappings, err := st.CalibreBookMappings(ctx, library.ID)
 	if err != nil {
 		return fmt.Errorf("read calibre mappings: %w", err)
 	}
+	root, err := os.OpenRoot(library.RootPath)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v",
+			ErrRootUnavailable, library.RootPath, err)
+	}
+	defer root.Close()
 	for _, book := range books {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := lease.hold(ctx, clock().UTC()); err != nil {
 			return err
 		}
 		bookID, err := resolveCalibreBook(ctx, st, library, mappings, book)
@@ -282,6 +364,78 @@ func applyCalibreMetadata(
 		if changed {
 			report.MetadataUpdated++
 		}
+		if err := applyCalibreCover(
+			ctx, st, root, library, bookID, book, clock, report); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maxCalibreCoverBytes bounds the cover.jpg one book may have. It is far
+// past any real cover and small enough that a library full of them
+// cannot make a refresh read an unbounded amount of somebody else's
+// disk.
+const maxCalibreCoverBytes = 16 << 20
+
+// applyCalibreCover records the cover Calibre holds beside the book, in
+// preference to the one inside the EPUB.
+//
+// It is stored rather than extracted because it is a choice somebody
+// made — a curator who replaced a bad cover means it — and because two
+// Calibre books can share one EPUB and still want different pictures.
+// The digest is what makes that work: the rendered-cover cache is keyed
+// by it, so a replaced cover.jpg is a different key rather than a stale
+// image (ADR-0014).
+func applyCalibreCover(
+	ctx context.Context,
+	st calibreStore,
+	root *os.Root,
+	library ScannedLibrary,
+	bookID string,
+	book calibre.Book,
+	clock func() time.Time,
+	report *CalibreSyncReport,
+) error {
+	files, err := st.ListBookFiles(
+		ctx, library.ActorUserID, bookID, store.LibraryRoleManage)
+	if err != nil {
+		return fmt.Errorf("read files of book %q: %w", bookID, err)
+	}
+	var file store.BookFile
+	for _, candidate := range files {
+		if candidate.Availability == store.BookFileAvailable {
+			file = candidate
+			break
+		}
+	}
+	if file.ID == "" {
+		return nil
+	}
+
+	var relativePath, digest string
+	if book.HasCover {
+		relativePath = book.CoverPath()
+		digest, err = hashWatchedSource(
+			ctx, root, relativePath, maxCalibreCoverBytes)
+		if err != nil {
+			// Calibre's flag is what it believes it wrote, not a stat.
+			// A cover that is not there, is too large, or cannot be read
+			// leaves the book with whatever its EPUB declares, which is
+			// a picture rather than an error.
+			relativePath, digest = "", ""
+		}
+	}
+	if digest == file.CoverSHA256 {
+		return nil
+	}
+	changed, err := st.SetBookFileCover(
+		ctx, library.ID, file.ID, relativePath, digest, clock().UTC())
+	if err != nil {
+		return fmt.Errorf("record cover of book %q: %w", bookID, err)
+	}
+	if changed {
+		report.CoversUpdated++
 	}
 	return nil
 }
@@ -412,4 +566,165 @@ func reconcileCalibreDeletions(
 	}
 	report.Deleted += len(result.BookIDs)
 	return nil
+}
+
+// reconcileCalibreBookFile decides what one mapped Calibre book's file
+// means, by book id rather than by path.
+//
+// It reports whether it settled the question. A book whose live file
+// this pass cannot identify — one with no file row yet, or with several
+// — is left to the path-based reconciliation, which is where ambiguity
+// is reported rather than resolved.
+func reconcileCalibreBookFile(
+	ctx context.Context,
+	st calibreStore,
+	root *os.Root,
+	library ScannedLibrary,
+	bookID string,
+	file ScannedFile,
+	opts WatchedSyncOptions,
+	clock func() time.Time,
+	report *WatchedSyncReport,
+) (bool, error) {
+	files, err := st.ListBookFiles(
+		ctx, library.ActorUserID, bookID, store.LibraryRoleManage)
+	if err != nil {
+		return false, fmt.Errorf("read files of book %q: %w", bookID, err)
+	}
+	var current store.BookFile
+	live := 0
+	for _, candidate := range files {
+		if candidate.Availability == store.BookFileSuperseded {
+			continue
+		}
+		live++
+		if current.ID == "" {
+			current = candidate
+		}
+	}
+	if current.ID == "" || live != 1 || current.SourceRelativePath == nil {
+		return false, nil
+	}
+
+	samePath := *current.SourceRelativePath == file.RelativePath
+	if samePath && bookFileUnchanged(current, file) {
+		report.Unchanged++
+		return true, nil
+	}
+	digest, err := hashWatchedSource(
+		ctx, root, file.RelativePath, opts.MaxFileBytes)
+	if err != nil {
+		if isRetryableWatchedFailure(err) {
+			report.Failed++
+			report.Scan.Complete = false
+			return true, nil
+		}
+		return false, err
+	}
+	if digest == current.ContentSHA256 {
+		if samePath {
+			// A touched file. The observation this sweep already
+			// recorded carries the new modification time.
+			report.Rehashed++
+			return true, nil
+		}
+		if err := st.RelocateWatchedFile(ctx, library.ID, current.ID,
+			file.RelativePath, file.ModifiedAt, clock().UTC()); err != nil {
+			return false, fmt.Errorf(
+				"relocate file of book %q: %w", bookID, err)
+		}
+		report.Relocated++
+		return true, nil
+	}
+
+	// Different bytes for a book Calibre still calls the same book: a
+	// conversion or a replaced format. The catalog row stays and the
+	// file behind it is replaced.
+	if library.Storage != store.LibraryStorageInPlace {
+		// The bytes would have to be copied into content-addressed
+		// storage first, which is the ingest pipeline's job and not
+		// this pass's. Leaving it to the path-based reconciliation
+		// flags the book for review, which is a person deciding rather
+		// than this pass guessing.
+		return false, nil
+	}
+	return supersedeCalibreBookFile(
+		ctx, st, root, library, bookID, current, file, opts, clock, report)
+}
+
+// supersedeCalibreBookFile records the replacement bytes as a new file
+// on the same book.
+//
+// The replacement is validated exactly as an in-place ingest would
+// validate it, because it is the same act — publishing bytes this server
+// does not own — and an unreadable conversion must not take a readable
+// book away. One that fails goes to review, where a person decides.
+func supersedeCalibreBookFile(
+	ctx context.Context,
+	st calibreStore,
+	root *os.Root,
+	library ScannedLibrary,
+	bookID string,
+	current store.BookFile,
+	file ScannedFile,
+	opts WatchedSyncOptions,
+	clock func() time.Time,
+	report *WatchedSyncReport,
+) (bool, error) {
+	read, err := readInPlaceReplacement(ctx, root, file.RelativePath, opts)
+	if err != nil {
+		if isRetryableWatchedFailure(err) || errors.Is(err, ErrSourceRaced) {
+			report.Failed++
+			report.Scan.Complete = false
+			return true, nil
+		}
+		report.Review++
+		if _, err := st.SetCatalogBookReview(ctx, library.ID, bookID,
+			reviewContentChanged, clock().UTC()); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	at := clock().UTC()
+	relativePath := file.RelativePath
+	replacement := store.BookFile{
+		ID:                 calibreReplacementFileID(library.ID, bookID, read.ContentSHA256),
+		LibraryID:          library.ID,
+		BookID:             bookID,
+		Storage:            store.LibraryStorageInPlace,
+		ContentSHA256:      read.ContentSHA256,
+		ContentSizeBytes:   read.ContentSizeBytes,
+		Source:             store.IngestScanned,
+		SourceRelativePath: &relativePath,
+		SourceModifiedAt:   read.SourceModifiedAt,
+		OriginalFilename:   path.Base(relativePath),
+		MediaType:          mediaTypeEPUB,
+		Availability:       store.BookFileAvailable,
+	}
+	if _, err := st.SupersedeInPlaceBookFile(
+		ctx, library.ID, current.ID, replacement, at); err != nil {
+		return false, fmt.Errorf(
+			"supersede file of book %q: %w", bookID, err)
+	}
+	report.Superseded++
+	return true, nil
+}
+
+// calibreReplacementFileID derives a replacement's id from the book and
+// the bytes, so a refresh that dies after the commit and runs again
+// names the same row rather than a second one.
+func calibreReplacementFileID(libraryID, bookID, digest string) string {
+	return uuid.NewSHA1(promotionNS,
+		[]byte("calibre-supersede|"+libraryID+"|"+bookID+"|"+digest)).String()
+}
+
+// bookFileUnchanged is watchedFileUnchanged for a catalog file row: the
+// recorded size and modification time still describing what is on disk,
+// without reading it.
+func bookFileUnchanged(current store.BookFile, file ScannedFile) bool {
+	if current.SourceModifiedAt == nil {
+		return false
+	}
+	return current.ContentSizeBytes == file.SizeBytes &&
+		current.SourceModifiedAt.Equal(file.ModifiedAt)
 }
