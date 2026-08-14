@@ -213,11 +213,16 @@ Phases 1 to 8 are in. What differs from the plan above, and why:
   false credit rather than a partial one. Three names fit; a crowd is
   counted. A book nobody is credited with still falls back to the date
   it was added.
-- **The browse toolbar has no sort or filter chips.** Sorting is not in
-  the store's list call either, so a sort control would have been a
-  control that lies. What the toolbar carries instead is the library
-  picker, the library-scoped search, links to the four entity indexes,
-  and the grid/list toggle.
+- **The toolbar sorts by the two orders that exist.** Filter chips and a
+  sort arrived with the merged library page, but only over orderings
+  something can actually produce: recently added, which is the catalog
+  cursor, and last read, which the reading history holds. Alphabetical
+  is not offered, because it is not a control — it is a column. Titles
+  would have to carry a normalized sort key written by every path that
+  sets a title, since `LOWER()` sorts accents one way in SQLite and
+  another in PostgreSQL, and a cursor that orders differently per
+  backend is a cursor that skips rows. That is a schema decision, so it
+  waits for one rather than for a layout.
 - **Narrow tables scroll sideways rather than becoming cards.** A
   card-per-row stack needs every cell labelled, and the tables that are
   wide — tokens with an inline scope form, admin invites — are exactly
