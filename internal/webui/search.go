@@ -54,7 +54,7 @@ func (s *Server) handleSearch(
 	// have not asked yet.
 	if text == "" && len(filters) == 0 {
 		v.Blank = true
-		searchPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+		searchPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 			Render(r.Context(), w)
 		return
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleSearch(
 			BookCount: f.BookCount, URL: v.urlWith(f.ID),
 		})
 	}
-	searchPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	searchPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
 
@@ -138,4 +138,35 @@ func (v SearchView) searchURL(filters []string) string {
 		values.Add("entity", id)
 	}
 	return "libraries/" + url.PathEscape(v.LibraryID) + "/search?" + values.Encode()
+}
+
+// handleTopSearch is what the search box in the top bar submits to.
+// Search is a library-scoped route, but the shell is not: rather than
+// give the top bar a library picker before anybody has asked for one,
+// this resolves the user's first readable library and forwards the
+// query there. It reads nothing the library-scoped page could not
+// already read.
+func (s *Server) handleTopSearch(
+	w http.ResponseWriter, r *http.Request, _ store.AuthSession, u *store.User,
+) {
+	libs, err := s.St.ListLibraries(r.Context(), u.ID, store.LibraryRoleRead)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	if len(libs) == 0 {
+		// Nothing to search yet. The books page explains how to get
+		// something into the catalog, which is the real answer.
+		redirectRel(w, "books", http.StatusSeeOther)
+		return
+	}
+	text := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(text) > maxSearchTextBytes {
+		text = text[:maxSearchTextBytes]
+	}
+	target := "libraries/" + url.PathEscape(libs[0].Library.ID) + "/search"
+	if text != "" {
+		target += "?q=" + url.QueryEscape(text)
+	}
+	redirectRel(w, target, http.StatusSeeOther)
 }

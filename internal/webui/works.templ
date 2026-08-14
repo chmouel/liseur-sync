@@ -14,14 +14,24 @@ type WorkRow struct {
 }
 
 templ worksPage(prefix string, u userCtx, csrf string, rows []WorkRow) {
-	@layout("Library", prefix, u.User, csrf, worksBody(prefix, rows))
+	@layout("Reading", prefix, u, csrf, worksBody(prefix, csrf, u.Prefs.View, rows))
 }
 
-templ worksBody(prefix string, rows []WorkRow) {
-	<h1>Library</h1>
+templ worksBody(prefix, csrf, view string, rows []WorkRow) {
+	<div class="toolbar">
+		<h1>Reading</h1>
+		<span class="spacer"></span>
+		@viewToggle(prefix, csrf, "works", view)
+	</div>
 	<section class="card">
 		if len(rows) == 0 {
 			<p class="muted">No books yet. Resolve one from a client to see it here.</p>
+		} else if view == viewGrid {
+			<div class="grid">
+				for _, w := range rows {
+					@workCard(prefix, w)
+				}
+			</div>
 		} else {
 			<table>
 				<tr><th>Title</th><th>Author</th><th>Progress</th><th>Last active</th></tr>
@@ -36,7 +46,7 @@ templ worksBody(prefix string, rows []WorkRow) {
 						<td>{ w.Author }</td>
 						<td>
 							if w.Progression != nil {
-								<div class="bar"><span style={ barWidth(*w.Progression) }></span></div>
+								<div class="bar"><span class={ pctClass(*w.Progression) }></span></div>
 								{ pct(*w.Progression) }
 							} else {
 								<span class="muted">—</span>
@@ -68,7 +78,7 @@ type OpRow struct {
 }
 
 templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow) {
-	@layout(orPlaceholder(d.Work.Title), prefix, u.User, csrf, workBody(d, ops))
+	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(d, ops))
 }
 
 templ workBody(d WorkDetail, ops []OpRow) {

@@ -34,7 +34,7 @@ type EntityBooksView struct {
 }
 
 templ entitiesPage(prefix string, u userCtx, csrf string, v EntitiesView) {
-	@layout(v.Heading, prefix, u.User, csrf, entitiesBody(prefix, csrf, v))
+	@layout(v.Heading, prefix, u, csrf, entitiesBody(prefix, csrf, v))
 }
 
 templ entitiesBody(prefix, csrf string, v EntitiesView) {
@@ -127,7 +127,7 @@ templ mergeForm(prefix, csrf string, v EntitiesView) {
 }
 
 templ entityBooksPage(prefix string, u userCtx, csrf string, v EntityBooksView) {
-	@layout(v.Heading, prefix, u.User, csrf, entityBooksBody(prefix, v))
+	@layout(v.Heading, prefix, u, csrf, entityBooksBody(prefix, v))
 }
 
 templ entityBooksBody(prefix string, v EntityBooksView) {

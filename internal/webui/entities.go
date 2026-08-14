@@ -83,7 +83,7 @@ func (s *Server) handleEntities(
 			url.PathEscape(v.Kind) + "?after=" +
 			url.QueryEscape(rows[len(rows)-1].NormalizedName)
 	}
-	entitiesPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	entitiesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
 
@@ -133,7 +133,7 @@ func (s *Server) handleEntityBooks(
 			"?cursor=" + url.QueryEscape(encodeBooksCursor(
 			store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}))
 	}
-	entityBooksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	entityBooksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
 

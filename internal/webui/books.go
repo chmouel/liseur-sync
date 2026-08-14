@@ -48,6 +48,8 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 	v := BooksView{
 		Notice:  r.URL.Query().Get("notice"),
 		Problem: r.URL.Query().Get("problem"),
+		View:    readPrefs(r).View,
+		Back:    "books",
 	}
 	selected := r.URL.Query().Get("library")
 	if selected == "" && len(libs) > 0 {
@@ -69,7 +71,7 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 	// treated as no selection at all, rather than as an error: it is
 	// most often a stale bookmark.
 	if v.Selected == "" {
-		booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+		booksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 			Render(r.Context(), w)
 		return
 	}
@@ -97,6 +99,19 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		v.NextURL = "books?library=" + url.QueryEscape(v.Selected) +
 			"&cursor=" + url.QueryEscape(next)
 	}
+	// The view toggle comes back to this library rather than to the
+	// first one, which is what "keep looking at what I was looking at"
+	// means.
+	v.Back = "books?library=" + url.QueryEscape(v.Selected)
+
+	// An htmx continuation asks for more of one list, not for the page
+	// around it: answering with the whole document would append a second
+	// copy of the shell to the grid, and would make the librarian's
+	// review queries run again for markup nobody is going to look at.
+	if isHTMXRequest(r) {
+		booksFragment(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
+		return
+	}
 	// Only a librarian uploads, so only a librarian is shown what became
 	// of an upload. Without this the page is silent about a file that was
 	// accepted and then rejected, which looks exactly like losing it.
@@ -112,8 +127,16 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		// decision waiting for somebody who can make it.
 		v.Review = s.reviewRows(r, u.ID, v.Selected)
 	}
-	booksPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	booksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
+}
+
+// isHTMXRequest reports whether this is htmx asking for a fragment.
+// Nothing about access depends on it — the header is a hint about what
+// to render, never about what may be read — so an attacker setting it
+// gains a page of markup they were already entitled to.
+func isHTMXRequest(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
 }
 
 // uploadActivityLimit keeps the section a status list rather than a log.
@@ -209,7 +232,7 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 	}
 	v.Notice = r.URL.Query().Get("notice")
 	v.Problem = r.URL.Query().Get("problem")
-	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	bookPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
 

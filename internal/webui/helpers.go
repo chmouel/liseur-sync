@@ -1,7 +1,9 @@
 package webui
 
 import (
-	"fmt"
+	"math"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -25,9 +27,60 @@ func relPrefix(p string) string {
 	return strings.Repeat("../", strings.Count(rest, "/")+1)
 }
 
-// userCtx carries the signed-in user into templates.
+// userCtx carries the signed-in user and everything the shell needs to
+// draw itself: which palette to render, which browse view to use, which
+// rail entry is the current one, and where a preference form should
+// send the reader back to.
 type userCtx struct {
-	User *store.User
+	User    *store.User
+	Prefs   prefs
+	Section string
+	Back    string
+}
+
+// uiCtx assembles that from a request, so a page does not have to think
+// about it and cannot forget to.
+func uiCtx(r *http.Request, u *store.User) userCtx {
+	return userCtx{
+		User:    u,
+		Prefs:   readPrefs(r),
+		Section: sectionOf(r.URL.Path),
+		Back:    backTo(r.URL),
+	}
+}
+
+// sectionOf names the rail entry a path belongs to. The rail is short
+// and the paths are stable, so a switch says it more plainly than a
+// table would.
+func sectionOf(path string) string {
+	rest := strings.TrimPrefix(strings.TrimPrefix(path, "/ui"), "/")
+	head, _, _ := strings.Cut(rest, "/")
+	switch head {
+	case "":
+		return "dashboard"
+	case "works", "books", "devices", "settings", "admin":
+		return head
+	case "libraries":
+		if strings.Contains(rest, "/search") {
+			return "search"
+		}
+		return "browse"
+	default:
+		return head
+	}
+}
+
+// backTo renders a URL as a path relative to the UI root, which is what
+// a Location resolves against after a POST to /ui/preferences.
+func backTo(u *url.URL) string {
+	rest := strings.TrimPrefix(strings.TrimPrefix(u.Path, "/ui"), "/")
+	if rest == "" {
+		return "."
+	}
+	if u.RawQuery != "" {
+		return rest + "?" + u.RawQuery
+	}
+	return rest
 }
 
 // SessionRow is one recent session for the dashboard.
@@ -61,8 +114,19 @@ func orPlaceholder(s string) string {
 	return s
 }
 
-func barWidth(f float64) string {
-	return fmt.Sprintf("width:%d%%", int(f*100))
+// pctClass rounds a progression to the nearest twentieth and names the
+// stylesheet rule that draws it. A class rather than a style attribute:
+// a per-card number is the one thing that would force
+// style-src 'unsafe-inline' on a UI that does not need it, and five
+// percentage points is finer than a 4mm bar can show anyway.
+func pctClass(f float64) string {
+	switch {
+	case f <= 0:
+		return "p0"
+	case f >= 1:
+		return "p100"
+	}
+	return "p" + strconv.Itoa(int(math.Round(f*20))*5)
 }
 
 // cellClass buckets minutes for the heatmap.

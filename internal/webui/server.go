@@ -132,7 +132,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 			redirectRel(w, "./", http.StatusSeeOther)
 			return
 		}
-		loginPage(relPrefix(r.URL.Path), "").Render(r.Context(), w)
+		loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "").Render(r.Context(), w)
 	}))
 	mux.Handle("GET /ui/works", sec(s.requireAuth(s.handleWorks)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
@@ -156,6 +156,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/books/{id}/metadata/apply",
 		sec(s.requireAuth(s.handleApplyBookMetadataCandidate)))
 	mux.Handle("POST /ui/books/{id}/accept", sec(s.requireAuth(s.handleAcceptBook)))
+	mux.Handle("GET /ui/search", sec(s.requireAuth(s.handleTopSearch)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
 	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
@@ -169,6 +170,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/koplugin", sec(s.requireAuth(s.handleCreateKoplugin)))
 	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
+	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))
@@ -222,7 +224,7 @@ func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 			if !s.LoginLimiter.Allow(host) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
-				loginPage(relPrefix(r.URL.Path), "too many attempts, try again later").
+				loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "too many attempts, try again later").
 					Render(r.Context(), w)
 				return
 			}
@@ -238,12 +240,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Same work as a real check, so an unknown username cannot be
 		// told apart from a wrong password by response time.
 		auth.CheckDummyPassword(r.FormValue("password"))
-		loginPage(prefix, "invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
 		return
 	}
 	ok, err := auth.CheckPassword(r.FormValue("password"), u.Argon2Hash)
 	if err != nil || !ok {
-		loginPage(prefix, "invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
 		return
 	}
 	secret, _ := auth.NewSecret()
@@ -255,7 +257,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		CSRFHash: auth.HashSecret(csrf), CreatedAt: now,
 		ExpiresAt: now.Add(7 * 24 * time.Hour),
 	}); err != nil {
-		loginPage(prefix, "internal error").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "internal error").Render(r.Context(), w)
 		return
 	}
 	// No Path attribute: the RFC 6265 default-path (the directory of
