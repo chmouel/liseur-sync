@@ -236,6 +236,22 @@ const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the publisher styling',
   unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
 
+// A click on any blank margin is a page turn: aimed at the right edge
+// of the stage — which the engine's own margin occupies, retargeted to
+// the foliate-view host — the book moves forward.
+const beforeClick = JSON.parse(await evalIn(probe));
+await evalIn(`(() => {
+  const stage = document.getElementById('reader-view');
+  const box = stage.getBoundingClientRect();
+  const target = document.elementFromPoint(box.right - 4, box.top + box.height / 2) || stage;
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: box.right - 4, clientY: box.top + box.height / 2 }));
+})()`);
+await new Promise((r) => setTimeout(r, 900));
+const afterClick = JSON.parse(await evalIn(probe));
+check('a click on the blank margin turns the page',
+  afterClick.fraction > beforeClick.fraction,
+  `${beforeClick.fraction} -> ${afterClick.fraction}`);
+
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.
 const unexpected = consoleErrors.filter((e) =>
