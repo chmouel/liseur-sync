@@ -43,19 +43,26 @@ type SeriesValue struct {
 // MergeEntries instead, or it would delete rows it never had any knowledge
 // of.
 type Proposal struct {
-	Source        store.MetadataSource
-	Confidence    Confidence
-	PartialSets   bool
-	Title         Candidate
-	Subtitle      Candidate
-	Description   Candidate
-	Publisher     Candidate
-	PublishedDate Candidate
-	Identifiers   []Assertion[IdentifierKey, struct{}]
-	Languages     []Assertion[string, string]
-	Tags          []Assertion[string, string]
-	Series        []Assertion[string, SeriesValue]
-	Contributors  []Assertion[ContributorKey, string]
+	Source      store.MetadataSource
+	Confidence  Confidence
+	PartialSets bool
+	// ClearsUnstated says that a scalar this proposal leaves empty is an
+	// assertion of emptiness rather than a value the source could not
+	// determine. Only a source that reads a complete, curated record may
+	// set it — Calibre does; an EPUB extraction that failed to find a
+	// publisher does not — and what it leaves behind is a tombstone, so
+	// a weaker source cannot refill the field on the next pass.
+	ClearsUnstated bool
+	Title          Candidate
+	Subtitle       Candidate
+	Description    Candidate
+	Publisher      Candidate
+	PublishedDate  Candidate
+	Identifiers    []Assertion[IdentifierKey, struct{}]
+	Languages      []Assertion[string, string]
+	Tags           []Assertion[string, string]
+	Series         []Assertion[string, SeriesValue]
+	Contributors   []Assertion[ContributorKey, string]
 }
 
 // FromEmbedded maps a bounded OPF extraction to an embedded-source proposal.
@@ -168,7 +175,13 @@ func FromPath(candidate PathCandidate) Proposal {
 // AssertsNothing reports a proposal with nothing in it: every value its
 // source might have carried was one it could not determine. Applying it is
 // a no-op, so a caller can skip the work of resolving it at all.
+//
+// A proposal that clears what it does not state always asserts something,
+// because saying nothing is what it says.
 func (p Proposal) AssertsNothing() bool {
+	if p.ClearsUnstated {
+		return false
+	}
 	return p.Title.Value == "" && p.Subtitle.Value == "" &&
 		p.Description.Value == "" && p.Publisher.Value == "" &&
 		p.PublishedDate.Value == "" &&

@@ -41,9 +41,23 @@ func Resolve(
 	apply := func(value *string, source *store.MetadataSource, locked *bool,
 		candidate metadata.Candidate,
 	) {
-		field, ok := metadata.Apply(
-			metadata.Field{Value: *value, Source: *source, Locked: *locked},
-			candidate)
+		current := metadata.Field{Value: *value, Source: *source, Locked: *locked}
+		var field metadata.Field
+		var ok bool
+		if candidate.Value == "" && proposal.ClearsUnstated &&
+			candidate.Source == proposal.Source {
+			// The source read the whole record and this field was not in
+			// it, which is an assertion that it is empty. Clearing keeps
+			// the provenance, so the value stays gone against everything
+			// weaker rather than being restored by the next extraction.
+			//
+			// A candidate with no source at all is not that: it is a
+			// field the source cannot express an opinion about, which is
+			// left exactly as it was found.
+			field, ok = metadata.ClearBy(current, proposal.Source)
+		} else {
+			field, ok = metadata.Apply(current, candidate)
+		}
 		if !ok {
 			return
 		}
