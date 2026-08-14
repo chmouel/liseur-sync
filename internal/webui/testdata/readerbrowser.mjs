@@ -118,24 +118,29 @@ if (detached) {
   check('the reader origin holds no cookie', at.cookie === '', at.cookie);
 }
 
-// The engine renders into an iframe it creates. That frame is
-// same-origin — which is how it measures the document in order to
-// paginate it — so unlike the previous renderer, its contents can be
-// inspected from here.
+// The engine (foliate-js, ADR-0012) keeps its frames inside closed
+// shadow roots, so the page cannot reach them by DOM query — and
+// neither can anything else on the page, which is part of the point.
+// The probe therefore goes through the engine's public API: the
+// chapter documents via renderer.getContents(), the position via
+// lastLocation.
 const probe = `(() => {
-  const frame = document.querySelector('#reader-view iframe');
-  const doc = frame && frame.contentDocument;
-  const body = doc && doc.body;
+  const view = document.querySelector('foliate-view');
+  const contents = view?.renderer?.getContents?.() ?? [];
+  const doc = contents[0]?.doc;
+  const body = doc?.body;
+  const loc = view?.lastLocation;
   return JSON.stringify({
     status: document.getElementById('reader-status')?.textContent,
     chapter: document.getElementById('reader-chapter')?.textContent,
     progress: document.getElementById('reader-progress-text')?.textContent,
     title: document.getElementById('reader-title-text')?.textContent,
-    hasFrame: !!frame,
-    sandbox: frame ? frame.getAttribute('sandbox') : null,
-    text: body ? body.innerText.slice(0, 60) : '',
-    colour: body ? getComputedStyle(body).color : '',
-    scroll: document.querySelector('#reader-view .epub-container')?.scrollLeft ?? -1,
+    hasDoc: !!doc,
+    frameReachable: !!document.querySelector('#reader-view iframe'),
+    text: body ? (body.innerText || '').slice(0, 60) : '',
+    colour: body ? doc.defaultView.getComputedStyle(body).color : '',
+    fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
+    cfi: loc?.cfi || '',
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
   });
 })()`;
@@ -144,10 +149,15 @@ const diag = JSON.parse(await evalIn(probe));
 console.log('diag:', JSON.stringify(diag));
 
 check('no error banner', !diag.status, diag.status);
-check('the engine rendered a chapter', diag.hasFrame && diag.text.length > 10,
-  `frame=${diag.hasFrame} text=${JSON.stringify(diag.text)}`);
+check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
+  `doc=${diag.hasDoc} text=${JSON.stringify(diag.text)}`);
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
 check('reader knows the spine', /^Chapter 1 of (\d+)$/.test(diag.chapter), diag.chapter);
+// The chapter frame lives in a closed shadow root: nothing on the
+// page — including anything a publication managed to smuggle onto it —
+// can reach in by DOM query.
+check('the chapter frame is not reachable from the page',
+  diag.frameReachable === false, String(diag.frameReachable));
 
 // The publication's own stylesheet is a separate zip entry. The engine
 // rewrites the link to a blob URL, which the page CSP has to permit.
@@ -155,8 +165,10 @@ check('publication stylesheet was applied',
   diag.colour.replace(/\s/g, '') === 'rgb(17,34,51)', diag.colour);
 
 // The publication's script must not have run. It sets a data attribute
-// on the documentElement; the sandbox has no allow-scripts, so it
-// cannot. This is the promise the vendored engine had to keep.
+// on the documentElement; the reader strips script elements from every
+// resource and the page CSP — inherited by each blob chapter — refuses
+// what stripping might miss. This is the promise the vendored engine
+// had to keep.
 check('publication script did not run', diag.ran === false, String(diag.ran));
 
 // It must have actually painted: an engine that renders nothing still
@@ -177,14 +189,14 @@ for (let i = 0; i < 10; i++) {
   await evalIn(`document.getElementById('reader-next').click()`);
   await new Promise((r) => setTimeout(r, 900));
   const now = JSON.parse(await evalIn(probe));
-  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, scroll: now.scroll });
+  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi });
 }
 console.log('page turns:', JSON.stringify(seen, null, 1));
 
 // Ten turns, ten different places. A book that lays itself out too wide
 // still turns the page — it just turns onto blank column after blank
 // column — so the count that matters is of distinct pages, not of clicks.
-const distinct = new Set(seen.map((p) => p.chapter + '|' + p.progress + '|' + p.scroll)).size;
+const distinct = new Set(seen.map((p) => p.chapter + '|' + p.fraction + '|' + p.cfi)).size;
 check('the book pages past page 2', distinct >= 6,
   `${distinct} distinct pages in 10 turns`);
 check('the reader leaves the first chapter',
@@ -197,9 +209,32 @@ await new Promise((r) => setTimeout(r, 900));
 const back = JSON.parse(await evalIn(probe));
 const wasAt = seen[seen.length - 1];
 check('the book pages backwards',
-  back.chapter !== wasAt.chapter || back.progress !== wasAt.progress ||
-  back.scroll !== wasAt.scroll,
-  `${wasAt.chapter} ${wasAt.progress} @${wasAt.scroll} -> ${back.chapter} ${back.progress} @${back.scroll}`);
+  back.chapter !== wasAt.chapter || back.fraction !== wasAt.fraction ||
+  back.cfi !== wasAt.cfi,
+  `${wasAt.chapter} @${wasAt.fraction} -> ${back.chapter} @${back.fraction}`);
+
+// The appearance settings must reach inside the publication: choose the
+// dark theme and the chapter text obeys; reset and the publisher's own
+// colour comes back. This also proves the user stylesheet survives the
+// engine's page lifecycle rather than styling a page that is repainted
+// away.
+await evalIn(`(() => {
+  const radio = document.querySelector('#reader-settings-form input[name="theme"][value="dark"]');
+  radio.checked = true;
+  radio.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 700));
+const themed = JSON.parse(await evalIn(probe));
+check('the dark theme restyles the publication',
+  themed.colour.replace(/\s/g, '') === 'rgb(207,207,212)', themed.colour);
+const saved = await evalIn(`localStorage.getItem('liseur.reader.settings')`);
+check('settings persist in the browser',
+  typeof saved === 'string' && saved.includes('"theme":"dark"'), String(saved));
+await evalIn(`document.getElementById('reader-settings-reset').click()`);
+await new Promise((r) => setTimeout(r, 700));
+const unthemed = JSON.parse(await evalIn(probe));
+check('reset restores the publisher styling',
+  unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.

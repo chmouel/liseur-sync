@@ -537,7 +537,42 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .reader-status.problem{color:var(--danger);opacity:1}
 .reader-stage{flex:1;display:flex;min-height:0}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
-#reader-view iframe{border:0}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;
   padding:0 .6rem;opacity:.35;color:inherit}
 .reader-turn:hover{opacity:.9}
+
+/* Reader appearance settings (ADR-0012): a details popover, no script
+   needed to open it and none to style it. The stage colour tracks the
+   chosen theme so page gaps match the book instead of flashing white. */
+.reader-settings{position:relative}
+.reader-settings>summary{list-style:none;cursor:pointer;user-select:none;
+  border:1px solid var(--line);border-radius:6px;padding:.1rem .55rem;
+  font-weight:600;font-size:.9rem;line-height:1.4}
+.reader-settings>summary::-webkit-details-marker{display:none}
+.reader-settings>summary:hover,.reader-settings[open]>summary{background:var(--surface-3)}
+.reader-settings>form{position:absolute;right:0;top:calc(100% + .55rem);z-index:40;
+  width:19rem;max-height:min(75vh,34rem);overflow:auto;
+  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 12px 32px rgba(0,0,0,.45);padding:.9rem;
+  display:grid;gap:.7rem;font-size:.85rem;white-space:normal}
+.reader-settings fieldset{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:.35rem}
+.reader-settings legend{width:100%;padding:0 0 .3rem;opacity:.65;
+  font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
+.reader-settings .chip{display:inline-flex;align-items:center;cursor:pointer;
+  border:1px solid var(--line);border-radius:999px;padding:.2rem .65rem}
+.reader-settings .chip input{position:absolute;opacity:0;pointer-events:none}
+.reader-settings .chip:has(input:checked){border-color:var(--primary);
+  background:var(--surface-3);color:var(--primary)}
+.reader-settings .row{display:grid;grid-template-columns:auto 1fr auto;
+  align-items:center;gap:.6rem}
+.reader-settings .row select{justify-self:end}
+.reader-settings .row2{display:flex;gap:.35rem}
+.reader-settings input[type="range"]{width:100%}
+.reader-settings output{opacity:.75;min-width:3ch;text-align:right}
+#reader-settings-reset{border:1px solid var(--line);border-radius:6px;
+  background:transparent;color:inherit;cursor:pointer;padding:.35rem .6rem}
+#reader-settings-reset:hover{background:var(--surface-3)}
+.reader-body[data-reader-theme="light"] #reader-view{background:#ffffff}
+.reader-body[data-reader-theme="sepia"] #reader-view{background:#f6ecd9}
+.reader-body[data-reader-theme="dark"] #reader-view{background:#202124}
+.reader-body[data-reader-theme="black"] #reader-view{background:#000000}

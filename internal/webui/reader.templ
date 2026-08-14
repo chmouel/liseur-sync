@@ -51,21 +51,88 @@ templ readerPage(v ReaderView, csrf string) {
 					<span id="reader-chapter"></span>
 					<span id="reader-progress-text"></span>
 				</div>
+				// Appearance settings (ADR-0012): everything here is applied
+				// client-side through the engine's user stylesheet and layout
+				// attributes, and remembered in this browser only. The server
+				// never sees a font choice, which is why there is no form
+				// action and no CSRF token anywhere near it.
+				<details class="reader-settings" id="reader-settings">
+					<summary title="Reader settings" aria-label="Reader settings">Aa</summary>
+					<form id="reader-settings-form" autocomplete="off">
+						<fieldset>
+							<legend>Theme</legend>
+							<label class="chip"><input type="radio" name="theme" value="original"/> Publisher</label>
+							<label class="chip"><input type="radio" name="theme" value="light"/> Light</label>
+							<label class="chip"><input type="radio" name="theme" value="sepia"/> Sepia</label>
+							<label class="chip"><input type="radio" name="theme" value="dark"/> Dark</label>
+							<label class="chip"><input type="radio" name="theme" value="black"/> Black</label>
+						</fieldset>
+						<fieldset>
+							<legend>Font</legend>
+							<label class="chip"><input type="radio" name="font" value="publisher"/> Publisher</label>
+							<label class="chip"><input type="radio" name="font" value="serif"/> Serif</label>
+							<label class="chip"><input type="radio" name="font" value="sans"/> Sans-serif</label>
+						</fieldset>
+						<label class="row">
+							Font size
+							<input type="range" name="size" min="70" max="180" step="5"/>
+							<output id="reader-size-out"></output>
+						</label>
+						<label class="row">
+							Line spacing
+							<select name="spacing">
+								<option value="0">Publisher</option>
+								<option value="1.2">1.2</option>
+								<option value="1.35">1.35</option>
+								<option value="1.5">1.5</option>
+								<option value="1.7">1.7</option>
+								<option value="2">2</option>
+							</select>
+						</label>
+						<div class="row2">
+							<label class="chip"><input type="checkbox" name="justify"/> Justify</label>
+							<label class="chip"><input type="checkbox" name="hyphenate"/> Hyphenate</label>
+						</div>
+						<fieldset>
+							<legend>Layout</legend>
+							<label class="chip"><input type="radio" name="flow" value="paginated"/> Pages</label>
+							<label class="chip"><input type="radio" name="flow" value="scrolled"/> Scroll</label>
+						</fieldset>
+						<label class="row">
+							Columns
+							<select name="columns">
+								<option value="auto">Auto</option>
+								<option value="1">1</option>
+								<option value="2">2</option>
+							</select>
+						</label>
+						<label class="row">
+							Margins
+							<select name="margin">
+								<option value="narrow">Narrow</option>
+								<option value="normal">Normal</option>
+								<option value="wide">Wide</option>
+							</select>
+						</label>
+						<button type="button" id="reader-settings-reset">Reset to defaults</button>
+					</form>
+				</details>
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
 			<p id="reader-status" class="reader-status">Loading…</p>
 			<div class="reader-stage">
 				<button id="reader-prev" class="reader-turn" type="button" aria-label="Previous page">&lsaquo;</button>
-				// epub.js builds the iframe itself, inside this element,
-				// and sandboxes it without allow-scripts: the
-				// publication is laid out and measured, and none of it
-				// runs.
+				// foliate-js (ADR-0012) mounts its <foliate-view> element
+				// here and loads each chapter into an iframe of its own
+				// making, from a blob: URL. A blob document inherits this
+				// page's CSP, whose script-src is 'self' with no room in
+				// it — that policy, plus the transform in reader-app.js
+				// that strips scripts from every resource, is why the
+				// publication is displayed and none of it runs.
 				<div id="reader-view"></div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>
-			<script src={ v.StaticBase + "vendor/jszip.min.js" }></script>
-			<script src={ v.StaticBase + "vendor/epub.min.js" }></script>
-			<script src={ v.StaticBase + "reader-app.js" } defer></script>
+			<script type="module" src={ v.StaticBase + "reader-app.js" }></script>
 		</body>
 	</html>
 }

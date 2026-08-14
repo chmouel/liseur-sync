@@ -58,12 +58,13 @@ func TestReaderPageIsolatesThePublication(t *testing.T) {
 	if strings.Contains(page, "Call me Ishmael") {
 		t.Error("publication content must not be rendered into the page")
 	}
-	for _, script := range []string{
-		"vendor/jszip.min.js", "vendor/epub.min.js", "reader-app.js",
-	} {
-		if !strings.Contains(page, script) {
-			t.Errorf("the reader page does not load %s", script)
-		}
+	// The page loads exactly one script of its own: the reader module,
+	// which imports the vendored engine (foliate-js, ADR-0012) itself.
+	if !strings.Contains(page, "reader-app.js") {
+		t.Error("the reader page does not load reader-app.js")
+	}
+	if !strings.Contains(page, `type="module"`) {
+		t.Error("the reader module must be loaded as an ES module")
 	}
 }
 
