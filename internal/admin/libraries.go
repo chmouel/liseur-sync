@@ -26,9 +26,9 @@ var (
 		"a library name may be at most %d characters", MaxLibraryNameLength)
 	ErrGrantToOwner = errors.New(
 		"the owner already has full access to this library")
-	ErrWatchedLibraryFromUI = errors.New(
-		"a watched library names a path on the server and is created with " +
-			"the watch-library subcommand")
+	ErrRootLibraryFromUI = errors.New(
+		"a directory or Calibre library names a path on the server and is " +
+			"created with the add-library subcommand")
 )
 
 // ValidateLibraryName is the one definition of an acceptable name. It
@@ -57,7 +57,9 @@ func NewManagedLibrary(ctx context.Context, st store.Store, ownerUserID, name st
 		// The owner pays for what the library holds, including bytes
 		// uploaded by others they grant access to (ADR-0002).
 		QuotaUserID: ownerUserID,
-		Kind:        store.LibraryManaged,
+		Source:      store.LibraryManaged,
+		Storage:     store.LibraryStorageCAS,
+		Refresh:     store.LibraryRefreshManual,
 		Name:        strings.TrimSpace(name),
 		CreatedAt:   time.Now().UTC(),
 	}

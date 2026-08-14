@@ -225,16 +225,18 @@ func (s *Store) ListBooksInReview(
 	return books, rows.Err()
 }
 
-// ListWatchedLibraries reads every watched library on the instance. It is
-// a background-job query and crosses users by design: a scanner sweeps
+// ListScannableLibraries reads every library on the instance that has a
+// root to sweep, whatever its refresh policy — a library refreshed by
+// hand is still scannable, it just is not due on its own. It is a
+// background-job query and crosses users by design: a scanner sweeps
 // what the server was configured to sweep, not what the caller can see.
-// Libraries with no root are excluded, because there is nothing to sweep.
-func (s *Store) ListWatchedLibraries(ctx context.Context) ([]store.Library, error) {
+func (s *Store) ListScannableLibraries(ctx context.Context) ([]store.Library, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, owner_user_id, quota_user_id, kind, name, root_path,
+		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
+		        refresh_interval_seconds, name, root_path,
 		        config_json, created_at, updated_at
 		 FROM libraries
-		 WHERE kind = 'watched' AND root_path IS NOT NULL AND root_path <> ''
+		 WHERE source <> 'managed' AND root_path IS NOT NULL AND root_path <> ''
 		 ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
@@ -244,11 +246,14 @@ func (s *Store) ListWatchedLibraries(ctx context.Context) ([]store.Library, erro
 	for rows.Next() {
 		var lib store.Library
 		var created, updated string
+		var refreshSeconds int64
 		if err := rows.Scan(&lib.ID, &lib.OwnerUserID, &lib.QuotaUserID,
-			&lib.Kind, &lib.Name, &lib.RootPath, &lib.ConfigJSON,
+			&lib.Source, &lib.Storage, &lib.Refresh, &refreshSeconds,
+			&lib.Name, &lib.RootPath, &lib.ConfigJSON,
 			&created, &updated); err != nil {
 			return nil, err
 		}
+		lib.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 		if lib.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err
 		}

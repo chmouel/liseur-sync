@@ -33,7 +33,9 @@ func newSearchFixture(t *testing.T, s store.Store) *searchFixture {
 	}
 	if err := s.CreateLibrary(f.ctx, store.Library{
 		ID: f.library, OwnerUserID: f.owner.ID, QuotaUserID: f.owner.ID,
-		Kind: store.LibraryManaged, Name: "Search", CreatedAt: f.at,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Search", CreatedAt: f.at,
 	}); err != nil {
 		t.Fatal(err)
 	}

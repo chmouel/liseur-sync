@@ -14,11 +14,15 @@ import (
 
 func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, error) {
 	var out store.AccessibleLibrary
+	var refreshSeconds int64
 	err := row.Scan(
 		&out.Library.ID,
 		&out.Library.OwnerUserID,
 		&out.Library.QuotaUserID,
-		&out.Library.Kind,
+		&out.Library.Source,
+		&out.Library.Storage,
+		&out.Library.Refresh,
+		&refreshSeconds,
 		&out.Library.Name,
 		&out.Library.RootPath,
 		&out.Library.ConfigJSON,
@@ -26,6 +30,7 @@ func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, 
 		&out.Library.UpdatedAt,
 		&out.Role,
 	)
+	out.Library.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	return out, err
 }
 
@@ -69,7 +74,8 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	return book, err
 }
 
-const libraryColumns = `l.id, l.owner_user_id, l.quota_user_id, l.kind, l.name,
+const libraryColumns = `l.id, l.owner_user_id, l.quota_user_id,
+	l.source, l.storage, l.refresh, l.refresh_interval_seconds, l.name,
 	l.root_path, l.config_json, l.created_at, l.updated_at,
 	CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END`
 
@@ -96,9 +102,12 @@ func (s *Store) CreateLibrary(ctx context.Context, library store.Library) error 
 	}
 	_, err := s.db.ExecContext(ctx, q(
 		`INSERT INTO libraries
-		 (id, owner_user_id, quota_user_id, kind, name, root_path, config_json, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-		library.ID, library.OwnerUserID, library.QuotaUserID, string(library.Kind),
+		 (id, owner_user_id, quota_user_id, source, storage, refresh,
+		  refresh_interval_seconds, name, root_path, config_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		library.ID, library.OwnerUserID, library.QuotaUserID,
+		string(library.Source), string(library.Storage), string(library.Refresh),
+		store.RefreshSeconds(library.RefreshInterval),
 		library.Name, library.RootPath, library.ConfigJSON,
 		library.CreatedAt.UTC(), library.UpdatedAt.UTC())
 	if isUniqueErr(err) {
@@ -601,7 +610,7 @@ func (s *Store) CatalogAuthorsForBooks(
 		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
 		   AND bc.role = ?
 		 ORDER BY bc.book_id, bc.position, c.normalized_name, c.id`,
-		), args...)
+	), args...)
 	if err != nil {
 		return nil, err
 	}

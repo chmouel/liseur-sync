@@ -42,7 +42,9 @@ func TestPromotionPassAgainstARealStore(t *testing.T) {
 	user := storetest.MkUser(t, st, "promoter")
 	library := store.Library{
 		ID: "lib-1", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Books", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Books", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, library); err != nil {
 		t.Fatalf("create library: %v", err)
@@ -234,7 +236,9 @@ func TestConfiguredLayoutReachesTheCatalog(t *testing.T) {
 		rootPath := filepath.Join(root, id)
 		if err := st.CreateLibrary(ctx, store.Library{
 			ID: id, OwnerUserID: user.ID, QuotaUserID: user.ID,
-			Kind: store.LibraryWatched, Name: id, RootPath: &rootPath,
+			Source:  store.LibraryDirectory,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshInterval, Name: id, RootPath: &rootPath,
 			CreatedAt: now,
 		}); err != nil {
 			t.Fatalf("create %s: %v", id, err)

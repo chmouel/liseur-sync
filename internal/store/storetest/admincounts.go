@@ -40,7 +40,9 @@ func testAdminCounts(t *testing.T, open OpenFunc) {
 
 	managed := store.Library{
 		ID: "counts-managed", OwnerUserID: alice.ID, QuotaUserID: alice.ID,
-		Kind: store.LibraryManaged, Name: "Managed", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Managed", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, managed); err != nil {
 		t.Fatal(err)
@@ -48,7 +50,9 @@ func testAdminCounts(t *testing.T, open OpenFunc) {
 	root := t.TempDir()
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "counts-watched", OwnerUserID: bob.ID, QuotaUserID: bob.ID,
-		Kind: store.LibraryWatched, Name: "Watched", RootPath: &root,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Watched", RootPath: &root,
 		CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)

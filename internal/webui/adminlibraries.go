@@ -45,7 +45,19 @@ type adminLibraryView struct {
 	LayoutError string
 }
 
-// Root reports the watched library's root path, or "" for a managed
+// libraryAxes renders a library's three axes as one line: where its
+// books come from, where their bytes live, and how often the source is
+// read again. The three are independent, so the page shows all three
+// rather than the single word `kind` used to be.
+func libraryAxes(l store.Library) string {
+	refresh := string(l.Refresh)
+	if l.Refresh == store.LibraryRefreshInterval {
+		refresh = "every " + humanDuration(l.RefreshInterval)
+	}
+	return string(l.Source) + " · " + string(l.Storage) + " · " + refresh
+}
+
+// Root reports a root-backed library's root path, or "" for a managed
 // one, which has none by construction.
 func (v adminLibraryView) Root() string {
 	if v.Library.RootPath == nil {

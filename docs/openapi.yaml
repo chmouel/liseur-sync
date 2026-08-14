@@ -714,7 +714,9 @@ paths:
                       properties:
                         library_id: { type: string, format: uuid }
                         name: { type: string }
-                        kind: { type: string, enum: [managed, watched] }
+                        source: { type: string, enum: [managed, directory, calibre] }
+                        storage: { type: string, enum: [cas, in_place] }
+                        refresh: { type: string, enum: [manual, interval] }
                         role: { type: string, enum: [read, manage] }
                         created_at: { type: string, format: date-time }
 

@@ -13,9 +13,9 @@ templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, ne
 		<h2>Create a library</h2>
 		<p class="muted">
 			A managed library holds what people upload to it and names no path
-			on this server. A <i>watched</i> library indexes a directory that
-			already exists here, so it is created with
-			<code>liseur-sync admin watch-library</code> — naming a server
+			on this server. A <i>directory</i> or <i>Calibre</i> library
+			indexes a tree that already exists here, so it is created with
+			<code>liseur-sync admin add-library</code> — naming a server
 			path is not something a browser session should be able to do.
 		</p>
 		<form method="post" action={ prefix + "admin/libraries" }>
@@ -41,7 +41,7 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
 		<h2>{ v.Library.Name }</h2>
 		<p class="muted">
 			<code>{ v.Library.ID }</code>
-			· { string(v.Library.Kind) }
+			· { libraryAxes(v.Library) }
 			· owned by
 			if v.OwnerName != "" {
 				{ v.OwnerName }
@@ -121,11 +121,11 @@ templ adminUserLibrariesSection(prefix string, libs []adminUserLibrary, more boo
 			<p class="muted">This account owns no libraries and was granted none.</p>
 		} else {
 			<table>
-				<tr><th>Library</th><th>Kind</th><th>Access</th></tr>
+				<tr><th>Library</th><th>Source</th><th>Access</th></tr>
 				for _, l := range libs {
 					<tr>
 						<td>{ l.Library.Name }</td>
-						<td>{ string(l.Library.Kind) }</td>
+						<td>{ libraryAxes(l.Library) }</td>
 						<td>
 							if l.Owner {
 								owner

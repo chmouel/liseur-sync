@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/workident"
@@ -55,8 +54,8 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return kopluginDevice(ctx, st, args[1:])
 	case "create-library":
 		return createLibrary(ctx, st, args[1:])
-	case "watch-library":
-		return watchLibrary(ctx, st, args[1:])
+	case "add-library":
+		return addLibrary(ctx, st, args[1:])
 	case "list-review":
 		return listReview(ctx, st, args[1:])
 	case "clear-review":
@@ -123,10 +122,14 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   koplugin-device <user> <name> create a statistics-plugin capability URL
 
   create-library <owner> <name> create a managed library
-  watch-library <owner> <name> <root>
-                                create a watched library over an existing
+  add-library <owner> <name> <root>
+                                create a library over an existing
                                 read-only directory; the server never
                                 writes below <root>
+                                flags: -source directory|calibre
+                                       -storage cas|in-place
+                                       -refresh manual|interval
+                                       -interval <duration>
   list-libraries <user>         list libraries the user can read
   grant-library <actor> <library-id> <user> read|manage
                                 grant access; actor must own or manage it
@@ -487,8 +490,9 @@ func listLibraries(ctx context.Context, st store.Store, args []string) error {
 		if l.Library.OwnerUserID == u.ID {
 			owner = "owner"
 		}
-		fmt.Printf("%s  %-10s %-6s %-7s %s\n",
-			l.Library.ID, l.Library.Kind, l.Role, owner, l.Library.Name)
+		fmt.Printf("%s  %-9s %-8s %-8s %-6s %-7s %s\n",
+			l.Library.ID, l.Library.Source, l.Library.Storage,
+			l.Library.Refresh, l.Role, owner, l.Library.Name)
 	}
 	return nil
 }

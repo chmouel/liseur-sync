@@ -24,7 +24,9 @@ func testAdminLibraries(t *testing.T, open OpenFunc) {
 	mk := func(id, owner, name string) store.Library {
 		l := store.Library{
 			ID: id, OwnerUserID: owner, QuotaUserID: owner,
-			Kind: store.LibraryManaged, Name: name,
+			Source:  store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual, Name: name,
 			ConfigJSON: []byte(`{}`), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := s.CreateLibrary(ctx, l); err != nil {

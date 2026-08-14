@@ -27,7 +27,9 @@ func TestIngestJobRejectsPartialBookReference(t *testing.T) {
 	}
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
-		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Library", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,9 @@ func TestSplitMovesMissingCatalogMapping(t *testing.T) {
 	root := "/srv/books"
 	library := store.Library{
 		ID: "lib1", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryWatched, Name: "Library", RootPath: &root, CreatedAt: now,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Library", RootPath: &root, CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -130,7 +134,9 @@ func TestMigration8NormalizesIngestTimestamps(t *testing.T) {
 	}
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
-		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Library", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

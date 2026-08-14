@@ -58,7 +58,9 @@ func seedBackup(t *testing.T, st store.Store) string {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Library", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

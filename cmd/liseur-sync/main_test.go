@@ -98,7 +98,9 @@ func TestOpenContentAndRecoverBeforeServe(t *testing.T) {
 	}
 	library := store.Library{
 		ID: "library", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Library", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -201,7 +203,9 @@ func TestOpenContentReconcilesBlobInventoryBeforeServe(t *testing.T) {
 	}
 	library := store.Library{
 		ID: "reconcile-library", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Reconciliation", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Reconciliation", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -562,7 +566,9 @@ func TestTrashPurgeWorkerDeletesOnlyWhatItsWindowAllows(t *testing.T) {
 	}
 	if err := st.CreateLibrary(ctx, store.Library{
 		ID: "library", OwnerUserID: "user", QuotaUserID: "user",
-		Kind: store.LibraryManaged, Name: "Library", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Library", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

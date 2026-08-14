@@ -39,8 +39,8 @@ func (s *Store) AdminCounts(ctx context.Context) (store.AdminCounts, error) {
 
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*),
-		       COALESCE(SUM(CASE WHEN kind = 'managed' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN kind = 'watched' THEN 1 ELSE 0 END), 0)
+		       COALESCE(SUM(CASE WHEN source = 'managed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN source <> 'managed' THEN 1 ELSE 0 END), 0)
 		FROM libraries`).Scan(&c.Libraries, &c.ManagedLibraries, &c.WatchedLibraries)
 	if err != nil {
 		return c, err

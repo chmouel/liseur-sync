@@ -85,7 +85,9 @@ func newUploadFixture(t *testing.T) *uploadFixture {
 	}
 	if err := st.CreateLibrary(t.Context(), store.Library{
 		ID: f.library, OwnerUserID: f.user.ID, QuotaUserID: f.user.ID,
-		Kind: store.LibraryManaged, Name: "Books", CreatedAt: time.Now().UTC(),
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Books", CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
 	}

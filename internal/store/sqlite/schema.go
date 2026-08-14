@@ -820,8 +820,72 @@ UPDATE users SET is_admin = 1 WHERE id IN (
 );
 `
 
+// migration17 splits libraries.kind into the three axes of ADR-0014.
+// `kind` said two things at once: where books come from and how often
+// the server looks again. A watch folder is not a kind of library, it is
+// a refresh policy any library with a root can have, and welding the two
+// together is why "a directory I index once" and "a Calibre library"
+// could not be expressed at all.
+//
+// SQLite cannot alter a CHECK constraint, so the table is rebuilt. The
+// definition below is the one from migration6 plus the new columns and
+// minus `kind`; every index is recreated. Both indexes are dropped first
+// because SQLite keeps index names unique per database, not per table.
+//
+// The rebuild is safe only because Migrate runs with foreign keys off
+// and checks them again before committing — see the comment there.
+//
+// The values a CHECK admits widen with the phase that implements them:
+// `in_place` arrives with the storage work and `calibre` with the
+// Calibre source, so a database cannot hold a state no code honours.
+const migration17 = `
+DROP INDEX libraries_watched_root;
+DROP INDEX libraries_owner;
+ALTER TABLE libraries RENAME TO libraries_old;
+
+CREATE TABLE libraries (
+    id            TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    quota_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source        TEXT NOT NULL CHECK (source IN ('managed', 'directory')),
+    storage       TEXT NOT NULL CHECK (storage IN ('cas')),
+    refresh       TEXT NOT NULL CHECK (refresh IN ('manual', 'interval')),
+    refresh_interval_seconds INTEGER NOT NULL DEFAULT 900
+        CHECK (refresh_interval_seconds > 0),
+    name          TEXT NOT NULL,
+    root_path     TEXT,
+    config_json   BLOB,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (id, quota_user_id),
+    CHECK ((source = 'managed' AND root_path IS NULL) OR
+           (source <> 'managed' AND root_path IS NOT NULL)),
+    CHECK (source <> 'managed' OR refresh = 'manual')
+);
+
+INSERT INTO libraries (
+    id, owner_user_id, quota_user_id, source, storage, refresh,
+    refresh_interval_seconds, name, root_path, config_json,
+    created_at, updated_at
+)
+SELECT id, owner_user_id, quota_user_id,
+       CASE kind WHEN 'managed' THEN 'managed' ELSE 'directory' END,
+       'cas',
+       CASE kind WHEN 'managed' THEN 'manual' ELSE 'interval' END,
+       900, name, root_path, config_json, created_at, updated_at
+FROM libraries_old;
+
+DROP TABLE libraries_old;
+
+CREATE UNIQUE INDEX libraries_root
+    ON libraries(root_path) WHERE root_path IS NOT NULL;
+CREATE INDEX libraries_owner ON libraries(owner_user_id);
+CREATE INDEX libraries_refresh_due
+    ON libraries(refresh, source) WHERE refresh = 'interval';
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14, migration15, migration16,
+	migration13, migration14, migration15, migration16, migration17,
 }

@@ -22,14 +22,18 @@ func testLibraryConfig(t *testing.T, open OpenFunc) {
 
 	library := store.Library{
 		ID: "lib-config", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Configured", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Configured", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
 	}
 	other := store.Library{
 		ID: "lib-config-other", OwnerUserID: outsider.ID, QuotaUserID: outsider.ID,
-		Kind: store.LibraryManaged, Name: "Untouched", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Untouched", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, other); err != nil {
 		t.Fatal(err)

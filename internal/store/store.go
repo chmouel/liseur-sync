@@ -182,7 +182,7 @@ type AdminCounts struct {
 	// carries the created_at of the oldest job in each *non-terminal*
 	// state, which is the number that answers "is ingest stuck?"
 	// without naming a file.
-	JobsByState     map[string]int
+	JobsByState      map[string]int
 	OldestJobByState map[string]time.Time
 }
 
@@ -200,14 +200,87 @@ type Token struct {
 	RevokedAt *time.Time
 }
 
-// LibraryKind controls whether content is server-managed or discovered from
-// an administrator-configured read-only root.
-type LibraryKind string
+// LibrarySource says where a library's books come from. It is one of the
+// three axes ADR-0014 split the old `kind` column into: a source, a
+// storage mode and a refresh policy. `kind` conflated the first and the
+// third, which is why "a directory indexed once" had no way to exist.
+type LibrarySource string
 
 const (
-	LibraryManaged LibraryKind = "managed"
-	LibraryWatched LibraryKind = "watched"
+	// LibraryManaged holds books users uploaded. The server owns the
+	// bytes and there is no root path.
+	LibraryManaged LibrarySource = "managed"
+	// LibraryDirectory is an administrator's directory of EPUBs. The
+	// server reads it and never writes, renames or deletes below it.
+	LibraryDirectory LibrarySource = "directory"
+	// LibraryCalibre is a Calibre library directory, described by the
+	// metadata.db at its root. Reserved by ADR-0014; the schema does not
+	// admit it until the Calibre source is implemented.
+	LibraryCalibre LibrarySource = "calibre"
 )
+
+func (s LibrarySource) Valid() bool {
+	return s == LibraryManaged || s == LibraryDirectory || s == LibraryCalibre
+}
+
+// RootBacked reports whether this source reads from a directory, and so
+// requires a root path.
+func (s LibrarySource) RootBacked() bool {
+	return s == LibraryDirectory || s == LibraryCalibre
+}
+
+// LibraryStorage says where the bytes this server serves actually live.
+type LibraryStorage string
+
+const (
+	// LibraryStorageCAS copies content into content-addressed storage,
+	// which is the only mode a managed library can have.
+	LibraryStorageCAS LibraryStorage = "cas"
+	// LibraryStorageInPlace serves bytes where they lie, with no copy
+	// and no quota charge. Reserved by ADR-0014; the schema does not
+	// admit it until in-place reading is implemented.
+	LibraryStorageInPlace LibraryStorage = "in_place"
+)
+
+func (s LibraryStorage) Valid() bool {
+	return s == LibraryStorageCAS || s == LibraryStorageInPlace
+}
+
+// LibraryRefresh says how often the server looks at a root again. A
+// watch folder is this, not a kind of library.
+type LibraryRefresh string
+
+const (
+	LibraryRefreshManual   LibraryRefresh = "manual"
+	LibraryRefreshInterval LibraryRefresh = "interval"
+)
+
+func (r LibraryRefresh) Valid() bool {
+	return r == LibraryRefreshManual || r == LibraryRefreshInterval
+}
+
+// DefaultRefreshInterval is how often a library set to refresh on an
+// interval is swept when nobody chose a number.
+const DefaultRefreshInterval = 15 * time.Minute
+
+// RefreshSeconds encodes an interval for storage. Both backends hold
+// whole seconds under a positive CHECK, so a zero or negative duration
+// — which is what a caller that never set one has — becomes the
+// default rather than a constraint violation.
+func RefreshSeconds(d time.Duration) int64 {
+	if d < time.Second {
+		d = DefaultRefreshInterval
+	}
+	return int64(d / time.Second)
+}
+
+// RefreshIntervalFrom decodes what RefreshSeconds wrote.
+func RefreshIntervalFrom(seconds int64) time.Duration {
+	if seconds <= 0 {
+		return DefaultRefreshInterval
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // LibraryRole is an ACL capability. Manage implies read.
 type LibraryRole string
@@ -230,12 +303,17 @@ type Library struct {
 	ID          string
 	OwnerUserID string
 	QuotaUserID string
-	Kind        LibraryKind
-	Name        string
-	RootPath    *string
-	ConfigJSON  []byte
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	Source      LibrarySource
+	Storage     LibraryStorage
+	Refresh     LibraryRefresh
+	// RefreshInterval is how long to wait between sweeps of a root. It
+	// is meaningless, but still set, when Refresh is manual.
+	RefreshInterval time.Duration
+	Name            string
+	RootPath        *string
+	ConfigJSON      []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // AccessibleLibrary includes the caller's effective ACL role.
@@ -1698,12 +1776,12 @@ type Store interface {
 	// bounds each of the four updates, so a caller loops while Changed
 	// reports work was done.
 	ReconcileCatalogAvailability(ctx context.Context, at time.Time, limit int) (CatalogAvailabilityResult, error)
-	// ListWatchedLibraries is a global housekeeping query. The scanner
+	// ListScannableLibraries is a global housekeeping query. The scanner
 	// runs on the server's behalf rather than any user's, so it is one of
 	// the documented cross-user lookups: it exists for a background job,
 	// and nothing user-facing may call it. Managed libraries are excluded
 	// because they have no root to sweep.
-	ListWatchedLibraries(ctx context.Context) ([]Library, error)
+	ListScannableLibraries(ctx context.Context) ([]Library, error)
 	// WatchedFilesByPath reads what the catalog already holds for one
 	// watched source path. It is a global housekeeping query like the
 	// other reconciliation methods — a sweep runs on the server's behalf,

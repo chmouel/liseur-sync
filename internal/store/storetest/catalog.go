@@ -17,7 +17,9 @@ func testAtomicCatalogWorkResolution(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib-concurrent", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Concurrent", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Concurrent", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -106,7 +108,9 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 
 	library := store.Library{
 		ID: "lib-shared", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Shared EPUBs",
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Shared EPUBs",
 		ConfigJSON: []byte(`{"parser":"conservative"}`),
 		CreatedAt:  now,
 	}
@@ -118,20 +122,26 @@ func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
 	}
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "bad-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryWatched, Name: "Missing root", CreatedAt: now,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Missing root", CreatedAt: now,
 	}); err == nil {
 		t.Fatal("watched library without a root was accepted")
 	}
 	root := "/srv/books"
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryWatched, Name: "Watched EPUBs", RootPath: &root, CreatedAt: now,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Watched EPUBs", RootPath: &root, CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-watched-duplicate", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryWatched, Name: "Same root", RootPath: &root, CreatedAt: now,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Same root", RootPath: &root, CreatedAt: now,
 	}); err != store.ErrConflict {
 		t.Fatalf("duplicate watched root: want conflict, got %v", err)
 	}
@@ -364,7 +374,9 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.August, 13, 9, 0, 0, 123456000, time.UTC)
 	library := store.Library{
 		ID: "lib-catalog-page", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Paged", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Paged", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -479,7 +491,9 @@ func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.August, 13, 10, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-catalog-files", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Files", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Files", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -555,7 +569,9 @@ func testAvailableBookMediaTypes(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-media-types", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Media types", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Media types", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -633,7 +649,9 @@ func testCatalogBookMetadata(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib-metadata", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Metadata", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Metadata", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -797,7 +815,9 @@ func testConcurrentCatalogMetadataApply(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib-metadata-concurrent", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Concurrent metadata", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Concurrent metadata", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -882,7 +902,9 @@ func testCatalogMetadataRejectsDuplicateEntityIDs(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib-metadata-duplicate", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Duplicate", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Duplicate", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -955,7 +977,9 @@ func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "lib-entity-race", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Entity race", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Entity race", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -1054,7 +1078,9 @@ func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-authors", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Authors", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Authors", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

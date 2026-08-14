@@ -18,7 +18,8 @@ import (
 func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int) ([]store.Library, error) {
 	name, id := store.SplitLibraryCursor(after)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, owner_user_id, quota_user_id, kind, name, root_path,
+		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
+		        refresh_interval_seconds, name, root_path,
 		        config_json, created_at, updated_at
 		 FROM libraries
 		 WHERE ? = '' OR (name, id) > (?, ?)
@@ -43,7 +44,9 @@ func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int)
 func (s *Store) AdminUserLibraries(ctx context.Context, userID, after string, limit int) ([]store.AccessibleLibrary, error) {
 	name, id := store.SplitLibraryCursor(after)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT l.id, l.owner_user_id, l.quota_user_id, l.kind, l.name, l.root_path,
+		`SELECT l.id, l.owner_user_id, l.quota_user_id,
+		        l.source, l.storage, l.refresh, l.refresh_interval_seconds,
+		        l.name, l.root_path,
 		        l.config_json, l.created_at, l.updated_at,
 		        CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END
 		 FROM libraries l
@@ -145,13 +148,16 @@ func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error
 	var l store.Library
 	var root sql.NullString
 	var created, updated string
-	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID, &l.Kind, &l.Name,
+	var refreshSeconds int64
+	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID,
+		&l.Source, &l.Storage, &l.Refresh, &refreshSeconds, &l.Name,
 		&root, &l.ConfigJSON, &created, &updated); err != nil {
 		return l, err
 	}
 	if root.Valid {
 		l.RootPath = &root.String
 	}
+	l.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	l.CreatedAt, _ = parseTime(created)
 	l.UpdatedAt, _ = parseTime(updated)
 	return l, nil
@@ -159,7 +165,8 @@ func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error
 
 func (s *Store) AdminLibraryByID(ctx context.Context, libraryID string) (store.Library, error) {
 	l, err := scanPlainLibrary(s.db.QueryRowContext(ctx,
-		`SELECT id, owner_user_id, quota_user_id, kind, name, root_path,
+		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
+		        refresh_interval_seconds, name, root_path,
 		        config_json, created_at, updated_at
 		 FROM libraries WHERE id = ?`, libraryID))
 	if errors.Is(err, sql.ErrNoRows) {
