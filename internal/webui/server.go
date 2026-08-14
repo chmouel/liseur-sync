@@ -97,6 +97,51 @@ func redirectRel(w http.ResponseWriter, loc string, code int) {
 	w.WriteHeader(code)
 }
 
+// uiPolicy is the Content-Security-Policy every /ui page carries. It is
+// as narrow as this UI actually needs, which is very narrow: the whole
+// interface is server-rendered HTML, one vendored copy of htmx, one
+// small script of our own, one stylesheet and same-origin cover images.
+// There is no CDN, no analytics, no font service and no inline anything
+// — ADR-0011 banned style attributes for exactly this reason, so the
+// progress bars are width classes rather than styles a policy would
+// have to permit.
+//
+// The reason it matters is that this UI displays metadata that arrived
+// inside somebody's EPUB: titles, authors, and descriptions that are
+// HTML in practice. The sanitizer parses that markup and lets almost
+// nothing through, but a sanitizer is one mistake away from being no
+// sanitizer at all, and this header is the fence behind it: a script
+// that reaches the page still cannot run, and one that runs anyway
+// cannot phone anywhere.
+//
+// The reader page is not covered by this: it writes its own, stricter,
+// per-response nonce policy (setReaderPolicy) after this middleware
+// runs, because it has to admit the blob: URLs a rendering engine needs
+// while refusing everything a publication might try.
+const uiPolicy = "default-src 'self'; " +
+	"script-src 'self'; " +
+	"style-src 'self'; " +
+	"img-src 'self' data:; " +
+	"font-src 'self'; " +
+	"connect-src 'self'; " +
+	"object-src 'none'; " +
+	"base-uri 'none'; " +
+	"form-action 'self'; " +
+	"frame-ancestors 'none'"
+
+// pagePolicy puts the UI's policy and the two headers that go with it
+// on a response before the handler writes anything. A handler that
+// needs a different policy — the reader does — simply sets its own,
+// which replaces this one.
+func pagePolicy(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", uiPolicy)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		h(w, r)
+	}
+}
+
 // Mount registers the UI routes. Route patterns stay absolute /ui/...;
 // only rendered URLs and redirect Locations are relative, so the UI
 // can be served under a stripped subpath (e.g. Caddy `handle_path
@@ -106,7 +151,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	// them go through the transport check — not just the login POST.
 	// Static assets are exempt: they hold no credential, and serving
 	// the stylesheet keeps the "https required" page readable.
-	sec := func(h http.HandlerFunc) http.Handler { return secure(h) }
+	sec := func(h http.HandlerFunc) http.Handler { return secure(pagePolicy(h)) }
 
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)

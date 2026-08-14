@@ -15,9 +15,14 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			// htmx would otherwise inject a <style> element into this head
+			// at load, which the page's CSP refuses. The rules it wanted to
+			// add live in style.css instead, spelled the same way.
+			<meta name="htmx-config" content="{&#34;includeIndicatorStyles&#34;:false}"/>
 			<title>{ title } · liseur-sync</title>
 			<link rel="stylesheet" href={ prefix + "static/style.css" }/>
 			<script src={ prefix + "static/htmx.min.js" } defer></script>
+			<script src={ prefix + "static/ui.js" } defer></script>
 		</head>
 		<body>
 			<a class="skip" href="#content">Skip to content</a>
@@ -72,17 +77,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					@body
 				</main>
 			}
-			<script>
-				document.addEventListener('keydown', function(e) {
-					if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
-						var input = document.querySelector('header form input[name="q"]');
-						if (input) { e.preventDefault(); input.focus(); }
-					} else if (e.key === 'Escape') {
-						var toggle = document.getElementById('nav-toggle');
-						if (toggle && toggle.checked) { toggle.checked = false; }
-					}
-				});
-			</script>
 		</body>
 	</html>
 }

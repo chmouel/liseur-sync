@@ -107,7 +107,7 @@ templ booksBody(prefix, csrf string, v BooksView) {
 		<div class="toolbar">
 			<form method="get" action={ prefix + "books" }>
 				<label class="visually-hidden" for="library-pick">Library</label>
-				<select id="library-pick" name="library" onchange="this.form.submit()">
+				<select id="library-pick" name="library">
 					for _, l := range v.Libraries {
 						if l.Selected {
 							<option value={ l.ID } selected>{ l.Name }</option>

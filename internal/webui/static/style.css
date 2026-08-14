@@ -616,3 +616,12 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .reader-body[data-reader-theme="sepia"] #reader-view{background:#f6ecd9}
 .reader-body[data-reader-theme="dark"] #reader-view{background:#202124}
 .reader-body[data-reader-theme="black"] #reader-view{background:#000000}
+
+/* htmx's request indicators. These are the rules htmx injects into the
+   head at load; it is told not to (see the htmx-config meta in the
+   layout) because a <style> element it wrote itself is exactly what a
+   style-src the page can trust must refuse. Spelled here, they are
+   served from this origin like everything else. */
+.htmx-indicator { opacity: 0 }
+.htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
+.htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
