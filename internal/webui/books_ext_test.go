@@ -467,15 +467,19 @@ func TestBooksUIExplainsAnUploadThatNeverBecameABook(t *testing.T) {
 		t.Fatalf("upload: %d", up.StatusCode)
 	}
 
-	// While it is working, the page says so rather than staying silent.
+	// While it is working, the management page says so rather than staying silent.
 	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	if strings.Contains(html, "Uploads in progress") {
+		t.Fatalf("the catalog page contains upload activity:\n%s", html)
+	}
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Uploads in progress") {
 		t.Fatalf("an upload in flight is invisible:\n%s", html)
 	}
 
 	f.quarantine(t, "invalid_epub")
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Not a readable EPUB") {
 		t.Fatalf("a rejected upload is invisible:\n%s", html)
 	}
@@ -562,6 +566,7 @@ func TestBooksUIDeletesAndRestoresABook(t *testing.T) {
 	if strings.Contains(html, "books/"+bookID+"/download") {
 		t.Fatalf("deleted book still offered for download:\n%s", html)
 	}
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Recently deleted") ||
 		!strings.Contains(html, "books/"+bookID+"/restore") {
 		t.Fatalf("deleted book is not restorable from the page:\n%s", html)
@@ -582,7 +587,7 @@ func TestBooksUIDeletesAndRestoresABook(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || got != string(body) {
 		t.Fatalf("restored download: %d, %d bytes", resp.StatusCode, len(got))
 	}
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if strings.Contains(html, "Recently deleted") {
 		t.Fatalf("restored book still in the trash:\n%s", html)
 	}
@@ -698,7 +703,7 @@ func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
 	}
 	f.promote(t, "alone")
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "The same file, more than once") {
 		t.Fatalf("duplicates not reported:\n%s", html)
 	}
@@ -728,7 +733,7 @@ func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("delete: %d", resp.StatusCode)
 	}
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if strings.Contains(html, "The same file, more than once") {
 		t.Fatalf("duplicates still reported after deleting one:\n%s", html)
 	}

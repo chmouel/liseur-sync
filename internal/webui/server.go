@@ -211,6 +211,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/setup", sec(s.handleSetupPage))
 	mux.Handle("POST /ui/setup", sec(s.rateLimited(s.handleSetup)))
 	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
+	mux.Handle("GET /ui/library/manage", sec(s.requireAuth(s.handleLibraryManage)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))

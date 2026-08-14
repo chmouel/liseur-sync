@@ -33,7 +33,7 @@ func TestBooksUIShowsAndAcceptsAChangedWatchedFile(t *testing.T) {
 	bookID := f.promote(t, "changed")
 	flagForReview(t, f, bookID, "the file at this watched path was replaced")
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Changed under us") ||
 		!strings.Contains(html, "books/"+bookID+"/accept") {
 		t.Fatalf("review queue is not on the page:\n%s", html)
@@ -52,7 +52,7 @@ func TestBooksUIShowsAndAcceptsAChangedWatchedFile(t *testing.T) {
 		t.Fatalf("accept: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if strings.Contains(html, "Changed under us") {
 		t.Fatalf("accepted book is still in the queue:\n%s", html)
 	}

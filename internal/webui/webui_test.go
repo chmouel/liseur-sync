@@ -181,7 +181,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 
-	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/devices", "/ui/settings"} {
+	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/library/manage", "/ui/devices", "/ui/settings"} {
 		code, body = page(t, ts, cookie, path)
 		if code != 200 || !strings.Contains(body, "liseur-sync") {
 			t.Fatalf("%s: %d", path, code)
@@ -493,7 +493,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/devices", "/ui/settings",
 		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
 		"/ui/admin/maintenance",
-		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
+		"/ui/library", "/ui/library/manage", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {

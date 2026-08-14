@@ -126,7 +126,7 @@ func TestBooksPageAsksAboutBooksThatLookAlike(t *testing.T) {
 		}
 	}
 
-	_, page := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, page := f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(page, "Possibly the same book") {
 		t.Fatalf("the librarian was not told:\n%s", page)
 	}
