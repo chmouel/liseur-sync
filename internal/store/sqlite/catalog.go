@@ -457,7 +457,7 @@ func (s *Store) ListBookFiles(
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+bookFileColumns+`
+		`SELECT `+bookFileColumnsWithRoot+`
 		 FROM book_files f
 		 JOIN libraries l ON l.id = f.library_id
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
@@ -471,7 +471,7 @@ func (s *Store) ListBookFiles(
 	defer rows.Close()
 	var out []store.BookFile
 	for rows.Next() {
-		file, err := scanBookFile(rows)
+		file, err := scanBookFileWithRoot(rows)
 		if err != nil {
 			return nil, err
 		}

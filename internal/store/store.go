@@ -962,8 +962,18 @@ type BookFile struct {
 	PartialMD5         *string
 	DCIdentifier       *string
 	Availability       BookFileAvailability
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// SourceModifiedAt is the modification time the file at the source
+	// path carried when its bytes were last read. Together with
+	// ContentSizeBytes it is the cheap proof that an in-place file is
+	// still the one that was catalogued.
+	SourceModifiedAt *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	// LibraryRoot is the directory an in-place file's bytes live under.
+	// It is not a column: it comes from the library row, and it is
+	// filled in by the ACL-scoped reads that resolve both, so that
+	// serving a file never needs a second lookup that no user scopes.
+	LibraryRoot string
 }
 
 // Normalized fills in what a caller left implicit, so that every write

@@ -26,10 +26,13 @@ const (
 	maxCatalogPageSize     = 200
 )
 
-// BlobStore is the read side of the CAS: what a download needs and nothing
-// more.
+// BlobStore is the read side of content: what a download needs and
+// nothing more. It takes the whole file rather than a digest because a
+// file's bytes may live in content-addressed storage or in the library
+// directory they were found in, and which one it is belongs to the
+// storage layer, not to the handler (ADR-0014).
 type BlobStore interface {
-	OpenBlob(ctx context.Context, sha256 string) (*os.File, int64, error)
+	OpenBookFile(ctx context.Context, file store.BookFile) (*os.File, int64, error)
 }
 
 // HandleLibraries implements GET /v1/libraries — every library the caller
@@ -219,10 +222,19 @@ func (s *Server) ServeBookDownload(
 
 	// ServeContent finds the length by seeking, so the size the CAS
 	// reports is redundant here.
-	blob, _, err := s.Blobs.OpenBlob(r.Context(), file.BlobSHA256)
+	blob, _, err := s.Blobs.OpenBookFile(r.Context(), *file)
 	if err != nil {
-		if errors.Is(err, content.ErrStageMissing) {
+		if errors.Is(err, content.ErrStageMissing) ||
+			errors.Is(err, content.ErrRootMissing) {
 			writeError(w, http.StatusGone, "content is no longer stored")
+			return
+		}
+		if errors.Is(err, content.ErrSourceChanged) {
+			// The bytes at that path are not the ones catalogued, so they
+			// are not this book's until the sweep says otherwise.
+			s.flagChangedSource(r.Context(), *file)
+			writeError(w, http.StatusConflict,
+				"the file behind this book changed on disk")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "download failed")
@@ -233,13 +245,31 @@ func (s *Server) ServeBookDownload(
 	w.Header().Set("Content-Type", downloadMediaType(file.MediaType))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", contentDisposition(downloadFilename(*file)))
-	// The digest names the content, so it is a strong validator and the
-	// content behind it can never change.
-	w.Header().Set("ETag", `"`+file.BlobSHA256+`"`)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if file.Storage == store.LibraryStorageInPlace {
+		// Nobody here owns those bytes: their owner may replace them
+		// between two requests, so the validator is weak and the answer
+		// is revalidated rather than cached as immutable.
+		w.Header().Set("ETag", `W/"`+file.ContentSHA256+`"`)
+		w.Header().Set("Cache-Control", "private, no-cache")
+	} else {
+		// The digest names the content, so it is a strong validator and
+		// the content behind it can never change.
+		w.Header().Set("ETag", `"`+file.ContentSHA256+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	}
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "",
 		file.UpdatedAt.UTC(), blob)
+}
+
+// flagChangedSource records that a file under a library root no longer
+// matches what was catalogued, so an administrator sees it without
+// waiting for the next sweep. It is best effort: the request has already
+// been refused, and failing to write the flag must not turn a precise
+// 409 into a 500.
+func (s *Server) flagChangedSource(ctx context.Context, file store.BookFile) {
+	_, _ = s.St.SetCatalogBookReview(ctx, file.LibraryID, file.BookID,
+		"source file changed on disk since it was catalogued", time.Now().UTC())
 }
 
 // catalogErrorWriter keeps http.ServeContent inside this package's error

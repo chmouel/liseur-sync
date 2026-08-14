@@ -67,11 +67,11 @@ func (s *Server) ServeBookCover(
 	}
 
 	if s.Covers != nil {
-		cached, _, err := s.Covers.OpenCover(r.Context(), file.BlobSHA256, string(size))
+		cached, _, err := s.Covers.OpenCover(r.Context(), file.ContentSHA256, string(size))
 		switch {
 		case err == nil:
 			defer cached.Close()
-			s.writeCover(w, r, file.BlobSHA256, size, cached, file.UpdatedAt)
+			s.writeCover(w, r, file, size, cached, file.UpdatedAt)
 			return
 		case errors.Is(err, content.ErrNoCover):
 			// Already established: this publication has no cover this
@@ -81,18 +81,21 @@ func (s *Server) ServeBookCover(
 		}
 	}
 
-	rendered, err := s.renderCover(r.Context(), file.BlobSHA256, size)
+	rendered, err := s.renderCover(r.Context(), file, size)
 	if err != nil {
-		s.writeCoverError(r.Context(), w, file.BlobSHA256, err)
+		if errors.Is(err, content.ErrSourceChanged) {
+			s.flagChangedSource(r.Context(), file)
+		}
+		s.writeCoverError(r.Context(), w, file.ContentSHA256, err)
 		return
 	}
 	if s.Covers != nil {
 		// A cache that cannot be written still serves: the bytes are in
 		// hand, and a full disk should cost the next request a re-render
 		// rather than cost this one its answer.
-		_ = s.Covers.StoreCover(r.Context(), file.BlobSHA256, string(size), rendered)
+		_ = s.Covers.StoreCover(r.Context(), file.ContentSHA256, string(size), rendered)
 	}
-	s.writeCover(w, r, file.BlobSHA256, size,
+	s.writeCover(w, r, file, size,
 		bytes.NewReader(rendered), file.UpdatedAt)
 }
 
@@ -122,11 +125,12 @@ func (s *Server) coverBookFile(
 	return store.BookFile{}, false
 }
 
-// renderCover produces one variant from the stored blob.
+// renderCover produces one variant from the book's own bytes, wherever
+// they live.
 func (s *Server) renderCover(
-	ctx context.Context, digest string, size cover.Size,
+	ctx context.Context, file store.BookFile, size cover.Size,
 ) ([]byte, error) {
-	blob, blobSize, err := s.Blobs.OpenBlob(ctx, digest)
+	blob, blobSize, err := s.Blobs.OpenBookFile(ctx, file)
 	if err != nil {
 		return nil, err
 	}
@@ -178,9 +182,10 @@ func isValidationFailure(err error) bool {
 }
 
 func (s *Server) writeCover(
-	w http.ResponseWriter, r *http.Request, digest string,
+	w http.ResponseWriter, r *http.Request, file store.BookFile,
 	size cover.Size, body io.ReadSeeker, modified time.Time,
 ) {
+	digest := file.ContentSHA256
 	// The type is what this server chose to produce, never what the
 	// publication claimed. With nosniff, that is what stops a cover from
 	// being interpreted as anything else.
@@ -188,8 +193,15 @@ func (s *Server) writeCover(
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// A cover is derived from immutable bytes by a fixed pipeline, so the
 	// digest and the variant together name the result exactly.
-	w.Header().Set("ETag", `"`+digest+`-`+string(size)+`"`)
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if file.Storage == store.LibraryStorageInPlace {
+		// The bytes belong to somebody else, who may replace them, so the
+		// derived image is revalidated rather than pinned for a year.
+		w.Header().Set("ETag", `W/"`+digest+`-`+string(size)+`"`)
+		w.Header().Set("Cache-Control", "private, no-cache")
+	} else {
+		w.Header().Set("ETag", `"`+digest+`-`+string(size)+`"`)
+		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	}
 	// An image is displayed, not saved, so there is no filename here and
 	// nothing to sanitize.
 	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "", modified, body)
