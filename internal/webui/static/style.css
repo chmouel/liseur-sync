@@ -427,12 +427,12 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* The sublinks under a reading cover. The cover itself carries on
-   reading, so the ways to the numbers behind it live here, small and
-   quiet, directly under the picture. */
+/* The sublinks at the foot of a card. The cover carries on reading and
+   the title names the book; the ways to the numbers behind it come
+   after both, small and quiet. */
 .bookcard .sublinks {
 	display: flex; flex-wrap: wrap; gap: .1rem .5rem;
-	font-size: .74rem; margin-top: -.15rem;
+	font-size: .74rem; margin-top: .15rem;
 }
 .bookcard .sublinks a { color: var(--muted); text-decoration: none; }
 .bookcard .sublinks a:hover, .bookcard .sublinks a:focus-visible {

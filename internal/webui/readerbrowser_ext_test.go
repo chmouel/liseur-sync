@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // findChrome locates a Chromium to drive, preferring one named
@@ -394,10 +396,26 @@ func TestUIScreenshots(t *testing.T) {
 	f := newBooksFixture(t)
 	_, html := f.get(t, "/ui/library", f.cookie)
 	csrf := csrfFrom(t, html)
+	var books []string
 	for _, name := range []string{"dune", "neuromancer", "solaris", "ubik"} {
 		f.uploadForm(t, f.cookie, csrf, f.library, name+".epub",
 			[]byte(strings.Repeat(name, 60)))
-		f.promote(t, name)
+		books = append(books, f.promote(t, name))
+	}
+	// A shelf with nothing read on it hides the half of the page that
+	// this walk exists to look at.
+	now := time.Now().UTC()
+	for i, m := range []struct {
+		work string
+		at   float64
+	}{{"w-dune", 0.42}, {"w-neuromancer", 1}} {
+		if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", books[i],
+			store.Work{ID: m.work, UserID: "u1", Title: m.work, CreatedAt: now},
+			nil, nil, true, now); err != nil {
+			t.Fatal(err)
+		}
+		progressOn(t, f, m.work, fmt.Sprintf("018e6f1a-0000-7000-8000-00000000005%d", i),
+			m.at, now)
 	}
 
 	ts := httptest.NewUnstartedServer(nil)
@@ -410,7 +428,7 @@ func TestUIScreenshots(t *testing.T) {
 		"SHOT_URL="+ts.URL,
 		"SHOT_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SHOT_DIR="+outDir,
-		"SHOT_PATHS=/ui/,/ui/books,/ui/works,/ui/books/book-dune,"+
+		"SHOT_PATHS=/ui/,/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
 			"/ui/libraries/"+f.library+"/contributors,/ui/devices,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
 		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),

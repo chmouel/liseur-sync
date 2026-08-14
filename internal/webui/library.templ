@@ -234,18 +234,6 @@ templ libraryCard(prefix string, row LibraryRow) {
 				@cardOpen(prefix, row)
 			</div>
 		}
-		<nav class="sublinks">
-			if row.BookID != "" {
-				<a href={ prefix + "books/" + row.BookID }>Details</a>
-			}
-			if row.WorkID != "" {
-				<a href={ prefix + "works/" + row.WorkID }>Stats</a>
-				<a href={ prefix + "works/" + row.WorkID + "#sessions" }>Sessions</a>
-			}
-			if row.CanGet && row.BookID != "" {
-				<a href={ prefix + "books/" + row.BookID + "/download" }>Get</a>
-			}
-		</nav>
 		<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
 		<span class="by">
 			if row.Pending {
@@ -258,6 +246,18 @@ templ libraryCard(prefix string, row LibraryRow) {
 				{ row.Added }
 			}
 		</span>
+		<nav class="sublinks">
+			if row.BookID != "" {
+				<a href={ prefix + "books/" + row.BookID }>Details</a>
+			}
+			if row.WorkID != "" {
+				<a href={ prefix + "works/" + row.WorkID }>Stats</a>
+				<a href={ prefix + "works/" + row.WorkID + "#sessions" }>Sessions</a>
+			}
+			if row.CanGet && row.BookID != "" {
+				<a href={ prefix + "books/" + row.BookID + "/download" }>Get</a>
+			}
+		</nav>
 	</article>
 }
 
