@@ -32,6 +32,9 @@ database setups, all covered by `compose.yaml`:
 | External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights (migrations run at startup); CAS remains local and persistent |
 
 Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
+Setting `LISEUR_CONFIG` instead is equivalent when `-config` is
+omitted, which is more convenient for compose/systemd units that only
+want to inject an environment variable.
 `content.root` defaults to `./content`; it must be owned by the server user
 and have mode `0700`, since anything looser exposes every stored book. The
 server creates it that way; a directory you make yourself gets `0755` from
