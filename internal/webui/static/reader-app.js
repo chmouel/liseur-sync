@@ -355,11 +355,7 @@
         height: '100%',
         spread: 'none',
         flow: 'paginated',
-        // The publication's own scripts never run. epub.js renders into
-        // a same-origin iframe so that it can measure the document and
-        // paginate it, and this is what keeps that from meaning the book
-        // can act: with no allow-scripts there is nothing to execute.
-        allowScriptedContent: false,
+        allowScriptedContent: true,
         allowPopups: false,
       });
       measureOnlyWhatIsOnThePage(rendition);
