@@ -387,14 +387,20 @@ function chapterCSS(s) {
       'body { font-size: 1rem !important; }',
       // A moved slider is the user taking over the typography, and
       // that has to include the measure: books that cap their own
-      // text width (max-width on the body or a top-level wrapper)
+      // text width (max-width on the body or a wrapper at any depth)
       // would otherwise keep a ribbon of the old width pinned to the
       // left of the wider column the reader lays out for the bigger
       // type, and the growth would arrive as blank page instead of
-      // longer lines. The engine's own max-inline-size still bounds
-      // the line length.
-      'body, body > div, body > section, body > article {' +
+      // longer lines. Caps are lifted on wrappers however deep —
+      // width as well as max-width, since publishers use either to
+      // pin the measure — but side spacing is only zeroed at the top
+      // level: deeper margins and padding are indentation, not page
+      // geometry. The engine's own max-inline-size still bounds the
+      // line length.
+      'body, body div, body section, body article {' +
         ' max-width: none !important; max-inline-size: none !important;' +
+        ' width: auto !important; inline-size: auto !important; }',
+      'body, body > div, body > section, body > article {' +
         ' margin-left: 0 !important; margin-right: 0 !important;' +
         ' padding-left: 0 !important; padding-right: 0 !important; }',
     );
