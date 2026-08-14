@@ -1,6 +1,6 @@
 # ADR-0011: Web UI revamp
 
-- **Status:** Accepted
+- **Status:** Implemented
 - **Date:** 2026-08-14
 - **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md),
   [ADR-0007](0007-web-reader.md)
@@ -133,3 +133,36 @@ rendering bug hunt would make both harder to judge.
   reflow as images arrive.
 - `go build` is still the whole toolchain, and `/ui/static/` still holds
   every asset the browser fetches.
+
+## As built
+
+Phases 1 to 8 are in. What differs from the plan above, and why:
+
+- **The books grid shows no author.** There is no read path that returns
+  a page of books with their contributors, and this ADR is not allowed
+  to add one: reading them per card would be a query per book on a page
+  of twenty-five. The card falls back to the date the book was added.
+  Fixing it properly means a batched catalog read, which belongs to
+  whoever adds one for the API, not to a layout change.
+- **The browse toolbar has no sort or filter chips.** Sorting is not in
+  the store's list call either, so a sort control would have been a
+  control that lies. What the toolbar carries instead is the library
+  picker, the library-scoped search, links to the four entity indexes,
+  and the grid/list toggle.
+- **Narrow tables scroll sideways rather than becoming cards.** A
+  card-per-row stack needs every cell labelled, and the tables that are
+  wide — tokens with an inline scope form, admin invites — are exactly
+  the ones where that reads worst. A scroll container is honest and is
+  three lines.
+- **A work's tile has no cover.** A work is user-scoped sync state that
+  may have no catalog entry at all. Its tile is its title and its
+  progress instead of a lookup invented to decorate it.
+- **The placeholder cover follows the theme.** This was not planned. It
+  became necessary the moment the grid existed: a shelf of sideloaded
+  books is mostly placeholders, and the old pale card turned the dark
+  theme into a wall of glare. Two cached images, chosen by the same
+  cookie the page was rendered from, with `Vary: Cookie`.
+- **A screenshot walk was added** (`TestUIScreenshots`, skipped unless
+  `LISEUR_UI_SHOTS` is set) because a layout is judged by looking at it.
+  It asserts nothing; the assertions that can be written about a layout
+  are in the other tests.

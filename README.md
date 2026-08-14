@@ -49,7 +49,8 @@ go build ./cmd/liseur-sync
 ./liseur-sync serve
 ```
 
-Then sign in at `/ui/books` to upload one, or point a reader at
+Then sign in at `/ui/books` — a dark cover grid with a left rail, a
+light theme one press away — to upload one, or point a reader at
 `/opds/v1.2`. To index EPUBs you already have instead of uploading them,
 `admin watch-library alice "Calibre" /srv/books` — the server reads that
 directory and never writes to it.

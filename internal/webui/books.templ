@@ -104,10 +104,10 @@ templ booksBody(prefix, csrf string, v BooksView) {
 			</p>
 		</section>
 	} else {
-		<section class="card">
-			<h2>Library</h2>
+		<div class="toolbar">
 			<form method="get" action={ prefix + "books" }>
-				<select name="library" onchange="this.form.submit()">
+				<label class="visually-hidden" for="library-pick">Library</label>
+				<select id="library-pick" name="library" onchange="this.form.submit()">
 					for _, l := range v.Libraries {
 						if l.Selected {
 							<option value={ l.ID } selected>{ l.Name }</option>
@@ -120,21 +120,19 @@ templ booksBody(prefix, csrf string, v BooksView) {
 			</form>
 			if v.Selected != "" {
 				@searchForm(prefix, SearchView{LibraryID: v.Selected})
-				<p>
-					Browse by
-					<a href={ prefix + "libraries/" + v.Selected + "/series" }>series</a>
-					{ ", " }
-					<a href={ prefix + "libraries/" + v.Selected + "/contributors" }>contributors</a>
-					{ ", " }
-					<a href={ prefix + "libraries/" + v.Selected + "/tags" }>tags</a>
-					{ " or " }
-					<a href={ prefix + "libraries/" + v.Selected + "/genres" }>genres</a>
-				</p>
+				<div class="chips">
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/series" }>Series</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/contributors" }>Contributors</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/tags" }>Tags</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/genres" }>Genres</a>
+				</div>
 			}
-		</section>
+			<span class="spacer"></span>
+			@viewToggle(prefix, csrf, v.Back, v.View)
+		</div>
 		if v.CanWrite {
-			<section class="card">
-				<h2>Upload an EPUB</h2>
+			<details class="card">
+				<summary>Upload an EPUB</summary>
 				<p class="muted">
 					The file is stored straight away; the book appears once a
 					background pass has read its metadata, usually within a
@@ -147,7 +145,7 @@ templ booksBody(prefix, csrf string, v BooksView) {
 					<input type="file" name="file" accept=".epub,application/epub+zip" required/>
 					<button type="submit">Upload</button>
 				</form>
-			</section>
+			</details>
 		}
 		if len(v.Uploads) > 0 {
 			<section class="card">
@@ -262,11 +260,7 @@ templ booksBody(prefix, csrf string, v BooksView) {
 			</section>
 		}
 		<section class="card">
-			<div class="toolbar">
-				<h2>In this library</h2>
-				<span class="spacer"></span>
-				@viewToggle(prefix, csrf, v.Back, v.View)
-			</div>
+			<h2>In this library</h2>
 			if len(v.Books) == 0 {
 				<p class="muted">No books yet.</p>
 			} else if v.View == viewList {
@@ -446,8 +440,8 @@ templ metadataRow(name, label, hint string, f MetadataFieldView, area bool) {
 }
 
 templ bookEditForm(prefix, csrf string, b BookView) {
-	<section class="card">
-		<h2>Correct this book</h2>
+	<details class="card">
+		<summary>Correct this book</summary>
 		<p class="muted">
 			Anything you change here is kept as yours: re-reading the file
 			will not undo it. Fields you do not touch stay as they are.
@@ -468,9 +462,9 @@ templ bookEditForm(prefix, csrf string, b BookView) {
 			@metadataRow("tags", "Tags", "Separated by commas", b.Edit.Tags, false)
 			@metadataRow("genres", "Genres", "Separated by commas", b.Edit.Genres, false)
 			@metadataRow("languages", "Languages", "Separated by commas", b.Edit.Languages, false)
-			<button type="submit">Save</button>
+			<button class="primary" type="submit">Save</button>
 		</form>
-	</section>
+	</details>
 }
 
 // bookLookupPanel offers to ask elsewhere, and shows what came back.
@@ -478,8 +472,8 @@ templ bookEditForm(prefix, csrf string, b BookView) {
 // so accepting one applies what was read rather than whatever a second
 // lookup would return.
 templ bookLookupPanel(prefix, csrf string, b BookView) {
-	<section class="card">
-		<h2>Ask elsewhere</h2>
+	<details class="card">
+		<summary>Ask elsewhere</summary>
 		<p class="muted">
 			This sends the book's title and ISBN to the metadata services
 			this server is set up to use. Nothing is changed until you
@@ -498,7 +492,7 @@ templ bookLookupPanel(prefix, csrf string, b BookView) {
 				@lookupCandidate(prefix, csrf, b, c)
 			}
 		}
-	</section>
+	</details>
 }
 
 templ lookupCandidate(prefix, csrf string, b BookView, c CandidateView) {

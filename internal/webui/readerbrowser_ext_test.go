@@ -236,3 +236,52 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 		t.Error("the detached reader never managed to sync a position")
 	}
 }
+
+// TestUIScreenshots is the visual review of ADR-0011. It asserts
+// nothing: a layout is judged by looking at it, and the assertions that
+// can be written about one are already in the other tests. Set
+// LISEUR_UI_SHOTS to a directory to get a PNG per page per width.
+func TestUIScreenshots(t *testing.T) {
+	outDir := os.Getenv("LISEUR_UI_SHOTS")
+	if outDir == "" {
+		t.Skip("set LISEUR_UI_SHOTS=<dir> to take screenshots of the UI")
+	}
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to take screenshots")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	for _, name := range []string{"dune", "neuromancer", "solaris", "ubik"} {
+		f.uploadForm(t, f.cookie, csrf, f.library, name+".epub",
+			[]byte(strings.Repeat(name, 60)))
+		f.promote(t, name)
+	}
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	cmd := exec.Command(node, filepath.Join("testdata", "uishots.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SHOT_CHROME="+chrome,
+		"SHOT_URL="+ts.URL,
+		"SHOT_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SHOT_DIR="+outDir,
+		"SHOT_PATHS=/ui/,/ui/books,/ui/works,/ui/books/book-dune,"+
+			"/ui/libraries/"+f.library+"/contributors,/ui/devices,/ui/settings",
+		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
+		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("screenshot walk failed: %v", err)
+	}
+}

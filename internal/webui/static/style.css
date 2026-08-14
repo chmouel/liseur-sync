@@ -249,6 +249,13 @@ main { grid-area: main; padding: 1.4rem 1.5rem 4rem; min-width: 0; }
 	margin: 0 0 var(--gap);
 	box-shadow: var(--shadow-sm);
 }
+details.card > summary {
+	cursor: pointer; font-weight: 600; color: var(--ink);
+	list-style: none; display: flex; align-items: center; gap: .5rem;
+}
+details.card > summary::before { content: "+"; color: var(--muted); }
+details.card[open] > summary::before { content: "−"; }
+
 .narrow { max-width: 23rem; margin: 4rem auto; }
 
 .cards { display: flex; gap: var(--gap); flex-wrap: wrap; margin: 0 0 var(--gap); }
@@ -293,6 +300,14 @@ code {
 }
 code.big { font-size: 1rem; display: inline-block; padding: .45rem .6rem; word-break: break-all; }
 
+/* A field is a stack: label, control, then whatever the server has to
+   say about it. Left to themselves these run into each other, because a
+   textarea and its hint are siblings. */
+.card form p { display: flex; flex-direction: column; gap: .25rem; max-width: 40rem; }
+.card form p > label { margin: 0; }
+.card form p > .muted { font-size: .8rem; }
+.card form p > input, .card form p > textarea { width: 100%; }
+
 form.inline { display: flex; gap: .6rem; align-items: center; margin-top: .7rem; flex-wrap: wrap; }
 form label { display: block; margin: .6rem 0; color: var(--ink-dim); font-size: .9rem; }
 form label.check { display: flex; gap: .5rem; align-items: center; }
@@ -306,7 +321,7 @@ fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); margi
 legend { color: var(--muted); font-size: .8rem; padding: 0 .4rem; }
 
 .error { color: var(--danger); }
-.ok { color: var(--ok); }
+.ok, .notice { color: var(--ok); }
 .muted { color: var(--muted); }
 
 .tag, .chip {
@@ -471,6 +486,13 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .kv dd { margin: 0; }
 
 /* Covers in a table row, which the list view still uses. */
+/* A token table has five columns and a form in one of them; below the
+   drawer breakpoint it scrolls sideways rather than wrapping into an
+   unreadable stack. */
+@media (max-width: 46em) {
+	.card > table { display: block; overflow-x: auto; }
+}
+
 .cover-thumb { width: 40px; height: 60px; object-fit: cover; border-radius: 2px; display: block; }
 
 @media (max-width: 46em) {

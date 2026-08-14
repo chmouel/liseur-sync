@@ -110,7 +110,7 @@ templ searchBody(prefix, csrf string, v SearchView) {
 // for something in it.
 templ searchForm(prefix string, v SearchView) {
 	<form method="get" action={ prefix + "libraries/" + v.LibraryID + "/search" }>
-		<label for="search-q">Find a book</label>
+		<label class="visually-hidden" for="search-q">Find a book in this library</label>
 		<input
 			id="search-q"
 			type="search"
