@@ -882,7 +882,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19,
+	migration18, migration19, migration20,
 }
 
 // migration19 is the PostgreSQL half of the refresh history. See the
@@ -897,4 +897,31 @@ ALTER TABLE libraries
 CREATE INDEX libraries_refresh_requested
     ON libraries(refresh_requested_at)
     WHERE refresh_requested_at IS NOT NULL;
+`
+
+// migration20 is the PostgreSQL half of what a Calibre library needs.
+// See the SQLite migration for what each piece is for; here the widened
+// CHECK is an ALTER rather than a table rebuild.
+const migration20 = `
+ALTER TABLE libraries DROP CONSTRAINT libraries_source_check;
+ALTER TABLE libraries
+    ADD CONSTRAINT libraries_source_check
+        CHECK (source IN ('managed', 'directory', 'calibre'));
+
+ALTER TABLE libraries ADD COLUMN last_inventory_digest TEXT;
+
+CREATE TABLE library_calibre_books (
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    calibre_id BIGINT NOT NULL,
+    book_id    TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (library_id, calibre_id),
+    UNIQUE (library_id, book_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+ALTER TABLE book_files
+    ADD COLUMN cover_relative_path TEXT,
+    ADD COLUMN cover_sha256 TEXT;
 `

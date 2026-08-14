@@ -39,6 +39,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("LibraryAxes", func(t *testing.T) { testLibraryAxes(t, open) })
 	t.Run("InPlaceBooks", func(t *testing.T) { testInPlaceBooks(t, open) })
 	t.Run("LibraryRefreshSchedule", func(t *testing.T) { testLibraryRefreshSchedule(t, open) })
+	t.Run("CalibreLibraryIdentity", func(t *testing.T) {
+		testCalibreLibraryIdentity(t, open)
+	})
 	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })

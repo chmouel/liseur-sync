@@ -67,6 +67,7 @@ func reset(t *testing.T, s *Store) {
 		"book_languages", "book_genres", "genres", "book_tags", "tags",
 		"book_contributors", "contributors", "book_series", "series",
 		"book_identifiers", "user_book_works", "ingest_jobs",
+		"library_calibre_books",
 		"blob_reservations", "book_files", "books", "library_access", "libraries", "blobs",
 		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "kosync_devices",

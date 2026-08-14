@@ -19,7 +19,8 @@ import (
 const plainLibraryColumns = `id, owner_user_id, quota_user_id, source,
 	storage, refresh, refresh_interval_seconds, name, root_path,
 	config_json, created_at, updated_at, last_refresh_at,
-	last_refresh_attempt_at, last_refresh_error, refresh_requested_at`
+	last_refresh_attempt_at, last_refresh_error, refresh_requested_at,
+	last_inventory_digest`
 
 func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int) ([]store.Library, error) {
 	name, id := store.SplitLibraryCursor(after)
@@ -143,13 +144,13 @@ func affectedOne(res sql.Result, err error) error {
 // scanPlainLibrary reads a library row with no role column.
 func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error) {
 	var l store.Library
-	var root, refreshError sql.NullString
+	var root, refreshError, digest sql.NullString
 	var refreshSeconds int64
 	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID,
 		&l.Source, &l.Storage, &l.Refresh, &refreshSeconds, &l.Name,
 		&root, &l.ConfigJSON, &l.CreatedAt, &l.UpdatedAt,
 		&l.LastRefreshAt, &l.LastRefreshAttemptAt, &refreshError,
-		&l.RefreshRequestedAt); err != nil {
+		&l.RefreshRequestedAt, &digest); err != nil {
 		return l, err
 	}
 	if root.Valid {
@@ -158,6 +159,7 @@ func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error
 	if refreshError.Valid {
 		l.LastRefreshError = &refreshError.String
 	}
+	l.LastInventoryDigest = digest.String
 	l.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	l.CreatedAt, l.UpdatedAt = l.CreatedAt.UTC(), l.UpdatedAt.UTC()
 	utcPtr(l.LastRefreshAt)

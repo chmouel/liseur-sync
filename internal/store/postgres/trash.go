@@ -161,7 +161,24 @@ func (s *Store) PurgeExpiredTrash(
 	if len(bookIDs) == 0 {
 		return result, nil
 	}
+	result, err = purgeBooksTx(ctx, tx, bookIDs, before)
+	if err != nil {
+		return store.TrashPurgeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.TrashPurgeResult{}, err
+	}
+	result.BookIDs = bookIDs
+	return result, nil
+}
 
+// purgeBooksTx permanently removes books and settles what their files
+// were holding. See the SQLite copy for why the trash purge and a
+// Calibre refresh reconciling a deleted book share it.
+func purgeBooksTx(
+	ctx context.Context, tx *sql.Tx, bookIDs []string, at time.Time,
+) (store.TrashPurgeResult, error) {
+	var result store.TrashPurgeResult
 	type reference struct{ quotaUserID, blob string }
 	affected := map[reference]bool{}
 	blobs := map[string]bool{}
@@ -252,7 +269,7 @@ func (s *Store) PurgeExpiredTrash(
 			       SELECT 1 FROM ingest_blob_holds h
 			       WHERE h.blob_sha256 = blobs.sha256
 			   )`),
-			before.UTC(), blob)
+			at.UTC(), blob)
 		if err != nil {
 			return store.TrashPurgeResult{}, err
 		}
@@ -263,9 +280,6 @@ func (s *Store) PurgeExpiredTrash(
 		result.BlobsOrphaned += int(marked)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return store.TrashPurgeResult{}, err
-	}
 	result.BookIDs = bookIDs
 	return result, nil
 }

@@ -158,7 +158,7 @@ func TestRebuiltTablesKeepEveryColumn(t *testing.T) {
 	// point, it must still have.
 	want := map[string]map[string]bool{}
 	// One entry per rebuild: the schema just before each one.
-	for _, upTo := range []int{16, 17} {
+	for _, upTo := range []int{16, 17, 19} {
 		s, err := Open(filepath.Join(t.TempDir(), "before.db"))
 		if err != nil {
 			t.Fatal(err)

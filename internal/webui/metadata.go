@@ -202,6 +202,8 @@ func sourceLabel(source store.MetadataSource) string {
 		return "from the filename"
 	case store.MetadataExternal:
 		return "from an external source"
+	case store.MetadataCalibre:
+		return "from Calibre"
 	case store.MetadataManual:
 		return "edited by hand"
 	default:

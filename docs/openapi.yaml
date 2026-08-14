@@ -1835,7 +1835,7 @@ components:
       required: [value, source, locked]
       properties:
         value: { type: string }
-        source: { type: string, enum: ["", embedded, filename, external, manual] }
+        source: { type: string, enum: ["", embedded, filename, external, calibre, manual] }
         locked: { type: boolean }
 
     MetadataCandidate:
@@ -1975,7 +1975,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        source: { type: string, enum: [embedded, filename, external, manual] }
+        source: { type: string, enum: [embedded, filename, external, calibre, manual] }
         locked: { type: boolean }
 
     ScalarEdit:
