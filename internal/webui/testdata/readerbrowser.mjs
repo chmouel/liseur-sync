@@ -260,6 +260,27 @@ check('a click on the blank margin turns the page',
   afterClick.fraction > beforeClick.fraction,
   `${beforeClick.fraction} -> ${afterClick.fraction}`);
 
+// The reading keys: space turns forward, shift+space turns back — and
+// they must keep working after a click in the text, when the chapter
+// frame owns the keyboard and only the per-document listener hears it.
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 900));
+const spaced = JSON.parse(await evalIn(probe));
+check('space turns the page', spaced.fraction > afterClick.fraction,
+  `${afterClick.fraction} -> ${spaced.fraction}`);
+await evalIn(`(() => {
+  const view = document.querySelector('foliate-view');
+  const doc = view.renderer.getContents()[0].doc;
+  doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', shiftKey: true, bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 900));
+const unspaced = JSON.parse(await evalIn(probe));
+check('shift+space inside the chapter turns back',
+  unspaced.fraction < spaced.fraction,
+  `${spaced.fraction} -> ${unspaced.fraction}`);
+
 // The first chapter carries the full hostile battery: an inline script,
 // a script inside an SVG island, an external script pointing at a real
 // same-origin file, and an attempt to retitle the parent page. Jump

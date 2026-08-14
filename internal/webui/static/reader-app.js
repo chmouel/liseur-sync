@@ -573,7 +573,14 @@ stage.addEventListener('click', (e) => {
   const box = stage.getBoundingClientRect();
   turn(e.clientX < box.left + box.width / 2 ? -1 : 1);
 });
-document.addEventListener('keydown', (e) => {
+// The standard reading keys. Space is the one every reader agrees on
+// (Shift reverses it, as everywhere else); h/l and j/k are for hands
+// that live on vim; Home and End are the covers. The handler is shared
+// between the page and every chapter document, because after a click
+// in the text the frame owns the keyboard and a page-level listener
+// alone goes deaf — the engine re-emits its load event per chapter, so
+// each document gets wired as it arrives.
+function handleKeys(e) {
   // Arrow keys inside the settings panel adjust its controls, not the
   // book; Escape puts the panel away from the keyboard.
   if (settingsPanel && settingsPanel.contains(e.target)) {
@@ -584,9 +591,40 @@ document.addEventListener('keydown', (e) => {
     settingsPanel.open = false;
     return;
   }
-  if (e.key === 'ArrowRight' || e.key === 'PageDown') turn(1);
-  if (e.key === 'ArrowLeft' || e.key === 'PageUp') turn(-1);
-});
+  // Modified keys belong to the browser, and keys aimed at a form
+  // field belong to the field.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = e.target && e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+    (e.target && e.target.isContentEditable)) return;
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      turn(e.shiftKey ? -1 : 1);
+      break;
+    case 'ArrowRight':
+    case 'PageDown':
+    case 'l':
+    case 'j':
+      e.preventDefault();
+      turn(1);
+      break;
+    case 'ArrowLeft':
+    case 'PageUp':
+    case 'h':
+    case 'k':
+      e.preventDefault();
+      turn(-1);
+      break;
+    case 'Home':
+      if (view) view.goToFraction(0);
+      break;
+    case 'End':
+      if (view) view.goToFraction(1);
+      break;
+  }
+}
+document.addEventListener('keydown', handleKeys);
 window.addEventListener('beforeunload', () => {
   clearTimeout(pending);
   push();
@@ -612,6 +650,12 @@ window.addEventListener('beforeunload', () => {
     view.addEventListener('relocate', (e) => {
       paint(e.detail);
       schedulePush();
+    });
+    // Each chapter document gets the reading keys: after a click in
+    // the text, the frame owns the keyboard, and a listener on the
+    // page alone would go deaf exactly when the reader looks focused.
+    view.addEventListener('load', (e) => {
+      e.detail.doc.addEventListener('keydown', handleKeys);
     });
     await view.open(new File([blob], 'book.epub', { type: 'application/epub+zip' }));
     stripScripts(view.book);
