@@ -95,8 +95,9 @@ mechanism.
 
 - epub.js and JSZip are removed; all three measurement patches die with
   them. Net vendored weight drops by roughly a third.
-- The reader page loads one `<script type="module">`; the engine
-  arrives as module imports under the existing `script-src 'self'`.
+- The reader page loads one `<script type="module">`, carrying the
+  response's CSP nonce; the engine arrives as that module's imports,
+  which `'strict-dynamic'` trusts transitively.
 - Only the EPUB pipeline is vendored. foliate-js can read MOBI, FB2,
   CBZ and PDF, but the catalog only serves EPUBs to the reader; those
   loaders are dynamic imports that are simply absent.

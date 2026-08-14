@@ -3,14 +3,18 @@ package webui_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // findChrome locates a Chromium to drive, preferring one named
@@ -144,6 +148,93 @@ func browserTestEPUB(t *testing.T) []byte {
 // its first section is obvious rather than borderline.
 const browserTestChapters = 12
 
+// seededStaleOpID names the op the test plants before the browser
+// opens: a stored position whose CFI has a valid spine step for this
+// book but a garbage path inside the chapter. The engine only walks
+// that path after the chapter loads, so a reader that trusts the
+// pointer once it "resolves" dies there — the harness's "no error
+// banner" and "Chapter 1 of 13" checks are what catch it, because the
+// reader must quietly descend to the stored fraction instead.
+const seededStaleOpID = "00000000-0000-4000-8000-00000000feed"
+
+func seedStalePosition(t *testing.T, base string, cookie *http.Cookie, bookID string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/ui/books/"+bookID+"/read", nil)
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(raw)
+	const marker = `data-csrf="`
+	i := strings.Index(html, marker)
+	if i < 0 {
+		t.Fatal("no csrf on the reader page")
+	}
+	csrf := html[i+len(marker):]
+	csrf = csrf[:strings.Index(csrf, `"`)]
+
+	// The same credential path the reader itself takes: a short-lived
+	// token from the session, then the native API with it.
+	req, _ = http.NewRequest(http.MethodPost, base+"/ui/reader/token",
+		strings.NewReader(url.Values{"csrf": {csrf}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	api := func(path, body string) map[string]any {
+		req, _ := http.NewRequest(http.MethodPost, base+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+minted.Token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, raw)
+		}
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	workID, _ := api("/v1/books/"+bookID+"/resolve", "{}")["work_id"].(string)
+	if workID == "" {
+		t.Fatal("the book did not resolve to a work")
+	}
+	op := map[string]any{
+		"op_id": seededStaleOpID, "work_id": workID,
+		"client_ts":   time.Now().UTC().Format(time.RFC3339),
+		"progression": 0.001,
+		"locator": map[string]any{
+			"href": "pagetitre.xhtml", "type": "application/xhtml+xml",
+			"locations": map[string]any{
+				// A spine step this book has, a chapter path it does not.
+				"fragments":        []string{"epubcfi(/6/2!/4/9999/1:12)"},
+				"totalProgression": 0.001,
+			},
+		},
+	}
+	payload, _ := json.Marshal(map[string]any{"ops": []any{op}})
+	api("/v1/ops", string(payload))
+}
+
 // TestReaderOpensInARealBrowser is the only test that can judge whether
 // the reader works, because everything it does is a browser behaviour.
 // The bug that brought the vendored engine in — a book that would not go
@@ -176,6 +267,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")
 	cookie := f.loginTo(t, ts, "alice")
+	seedStalePosition(t, ts.URL, cookie, bookID)
 
 	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", f.cookie); resp.StatusCode != http.StatusOK {
 		t.Fatalf("reader page: %d", resp.StatusCode)
@@ -199,7 +291,13 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Ops) == 0 {
+	synced := false
+	for _, op := range page.Ops {
+		if op.OpID != seededStaleOpID {
+			synced = true
+		}
+	}
+	if !synced {
 		t.Error("the reader never managed to sync a position")
 	}
 }

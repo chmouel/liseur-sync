@@ -131,10 +131,11 @@ templ readerPage(v ReaderView, csrf string) {
 				// foliate-js (ADR-0012) mounts its <foliate-view> element
 				// here and loads each chapter into an iframe of its own
 				// making, from a blob: URL. A blob document inherits this
-				// page's CSP, whose script-src is 'self' with no room in
-				// it — that policy, plus the transform in reader-app.js
-				// that strips scripts from every resource, is why the
-				// publication is displayed and none of it runs.
+				// page's CSP, whose script-src admits only the nonced
+				// module tag below and its imports — that policy, plus
+				// the transform in reader-app.js that strips scripts from
+				// every resource, is why the publication is displayed and
+				// none of it runs.
 				<div id="reader-view"></div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>

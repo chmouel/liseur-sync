@@ -85,11 +85,12 @@ only scroll.
 The `Content-Security-Policy` on the reader page is what confines the
 publication now, and it does so directly: a `srcdoc` or `blob:` document
 inherits its creator's policy container, so the one header covers both.
-`script-src 'self'` has no hole in it — no `unsafe-inline`, no
-`unsafe-eval`, no nonce — so even without the sandbox attribute a book's
-script has nowhere to run. `style-src` must admit `'unsafe-inline'`,
-because books carry style attributes, and `default-src 'none'` keeps the
-network shut.
+`script-src` is a per-response nonce with `'strict-dynamic'` — the only
+script it admits is the module tag the server minted the nonce for and
+that module's own imports, so a book cannot even point a script tag at a
+same-origin file, and there is no `unsafe-inline` and no `unsafe-eval`.
+`style-src` must admit `'unsafe-inline'`, because books carry style
+attributes, and `default-src 'none'` keeps the network shut.
 
 The binding constraint recorded in the original decision — publication
 content never executes on the authenticated UI origin — therefore
