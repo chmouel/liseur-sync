@@ -10,7 +10,8 @@ import (
 )
 
 const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
-	j.source, j.client_key, j.request_fingerprint, j.promotion_fingerprint,
+	j.source, j.storage, j.client_key, j.request_fingerprint,
+	j.promotion_fingerprint,
 	j.artifacts_expired, j.artifact_cleanup_pending, j.state,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
 	j.extracted_embedded_metadata_json, j.book_id, j.error_code, j.error_detail,
@@ -21,7 +22,7 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 	var job store.IngestJob
 	err := row.Scan(
 		&job.ID, &job.UserID, &job.LibraryID, &job.QuotaUserID,
-		&job.Source, &job.ClientKey, &job.RequestFingerprint,
+		&job.Source, &job.Storage, &job.ClientKey, &job.RequestFingerprint,
 		&job.PromotionFingerprint, &job.ArtifactsExpired,
 		&job.ArtifactCleanupPending, &job.State,
 		&job.BytesReceived, &job.ContentSHA256, &job.StagingPath,
@@ -73,10 +74,10 @@ func (s *Store) CreateIngestJob(
 
 	res, err := tx.ExecContext(ctx, q(
 		`INSERT INTO ingest_jobs
-		 (id, user_id, library_id, quota_user_id, source, client_key,
-		  request_fingerprint, state, source_relative_path, revision,
-		  created_at, updated_at)
-		 SELECT ?, ?, l.id, l.quota_user_id, ?, ?, ?, 'received', ?, 1, ?, ?
+		 (id, user_id, library_id, quota_user_id, source, storage,
+		  client_key, request_fingerprint, state, source_relative_path,
+		  revision, created_at, updated_at)
+		 SELECT ?, ?, l.id, l.quota_user_id, ?, l.storage, ?, ?, 'received', ?, 1, ?, ?
 		 FROM libraries l
 		 LEFT JOIN library_access a
 		   ON a.library_id = l.id AND a.user_id = ?
@@ -303,9 +304,13 @@ func (s *Store) ListAbandonedIngestJobs(
 	if limit < 1 || limit > 500 {
 		return nil, store.ErrInvalidTransition
 	}
+	// An in-place job in `received` has not lost anything: it never had
+	// a staged artifact, and the next sweep re-enters it and does the
+	// work again. Only an upload's `received` row means bytes on disk
+	// the database does not point at (ADR-0014).
 	query := `SELECT ` + ingestJobColumns + `
 		FROM ingest_jobs j
-		WHERE j.state = 'received'`
+		WHERE j.state = 'received' AND j.storage = 'cas'`
 	args := []any{}
 	if afterID != "" {
 		query += ` AND j.id > ?`

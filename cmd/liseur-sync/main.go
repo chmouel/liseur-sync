@@ -286,6 +286,11 @@ func runWatchedScanWorker(
 		},
 		MaxFileBytes:    cfg.Content.MaxUploadBytes,
 		QuotaLimitBytes: watchedQuotaLimit(cfg),
+		// An in-place library's books are published by the sweep itself,
+		// so it needs the layouts the promotion worker would otherwise
+		// have resolved.
+		Patterns:         content.NewLibraryPatterns(st),
+		FailureRetention: time.Duration(cfg.Content.FailureRetentionHours) * time.Hour,
 	}
 	for {
 		report, err := content.RunScanPass(ctx, st, cas, opts, time.Now)
