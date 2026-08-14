@@ -271,30 +271,39 @@
   // chapter by the bounding box of everything in it, so one such heading
   // makes the column strip tens of thousands of pixels wide, and the reader
   // spends forty blank pages getting out of the title page. Measure the
-  // bounding box of what is laid out on the page, ignoring anything that
-  // ends before the page begins.
+  // bounding box of what is laid out on the page, falling back to layout
+  // width if empty or unloaded (e.g. image/SVG chapters).
   function measureOnlyWhatIsOnThePage(rend) {
     rend.hooks.content.register((contents) => {
       const box = (axis) => {
         const doc = contents.document;
+        if (!doc || !doc.body) return 0;
+        const fallback = axis === 'x'
+          ? (doc.body.scrollWidth || (doc.documentElement && doc.documentElement.scrollWidth) || stage.clientWidth || 800)
+          : (doc.body.scrollHeight || (doc.documentElement && doc.documentElement.scrollHeight) || stage.clientHeight || 600);
         const range = doc.createRange();
-        range.selectNodeContents(doc.body);
+        try {
+          range.selectNodeContents(doc.body);
+        } catch (e) {
+          return fallback;
+        }
         let low = Infinity;
         let high = -Infinity;
         for (const rect of range.getClientRects()) {
+          if (rect.right < -1000 || rect.bottom < -1000) continue;
           const near = axis === 'x' ? rect.left : rect.top;
           const far = axis === 'x' ? rect.right : rect.bottom;
-          if (far <= 0) continue;
           if (near < low) low = near;
           if (far > high) high = far;
         }
-        if (high === -Infinity) return 0;
+        if (high === -Infinity || high <= low) return fallback;
         const style = contents.window.getComputedStyle(doc.body);
         const pad =
           axis === 'x'
-            ? parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
-            : parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-        return Math.round(high - low + (pad || 0));
+            ? parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0)
+            : parseFloat(style.paddingTop || 0) + parseFloat(style.paddingBottom || 0);
+        const measured = Math.round(high - low + (pad || 0));
+        return measured > 0 ? measured : fallback;
       };
       contents.textWidth = () => box('x');
       contents.textHeight = () => box('y');
