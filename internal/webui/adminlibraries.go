@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
 	"github.com/chmouel/liseur-sync/internal/metadata"
@@ -55,6 +56,41 @@ func libraryAxes(l store.Library) string {
 		refresh = "every " + humanDuration(l.RefreshInterval)
 	}
 	return string(l.Source) + " · " + string(l.Storage) + " · " + refresh
+}
+
+// RefreshState is the sentence the library card shows about the last
+// time this library's source was read. A library with no source has
+// nothing to say, and a library that has never been refreshed says so
+// rather than showing a blank.
+func (v adminLibraryView) RefreshState() string {
+	l := v.Library
+	if l.RootPath == nil || *l.RootPath == "" {
+		return ""
+	}
+	switch {
+	case l.RefreshRequestedAt != nil:
+		return "A refresh is queued and starts on the next tick."
+	case l.LastRefreshAt != nil:
+		return "Last refreshed " + l.LastRefreshAt.Format("2006-01-02 15:04") + "."
+	case l.LastRefreshAttemptAt != nil:
+		return "Tried " + l.LastRefreshAttemptAt.Format("2006-01-02 15:04") +
+			" and has never completed."
+	default:
+		return "Never refreshed."
+	}
+}
+
+// RefreshError is what went wrong last time, if anything did.
+func (v adminLibraryView) RefreshError() string {
+	if v.Library.LastRefreshError == nil {
+		return ""
+	}
+	return *v.Library.LastRefreshError
+}
+
+// Refreshable says whether this library has a source to read again.
+func (v adminLibraryView) Refreshable() bool {
+	return v.Library.RootPath != nil && *v.Library.RootPath != ""
 }
 
 // Root reports a root-backed library's root path, or "" for a managed
@@ -213,6 +249,33 @@ func (s *Server) handleAdminLibraryLayout(
 		}
 		return lib.Name + " now reads filenames as " +
 			metadata.FormatPathPatterns(patterns) + ".", nil
+	})
+}
+
+// handleAdminRefreshLibrary asks for a refresh of one library now. It
+// queues rather than sweeps: the refresh worker holds the claim that
+// stops two sweeps of one root, and a request handler that walked a
+// disk would hold a browser connection open for as long as the disk
+// took. No re-authentication — it reads a directory the administrator
+// already configured, and changes no credential (ADR-0013).
+func (s *Server) handleAdminRefreshLibrary(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.runLibraryMutation(w, r, a, u, "refresh-library", func() (string, error) {
+		lib, err := s.St.AdminLibraryByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			return "", err
+		}
+		if lib.RootPath == nil || *lib.RootPath == "" {
+			return "", errors.New(
+				"a managed library has no source to refresh from")
+		}
+		if err := s.St.AdminRequestLibraryRefresh(
+			r.Context(), u.ID, lib.ID, time.Now().UTC()); err != nil {
+			return "", err
+		}
+		return "Queued a refresh of " + lib.Name +
+			"; the server picks it up on its next tick.", nil
 	})
 }
 

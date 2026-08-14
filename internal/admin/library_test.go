@@ -388,3 +388,53 @@ func TestAddLibraryRejectsBadInput(t *testing.T) {
 		})
 	}
 }
+
+// TestRefreshLibraryQueuesRatherThanSweeps pins what the subcommand
+// does and, just as importantly, what it does not: it records a request
+// for the running server to honour, and refuses a library that has no
+// source to read again.
+func TestRefreshLibraryQueuesRatherThanSweeps(t *testing.T) {
+	st := newAdminStore(t)
+	addUser(t, st, "ada")
+	root := t.TempDir()
+
+	out, err := capture(t, st, "add-library", "-refresh", "manual",
+		"ada", "Shelf", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := libraryIDFrom(t, out)
+
+	out, err = capture(t, st, "refresh-library", "ada", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "queued a refresh") {
+		t.Fatalf("refresh-library said %q", out)
+	}
+	lib, err := st.AdminLibraryByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lib.RefreshRequestedAt == nil {
+		t.Fatal("no request was recorded on the library")
+	}
+	// The command itself swept nothing: no refresh has happened, only
+	// been asked for.
+	if lib.LastRefreshAt != nil || lib.LastRefreshAttemptAt != nil {
+		t.Fatalf("the CLI performed the refresh itself (%v/%v)",
+			lib.LastRefreshAt, lib.LastRefreshAttemptAt)
+	}
+
+	managed, err := capture(t, st, "create-library", "ada", "Uploads")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := capture(
+		t, st, "refresh-library", "ada", libraryIDFrom(t, managed)); err == nil {
+		t.Fatal("refreshed a managed library, which has no source to read")
+	}
+	if _, err := capture(t, st, "refresh-library", "ada"); err == nil {
+		t.Fatal("accepted refresh-library without a library id")
+	}
+}

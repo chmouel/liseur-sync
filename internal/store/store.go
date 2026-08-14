@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/contentpath"
 )
@@ -282,6 +283,29 @@ func RefreshIntervalFrom(seconds int64) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// MaxRefreshErrorLen bounds what a failed refresh may write back. The
+// message is somebody else's filesystem talking, and an administrator
+// reading a library page needs the shape of the failure, not a
+// megabyte of it.
+const MaxRefreshErrorLen = 500
+
+// TruncateRefreshError trims a refresh failure to what is worth
+// storing.
+func TruncateRefreshError(msg string) string {
+	if len(msg) <= MaxRefreshErrorLen {
+		return msg
+	}
+	// Cut on a rune boundary: the message is somebody's file name, and
+	// half a rune is not a shorter file name, it is a broken string.
+	// The ellipsis is three bytes, and the whole point of the limit is
+	// that what comes back fits in it.
+	cut := MaxRefreshErrorLen - len("…")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "…"
+}
+
 // LibraryRole is an ACL capability. Manage implies read.
 type LibraryRole string
 
@@ -314,6 +338,51 @@ type Library struct {
 	ConfigJSON      []byte
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	// LastRefreshAt is when a refresh of this library last finished
+	// without an error, and LastRefreshAttemptAt when one was last
+	// started. The schedule is computed from the attempt, so a root that
+	// fails every time backs off on its interval instead of being retried
+	// in a loop.
+	LastRefreshAt        *time.Time
+	LastRefreshAttemptAt *time.Time
+	// LastRefreshError is what went wrong the last time, and is cleared
+	// by the next refresh that succeeds.
+	LastRefreshError *string
+	// RefreshRequestedAt is an administrator asking for a refresh now. It
+	// is cleared by the claim that honours it, which is what lets a
+	// library with no schedule at all be refreshed on demand.
+	RefreshRequestedAt *time.Time
+}
+
+// RefreshDueAt is when this library's next scheduled refresh falls due.
+// It is meaningless for a library that is not on an interval, and the
+// caller is expected to have checked. The attempt comes first because a
+// refresh that failed still counts as having looked.
+func (l Library) RefreshDueAt() time.Time {
+	switch {
+	case l.LastRefreshAttemptAt != nil:
+		return l.LastRefreshAttemptAt.Add(l.RefreshInterval)
+	case l.LastRefreshAt != nil:
+		return l.LastRefreshAt.Add(l.RefreshInterval)
+	default:
+		return l.CreatedAt.Add(l.RefreshInterval)
+	}
+}
+
+// RefreshDue says whether this library wants looking at. A request made
+// by hand is due whatever the policy says, including for a library that
+// has no schedule.
+func (l Library) RefreshDue(now time.Time) bool {
+	if l.RootPath == nil || *l.RootPath == "" {
+		return false
+	}
+	if l.RefreshRequestedAt != nil {
+		return true
+	}
+	if l.Refresh != LibraryRefreshInterval {
+		return false
+	}
+	return !l.RefreshDueAt().After(now)
 }
 
 // AccessibleLibrary includes the caller's effective ACL role.
@@ -1919,6 +1988,33 @@ type Store interface {
 	// and nothing user-facing may call it. Managed libraries are excluded
 	// because they have no root to sweep.
 	ListScannableLibraries(ctx context.Context) ([]Library, error)
+	// ClaimLibraryRefresh takes the next library whose refresh is due and
+	// stamps the attempt, atomically, so that two servers — or two ticks
+	// of one — cannot sweep the same root at the same time. It reports
+	// false when nothing is due. It is a global housekeeping query for the
+	// same reason ListScannableLibraries is one.
+	//
+	// Claiming clears any standing request: an administrator who asks for
+	// a refresh while one is running is asking for the next one, and gets
+	// it, because the request they made lands after this claim took the
+	// one it cleared.
+	ClaimLibraryRefresh(ctx context.Context, now time.Time) (Library, bool, error)
+	// FinishLibraryRefresh records the outcome of a claimed refresh. An
+	// empty refreshErr means it worked, which stamps last_refresh_at and
+	// clears the previous error; a non-empty one leaves last_refresh_at
+	// where it was, because a refresh that failed did not refresh
+	// anything.
+	FinishLibraryRefresh(ctx context.Context, libraryID string, at time.Time, refreshErr string) error
+	// AdminRequestLibraryRefresh asks for a refresh of one library now. It
+	// is an administrator's operation (ADR-0013): the ACL-scoped reads in
+	// this interface do not have a counterpart, because deciding when the
+	// server walks a disk is not a library member's business.
+	//
+	// It is idempotent — a second request before the first is honoured
+	// changes nothing but the timestamp — and it queues rather than
+	// sweeps, so it returns as fast as an UPDATE whatever the size of the
+	// library behind it.
+	AdminRequestLibraryRefresh(ctx context.Context, actorUserID, libraryID string, at time.Time) error
 	// WatchedFilesByPath reads what the catalog already holds for one
 	// watched source path. It is a global housekeeping query like the
 	// other reconciliation methods — a sweep runs on the server's behalf,

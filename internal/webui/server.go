@@ -275,6 +275,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminLibraryAccess)))
 	mux.Handle("POST /ui/admin/libraries/{id}/layout",
 		sec(s.requireAdmin(s.handleAdminLibraryLayout)))
+	mux.Handle("POST /ui/admin/libraries/{id}/refresh",
+		sec(s.requireAdmin(s.handleAdminRefreshLibrary)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }

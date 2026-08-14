@@ -182,3 +182,39 @@ func libraryRoot(path string) (string, error) {
 	}
 	return absolute, nil
 }
+
+// refreshLibrary queues a refresh of one library.
+//
+// It queues rather than sweeps: the work belongs to the running server,
+// which holds the claim that stops two refreshes of one root, and a CLI
+// that walked the tree itself would be a second implementation of the
+// scan with none of that. The command therefore returns immediately, and
+// what it reports is that the request was recorded.
+func refreshLibrary(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: refresh-library <actor> <library-id>")
+	}
+	actor, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	libraryID := strings.TrimSpace(args[1])
+	lib, err := st.AdminLibraryByID(ctx, libraryID)
+	if err != nil {
+		return err
+	}
+	if lib.RootPath == nil || *lib.RootPath == "" {
+		return fmt.Errorf(
+			"library %q is %s and has no root to refresh", lib.Name, lib.Source)
+	}
+	now := time.Now().UTC()
+	if err := st.AdminRequestLibraryRefresh(
+		ctx, actor.ID, libraryID, now); err != nil {
+		return err
+	}
+	fmt.Printf("queued a refresh of %q (%s)\n", lib.Name, *lib.RootPath)
+	fmt.Println(
+		"the running server picks it up on its next refresh tick; if no " +
+			"server is running, it is picked up when one starts")
+	return nil
+}

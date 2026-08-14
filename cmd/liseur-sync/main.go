@@ -262,20 +262,26 @@ func runIngestPromotionWorker(
 	}
 }
 
-// runWatchedScanWorker sweeps every watched library on an interval.
+// runLibraryRefreshWorker refreshes each library on its own schedule.
+//
+// The tick is not the schedule: it is how often the server asks whether
+// anything is due. What is due is a per-library question — an interval
+// that library carries, or an administrator who pressed the button — and
+// the claim that answers it is also the lock, so two ticks cannot end up
+// sweeping the same root at once.
 //
 // There is no filesystem-notification path. Only a completed full sweep
 // may conclude that a book is gone (ADR-0002), so a notification could
 // only ever reduce latency for additions, and a server that acts on them
 // has two code paths where one of them is not allowed to reach the
 // conclusion that matters.
-func runWatchedScanWorker(
+func runLibraryRefreshWorker(
 	ctx context.Context,
 	st store.Store,
 	cas *content.CAS,
 	cfg config.Config,
 ) error {
-	interval := time.Duration(cfg.Content.WatchedScanInterval) * time.Second
+	interval := time.Duration(cfg.Content.RefreshTick) * time.Second
 	if interval <= 0 {
 		return nil
 	}
@@ -293,7 +299,7 @@ func runWatchedScanWorker(
 		FailureRetention: time.Duration(cfg.Content.FailureRetentionHours) * time.Hour,
 	}
 	for {
-		report, err := content.RunScanPass(ctx, st, cas, opts, time.Now)
+		report, err := content.RunRefreshPass(ctx, st, cas, opts, time.Now)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -301,13 +307,14 @@ func runWatchedScanWorker(
 			if fatalWorkerError(err) {
 				return err
 			}
-			slog.Error("watched scan failed, retrying next tick", "err", err)
+			slog.Error("library refresh failed, retrying next tick", "err", err)
 		}
 		if report.Changed() {
-			slog.Info("watched scan pass complete",
+			slog.Info("library refresh pass complete",
 				"libraries", report.Libraries,
 				"swept", report.Swept,
 				"unavailable", report.Unavailable,
+				"errored", report.Errored,
 				"ingested", report.Ingested,
 				"unchanged", report.Unchanged,
 				"rehashed", report.Rehashed,
@@ -615,11 +622,11 @@ func cmdServe(args []string) error {
 			errCh <- fmt.Errorf("trash purge worker: %w", err)
 		}
 	}()
-	watchedDone := make(chan struct{})
+	refreshDone := make(chan struct{})
 	go func() {
-		defer close(watchedDone)
-		if err := runWatchedScanWorker(bgCtx, st, cas, cfg); err != nil {
-			errCh <- fmt.Errorf("watched scan worker: %w", err)
+		defer close(refreshDone)
+		if err := runLibraryRefreshWorker(bgCtx, st, cas, cfg); err != nil {
+			errCh <- fmt.Errorf("library refresh worker: %w", err)
 		}
 	}()
 	serverDone := make(chan struct{})
@@ -651,7 +658,7 @@ func cmdServe(args []string) error {
 	<-extractionDone
 	<-promotionDone
 	<-trashDone
-	<-watchedDone
+	<-refreshDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)
 }

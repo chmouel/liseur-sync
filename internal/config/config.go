@@ -52,12 +52,19 @@ type Config struct {
 		EPUBMaxRatio          int64 `toml:"epub_max_compression_ratio"`
 		EPUBMaxMetadataBytes  int64 `toml:"epub_max_metadata_bytes"`
 		EPUBMaxXMLDepth       int   `toml:"epub_max_xml_depth"`
-		// WatchedScanInterval is how often each watched library is swept,
-		// in seconds, or 0 to run no sweeps at all. Notifications are not
-		// used: a sweep is the only thing allowed to conclude that a book
-		// is gone (ADR-0002), so the interval is the real latency budget
-		// rather than a fallback for a missed event.
-		WatchedScanInterval int `toml:"watched_scan_interval_seconds"`
+		// RefreshTick is how often, in seconds, the server looks for a
+		// library whose refresh has come due, or 0 to run no refreshes at
+		// all. It is not how often a root is swept: each library carries
+		// its own interval, and this is the granularity at which those
+		// are noticed. Setting it to a minute costs one query a minute
+		// and makes an hourly library an hourly library rather than an
+		// hourly-give-or-take-five-minutes one.
+		//
+		// Notifications are not used: a sweep is the only thing allowed
+		// to conclude that a book is gone (ADR-0002), so the interval is
+		// the real latency budget rather than a fallback for a missed
+		// event.
+		RefreshTick int `toml:"refresh_tick_seconds"`
 		// WatchedMaxFiles and WatchedMaxDepth bound one traversal. A
 		// sweep that meets either is incomplete, and an incomplete sweep
 		// never marks anything missing, so raising them is how an
@@ -172,7 +179,7 @@ func Default() Config {
 	// Five minutes is short enough that a book dropped into a folder is
 	// there before anybody goes looking for it, and long enough that a
 	// spinning disk is not read continuously.
-	c.Content.WatchedScanInterval = 300
+	c.Content.RefreshTick = 60
 	c.Content.WatchedMaxFiles = 200_000
 	c.Content.WatchedMaxDepth = 32
 	c.Adapters.Kosync = true
@@ -294,10 +301,9 @@ func (c *Config) Validate() error {
 	if c.Content.QuotaBytes < 0 {
 		return fmt.Errorf("content.quota_bytes must be >= 0 (0 disables the quota)")
 	}
-	if c.Content.WatchedScanInterval < 0 ||
-		c.Content.WatchedScanInterval > 86400 {
+	if c.Content.RefreshTick < 0 || c.Content.RefreshTick > 86400 {
 		return fmt.Errorf(
-			"content.watched_scan_interval_seconds must be between 0 and 86400 (0 disables scanning)")
+			"content.refresh_tick_seconds must be between 0 and 86400 (0 disables refreshing)")
 	}
 	if c.Content.WatchedMaxFiles < 1 {
 		return fmt.Errorf("content.watched_max_files must be >= 1")

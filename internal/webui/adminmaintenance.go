@@ -34,7 +34,106 @@ type maintenanceView struct {
 	// should happen, next to what the database says has happened.
 	TrashRetention string
 	OrphanGrace    string
-	Now            time.Time
+	// RefreshTick is how often the server looks for a library that is
+	// due. A refresh that is late by less than this is not late.
+	RefreshTick string
+	Refresh     refreshHealth
+	Now         time.Time
+}
+
+// refreshHealth is what the page says about library refreshes: counts,
+// not names. Which library is failing, and why, is on the Libraries
+// page next to the button that retries it — this page answers "is
+// anything stuck?" (ADR-0013).
+type refreshHealth struct {
+	// Sources counts libraries with something to refresh at all.
+	Sources int
+	// Scheduled counts the ones that refresh on their own interval, and
+	// Queued the ones somebody has asked for by hand and that have not
+	// been picked up yet.
+	Scheduled int
+	Queued    int
+	// Overdue counts scheduled libraries whose refresh came round more
+	// than a whole interval ago. One interval of slack is deliberate: a
+	// library is due the instant its interval elapses, so counting that
+	// as late would make a healthy server look permanently behind.
+	Overdue int
+	// Failing counts libraries whose last refresh recorded an error.
+	Failing int
+	// Oldest is the age of the least recently refreshed source, and
+	// Never counts the ones that have not been refreshed at all.
+	Oldest string
+	Never  int
+	// Truncated says the walk stopped before the end of the list, so
+	// these are counts of what was looked at rather than of everything.
+	Truncated bool
+}
+
+// refreshHealthPage and refreshHealthPages bound the walk. A server
+// with more libraries than this has a page that says so rather than one
+// that reads every row on every render.
+const (
+	refreshHealthPage  = 100
+	refreshHealthPages = 10
+)
+
+// libraryRefreshHealth walks the library list and totals what it finds.
+// It reads through the admin-scoped list rather than the scanner's
+// global one: this is a page somebody is looking at, and
+// ListScannableLibraries exists for background jobs.
+func (s *Server) libraryRefreshHealth(r *http.Request, now time.Time) refreshHealth {
+	var health refreshHealth
+	var oldest time.Time
+	finish := func() refreshHealth {
+		if !oldest.IsZero() {
+			health.Oldest = age(now.Sub(oldest))
+		}
+		return health
+	}
+	cursor := ""
+	for page := 0; page < refreshHealthPages; page++ {
+		libs, err := s.St.AdminListLibraries(
+			r.Context(), cursor, refreshHealthPage+1)
+		if err != nil {
+			health.Truncated = true
+			return finish()
+		}
+		more := len(libs) > refreshHealthPage
+		if more {
+			libs = libs[:refreshHealthPage]
+		}
+		for _, l := range libs {
+			if l.RootPath == nil || *l.RootPath == "" {
+				continue
+			}
+			health.Sources++
+			if l.LastRefreshError != nil {
+				health.Failing++
+			}
+			if l.RefreshRequestedAt != nil {
+				health.Queued++
+			}
+			switch {
+			case l.LastRefreshAt == nil:
+				health.Never++
+			case oldest.IsZero() || l.LastRefreshAt.Before(oldest):
+				oldest = *l.LastRefreshAt
+			}
+			if l.Refresh != store.LibraryRefreshInterval {
+				continue
+			}
+			health.Scheduled++
+			if now.After(l.RefreshDueAt().Add(l.RefreshInterval)) {
+				health.Overdue++
+			}
+		}
+		if !more {
+			return finish()
+		}
+		cursor = store.LibraryCursor(libs[len(libs)-1])
+	}
+	health.Truncated = true
+	return finish()
 }
 
 type jobStateRow struct {
@@ -58,7 +157,9 @@ func (s *Server) handleAdminMaintenance(
 		Now:            time.Now(),
 		TrashRetention: hours(s.Cfg.Content.TrashRetentionHours),
 		OrphanGrace:    hours(s.Cfg.Content.OrphanGraceHours),
+		RefreshTick:    secondsOr(s.Cfg.Content.RefreshTick, "never"),
 	}
+	view.Refresh = s.libraryRefreshHealth(r, view.Now)
 	view.Jobs = jobRows(counts, view.Now)
 	prefix := relPrefix(r.URL.Path)
 	adminPage("Maintenance", prefix, uiCtx(r, u), csrfFor(a), "maintenance",

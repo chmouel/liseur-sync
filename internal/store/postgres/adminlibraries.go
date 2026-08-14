@@ -13,12 +13,18 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+// plainLibraryColumns is a library row with no ACL role attached: the
+// admin panel's reads and the scanner's, which have no caller to join
+// against.
+const plainLibraryColumns = `id, owner_user_id, quota_user_id, source,
+	storage, refresh, refresh_interval_seconds, name, root_path,
+	config_json, created_at, updated_at, last_refresh_at,
+	last_refresh_attempt_at, last_refresh_error, refresh_requested_at`
+
 func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int) ([]store.Library, error) {
 	name, id := store.SplitLibraryCursor(after)
 	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
-		        refresh_interval_seconds, name, root_path,
-		        config_json, created_at, updated_at
+		`SELECT `+plainLibraryColumns+`
 		 FROM libraries
 		 WHERE ? = '' OR (name, id) > (?, ?)
 		 ORDER BY name, id
@@ -42,11 +48,7 @@ func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int)
 func (s *Store) AdminUserLibraries(ctx context.Context, userID, after string, limit int) ([]store.AccessibleLibrary, error) {
 	name, id := store.SplitLibraryCursor(after)
 	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT l.id, l.owner_user_id, l.quota_user_id,
-		        l.source, l.storage, l.refresh, l.refresh_interval_seconds,
-		        l.name, l.root_path,
-		        l.config_json, l.created_at, l.updated_at,
-		        CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END
+		`SELECT `+libraryColumns+`
 		 FROM libraries l
 		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
 		 WHERE (l.owner_user_id = ? OR a.role IS NOT NULL)
@@ -141,26 +143,41 @@ func affectedOne(res sql.Result, err error) error {
 // scanPlainLibrary reads a library row with no role column.
 func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error) {
 	var l store.Library
-	var root sql.NullString
+	var root, refreshError sql.NullString
 	var refreshSeconds int64
 	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID,
 		&l.Source, &l.Storage, &l.Refresh, &refreshSeconds, &l.Name,
-		&root, &l.ConfigJSON, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		&root, &l.ConfigJSON, &l.CreatedAt, &l.UpdatedAt,
+		&l.LastRefreshAt, &l.LastRefreshAttemptAt, &refreshError,
+		&l.RefreshRequestedAt); err != nil {
 		return l, err
 	}
 	if root.Valid {
 		l.RootPath = &root.String
 	}
+	if refreshError.Valid {
+		l.LastRefreshError = &refreshError.String
+	}
 	l.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	l.CreatedAt, l.UpdatedAt = l.CreatedAt.UTC(), l.UpdatedAt.UTC()
+	utcPtr(l.LastRefreshAt)
+	utcPtr(l.LastRefreshAttemptAt)
+	utcPtr(l.RefreshRequestedAt)
 	return l, nil
+}
+
+// utcPtr normalises a nullable timestamp in place, the way every other
+// read here normalises its scalar ones. Timestamps are UTC everywhere
+// above the store, and pgx hands back the session's zone.
+func utcPtr(t *time.Time) {
+	if t != nil {
+		*t = t.UTC()
+	}
 }
 
 func (s *Store) AdminLibraryByID(ctx context.Context, libraryID string) (store.Library, error) {
 	l, err := scanPlainLibrary(s.db.QueryRowContext(ctx, q(
-		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
-		        refresh_interval_seconds, name, root_path,
-		        config_json, created_at, updated_at
+		`SELECT `+plainLibraryColumns+`
 		 FROM libraries WHERE id = ?`), libraryID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Library{}, store.ErrNotFound

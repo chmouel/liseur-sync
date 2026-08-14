@@ -15,6 +15,7 @@ import (
 func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, error) {
 	var out store.AccessibleLibrary
 	var refreshSeconds int64
+	var refreshError sql.NullString
 	err := row.Scan(
 		&out.Library.ID,
 		&out.Library.OwnerUserID,
@@ -28,9 +29,19 @@ func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, 
 		&out.Library.ConfigJSON,
 		&out.Library.CreatedAt,
 		&out.Library.UpdatedAt,
+		&out.Library.LastRefreshAt,
+		&out.Library.LastRefreshAttemptAt,
+		&refreshError,
+		&out.Library.RefreshRequestedAt,
 		&out.Role,
 	)
+	if refreshError.Valid {
+		out.Library.LastRefreshError = &refreshError.String
+	}
 	out.Library.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
+	utcPtr(out.Library.LastRefreshAt)
+	utcPtr(out.Library.LastRefreshAttemptAt)
+	utcPtr(out.Library.RefreshRequestedAt)
 	return out, err
 }
 
@@ -77,6 +88,8 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 const libraryColumns = `l.id, l.owner_user_id, l.quota_user_id,
 	l.source, l.storage, l.refresh, l.refresh_interval_seconds, l.name,
 	l.root_path, l.config_json, l.created_at, l.updated_at,
+	l.last_refresh_at, l.last_refresh_attempt_at, l.last_refresh_error,
+	l.refresh_requested_at,
 	CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END`
 
 const bookColumns = `b.id, b.library_id, b.status,

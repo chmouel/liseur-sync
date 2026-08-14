@@ -56,6 +56,8 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return createLibrary(ctx, st, args[1:])
 	case "add-library":
 		return addLibrary(ctx, st, args[1:])
+	case "refresh-library":
+		return refreshLibrary(ctx, st, args[1:])
 	case "list-review":
 		return listReview(ctx, st, args[1:])
 	case "clear-review":
@@ -130,6 +132,9 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                        -storage cas|in-place
                                        -refresh manual|interval
                                        -interval <duration>
+  refresh-library <actor> <library-id>
+                                queue a refresh of a root-backed
+                                library; the running server performs it
   list-libraries <user>         list libraries the user can read
   grant-library <actor> <library-id> <user> read|manage
                                 grant access; actor must own or manage it

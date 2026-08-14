@@ -171,10 +171,11 @@ liseur-sync admin -config liseur-sync.toml add-library alice "Shelf" /srv/books
 ```
 
 A library has three independent properties: a **source** (`managed` for
-uploads, `directory` for a tree of EPUBs), a **storage** mode (`cas`
-today, so the bytes are copied) and a **refresh** policy (`manual`, or
-`interval` every `-interval`). `add-library` defaults to a directory
-source refreshed on an interval, which is what a watch folder was.
+uploads, `directory` for a tree of EPUBs), a **storage** mode (`cas`, so
+the bytes are copied, or `in-place`, so they are read where they lie) and
+a **refresh** policy (`manual`, or `interval` every `-interval`).
+`add-library` defaults to a directory source, copied, refreshed on an
+interval — which is what a watch folder was.
 
 Mount that directory read-only if you can. The server does not need write
 access and treating the mount as the enforcement point means a bug cannot
@@ -183,12 +184,31 @@ happens to contain it: the sweep walks everything below the root, and
 `watched_max_files` and `watched_max_depth` exist to stop a mistake there
 from becoming a very long sweep.
 
-Every `watched_scan_interval_seconds` (300 by default) each root is swept
-and the EPUBs it holds are ingested through the same pipeline uploads use.
-Books are therefore served from a validated copy in `content.root`, never
-from the source file — a watched library costs disk like a managed one,
-and editing a file under the root does not change what readers are being
-served.
+Each library is swept on its own `-interval`, and the server looks for
+one that has come due every `refresh_tick_seconds` (60 by default; 0
+turns refreshing off entirely). A library set to `manual` is only swept
+when somebody asks, with **Refresh now** on the admin panel's Libraries
+page or:
+
+```
+liseur-sync admin -config liseur-sync.toml refresh-library alice <library-id>
+```
+
+Both queue the work for the running server rather than doing it
+themselves, so neither holds a terminal or a browser open for the length
+of a sweep, and neither can start a second sweep of a root that is
+already being read.
+
+What each sweep found — when it last succeeded, and what went wrong if it
+did not — is on that library's card, and the count of libraries that are
+overdue or failing is on the Maintenance page.
+
+The EPUBs a sweep finds are ingested through the same pipeline uploads
+use. For a `cas` library the bytes are copied, so books are served from a
+validated copy in `content.root` and editing a file under the root does
+not change what readers are being served; the library costs disk like a
+managed one. An `in-place` library copies nothing and costs no quota, and
+its books are read from the source file at download time.
 
 What the sweep concludes about files that are *not* there is deliberately
 cautious:

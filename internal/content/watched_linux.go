@@ -553,13 +553,18 @@ func isRetryableWatchedFailure(err error) bool {
 	}
 }
 
-// scannableLibraryLister is the housekeeping surface a scan pass needs.
-type scannableLibraryLister interface {
+// refreshableLibraryStore is the housekeeping surface a refresh pass
+// needs. A pass no longer reads every library and walks each one: it
+// claims the libraries that are due, one at a time, so a library
+// refreshed by hand and a library on a five-minute interval are the
+// same mechanism with different triggers.
+type refreshableLibraryStore interface {
 	watchedStore
-	ListScannableLibraries(context.Context) ([]store.Library, error)
+	ClaimLibraryRefresh(context.Context, time.Time) (store.Library, bool, error)
+	FinishLibraryRefresh(context.Context, string, time.Time, string) error
 }
 
-// WatchedScanReport totals one pass over every root-backed library.
+// WatchedScanReport totals one pass over the libraries that were due.
 type WatchedScanReport struct {
 	Libraries int
 	// Swept counts libraries whose traversal completed, so absence was
@@ -567,7 +572,11 @@ type WatchedScanReport struct {
 	Swept int
 	// Unavailable counts libraries whose root could not be opened at all.
 	// Their catalogs are left untouched.
-	Unavailable  int
+	Unavailable int
+	// Errored counts libraries whose refresh failed for a reason that is
+	// not the root being unreachable. The reason itself is on the
+	// library row, not here.
+	Errored      int
 	Ingested     int
 	Unchanged    int
 	Rehashed     int
@@ -579,18 +588,29 @@ type WatchedScanReport struct {
 // Changed reports whether the pass did anything worth logging.
 func (r WatchedScanReport) Changed() bool {
 	return r.Ingested != 0 || r.Rehashed != 0 || r.Review != 0 ||
-		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0
+		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0 ||
+		r.Errored != 0
 }
 
-// RunScanPass sweeps every root-backed library once.
+// maxRefreshesPerPass bounds one pass. A claim stamps the attempt, so a
+// library cannot be claimed twice within its own interval and the loop
+// terminates on its own; the ceiling is there for the case where it
+// does not — a clock that jumped backwards, a store that reports a
+// claim it did not make — so that a broken schedule costs a slow tick
+// rather than a worker that never returns.
+const maxRefreshesPerPass = 1000
+
+// RunRefreshPass refreshes every library that is due, and only those.
 //
 // One library's failure does not stop the others. A root on a network
 // mount that is down is the ordinary case here, and letting it stall every
 // other library's scanning would make one flaky disk look like a broken
-// server.
-func RunScanPass(
+// server. The failure is recorded against the library that had it, which
+// is what the admin panel reads: an error that only ever reached the log
+// is an error nobody sees.
+func RunRefreshPass(
 	ctx context.Context,
-	st scannableLibraryLister,
+	st refreshableLibraryStore,
 	blobs watchedStager,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
@@ -599,19 +619,27 @@ func RunScanPass(
 	if st == nil || blobs == nil || clock == nil || opts.MaxFileBytes <= 0 {
 		return report, store.ErrInvalidTransition
 	}
-	libraries, err := st.ListScannableLibraries(ctx)
-	if err != nil {
-		return report, fmt.Errorf("list scannable libraries: %w", err)
-	}
-	for _, library := range libraries {
+	for range maxRefreshesPerPass {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		library, claimed, err := st.ClaimLibraryRefresh(ctx, clock())
+		if err != nil {
+			return report, fmt.Errorf("claim library refresh: %w", err)
+		}
+		if !claimed {
+			return report, nil
+		}
 		if library.RootPath == nil || *library.RootPath == "" {
+			// A library with a root is the only thing a claim can
+			// return, so this is a database somebody edited by hand.
+			// Finishing it stops it being claimed again in a loop.
+			_ = st.FinishLibraryRefresh(ctx, library.ID, clock(),
+				"library has no root path to refresh")
 			continue
 		}
 		report.Libraries++
-		result, err := SyncScannedLibrary(ctx, st, blobs, ScannedLibrary{
+		result, syncErr := SyncScannedLibrary(ctx, st, blobs, ScannedLibrary{
 			ID:       library.ID,
 			Storage:  library.Storage,
 			RootPath: *library.RootPath,
@@ -627,18 +655,33 @@ func RunScanPass(
 		report.Review += result.Review
 		report.MarkedAbsent += result.MarkedAbsent
 		report.Failed += result.Failed
-		if err != nil {
-			if errors.Is(err, ErrRootUnavailable) {
-				report.Unavailable++
-				continue
-			}
-			if ctx.Err() != nil {
-				return report, err
-			}
-			return report, fmt.Errorf(
-				"sweep library %q: %w", library.ID, err)
+		if syncErr != nil && ctx.Err() != nil {
+			return report, syncErr
 		}
-		if result.Scan.Complete {
+		var failure string
+		switch {
+		case syncErr != nil:
+			failure = syncErr.Error()
+		case !result.Scan.Complete:
+			// An incomplete traversal is not an error — a limit was hit,
+			// or a subdirectory could not be read — but it is not a
+			// refresh either, because absence cannot be concluded from
+			// it. Saying so is the difference between a library that is
+			// quietly half-indexed and one an administrator can see is.
+			failure = "the traversal did not complete, so this library " +
+				"is only partly accounted for"
+		}
+		if err := st.FinishLibraryRefresh(
+			ctx, library.ID, clock(), failure); err != nil {
+			return report, fmt.Errorf(
+				"finish refresh of library %q: %w", library.ID, err)
+		}
+		switch {
+		case syncErr != nil && errors.Is(syncErr, ErrRootUnavailable):
+			report.Unavailable++
+		case syncErr != nil:
+			report.Errored++
+		case result.Scan.Complete:
 			report.Swept++
 		}
 	}

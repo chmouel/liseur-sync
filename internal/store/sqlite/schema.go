@@ -1092,5 +1092,29 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18,
+	migration18, migration19,
 }
+
+// migration19 records what happened the last time a library's root was
+// looked at. Until now a sweep was a global tick with no memory: every
+// root was walked on the same interval, and a root that failed said so
+// once in the log and nowhere else.
+//
+// Four nullable columns make a refresh a per-library event with a
+// history. last_refresh_attempt_at is stamped when a refresh is claimed
+// and is what the schedule is computed from, so a library whose refresh
+// keeps failing backs off on its interval instead of spinning; the
+// refresh a claim wins is exclusive because the claim is the update.
+// refresh_requested_at is an administrator asking for one now, and is
+// cleared by the claim that honours it — which is what makes "Refresh
+// now" work for a manual library that has no schedule at all.
+const migration19 = `
+ALTER TABLE libraries ADD COLUMN last_refresh_at TEXT;
+ALTER TABLE libraries ADD COLUMN last_refresh_attempt_at TEXT;
+ALTER TABLE libraries ADD COLUMN last_refresh_error TEXT;
+ALTER TABLE libraries ADD COLUMN refresh_requested_at TEXT;
+
+CREATE INDEX libraries_refresh_requested
+    ON libraries(refresh_requested_at)
+    WHERE refresh_requested_at IS NOT NULL;
+`
