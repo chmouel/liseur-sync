@@ -171,7 +171,8 @@ check('no error banner', !diag.status, diag.status);
 check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
   `doc=${diag.hasDoc} text=${JSON.stringify(diag.text)}`);
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
-check('reader knows the spine', /^Chapter 1 of (\d+)$/.test(diag.chapter), diag.chapter);
+check('reader shows the book: own chapter label',
+  diag.chapter === 'Title Page', diag.chapter);
 check('publication stylesheet was applied',
   diag.colour.replace(/\s/g, '') === 'rgb(17,34,51)', diag.colour);
 check('publication script did not run', diag.ran === false, String(diag.ran));

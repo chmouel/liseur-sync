@@ -45,6 +45,9 @@ const progressBar = document.getElementById('reader-progress-bar');
 const progressText = document.getElementById('reader-progress-text');
 const chapterText = document.getElementById('reader-chapter');
 const titleText = document.getElementById('reader-title-text');
+const tocPanel = document.getElementById('reader-toc');
+const tocList = document.getElementById('reader-toc-list');
+const tocButton = document.getElementById('reader-toc-button');
 
 let view = null;
 let workID = null;
@@ -499,12 +502,95 @@ function paint(location) {
   const fraction = typeof location.fraction === 'number' ? location.fraction : 0;
   progressBar.style.width = (fraction * 100).toFixed(1) + '%';
   progressText.textContent = Math.round(fraction * 100) + '%';
-  const section = location.section || {};
-  if (typeof section.current === 'number' && section.total) {
-    chapterText.textContent =
-      'Chapter ' + (section.current + 1) + ' of ' + section.total;
+  // The chapter title the book itself gives this spot, falling back to
+  // a plain count when the navigation has no entry covering it.
+  const tocItem = location.tocItem;
+  if (tocItem && tocItem.label) {
+    chapterText.textContent = tocItem.label.trim();
+  } else {
+    const section = location.section || {};
+    if (typeof section.current === 'number' && section.total) {
+      chapterText.textContent =
+        'Chapter ' + (section.current + 1) + ' of ' + section.total;
+    }
+  }
+  markTOC(tocItem);
+}
+
+// ------------------------------------------------------- contents
+
+// buildTOC turns the publication's navigation into the drawer's list.
+// Labels are set as text, never as markup — the TOC is publication
+// content like everything else. Entries without an href (bare section
+// headings) render as labels that cannot be followed.
+function buildTOC(items) {
+  tocList.textContent = '';
+  if (!items || !items.length) {
+    if (tocButton) tocButton.hidden = true;
+    return;
+  }
+  const make = (list) => {
+    const ul = document.createElement('ul');
+    for (const item of list || []) {
+      const li = document.createElement('li');
+      if (item.href) {
+        const a = document.createElement('a');
+        a.href = '#';
+        a.textContent = (item.label || '').trim() || item.href;
+        a.dataset.href = item.href;
+        li.append(a);
+      } else {
+        const span = document.createElement('span');
+        span.textContent = (item.label || '').trim();
+        li.append(span);
+      }
+      if (item.subitems && item.subitems.length) li.append(make(item.subitems));
+      ul.append(li);
+    }
+    return ul;
+  };
+  tocList.append(make(items));
+}
+
+function markTOC(tocItem) {
+  if (!tocList) return;
+  const before = tocList.querySelector('a.current');
+  if (before) before.classList.remove('current');
+  if (!tocItem || !tocItem.href) return;
+  for (const a of tocList.querySelectorAll('a')) {
+    if (a.dataset.href === tocItem.href) {
+      a.classList.add('current');
+      break;
+    }
   }
 }
+
+function toggleTOC(open) {
+  const want = typeof open === 'boolean' ? open : tocPanel.hidden;
+  tocPanel.hidden = !want;
+  if (want) {
+    const current = tocList.querySelector('a.current') || tocList.querySelector('a');
+    if (current) current.focus();
+    if (current) current.scrollIntoView({ block: 'center' });
+  }
+}
+
+if (tocButton) tocButton.addEventListener('click', () => toggleTOC());
+// A click anywhere outside the drawer puts it away, the way a drawer
+// behaves everywhere else.
+document.addEventListener('click', (e) => {
+  if (!tocPanel || tocPanel.hidden) return;
+  if (tocPanel.contains(e.target)) return;
+  if (tocButton && tocButton.contains(e.target)) return;
+  toggleTOC(false);
+});
+tocList.addEventListener('click', (e) => {
+  const a = e.target && e.target.closest && e.target.closest('a[data-href]');
+  if (!a) return;
+  e.preventDefault();
+  toggleTOC(false);
+  if (view) view.goTo(a.dataset.href).catch(() => {});
+});
 
 // stripScripts removes the publication's own code from every resource
 // before the engine turns it into a blob URL. The page CSP is what
@@ -569,6 +655,7 @@ document.getElementById('reader-prev').addEventListener('click', () => turn(-1))
 // stay untouched, because those land in the frame, not here.
 stage.addEventListener('click', (e) => {
   if (!view) return;
+  if (tocPanel && !tocPanel.hidden) return; // the click puts the drawer away
   if (e.target !== stage && e.target !== view) return;
   const box = stage.getBoundingClientRect();
   turn(e.clientX < box.left + box.width / 2 ? -1 : 1);
@@ -590,6 +677,16 @@ function handleKeys(e) {
   }
   if (e.key === 'Escape' && settingsPanel && settingsPanel.open) {
     settingsPanel.open = false;
+    return;
+  }
+  // While the contents drawer is up it owns the keyboard: Tab walks
+  // it, Enter follows, Escape or t puts it away — and nothing leaks
+  // through to turn a page underneath it.
+  if (tocPanel && !tocPanel.hidden) {
+    if (e.key === 'Escape' || e.key === 't') {
+      e.preventDefault();
+      toggleTOC(false);
+    }
     return;
   }
   // "?" summons the help from anywhere, including from inside a
@@ -626,6 +723,10 @@ function handleKeys(e) {
     case 'k':
       e.preventDefault();
       turn(-1);
+      break;
+    case 't':
+      e.preventDefault();
+      toggleTOC(true);
       break;
     case 'Home':
       if (view) view.goToFraction(0);
@@ -670,6 +771,7 @@ window.addEventListener('beforeunload', () => {
     });
     await view.open(new File([blob], 'book.epub', { type: 'application/epub+zip' }));
     stripScripts(view.book);
+    buildTOC(view.book.toc);
     // The renderer exists once the book is open; settings applied here
     // shape the very first page rather than repainting it.
     applySettings();

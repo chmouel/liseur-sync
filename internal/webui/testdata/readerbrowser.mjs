@@ -160,7 +160,8 @@ check('no error banner', !diag.status, diag.status);
 check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
   `doc=${diag.hasDoc} text=${JSON.stringify(diag.text)}`);
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
-check('reader knows the spine', /^Chapter 1 of (\d+)$/.test(diag.chapter), diag.chapter);
+check('reader shows the book: own chapter label',
+  diag.chapter === 'Title Page', diag.chapter);
 // The chapter frame lives in a closed shadow root: nothing on the
 // page — including anything a publication managed to smuggle onto it —
 // can reach in by DOM query.
@@ -300,6 +301,48 @@ check('the reading keys are parked while help is up',
   heldStill.fraction === unspaced.fraction,
   `${unspaced.fraction} -> ${heldStill.fraction}`);
 check('the help closes', helpClosed === true, String(helpClosed));
+
+// The contents drawer: "t" opens it, its entries come from the book's
+// own nav document (nested entry included), a click on one jumps
+// there, and Escape puts the drawer away.
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+})()`);
+const toc = JSON.parse(await evalIn(`JSON.stringify((() => {
+  const panel = document.getElementById('reader-toc');
+  return {
+    open: !panel.hidden,
+    entries: [...panel.querySelectorAll('a')].map((a) => a.textContent),
+  };
+})())`));
+check('"t" opens the contents drawer', toc.open === true, String(toc.open));
+check('the drawer lists the book: own contents',
+  toc.entries.includes('Loomings') && toc.entries.includes('The Spouter-Inn'),
+  toc.entries.join(' | '));
+const beforeJump = JSON.parse(await evalIn(probe));
+await evalIn(`(() => {
+  for (const a of document.getElementById('reader-toc').querySelectorAll('a')) {
+    if (a.textContent === 'Chowder') { a.click(); return; }
+  }
+})()`);
+await new Promise((r) => setTimeout(r, 1200));
+const jumped = JSON.parse(await evalIn(probe));
+const tocGone = await evalIn(`document.getElementById('reader-toc').hidden`);
+check('a contents entry jumps there',
+  jumped.chapter === 'Chowder' && jumped.cfi !== beforeJump.cfi,
+  `${beforeJump.chapter} -> ${jumped.chapter}`);
+check('the jump closes the drawer', tocGone === true, String(tocGone));
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+})()`);
+const currentMarked = await evalIn(
+  `document.querySelector('#reader-toc a.current')?.textContent ?? ''`);
+check('the drawer marks where the reader is', currentMarked === 'Chowder', currentMarked);
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+})()`);
+const tocClosed = await evalIn(`document.getElementById('reader-toc').hidden`);
+check('Escape closes the drawer', tocClosed === true, String(tocClosed));
 
 // The first chapter carries the full hostile battery: an inline script,
 // a script inside an SVG island, an external script pointing at a real
