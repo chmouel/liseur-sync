@@ -109,8 +109,20 @@ func browserTestEPUB(t *testing.T) []byte {
 			`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">` +
 			`<script>document.documentElement.dataset.svgRan = "yes";</script></svg>` +
 			body + `</div></div></body></html>`,
+		// A real EPUB 3 nav document: the reader's contents drawer is
+		// built from this, entry labels shown as-is, one entry nested to
+		// prove subitems survive the trip.
+		"OEBPS/nav.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">` +
+			`<head><title>Contents</title></head><body><nav epub:type="toc"><h1>Contents</h1><ol>` +
+			`<li><a href="pagetitre.xhtml">Title Page</a></li>` +
+			`<li><a href="chapter1.xhtml">Loomings</a></li>` +
+			`<li><a href="chapter2.xhtml">The Carpet-Bag</a>` +
+			`<ol><li><a href="chapter3.xhtml">The Spouter-Inn</a></li></ol></li>` +
+			`<li><a href="chapter5.xhtml">Chowder</a></li>` +
+			`</ol></nav></body></html>`,
 	}
-	manifest := `<item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
+	manifest := `<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
     <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
 	spine := `<itemref idref="tp"/><itemref idref="c1"/>`
 	for i := 2; i <= browserTestChapters; i++ {

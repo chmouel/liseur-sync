@@ -546,6 +546,22 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .reader-help kbd{background:var(--surface-3);border:1px solid var(--line);
   border-radius:4px;padding:.05rem .35rem;font-size:.8rem;font-family:inherit}
 .reader-help form{margin:.8rem 0 0;text-align:right}
+.reader-toc-button{border:1px solid var(--line);border-radius:6px;background:transparent;
+  color:inherit;cursor:pointer;padding:.1rem .55rem;font-size:1rem;line-height:1.4}
+.reader-toc-button:hover{background:var(--surface-3)}
+.reader-toc{position:fixed;top:0;bottom:0;left:0;z-index:60;
+  width:min(22rem,85vw);overflow-y:auto;padding:1rem 1.1rem;
+  background:var(--surface);border-right:1px solid var(--line);
+  box-shadow:0 0 32px rgba(0,0,0,.45);font-size:.9rem}
+.reader-toc h2{margin:0 0 .6rem;font-size:1rem}
+.reader-toc ul{list-style:none;margin:0;padding:0}
+.reader-toc ul ul{padding-left:1rem}
+.reader-toc li{margin:0}
+.reader-toc a,.reader-toc span{display:block;padding:.3rem .45rem;border-radius:6px;
+  color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-toc span{opacity:.65}
+.reader-toc a:hover,.reader-toc a:focus-visible{background:var(--surface-3)}
+.reader-toc a.current{background:var(--surface-3);color:var(--primary);font-weight:600}
 .reader-stage{flex:1;display:flex;min-height:0}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;

@@ -49,6 +49,13 @@ templ readerPage(v ReaderView, csrf string) {
 				hidden
 			></div>
 			<header class="reader-bar">
+				<button
+					type="button"
+					id="reader-toc-button"
+					class="reader-toc-button"
+					title="Table of contents (t)"
+					aria-label="Table of contents"
+				>&#9776;</button>
 				<a class="reader-back" href={ templ.SafeURL(v.BackURL) }>&larr; Back</a>
 				<div class="reader-title">
 					<strong id="reader-title-text">{ v.Title }</strong>
@@ -126,6 +133,15 @@ templ readerPage(v ReaderView, csrf string) {
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
 			<p id="reader-status" class="reader-status">Loading…</p>
+			// The table of contents, filled in from the publication's own
+			// navigation once the book is open. A drawer over the left
+			// edge, the way Komga does it: every entry is the book's, so
+			// the labels arrive as text nodes only — nothing a publication
+			// writes here is markup.
+			<aside id="reader-toc" class="reader-toc" aria-label="Table of contents" hidden>
+				<h2>Contents</h2>
+				<nav id="reader-toc-list"></nav>
+			</aside>
 			<div class="reader-stage">
 				<button id="reader-prev" class="reader-turn" type="button" aria-label="Previous page">&lsaquo;</button>
 				// foliate-js (ADR-0012) mounts its <foliate-view> element
@@ -150,8 +166,9 @@ templ readerPage(v ReaderView, csrf string) {
 						<tr><td><kbd>&rarr;</kbd> <kbd>&larr;</kbd>, <kbd>PgDn</kbd> <kbd>PgUp</kbd></td><td>Next / previous page</td></tr>
 						<tr><td><kbd>l</kbd> <kbd>h</kbd>, <kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous page</td></tr>
 						<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Beginning / end of book</td></tr>
+						<tr><td><kbd>t</kbd></td><td>Table of contents</td></tr>
 						<tr><td><kbd>?</kbd></td><td>This help</td></tr>
-						<tr><td><kbd>Esc</kbd></td><td>Close help or settings</td></tr>
+						<tr><td><kbd>Esc</kbd></td><td>Close help, contents or settings</td></tr>
 					</tbody>
 				</table>
 				<form method="dialog"><button>Close</button></form>
