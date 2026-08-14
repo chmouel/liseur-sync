@@ -16,11 +16,17 @@ type DayCell struct {
 	Minutes float64
 }
 
-templ dashboard(prefix string, u userCtx, csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {
-	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, heatmap, recent))
+templ dashboard(
+	prefix string, u userCtx, csrf string,
+	sum SummaryData, heatmap []DayCell, recent []SessionRow, reading []WorkRow,
+) {
+	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, heatmap, recent, reading))
 }
 
-templ dashboardBody(prefix string, csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {
+templ dashboardBody(
+	prefix string, csrf string,
+	sum SummaryData, heatmap []DayCell, recent []SessionRow, reading []WorkRow,
+) {
 	<h1>Dashboard</h1>
 	<section class="cards">
 		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes ({ i2s(sum.RangeDays) }d)</span></div>
@@ -30,6 +36,17 @@ templ dashboardBody(prefix string, csrf string, sum SummaryData, heatmap []DayCe
 		<div class="stat"><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
 		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak</span></div>
 	</section>
+
+	if len(reading) > 0 {
+		<section class="card">
+			<h2>Continue reading</h2>
+			<div class="grid shelf">
+				for _, w := range reading {
+					@workCard(prefix, w)
+				}
+			</div>
+		</section>
+	}
 
 	<section class="card">
 		<h2>This year</h2>

@@ -343,3 +343,52 @@ func TestEntityPagesAreScopedToTheTenant(t *testing.T) {
 		}
 	}
 }
+
+// TestBookPageShowsEntityChipsToAReader pins the detail hero (ADR-0011):
+// the fastest route from a book to the rest of its author is a link on
+// the book, and it is a fact about the book rather than a librarian's
+// privilege — so a read-only grantee gets it too, without getting the
+// edit form that reveals where each value came from.
+func TestBookPageShowsEntityChipsToAReader(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := bookWithMetadata(t, f, "chipped")
+	_, html := f.get(t, "/ui/books/"+bookID, f.cookie)
+	resp := saveMetadata(t, f, f.cookie, bookID, url.Values{
+		"csrf":             {csrfFrom(t, html)},
+		"title":            {"Dune"},
+		"title_was":        {""},
+		"contributors":     {"Frank Herbert (author)"},
+		"contributors_was": {""},
+		"series":           {"Dune #1"},
+		"series_was":       {""},
+		"tags":             {"Desert"},
+		"tags_was":         {""},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save: %d", resp.StatusCode)
+	}
+
+	if err := f.st.GrantLibraryAccess(t.Context(), "u1", f.library, "u2",
+		store.LibraryRoleRead, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	bob := f.login(t, "bob")
+	_, page := f.get(t, "/ui/books/"+bookID, bob)
+
+	for _, want := range []string{
+		"Frank Herbert", "Dune", "Desert",
+		"/contributors/", "/series/", "/tags/",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the book page does not show %q", want)
+		}
+	}
+	// The byline is the authors, not every contributor.
+	if !strings.Contains(page, `class="byline">Frank Herbert<`) {
+		t.Error("the hero has no byline")
+	}
+	// A reader is still not told where each value came from.
+	if strings.Contains(page, "Correct this book") {
+		t.Error("a read-only grantee was offered the edit form")
+	}
+}

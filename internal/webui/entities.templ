@@ -22,6 +22,9 @@ type EntitiesView struct {
 	CanWrite bool
 	Notice   string
 	Problem  string
+	// View and Back drive the grid/list toggle, as on the books page.
+	View string
+	Back string
 }
 
 type EntityBooksView struct {
@@ -31,6 +34,8 @@ type EntityBooksView struct {
 	Singular  string
 	Books     []BookRow
 	NextURL   string
+	View      string
+	Back      string
 }
 
 templ entitiesPage(prefix string, u userCtx, csrf string, v EntitiesView) {
@@ -38,7 +43,11 @@ templ entitiesPage(prefix string, u userCtx, csrf string, v EntitiesView) {
 }
 
 templ entitiesBody(prefix, csrf string, v EntitiesView) {
-	<h1>{ v.Heading }</h1>
+	<div class="toolbar">
+		<h1>{ v.Heading }</h1>
+		<span class="spacer"></span>
+		@viewToggle(prefix, csrf, v.Back, v.View)
+	</div>
 	if v.Problem != "" {
 		<p class="error" role="alert">{ v.Problem }</p>
 	}
@@ -50,6 +59,12 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 			<p class="muted">
 				Nothing here yet. These appear as books are added and read.
 			</p>
+		} else if v.View == viewGrid {
+			<div class="grid">
+				for _, e := range v.Entities {
+					@entityCard(prefix, csrf, v, e)
+				}
+			</div>
 		} else {
 			<table>
 				<tr>
@@ -127,14 +142,24 @@ templ mergeForm(prefix, csrf string, v EntitiesView) {
 }
 
 templ entityBooksPage(prefix string, u userCtx, csrf string, v EntityBooksView) {
-	@layout(v.Heading, prefix, u, csrf, entityBooksBody(prefix, v))
+	@layout(v.Heading, prefix, u, csrf, entityBooksBody(prefix, csrf, v))
 }
 
-templ entityBooksBody(prefix string, v EntityBooksView) {
-	<h1>{ v.Heading }</h1>
+templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
+	<div class="toolbar">
+		<h1>{ v.Heading }</h1>
+		<span class="spacer"></span>
+		@viewToggle(prefix, csrf, v.Back, v.View)
+	</div>
 	<section class="card">
 		if len(v.Books) == 0 {
 			<p class="muted">Nothing here — every book that used this is in the trash.</p>
+		} else if v.View == viewGrid {
+			<div class="grid">
+				for _, b := range v.Books {
+					@bookCard(prefix, csrf, v.LibraryID, false, b)
+				}
+			</div>
 		} else {
 			<table>
 				<tr><th>Title</th><th>Added</th></tr>

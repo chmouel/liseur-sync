@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,10 +82,48 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 				EndProg:   ses.EndProg,
 			})
 		}
-		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), sum, heat, recent).Render(r.Context(), w)
+		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
+			sum, heat, recent, continueReading(works, loc)).Render(r.Context(), w)
 		return
 	}
-	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), sum, nil, nil).Render(r.Context(), w)
+	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
+		sum, nil, nil, continueReading(works, loc)).Render(r.Context(), w)
+}
+
+// continueReadingLimit is a shelf, not a list: the point is to get back
+// into the book you put down, and a wall of half-read books is a guilt
+// trip rather than a shortcut.
+const continueReadingLimit = 8
+
+// continueReading is the works that are started and not finished, newest
+// first. It reads nothing extra — the dashboard has already listed the
+// works to name them in the session table.
+func continueReading(works []store.WorkSummary, loc *time.Location) []WorkRow {
+	started := make([]store.WorkSummary, 0, len(works))
+	for _, ws := range works {
+		if ws.Progression == nil || *ws.Progression <= 0 || *ws.Progression >= 0.999 {
+			continue
+		}
+		if ws.LastActive == nil {
+			continue
+		}
+		started = append(started, ws)
+	}
+	sort.Slice(started, func(i, j int) bool {
+		return started[i].LastActive.After(*started[j].LastActive)
+	})
+	if len(started) > continueReadingLimit {
+		started = started[:continueReadingLimit]
+	}
+	rows := make([]WorkRow, 0, len(started))
+	for _, ws := range started {
+		rows = append(rows, WorkRow{
+			ID: ws.Work.ID, Title: ws.Work.Title, Author: ws.Work.Author,
+			Progression: ws.Progression, Pending: ws.Pending,
+			LastActive: ws.LastActive.In(loc).Format("Jan 2"),
+		})
+	}
+	return rows
 }
 
 func userLoc(u *store.User) *time.Location {

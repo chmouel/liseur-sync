@@ -82,7 +82,7 @@ func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 		t.Error("an EPUB in the library is not offered to the reader")
 	}
 	_, detail := f.get(t, "/ui/books/"+bookID, f.cookie)
-	if !strings.Contains(detail, "Read in the browser") {
+	if !strings.Contains(detail, "books/"+bookID+"/read") {
 		t.Error("the book page does not offer to open the book")
 	}
 }

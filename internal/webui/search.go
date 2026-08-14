@@ -48,6 +48,7 @@ func (s *Server) handleSearch(
 		LibraryName: lib.Library.Name,
 		Query:       text,
 		Filters:     filters,
+		View:        readPrefs(r).View,
 	}
 	// An empty page is what somebody who has only just arrived should
 	// see: asking the store for every book would answer a question they

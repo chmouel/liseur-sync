@@ -15,7 +15,7 @@ import (
 func facetLink(t *testing.T, html, name string) string {
 	t.Helper()
 	pattern := regexp.MustCompile(
-		`href="([^"]*search\?[^"]*)"[^>]*>` + regexp.QuoteMeta(name) + `<`)
+		`href="([^"]*search\?[^"]*)"[^>]*>\s*` + regexp.QuoteMeta(name) + `\s*<`)
 	m := pattern.FindStringSubmatch(html)
 	if m == nil {
 		t.Fatalf("no facet link for %q in:\n%s", name, html)

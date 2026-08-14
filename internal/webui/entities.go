@@ -65,7 +65,11 @@ func (s *Server) handleEntities(
 		Singular:  labels.One,
 		Notice:    r.URL.Query().Get("notice"),
 		Problem:   r.URL.Query().Get("problem"),
+		View:      readPrefs(r).View,
 	}
+	// The view toggle returns here. A relative target is resolved by the
+	// browser against this URL, so the kind segment alone is this page.
+	v.Back = url.PathEscape(v.Kind)
 	// Only a librarian is offered rename and merge, for the same reason
 	// they are the only one offered the trash: these are decisions about
 	// the library rather than facts about a book.
@@ -119,6 +123,8 @@ func (s *Server) handleEntityBooks(
 		Kind:      r.PathValue("kind"),
 		Heading:   entity.Name,
 		Singular:  entityKindLabels[kind].One,
+		View:      readPrefs(r).View,
+		Back:      url.PathEscape(entityID),
 	}
 	for _, b := range books {
 		v.Books = append(v.Books, BookRow{

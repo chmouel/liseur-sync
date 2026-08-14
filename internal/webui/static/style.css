@@ -418,6 +418,9 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .p80 { width: 80% } .p85 { width: 85% } .p90 { width: 90% } .p95 { width: 95% }
 .p100 { width: 100% }
 
+/* A shelf is a grid that does not want to be tall: fewer, wider tiles. */
+.shelf { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); }
+
 /* The endless-scroll sentinel: a plain link until htmx reaches it. */
 .more { grid-column: 1 / -1; text-align: center; padding: .8rem 0; }
 
