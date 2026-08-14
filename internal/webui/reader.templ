@@ -139,6 +139,23 @@ templ readerPage(v ReaderView, csrf string) {
 				<div id="reader-view"></div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>
+			// The keyboard help, summoned with "?" like everywhere else. A
+			// native dialog: showModal gives focus trapping and Escape for
+			// free, so the script only has to open and close it.
+			<dialog id="reader-help" class="reader-help" aria-label="Keyboard shortcuts">
+				<h2>Keyboard shortcuts</h2>
+				<table>
+					<tbody>
+						<tr><td><kbd>Space</kbd> / <kbd>Shift</kbd>+<kbd>Space</kbd></td><td>Next / previous page</td></tr>
+						<tr><td><kbd>&rarr;</kbd> <kbd>&larr;</kbd>, <kbd>PgDn</kbd> <kbd>PgUp</kbd></td><td>Next / previous page</td></tr>
+						<tr><td><kbd>l</kbd> <kbd>h</kbd>, <kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous page</td></tr>
+						<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Beginning / end of book</td></tr>
+						<tr><td><kbd>?</kbd></td><td>This help</td></tr>
+						<tr><td><kbd>Esc</kbd></td><td>Close help or settings</td></tr>
+					</tbody>
+				</table>
+				<form method="dialog"><button>Close</button></form>
+			</dialog>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>
 	</html>

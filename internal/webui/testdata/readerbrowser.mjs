@@ -281,6 +281,26 @@ check('shift+space inside the chapter turns back',
   unspaced.fraction < spaced.fraction,
   `${spaced.fraction} -> ${unspaced.fraction}`);
 
+// "?" summons the keyboard help; while it is up the reading keys are
+// parked (space must not turn the page under the dialog); Escape puts
+// it away — the native dialog owns that.
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '?', shiftKey: true, bubbles: true }));
+})()`);
+const helpOpen = await evalIn(`document.getElementById('reader-help').open`);
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 600));
+const heldStill = JSON.parse(await evalIn(probe));
+await evalIn(`document.getElementById('reader-help').close()`);
+const helpClosed = await evalIn(`!document.getElementById('reader-help').open`);
+check('"?" opens the keyboard help', helpOpen === true, String(helpOpen));
+check('the reading keys are parked while help is up',
+  heldStill.fraction === unspaced.fraction,
+  `${unspaced.fraction} -> ${heldStill.fraction}`);
+check('the help closes', helpClosed === true, String(helpClosed));
+
 // The first chapter carries the full hostile battery: an inline script,
 // a script inside an SVG island, an external script pointing at a real
 // same-origin file, and an attempt to retitle the parent page. Jump

@@ -581,6 +581,7 @@ stage.addEventListener('click', (e) => {
 // alone goes deaf — the engine re-emits its load event per chapter, so
 // each document gets wired as it arrives.
 function handleKeys(e) {
+  const helpDialog = document.getElementById('reader-help');
   // Arrow keys inside the settings panel adjust its controls, not the
   // book; Escape puts the panel away from the keyboard.
   if (settingsPanel && settingsPanel.contains(e.target)) {
@@ -591,6 +592,16 @@ function handleKeys(e) {
     settingsPanel.open = false;
     return;
   }
+  // "?" summons the help from anywhere, including from inside a
+  // chapter document; the native dialog owns Escape and focus while
+  // it is up.
+  if (e.key === '?' && helpDialog && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    if (helpDialog.open) helpDialog.close();
+    else helpDialog.showModal();
+    return;
+  }
+  if (helpDialog && helpDialog.open) return;
   // Modified keys belong to the browser, and keys aimed at a form
   // field belong to the field.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
