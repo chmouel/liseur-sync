@@ -42,13 +42,13 @@ func findChrome() string {
 }
 
 // browserTestEPUB is a small but real publication, and it is deliberately
-// awkward in the way real books are. Twelve spine documents, a separate
-// stylesheet, a chapter long enough to need several pages — and a heading
+// awkward in the way real books are. A title page living entirely inside
+// position:absolute, twelve chapters, a separate stylesheet, a chapter
+// long enough to need several pages — and a heading
 // parked at left: -9999px, the trick publishers use to speak to a screen
-// reader without showing anything. That last detail is the fixture's whole
-// reason for being this shape: a book with it laid out thirty thousand
-// pixels wide and would not turn past its first section, and a two-chapter
-// fixture without it saw nothing wrong.
+// reader without showing anything. Those layout details are the fixture's
+// whole reason for being this shape: each one, in a real book, produced
+// an engine that laid pages out wrong or not at all (ADR-0012).
 func browserTestEPUB(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -72,7 +72,19 @@ func browserTestEPUB(t *testing.T) []byte {
   <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
 </container>`,
 		"OEBPS/style.css": "body { color: rgb(17, 34, 51); }\n" +
-			".offscreen { position: absolute; left: -9999px; width: 1px; overflow: hidden; }",
+			".offscreen { position: absolute; left: -9999px; width: 1px; overflow: hidden; }\n" +
+			".sectionpp { position: absolute; top: 0; left: 0; height: 100%; width: 100%; overflow: hidden; }",
+		// The other publisher trick this fixture pins down: a title page
+		// whose entire content sits inside position:absolute. An engine
+		// that measures the document's bounding boxes to size its page
+		// sees zero width and paints a blank page — the failure that
+		// retired epub.js here (ADR-0012).
+		"OEBPS/pagetitre.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+			`<head><link rel="stylesheet" href="style.css"/>` +
+			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
+			`</head><body>` +
+			`<div class="sectionpp"><p>A title page, absolutely positioned, the way real publishers ship them.</p></div>` +
+			`</body></html>`,
 		// The script is the test: a publication that tries to act must
 		// not be able to. It marks the document, and the browser check
 		// asserts the mark is absent.
@@ -81,8 +93,9 @@ func browserTestEPUB(t *testing.T) []byte {
 			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
 			`</head><body>` + offscreen + body + `</body></html>`,
 	}
-	manifest := `<item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
-	spine := `<itemref idref="c1"/>`
+	manifest := `<item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
+	spine := `<itemref idref="tp"/><itemref idref="c1"/>`
 	for i := 2; i <= browserTestChapters; i++ {
 		name := fmt.Sprintf("chapter%d.xhtml", i)
 		files["OEBPS/"+name] = `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +

@@ -94,16 +94,20 @@ func (s *Server) handleReaderToken(w http.ResponseWriter, r *http.Request, a sto
 // The policy has to admit two things the rendering engine needs, and
 // nothing else.
 //
-// `blob:` is how epub.js hands each chapter to its iframe and how it
-// rewrites the publication's own images and stylesheets. A blob document
-// inherits the policy of whatever created it, so this header is what
-// confines the publication as well as the page.
+// `blob:` is how foliate-js hands each chapter to its iframe and how
+// it rewrites the publication's own images and stylesheets. A blob
+// document inherits the policy of whatever created it, so this header
+// is what confines the publication as well as the page.
 //
 // `style-src 'unsafe-inline'` is unavoidable: a book's own markup
 // carries style attributes, and there is no nonce to give markup that
 // arrived in a zip file. `script-src` deliberately has no such hole —
-// the engine is served from here, and the publication's scripts never
-// run at all, because the iframe is sandboxed without allow-scripts.
+// the engine is served from here as ES modules, and the publication's
+// scripts never run at all: the frame's sandbox does carry
+// allow-scripts (the engine needs its own events inside it), so this
+// directive, inherited by every blob chapter, is the barrier, with the
+// reader stripping script elements from each resource besides
+// (ADR-0012).
 //
 // apiOrigin widens `connect-src` by exactly one origin, and only on the
 // separate reader origin, where the API is somewhere else by design. It

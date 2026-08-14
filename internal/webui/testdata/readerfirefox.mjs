@@ -137,20 +137,25 @@ if (detached) {
   check('the reader origin holds no cookie', at.cookie === '', at.cookie);
 }
 
+// foliate-js keeps its frames in closed shadow roots, so the probe
+// goes through the engine's public API rather than DOM queries.
 const probe = `(() => {
-  const frame = document.querySelector('#reader-view iframe');
-  const doc = frame && frame.contentDocument;
-  const body = doc && doc.body;
+  const view = document.querySelector('foliate-view');
+  const contents = view?.renderer?.getContents?.() ?? [];
+  const doc = contents[0]?.doc;
+  const body = doc?.body;
+  const loc = view?.lastLocation;
   return JSON.stringify({
     status: document.getElementById('reader-status')?.textContent,
     chapter: document.getElementById('reader-chapter')?.textContent,
     progress: document.getElementById('reader-progress-text')?.textContent,
     title: document.getElementById('reader-title-text')?.textContent,
-    hasFrame: !!frame,
-    sandbox: frame ? frame.getAttribute('sandbox') : null,
+    hasDoc: !!doc,
+    frameReachable: !!document.querySelector('#reader-view iframe'),
     text: body ? (body.innerText || '').slice(0, 60) : '',
-    colour: body ? getComputedStyle(body).color : '',
-    scroll: document.querySelector('#reader-view .epub-container')?.scrollLeft ?? -1,
+    colour: body ? doc.defaultView.getComputedStyle(body).color : '',
+    fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
+    cfi: loc?.cfi || '',
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
   });
 })()`;
@@ -160,8 +165,8 @@ const diag = JSON.parse(await evalIn(probe));
 console.log('diag:', JSON.stringify(diag));
 
 check('no error banner', !diag.status, diag.status);
-check('the engine rendered a chapter', diag.hasFrame && diag.text.length > 10,
-  `frame=${diag.hasFrame} text=${JSON.stringify(diag.text)}`);
+check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
+  `doc=${diag.hasDoc} text=${JSON.stringify(diag.text)}`);
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
 check('reader knows the spine', /^Chapter 1 of (\d+)$/.test(diag.chapter), diag.chapter);
 check('publication stylesheet was applied',
@@ -174,13 +179,31 @@ for (let i = 0; i < 10; i++) {
   await evalIn(`document.getElementById('reader-next').click()`);
   await new Promise((r) => setTimeout(r, 900));
   const now = JSON.parse(await evalIn(probe));
-  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, scroll: now.scroll });
+  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi });
 }
 console.log('page turns:', JSON.stringify(seen, null, 1));
-const distinct = new Set(seen.map((p) => p.chapter + '|' + p.progress + '|' + p.scroll)).size;
+const distinct = new Set(seen.map((p) => p.chapter + '|' + p.fraction + '|' + p.cfi)).size;
 check('the book pages past page 2', distinct >= 6, `${distinct} distinct pages in 10 turns`);
 check('the reader leaves the first chapter',
   seen.some((p) => p.chapter !== diag.chapter), seen.map((p) => p.chapter).join(' '));
+
+// Same appearance round-trip as the Chromium harness: dark theme in,
+// publisher styling back out.
+at('appearance settings');
+await evalIn(`(() => {
+  const radio = document.querySelector('#reader-settings-form input[name="theme"][value="dark"]');
+  radio.checked = true;
+  radio.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 700));
+const themed = JSON.parse(await evalIn(probe));
+check('the dark theme restyles the publication',
+  themed.colour.replace(/\s/g, '') === 'rgb(207,207,212)', themed.colour);
+await evalIn(`document.getElementById('reader-settings-reset').click()`);
+await new Promise((r) => setTimeout(r, 700));
+const unthemed = JSON.parse(await evalIn(probe));
+check('reset restores the publisher styling',
+  unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
 
 if (process.env.SMOKE_SHOT) {
   const shot = await send('browsingContext.captureScreenshot', { context });
@@ -190,12 +213,13 @@ if (process.env.SMOKE_SHOT) {
 // Chromium says out loud that it refused to run the publication's
 // script. Firefox reports the same refusal as a policy violation, and
 // BiDi's log channel carries console calls and script errors only — a
-// violation never reaches it. So state the refusal as what it is rather
-// than as something a browser happens to print: the frame is sandboxed
-// without allow-scripts, and the publication's script did not run.
-const sandbox = diag.sandbox || '';
-check('the publication is sandboxed',
-  sandbox.includes('allow-same-origin'), JSON.stringify(diag.sandbox));
+// violation never reaches it. So state the refusal structurally: the
+// chapter frame is unreachable from the page (closed shadow root), the
+// reader stripped the publication's script elements, and the page CSP
+// — inherited by every blob chapter — refuses whatever stripping might
+// miss. What can be observed from here is that the script did not run.
+check('the chapter frame is not reachable from the page',
+  diag.frameReachable === false, String(diag.frameReachable));
 check('the browser refused to run the publication', diag.ran === false,
   String(diag.ran));
 const unexpected = consoleErrors.filter((e) => !/Content-Security-Policy|Blocked script/i.test(e));

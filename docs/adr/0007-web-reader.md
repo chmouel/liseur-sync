@@ -165,12 +165,25 @@ was not: the hand-written renderer could not turn past the second page of
 a real book, and each fix revealed the next thing a reading engine is
 expected to already know.
 
-So the engine is vendored. `epub.min.js` (BSD-3) and `jszip.min.js` (MIT)
-sit beside the other static assets, about 320 KB, pinned, with their
-licences next to them. The constraint that actually mattered is intact:
-**there is still no build step and still no CDN.** These are prebuilt
-single files, served from `/ui/static/vendor/` like everything else, and
-`go build` remains the whole toolchain. What was given up is "the
+So the engine is vendored. **Which engine has since changed:**
+[ADR-0012](0012-reader-engine-foliate.md) supersedes the rest of this
+section. The first vendored engine, epub.js with JSZip, kept the
+constraint that mattered — no build step, no CDN, prebuilt files served
+from `/ui/static/vendor/` with `go build` as the whole toolchain — but
+its design sizes a page by measuring the publication's own layout, and
+real publications defeated that three ways in a row: off-screen
+screen-reader headings, `srcdoc` sandbox script refusals, and title
+pages built entirely of `position: absolute`. The escape hatch named
+below (a Readium-style engine that paginates inside the frame's own
+viewport and measures nothing) is what ADR-0012 takes — via foliate-js,
+which does it client-side and so keeps this ADR's one-blob download,
+client-side unzip, CSP, token lifecycle and locator envelope exactly as
+written. The paragraphs that follow record why epub.js was chosen and
+what it cost, as history.
+
+The engine was `epub.min.js` (BSD-3) and `jszip.min.js` (MIT),
+beside the other static assets, about 320 KB, pinned, with their
+licences next to them. What was given up is "the
 repository writes all its own JavaScript", which was a preference, not a
 promise — and it bought pagination, a spine-wide progress model, CFI
 positions, and typography nobody here was going to write.
@@ -182,18 +195,20 @@ others — park a heading at `left: -9999px` so a screen reader announces
 what an eye does not see. That one element made a title page measure
 thirty-two thousand pixels wide: the reader turned the page correctly,
 onto forty-five blank columns, and looked exactly like the hand-written
-renderer it replaced. The fix is a `rendition.hooks.content` hook that
-measures only what is laid out on the page. It is worth being plain
-about the trade this exposes: Komga, which does the same job, does not
+renderer it replaced. The fix was a `rendition.hooks.content` hook that
+measured only what is laid out on the page. It is worth being plain
+about the trade this exposed: Komga, which does the same job, does not
 use epub.js — it runs a fork of R2D2BC, a Readium engine, which
 paginates inside the frame's own viewport and so has nothing to measure
-wrongly. That is the escape hatch if epub.js's sizing defeats us again;
-it costs an npm build step, which is why it is not the choice today.
+wrongly. That escape hatch was taken when epub.js's sizing was defeated
+a third time; ADR-0012 records how it was taken without the npm build
+step that made it not the choice at the time of writing.
 
-Neither library needs `unsafe-eval`: their `new Function` uses are in
-guarded fallback paths that the browser never reaches. This was checked
+Neither library needed `unsafe-eval`: their `new Function` uses were in
+guarded fallback paths that the browser never reached. This was checked
 before vendoring, because a CSP hole for a convenience path would have
-been a real cost.
+been a real cost — and the same check was repeated on foliate-js, with
+the same answer.
 
 What the reader still does not do: no full-text search inside a book, no
 annotations, no read-aloud. The locator envelope means those remain
