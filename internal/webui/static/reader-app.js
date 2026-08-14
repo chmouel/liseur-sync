@@ -188,11 +188,24 @@ function sectionProgression(location) {
 // push records where we are. Failure is deliberately quiet: losing a
 // position update is a smaller harm than an error banner over the page
 // every time a laptop lid closes, and the next page turn retries.
+//
+// The op log is append-only and idempotent by op id, so a retry of the
+// same position must replay the same id — a fresh id per attempt would
+// write the same place into history twice. A different position is a
+// different op and gets a new id; a 409 means this id already exists
+// with another payload, where replaying is the one thing that cannot
+// help.
+let retryOp = null;
+
 async function push() {
   if (!workID || !here) return;
   const locator = locatorFor(here);
+  const key = (locator.locations.fragments[0] || '') + '@' +
+    locator.locations.totalProgression;
+  const id = retryOp && retryOp.key === key ? retryOp.id : opID();
+  retryOp = { id, key };
   try {
-    await api('v1/ops', {
+    const resp = await api('v1/ops', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // keepalive lets the final flush outlive the page: without it a
@@ -200,7 +213,7 @@ async function push() {
       keepalive: true,
       body: JSON.stringify({
         ops: [{
-          op_id: opID(),
+          op_id: id,
           work_id: workID,
           client_ts: new Date().toISOString(),
           progression: locator.locations.totalProgression,
@@ -208,8 +221,9 @@ async function push() {
         }],
       }),
     });
+    if (resp.ok || resp.status === 409) retryOp = null;
   } catch (err) {
-    /* offline: the next page turn will carry the position instead */
+    /* offline: the next page turn retries this op under the same id */
   }
 }
 
@@ -247,19 +261,32 @@ function cfiOf(op) {
 // actually said — a CFI from this reader, or the resource another one
 // named — and falls back to the fraction every client agrees on, which
 // is why a book started on a phone opens in roughly the right place
-// here. The return value is whatever view.init can resolve: a CFI
-// string, an href, or a { fraction } object.
+// here. A stored pointer is only trusted after the engine confirms it
+// resolves against *this* copy of the book: a CFI written by another
+// engine or against another edition otherwise opens page one silently,
+// when the fraction beside it would have landed within a page of the
+// right place. The return value is whatever view.init can resolve.
 function startFrom(op) {
   if (!op) return null;
+  const resolves = (target) => {
+    try {
+      const resolved = view.resolveNavigation(target);
+      return resolved != null && typeof resolved.index === 'number' &&
+        !!view.book.sections[resolved.index];
+    } catch (err) {
+      return false;
+    }
+  };
   const cfi = cfiOf(op);
-  if (cfi) return cfi;
+  if (cfi && resolves(cfi)) return cfi;
   const locations = (op.locator && op.locator.locations) || {};
   const fraction = typeof locations.totalProgression === 'number'
     ? locations.totalProgression : op.progression;
   if (typeof fraction === 'number' && fraction > 0) {
     return { fraction: Math.min(0.999, fraction) };
   }
-  if (op.locator && op.locator.href) return op.locator.href;
+  const href = op.locator && op.locator.href;
+  if (href && resolves(href)) return href;
   return null;
 }
 
@@ -451,22 +478,47 @@ function paint(location) {
 // stripScripts removes the publication's own code from every resource
 // before the engine turns it into a blob URL. The page CSP is what
 // actually stops a book's script from running — a blob document
-// inherits this page's policy, and script-src has no hole in it — so
-// this is the second fence, and it also keeps the console clear of the
-// browser announcing refusals.
+// inherits this page's policy, and only the nonce this server minted
+// for its own module tag passes script-src — so this is the second
+// fence, and it also keeps the console clear of the browser announcing
+// refusals.
+//
+// Markup is stripped by parsing it, not by pattern-matching it: a
+// regex misses a script element in an SVG island, a namespace prefix,
+// or markup broken in just the way a parser would quietly repair. The
+// document is parsed exactly as the engine will parse it, every script
+// element in any namespace is removed, and what is serialized back is
+// what the parser saw — there is no second interpretation for hostile
+// markup to aim between. If the resource does not parse at all, the
+// engine will not render it either; it is replaced with the parse
+// error rather than passed through unexamined.
 function stripScripts(book) {
   if (!book || !book.transformTarget) return;
+  const parser = new DOMParser();
+  const serializer = new XMLSerializer();
+  const strip = (data, mime) => {
+    const doc = parser.parseFromString(data, mime);
+    if (doc.querySelector('parsererror')) {
+      return serializer.serializeToString(doc);
+    }
+    for (const el of [...doc.getElementsByTagName('script')]) el.remove();
+    for (const el of [...doc.getElementsByTagNameNS('*', 'script')]) el.remove();
+    return serializer.serializeToString(doc);
+  };
   book.transformTarget.addEventListener('data', (event) => {
     const detail = event.detail;
-    if (/\b(x-)?(javascript|ecmascript)\b/.test(detail.type || '')) {
+    const type = detail.type || '';
+    if (/\b(x-)?(javascript|ecmascript)\b/.test(type)) {
       detail.data = '';
       return;
     }
-    if (/\b(xhtml\+xml|html)\b/.test(detail.type || '')) {
+    const mime = /\bxhtml\+xml\b/.test(type) ? 'application/xhtml+xml'
+      : /\bsvg\+xml\b/.test(type) ? 'image/svg+xml'
+        : /\bhtml\b/.test(type) ? 'text/html'
+          : null;
+    if (mime) {
       detail.data = Promise.resolve(detail.data).then((data) =>
-        typeof data === 'string'
-          ? data.replace(/<script\b[\s\S]*?(?:<\/script\s*>|\/>)/gi, '')
-          : data);
+        typeof data === 'string' ? strip(data, mime) : data);
     }
   });
 }

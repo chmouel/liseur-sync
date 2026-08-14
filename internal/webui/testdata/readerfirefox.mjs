@@ -157,6 +157,9 @@ const probe = `(() => {
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
     cfi: loc?.cfi || '',
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
+    svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
+    extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
+    pageTitle: document.title,
   });
 })()`;
 
@@ -204,6 +207,18 @@ await new Promise((r) => setTimeout(r, 700));
 const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the publisher styling',
   unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
+
+// The same hostile battery as the Chromium harness, judged by Firefox.
+at('hostile chapter');
+await evalIn(`document.querySelector('foliate-view').goTo(1)`);
+await new Promise((r) => setTimeout(r, 900));
+const hostile = JSON.parse(await evalIn(probe));
+check('the inline script did not run', hostile.ran === false, String(hostile.ran));
+check('the SVG script did not run', hostile.svgRan === false, String(hostile.svgRan));
+check('the same-origin external script did not run',
+  hostile.extRan === false, String(hostile.extRan));
+check('the publication could not reach the parent page',
+  !String(hostile.pageTitle).includes('pwned'), hostile.pageTitle);
 
 if (process.env.SMOKE_SHOT) {
   const shot = await send('browsingContext.captureScreenshot', { context });

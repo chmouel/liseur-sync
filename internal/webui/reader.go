@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -26,7 +28,7 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 	prefix := relPrefix(r.URL.Path)
 	escaped := url.PathEscape(bookID)
 
-	setReaderPolicy(w, "")
+	nonce := setReaderPolicy(w, "")
 
 	readerPage(ReaderView{
 		BookID:      book.ID,
@@ -36,6 +38,7 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 		TokenURL:    prefix + "reader/token",
 		APIBase:     prefix + "../",
 		StaticBase:  prefix + "static/",
+		ScriptNonce: nonce,
 	}, csrfFor(a)).Render(r.Context(), w)
 }
 
@@ -101,25 +104,39 @@ func (s *Server) handleReaderToken(w http.ResponseWriter, r *http.Request, a sto
 //
 // `style-src 'unsafe-inline'` is unavoidable: a book's own markup
 // carries style attributes, and there is no nonce to give markup that
-// arrived in a zip file. `script-src` deliberately has no such hole —
-// the engine is served from here as ES modules, and the publication's
-// scripts never run at all: the frame's sandbox does carry
-// allow-scripts (the engine needs its own events inside it), so this
-// directive, inherited by every blob chapter, is the barrier, with the
-// reader stripping script elements from each resource besides
-// (ADR-0012).
+// arrived in a zip file. `script-src` gets the opposite treatment — a
+// per-response nonce plus 'strict-dynamic', so the only script that
+// runs anywhere under this policy is the module tag this server wrote
+// into this response and the imports that module makes. A publication
+// pointing a script tag at a same-origin URL gets nothing: 'self' is
+// listed only for old browsers, and everything that understands
+// 'strict-dynamic' ignores it. The frames the engine makes carry
+// allow-scripts (it needs its own events inside them), so this
+// directive — inherited by every blob: chapter document — is the
+// barrier, with the reader stripping script elements from each
+// resource besides (ADR-0012).
 //
 // apiOrigin widens `connect-src` by exactly one origin, and only on the
 // separate reader origin, where the API is somewhere else by design. It
 // is a checked bare origin or nothing; the caller does that checking.
-func setReaderPolicy(w http.ResponseWriter, apiOrigin string) {
+//
+// The returned nonce must be written into the page's own script tag and
+// nowhere else.
+func setReaderPolicy(w http.ResponseWriter, apiOrigin string) string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		// No randomness, no page: serving without a working nonce would
+		// silently downgrade the script policy to 'self'.
+		panic(err)
+	}
+	nonce := base64.StdEncoding.EncodeToString(raw)
 	connect := "connect-src 'self' blob:"
 	if apiOrigin != "" {
 		connect += " " + apiOrigin
 	}
 	w.Header().Set("Content-Security-Policy", strings.Join([]string{
 		"default-src 'none'",
-		"script-src 'self'",
+		"script-src 'self' 'nonce-" + nonce + "' 'strict-dynamic'",
 		"style-src 'self' 'unsafe-inline' blob:",
 		"img-src 'self' data: blob:",
 		"font-src data: blob:",
@@ -137,6 +154,7 @@ func setReaderPolicy(w http.ResponseWriter, apiOrigin string) {
 	}, "; "))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	return nonce
 }
 
 // boolAttr renders a bool as a data attribute the browser can read

@@ -9,9 +9,11 @@ import (
 // TestReaderPageIsolatesThePublication is the security half of
 // ADR-0007, checked on the page a browser actually receives.
 //
-// The reader's defence is not that the markup is cleaned; it is that
-// publication content is given an opaque origin and no network. Both of
-// those live in attributes and headers that are easy to drop in a
+// The reader's defence is the policy: publication content renders in
+// same-origin frames, and what keeps a book's script from running is a
+// nonce-gated script-src that every chapter document inherits, plus the
+// reader stripping script elements from each resource (ADR-0012). All
+// of that lives in headers and attributes that are easy to drop in a
 // refactor and produce no visible symptom when they are missing, which
 // is exactly why they are asserted here.
 func TestReaderPageIsolatesThePublication(t *testing.T) {
@@ -44,10 +46,32 @@ func TestReaderPageIsolatesThePublication(t *testing.T) {
 	}
 	// script-src is the one directive with no hole in it. A book's own
 	// markup carries style attributes, so style-src cannot be so strict;
-	// nothing in a publication is ever allowed to execute.
+	// nothing in a publication is ever allowed to execute. The nonce is
+	// per-response and must appear both in the header and on the page's
+	// one module tag — and nowhere else a publication could quote it
+	// from.
 	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") ||
 		strings.Contains(csp, "script-src 'self' blob:") {
 		t.Errorf("publication script would be allowed to run: %s", csp)
+	}
+	if !strings.Contains(csp, "'strict-dynamic'") {
+		t.Errorf("script-src is not nonce-gated with strict-dynamic: %s", csp)
+	}
+	nonceStart := strings.Index(csp, "'nonce-")
+	if nonceStart < 0 {
+		t.Fatalf("script-src carries no nonce: %s", csp)
+	}
+	nonceEnd := strings.Index(csp[nonceStart+7:], "'")
+	nonce := csp[nonceStart+7 : nonceStart+7+nonceEnd]
+	if len(nonce) < 16 {
+		t.Errorf("the CSP nonce is too short to be one: %q", nonce)
+	}
+	if !strings.Contains(page, `nonce="`+nonce+`"`) {
+		t.Error("the page's module tag does not carry the response's CSP nonce")
+	}
+	if strings.Count(page, "nonce=") != 1 {
+		t.Errorf("the nonce appears on %d elements; it belongs on exactly one",
+			strings.Count(page, "nonce="))
 	}
 	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 		t.Error("reader page must be nosniff")
