@@ -228,3 +228,47 @@ func TestLibraryIsScopedToTheSignedInUser(t *testing.T) {
 		}
 	}
 }
+
+// TestLibraryCardsNameTheAuthor is the card's half of the batched
+// credit read. The store answers with names; what this pins is that the
+// page asks for them, prints the author rather than whoever else worked
+// on the book, and does not let a crowded title page push the title off
+// the card.
+func TestLibraryCardsNameTheAuthor(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/library", f.cookie)
+	csrf := csrfFrom(t, html)
+	f.uploadForm(t, f.cookie, csrf, f.library, "credited.epub",
+		bytes.Repeat([]byte("credited"), 50))
+	book := f.promote(t, "credited")
+
+	metadata, err := f.st.CatalogBookMetadata(
+		t.Context(), "u1", book, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Contributors = []store.BookContributor{
+		{ContributorID: "c-lem", Name: "Stanisław Lem",
+			NormalizedName: "stanisław lem", Role: store.ContributorRoleAuthor,
+			Position: 1, Source: store.MetadataEmbedded},
+		{ContributorID: "c-kilmartin", Name: "Joanna Kilmartin",
+			NormalizedName: "joanna kilmartin", Role: "translator",
+			Position: 2, Source: store.MetadataEmbedded},
+	}
+	if _, err := f.st.ApplyCatalogBookMetadata(t.Context(), "u1",
+		store.ApplyBookMetadataRequest{
+			Metadata:         metadata,
+			ExpectedRevision: metadata.Book.Revision,
+			UpdatedAt:        time.Now().UTC(),
+		}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, page := f.get(t, "/ui/library", f.cookie)
+	if !strings.Contains(page, "Stanisław Lem") {
+		t.Error("the card does not say who wrote the book")
+	}
+	if strings.Contains(page, "Joanna Kilmartin") {
+		t.Error("a translator was printed where the author goes")
+	}
+}

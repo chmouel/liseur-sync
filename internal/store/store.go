@@ -311,6 +311,12 @@ type BookSeries struct {
 	Locked         bool
 }
 
+// ContributorRoleAuthor is the role a person holds when they wrote the
+// book. Roles are normalized on the way in (MARC's "aut" and the word
+// "author" are the same role), so a reader of the catalog compares
+// against this rather than against whatever the file said.
+const ContributorRoleAuthor = "author"
+
 // BookContributor is one contributor in one role. A person credited twice
 // in different roles is two rows over one contributor entity.
 type BookContributor struct {
@@ -1470,7 +1476,14 @@ type Store interface {
 	ResolveCatalogBookWork(ctx context.Context, userID, bookID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool, at time.Time) (WorkResolution, error)
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
 	WorkBookIDs(ctx context.Context, userID string) (map[string]string, error)
-	CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error)
+	// CatalogAuthorsForBooks names, per book, the people credited as its
+	// authors, so a page of books can say who wrote them without a query
+	// per row. Only libraries the user may read are answered, and only
+	// the author role: a translator printed where a card says "author"
+	// is a false credit, not a partial one. Names come back in the order
+	// the book credits them, and a book with no author is absent rather
+	// than present and empty.
+	CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string][]string, error)
 	// AvailableBookMediaTypes reports, per book, the media types the user
 	// can actually be served right now — files that are present, in a
 	// library they may read. It exists so a list of books can be told

@@ -205,12 +205,14 @@ rendering bug hunt would make both harder to judge.
 
 Phases 1 to 8 are in. What differs from the plan above, and why:
 
-- **The books grid shows no author.** There is no read path that returns
-  a page of books with their contributors, and this ADR is not allowed
-  to add one: reading them per card would be a query per book on a page
-  of twenty-five. The card falls back to the date the book was added.
-  Fixing it properly means a batched catalog read, which belongs to
-  whoever adds one for the API, not to a layout change.
+- **A card names its author through a batched read.** Reading
+  contributors per card would be a query per book on a page of
+  twenty-five, so `CatalogAuthorsForBooks` answers a whole page at once,
+  scoped to the libraries the reader may read and restricted to the
+  author role — a translator printed where a card says "author" is a
+  false credit rather than a partial one. Three names fit; a crowd is
+  counted. A book nobody is credited with still falls back to the date
+  it was added.
 - **The browse toolbar has no sort or filter chips.** Sorting is not in
   the store's list call either, so a sort control would have been a
   control that lies. What the toolbar carries instead is the library

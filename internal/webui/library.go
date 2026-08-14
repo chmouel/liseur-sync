@@ -300,7 +300,7 @@ func (s *Server) libraryRows(
 		row := LibraryRow{
 			BookID: b.ID,
 			Title:  b.Title,
-			Author: authors[b.ID],
+			Author: credit(authors[b.ID]),
 			Added:  b.CreatedAt.In(loc).Format("Jan 2, 2006"),
 		}
 		for _, mt := range media[b.ID] {

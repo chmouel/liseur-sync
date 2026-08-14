@@ -1038,3 +1038,101 @@ func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
 		}
 	}
 }
+
+// testCatalogAuthorsForBooks pins the batch lookup a page of cards uses
+// to say who wrote what. Three things are load bearing: it answers only
+// for libraries the reader may read, it credits only authors, and it
+// keeps the order the book credits its people in — a card that reorders
+// co-authors alphabetically has invented a billing that nobody agreed
+// to.
+func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	owner := MkUser(t, s, "authors-owner")
+	reader := MkUser(t, s, "authors-reader")
+	outsider := MkUser(t, s, "authors-outsider")
+	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+	library := store.Library{
+		ID: "lib-authors", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Authors", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(
+		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
+		t.Fatal(err)
+	}
+	credits := map[string][]store.BookContributor{
+		// Billed second first, to prove the order comes from the book.
+		"book-pair": {
+			{ContributorID: "c-gibson", Name: "William Gibson",
+				NormalizedName: "william gibson", Role: store.ContributorRoleAuthor,
+				Position: 1, Source: store.MetadataEmbedded},
+			{ContributorID: "c-sterling", Name: "Bruce Sterling",
+				NormalizedName: "bruce sterling", Role: store.ContributorRoleAuthor,
+				Position: 2, Source: store.MetadataEmbedded},
+		},
+		// Somebody worked on this book, but nobody wrote it here.
+		"book-translated": {
+			{ContributorID: "c-bell", Name: "Anthea Bell",
+				NormalizedName: "anthea bell", Role: "translator",
+				Position: 1, Source: store.MetadataEmbedded},
+		},
+		"book-anonymous": nil,
+	}
+	books := []string{"book-anonymous", "book-pair", "book-translated"}
+	for _, id := range books {
+		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
+			ID: id, LibraryID: library.ID, Status: store.BookActive,
+			Title: id, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		people := credits[id]
+		if len(people) == 0 {
+			continue
+		}
+		metadata, err := s.CatalogBookMetadata(ctx, owner.ID, id, store.LibraryRoleRead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata.Contributors = people
+		if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+			store.ApplyBookMetadataRequest{
+				Metadata:         metadata,
+				ExpectedRevision: metadata.Book.Revision,
+				UpdatedAt:        now,
+			}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.CatalogAuthorsForBooks(ctx, reader.ID, books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"William Gibson", "Bruce Sterling"}; fmt.Sprint(got["book-pair"]) != fmt.Sprint(want) {
+		t.Fatalf("co-authors: got %v want %v", got["book-pair"], want)
+	}
+	if len(got["book-translated"]) != 0 {
+		t.Fatalf("a translator was credited as an author: %v", got["book-translated"])
+	}
+	if len(got["book-anonymous"]) != 0 {
+		t.Fatalf("a book nobody is credited with got a name: %v", got["book-anonymous"])
+	}
+
+	// A stranger learns nothing, not even that the ids resolve.
+	blind, err := s.CatalogAuthorsForBooks(ctx, outsider.ID, books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blind) != 0 {
+		t.Fatalf("outsider read another user's credits: %v", blind)
+	}
+
+	empty, err := s.CatalogAuthorsForBooks(ctx, reader.ID, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty request: %v %v", empty, err)
+	}
+}
