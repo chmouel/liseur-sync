@@ -39,6 +39,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("LibraryAxes", func(t *testing.T) { testLibraryAxes(t, open) })
 	t.Run("InPlaceBooks", func(t *testing.T) { testInPlaceBooks(t, open) })
 	t.Run("LibraryRefreshSchedule", func(t *testing.T) { testLibraryRefreshSchedule(t, open) })
+	t.Run("LibraryRefreshLeaseExpires", func(t *testing.T) { testLibraryRefreshLeaseExpires(t, open) })
 	t.Run("CalibreLibraryIdentity", func(t *testing.T) {
 		testCalibreLibraryIdentity(t, open)
 	})
@@ -115,6 +116,9 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("SearchFollowsAMerge", func(t *testing.T) {
 		testSearchFollowsAMerge(t, open)
+	})
+	t.Run("CalibreFileReconciliation", func(t *testing.T) {
+		testCalibreFileReconciliation(t, open)
 	})
 	t.Run("WatchedSourceReconciliation", func(t *testing.T) {
 		testWatchedSourceReconciliation(t, open)

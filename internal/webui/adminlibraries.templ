@@ -53,8 +53,8 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
 		if v.Refreshable() {
 			<p class="muted">Root: <code>{ v.Root() }</code></p>
 			<p class="muted">{ v.RefreshState() }</p>
-			if v.RefreshError() != "" {
-				<p class="error">Last refresh failed: { v.RefreshError() }</p>
+			if v.RefreshFailure() != "" {
+				<p class="error">Last refresh failed: { v.RefreshFailure() }</p>
 			}
 			<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/refresh" } class="inline">
 				<input type="hidden" name="csrf" value={ csrf }/>

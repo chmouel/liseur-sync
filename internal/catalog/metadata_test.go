@@ -361,3 +361,92 @@ func TestResolveKeepsAManualEditThroughACalibreRefresh(t *testing.T) {
 		t.Fatalf("title = %q, want the manual one", next.Book.Title)
 	}
 }
+
+func TestResolveClearsASetCalibreEmptied(t *testing.T) {
+	t.Parallel()
+	current := store.BookMetadata{
+		Book: store.CatalogBook{ID: "book", LibraryID: "lib"},
+		Tags: []store.BookTaxon{{
+			ID: "t1", Name: "Fantasy", NormalizedName: "fantasy",
+			Source: store.MetadataCalibre,
+		}},
+		Genres: []store.BookTaxon{{
+			ID: "g1", Name: "Novel", NormalizedName: "novel",
+			Source: store.MetadataEmbedded,
+		}},
+		Languages: []store.BookLanguage{
+			{Language: "en", Source: store.MetadataEmbedded}},
+		Identifiers: []store.BookIdentifier{
+			{Scheme: "isbn", Value: "9780060853983",
+				Source: store.MetadataCalibre}},
+		Series: []store.BookSeries{{
+			SeriesID: "s1", Name: "Discworld", NormalizedName: "discworld",
+			Source: store.MetadataCalibre,
+		}},
+		Contributors: []store.BookContributor{{
+			ContributorID: "c1", Name: "Terry Pratchett",
+			NormalizedName: "terry pratchett",
+			Role:           store.ContributorRoleAuthor,
+			Source:         store.MetadataCalibre,
+		}},
+	}
+	// The last tag, author, identifier, language and series removed in
+	// Calibre: a curated record that now says the book has none.
+	next, changed := Resolve(current, metadata.FromCalibre(
+		calibre.Book{ID: 1, Title: "Small Gods"}))
+	if !changed {
+		t.Fatal("a Calibre read that emptied every set changed nothing")
+	}
+	if len(next.Tags) != 0 {
+		t.Errorf("tags = %+v, want cleared", next.Tags)
+	}
+	if len(next.Languages) != 0 {
+		t.Errorf("languages = %+v, want cleared", next.Languages)
+	}
+	if len(next.Identifiers) != 0 {
+		t.Errorf("identifiers = %+v, want cleared", next.Identifiers)
+	}
+	if len(next.Series) != 0 {
+		t.Errorf("series = %+v, want cleared", next.Series)
+	}
+	if len(next.Contributors) != 0 {
+		t.Errorf("contributors = %+v, want cleared", next.Contributors)
+	}
+	// Calibre has no genres, so it never asserts an empty one.
+	if len(next.Genres) != 1 {
+		t.Errorf("genres = %+v, want left alone", next.Genres)
+	}
+}
+
+func TestResolveKeepsALockedRowThroughACalibreClear(t *testing.T) {
+	t.Parallel()
+	current := store.BookMetadata{
+		Book: store.CatalogBook{ID: "book", LibraryID: "lib"},
+		Tags: []store.BookTaxon{
+			{ID: "t1", Name: "Mine", NormalizedName: "mine",
+				Source: store.MetadataManual, Locked: true},
+			{ID: "t2", Name: "Fantasy", NormalizedName: "fantasy",
+				Source: store.MetadataCalibre},
+		},
+	}
+	next, changed := Resolve(current, metadata.FromCalibre(
+		calibre.Book{ID: 1, Title: "Small Gods"}))
+	if !changed {
+		t.Fatal("an emptied Calibre tag set changed nothing")
+	}
+	if len(next.Tags) != 1 || next.Tags[0].Name != "Mine" {
+		t.Errorf("tags = %+v, want the locked row only", next.Tags)
+	}
+}
+
+func TestResolveEmptyCalibreSetsAreIdempotent(t *testing.T) {
+	t.Parallel()
+	book := store.BookMetadata{
+		Book: store.CatalogBook{ID: "book", LibraryID: "lib"},
+	}
+	proposal := metadata.FromCalibre(calibre.Book{ID: 1})
+	next, _ := Resolve(book, proposal)
+	if _, changed := Resolve(next, proposal); changed {
+		t.Error("a second read of an empty Calibre book changed something")
+	}
+}

@@ -48,6 +48,11 @@ var (
 	// that was checked at the root — a bind mount that moved, a root
 	// that is itself a link into another library.
 	ErrUnsafeRoot = errors.New("calibre: metadata.db is not the file at the root")
+	// ErrUnsupportedSchema means the database has none of a table this
+	// package cannot do without. A relation that only carries a field —
+	// tags, languages, identifiers — costs that field instead, and is
+	// recorded by Missing rather than raised here.
+	ErrUnsupportedSchema = errors.New("calibre: unsupported metadata.db schema")
 )
 
 // Library is an open, read-only view of one Calibre library.

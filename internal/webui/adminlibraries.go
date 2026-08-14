@@ -80,12 +80,36 @@ func (v adminLibraryView) RefreshState() string {
 	}
 }
 
-// RefreshError is what went wrong last time, if anything did.
-func (v adminLibraryView) RefreshError() string {
-	if v.Library.LastRefreshError == nil {
+// RefreshFailure is why the last refresh did not work, in words, or ""
+// when it did.
+//
+// The catalog stores a bounded code and this turns it into a sentence.
+// Neither is the underlying error: that names paths, mount points and
+// database URLs, which ADR-0013 keeps out of the browser entirely, so it
+// goes to the log where an operator can read it next to the code.
+func (v adminLibraryView) RefreshFailure() string {
+	switch v.Library.LastRefreshCode {
+	case store.RefreshCodeNone:
 		return ""
+	case store.RefreshCodeRootUnavailable:
+		return "this library's directory could not be read; the catalog " +
+			"was left exactly as it was"
+	case store.RefreshCodeNoRootPath:
+		return "this library has no directory to read"
+	case store.RefreshCodeUnreadableDatabase:
+		return "this library's Calibre database could not be read"
+	case store.RefreshCodeUnsupportedSchema:
+		return "this library's Calibre database is of a version this " +
+			"server does not understand"
+	case store.RefreshCodeIncompleteScan:
+		return "the scan did not finish, so this library is only partly " +
+			"accounted for"
+	case store.RefreshCodeLeaseLost:
+		return "another refresh of this library took over; the next one " +
+			"finishes the work"
+	default:
+		return "the last refresh failed; the server log has the detail"
 	}
-	return *v.Library.LastRefreshError
 }
 
 // Refreshable says whether this library has a source to read again.

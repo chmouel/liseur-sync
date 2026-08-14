@@ -53,16 +53,36 @@ type Proposal struct {
 	// publisher does not — and what it leaves behind is a tombstone, so
 	// a weaker source cannot refill the field on the next pass.
 	ClearsUnstated bool
-	Title          Candidate
-	Subtitle       Candidate
-	Description    Candidate
-	Publisher      Candidate
-	PublishedDate  Candidate
-	Identifiers    []Assertion[IdentifierKey, struct{}]
-	Languages      []Assertion[string, string]
-	Tags           []Assertion[string, string]
-	Series         []Assertion[string, SeriesValue]
-	Contributors   []Assertion[ContributorKey, string]
+	// StatedSets names the multi-valued sets this proposal speaks for.
+	// It only matters when the proposal asserts complete sets and clears
+	// what it does not state: a set named here and left empty is an
+	// assertion that the set is empty — the last tag removed in Calibre
+	// is a book with no tags — while one not named is a set the source
+	// cannot express an opinion about and is left exactly as it was.
+	StatedSets    SetFields
+	Title         Candidate
+	Subtitle      Candidate
+	Description   Candidate
+	Publisher     Candidate
+	PublishedDate Candidate
+	Identifiers   []Assertion[IdentifierKey, struct{}]
+	Languages     []Assertion[string, string]
+	Tags          []Assertion[string, string]
+	Series        []Assertion[string, SeriesValue]
+	Contributors  []Assertion[ContributorKey, string]
+}
+
+// SetFields marks which of a book's multi-valued sets a proposal speaks
+// for. It is a struct of named flags rather than a list of keys so that
+// a set added later is a compile error at every source that has to
+// decide about it, rather than a silently unstated one.
+type SetFields struct {
+	Identifiers  bool
+	Languages    bool
+	Tags         bool
+	Genres       bool
+	Series       bool
+	Contributors bool
 }
 
 // FromEmbedded maps a bounded OPF extraction to an embedded-source proposal.

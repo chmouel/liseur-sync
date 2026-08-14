@@ -1092,7 +1092,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19, migration20,
+	migration18, migration19, migration20, migration21,
 }
 
 // migration19 records what happened the last time a library's root was
@@ -1215,4 +1215,26 @@ CREATE TABLE library_calibre_books (
 
 ALTER TABLE book_files ADD COLUMN cover_relative_path TEXT;
 ALTER TABLE book_files ADD COLUMN cover_sha256 TEXT;
+`
+
+// migration21 makes a refresh a claim somebody holds and a failure
+// something a page may render (ADR-0014).
+//
+// The lease is two columns rather than one, because expiry alone does
+// not stop the worker that held it: a slow refresh can still be running
+// when a second one takes over. The owner token is what every write
+// concluding a refresh proves it still has, so a dispossessed worker
+// cannot record completion or advance the inventory digest over the top
+// of the worker that replaced it.
+//
+// `last_refresh_error` goes and `last_refresh_code` replaces it. The
+// error was a filesystem talking — paths, mount points, DSNs — and the
+// admin panel rendered it verbatim, which ADR-0013 does not allow. The
+// code is from a closed set the panel has wording for, and the error
+// itself now goes to the log, where paths are allowed.
+const migration21 = `
+ALTER TABLE libraries ADD COLUMN refresh_lease_owner TEXT;
+ALTER TABLE libraries ADD COLUMN refresh_lease_until TEXT;
+ALTER TABLE libraries ADD COLUMN last_refresh_code TEXT;
+ALTER TABLE libraries DROP COLUMN last_refresh_error;
 `

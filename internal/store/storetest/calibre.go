@@ -115,10 +115,20 @@ func testCalibreLibraryIdentity(t *testing.T, open OpenFunc) {
 		t.Fatalf("deleting an unmapped calibre id: %v", err)
 	}
 
-	// The change gate is stored on the library and read back with it.
+	// The change gate is stored on the library and read back with it —
+	// by the worker holding the lease, and by nobody else.
+	gate := now.Add(4 * time.Hour)
+	holder, ok, err := s.ClaimLibraryRefresh(ctx, gate, leaseFor(gate))
+	if err != nil || !ok || holder.ID != library.ID {
+		t.Fatalf("claim for the digest: %v %v %q", ok, err, holder.ID)
+	}
 	if err := s.SetLibraryInventoryDigest(
-		ctx, library.ID, "abc123", now.Add(4*time.Hour)); err != nil {
+		ctx, library.ID, holder.RefreshLeaseOwner, "abc123", gate); err != nil {
 		t.Fatalf("set inventory digest: %v", err)
+	}
+	if err := s.FinishLibraryRefresh(ctx, library.ID,
+		holder.RefreshLeaseOwner, gate, store.RefreshCodeNone); err != nil {
+		t.Fatalf("finish: %v", err)
 	}
 	stored, err := s.AdminLibraryByID(ctx, library.ID)
 	if err != nil {
@@ -132,7 +142,8 @@ func testCalibreLibraryIdentity(t *testing.T, open OpenFunc) {
 	}
 	// And a claim hands the digest to whoever runs the refresh, which is
 	// the only reason it is stored.
-	claimed, ok, err := s.ClaimLibraryRefresh(ctx, now.Add(5*time.Hour))
+	claimed, ok, err := s.ClaimLibraryRefresh(
+		ctx, now.Add(5*time.Hour), leaseFor(now.Add(5*time.Hour)))
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -141,7 +152,8 @@ func testCalibreLibraryIdentity(t *testing.T, open OpenFunc) {
 	}
 
 	if err := s.SetLibraryInventoryDigest(
-		ctx, "no-such-library", "abc", now); !errors.Is(err, store.ErrNotFound) {
+		ctx, "no-such-library", "owner", "abc", now,
+	); !errors.Is(err, store.ErrRefreshLeaseLost) {
 		t.Fatalf("digest of a library that does not exist: %v", err)
 	}
 	if err := s.MapCalibreBook(

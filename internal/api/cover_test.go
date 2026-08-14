@@ -13,6 +13,9 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -481,5 +484,106 @@ func TestBookRecordAdvertisesItsCover(t *testing.T) {
 	}
 	if books[0].(map[string]any)["cover_url"] == nil {
 		t.Fatalf("listed book has no cover_url: %v", books[0])
+	}
+}
+
+// chosenCover is a picture nobody could mistake for the one inside the
+// publication: a wide, short image against the tall one coverEPUB
+// builds.
+func chosenCover(t *testing.T, width, height int) []byte {
+	t.Helper()
+	picture := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(picture, picture.Bounds(),
+		&image.Uniform{color.RGBA{R: 10, G: 200, B: 90, A: 255}},
+		image.Point{}, draw.Src)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, picture, nil); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
+// TestChosenCoverBeatsTheOneInsideTheBook is the Calibre case: cover.jpg
+// beside the book is a picture somebody chose, and two books sharing one
+// EPUB keep their own (ADR-0014). If the cache were keyed by the
+// publication alone, the second book here would be served the first
+// one's cover.
+func TestChosenCoverBeatsTheOneInsideTheBook(t *testing.T) {
+	f := newUploadFixture(t)
+	body := coverEPUB(t, 900, 1200, "cover.png")
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	type shelved struct {
+		bookID string
+		cover  []byte
+	}
+	var books []shelved
+	for i, size := range []int{400, 800} {
+		bookID, libraryID, full := f.publishInPlace(
+			t, "chosen-"+string(rune('a'+i)), body)
+		chosen := chosenCover(t, size, size/4)
+		coverPath := filepath.Join(filepath.Dir(full), "cover.jpg")
+		if err := os.WriteFile(coverPath, chosen, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files, err := f.st.ListBookFiles(
+			t.Context(), f.user.ID, bookID, store.LibraryRoleManage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.SetBookFileCover(t.Context(), libraryID,
+			files[0].ID, "cover.jpg", sha256Hex(chosen),
+			time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		books = append(books, shelved{bookID: bookID, cover: chosen})
+	}
+
+	var served []image.Config
+	for _, book := range books {
+		resp, raw := f.get(t, "/v1/books/"+book.bookID+"/cover?size=full", read)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("cover: %d %s", resp.StatusCode, raw)
+		}
+		config := decodeCover(t, raw)
+		if config.Width <= config.Height {
+			t.Fatalf("the publication's own cover was served: %dx%d",
+				config.Width, config.Height)
+		}
+		if got := resp.Header.Get("ETag"); !strings.Contains(
+			got, sha256Hex(book.cover)) {
+			t.Errorf("ETag %q does not name the cover it served", got)
+		}
+		served = append(served, config)
+	}
+	// Same publication, same rendering pipeline, two different pictures:
+	// the cache key is the cover's digest, not the book's.
+	if served[0].Width == served[1].Width {
+		t.Fatalf("two books sharing one EPUB were served one cover: %+v", served)
+	}
+
+	// A cover that went away is not an error: the book still has the one
+	// inside it.
+	_, libraryID, _ := f.publishInPlace(t, "chosen-gone", body)
+	files, err := f.st.ListBookFiles(
+		t.Context(), f.user.ID, "book-in-place-chosen-gone",
+		store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.SetBookFileCover(t.Context(), libraryID, files[0].ID,
+		"cover.jpg", sha256Hex([]byte("a cover.jpg nobody wrote")),
+		time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	resp, raw := f.get(
+		t, "/v1/books/book-in-place-chosen-gone/cover?size=full", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a missing cover.jpg cost the book its cover: %d %s",
+			resp.StatusCode, raw)
+	}
+	if config := decodeCover(t, raw); config.Width >= config.Height {
+		t.Fatalf("the fallback is not the publication's own: %dx%d",
+			config.Width, config.Height)
 	}
 }

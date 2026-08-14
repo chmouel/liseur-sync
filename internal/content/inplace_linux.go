@@ -4,11 +4,15 @@ package content
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -29,6 +33,71 @@ func (c *CAS) OpenBookFile(
 		return c.OpenBlob(ctx, file.BlobSHA256)
 	}
 	return OpenInPlaceFile(ctx, file)
+}
+
+// OpenBookFileCover opens the cover a library's curator chose for this
+// file — Calibre's cover.jpg — which lives beside the publication under
+// the library root rather than inside it.
+//
+// The bytes are proved by digest rather than by stat. A cover has no
+// snapshot of its own to compare against, and it is small enough to hash
+// on the way out; a cover.jpg somebody replaced therefore fails here and
+// falls back to the publication's own until the next refresh records the
+// new one, instead of being served under a cache key that names the old
+// image.
+func (c *CAS) OpenBookFileCover(
+	ctx context.Context, file store.BookFile,
+) (*os.File, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	if file.CoverSHA256 == "" || file.CoverRelativePath == nil {
+		return nil, 0, ErrStageMissing
+	}
+	if file.LibraryRoot == "" {
+		return nil, 0, ErrRootMissing
+	}
+	relative := *file.CoverRelativePath
+	if !safeRelativePath(relative) {
+		return nil, 0, ErrUnsafePath
+	}
+	root, err := os.OpenRoot(file.LibraryRoot)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %s: %v",
+			ErrRootMissing, file.LibraryRoot, err)
+	}
+	defer root.Close()
+
+	opened, err := root.OpenFile(relative, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, ErrStageMissing
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := opened.Stat()
+	if err != nil {
+		opened.Close()
+		return nil, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		opened.Close()
+		return nil, 0, ErrUnsafePath
+	}
+	digest := sha256.New()
+	if _, err := io.Copy(digest, opened); err != nil {
+		opened.Close()
+		return nil, 0, err
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != file.CoverSHA256 {
+		opened.Close()
+		return nil, 0, ErrSourceChanged
+	}
+	if _, err := opened.Seek(0, io.SeekStart); err != nil {
+		opened.Close()
+		return nil, 0, err
+	}
+	return opened, info.Size(), nil
 }
 
 // OpenInPlaceFile opens a file under a library root that this server does

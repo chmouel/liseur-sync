@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/chmouel/liseur-sync/internal/calibre"
 	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -69,6 +71,71 @@ type ScannedLibrary struct {
 	// recorded. A refresh that computes the same value stops there. It is
 	// empty for every other source, which have no such gate.
 	InventoryDigest string
+	// Lease is the claim the worker running this sweep holds on the
+	// library. Every unit of work checks it, so a sweep whose lease was
+	// taken over stops at the next book rather than writing over the
+	// worker that replaced it. A zero lease is a caller that is not
+	// running under one — a test, or a sweep of a library nobody else
+	// can reach — and nothing is checked.
+	Lease store.RefreshLease
+}
+
+// refreshLease is the claim one sweep holds, and the schedule on which
+// it proves it still has it.
+//
+// The renewal is here rather than on a timer in the background because a
+// lease that renews itself while the work is wedged is a lease that says
+// nothing. Renewing between units of work means the library is held for
+// exactly as long as it is being refreshed.
+type refreshLease struct {
+	st        refreshLeaseStore
+	libraryID string
+	lease     store.RefreshLease
+	renewAt   time.Time
+}
+
+// newRefreshLease starts holding a claim, or returns nil for a sweep
+// that has none.
+func newRefreshLease(
+	st refreshLeaseStore, library ScannedLibrary, now time.Time,
+) *refreshLease {
+	if st == nil || library.Lease.Owner == "" {
+		return nil
+	}
+	return &refreshLease{
+		st: st, libraryID: library.ID, lease: library.Lease,
+		renewAt: now.Add(store.RefreshLeaseRenewAfter),
+	}
+}
+
+// hold is what a sweep calls before each unit of work: a read most of
+// the time, and a renewal once half the lease has gone. Either way, a
+// worker that was taken over learns it here and gets
+// store.ErrRefreshLeaseLost.
+func (l *refreshLease) hold(ctx context.Context, now time.Time) error {
+	if l == nil {
+		return nil
+	}
+	if now.Before(l.renewAt) {
+		return l.st.CheckLibraryRefreshLease(
+			ctx, l.libraryID, l.lease.Owner, now)
+	}
+	l.lease.Until = now.Add(store.DefaultRefreshLease)
+	if err := l.st.RenewLibraryRefreshLease(
+		ctx, l.libraryID, l.lease, now); err != nil {
+		return err
+	}
+	l.renewAt = now.Add(store.RefreshLeaseRenewAfter)
+	return nil
+}
+
+// owner is the token every lease-guarded write carries, and "" for a
+// sweep running without one.
+func (l *refreshLease) owner() string {
+	if l == nil {
+		return ""
+	}
+	return l.lease.Owner
 }
 
 // WatchedSyncReport totals one library's sweep.
@@ -87,6 +154,15 @@ type WatchedSyncReport struct {
 	Rehashed int
 	// Review counts paths a sweep refused to resolve.
 	Review int
+	// Relocated counts files whose bytes were found at a new path and
+	// whose catalog row moved with them. Only a source that names its
+	// books — Calibre — can produce these: a directory sweep has no way
+	// to tell a rename from a deletion and an arrival.
+	Relocated int
+	// Superseded counts books whose file was replaced by different
+	// bytes: a new file row on the same book, with the old one kept as
+	// superseded.
+	Superseded int
 	// MarkedAbsent counts files a completed sweep proved are no longer at
 	// their recorded path. It is always zero for an incomplete sweep.
 	MarkedAbsent int
@@ -97,9 +173,17 @@ type WatchedSyncReport struct {
 	Failed int
 }
 
+// refreshLeaseStore is how a sweep asks whether it still owns the
+// library it is writing to.
+type refreshLeaseStore interface {
+	RenewLibraryRefreshLease(context.Context, string, store.RefreshLease, time.Time) error
+	CheckLibraryRefreshLease(context.Context, string, string, time.Time) error
+}
+
 // watchedStore is the durable surface one sweep needs.
 type watchedStore interface {
 	bookMetadataStore
+	refreshLeaseStore
 	ingestTransitionStore
 	WatchedFilesByPath(context.Context, string, string) ([]store.WatchedFile, error)
 	MarkWatchedSourcesSeen(context.Context, string, []store.WatchedObservation, time.Time) (int, error)
@@ -220,9 +304,17 @@ func SyncScannedLibrary(
 	}
 	defer root.Close()
 
+	lease := newRefreshLease(st, library, sweepStartedAt)
 	observations := make([]store.WatchedObservation, 0, len(scan.Files))
 	for _, file := range scan.Files {
 		if err := ctx.Err(); err != nil {
+			report.Scan.Complete = false
+			return report, err
+		}
+		if err := lease.hold(ctx, clock().UTC()); err != nil {
+			// The library is somebody else's now. Absence must not be
+			// concluded from a sweep that stopped, so the traversal is
+			// marked incomplete and nothing further is written.
 			report.Scan.Complete = false
 			return report, err
 		}
@@ -567,8 +659,9 @@ func isRetryableWatchedFailure(err error) bool {
 // same mechanism with different triggers.
 type refreshableLibraryStore interface {
 	calibreStore
-	ClaimLibraryRefresh(context.Context, time.Time) (store.Library, bool, error)
-	FinishLibraryRefresh(context.Context, string, time.Time, string) error
+	catalogAvailabilityStore
+	ClaimLibraryRefresh(context.Context, time.Time, store.RefreshLease) (store.Library, bool, error)
+	FinishLibraryRefresh(context.Context, string, string, time.Time, store.RefreshCode) error
 }
 
 // WatchedScanReport totals one pass over the libraries that were due.
@@ -588,6 +681,8 @@ type WatchedScanReport struct {
 	Unchanged    int
 	Rehashed     int
 	Review       int
+	Relocated    int
+	Superseded   int
 	MarkedAbsent int
 	Failed       int
 	// Skipped counts Calibre libraries whose inventory digest had not
@@ -598,6 +693,13 @@ type WatchedScanReport struct {
 	// the catalog did.
 	Deleted         int
 	MetadataUpdated int
+	// FilesUnavailable and FilesRestored are what the availability
+	// reconciliation the pass ends with changed: a refresh records that
+	// a source file is gone or back, and this is that record reaching
+	// the catalog, so a file deleted while the server runs stops being
+	// offered without waiting for a restart.
+	FilesUnavailable int
+	FilesRestored    int
 }
 
 // boolCount counts a flag, so a report can total what happened across
@@ -612,9 +714,18 @@ func boolCount(b bool) int {
 // Changed reports whether the pass did anything worth logging.
 func (r WatchedScanReport) Changed() bool {
 	return r.Ingested != 0 || r.Rehashed != 0 || r.Review != 0 ||
+		r.Relocated != 0 || r.Superseded != 0 ||
 		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0 ||
-		r.Errored != 0 || r.Deleted != 0 || r.MetadataUpdated != 0
+		r.Errored != 0 || r.Deleted != 0 || r.MetadataUpdated != 0 ||
+		r.FilesUnavailable != 0 || r.FilesRestored != 0
 }
+
+// refreshAvailabilityPageSize bounds one availability reconciliation
+// step after a refresh. It is the same order as the recovery batch the
+// startup pass uses: large enough that a library whose mount came back
+// converges in a few statements, small enough not to hold one long
+// transaction over a catalog somebody is reading.
+const refreshAvailabilityPageSize = 200
 
 // maxRefreshesPerPass bounds one pass. A claim stamps the attempt, so a
 // library cannot be claimed twice within its own interval and the loop
@@ -643,23 +754,60 @@ func RunRefreshPass(
 	if st == nil || blobs == nil || clock == nil || opts.MaxFileBytes <= 0 {
 		return report, store.ErrInvalidTransition
 	}
+	if err := refreshDueLibraries(
+		ctx, st, blobs, opts, clock, &report); err != nil {
+		return report, err
+	}
+	if report.Libraries == 0 {
+		return report, nil
+	}
+	// A refresh writes presence — source_seen_at and source_absent_at —
+	// and presence only becomes availability here. Running it now rather
+	// than at the next startup is what makes a file deleted or returned
+	// under a running server change what the catalog offers.
+	availability, err := ReconcileCatalogAvailability(
+		ctx, st, clock().UTC(), refreshAvailabilityPageSize)
+	report.FilesUnavailable = availability.FilesMarkedMissing
+	report.FilesRestored = availability.FilesMarkedAvailable
+	if err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// refreshDueLibraries is the claiming loop itself, split out so that
+// what follows every pass — reconciling availability — happens whether
+// the loop ran out of libraries or ran out of its ceiling.
+func refreshDueLibraries(
+	ctx context.Context,
+	st refreshableLibraryStore,
+	blobs watchedStager,
+	opts WatchedSyncOptions,
+	clock func() time.Time,
+	report *WatchedScanReport,
+) error {
 	for range maxRefreshesPerPass {
 		if err := ctx.Err(); err != nil {
-			return report, err
+			return err
 		}
-		library, claimed, err := st.ClaimLibraryRefresh(ctx, clock())
+		now := clock().UTC()
+		lease := store.RefreshLease{
+			Owner: newRefreshOwner(),
+			Until: now.Add(store.DefaultRefreshLease),
+		}
+		library, claimed, err := st.ClaimLibraryRefresh(ctx, now, lease)
 		if err != nil {
-			return report, fmt.Errorf("claim library refresh: %w", err)
+			return fmt.Errorf("claim library refresh: %w", err)
 		}
 		if !claimed {
-			return report, nil
+			return nil
 		}
 		if library.RootPath == nil || *library.RootPath == "" {
 			// A library with a root is the only thing a claim can
 			// return, so this is a database somebody edited by hand.
 			// Finishing it stops it being claimed again in a loop.
-			_ = st.FinishLibraryRefresh(ctx, library.ID, clock(),
-				"library has no root path to refresh")
+			_ = st.FinishLibraryRefresh(ctx, library.ID, lease.Owner,
+				clock(), store.RefreshCodeNoRootPath)
 			continue
 		}
 		report.Libraries++
@@ -674,6 +822,7 @@ func RunRefreshPass(
 			// allowance by being named here.
 			ActorUserID:     library.OwnerUserID,
 			InventoryDigest: library.LastInventoryDigest,
+			Lease:           lease,
 		}
 		var result WatchedSyncReport
 		var syncErr error
@@ -692,28 +841,32 @@ func RunRefreshPass(
 		report.Ingested += result.Ingested
 		report.Unchanged += result.Unchanged
 		report.Rehashed += result.Rehashed
+		report.Relocated += result.Relocated
+		report.Superseded += result.Superseded
 		report.Review += result.Review
 		report.MarkedAbsent += result.MarkedAbsent
 		report.Failed += result.Failed
 		if syncErr != nil && ctx.Err() != nil {
-			return report, syncErr
+			return syncErr
 		}
-		var failure string
-		switch {
-		case syncErr != nil:
-			failure = syncErr.Error()
-		case !result.Scan.Complete:
-			// An incomplete traversal is not an error — a limit was hit,
-			// or a subdirectory could not be read — but it is not a
-			// refresh either, because absence cannot be concluded from
-			// it. Saying so is the difference between a library that is
-			// quietly half-indexed and one an administrator can see is.
-			failure = "the traversal did not complete, so this library " +
-				"is only partly accounted for"
+		code := refreshCodeFor(syncErr, result)
+		if syncErr != nil {
+			// The error itself goes here and nowhere else. It names
+			// paths, mount points and database files, which no page
+			// under /ui may render (ADR-0013), so the library keeps the
+			// bounded code and the log keeps the detail.
+			slog.Error("library refresh failed",
+				"library", library.ID, "code", string(code), "err", syncErr)
 		}
 		if err := st.FinishLibraryRefresh(
-			ctx, library.ID, clock(), failure); err != nil {
-			return report, fmt.Errorf(
+			ctx, library.ID, lease.Owner, clock(), code); err != nil {
+			if errors.Is(err, store.ErrRefreshLeaseLost) {
+				// Another worker owns this library and has recorded, or
+				// will record, its own outcome. Ours is not news.
+				report.Errored++
+				continue
+			}
+			return fmt.Errorf(
 				"finish refresh of library %q: %w", library.ID, err)
 		}
 		switch {
@@ -725,5 +878,37 @@ func RunRefreshPass(
 			report.Swept++
 		}
 	}
-	return report, nil
+	return nil
+}
+
+// newRefreshOwner mints the token one claim is held by. It is random
+// rather than derived from the host or the process, because two workers
+// on one machine — a `refresh-library` run and the scheduler — must not
+// be able to mistake each other for themselves.
+func newRefreshOwner() string { return uuid.NewString() }
+
+// refreshCodeFor is what the library remembers about a refresh: a code
+// from a closed set the admin panel has wording for, never the error.
+func refreshCodeFor(syncErr error, result WatchedSyncReport) store.RefreshCode {
+	switch {
+	case syncErr == nil && result.Scan.Complete:
+		return store.RefreshCodeNone
+	case syncErr == nil:
+		// An incomplete traversal is not an error — a limit was hit, or
+		// a subdirectory could not be read — but it is not a refresh
+		// either, because absence cannot be concluded from it. Saying so
+		// is the difference between a library that is quietly
+		// half-indexed and one an administrator can see is.
+		return store.RefreshCodeIncompleteScan
+	case errors.Is(syncErr, store.ErrRefreshLeaseLost):
+		return store.RefreshCodeLeaseLost
+	case errors.Is(syncErr, calibre.ErrUnsupportedSchema):
+		return store.RefreshCodeUnsupportedSchema
+	case errors.Is(syncErr, ErrCalibreUnreadable):
+		return store.RefreshCodeUnreadableDatabase
+	case errors.Is(syncErr, ErrRootUnavailable):
+		return store.RefreshCodeRootUnavailable
+	default:
+		return store.RefreshCodeFailed
+	}
 }

@@ -37,7 +37,8 @@ type Assertion[K comparable, V comparable] struct {
 //
 //   - An empty assertion or an unknown source is ignored. A source that
 //     found nothing is treated as having no opinion, never as a request to
-//     empty the set, so a failed parse cannot strip a book's tags.
+//     empty the set, so a failed parse cannot strip a book's tags. A source
+//     that does mean it says so through MergeStatedSet.
 //   - A set-level manual lock rejects the assertion outright. Removing a row
 //     leaves nothing behind to carry a row lock, so this is what makes a
 //     user's deliberate emptying of a set survive later rescans.
@@ -56,7 +57,25 @@ func MergeSet[K comparable, V comparable](
 	source store.MetadataSource,
 	setLocked bool,
 ) ([]SetEntry[K, V], bool) {
-	return mergeEntries(current, incoming, source, setLocked, true)
+	return mergeEntries(current, incoming, source, setLocked, true, false)
+}
+
+// MergeStatedSet resolves a complete set assertion from a source that
+// also states the set is empty when it is empty. It is MergeSet in every
+// respect but one: an assertion with nothing in it empties the set
+// instead of being ignored, because the source curates the whole record
+// and removing the last tag there is removing the last tag.
+//
+// Only a caller that knows the source speaks for this particular set may
+// use it. Calibre has no genres, so a Calibre proposal states its tags
+// and not its genres, and the genres of a book stay where they are.
+func MergeStatedSet[K comparable, V comparable](
+	current []SetEntry[K, V],
+	incoming []Assertion[K, V],
+	source store.MetadataSource,
+	setLocked bool,
+) ([]SetEntry[K, V], bool) {
+	return mergeEntries(current, incoming, source, setLocked, true, true)
 }
 
 // MergeEntries resolves a partial assertion: a source that knows about some
@@ -70,7 +89,7 @@ func MergeEntries[K comparable, V comparable](
 	source store.MetadataSource,
 	setLocked bool,
 ) ([]SetEntry[K, V], bool) {
-	return mergeEntries(current, incoming, source, setLocked, false)
+	return mergeEntries(current, incoming, source, setLocked, false, false)
 }
 
 func mergeEntries[K comparable, V comparable](
@@ -79,8 +98,12 @@ func mergeEntries[K comparable, V comparable](
 	source store.MetadataSource,
 	setLocked bool,
 	dropUnasserted bool,
+	emptyClears bool,
 ) ([]SetEntry[K, V], bool) {
-	if setLocked || len(incoming) == 0 || !KnownSource(source) {
+	if setLocked || !KnownSource(source) {
+		return current, false
+	}
+	if len(incoming) == 0 && !emptyClears {
 		return current, false
 	}
 	asserted := make(map[K]V, len(incoming))

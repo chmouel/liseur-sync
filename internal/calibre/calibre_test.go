@@ -453,7 +453,7 @@ func TestInventoryNoticesADeletedBook(t *testing.T) {
 	}
 }
 
-func TestReadOPFFillsOnlyWhatTheDatabaseLacks(t *testing.T) {
+func TestReadOPFLeavesAClearedValueCleared(t *testing.T) {
 	t.Parallel()
 	root := writeCalibre(t)
 	writeFile(t, root, "Terry Pratchett/Good Omens (2)/"+OPFName, goodOmensOPF)
@@ -468,8 +468,55 @@ func TestReadOPFFillsOnlyWhatTheDatabaseLacks(t *testing.T) {
 		t.Fatalf("read opf: %v", err)
 	}
 
-	// The database had no description, no languages and no publisher
-	// for this book; the OPF has all three.
+	// This database has comments, publishers and languages tables and
+	// simply holds nothing in them for this book, which is Calibre
+	// saying the fields are empty. The OPF is older than that edit and
+	// does not get to undo it.
+	if book.Description != "" {
+		t.Errorf("description = %q, want the database's clear", book.Description)
+	}
+	if len(book.Languages) != 0 {
+		t.Errorf("languages = %v, want the database's clear", book.Languages)
+	}
+	if book.Publisher != "" {
+		t.Errorf("publisher = %q, want the database's clear", book.Publisher)
+	}
+	// And nothing the database did state moves either.
+	if book.Title != "Good Omens" {
+		t.Errorf("title = %q, want the database's", book.Title)
+	}
+	if got := book.Authors; len(got) != 2 || got[0] != "Terry Pratchett" {
+		t.Errorf("authors = %v, want the database's", got)
+	}
+	if got := book.Identifiers["isbn"]; got != "9780060853983" {
+		t.Errorf("isbn = %q, want the database's", got)
+	}
+}
+
+func TestReadOPFFillsOnlyWhatTheSchemaLacks(t *testing.T) {
+	t.Parallel()
+	root := writeCalibre(t)
+	writeFile(t, root, "Terry Pratchett/Good Omens (2)/"+OPFName, goodOmensOPF)
+	// A Calibre version that does not have these relations at all: the
+	// one case the OPF fallback exists for.
+	writer := openWritable(t, filepath.Join(root, MetadataDB))
+	exec(t, writer, `DROP TABLE comments`)
+	exec(t, writer, `DROP TABLE publishers`)
+	exec(t, writer, `DROP TABLE languages`)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	library := openLibrary(t, root)
+
+	books, err := library.Books(t.Context())
+	if err != nil {
+		t.Fatalf("books: %v", err)
+	}
+	book := books[1]
+	if err := library.ReadOPF(t.Context(), &book); err != nil {
+		t.Fatalf("read opf: %v", err)
+	}
+
 	if book.Description != "An apocalyptic comedy." {
 		t.Errorf("description = %q", book.Description)
 	}
@@ -479,7 +526,7 @@ func TestReadOPFFillsOnlyWhatTheDatabaseLacks(t *testing.T) {
 	if book.Publisher != "Workman" {
 		t.Errorf("publisher = %q", book.Publisher)
 	}
-	// The database had all of these, so the OPF changes nothing.
+	// The relations that are still there keep their say.
 	if book.Title != "Good Omens" {
 		t.Errorf("title = %q, want the database's", book.Title)
 	}
