@@ -1092,7 +1092,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19,
+	migration18, migration19, migration20,
 }
 
 // migration19 records what happened the last time a library's root was
@@ -1117,4 +1117,102 @@ ALTER TABLE libraries ADD COLUMN refresh_requested_at TEXT;
 CREATE INDEX libraries_refresh_requested
     ON libraries(refresh_requested_at)
     WHERE refresh_requested_at IS NOT NULL;
+`
+
+// migration20 is what a Calibre library needs the database to hold
+// (ADR-0014).
+//
+// `libraries` is rebuilt once more, because SQLite cannot alter a CHECK
+// and `source` must now admit `calibre`. The definition is the one from
+// migration18 with the widened constraint and two new columns; every
+// index is recreated.
+//
+// `last_inventory_digest` is the change gate. A Calibre refresh reads
+// the whole inventory — book ids, modification times, and the size and
+// mtime of each file — and hashes it to one value; when that value has
+// not moved, the refresh stops without touching a catalog row. It is not
+// a stat of metadata.db, because Calibre runs SQLite in WAL mode and a
+// commit can leave that file untouched.
+//
+// `library_calibre_books` is identity. A Calibre row resolves to a
+// catalog row through its Calibre book id and nothing else: matching by
+// content digest would merge two deliberately distinct books, which
+// ADR-0002 keeps apart. Unique on both sides, and cascading from the
+// book, so a deleted book takes its mapping with it.
+//
+// The two `book_files` columns are the cover Calibre chose. A cover.jpg
+// somebody picked beats one extracted from the EPUB, and the cache
+// cannot be keyed by the publication digest alone: two Calibre books can
+// share one EPUB and have different covers, so the key gains the cover's
+// own digest.
+const migration20 = `
+DROP INDEX libraries_root;
+DROP INDEX libraries_owner;
+DROP INDEX libraries_refresh_due;
+DROP INDEX libraries_refresh_requested;
+ALTER TABLE libraries RENAME TO libraries_old;
+
+CREATE TABLE libraries (
+    id            TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    quota_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source        TEXT NOT NULL
+        CHECK (source IN ('managed', 'directory', 'calibre')),
+    storage       TEXT NOT NULL CHECK (storage IN ('cas', 'in_place')),
+    refresh       TEXT NOT NULL CHECK (refresh IN ('manual', 'interval')),
+    refresh_interval_seconds INTEGER NOT NULL DEFAULT 900
+        CHECK (refresh_interval_seconds > 0),
+    name          TEXT NOT NULL,
+    root_path     TEXT,
+    config_json   BLOB,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    last_refresh_at         TEXT,
+    last_refresh_attempt_at TEXT,
+    last_refresh_error      TEXT,
+    refresh_requested_at    TEXT,
+    last_inventory_digest   TEXT,
+    UNIQUE (id, quota_user_id),
+    CHECK ((source = 'managed' AND root_path IS NULL) OR
+           (source <> 'managed' AND root_path IS NOT NULL)),
+    CHECK (source <> 'managed' OR refresh = 'manual'),
+    CHECK (storage = 'cas' OR root_path IS NOT NULL)
+);
+
+INSERT INTO libraries (
+    id, owner_user_id, quota_user_id, source, storage, refresh,
+    refresh_interval_seconds, name, root_path, config_json,
+    created_at, updated_at, last_refresh_at, last_refresh_attempt_at,
+    last_refresh_error, refresh_requested_at
+)
+SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
+       refresh_interval_seconds, name, root_path, config_json,
+       created_at, updated_at, last_refresh_at, last_refresh_attempt_at,
+       last_refresh_error, refresh_requested_at
+FROM libraries_old;
+
+DROP TABLE libraries_old;
+
+CREATE UNIQUE INDEX libraries_root
+    ON libraries(root_path) WHERE root_path IS NOT NULL;
+CREATE INDEX libraries_owner ON libraries(owner_user_id);
+CREATE INDEX libraries_refresh_due
+    ON libraries(refresh, source) WHERE refresh = 'interval';
+CREATE INDEX libraries_refresh_requested
+    ON libraries(refresh_requested_at)
+    WHERE refresh_requested_at IS NOT NULL;
+
+CREATE TABLE library_calibre_books (
+    library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    calibre_id INTEGER NOT NULL,
+    book_id    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (library_id, calibre_id),
+    UNIQUE (library_id, book_id),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+ALTER TABLE book_files ADD COLUMN cover_relative_path TEXT;
+ALTER TABLE book_files ADD COLUMN cover_sha256 TEXT;
 `

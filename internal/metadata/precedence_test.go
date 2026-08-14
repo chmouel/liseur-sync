@@ -183,3 +183,97 @@ func TestManualClearAndSetLocked(t *testing.T) {
 		t.Fatalf("unlocked empty field did not accept a rescan: %+v", reapplied)
 	}
 }
+
+func TestCalibreOutranksEverythingButAHuman(t *testing.T) {
+	t.Parallel()
+	// The EPUB said one thing and Calibre says another; Calibre is the
+	// point of pointing this server at a Calibre library.
+	embedded := Field{Value: "dune", Source: store.MetadataEmbedded}
+	calibre, changed := Apply(embedded, Candidate{
+		Value: "Dune", Source: store.MetadataCalibre})
+	if !changed || calibre.Value != "Dune" ||
+		calibre.Source != store.MetadataCalibre {
+		t.Fatalf("Calibre did not win over the EPUB: %+v", calibre)
+	}
+	// A lookup service does not get to undo it.
+	if _, changed := Apply(calibre, Candidate{
+		Value: "Dune (1965)", Source: store.MetadataExternal}); changed {
+		t.Fatal("an external lookup overwrote Calibre")
+	}
+	// A later Calibre read refreshes its own value.
+	corrected, changed := Apply(calibre, Candidate{
+		Value: "Dune: Book One", Source: store.MetadataCalibre})
+	if !changed || corrected.Value != "Dune: Book One" {
+		t.Fatalf("Calibre did not refresh its own value: %+v", corrected)
+	}
+	// A human does, and locks it against every later refresh.
+	edited, changed := Apply(corrected, Candidate{
+		Value: "Dune", Source: store.MetadataManual})
+	if !changed || !edited.Locked {
+		t.Fatalf("a manual edit did not win and lock: %+v", edited)
+	}
+	if _, changed := Apply(edited, Candidate{
+		Value: "Dune: Book One", Source: store.MetadataCalibre}); changed {
+		t.Fatal("a Calibre refresh clobbered a manual edit")
+	}
+}
+
+func TestClearByLeavesATombstone(t *testing.T) {
+	t.Parallel()
+	current := Field{Value: "A blurb", Source: store.MetadataCalibre}
+	cleared, changed := ClearBy(current, store.MetadataCalibre)
+	if !changed || cleared.Value != "" ||
+		cleared.Source != store.MetadataCalibre || cleared.Locked {
+		t.Fatalf("ClearBy = %+v, changed %v", cleared, changed)
+	}
+	if _, changed := ClearBy(cleared, store.MetadataCalibre); changed {
+		t.Fatal("ClearBy is not idempotent")
+	}
+	// The whole point: the EPUB does not refill what Calibre emptied.
+	if _, changed := Apply(cleared, Candidate{
+		Value: "A blurb from the file", Source: store.MetadataEmbedded,
+	}); changed {
+		t.Fatal("the EPUB refilled a field Calibre cleared")
+	}
+	if _, changed := Apply(cleared, Candidate{
+		Value: "A blurb from a lookup", Source: store.MetadataExternal,
+	}); changed {
+		t.Fatal("a lookup refilled a field Calibre cleared")
+	}
+	// Calibre itself, and a human, still can.
+	refilled, changed := Apply(cleared, Candidate{
+		Value: "A better blurb", Source: store.MetadataCalibre})
+	if !changed || refilled.Value != "A better blurb" {
+		t.Fatalf("Calibre could not refill its own tombstone: %+v", refilled)
+	}
+	edited, changed := Apply(cleared, Candidate{
+		Value: "Mine", Source: store.MetadataManual})
+	if !changed || !edited.Locked || edited.Value != "Mine" {
+		t.Fatalf("a human could not refill a Calibre tombstone: %+v", edited)
+	}
+}
+
+func TestClearByRefusesWhatItMayNotWrite(t *testing.T) {
+	t.Parallel()
+	locked := Field{Value: "Mine", Source: store.MetadataManual, Locked: true}
+	if _, changed := ClearBy(locked, store.MetadataCalibre); changed {
+		t.Fatal("Calibre cleared a manually locked field")
+	}
+	stronger := Field{Value: "From Calibre", Source: store.MetadataCalibre}
+	if _, changed := ClearBy(stronger, store.MetadataEmbedded); changed {
+		t.Fatal("the EPUB cleared a field Calibre owns")
+	}
+	if _, changed := ClearBy(stronger, ""); changed {
+		t.Fatal("an unknown source cleared a field")
+	}
+}
+
+func TestAnEmptyFieldWithoutProvenanceStillAcceptsAnything(t *testing.T) {
+	t.Parallel()
+	// Rows written before provenance existed must not become tombstones.
+	filled, changed := Apply(Field{}, Candidate{
+		Value: "Dune", Source: store.MetadataEmbedded})
+	if !changed || filled.Value != "Dune" {
+		t.Fatalf("an empty field refused a candidate: %+v", filled)
+	}
+}

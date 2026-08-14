@@ -352,6 +352,12 @@ type Library struct {
 	// is cleared by the claim that honours it, which is what lets a
 	// library with no schedule at all be refreshed on demand.
 	RefreshRequestedAt *time.Time
+	// LastInventoryDigest is the change gate of a Calibre library: the
+	// whole of metadata.db's book inventory, and the size and mtime of
+	// every file it names, hashed to one value. A refresh that computes
+	// the same value stops without touching a catalog row. It is empty
+	// for every other source, which have no such gate.
+	LastInventoryDigest string
 }
 
 // RefreshDueAt is when this library's next scheduled refresh falls due.
@@ -439,13 +445,20 @@ const (
 	MetadataEmbedded MetadataSource = "embedded"
 	MetadataFilename MetadataSource = "filename"
 	MetadataExternal MetadataSource = "external"
-	MetadataManual   MetadataSource = "manual"
+	// MetadataCalibre is a Calibre library's own metadata.db. It is not
+	// folded into MetadataExternal because the precedence engine lets a
+	// source refresh its own earlier value: a network lookup and a
+	// Calibre read sharing one source would overwrite each other
+	// forever, whichever ran last (ADR-0014).
+	MetadataCalibre MetadataSource = "calibre"
+	MetadataManual  MetadataSource = "manual"
 )
 
-// Valid reports whether the source is one of the four precedence stages.
+// Valid reports whether the source is one of the precedence stages.
 func (s MetadataSource) Valid() bool {
 	return s == MetadataEmbedded || s == MetadataFilename ||
-		s == MetadataExternal || s == MetadataManual
+		s == MetadataExternal || s == MetadataCalibre ||
+		s == MetadataManual
 }
 
 // MetadataSetLocks records the set-level manual locks of one book. A row
@@ -2015,6 +2028,32 @@ type Store interface {
 	// sweeps, so it returns as fast as an UPDATE whatever the size of the
 	// library behind it.
 	AdminRequestLibraryRefresh(ctx context.Context, actorUserID, libraryID string, at time.Time) error
+	// CalibreBookMappings reads a Calibre library's book identity map:
+	// Calibre's own book id to this catalog's book id. It is what makes a
+	// book that moved, or was renamed, or had its file replaced, the same
+	// book here (ADR-0014); matching by content digest would merge two
+	// books ADR-0002 deliberately keeps apart. Global housekeeping, like
+	// the rest of the refresh path, and scoped to one library.
+	CalibreBookMappings(ctx context.Context, libraryID string) (map[int64]string, error)
+	// MapCalibreBook records that one Calibre book is one catalog book.
+	// It is idempotent, and re-pointing a Calibre id at a different book
+	// replaces the mapping rather than adding a second one.
+	MapCalibreBook(ctx context.Context, libraryID string, calibreID int64, bookID string, at time.Time) error
+	// DeleteCalibreBooks permanently removes the catalog books behind the
+	// named Calibre ids, because they are gone from metadata.db and
+	// Calibre is what that library means by true. It settles quota and
+	// blob references exactly as a trash purge does, and never touches a
+	// byte under the library root. Trash is deliberately not involved:
+	// it holds bytes through a grace period, and here there are none of
+	// ours to hold.
+	//
+	// Reading history survives, because it hangs off user-scoped works
+	// rather than off catalog books.
+	DeleteCalibreBooks(ctx context.Context, libraryID string, calibreIDs []int64, at time.Time) (TrashPurgeResult, error)
+	// SetLibraryInventoryDigest records the change gate a Calibre refresh
+	// computed, so the next one can stop without reading a catalog row.
+	// It is written only by a refresh that completed.
+	SetLibraryInventoryDigest(ctx context.Context, libraryID, digest string, at time.Time) error
 	// WatchedFilesByPath reads what the catalog already holds for one
 	// watched source path. It is a global housekeeping query like the
 	// other reconciliation methods — a sweep runs on the server's behalf,

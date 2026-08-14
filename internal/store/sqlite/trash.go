@@ -164,7 +164,30 @@ func (s *Store) PurgeExpiredTrash(
 	if len(bookIDs) == 0 {
 		return result, nil
 	}
+	result, err = purgeBooksTx(ctx, tx, bookIDs, before)
+	if err != nil {
+		return store.TrashPurgeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.TrashPurgeResult{}, err
+	}
+	result.BookIDs = bookIDs
+	return result, nil
+}
 
+// purgeBooksTx permanently removes books and settles what their files
+// were holding: quota reservations that lose their last reference for a
+// principal, and blobs that lose their last reference anywhere.
+//
+// It is shared by the trash purge and by a Calibre refresh reconciling a
+// book that vanished from metadata.db. Those arrive by different routes
+// — a grace period expiring, and somebody deleting a book in Calibre —
+// but a deleted book is a deleted book, and two copies of this reference
+// counting would be two chances to leak a reservation.
+func purgeBooksTx(
+	ctx context.Context, tx *sql.Tx, bookIDs []string, at time.Time,
+) (store.TrashPurgeResult, error) {
+	var result store.TrashPurgeResult
 	type reference struct{ quotaUserID, blob string }
 	affected := map[reference]bool{}
 	blobs := map[string]bool{}
@@ -261,7 +284,7 @@ func (s *Store) PurgeExpiredTrash(
 			       SELECT 1 FROM ingest_blob_holds h
 			       WHERE h.blob_sha256 = blobs.sha256
 			   )`,
-			formatTime(before.UTC()), blob)
+			formatTime(at.UTC()), blob)
 		if err != nil {
 			return store.TrashPurgeResult{}, err
 		}
@@ -272,9 +295,6 @@ func (s *Store) PurgeExpiredTrash(
 		result.BlobsOrphaned += int(marked)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return store.TrashPurgeResult{}, err
-	}
 	result.BookIDs = bookIDs
 	return result, nil
 }
