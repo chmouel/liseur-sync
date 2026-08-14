@@ -17,7 +17,7 @@ type DayCell struct {
 }
 
 templ dashboard(prefix string, u userCtx, csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {
-	@layout("Dashboard", prefix, u.User, csrf, dashboardBody(prefix, csrf, sum, heatmap, recent))
+	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, heatmap, recent))
 }
 
 templ dashboardBody(prefix string, csrf string, sum SummaryData, heatmap []DayCell, recent []SessionRow) {

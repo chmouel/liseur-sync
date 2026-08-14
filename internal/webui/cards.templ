@@ -1,0 +1,95 @@
+package webui
+
+// Cards (ADR-0011). A library is recognised by its covers, so browsing
+// is a wall of them rather than a table of titles. The table is not
+// deleted: it is the list view behind the toolbar's toggle, for the
+// times when scanning five thousand rows beats looking at five thousand
+// pictures.
+
+// bookCard is one book in a grid. The cover carries the link, the
+// actions appear on hover or on focus, and every number that varies is
+// a class rather than a style attribute.
+templ bookCard(prefix string, csrf string, library string, canWrite bool, b BookRow) {
+	<article class="bookcard">
+		<div class="art">
+			<a href={ prefix + "books/" + b.ID } title={ orPlaceholder(b.Title) }>
+				<img
+					src={ prefix + "books/" + b.ID + "/cover?size=thumb" }
+					alt=""
+					loading="lazy"
+					decoding="async"
+					width="333"
+					height="500"
+				/>
+			</a>
+			<div class="actions">
+				if b.CanRead {
+					<a class="btn" href={ prefix + "books/" + b.ID + "/read" }>Read</a>
+				}
+				if b.CanGet {
+					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Get</a>
+				}
+				if canWrite {
+					<form method="post" action={ prefix + "books/" + b.ID + "/delete" }>
+						<input type="hidden" name="csrf" value={ csrf }/>
+						<input type="hidden" name="library" value={ library }/>
+						<button class="btn" type="submit">Delete</button>
+					</form>
+				}
+			</div>
+		</div>
+		<a class="title" href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a>
+		if b.Author != "" {
+			<span class="by">{ b.Author }</span>
+		} else {
+			<span class="by">{ b.Added }</span>
+		}
+	</article>
+}
+
+// workCard is a book being read rather than a book that is held. There
+// is no cover here on purpose: a work is user-scoped sync state and may
+// have no catalog entry at all, and inventing a lookup to decorate a
+// tile would put a read path in the way of the thing that matters, which
+// is how far through it you are.
+templ workCard(prefix string, w WorkRow) {
+	<article class="bookcard">
+		<a class="art art-text" href={ prefix + "works/" + w.ID }>
+			<span class="name">{ orPlaceholder(w.Title) }</span>
+			if w.Author != "" {
+				<span class="count">{ w.Author }</span>
+			}
+			if w.Progression != nil {
+				<span class="big">{ pct(*w.Progression) }</span>
+			}
+		</a>
+		<a class="title" href={ prefix + "works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
+		<span class="by">
+			if w.Pending {
+				pending
+			} else if w.LastActive != "" {
+				{ "read " + w.LastActive }
+			}
+		</span>
+		if w.Progression != nil {
+			<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
+		}
+	</article>
+}
+
+// viewToggle switches a browse page between the grid and the table. It
+// posts, like every other preference, so it works with scripting off and
+// is remembered on the next page.
+templ viewToggle(prefix string, csrf string, back string, current string) {
+	<form class="viewtoggle" method="post" action={ prefix + "preferences" }>
+		<input type="hidden" name="csrf" value={ csrf }/>
+		<input type="hidden" name="back" value={ back }/>
+		if current == viewGrid {
+			<button class="on" type="submit" name="view" value="grid" aria-pressed="true">Grid</button>
+			<button type="submit" name="view" value="list" aria-pressed="false">List</button>
+		} else {
+			<button type="submit" name="view" value="grid" aria-pressed="false">Grid</button>
+			<button class="on" type="submit" name="view" value="list" aria-pressed="true">List</button>
+		}
+	</form>
+}

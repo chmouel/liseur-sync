@@ -119,7 +119,7 @@ func (s *Server) renderBookWithCandidates(
 	}
 	v.Lookup.Ran = true
 	v.Lookup.Candidates = candidateViews(candidates)
-	bookPage(relPrefix(r.URL.Path), userCtx{User: u}, csrfFor(a), v).
+	bookPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
 

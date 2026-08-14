@@ -5,7 +5,7 @@ import "github.com/chmouel/liseur-sync/internal/store"
 // Settings and admin pages.
 
 templ settingsPage(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
-	@layout("Settings", prefix, u.User, csrf, settingsBody(prefix, u, csrf, saved, zones, pwMsg, pwErr))
+	@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, saved, zones, pwMsg, pwErr))
 }
 
 templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
@@ -70,7 +70,7 @@ templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []st
 }
 
 templ adminPage(prefix string, u userCtx, csrf string, invites []store.Invite, users []store.User, flash Flash) {
-	@layout("Admin", prefix, u.User, csrf, adminBody(prefix, csrf, invites, users, flash))
+	@layout("Admin", prefix, u, csrf, adminBody(prefix, csrf, invites, users, flash))
 }
 
 templ adminBody(prefix string, csrf string, invites []store.Invite, users []store.User, flash Flash) {

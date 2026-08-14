@@ -731,3 +731,101 @@ func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
 		t.Fatalf("duplicates still reported after deleting one:\n%s", html)
 	}
 }
+
+// TestBooksGridAndListViews covers the revamp's browse shapes (ADR-0011):
+// a grid of covers by default, the old table on request, and the same
+// books either way.
+func TestBooksGridAndListViews(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	f.uploadForm(t, f.cookie, csrf, f.library, "moby.epub", bytes.Repeat([]byte("web-epub"), 50))
+	bookID := f.promote(t, "moby")
+
+	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	if !strings.Contains(html, `class="grid"`) || !strings.Contains(html, `class="bookcard"`) {
+		t.Fatal("default browse view is not a grid of cards")
+	}
+	if !strings.Contains(html, "/cover?size=thumb") {
+		t.Error("grid does not ask for the cached thumbnail")
+	}
+	if !strings.Contains(html, bookID) {
+		t.Error("the book is missing from the grid")
+	}
+
+	// Switching to the list is a form post like every other mutation,
+	// and it comes back to the library that was being looked at.
+	req, _ := http.NewRequest("POST", f.ts.URL+"/ui/preferences", strings.NewReader(
+		url.Values{
+			"csrf": {csrf}, "view": {"list"},
+			"back": {"books?library=" + f.library},
+		}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(f.cookie)
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("view toggle: want 303, got %d", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "books?library="+f.library {
+		t.Errorf("view toggle returned to %q", loc)
+	}
+	var pref *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "liseur_ui" {
+			pref = c
+		}
+	}
+	if pref == nil {
+		t.Fatal("view toggle set no preference cookie")
+	}
+
+	req, _ = http.NewRequest("GET", f.ts.URL+"/ui/books?library="+f.library, nil)
+	req.AddCookie(f.cookie)
+	req.AddCookie(pref)
+	resp, err = noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	list := string(body)
+	if strings.Contains(list, `class="bookcard"`) {
+		t.Error("list view still rendered cards")
+	}
+	if !strings.Contains(list, "<table>") || !strings.Contains(list, bookID) {
+		t.Error("list view lost the table or the book")
+	}
+}
+
+// TestBooksHTMXFragmentIsOnlyTheCards pins the endless-scroll contract:
+// htmx gets cards and a sentinel, never a second copy of the shell.
+func TestBooksHTMXFragmentIsOnlyTheCards(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	csrf := csrfFrom(t, html)
+	f.uploadForm(t, f.cookie, csrf, f.library, "moby.epub", bytes.Repeat([]byte("web-epub"), 50))
+	f.promote(t, "moby")
+
+	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/books?library="+f.library, nil)
+	req.AddCookie(f.cookie)
+	req.Header.Set("HX-Request", "true")
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	frag := string(body)
+	if !strings.Contains(frag, `class="bookcard"`) {
+		t.Fatal("fragment has no cards")
+	}
+	for _, shell := range []string{"<html", `class="rail"`, `class="topbar"`, "<table>"} {
+		if strings.Contains(frag, shell) {
+			t.Errorf("fragment contains %q, so htmx would append the whole page", shell)
+		}
+	}
+}

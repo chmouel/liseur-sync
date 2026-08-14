@@ -5,7 +5,7 @@ import "github.com/chmouel/liseur-sync/internal/store"
 // Devices page: tokens, kosync slots, koplugin capabilities, pairing.
 
 templ devicesPage(prefix string, u userCtx, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
-	@layout("Devices", prefix, u.User, csrf, devicesBody(prefix, csrf, toks, kosyncDevs, kopluginDevs, flash))
+	@layout("Devices", prefix, u, csrf, devicesBody(prefix, csrf, toks, kosyncDevs, kopluginDevs, flash))
 }
 
 // Flash carries one-time results (a shown-once secret).

@@ -30,7 +30,7 @@ type SearchView struct {
 }
 
 templ searchPage(prefix string, u userCtx, csrf string, v SearchView) {
-	@layout("Search", prefix, u.User, csrf, searchBody(prefix, v))
+	@layout("Search", prefix, u, csrf, searchBody(prefix, v))
 }
 
 templ searchBody(prefix string, v SearchView) {

@@ -76,10 +76,16 @@ type BooksView struct {
 	NextURL    string
 	Notice    string
 	Problem   string
+	// View is the reader's grid/list preference, copied out of the
+	// cookie so the body does not need the whole shell context.
+	View string
+	// Back is where the view toggle returns to: this page, with its
+	// library selection intact.
+	Back string
 }
 
 templ booksPage(prefix string, u userCtx, csrf string, v BooksView) {
-	@layout("Books", prefix, u.User, csrf, booksBody(prefix, csrf, v))
+	@layout("Books", prefix, u, csrf, booksBody(prefix, csrf, v))
 }
 
 templ booksBody(prefix, csrf string, v BooksView) {
@@ -256,10 +262,14 @@ templ booksBody(prefix, csrf string, v BooksView) {
 			</section>
 		}
 		<section class="card">
-			<h2>In this library</h2>
+			<div class="toolbar">
+				<h2>In this library</h2>
+				<span class="spacer"></span>
+				@viewToggle(prefix, csrf, v.Back, v.View)
+			</div>
 			if len(v.Books) == 0 {
 				<p class="muted">No books yet.</p>
-			} else {
+			} else if v.View == viewList {
 				<table>
 					<tr><th></th><th>Title</th><th>Added</th><th></th><th></th></tr>
 					for _, b := range v.Books {
@@ -268,11 +278,11 @@ templ booksBody(prefix, csrf string, v BooksView) {
 								<a href={ prefix + "books/" + b.ID }>
 									<img
 										class="cover-thumb"
-										src={ prefix + "books/" + b.ID + "/cover" }
+										src={ prefix + "books/" + b.ID + "/cover?size=thumb" }
 										alt=""
 										loading="lazy"
 										width="40"
-										height="53"/>
+										height="60"/>
 								</a>
 							</td>
 							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
@@ -302,8 +312,40 @@ templ booksBody(prefix, csrf string, v BooksView) {
 				if v.NextURL != "" {
 					<p><a href={ v.NextURL }>Next page</a></p>
 				}
+			} else {
+				@bookGrid(prefix, csrf, v)
 			}
 		</section>
+	}
+}
+
+// bookGrid is its own component so the first page and every htmx
+// continuation render from the same markup.
+templ bookGrid(prefix, csrf string, v BooksView) {
+	<div class="grid">
+		@booksFragment(prefix, csrf, v)
+	</div>
+}
+
+// booksFragment is a page of cards plus the sentinel that fetches the
+// next one. It replaces itself, so the cards it brings land inside the
+// grid rather than after it.
+//
+// The sentinel is a link first and a trigger second: with scripting off
+// it is the "next page" the table view has always had.
+templ booksFragment(prefix, csrf string, v BooksView) {
+	for _, b := range v.Books {
+		@bookCard(prefix, csrf, v.Selected, v.CanWrite, b)
+	}
+	if v.NextURL != "" {
+		<div
+			class="more"
+			hx-get={ v.NextURL }
+			hx-trigger="revealed"
+			hx-swap="outerHTML"
+		>
+			<a href={ v.NextURL }>Next page</a>
+		</div>
 	}
 }
 
@@ -358,7 +400,7 @@ type MetadataEditView struct {
 }
 
 templ bookPage(prefix string, u userCtx, csrf string, b BookView) {
-	@layout(orPlaceholder(b.Title), prefix, u.User, csrf, bookBody(prefix, csrf, b))
+	@layout(orPlaceholder(b.Title), prefix, u, csrf, bookBody(prefix, csrf, b))
 }
 
 // metadataRow renders one field of the edit form. The hidden `_was`
