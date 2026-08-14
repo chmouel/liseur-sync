@@ -190,11 +190,14 @@ function sectionProgression(location) {
 // every time a laptop lid closes, and the next page turn retries.
 //
 // The op log is append-only and idempotent by op id, so a retry of the
-// same position must replay the same id — a fresh id per attempt would
-// write the same place into history twice. A different position is a
-// different op and gets a new id; a 409 means this id already exists
-// with another payload, where replaying is the one thing that cannot
-// help.
+// same position must replay the same op — the whole op, byte for byte,
+// because a fresh client_ts under an old id is a different payload and
+// the server rightly calls that a conflict. The op is therefore built
+// once and kept until the server confirms it holds it; a different
+// position is a different op and gets a new id. The server answers 200
+// with a status per op: "applied" and "duplicate" both mean the log
+// has it, and "conflict" means this id already belongs to another
+// payload, where replaying is the one thing that cannot help.
 let retryOp = null;
 
 async function push() {
@@ -202,8 +205,14 @@ async function push() {
   const locator = locatorFor(here);
   const key = (locator.locations.fragments[0] || '') + '@' +
     locator.locations.totalProgression;
-  const id = retryOp && retryOp.key === key ? retryOp.id : opID();
-  retryOp = { id, key };
+  const op = retryOp && retryOp.key === key ? retryOp.op : {
+    op_id: opID(),
+    work_id: workID,
+    client_ts: new Date().toISOString(),
+    progression: locator.locations.totalProgression,
+    locator: locator,
+  };
+  retryOp = { key, op };
   try {
     const resp = await api('v1/ops', {
       method: 'POST',
@@ -211,19 +220,20 @@ async function push() {
       // keepalive lets the final flush outlive the page: without it a
       // position pushed from beforeunload is cancelled mid-flight.
       keepalive: true,
-      body: JSON.stringify({
-        ops: [{
-          op_id: id,
-          work_id: workID,
-          client_ts: new Date().toISOString(),
-          progression: locator.locations.totalProgression,
-          locator: locator,
-        }],
-      }),
+      body: JSON.stringify({ ops: [op] }),
     });
-    if (resp.ok || resp.status === 409) retryOp = null;
+    if (!resp.ok) return;
+    const out = await resp.json().catch(() => null);
+    const status = out && out.results && out.results[0] && out.results[0].status;
+    if (status !== 'applied' && status !== 'duplicate' && status !== 'conflict') {
+      return;
+    }
+    // Only this op's own outcome may clear it: a slower response
+    // arriving after the reader has moved on must not discard the op
+    // a newer push is still responsible for.
+    if (retryOp && retryOp.op === op) retryOp = null;
   } catch (err) {
-    /* offline: the next page turn retries this op under the same id */
+    /* offline: the next page turn replays this exact op */
   }
 }
 
@@ -257,17 +267,19 @@ function cfiOf(op) {
   return null;
 }
 
-// startFrom decides where to open. It prefers what the writing client
-// actually said — a CFI from this reader, or the resource another one
-// named — and falls back to the fraction every client agrees on, which
-// is why a book started on a phone opens in roughly the right place
-// here. A stored pointer is only trusted after the engine confirms it
-// resolves against *this* copy of the book: a CFI written by another
-// engine or against another edition otherwise opens page one silently,
-// when the fraction beside it would have landed within a page of the
-// right place. The return value is whatever view.init can resolve.
-function startFrom(op) {
-  if (!op) return null;
+// startCandidates lists where to try opening, best pointer first. It
+// prefers what the writing client actually said — a CFI from this
+// reader, or the resource another one named — and keeps the fraction
+// every client agrees on as the fallback, which is why a book started
+// on a phone opens in roughly the right place here. A stored pointer
+// is only offered after the engine confirms it resolves against *this*
+// copy of the book; but resolution here checks only the spine step, and
+// a CFI's path inside the chapter is walked lazily after the chapter
+// loads, where a pointer from another engine or edition can still fail.
+// That is why this returns a ladder for the caller to descend rather
+// than a single answer.
+function startCandidates(op) {
+  if (!op) return [];
   const resolves = (target) => {
     try {
       const resolved = view.resolveNavigation(target);
@@ -277,17 +289,18 @@ function startFrom(op) {
       return false;
     }
   };
+  const out = [];
   const cfi = cfiOf(op);
-  if (cfi && resolves(cfi)) return cfi;
+  if (cfi && resolves(cfi)) out.push(cfi);
   const locations = (op.locator && op.locator.locations) || {};
   const fraction = typeof locations.totalProgression === 'number'
     ? locations.totalProgression : op.progression;
   if (typeof fraction === 'number' && fraction > 0) {
-    return { fraction: Math.min(0.999, fraction) };
+    out.push({ fraction: Math.min(0.999, fraction) });
   }
   const href = op.locator && op.locator.href;
-  if (href && resolves(href)) return href;
-  return null;
+  if (href && resolves(href)) out.push(href);
+  return out;
 }
 
 // ------------------------------------------------------ appearance
@@ -604,7 +617,24 @@ window.addEventListener('beforeunload', () => {
       /* read on without sync */
     }
 
-    await view.init({ lastLocation: startFrom(op) });
+    // The candidates are tried in order because a pointer that
+    // resolved on paper can still fail in the chapter: the CFI's spine
+    // step is checked up front, but its path inside the document is
+    // only walked once the chapter has loaded, and a CFI minted by
+    // another engine or against another edition throws there. Each
+    // rung falls to the next; a book with no usable pointer at all
+    // opens at its text start rather than not at all.
+    let opened = false;
+    for (const target of startCandidates(op)) {
+      try {
+        await view.init({ lastLocation: target });
+        opened = true;
+        break;
+      } catch (err) {
+        /* stale pointer: descend to the coarser one */
+      }
+    }
+    if (!opened) await view.init({ lastLocation: null });
     say('');
   } catch (err) {
     say((err && err.message) || 'this book could not be opened', true);
