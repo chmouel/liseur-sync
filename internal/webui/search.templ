@@ -56,7 +56,7 @@ templ searchBody(prefix, csrf string, v SearchView) {
 	if !v.Blank {
 		<section class="card">
 			if len(v.Books) == 0 {
-				<p class="muted">Nothing matched. Try fewer words.</p>
+				@emptyState("Nothing matched", "Try searching with fewer words or removing entity filters.", "", "")
 			} else if v.View == viewGrid {
 				<div class="grid">
 					for _, b := range v.Books {

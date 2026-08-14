@@ -546,3 +546,41 @@ func TestLoginDoesNotLeakUserExistence(t *testing.T) {
 			"the dummy hash check is not running", unknown, known)
 	}
 }
+
+func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ctx := t.Context()
+
+	now := time.Now().UTC()
+	lib := store.Library{
+		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
+		Kind: store.LibraryManaged, Name: "Test Lib", CreatedAt: now,
+	}
+	if err := st.CreateLibrary(ctx, lib); err != nil {
+		t.Fatal(err)
+	}
+
+	book := store.CatalogBook{
+		ID: "b1", LibraryID: lib.ID, Status: store.BookActive, Title: "Dune",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := st.CreateCatalogBook(ctx, "u1", book); err != nil {
+		t.Fatal(err)
+	}
+
+	work := store.Work{
+		ID: "w1", UserID: "u1", Title: "Dune", CreatedAt: now,
+	}
+	if _, err := st.ResolveCatalogBookWork(ctx, "u1", book.ID, work, nil, nil, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := page(t, ts, cookie, "/ui/works")
+	if code != 200 {
+		t.Fatalf("works page: %d", code)
+	}
+	if !strings.Contains(body, "books/b1/cover?size=thumbnail") {
+		t.Fatalf("reading page does not render cover for mapped work:\n%s", body)
+	}
+}

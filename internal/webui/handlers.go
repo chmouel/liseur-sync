@@ -82,12 +82,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 				EndProg:   ses.EndProg,
 			})
 		}
+		workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
 		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-			sum, heat, recent, continueReading(works, loc)).Render(r.Context(), w)
+			sum, heat, recent, continueReading(works, workBookIDs, loc)).Render(r.Context(), w)
 		return
 	}
+	workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		sum, nil, nil, continueReading(works, loc)).Render(r.Context(), w)
+		sum, nil, nil, continueReading(works, workBookIDs, loc)).Render(r.Context(), w)
 }
 
 // continueReadingLimit is a shelf, not a list: the point is to get back
@@ -98,7 +100,7 @@ const continueReadingLimit = 8
 // continueReading is the works that are started and not finished, newest
 // first. It reads nothing extra — the dashboard has already listed the
 // works to name them in the session table.
-func continueReading(works []store.WorkSummary, loc *time.Location) []WorkRow {
+func continueReading(works []store.WorkSummary, bookIDs map[string]string, loc *time.Location) []WorkRow {
 	started := make([]store.WorkSummary, 0, len(works))
 	for _, ws := range works {
 		if ws.Progression == nil || *ws.Progression <= 0 || *ws.Progression >= 0.999 {
@@ -118,7 +120,7 @@ func continueReading(works []store.WorkSummary, loc *time.Location) []WorkRow {
 	rows := make([]WorkRow, 0, len(started))
 	for _, ws := range started {
 		rows = append(rows, WorkRow{
-			ID: ws.Work.ID, Title: ws.Work.Title, Author: ws.Work.Author,
+			ID: ws.Work.ID, BookID: bookIDs[ws.Work.ID], Title: ws.Work.Title, Author: ws.Work.Author,
 			Progression: ws.Progression, Pending: ws.Pending,
 			LastActive: ws.LastActive.In(loc).Format("Jan 2"),
 		})
@@ -164,11 +166,12 @@ func (s *Server) handleWorks(w http.ResponseWriter, r *http.Request, a store.Aut
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
 	loc := userLoc(u)
 	var rows []WorkRow
 	for _, ws := range works {
 		row := WorkRow{
-			ID: ws.Work.ID, Title: ws.Work.Title, Author: ws.Work.Author,
+			ID: ws.Work.ID, BookID: workBookIDs[ws.Work.ID], Title: ws.Work.Title, Author: ws.Work.Author,
 			Progression: ws.Progression, Pending: ws.Pending,
 		}
 		if ws.LastActive != nil {

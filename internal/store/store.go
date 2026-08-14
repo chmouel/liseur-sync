@@ -1469,6 +1469,8 @@ type Store interface {
 	// resolutions do not mutate the graph or create a mapping.
 	ResolveCatalogBookWork(ctx context.Context, userID, bookID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool, at time.Time) (WorkResolution, error)
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
+	WorkBookIDs(ctx context.Context, userID string) (map[string]string, error)
+	CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error)
 
 	// Ingestion jobs.
 	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)

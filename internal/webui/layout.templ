@@ -72,6 +72,17 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					@body
 				</main>
 			}
+			<script>
+				document.addEventListener('keydown', function(e) {
+					if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+						var input = document.querySelector('header form input[name="q"]');
+						if (input) { e.preventDefault(); input.focus(); }
+					} else if (e.key === 'Escape') {
+						var toggle = document.getElementById('nav-toggle');
+						if (toggle && toggle.checked) { toggle.checked = false; }
+					}
+				});
+			</script>
 		</body>
 	</html>
 }

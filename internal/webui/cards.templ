@@ -47,22 +47,38 @@ templ bookCard(prefix string, csrf string, library string, canWrite bool, b Book
 	</article>
 }
 
-// workCard is a book being read rather than a book that is held. There
-// is no cover here on purpose: a work is user-scoped sync state and may
-// have no catalog entry at all, and inventing a lookup to decorate a
-// tile would put a read path in the way of the thing that matters, which
-// is how far through it you are.
+// workCard is a book being read rather than a book that is held. When mapped
+// to a catalog book, it renders the cover art with the reading progress
+// bar across the bottom; when unmapped, it falls back to a text tile.
 templ workCard(prefix string, w WorkRow) {
 	<article class="bookcard">
-		<a class="art art-text" href={ prefix + "works/" + w.ID }>
-			<span class="name">{ orPlaceholder(w.Title) }</span>
-			if w.Author != "" {
-				<span class="count">{ w.Author }</span>
-			}
-			if w.Progression != nil {
-				<span class="big">{ pct(*w.Progression) }</span>
-			}
-		</a>
+		if w.BookID != "" {
+			<div class="art">
+				<a href={ prefix + "works/" + w.ID } title={ orPlaceholder(w.Title) }>
+					<img
+						src={ prefix + "books/" + w.BookID + "/cover?size=thumbnail" }
+						alt=""
+						loading="lazy"
+						decoding="async"
+						width="333"
+						height="500"
+					/>
+				</a>
+				if w.Progression != nil {
+					<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
+				}
+			</div>
+		} else {
+			<a class="art art-text" href={ prefix + "works/" + w.ID }>
+				<span class="name">{ orPlaceholder(w.Title) }</span>
+				if w.Author != "" {
+					<span class="count">{ w.Author }</span>
+				}
+				if w.Progression != nil {
+					<span class="big">{ pct(*w.Progression) }</span>
+				}
+			</a>
+		}
 		<a class="title" href={ prefix + "works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
 		<span class="by">
 			if w.Pending {
@@ -71,7 +87,7 @@ templ workCard(prefix string, w WorkRow) {
 				{ "read " + w.LastActive }
 			}
 		</span>
-		if w.Progression != nil {
+		if w.BookID == "" && w.Progression != nil {
 			<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
 		}
 	</article>
@@ -122,4 +138,17 @@ templ entityCard(prefix, csrf string, v EntitiesView, e EntityRow) {
 			</form>
 		}
 	</article>
+}
+
+// emptyState presents a friendly placeholder with optional call to action.
+templ emptyState(title, message, btnText, btnHREF string) {
+	<div class="empty-state">
+		<h3>{ title }</h3>
+		if message != "" {
+			<p>{ message }</p>
+		}
+		if btnText != "" && btnHREF != "" {
+			<a class="btn primary" href={ btnHREF }>{ btnText }</a>
+		}
+	</div>
 }
