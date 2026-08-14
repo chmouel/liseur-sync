@@ -33,7 +33,7 @@ loose ends that must come before any of it, are in
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Unblocked; API is stable |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Unblocked; API is stable |
 | [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Implemented | Nothing outstanding |
-| [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Accepted | Phase 1: design system and shell |
+| [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Implemented | Books grid shows no author until a batched catalog read exists |
 
 ## Convention
 

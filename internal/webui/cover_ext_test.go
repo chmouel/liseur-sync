@@ -263,3 +263,43 @@ func TestBooksUICoverWithoutContentStorage(t *testing.T) {
 		t.Fatalf("not an image: %v", err)
 	}
 }
+
+// TestPlaceholderFollowsTheTheme: a shelf of sideloaded books is mostly
+// placeholders, so a light card on the dark theme is a wall of glare.
+// The theme is already in a cookie, so the image can simply follow it.
+func TestPlaceholderFollowsTheTheme(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := bookWithMetadata(t, f, "coverless")
+
+	dark := f.coverBytes(t, bookID, nil)
+	light := f.coverBytes(t, bookID, &http.Cookie{Name: "liseur_ui", Value: "light.grid"})
+	if bytes.Equal(dark, light) {
+		t.Fatal("the placeholder ignored the theme")
+	}
+	// Both are still images, and both still say so.
+	for _, body := range [][]byte{dark, light} {
+		if _, _, err := image.Decode(bytes.NewReader(body)); err != nil {
+			t.Fatalf("placeholder is not an image: %v", err)
+		}
+	}
+}
+
+// coverBytes fetches a cover with an optional extra cookie.
+func (f *booksFixture) coverBytes(t *testing.T, bookID string, extra *http.Cookie) []byte {
+	t.Helper()
+	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/books/"+bookID+"/cover", nil)
+	req.AddCookie(f.cookie)
+	if extra != nil {
+		req.AddCookie(extra)
+	}
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Vary") == "" {
+		t.Error("a cookie-dependent image did not say it varies by cookie")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return body
+}
