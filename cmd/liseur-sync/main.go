@@ -435,6 +435,15 @@ func run(args []string) error {
 	}
 }
 
+// defaultConfigPath is the -config flag default: LISEUR_CONFIG if set,
+// else the conventional file name in the working directory.
+func defaultConfigPath() string {
+	if p := os.Getenv("LISEUR_CONFIG"); p != "" {
+		return p
+	}
+	return "liseur-sync.toml"
+}
+
 func flagUsage(fs *flag.FlagSet) string {
 	var buf bytes.Buffer
 	old := fs.Output()
@@ -447,7 +456,8 @@ func flagUsage(fs *flag.FlagSet) string {
 func cmdServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	cfgPath := fs.String("config", "liseur-sync.toml", "path to TOML config file")
+	cfgPath := fs.String("config", defaultConfigPath(),
+		"path to TOML config file (default liseur-sync.toml, override with LISEUR_CONFIG)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return usageExit{text: flagUsage(fs), code: 0}
@@ -650,7 +660,8 @@ func cmdAdmin(args []string) error {
 	}
 	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	cfgPath := fs.String("config", "liseur-sync.toml", "path to TOML config file")
+	cfgPath := fs.String("config", defaultConfigPath(),
+		"path to TOML config file (default liseur-sync.toml, override with LISEUR_CONFIG)")
 	// Standard flag parsing: flags must precede the subcommand.
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

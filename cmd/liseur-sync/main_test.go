@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,32 @@ func TestAdminUsageHelpFlagExitsZero(t *testing.T) {
 	if !strings.Contains(stderr.String(),
 		"usage: liseur-sync admin [-config <file>] <subcommand>\n\n") {
 		t.Fatalf("stderr did not contain admin usage:\n%s", stderr.String())
+	}
+}
+
+func TestDefaultConfigPathFallsBackWithoutEnv(t *testing.T) {
+	t.Setenv("LISEUR_CONFIG", "")
+	if got := defaultConfigPath(); got != "liseur-sync.toml" {
+		t.Fatalf("defaultConfigPath() = %q, want %q", got, "liseur-sync.toml")
+	}
+}
+
+func TestDefaultConfigPathUsesEnvOverride(t *testing.T) {
+	t.Setenv("LISEUR_CONFIG", "/etc/liseur-sync/prod.toml")
+	if got := defaultConfigPath(); got != "/etc/liseur-sync/prod.toml" {
+		t.Fatalf("defaultConfigPath() = %q, want %q", got, "/etc/liseur-sync/prod.toml")
+	}
+}
+
+func TestConfigFlagOverridesLISEUR_CONFIGEnvVar(t *testing.T) {
+	t.Setenv("LISEUR_CONFIG", "/etc/liseur-sync/prod.toml")
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	cfgPath := fs.String("config", defaultConfigPath(), "path to TOML config file")
+	if err := fs.Parse([]string{"-config", "explicit.toml"}); err != nil {
+		t.Fatal(err)
+	}
+	if *cfgPath != "explicit.toml" {
+		t.Fatalf("cfgPath = %q, want %q (explicit -config must win over LISEUR_CONFIG)", *cfgPath, "explicit.toml")
 	}
 }
 
