@@ -45,7 +45,9 @@ func newAbandonedFixture(t *testing.T) *abandonedFixture {
 		user: storetest.MkUser(t, st, "abandoner")}
 	f.library = store.Library{
 		ID: "lib-1", OwnerUserID: f.user.ID, QuotaUserID: f.user.ID,
-		Kind: store.LibraryManaged, Name: "Books", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Books", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(t.Context(), f.library); err != nil {
 		t.Fatal(err)

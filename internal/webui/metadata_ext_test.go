@@ -329,7 +329,9 @@ func TestEntityPagesAreScopedToTheTenant(t *testing.T) {
 	f := newBooksFixture(t)
 	if err := f.st.CreateLibrary(t.Context(), store.Library{
 		ID: "lib-other", OwnerUserID: "u2", QuotaUserID: "u2",
-		Kind: store.LibraryManaged, Name: "Bob's Books",
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Bob's Books",
 		CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)

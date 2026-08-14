@@ -68,15 +68,50 @@ func (s *Store) Close() error { return s.db.Close() }
 // cross-process file lock that coordinates the server, the admin CLI,
 // and concurrent starters. Failure aborts the transaction: the server
 // never runs against a partially migrated schema.
+//
+// Foreign keys are switched off for the duration, which is what SQLite's
+// own table-rebuild procedure requires and cannot be done inside a
+// transaction. Two behaviours make it necessary: with foreign keys on, a
+// table rename rewrites every *other* table's REFERENCES clauses to
+// follow it — even with legacy_alter_table on — so a rebuild that moves
+// the old table aside repoints the whole catalog at the scratch table;
+// and DROP TABLE performs an
+// implicit DELETE FROM that fires ON DELETE CASCADE, so dropping the
+// table the books hang off would take the books with it. The
+// enforcement given up is bought back by the foreign_key_check below,
+// which runs before the commit and fails the upgrade rather than
+// shipping a catalog with dangling references.
 func (s *Store) Migrate(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	// The pragma is per connection, so the whole migration has to run on
+	// one pinned connection rather than whatever the pool hands out.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	// Both flags are needed, and only together: with foreign keys on, a
+	// rename rewrites other tables' REFERENCES clauses whatever this one
+	// says, and with foreign keys off it is this one that decides.
+	if _, err := conn.ExecContext(ctx,
+		`PRAGMA legacy_alter_table = ON`); err != nil {
+		return err
+	}
+	defer func() {
+		// The connection goes back to a pool where every other caller
+		// expects enforcement, so it is restored even when a migration
+		// failed and even when the caller's context is already done.
+		restore := context.WithoutCancel(ctx)
+		_, _ = conn.ExecContext(restore, `PRAGMA legacy_alter_table = OFF`)
+		_, _ = conn.ExecContext(restore, `PRAGMA foreign_keys = ON`)
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-		return err
-	}
 
 	// Bootstrap the migrations table itself.
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -99,7 +134,34 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := checkForeignKeys(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// checkForeignKeys refuses a migration that left a dangling reference.
+// PRAGMA foreign_key_check reports violations as rows rather than as an
+// error, so a migration cannot catch this itself by running it.
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table any
+		var rowid any
+		var parent any
+		var fkid any
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return fmt.Errorf("migration left a dangling foreign key")
+		}
+		return fmt.Errorf(
+			"migration left a dangling foreign key: %v references %v",
+			table, parent)
+	}
+	return rows.Err()
 }
 
 // --- helpers ---

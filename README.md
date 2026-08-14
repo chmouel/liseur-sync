@@ -61,7 +61,7 @@ Then sign in at `/ui/library` — one dark cover grid with a left rail, a
 light theme one press away, holding both what this server stores and
 what you have read on it — to upload a book, or point a reader at
 `/opds/v1.2`. To index EPUBs you already have instead of uploading them,
-`admin watch-library alice "Calibre" /srv/books` — the server reads that
+`admin add-library alice "Shelf" /srv/books` — the server reads that
 directory and never writes to it.
 
 An administrator also gets `/ui/admin`: accounts (create, reset a

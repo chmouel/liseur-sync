@@ -25,7 +25,9 @@ func testTrashRestoreAndPurge(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-trash", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Trash", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Trash", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -213,7 +215,9 @@ func testPurgeKeepsQuotaForRemainingReferences(t *testing.T, open OpenFunc) {
 	for _, r := range refs {
 		if err := s.CreateLibrary(ctx, store.Library{
 			ID: r.library, OwnerUserID: r.owner, QuotaUserID: r.owner,
-			Kind: store.LibraryManaged, Name: r.library, CreatedAt: now,
+			Source:  store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual, Name: r.library, CreatedAt: now,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -301,7 +305,9 @@ func testPurgeRespectsItsLimit(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-purge-limit", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Limit", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Limit", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +419,9 @@ func testPurgeSparesBlobsHeldByIngest(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-hold", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Hold", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Hold", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +486,9 @@ func testRestoreReflectsWhatTheBytesSupport(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-restore", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Restore", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Restore", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +551,9 @@ func testTrashedBooksLeaveTheCatalogAndAppearInTheTrash(t *testing.T, open OpenF
 	now := time.Date(2026, time.November, 2, 9, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-vis", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Visibility", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Visibility", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

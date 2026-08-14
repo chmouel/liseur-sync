@@ -288,7 +288,7 @@ func runWatchedScanWorker(
 		QuotaLimitBytes: watchedQuotaLimit(cfg),
 	}
 	for {
-		report, err := content.RunWatchedScanPass(ctx, st, cas, opts, time.Now)
+		report, err := content.RunScanPass(ctx, st, cas, opts, time.Now)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

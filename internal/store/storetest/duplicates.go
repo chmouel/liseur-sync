@@ -25,7 +25,9 @@ func testDuplicateContentIsReportedNotResolved(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.November, 3, 9, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-dup", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Duplicates", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Duplicates", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -35,7 +37,9 @@ func testDuplicateContentIsReportedNotResolved(t *testing.T, open OpenFunc) {
 	// the user cannot see must not be reported as a duplicate here.
 	other := store.Library{
 		ID: "lib-dup-other", OwnerUserID: outsider.ID, QuotaUserID: outsider.ID,
-		Kind: store.LibraryManaged, Name: "Elsewhere", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Elsewhere", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, other); err != nil {
 		t.Fatal(err)
@@ -177,7 +181,9 @@ func testSimilarBooksAreAskedAboutNotAsserted(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.November, 4, 9, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-similar", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Similar", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Similar", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

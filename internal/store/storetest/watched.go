@@ -30,7 +30,9 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 	root := "/srv/books"
 	library := store.Library{
 		ID: "lib-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryWatched, Name: "Watched", RootPath: &root,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Watched", RootPath: &root,
 		CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
@@ -40,15 +42,19 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 	otherRoot := "/srv/other"
 	other := store.Library{
 		ID: "lib-watched-other", OwnerUserID: outsider.ID,
-		QuotaUserID: outsider.ID, Kind: store.LibraryWatched,
-		Name: "Other", RootPath: &otherRoot, CreatedAt: now,
+		QuotaUserID: outsider.ID, Source: store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval,
+		Name:    "Other", RootPath: &otherRoot, CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, other); err != nil {
 		t.Fatal(err)
 	}
 	managed := store.Library{
 		ID: "lib-managed", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Managed", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Managed", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, managed); err != nil {
 		t.Fatal(err)
@@ -240,7 +246,7 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 	// The scanner's library list is a housekeeping query: it reports the
 	// instance's watched roots regardless of who owns them, and never a
 	// managed library.
-	watched, err := s.ListWatchedLibraries(ctx)
+	watched, err := s.ListScannableLibraries(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +254,7 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 		t.Fatalf("expected both watched libraries, got %d", len(watched))
 	}
 	for _, lib := range watched {
-		if lib.Kind != store.LibraryWatched {
+		if lib.Source == store.LibraryManaged {
 			t.Fatalf("a managed library was offered to the scanner: %+v", lib)
 		}
 		if lib.RootPath == nil || *lib.RootPath == "" {

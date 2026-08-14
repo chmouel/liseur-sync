@@ -163,12 +163,18 @@ the panel or the shell, so an instance cannot lock itself out.
 
 ## Watching a folder you already have
 
-A watched library indexes an existing directory of EPUBs without ever
+A directory library indexes an existing directory of EPUBs without ever
 writing to it:
 
 ```
-liseur-sync admin -config liseur-sync.toml watch-library alice "Calibre" /srv/books
+liseur-sync admin -config liseur-sync.toml add-library alice "Shelf" /srv/books
 ```
+
+A library has three independent properties: a **source** (`managed` for
+uploads, `directory` for a tree of EPUBs), a **storage** mode (`cas`
+today, so the bytes are copied) and a **refresh** policy (`manual`, or
+`interval` every `-interval`). `add-library` defaults to a directory
+source refreshed on an interval, which is what a watch folder was.
 
 Mount that directory read-only if you can. The server does not need write
 access and treating the mount as the enforcement point means a bug cannot

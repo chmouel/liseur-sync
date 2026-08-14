@@ -24,7 +24,9 @@ func testCatalogAvailabilityReconciliation(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.September, 2, 9, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-availability", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Availability", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Availability", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -200,8 +202,10 @@ func testCatalogAvailabilityRespectsItsLimit(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.September, 3, 9, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-availability-limit", OwnerUserID: owner.ID,
-		QuotaUserID: owner.ID, Kind: store.LibraryManaged,
-		Name: "Limit", CreatedAt: now,
+		QuotaUserID: owner.ID, Source: store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual,
+		Name:    "Limit", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

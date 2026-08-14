@@ -102,7 +102,9 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 100_000_000, time.UTC)
 	managed := store.Library{
 		ID: "ingest-managed", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Managed", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Managed", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, managed); err != nil {
 		t.Fatal(err)
@@ -110,7 +112,9 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 	root := "/srv/ingest"
 	watched := store.Library{
 		ID: "ingest-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryWatched, Name: "Watched", RootPath: &root, CreatedAt: now,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Watched", RootPath: &root, CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, watched); err != nil {
 		t.Fatal(err)
@@ -349,8 +353,10 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		boundaryUser := MkUser(t, s, "quota-boundary")
 		boundaryLibrary := store.Library{
 			ID: "quota-boundary", OwnerUserID: boundaryUser.ID,
-			QuotaUserID: boundaryUser.ID, Kind: store.LibraryManaged,
-			Name: "Boundary", CreatedAt: now,
+			QuotaUserID: boundaryUser.ID, Source: store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual,
+			Name:    "Boundary", CreatedAt: now,
 		}
 		if err := s.CreateLibrary(ctx, boundaryLibrary); err != nil {
 			t.Fatal(err)
@@ -397,8 +403,10 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		dedupUser := MkUser(t, s, "quota-dedup")
 		dedupLibrary := store.Library{
 			ID: "quota-dedup", OwnerUserID: dedupUser.ID,
-			QuotaUserID: dedupUser.ID, Kind: store.LibraryManaged,
-			Name: "Dedup", CreatedAt: now,
+			QuotaUserID: dedupUser.ID, Source: store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual,
+			Name:    "Dedup", CreatedAt: now,
 		}
 		if err := s.CreateLibrary(ctx, dedupLibrary); err != nil {
 			t.Fatal(err)
@@ -450,8 +458,10 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		cleanupUser := MkUser(t, s, "quota-cleanup")
 		cleanupLibrary := store.Library{
 			ID: "quota-cleanup", OwnerUserID: cleanupUser.ID,
-			QuotaUserID: cleanupUser.ID, Kind: store.LibraryManaged,
-			Name: "Cleanup", CreatedAt: now,
+			QuotaUserID: cleanupUser.ID, Source: store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual,
+			Name:    "Cleanup", CreatedAt: now,
 		}
 		if err := s.CreateLibrary(ctx, cleanupLibrary); err != nil {
 			t.Fatal(err)
@@ -565,8 +575,10 @@ func testIngestJobs(t *testing.T, open OpenFunc) {
 		otherUser := MkUser(t, s, "quota-other")
 		otherLibrary := store.Library{
 			ID: "quota-other", OwnerUserID: otherUser.ID,
-			QuotaUserID: otherUser.ID, Kind: store.LibraryManaged,
-			Name: "Other", CreatedAt: now,
+			QuotaUserID: otherUser.ID, Source: store.LibraryManaged,
+			Storage: store.LibraryStorageCAS,
+			Refresh: store.LibraryRefreshManual,
+			Name:    "Other", CreatedAt: now,
 		}
 		if err := s.CreateLibrary(ctx, otherLibrary); err != nil {
 			t.Fatal(err)
@@ -833,7 +845,9 @@ func testConcurrentIngestJobCreate(t *testing.T, open OpenFunc) {
 	now := time.Now().UTC()
 	library := store.Library{
 		ID: "ingest-concurrent", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Concurrent", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Concurrent", CreatedAt: now,
 	}
 
 	if err := s.CreateLibrary(ctx, library); err != nil {
@@ -903,7 +917,9 @@ func testIngestRecoveryList(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.February, 3, 4, 5, 6, 0, time.UTC)
 	library := store.Library{
 		ID: "ingest-recovery", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Recovery", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Recovery", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)
@@ -993,7 +1009,9 @@ func testIngestActivityShowsWhatNeverBecameABook(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
 	if err := s.CreateLibrary(ctx, store.Library{
 		ID: "lib-activity", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Activity", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Activity", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1103,11 +1121,15 @@ func testAbandonedIngestList(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.March, 4, 5, 6, 7, 0, time.UTC)
 	library := store.Library{
 		ID: "ingest-abandoned", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Abandoned", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Abandoned", CreatedAt: now,
 	}
 	otherLibrary := store.Library{
 		ID: "ingest-abandoned-2", OwnerUserID: other.ID, QuotaUserID: other.ID,
-		Kind: store.LibraryManaged, Name: "Abandoned", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Abandoned", CreatedAt: now,
 	}
 	for _, l := range []store.Library{library, otherLibrary} {
 		if err := s.CreateLibrary(ctx, l); err != nil {

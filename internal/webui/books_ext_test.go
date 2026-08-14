@@ -87,7 +87,9 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	}
 	if err := st.CreateLibrary(t.Context(), store.Library{
 		ID: f.library, OwnerUserID: "u1", QuotaUserID: "u1",
-		Kind: store.LibraryManaged, Name: "Alice's Books", CreatedAt: time.Now().UTC(),
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Alice's Books", CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatal(err)
 	}

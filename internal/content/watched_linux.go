@@ -48,8 +48,8 @@ const (
 		"path, so a sweep cannot tell which one the file belongs to"
 )
 
-// WatchedLibrary is the one library a sweep is asked about.
-type WatchedLibrary struct {
+// ScannedLibrary is the one library a sweep is asked about.
+type ScannedLibrary struct {
 	ID string
 	// RootPath is the administrator-configured directory. Nothing beneath
 	// it is ever written, renamed, moved, trashed or deleted.
@@ -114,7 +114,7 @@ type WatchedSyncOptions struct {
 	QuotaLimitBytes *int64
 }
 
-// SyncWatchedLibrary reconciles one watched library against its root.
+// SyncScannedLibrary reconciles one watched library against its root.
 //
 // It is the only place that decides what a sweep means, and the decisions
 // are deliberately conservative:
@@ -138,11 +138,11 @@ type WatchedSyncOptions struct {
 // Nothing beneath the root is written to. The source is opened read-only,
 // refusing a symlink at the final component, and every path is resolved
 // relative to a descriptor for the root rather than by name.
-func SyncWatchedLibrary(
+func SyncScannedLibrary(
 	ctx context.Context,
 	st watchedStore,
 	blobs watchedStager,
-	library WatchedLibrary,
+	library ScannedLibrary,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
 ) (WatchedSyncReport, error) {
@@ -215,7 +215,7 @@ func reconcileWatchedFile(
 	st watchedStore,
 	blobs watchedStager,
 	root *os.Root,
-	library WatchedLibrary,
+	library ScannedLibrary,
 	file ScannedFile,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
@@ -321,7 +321,7 @@ func ingestWatchedFile(
 	st watchedStore,
 	blobs watchedStager,
 	root *os.Root,
-	library WatchedLibrary,
+	library ScannedLibrary,
 	file ScannedFile,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
@@ -495,13 +495,13 @@ func isRetryableWatchedFailure(err error) bool {
 	}
 }
 
-// watchedLibraryLister is the housekeeping surface a scan pass needs.
-type watchedLibraryLister interface {
+// scannableLibraryLister is the housekeeping surface a scan pass needs.
+type scannableLibraryLister interface {
 	watchedStore
-	ListWatchedLibraries(context.Context) ([]store.Library, error)
+	ListScannableLibraries(context.Context) ([]store.Library, error)
 }
 
-// WatchedScanReport totals one pass over every watched library.
+// WatchedScanReport totals one pass over every root-backed library.
 type WatchedScanReport struct {
 	Libraries int
 	// Swept counts libraries whose traversal completed, so absence was
@@ -524,15 +524,15 @@ func (r WatchedScanReport) Changed() bool {
 		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0
 }
 
-// RunWatchedScanPass sweeps every watched library once.
+// RunScanPass sweeps every root-backed library once.
 //
 // One library's failure does not stop the others. A root on a network
 // mount that is down is the ordinary case here, and letting it stall every
 // other library's scanning would make one flaky disk look like a broken
 // server.
-func RunWatchedScanPass(
+func RunScanPass(
 	ctx context.Context,
-	st watchedLibraryLister,
+	st scannableLibraryLister,
 	blobs watchedStager,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
@@ -541,9 +541,9 @@ func RunWatchedScanPass(
 	if st == nil || blobs == nil || clock == nil || opts.MaxFileBytes <= 0 {
 		return report, store.ErrInvalidTransition
 	}
-	libraries, err := st.ListWatchedLibraries(ctx)
+	libraries, err := st.ListScannableLibraries(ctx)
 	if err != nil {
-		return report, fmt.Errorf("list watched libraries: %w", err)
+		return report, fmt.Errorf("list scannable libraries: %w", err)
 	}
 	for _, library := range libraries {
 		if err := ctx.Err(); err != nil {
@@ -553,7 +553,7 @@ func RunWatchedScanPass(
 			continue
 		}
 		report.Libraries++
-		result, err := SyncWatchedLibrary(ctx, st, blobs, WatchedLibrary{
+		result, err := SyncScannedLibrary(ctx, st, blobs, ScannedLibrary{
 			ID:       library.ID,
 			RootPath: *library.RootPath,
 			// The owner is the principal the jobs belong to. The quota
@@ -577,7 +577,7 @@ func RunWatchedScanPass(
 				return report, err
 			}
 			return report, fmt.Errorf(
-				"sweep watched library %q: %w", library.ID, err)
+				"sweep library %q: %w", library.ID, err)
 		}
 		if result.Scan.Complete {
 			report.Swept++

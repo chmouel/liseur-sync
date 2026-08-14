@@ -39,8 +39,8 @@ func (s *Store) AdminCounts(ctx context.Context) (store.AdminCounts, error) {
 
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*),
-		       COUNT(*) FILTER (WHERE kind = 'managed'),
-		       COUNT(*) FILTER (WHERE kind = 'watched')
+		       COUNT(*) FILTER (WHERE source = 'managed'),
+		       COUNT(*) FILTER (WHERE source <> 'managed')
 		FROM libraries`).Scan(&c.Libraries, &c.ManagedLibraries, &c.WatchedLibraries)
 	if err != nil {
 		return c, err

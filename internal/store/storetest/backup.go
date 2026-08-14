@@ -25,7 +25,9 @@ func testReferencedBlobsAreWhatABackupMustHold(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.December, 1, 8, 0, 0, 0, time.UTC)
 	library := store.Library{
 		ID: "lib-backup", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Kind: store.LibraryManaged, Name: "Backup", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Backup", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

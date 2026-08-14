@@ -18,7 +18,9 @@ func testBlobReconciliation(t *testing.T, open OpenFunc) {
 	now := time.Date(2026, time.April, 5, 6, 7, 8, 0, time.UTC)
 	library := store.Library{
 		ID: "blob-reconciliation", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Blobs", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Blobs", CreatedAt: now,
 	}
 	if err := s.CreateLibrary(ctx, library); err != nil {
 		t.Fatal(err)

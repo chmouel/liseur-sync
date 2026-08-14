@@ -771,8 +771,52 @@ UPDATE users SET is_admin = TRUE WHERE id IN (
 );
 `
 
+// migration17 splits libraries.kind into the three axes of ADR-0014. See
+// the SQLite copy for why; PostgreSQL can alter constraints in place, so
+// there is no table rebuild here — the same end state, reached the way
+// this backend reaches it.
+const migration17 = `
+ALTER TABLE libraries ADD COLUMN source TEXT;
+ALTER TABLE libraries ADD COLUMN storage TEXT;
+ALTER TABLE libraries ADD COLUMN refresh TEXT;
+ALTER TABLE libraries
+    ADD COLUMN refresh_interval_seconds INTEGER NOT NULL DEFAULT 900;
+
+UPDATE libraries SET
+    source  = CASE kind WHEN 'managed' THEN 'managed' ELSE 'directory' END,
+    storage = 'cas',
+    refresh = CASE kind WHEN 'managed' THEN 'manual' ELSE 'interval' END;
+
+ALTER TABLE libraries ALTER COLUMN source SET NOT NULL;
+ALTER TABLE libraries ALTER COLUMN storage SET NOT NULL;
+ALTER TABLE libraries ALTER COLUMN refresh SET NOT NULL;
+
+ALTER TABLE libraries DROP CONSTRAINT libraries_kind_check;
+ALTER TABLE libraries DROP CONSTRAINT libraries_check;
+ALTER TABLE libraries DROP COLUMN kind;
+
+ALTER TABLE libraries
+    ADD CONSTRAINT libraries_source_check
+        CHECK (source IN ('managed', 'directory')),
+    ADD CONSTRAINT libraries_storage_check
+        CHECK (storage IN ('cas')),
+    ADD CONSTRAINT libraries_refresh_check
+        CHECK (refresh IN ('manual', 'interval')),
+    ADD CONSTRAINT libraries_refresh_interval_check
+        CHECK (refresh_interval_seconds > 0),
+    ADD CONSTRAINT libraries_root_check
+        CHECK ((source = 'managed' AND root_path IS NULL) OR
+               (source <> 'managed' AND root_path IS NOT NULL)),
+    ADD CONSTRAINT libraries_managed_refresh_check
+        CHECK (source <> 'managed' OR refresh = 'manual');
+
+ALTER INDEX libraries_watched_root RENAME TO libraries_root;
+CREATE INDEX libraries_refresh_due
+    ON libraries(refresh, source) WHERE refresh = 'interval';
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14, migration15, migration16,
+	migration13, migration14, migration15, migration16, migration17,
 }

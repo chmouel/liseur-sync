@@ -32,7 +32,9 @@ func newEntityFixture(t *testing.T, s store.Store) *entityFixture {
 	now := time.Now().UTC()
 	if err := s.CreateLibrary(f.ctx, store.Library{
 		ID: f.library, OwnerUserID: f.owner.ID, QuotaUserID: f.owner.ID,
-		Kind: store.LibraryManaged, Name: "Entities", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Entities", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

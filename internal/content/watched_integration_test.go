@@ -58,7 +58,9 @@ func newWatchedFixture(t *testing.T) *watchedFixture {
 	}
 	library := store.Library{
 		ID: "lib-watched", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryWatched, Name: "Shelf",
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Shelf",
 		RootPath: &root, CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, library); err != nil {
@@ -81,7 +83,7 @@ func (f *watchedFixture) clock() func() time.Time {
 
 func (f *watchedFixture) sync() WatchedSyncReport {
 	f.t.Helper()
-	report, err := SyncWatchedLibrary(f.ctx, f.store, f.cas, WatchedLibrary{
+	report, err := SyncScannedLibrary(f.ctx, f.store, f.cas, ScannedLibrary{
 		ID:          f.library.ID,
 		RootPath:    f.root,
 		ActorUserID: f.library.OwnerUserID,
@@ -416,7 +418,7 @@ func TestWatchedIncompleteSweepMarksNothingMissing(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.root, "c.epub")); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	report, err := SyncWatchedLibrary(f.ctx, f.store, f.cas, WatchedLibrary{
+	report, err := SyncScannedLibrary(f.ctx, f.store, f.cas, ScannedLibrary{
 		ID:          f.library.ID,
 		RootPath:    f.root,
 		ActorUserID: f.library.OwnerUserID,
@@ -453,7 +455,7 @@ func TestWatchedUnavailableRootChangesNothing(t *testing.T) {
 	if err := os.Rename(f.root, moved); err != nil {
 		t.Fatalf("rename root: %v", err)
 	}
-	_, err := SyncWatchedLibrary(f.ctx, f.store, f.cas, WatchedLibrary{
+	_, err := SyncScannedLibrary(f.ctx, f.store, f.cas, ScannedLibrary{
 		ID:          f.library.ID,
 		RootPath:    f.root,
 		ActorUserID: f.library.OwnerUserID,

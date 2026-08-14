@@ -634,7 +634,9 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 	now := time.Now().UTC()
 	lib := store.Library{
 		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
-		Kind: store.LibraryManaged, Name: "Test Lib", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Test Lib", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, lib); err != nil {
 		t.Fatal(err)

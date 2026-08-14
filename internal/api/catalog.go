@@ -51,7 +51,9 @@ func (s *Server) HandleLibraries(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"library_id": l.Library.ID,
 			"name":       l.Library.Name,
-			"kind":       string(l.Library.Kind),
+			"source":     string(l.Library.Source),
+			"storage":    string(l.Library.Storage),
+			"refresh":    string(l.Library.Refresh),
 			"role":       string(l.Role),
 			"created_at": l.Library.CreatedAt.UTC().Format(time.RFC3339Nano),
 		})

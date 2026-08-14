@@ -25,7 +25,9 @@ func TestAdminLibrariesPage(t *testing.T) {
 	now := time.Now().UTC()
 	if err := st.CreateLibrary(ctx, store.Library{
 		ID: "lib-bob", OwnerUserID: bob.ID, QuotaUserID: bob.ID,
-		Kind: store.LibraryWatched, Name: "Bobs shelf", RootPath: &root,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshInterval, Name: "Bobs shelf", RootPath: &root,
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -36,7 +38,7 @@ func TestAdminLibrariesPage(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("libraries page: %d", code)
 	}
-	for _, want := range []string{"Bobs shelf", "watched", "bob", root, "Only the owner."} {
+	for _, want := range []string{"Bobs shelf", "directory · cas", "bob", root, "Only the owner."} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("libraries page is missing %q:\n%s", want, body)
 		}

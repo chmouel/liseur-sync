@@ -94,9 +94,9 @@ func TestCreateLibraryMakesAnUploadableLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("owner cannot manage the library they were given: %v", err)
 	}
-	if got.Library.Kind != store.LibraryManaged {
+	if got.Library.Source != store.LibraryManaged {
 		t.Fatalf("kind = %q, want managed: a watched library cannot be uploaded to",
-			got.Library.Kind)
+			got.Library.Source)
 	}
 	if got.Library.QuotaUserID != owner.ID {
 		t.Fatalf("quota_user_id = %q, want the owner", got.Library.QuotaUserID)
@@ -293,5 +293,98 @@ func TestUnknownSubcommandIsAnError(t *testing.T) {
 	st := newAdminStore(t)
 	if _, err := capture(t, st, "grant-libraries"); err == nil {
 		t.Fatal("accepted a subcommand that does not exist")
+	}
+}
+
+func TestAddLibraryDefaultsToADirectoryOnAnInterval(t *testing.T) {
+	st := newAdminStore(t)
+	owner := addUser(t, st, "ada")
+	root := t.TempDir()
+
+	out, err := capture(t, st, "add-library", "ada", "Shelf", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := libraryIDFrom(t, out)
+
+	got, err := st.LibraryByID(t.Context(), owner.ID, id, store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Library.Source != store.LibraryDirectory {
+		t.Fatalf("source = %q, want directory", got.Library.Source)
+	}
+	// Copying stays the default: in-place is opt-in for a plain
+	// directory, whose owner has not told us their tree is stable.
+	if got.Library.Storage != store.LibraryStorageCAS {
+		t.Fatalf("storage = %q, want cas", got.Library.Storage)
+	}
+	if got.Library.Refresh != store.LibraryRefreshInterval {
+		t.Fatalf("refresh = %q, want interval", got.Library.Refresh)
+	}
+	if got.Library.RefreshInterval != store.DefaultRefreshInterval {
+		t.Fatalf("interval = %s, want %s",
+			got.Library.RefreshInterval, store.DefaultRefreshInterval)
+	}
+	if got.Library.RootPath == nil || *got.Library.RootPath != root {
+		t.Fatalf("root = %v, want %s", got.Library.RootPath, root)
+	}
+}
+
+func TestAddLibraryReadsItsFlags(t *testing.T) {
+	st := newAdminStore(t)
+	owner := addUser(t, st, "ada")
+	root := t.TempDir()
+
+	out, err := capture(t, st,
+		"add-library", "-refresh", "manual", "-storage", "cas",
+		"ada", "Shelf", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.LibraryByID(
+		t.Context(), owner.ID, libraryIDFrom(t, out), store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Library.Refresh != store.LibraryRefreshManual {
+		t.Fatalf("refresh = %q, want manual", got.Library.Refresh)
+	}
+}
+
+func TestAddLibraryRejectsBadInput(t *testing.T) {
+	st := newAdminStore(t)
+	addUser(t, st, "ada")
+	root := t.TempDir()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no root", []string{"add-library", "ada", "Shelf"}},
+		{"missing directory", []string{
+			"add-library", "ada", "Shelf", filepath.Join(root, "nope")}},
+		{"managed source", []string{
+			"add-library", "-source", "managed", "ada", "Shelf", root}},
+		{"unknown source", []string{
+			"add-library", "-source", "kobo", "ada", "Shelf", root}},
+		{"unknown storage", []string{
+			"add-library", "-storage", "elsewhere", "ada", "Shelf", root}},
+		{"unknown refresh", []string{
+			"add-library", "-refresh", "sometimes", "ada", "Shelf", root}},
+		{"absurd interval", []string{
+			"add-library", "-interval", "1s", "ada", "Shelf", root}},
+		{"blank name", []string{"add-library", "ada", "  ", root}},
+		// A Calibre library is identified by its database, so a
+		// directory without one is refused where somebody can still
+		// read the message.
+		{"not calibre", []string{
+			"add-library", "-source", "calibre", "ada", "Shelf", root}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := capture(t, st, tc.args...); err == nil {
+				t.Fatal("accepted")
+			}
+		})
 	}
 }

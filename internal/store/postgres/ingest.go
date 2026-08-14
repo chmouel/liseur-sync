@@ -82,8 +82,8 @@ func (s *Store) CreateIngestJob(
 		   ON a.library_id = l.id AND a.user_id = ?
 		 WHERE l.id = ?
 		   AND (l.owner_user_id = ? OR a.role = 'manage')
-		   AND ((? = 'upload' AND l.kind = 'managed') OR
-		        (? = 'watched' AND l.kind = 'watched')
+		   AND ((? = 'upload' AND l.source = 'managed') OR
+		        (? = 'watched' AND l.source <> 'managed')
 		   )
 		 ON CONFLICT DO NOTHING`),
 		request.ID, actorUserID, string(request.Source), request.ClientKey,
@@ -117,8 +117,8 @@ func (s *Store) CreateIngestJob(
 		   ON a.library_id = l.id AND a.user_id = ?
 		 WHERE l.id = ?
 		   AND (l.owner_user_id = ? OR a.role = 'manage')
-		   AND ((? = 'upload' AND l.kind = 'managed') OR
-		        (? = 'watched' AND l.kind = 'watched'))`),
+		   AND ((? = 'upload' AND l.source = 'managed') OR
+		        (? = 'watched' AND l.source <> 'managed'))`),
 		actorUserID, request.LibraryID, actorUserID,
 		string(request.Source), string(request.Source)).Scan(&accessible)
 	if errors.Is(err, sql.ErrNoRows) {

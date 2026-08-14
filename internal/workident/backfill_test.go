@@ -42,7 +42,9 @@ func newBackfillFixture(t *testing.T) *backfillFixture {
 	}
 	lib := store.Library{
 		ID: "lib-backfill", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Kind: store.LibraryManaged, Name: "Backfill", CreatedAt: now,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Backfill", CreatedAt: now,
 	}
 	if err := st.CreateLibrary(ctx, lib); err != nil {
 		t.Fatal(err)
