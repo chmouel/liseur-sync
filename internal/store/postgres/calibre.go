@@ -149,7 +149,9 @@ func (s *Store) SetLibraryInventoryDigest(
 // is also what invalidates that cache: a curator who replaces cover.jpg
 // gets a new key rather than the picture the old bytes rendered to
 // (ADR-0014). It reports whether anything changed, so a refresh that
-// re-hashes an unchanged cover writes nothing.
+// re-hashes an unchanged cover writes nothing — unchanged meaning the
+// same bytes at the same path, since renaming a book in Calibre moves
+// the same cover somewhere else.
 func (s *Store) SetBookFileCover(
 	ctx context.Context, libraryID, fileID, relativePath, coverSHA256 string,
 	at time.Time,
@@ -164,10 +166,11 @@ func (s *Store) SetBookFileCover(
 		`UPDATE book_files
 		    SET cover_relative_path = ?, cover_sha256 = ?, updated_at = ?
 		  WHERE library_id = ? AND id = ?
-		    AND COALESCE(cover_sha256, '') != ?`),
+		    AND (COALESCE(cover_sha256, '') != ?
+		         OR COALESCE(cover_relative_path, '') != ?)`),
 		sql.NullString{String: relativePath, Valid: relativePath != ""},
 		sql.NullString{String: coverSHA256, Valid: coverSHA256 != ""},
-		at.UTC(), libraryID, fileID, coverSHA256)
+		at.UTC(), libraryID, fileID, coverSHA256, relativePath)
 	if err != nil {
 		return false, err
 	}

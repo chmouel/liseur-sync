@@ -72,7 +72,7 @@ func (s *Server) ServeBookCover(
 		switch {
 		case err == nil:
 			defer cached.Close()
-			s.writeCover(w, r, file, size, cached, file.UpdatedAt)
+			s.writeCover(w, r, file, size, key, cached, file.UpdatedAt)
 			return
 		case errors.Is(err, content.ErrNoCover):
 			// Already established: this publication has no cover this
@@ -82,21 +82,26 @@ func (s *Server) ServeBookCover(
 		}
 	}
 
-	rendered, err := s.renderCover(r.Context(), file, size)
+	// What comes back says which image it is, which is not always the
+	// one the row named: a chosen cover that has gone missing falls back
+	// to the publication's. Caching that under the chosen cover's key
+	// would answer for the cover once it returned, and marking it absent
+	// there would do so permanently.
+	rendered, renderedKey, err := s.renderCover(r.Context(), file, size)
 	if err != nil {
 		if errors.Is(err, content.ErrSourceChanged) {
 			s.flagChangedSource(r.Context(), file)
 		}
-		s.writeCoverError(r.Context(), w, key, err)
+		s.writeCoverError(r.Context(), w, renderedKey, err)
 		return
 	}
 	if s.Covers != nil {
 		// A cache that cannot be written still serves: the bytes are in
 		// hand, and a full disk should cost the next request a re-render
 		// rather than cost this one its answer.
-		_ = s.Covers.StoreCover(r.Context(), key, string(size), rendered)
+		_ = s.Covers.StoreCover(r.Context(), renderedKey, string(size), rendered)
 	}
-	s.writeCover(w, r, file, size,
+	s.writeCover(w, r, file, size, renderedKey,
 		bytes.NewReader(rendered), file.UpdatedAt)
 }
 
@@ -146,26 +151,26 @@ func coverCacheKey(file store.BookFile) string {
 // publication declares.
 func (s *Server) renderCover(
 	ctx context.Context, file store.BookFile, size cover.Size,
-) ([]byte, error) {
+) ([]byte, string, error) {
 	if file.CoverSHA256 != "" && file.CoverRelativePath != nil {
 		return s.renderStoredCover(ctx, file, size)
 	}
 	blob, blobSize, err := s.Blobs.OpenBookFile(ctx, file)
 	if err != nil {
-		return nil, err
+		return nil, file.ContentSHA256, err
 	}
 	defer blob.Close()
 
 	image, err := epub.ReadCover(ctx, blob, blobSize,
 		epub.DefaultLimits(), maxCoverSourceBytes)
 	if err != nil {
-		return nil, err
+		return nil, file.ContentSHA256, err
 	}
 	rendered, err := cover.Render(image.Data, size, cover.DefaultLimits())
 	if err != nil {
-		return nil, err
+		return nil, file.ContentSHA256, err
 	}
-	return rendered, nil
+	return rendered, file.ContentSHA256, nil
 }
 
 // renderStoredCover renders the image the library itself holds. A cover
@@ -174,7 +179,7 @@ func (s *Server) renderCover(
 // showing it.
 func (s *Server) renderStoredCover(
 	ctx context.Context, file store.BookFile, size cover.Size,
-) ([]byte, error) {
+) ([]byte, string, error) {
 	image, imageSize, err := s.Blobs.OpenBookFileCover(ctx, file)
 	if err != nil {
 		stripped := file
@@ -183,13 +188,17 @@ func (s *Server) renderStoredCover(
 	}
 	defer image.Close()
 	if imageSize > maxCoverSourceBytes {
-		return nil, cover.ErrUnsupported
+		return nil, file.CoverSHA256, cover.ErrUnsupported
 	}
 	data, err := io.ReadAll(io.LimitReader(image, maxCoverSourceBytes))
 	if err != nil {
-		return nil, err
+		return nil, file.CoverSHA256, err
 	}
-	return cover.Render(data, size, cover.DefaultLimits())
+	rendered, err := cover.Render(data, size, cover.DefaultLimits())
+	if err != nil {
+		return nil, file.CoverSHA256, err
+	}
+	return rendered, file.CoverSHA256, nil
 }
 
 // writeCoverError maps a failed render onto a status, and remembers the
@@ -225,11 +234,14 @@ func isValidationFailure(err error) bool {
 	return errors.As(err, &failure)
 }
 
+// writeCover sends one rendered variant. `digest` names the image the
+// bytes came from — the chosen cover's, or the publication's when that
+// is what was rendered — so a fallback never borrows the ETag of a cover
+// it did not use.
 func (s *Server) writeCover(
 	w http.ResponseWriter, r *http.Request, file store.BookFile,
-	size cover.Size, body io.ReadSeeker, modified time.Time,
+	size cover.Size, digest string, body io.ReadSeeker, modified time.Time,
 ) {
-	digest := coverCacheKey(file)
 	// The type is what this server chose to produce, never what the
 	// publication claimed. With nosniff, that is what stops a cover from
 	// being interpreted as anything else.

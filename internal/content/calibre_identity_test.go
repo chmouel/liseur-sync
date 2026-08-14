@@ -9,6 +9,7 @@ package content
 // consulted first.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -255,5 +256,68 @@ func TestRefreshWithdrawsAndRestoresAFileWhileTheServerRuns(t *testing.T) {
 	if files := f.filesOf(book.ID); files[0].Availability !=
 		store.BookFileAvailable {
 		t.Fatalf("a returned file is still %q", files[0].Availability)
+	}
+}
+
+// TestARenamedBookKeepsItsChosenCover: renaming a book in Calibre moves
+// cover.jpg with everything else, so the same bytes turn up at a new
+// path. Recording covers by digest alone would leave the row pointing
+// into a directory that no longer exists — and, because the digest never
+// changes again, no later refresh could correct it, so the book would
+// silently fall back to its EPUB cover forever (ADR-0014).
+func TestARenamedBookKeepsItsChosenCover(t *testing.T) {
+	f := newCalibreFixture(t)
+	body := minimalEPUB(t)
+	f.addBook(1, "Small Gods", "Pratchett/Small Gods (1)", "Small Gods", body)
+	chosen := []byte("not really a jpeg, but bytes somebody chose")
+	f.write("Pratchett/Small Gods (1)/cover.jpg", chosen)
+	f.exec(`UPDATE books SET has_cover = 1 WHERE id = 1`)
+	f.refresh()
+	book := f.bookByTitle("Small Gods")
+
+	renamed := "Pratchett/Small Gods (Discworld 13) (1)"
+	f.write(renamed+"/Small Gods.epub", body)
+	f.write(renamed+"/cover.jpg", chosen)
+	if err := os.RemoveAll(filepath.Join(
+		f.root, "Pratchett", "Small Gods (1)")); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`UPDATE books SET path = '` + renamed + `',
+		last_modified = '2024-03-03 00:00:00+00:00' WHERE id = 1`)
+
+	f.now = f.now.Add(time.Hour)
+	f.refresh()
+
+	file := f.filesOf(book.ID)[0]
+	if file.CoverSHA256 != digestOf(chosen) {
+		t.Fatalf("the cover lost its digest: %q", file.CoverSHA256)
+	}
+	want := renamed + "/cover.jpg"
+	if file.CoverRelativePath == nil || *file.CoverRelativePath != want {
+		t.Fatalf("cover path = %v, want %q", file.CoverRelativePath, want)
+	}
+	if _, _, err := f.cas.OpenBookFileCover(t.Context(), file); err != nil {
+		t.Fatalf("the recorded cover cannot be opened: %v", err)
+	}
+}
+
+// TestACoverSwollenSinceItWasRecordedIsRefused: the bytes belong to
+// somebody else and can be replaced after a refresh bounded them, so the
+// size is checked again on the way out rather than after hashing the
+// whole file.
+func TestACoverSwollenSinceItWasRecordedIsRefused(t *testing.T) {
+	f := newCalibreFixture(t)
+	f.addBook(1, "Small Gods", "Pratchett/Small Gods (1)",
+		"Small Gods", minimalEPUB(t))
+	chosen := []byte("a small cover")
+	f.write("Pratchett/Small Gods (1)/cover.jpg", chosen)
+	f.exec(`UPDATE books SET has_cover = 1 WHERE id = 1`)
+	f.refresh()
+
+	file := f.filesOf(f.bookByTitle("Small Gods").ID)[0]
+	f.write("Pratchett/Small Gods (1)/cover.jpg",
+		bytes.Repeat([]byte("x"), MaxCoverBytes+1))
+	if _, _, err := f.cas.OpenBookFileCover(t.Context(), file); err == nil {
+		t.Fatal("a cover swapped for an enormous one was read anyway")
 	}
 }

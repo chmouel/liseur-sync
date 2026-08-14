@@ -168,10 +168,33 @@ func testCalibreFileReconciliation(t *testing.T, open OpenFunc) {
 			t.Fatalf("the recorded cover: %+v", file)
 		}
 	}
+	// The same cover at a new path is a change: renaming a book in
+	// Calibre moves cover.jpg with it, and a row still naming the old
+	// directory would serve nothing for as long as the bytes stay the
+	// same, which is forever.
+	movedCover := "Pratchett/Small Gods (Discworld 13) (2)/cover.jpg"
+	if changed, err := s.SetBookFileCover(
+		ctx, library.ID, "file-2", movedCover, hash64('d'), now.Add(6*time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	} else if !changed {
+		t.Fatal("a cover that moved reported no change")
+	}
+	files, err = s.ListBookFiles(ctx, owner.ID, "book-1", store.LibraryRoleManage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if file.ID == "file-2" && (file.CoverRelativePath == nil ||
+			*file.CoverRelativePath != movedCover) {
+			t.Fatalf("the cover did not move: %+v", file)
+		}
+	}
+
 	// A cover Calibre no longer has is cleared, and half a cover is
 	// refused: a key naming nothing serves nothing.
 	if _, err := s.SetBookFileCover(ctx, library.ID, "file-2",
-		coverPath, "", now.Add(7*time.Hour),
+		movedCover, "", now.Add(7*time.Hour),
 	); !errors.Is(err, store.ErrInvalidTransition) {
 		t.Fatalf("half a cover: %v", err)
 	}

@@ -586,4 +586,31 @@ func TestChosenCoverBeatsTheOneInsideTheBook(t *testing.T) {
 		t.Fatalf("the fallback is not the publication's own: %dx%d",
 			config.Width, config.Height)
 	}
+	if got := resp.Header.Get("ETag"); strings.Contains(
+		got, sha256Hex([]byte("a cover.jpg nobody wrote"))) {
+		t.Errorf("the fallback borrowed the missing cover's ETag: %q", got)
+	}
+
+	// And the fallback did not take the cover's place in the cache: the
+	// moment the file turns up, it is what gets served. Caching under the
+	// cover's key would have made a transient absence permanent, since
+	// the key is the same bytes it always was.
+	chosen := chosenCover(t, 320, 80)
+	if _, err := f.st.SetBookFileCover(t.Context(), libraryID, files[0].ID,
+		"cover.jpg", sha256Hex(chosen), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(
+		f.root, "shelf-chosen-gone", "cover.jpg"), chosen, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, raw = f.get(
+		t, "/v1/books/book-in-place-chosen-gone/cover?size=full", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the returned cover: %d %s", resp.StatusCode, raw)
+	}
+	if config := decodeCover(t, raw); config.Width <= config.Height {
+		t.Fatalf("the fallback outlived the cover coming back: %dx%d",
+			config.Width, config.Height)
+	}
 }
