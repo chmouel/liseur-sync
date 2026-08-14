@@ -293,7 +293,10 @@ const FONTS = {
   serif: 'Georgia, "Times New Roman", "Liberation Serif", serif',
   sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Liberation Sans", sans-serif',
 };
-const MARGINS = { narrow: '24px', normal: '48px', wide: '72px' };
+const MARGINS = { narrow: '16px', normal: '48px', wide: '72px' };
+// The column gap follows the margin choice: "narrow" should mean the
+// text gets the window, not just that the outer edge moved.
+const GAPS = { narrow: '3%', normal: '7%', wide: '11%' };
 
 let settings = loadSettings();
 
@@ -335,7 +338,14 @@ function chapterCSS(s) {
   }
   const size = Number(s.size);
   if (size && size !== 100) {
-    rules.push(`html { font-size: ${size}% !important; }`);
+    // Both rules matter: scaling the root handles publications that
+    // size text in rem/em, and forcing the body back to 1rem overrides
+    // the ones that pin it in px — which would otherwise ignore the
+    // slider entirely.
+    rules.push(
+      `html { font-size: ${size}% !important; }`,
+      'body { font-size: 1rem !important; }',
+    );
   }
   const spacing = Number(s.spacing);
   if (spacing) {
@@ -361,6 +371,12 @@ function applySettings() {
   renderer.setAttribute('flow', settings.flow === 'scrolled' ? 'scrolled' : 'paginated');
   renderer.setAttribute('max-column-count', settings.columns === 'auto' ? '2' : settings.columns);
   renderer.setAttribute('margin', MARGINS[settings.margin] || MARGINS.normal);
+  renderer.setAttribute('gap', GAPS[settings.margin] || GAPS.normal);
+  // The line-length cap grows with the type: a bigger font on a wide
+  // window should mean a wider column with the same characters per
+  // line, not the same 720px ribbon with more empty page around it.
+  const scale = (Number(settings.size) || 100) / 100;
+  renderer.setAttribute('max-inline-size', Math.round(720 * Math.max(1, scale)) + 'px');
   if (renderer.setStyles) renderer.setStyles(chapterCSS(settings));
 }
 
