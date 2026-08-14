@@ -382,6 +382,7 @@ templ librarianQueues(prefix, csrf string, v LibraryView) {
 							<form method="post" action={ prefix + "books/" + b.ID + "/restore" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<input type="hidden" name="library" value={ v.Selected }/>
+								<input type="hidden" name="back" value={ backManage }/>
 								<button type="submit">Put back</button>
 							</form>
 						</td>
@@ -410,6 +411,7 @@ templ librarianQueues(prefix, csrf string, v LibraryView) {
 							<form method="post" action={ prefix + "books/" + b.ID + "/accept" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<input type="hidden" name="library" value={ v.Selected }/>
+								<input type="hidden" name="back" value={ backManage }/>
 								<button type="submit">Accept this copy</button>
 							</form>
 						</td>

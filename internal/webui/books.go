@@ -336,12 +336,28 @@ func (s *Server) uploadResult(w http.ResponseWriter, r *http.Request, library, n
 	if problem != "" {
 		q.Set("problem", problem)
 	}
-	target := "library"
+	target := resultPage(r)
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}
 	redirectRel(w, relPrefix(r.URL.Path)+target, http.StatusSeeOther)
 }
+
+// resultPage decides which page hears about what just happened. The
+// queues live on library management, so an action started there has to
+// end there — otherwise working through a queue means walking back to it
+// after every item. The choice is a bounded one rather than a path the
+// form supplies, because a free path here would be an open redirect
+// wearing a hidden input.
+func resultPage(r *http.Request) string {
+	if r.FormValue("back") == backManage {
+		return "library/manage"
+	}
+	return "library"
+}
+
+// backManage is the value the management page puts in its forms.
+const backManage = "manage"
 
 // uploadProblem turns a staging failure into something a person can act
 // on. The API's status codes are the authority on what went wrong; this

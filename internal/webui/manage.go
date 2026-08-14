@@ -19,7 +19,10 @@ func (s *Server) handleLibraryManage(
 		return
 	}
 
-	v := LibraryView{}
+	v := LibraryView{
+		Notice:  r.URL.Query().Get("notice"),
+		Problem: r.URL.Query().Get("problem"),
+	}
 	selected := r.URL.Query().Get("library")
 	if selected == "" && len(libs) > 0 {
 		selected = libs[0].Library.ID

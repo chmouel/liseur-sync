@@ -5,6 +5,12 @@ templ libraryManagePage(prefix string, u userCtx, csrf string, v LibraryView) {
 }
 
 templ libraryManageBody(prefix, csrf string, v LibraryView) {
+	if v.Problem != "" {
+		<p class="error" role="alert">{ v.Problem }</p>
+	}
+	if v.Notice != "" {
+		<p class="notice" role="status">{ v.Notice }</p>
+	}
 	<h1>Library management</h1>
 	<p class="muted">
 		Uploads, deleted books and catalog decisions belong here. The Library
@@ -16,8 +22,8 @@ templ libraryManageBody(prefix, csrf string, v LibraryView) {
 		</section>
 	} else {
 		<form class="toolbar" method="get" action={ prefix + "library/manage" }>
-			<label for="manage-library-pick">Library</label>
-			<select id="manage-library-pick" name="library">
+			<label for="library-pick">Library</label>
+			<select id="library-pick" name="library">
 				for _, l := range v.Libraries {
 					if l.Selected {
 						<option value={ l.ID } selected>{ l.Name }</option>
