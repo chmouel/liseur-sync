@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -51,6 +52,9 @@ const (
 // ScannedLibrary is the one library a sweep is asked about.
 type ScannedLibrary struct {
 	ID string
+	// Storage decides what discovering a file means: copying it into
+	// content-addressed storage, or cataloguing it where it lies.
+	Storage store.LibraryStorage
 	// RootPath is the administrator-configured directory. Nothing beneath
 	// it is ever written, renamed, moved, trashed or deleted.
 	RootPath string
@@ -88,12 +92,15 @@ type WatchedSyncReport struct {
 
 // watchedStore is the durable surface one sweep needs.
 type watchedStore interface {
+	bookMetadataStore
+	ingestTransitionStore
 	WatchedFilesByPath(context.Context, string, string) ([]store.WatchedFile, error)
 	MarkWatchedSourcesSeen(context.Context, string, []store.WatchedObservation, time.Time) (int, error)
 	MarkWatchedSourcesAbsent(context.Context, string, time.Time, time.Time, int) (int, error)
 	SetCatalogBookReview(context.Context, string, string, string, time.Time) (bool, error)
 	CreateIngestJob(context.Context, string, store.IngestJobRequest) (store.IngestJob, bool, error)
 	CommitIngestStage(context.Context, string, string, store.CommitIngestStageRequest) (store.CommitIngestStageResult, error)
+	CommitInPlaceBook(context.Context, string, string, store.CommitInPlaceBookRequest) (store.IngestPromotionResult, error)
 }
 
 // watchedStager is the CAS surface one sweep needs. Ingest copies from the
@@ -110,9 +117,41 @@ type WatchedSyncOptions struct {
 	// MaxFileBytes bounds a single publication, as the upload limit does.
 	MaxFileBytes int64
 	// QuotaLimitBytes is the quota principal's ceiling, or nil for no
-	// limit. A watched snapshot is charged exactly like an upload.
+	// limit. A watched snapshot is charged exactly like an upload. An
+	// in-place library charges nothing, because the server stores
+	// nothing.
 	QuotaLimitBytes *int64
+	// Patterns resolves each library's filename layouts. An in-place
+	// pass publishes the book itself, so it needs them where a copying
+	// pass leaves the work to the promotion worker.
+	Patterns PatternResolver
+	// EPUBLimits bounds the structural validation an in-place pass does
+	// from its own descriptor. Zero means the defaults.
+	EPUBLimits epub.Limits
+	// FailureRetention is how long a refused in-place job is kept for an
+	// operator to read. Zero means the default.
+	FailureRetention time.Duration
 }
+
+// epubLimits is the configured bound or the default one.
+func (o WatchedSyncOptions) epubLimits() epub.Limits {
+	if o.EPUBLimits.Validate() != nil {
+		return epub.DefaultLimits()
+	}
+	return o.EPUBLimits
+}
+
+func (o WatchedSyncOptions) failureRetention() time.Duration {
+	if o.FailureRetention <= 0 {
+		return defaultInPlaceFailureRetention
+	}
+	return o.FailureRetention
+}
+
+// defaultInPlaceFailureRetention keeps a refused scan visible for a week,
+// long enough for an operator to notice a library full of unreadable
+// files without keeping the record forever.
+const defaultInPlaceFailureRetention = 7 * 24 * time.Hour
 
 // SyncScannedLibrary reconciles one watched library against its root.
 //
@@ -228,7 +267,7 @@ func reconcileWatchedFile(
 
 	switch len(known) {
 	case 0:
-		if err := ingestWatchedFile(
+		if err := ingestDiscoveredFile(
 			ctx, st, blobs, root, library, file, opts, clock,
 		); err != nil {
 			if isRetryableWatchedFailure(err) {
@@ -309,6 +348,24 @@ func watchedFileUnchanged(existing store.WatchedFile, file ScannedFile) bool {
 	}
 	return existing.SizeBytes == file.SizeBytes &&
 		existing.SourceModifiedAt.Equal(file.ModifiedAt)
+}
+
+// ingestDiscoveredFile publishes one newly discovered path, by whichever
+// route its library's storage mode calls for.
+func ingestDiscoveredFile(
+	ctx context.Context,
+	st watchedStore,
+	blobs watchedStager,
+	root *os.Root,
+	library ScannedLibrary,
+	file ScannedFile,
+	opts WatchedSyncOptions,
+	clock func() time.Time,
+) error {
+	if library.Storage == store.LibraryStorageInPlace {
+		return ingestInPlaceFile(ctx, st, root, library, file, opts, clock)
+	}
+	return ingestWatchedFile(ctx, st, blobs, root, library, file, opts, clock)
 }
 
 // ingestWatchedFile copies one discovered publication into CAS staging and
@@ -485,6 +542,7 @@ func isRetryableWatchedFailure(err error) bool {
 	switch {
 	case errors.Is(err, store.ErrQuotaExceeded),
 		errors.Is(err, ErrTooLarge),
+		errors.Is(err, ErrSourceRaced),
 		errors.Is(err, ErrStagingFull),
 		errors.Is(err, os.ErrNotExist),
 		errors.Is(err, os.ErrPermission),
@@ -555,6 +613,7 @@ func RunScanPass(
 		report.Libraries++
 		result, err := SyncScannedLibrary(ctx, st, blobs, ScannedLibrary{
 			ID:       library.ID,
+			Storage:  library.Storage,
 			RootPath: *library.RootPath,
 			// The owner is the principal the jobs belong to. The quota
 			// principal is charged separately by the commit, so an owner

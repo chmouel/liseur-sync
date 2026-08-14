@@ -684,7 +684,12 @@ func (s IngestState) Valid() bool {
 func CanTransitionIngest(from, to IngestState) bool {
 	switch from {
 	case IngestReceived:
-		return to == IngestFailed
+		// Quarantine is reachable from here only because an in-place
+		// scan validates from its own descriptor and never stages
+		// anything: it learns that a file is not a publication while the
+		// job is still `received`, and that verdict is as permanent as
+		// the one a staged upload gets (ADR-0014).
+		return to == IngestFailed || to == IngestQuarantined
 	case IngestStaged:
 		return to == IngestValidated || to == IngestQuarantined || to == IngestFailed
 	case IngestValidated:
@@ -703,11 +708,17 @@ func CanTransitionIngest(from, to IngestState) bool {
 // IngestJob is the persisted ingestion state. RequestFingerprint describes
 // immutable request metadata, not the uploaded content digest.
 type IngestJob struct {
-	ID                            string
-	UserID                        string
-	LibraryID                     string
-	QuotaUserID                   string
-	Source                        IngestSource
+	ID          string
+	UserID      string
+	LibraryID   string
+	QuotaUserID string
+	Source      IngestSource
+	// Storage is the library's own storage mode, copied onto the job so
+	// that a worker knows without a second read whether there is a
+	// staged artifact to find. An in-place job has none by construction,
+	// which is what distinguishes a job that has not started from an
+	// upload that lost its bytes (ADR-0014).
+	Storage                       LibraryStorage
 	ClientKey                     *string
 	RequestFingerprint            string
 	PromotionFingerprint          *string
@@ -1113,6 +1124,67 @@ type CommitNewBookPromotionRequest struct {
 	Book             CatalogBook
 	File             BookFile
 	UpdatedAt        time.Time
+}
+
+// CommitInPlaceBookRequest atomically creates one catalog book and file
+// for bytes that stay where they were found. It carries no BlobInfo
+// because there is no blob: identity, size and the modification time
+// snapshot all come from the file that was read.
+type CommitInPlaceBookRequest struct {
+	ExpectedRevision int64
+	// ExtractedEmbeddedMetadataJSON is the publication's own metadata,
+	// read from the same descriptor as the digest. An in-place job has
+	// no `extracted` state to record it in, so it is recorded here.
+	ExtractedEmbeddedMetadataJSON []byte
+	Book                          CatalogBook
+	File                          BookFile
+	UpdatedAt                     time.Time
+}
+
+// InPlaceBookFingerprint identifies the immutable payload that produced a
+// promoted in-place job, so a commit whose response was lost replays onto
+// the same rows instead of being read as a second, conflicting claim.
+func InPlaceBookFingerprint(request CommitInPlaceBookRequest) (string, error) {
+	return NewBookPromotionFingerprint(CommitNewBookPromotionRequest{
+		ExpectedRevision: request.ExpectedRevision,
+		Book:             request.Book,
+		File:             request.File,
+		UpdatedAt:        request.UpdatedAt,
+	})
+}
+
+// ValidateInPlaceBook checks what every backend must refuse. The rules
+// are promotion's, minus the blob and plus the two facts that replace it:
+// a path under the library root, and the size and modification time that
+// prove the file is still the one that was read.
+func ValidateInPlaceBook(request CommitInPlaceBookRequest) error {
+	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if request.Book.ID == "" || request.Book.LibraryID == "" ||
+		request.Book.Status != BookActive || request.Book.CreatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	file := request.File
+	if file.ID == "" || file.LibraryID == "" || file.BookID == "" ||
+		file.Storage != LibraryStorageInPlace || file.Source != IngestScanned ||
+		file.BlobSHA256 != "" || file.ContentSizeBytes < 0 ||
+		file.Availability != BookFileAvailable ||
+		file.CreatedAt.IsZero() || file.UpdatedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if file.SourceRelativePath == nil || *file.SourceRelativePath == "" {
+		return ErrInvalidTransition
+	}
+	if file.SourceModifiedAt == nil || file.SourceModifiedAt.IsZero() {
+		return ErrInvalidTransition
+	}
+	if err := ValidateBlobInfo(BlobInfo{
+		SHA256: file.ContentSHA256, SizeBytes: file.ContentSizeBytes,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 type IngestPromotionResult struct {
@@ -1806,12 +1878,22 @@ type Store interface {
 	// upload in flight or was interrupted by a crash between writing the
 	// bytes and recording them. Only the caller can tell those apart —
 	// at startup nothing is in flight, so all of them are the second.
+	//
+	// In-place jobs are excluded: they have no staged artifact to lose,
+	// so one left in `received` is work not yet done rather than bytes
+	// stranded on disk, and the next sweep picks it up (ADR-0014).
 	ListAbandonedIngestJobs(ctx context.Context, afterID string, limit int) ([]IngestJob, error)
 	// ListIngestWorkerJobs snapshots one bounded internal worker batch.
 	// Revision-checked transitions resolve concurrent workers.
 	ListIngestWorkerJobs(ctx context.Context, state IngestState, limit int) ([]IngestJob, error)
 	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
 	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
+	// CommitInPlaceBook is promotion for a library whose bytes this
+	// server never copied: it creates the book and its file, and takes
+	// the job from `received` straight to `promoted`, with no blob, no
+	// reservation and no quota charge, because there is nothing the
+	// server stores and nothing it could later collect (ADR-0014).
+	CommitInPlaceBook(ctx context.Context, userID, jobID string, request CommitInPlaceBookRequest) (IngestPromotionResult, error)
 	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
 	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
 	// ListReferencedBlobs pages the blobs the database says must exist,

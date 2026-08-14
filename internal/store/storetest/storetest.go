@@ -37,6 +37,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ListUsersPage", func(t *testing.T) { testListUsersPage(t, open) })
 	t.Run("AdminLibraries", func(t *testing.T) { testAdminLibraries(t, open) })
 	t.Run("LibraryAxes", func(t *testing.T) { testLibraryAxes(t, open) })
+	t.Run("InPlaceBooks", func(t *testing.T) { testInPlaceBooks(t, open) })
 	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })
