@@ -746,7 +746,7 @@ func TestBooksGridAndListViews(t *testing.T) {
 	if !strings.Contains(html, `class="grid"`) || !strings.Contains(html, `class="bookcard"`) {
 		t.Fatal("default browse view is not a grid of cards")
 	}
-	if !strings.Contains(html, "/cover?size=thumb") {
+	if !strings.Contains(html, "/cover?size=thumbnail") {
 		t.Error("grid does not ask for the cached thumbnail")
 	}
 	if !strings.Contains(html, bookID) {

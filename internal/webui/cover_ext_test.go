@@ -3,12 +3,14 @@ package webui_test
 import (
 	"archive/zip"
 	"bytes"
+	htmlpkg "html"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -302,4 +304,46 @@ func (f *booksFixture) coverBytes(t *testing.T, bookID string, extra *http.Cooki
 	}
 	body, _ := io.ReadAll(resp.Body)
 	return body
+}
+
+// The grid does not link to the cover route bare: it asks for a named
+// variant. A size the renderer does not know is a 400, which the
+// fallback turns into a placeholder, so the failure is silent — a wall
+// of blank cards where every book has a picture. This asserts against
+// the URL the page actually emits rather than against a substring of
+// it, because the substring is how the wrong name survived: "thumb" is
+// a prefix of "thumbnail".
+func TestBooksGridAsksForACoverSizeTheServerRenders(t *testing.T) {
+	f := newBooksFixture(t)
+	f.uploadAndPromote(t, "illustrated", coverEPUB(t, 300, 400))
+
+	_, html := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	sources := coverSources(t, html)
+	if len(sources) == 0 {
+		t.Fatalf("the grid shows no cover images:\n%s", html)
+	}
+	for _, src := range sources {
+		resp, body := f.fetchCover(t, "/ui/"+src, f.cookie)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d", src, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "image/jpeg" {
+			t.Fatalf("%s: Content-Type = %q, want the rendered cover"+
+				" rather than the placeholder", src, got)
+		}
+		if _, _, err := image.DecodeConfig(bytes.NewReader(body)); err != nil {
+			t.Fatalf("%s: not a decodable image: %v", src, err)
+		}
+	}
+}
+
+var coverImageSrc = regexp.MustCompile(`<img[^>]+src="([^"]*cover[^"]*)"`)
+
+func coverSources(t *testing.T, html string) []string {
+	t.Helper()
+	var found []string
+	for _, match := range coverImageSrc.FindAllStringSubmatch(html, -1) {
+		found = append(found, htmlpkg.UnescapeString(match[1]))
+	}
+	return found
 }
