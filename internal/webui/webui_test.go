@@ -584,3 +584,23 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 		t.Fatalf("reading page does not render cover for mapped work:\n%s", body)
 	}
 }
+
+// TestCreditStopsAtThree pins the one-line rule on a card: three names,
+// then a count. A card is one line of small type, and an anthology with
+// nineteen contributors would push the title off it.
+func TestCreditStopsAtThree(t *testing.T) {
+	for _, c := range []struct {
+		names []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"Ann"}, "Ann"},
+		{[]string{"Ann", "Bo", "Cy"}, "Ann, Bo, Cy"},
+		{[]string{"Ann", "Bo", "Cy", "Dee"}, "Ann, Bo, Cy and one other"},
+		{[]string{"Ann", "Bo", "Cy", "Dee", "Eli"}, "Ann, Bo, Cy and 2 others"},
+	} {
+		if got := credit(c.names); got != c.want {
+			t.Errorf("credit(%v) = %q want %q", c.names, got, c.want)
+		}
+	}
+}

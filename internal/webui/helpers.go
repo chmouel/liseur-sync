@@ -159,3 +159,21 @@ func cellClass(minutes float64) string {
 		return "cell c4"
 	}
 }
+
+// credit is how a list names a book's authors in one line. Three is
+// where it stops: a card is one line of small type, and an anthology
+// with nineteen contributors would push the title off it. The rest are
+// counted rather than elided, because "and 16 others" says how much is
+// missing where an ellipsis does not.
+func credit(names []string) string {
+	const shown = 3
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	rest := len(names) - shown
+	if rest == 1 {
+		return strings.Join(names[:shown], ", ") + " and one other"
+	}
+	return strings.Join(names[:shown], ", ") +
+		" and " + strconv.Itoa(rest) + " others"
+}

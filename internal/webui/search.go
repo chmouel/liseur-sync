@@ -80,7 +80,7 @@ func (s *Server) handleSearch(
 	loc := userLoc(u)
 	for _, b := range result.Books {
 		v.Books = append(v.Books, BookRow{
-			ID: b.ID, Title: b.Title, Author: authors[b.ID],
+			ID: b.ID, Title: b.Title, Author: credit(authors[b.ID]),
 			Added: b.CreatedAt.In(loc).Format("Jan 2, 2006"),
 		})
 	}

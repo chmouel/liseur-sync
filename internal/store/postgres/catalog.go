@@ -575,39 +575,44 @@ func (s *Store) AvailableBookMediaTypes(
 	return out, rows.Err()
 }
 
-func (s *Store) CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error) {
+func (s *Store) CatalogAuthorsForBooks(
+	ctx context.Context,
+	userID string,
+	bookIDs []string,
+) (map[string][]string, error) {
 	if len(bookIDs) == 0 {
-		return map[string]string{}, nil
+		return map[string][]string{}, nil
 	}
 	placeholders := make([]string, len(bookIDs))
-	args := make([]any, len(bookIDs))
+	args := []any{userID}
 	for i, id := range bookIDs {
 		placeholders[i] = "?"
-		args[i] = id
+		args = append(args, id)
 	}
-	query := `SELECT bc.book_id, c.name
+	args = append(args, userID, store.ContributorRoleAuthor)
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT bc.book_id, c.name
 		 FROM book_contributors bc
-		 JOIN contributors c ON c.id = bc.contributor_id
-		 WHERE bc.book_id IN (` + strings.Join(placeholders, ",") + `)
-		 ORDER BY bc.book_id, bc.position`
-
-	rows, err := s.db.QueryContext(ctx, q(query), args...)
+		 JOIN contributors c
+		   ON c.library_id = bc.library_id AND c.id = bc.contributor_id
+		 JOIN libraries l ON l.id = bc.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE bc.book_id IN (`+strings.Join(placeholders, ",")+`)
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		   AND bc.role = ?
+		 ORDER BY bc.book_id, bc.position, c.normalized_name, c.id`,
+		), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	out := make(map[string]string)
+	out := make(map[string][]string)
 	for rows.Next() {
 		var bookID, name string
 		if err := rows.Scan(&bookID, &name); err != nil {
 			return nil, err
 		}
-		if existing, ok := out[bookID]; ok {
-			out[bookID] = existing + ", " + name
-		} else {
-			out[bookID] = name
-		}
+		out[bookID] = append(out[bookID], name)
 	}
 	return out, rows.Err()
 }
