@@ -372,11 +372,12 @@ func applyCalibreMetadata(
 	return nil
 }
 
-// maxCalibreCoverBytes bounds the cover.jpg one book may have. It is far
-// past any real cover and small enough that a library full of them
-// cannot make a refresh read an unbounded amount of somebody else's
-// disk.
-const maxCalibreCoverBytes = 16 << 20
+// MaxCoverBytes bounds the cover.jpg one book may have. It is far past
+// any real cover and small enough that a library full of them cannot
+// make a refresh — or a request — read an unbounded amount of somebody
+// else's disk. Recording and serving share it: a cover too large to
+// record must not become one that is read anyway on the way out.
+const MaxCoverBytes = 16 << 20
 
 // applyCalibreCover records the cover Calibre holds beside the book, in
 // preference to the one inside the EPUB.
@@ -386,7 +387,10 @@ const maxCalibreCoverBytes = 16 << 20
 // Calibre books can share one EPUB and still want different pictures.
 // The digest is what makes that work: the rendered-cover cache is keyed
 // by it, so a replaced cover.jpg is a different key rather than a stale
-// image (ADR-0014).
+// image (ADR-0014). The path is compared too, because renaming a book in
+// Calibre moves the same bytes to a new directory: a digest-only
+// comparison would leave the recorded path pointing at a directory that
+// no longer exists, and no later refresh could ever correct it.
 func applyCalibreCover(
 	ctx context.Context,
 	st calibreStore,
@@ -417,7 +421,7 @@ func applyCalibreCover(
 	if book.HasCover {
 		relativePath = book.CoverPath()
 		digest, err = hashWatchedSource(
-			ctx, root, relativePath, maxCalibreCoverBytes)
+			ctx, root, relativePath, MaxCoverBytes)
 		if err != nil {
 			// Calibre's flag is what it believes it wrote, not a stat.
 			// A cover that is not there, is too large, or cannot be read
@@ -426,7 +430,11 @@ func applyCalibreCover(
 			relativePath, digest = "", ""
 		}
 	}
-	if digest == file.CoverSHA256 {
+	stored := ""
+	if file.CoverRelativePath != nil {
+		stored = *file.CoverRelativePath
+	}
+	if digest == file.CoverSHA256 && relativePath == stored {
 		return nil
 	}
 	changed, err := st.SetBookFileCover(

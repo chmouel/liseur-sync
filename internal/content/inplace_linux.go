@@ -39,7 +39,8 @@ func (c *CAS) OpenBookFile(
 // file — Calibre's cover.jpg — which lives beside the publication under
 // the library root rather than inside it.
 //
-// The bytes are proved by digest rather than by stat. A cover has no
+// The bytes are bounded by MaxCoverBytes and then proved by digest
+// rather than by stat. A cover has no
 // snapshot of its own to compare against, and it is small enough to hash
 // on the way out; a cover.jpg somebody replaced therefore fails here and
 // falls back to the publication's own until the next refresh records the
@@ -84,8 +85,16 @@ func (c *CAS) OpenBookFileCover(
 		opened.Close()
 		return nil, 0, ErrUnsafePath
 	}
+	if info.Size() > MaxCoverBytes {
+		// The refresh only ever records a cover within this bound, so
+		// anything larger is a file somebody swapped after it was
+		// recorded. Refusing it before the hash is what keeps a request
+		// from being made to read an arbitrary amount of their disk.
+		opened.Close()
+		return nil, 0, ErrSourceChanged
+	}
 	digest := sha256.New()
-	if _, err := io.Copy(digest, opened); err != nil {
+	if _, err := io.Copy(digest, io.LimitReader(opened, MaxCoverBytes)); err != nil {
 		opened.Close()
 		return nil, 0, err
 	}
