@@ -31,6 +31,14 @@ var (
 	ErrUnsafePath            = errors.New("content: unsafe path or file type")
 	ErrStagingFull           = errors.New("content: staging area is full")
 	ErrUnsupportedFilesystem = errors.New("content: filesystem lacks atomic no-replace rename")
+	// ErrSourceChanged says an in-place file is no longer the file that
+	// was catalogued: its size or its modification time has moved since
+	// it was read. The bytes behind it may be a different book, so they
+	// are refused rather than served under the old book's name.
+	ErrSourceChanged = errors.New("content: source file changed since it was catalogued")
+	// ErrRootMissing says an in-place library's root is not usable, so
+	// none of the files under it can be opened.
+	ErrRootMissing = errors.New("content: library root is unavailable")
 )
 
 // StagedBlob is a complete, durable file under the CAS incoming directory.

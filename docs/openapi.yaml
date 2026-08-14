@@ -1395,9 +1395,18 @@ paths:
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
         Serves the newest available file. Supports `HEAD`, byte ranges
-        and conditional requests; the `ETag` is the content digest, so
-        it never changes for a given file. `Content-Disposition` carries
-        a sanitized filename that is a label, never a path.
+        and conditional requests; `Content-Disposition` carries a
+        sanitized filename that is a label, never a path.
+
+        For a book whose bytes this server keeps a copy of, the `ETag` is
+        the content digest and never changes, and the answer may be
+        cached indefinitely. For a book served in place out of a library
+        directory, the bytes belong to whoever owns that directory: the
+        `ETag` is weak and the answer is `private, no-cache`. If such a
+        file no longer matches what was catalogued — a different size or
+        modification time — it is refused with `409` and the book is
+        flagged for an administrator rather than served under a title
+        that may no longer describe it.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: Range, in: header, required: false, schema: { type: string } }
@@ -1411,6 +1420,7 @@ paths:
         "206": { description: The requested byte range }
         "304": { description: The client's copy is current }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
@@ -1428,7 +1438,10 @@ paths:
         Rendered covers are cached, so the first request for a book pays
         for the decode and later ones do not. The `ETag` combines the
         content digest with the size, both of which are fixed for a given
-        book, so a client that has one may reuse it indefinitely.
+        book, so a client that has one may reuse it indefinitely — except
+        for a book served in place out of a library directory, whose
+        bytes are not this server's to promise: there the validator is
+        weak and the answer is `private, no-cache`.
 
         A book whose publication declares no cover, or one this server
         cannot decode, answers `404`. That answer is cached too, so it

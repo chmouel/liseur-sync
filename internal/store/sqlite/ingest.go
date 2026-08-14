@@ -608,20 +608,53 @@ func (s *Store) CommitIngestStage(
 const bookFileColumns = `f.id, f.library_id, f.book_id, f.storage,
 	f.content_sha256, f.content_size_bytes, f.blob_sha256,
 	f.source, f.source_relative_path, f.original_filename, f.media_type,
-	f.partial_md5, f.dc_identifier, f.availability, f.created_at, f.updated_at`
+	f.partial_md5, f.dc_identifier, f.availability, f.source_modified_at,
+	f.created_at, f.updated_at`
+
+// bookFileColumnsWithRoot is what a reader that intends to open the
+// bytes selects. The root travels with the file because an in-place
+// file's bytes are found by path, and looking that path up separately
+// would be a library read no user's access scoped.
+const bookFileColumnsWithRoot = bookFileColumns + `, l.root_path`
 
 func scanBookFile(row interface{ Scan(...any) error }) (store.BookFile, error) {
+	return scanBookFileInto(row, nil)
+}
+
+// scanBookFileWithRoot reads a file selected with bookFileColumnsWithRoot.
+func scanBookFileWithRoot(row interface{ Scan(...any) error }) (store.BookFile, error) {
+	var root sql.NullString
+	file, err := scanBookFileInto(row, &root)
+	file.LibraryRoot = root.String
+	return file, err
+}
+
+func scanBookFileInto(
+	row interface{ Scan(...any) error }, root *sql.NullString,
+) (store.BookFile, error) {
 	var file store.BookFile
-	var sourcePath, partialMD5, dcIdentifier, blob sql.NullString
+	var sourcePath, partialMD5, dcIdentifier, blob, modified sql.NullString
 	var created, updated string
-	err := row.Scan(
+	targets := []any{
 		&file.ID, &file.LibraryID, &file.BookID, &file.Storage,
 		&file.ContentSHA256, &file.ContentSizeBytes, &blob,
 		&file.Source, &sourcePath, &file.OriginalFilename, &file.MediaType,
-		&partialMD5, &dcIdentifier, &file.Availability, &created, &updated,
-	)
+		&partialMD5, &dcIdentifier, &file.Availability, &modified,
+		&created, &updated,
+	}
+	if root != nil {
+		targets = append(targets, root)
+	}
+	err := row.Scan(targets...)
 	if err != nil {
 		return file, err
+	}
+	if modified.Valid {
+		at, err := parseTime(modified.String)
+		if err != nil {
+			return file, err
+		}
+		file.SourceModifiedAt = &at
 	}
 	file.BlobSHA256 = blob.String
 	if sourcePath.Valid {
