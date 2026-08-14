@@ -166,15 +166,28 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 	display: flex; align-items: center; gap: .5rem;
 }
 .brand:hover { color: var(--primary); }
-/* The Liseur emblem, the same drawing the app wears, so the server and
-   the reader that syncs to it look like one thing. It is decorative —
-   the wordmark next to it is the actual name — so it carries an empty
-   alt. */
-.brand .mark {
-	width: 1.65rem; height: 1.65rem; border-radius: 50%;
+/* The Liseur wordmark, cut out of the banner the app's README wears, so
+   the server and the reader that syncs to it look like one thing. It is
+   the lettering alone: the banner's drawing is fine line art and turns
+   to mush at the height of a top bar. It is a background rather than an
+   <img> because it has to follow the theme — the lettering is cream on
+   one banner and ink on the other, and a src cannot be chosen in CSS.
+   The element carries the name as an aria-label, the picture being the
+   wordmark. */
+.brand .brandmark {
 	display: block; flex: none;
+	height: 1.55rem; width: 7.5rem;
+	background: url("brand-dark.png") left center / contain no-repeat;
 }
-@media (max-width: 32em) { .brand span { display: none; } }
+[data-theme="light"] .brand .brandmark { background-image: url("brand-light.png"); }
+@media (prefers-color-scheme: light) {
+	[data-theme="system"] .brand .brandmark { background-image: url("brand-light.png"); }
+}
+.brand .suffix {
+	font-size: .8rem; font-weight: 600; color: var(--muted);
+	letter-spacing: .06em; text-transform: lowercase;
+}
+@media (max-width: 32em) { .brand .suffix { display: none; } }
 
 .topsearch { flex: 1; max-width: 34rem; margin: 0; display: flex; }
 .topsearch input {

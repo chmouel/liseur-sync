@@ -36,14 +36,8 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<span class="visually-hidden">Menu</span>
 						</label>
 						<a class="brand" href={ prefix + "." }>
-							<img
-								class="mark"
-								src={ prefix + "static/liseur.png" }
-								alt=""
-								width="128"
-								height="128"
-							/>
-							<span>liseur-sync</span>
+							<span class="brandmark" role="img" aria-label="Liseur sync"></span>
+							<span class="suffix" aria-hidden="true">sync</span>
 						</a>
 						<form class="topsearch" method="get" action={ prefix + "search" }>
 							<input
