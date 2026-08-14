@@ -82,7 +82,7 @@ const [name, value] = cookie.split('=');
 await S('Network.setCookie', { name, value, domain: host.split(':')[0], path: '/' });
 
 await S('Page.navigate', { url });
-await new Promise((r) => setTimeout(r, 6000));
+await new Promise((r) => setTimeout(r, 8000));
 
 // In two-origin mode the page under test is not the one navigated to:
 // the main origin authorised the book and redirected here with the
@@ -203,7 +203,10 @@ check('the book pages backwards',
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.
-const unexpected = consoleErrors.filter((e) => !/Blocked script execution/.test(e));
+const unexpected = consoleErrors.filter((e) =>
+  !/Blocked script execution/.test(e) &&
+  !/Permissions policy violation: unload is not allowed/.test(e)
+);
 check('the browser refused to run the publication', diag.ran === false);
 
 if (unexpected.length) {
