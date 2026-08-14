@@ -509,6 +509,19 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .empty-state h3 { margin: 0; font-size: 1.1rem; color: var(--ink); }
 .empty-state p { margin: 0; max-width: 26rem; font-size: .9rem; color: var(--muted); }
 
+.dev-cell {
+	display: inline-flex; align-items: center; gap: .5rem;
+}
+.dev-icon {
+	display: inline-flex; align-items: center; justify-content: center;
+	width: 1.6rem; height: 1.6rem; border-radius: var(--radius-sm);
+	background: var(--surface-2); color: var(--muted); flex-shrink: 0;
+}
+.dev-web { color: var(--primary); background: var(--surface-1); }
+.dev-mobile { color: var(--ok); background: var(--surface-1); }
+.dev-ereader { color: var(--primary); background: var(--surface-1); opacity: .85; }
+.dev-desktop { color: var(--ink); background: var(--surface-1); opacity: .75; }
+
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left. */
 .reader-body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden}

@@ -258,6 +258,9 @@ func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.A
 	toks, _ := s.St.ListTokens(r.Context(), u.ID)
 	kosyncDevs, _ := s.St.ListKosyncDevices(r.Context(), u.ID)
 	kopluginDevs, _ := s.St.ListKopluginDevices(r.Context(), u.ID)
+	sortTokens(toks)
+	sortKosyncDevices(kosyncDevs)
+	sortKopluginDevices(kopluginDevs)
 	devicesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), toks, kosyncDevs, kopluginDevs, flash).Render(r.Context(), w)
 }
 
