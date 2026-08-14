@@ -644,12 +644,15 @@ type UserBookWork struct {
 type IngestSource string
 
 const (
-	IngestUpload  IngestSource = "upload"
-	IngestWatched IngestSource = "watched"
+	IngestUpload IngestSource = "upload"
+	// IngestScanned is a file the server found on disk. How often it
+	// looks is the library's refresh policy and no business of the file's
+	// (ADR-0014).
+	IngestScanned IngestSource = "scanned"
 )
 
 func (s IngestSource) Valid() bool {
-	return s == IngestUpload || s == IngestWatched
+	return s == IngestUpload || s == IngestScanned
 }
 
 // IngestState is one durable stage of content ingestion.
@@ -822,7 +825,9 @@ type WatchedFile struct {
 	BookID             string
 	BookStatus         BookStatus
 	SourceRelativePath string
-	BlobSHA256         string
+	// ContentSHA256 is the digest of the bytes the catalog holds for
+	// this path, whether or not the server keeps a copy of them.
+	ContentSHA256 string
 	// SizeBytes is the snapshot's size, which is also the size the source
 	// had when it was taken.
 	SizeBytes int64
@@ -931,9 +936,24 @@ func (a BookFileAvailability) Valid() bool {
 
 // BookFile is one immutable blob reference in a catalog book.
 type BookFile struct {
-	ID                 string
-	LibraryID          string
-	BookID             string
+	ID        string
+	LibraryID string
+	BookID    string
+	// Storage says whether the server keeps a copy of these bytes or
+	// reads them where their owner put them (ADR-0014).
+	Storage LibraryStorage
+	// ContentSHA256 is what this file *is*: the digest duplicate
+	// detection, edition matching and the cover cache are about. It is
+	// always known, whoever owns the bytes.
+	ContentSHA256 string
+	// ContentSizeBytes is the length those bytes had when they were
+	// last read. For an in-place file it is half of the cheap check
+	// that the file on disk is still the one that was catalogued.
+	ContentSizeBytes int64
+	// BlobSHA256 addresses the server's own copy in content-addressed
+	// storage, and is empty for an in-place file, which has none. Only
+	// the quota, garbage collection, backup and reconciliation paths
+	// should look at it: everything about identity is ContentSHA256.
 	BlobSHA256         string
 	Source             IngestSource
 	SourceRelativePath *string
@@ -944,6 +964,31 @@ type BookFile struct {
 	Availability       BookFileAvailability
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+// Normalized fills in what a caller left implicit, so that every write
+// path agrees on what an under-specified file means rather than each
+// backend deciding for itself: a file with no storage mode is one the
+// server keeps a copy of, and such a file's identity is the digest of
+// that copy.
+func (f BookFile) Normalized() BookFile {
+	if f.Storage == "" {
+		f.Storage = LibraryStorageCAS
+	}
+	if f.ContentSHA256 == "" {
+		f.ContentSHA256 = f.BlobSHA256
+	}
+	return f
+}
+
+// BlobRef renders the CAS digest for a nullable column: an in-place file
+// has no copy in content-addressed storage, and the column says so with
+// NULL rather than with an empty string that would sort and join.
+func (f BookFile) BlobRef() any {
+	if f.BlobSHA256 == "" {
+		return nil
+	}
+	return f.BlobSHA256
 }
 
 // CatalogBookCursor is the exclusive cursor for catalog listings. It pairs
@@ -1164,7 +1209,7 @@ func ValidateNewBookPromotion(request CommitNewBookPromotionRequest) error {
 	if file.Source == IngestUpload && file.SourceRelativePath != nil {
 		return ErrInvalidTransition
 	}
-	if file.Source == IngestWatched &&
+	if file.Source == IngestScanned &&
 		(file.SourceRelativePath == nil || *file.SourceRelativePath == "") {
 		return ErrInvalidTransition
 	}
@@ -1194,7 +1239,7 @@ func ValidateIngestJobRequest(request IngestJobRequest) error {
 		if request.SourceRelativePath != nil {
 			return errors.New("upload job cannot have a source path")
 		}
-	case IngestWatched:
+	case IngestScanned:
 		if request.SourceRelativePath == nil || *request.SourceRelativePath == "" ||
 			len(*request.SourceRelativePath) > 4096 {
 			return errors.New("watched job requires a source path")

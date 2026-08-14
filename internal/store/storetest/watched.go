@@ -70,7 +70,7 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 		}
 		file := store.BookFile{
 			ID: bookID + "-file", LibraryID: libraryID, BookID: bookID,
-			BlobSHA256: blob, Source: store.IngestWatched,
+			BlobSHA256: blob, Source: store.IngestScanned,
 			MediaType:          "application/epub+zip",
 			SourceRelativePath: &path, OriginalFilename: path,
 			Availability: store.BookFileAvailable,
@@ -182,7 +182,7 @@ func testWatchedSourceReconciliation(t *testing.T, open OpenFunc) {
 	latePath := "late.epub"
 	if err := inserter.InsertBookFileForTest(ctx, store.BookFile{
 		ID: "book-late-file", LibraryID: library.ID, BookID: "book-late",
-		BlobSHA256: "blob-late", Source: store.IngestWatched,
+		BlobSHA256: "blob-late", Source: store.IngestScanned,
 		MediaType:          "application/epub+zip",
 		SourceRelativePath: &latePath, OriginalFilename: latePath,
 		Availability: store.BookFileAvailable,

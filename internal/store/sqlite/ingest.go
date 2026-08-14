@@ -131,7 +131,7 @@ func (s *Store) CreateIngestJob(
 		 WHERE l.id = ?
 		   AND (l.owner_user_id = ? OR a.role = 'manage')
 		   AND ((? = 'upload' AND l.source = 'managed') OR
-		        (? = 'watched' AND l.source <> 'managed'))
+		        (? = 'scanned' AND l.source <> 'managed'))
 		 ON CONFLICT DO NOTHING`,
 		request.ID, actorUserID, string(request.Source), nullStr(request.ClientKey),
 		request.RequestFingerprint, nullStr(request.SourceRelativePath),
@@ -165,7 +165,7 @@ func (s *Store) CreateIngestJob(
 		 WHERE l.id = ?
 		   AND (l.owner_user_id = ? OR a.role = 'manage')
 		   AND ((? = 'upload' AND l.source = 'managed') OR
-		        (? = 'watched' AND l.source <> 'managed'))`,
+		        (? = 'scanned' AND l.source <> 'managed'))`,
 		actorUserID, request.LibraryID, actorUserID,
 		string(request.Source), string(request.Source)).Scan(&accessible)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -605,22 +605,25 @@ func (s *Store) CommitIngestStage(
 	return store.CommitIngestStageResult{Job: job, Quota: usage}, nil
 }
 
-const bookFileColumns = `f.id, f.library_id, f.book_id, f.blob_sha256,
+const bookFileColumns = `f.id, f.library_id, f.book_id, f.storage,
+	f.content_sha256, f.content_size_bytes, f.blob_sha256,
 	f.source, f.source_relative_path, f.original_filename, f.media_type,
 	f.partial_md5, f.dc_identifier, f.availability, f.created_at, f.updated_at`
 
 func scanBookFile(row interface{ Scan(...any) error }) (store.BookFile, error) {
 	var file store.BookFile
-	var sourcePath, partialMD5, dcIdentifier sql.NullString
+	var sourcePath, partialMD5, dcIdentifier, blob sql.NullString
 	var created, updated string
 	err := row.Scan(
-		&file.ID, &file.LibraryID, &file.BookID, &file.BlobSHA256,
+		&file.ID, &file.LibraryID, &file.BookID, &file.Storage,
+		&file.ContentSHA256, &file.ContentSizeBytes, &blob,
 		&file.Source, &sourcePath, &file.OriginalFilename, &file.MediaType,
 		&partialMD5, &dcIdentifier, &file.Availability, &created, &updated,
 	)
 	if err != nil {
 		return file, err
 	}
+	file.BlobSHA256 = blob.String
 	if sourcePath.Valid {
 		file.SourceRelativePath = &sourcePath.String
 	}
@@ -811,18 +814,25 @@ func (s *Store) CommitNewBookPromotion(
 	if mediaType == "" {
 		mediaType = "application/epub+zip"
 	}
+	// The size comes from the blob the store just checked the
+	// reservation against, not from the caller: this is a promotion of
+	// bytes the server has, and it knows how many there were.
+	newFile := request.File.Normalized()
+	newFile.ContentSizeBytes = request.Blob.SizeBytes
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO book_files
-		 (id, library_id, book_id, blob_sha256, source,
+		 (id, library_id, book_id, storage, content_sha256,
+		  content_size_bytes, blob_sha256, source,
 		  source_relative_path, original_filename, media_type,
 		  partial_md5, dc_identifier, availability, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		request.File.ID, request.File.LibraryID, request.File.BookID,
-		request.File.BlobSHA256, string(request.File.Source),
-		nullStr(request.File.SourceRelativePath), request.File.OriginalFilename,
-		mediaType, nullStr(request.File.PartialMD5), nullStr(request.File.DCIdentifier),
-		string(request.File.Availability), formatTime(request.File.CreatedAt),
-		formatTime(request.File.UpdatedAt)); err != nil {
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		newFile.ID, newFile.LibraryID, newFile.BookID,
+		string(newFile.Storage), newFile.ContentSHA256, newFile.ContentSizeBytes,
+		newFile.BlobRef(), string(newFile.Source),
+		nullStr(newFile.SourceRelativePath), newFile.OriginalFilename,
+		mediaType, nullStr(newFile.PartialMD5), nullStr(newFile.DCIdentifier),
+		string(newFile.Availability), formatTime(newFile.CreatedAt),
+		formatTime(newFile.UpdatedAt)); err != nil {
 		if isUniqueErr(err) {
 			return store.IngestPromotionResult{}, store.ErrConflict
 		}

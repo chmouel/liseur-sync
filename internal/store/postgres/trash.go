@@ -166,11 +166,24 @@ func (s *Store) PurgeExpiredTrash(
 	affected := map[reference]bool{}
 	blobs := map[string]bool{}
 	for _, bookID := range bookIDs {
+		// Every catalog reference is purged, whoever owns its bytes, so
+		// the count is taken before the blob-only pass below.
+		var files int
+		if err := tx.QueryRowContext(ctx, q(
+			`SELECT COUNT(1) FROM book_files WHERE book_id = ?`),
+			bookID).Scan(&files); err != nil {
+			return store.TrashPurgeResult{}, err
+		}
+		result.FilesPurged += files
+		// Only the server's own copies are unreferenced here. An
+		// in-place file's bytes belong to somebody else's directory:
+		// there is no reservation to release and nothing to collect,
+		// and deleting a book must never reach outside the catalog.
 		fileRows, err := tx.QueryContext(ctx, q(
 			`SELECT f.blob_sha256, l.quota_user_id
 			 FROM book_files f
 			 JOIN libraries l ON l.id = f.library_id
-			 WHERE f.book_id = ?`), bookID)
+			 WHERE f.book_id = ? AND f.blob_sha256 IS NOT NULL`), bookID)
 		if err != nil {
 			return store.TrashPurgeResult{}, err
 		}
@@ -182,7 +195,6 @@ func (s *Store) PurgeExpiredTrash(
 			}
 			affected[reference{quotaUserID, blob}] = true
 			blobs[blob] = true
-			result.FilesPurged++
 		}
 		fileRows.Close()
 		if err := fileRows.Err(); err != nil {

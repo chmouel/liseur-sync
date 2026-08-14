@@ -815,8 +815,72 @@ CREATE INDEX libraries_refresh_due
     ON libraries(refresh, source) WHERE refresh = 'interval';
 `
 
+// migration18 is the PostgreSQL half of ADR-0014's storage split. See
+// the SQLite migration for why identity and the CAS copy stop being the
+// same column; here they are plain ALTERs, because a CHECK can be
+// dropped and added in place.
+const migration18 = `
+ALTER TABLE libraries DROP CONSTRAINT libraries_storage_check;
+ALTER TABLE libraries
+    ADD CONSTRAINT libraries_storage_check
+        CHECK (storage IN ('cas', 'in_place')),
+    ADD CONSTRAINT libraries_in_place_root_check
+        CHECK (storage = 'cas' OR root_path IS NOT NULL);
+
+ALTER TABLE book_files ADD COLUMN storage TEXT;
+ALTER TABLE book_files ADD COLUMN content_sha256 TEXT;
+ALTER TABLE book_files ADD COLUMN content_size_bytes BIGINT;
+
+UPDATE book_files f SET
+    storage            = 'cas',
+    content_sha256     = f.blob_sha256,
+    content_size_bytes = COALESCE(
+        (SELECT b.size_bytes FROM blobs b WHERE b.sha256 = f.blob_sha256), 0);
+
+ALTER TABLE book_files
+    ALTER COLUMN storage SET NOT NULL,
+    ALTER COLUMN content_sha256 SET NOT NULL,
+    ALTER COLUMN content_size_bytes SET NOT NULL,
+    ALTER COLUMN blob_sha256 DROP NOT NULL;
+
+UPDATE book_files SET source = 'scanned' WHERE source = 'watched';
+
+ALTER TABLE book_files DROP CONSTRAINT book_files_source_check;
+ALTER TABLE book_files
+    ADD CONSTRAINT book_files_source_check
+        CHECK (source IN ('upload', 'scanned')),
+    ADD CONSTRAINT book_files_storage_check
+        CHECK (storage IN ('cas', 'in_place')),
+    ADD CONSTRAINT book_files_content_size_check
+        CHECK (content_size_bytes >= 0),
+    ADD CONSTRAINT book_files_storage_blob_check
+        CHECK ((storage = 'cas' AND blob_sha256 IS NOT NULL) OR
+               (storage = 'in_place' AND blob_sha256 IS NULL AND
+                source_relative_path IS NOT NULL));
+
+DROP INDEX book_files_blob;
+CREATE INDEX book_files_blob ON book_files(blob_sha256)
+    WHERE blob_sha256 IS NOT NULL;
+CREATE INDEX book_files_content ON book_files(content_sha256);
+
+ALTER TABLE ingest_jobs
+    ADD COLUMN storage TEXT NOT NULL DEFAULT 'cas';
+
+UPDATE ingest_jobs SET source = 'scanned' WHERE source = 'watched';
+
+ALTER TABLE ingest_jobs DROP CONSTRAINT ingest_jobs_source_check;
+ALTER TABLE ingest_jobs
+    ADD CONSTRAINT ingest_jobs_source_check
+        CHECK (source IN ('upload', 'scanned')),
+    ADD CONSTRAINT ingest_jobs_storage_check
+        CHECK (storage IN ('cas', 'in_place')),
+    ADD CONSTRAINT ingest_jobs_in_place_path_check
+        CHECK (storage = 'cas' OR source_relative_path IS NOT NULL);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
+	migration18,
 }

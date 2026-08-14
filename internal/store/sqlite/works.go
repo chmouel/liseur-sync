@@ -442,7 +442,7 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		       JOIN book_files f
 		         ON f.library_id = m.library_id AND f.book_id = m.book_id
 		       WHERE m.user_id = ? AND m.work_id = ?
-		         AND f.blob_sha256 = ?
+		         AND f.content_sha256 = ?
 		         AND f.availability IN ('available', 'missing')
 		   )`,
 		newWork.ID, userID, workID, userID, workID, editionSHA); err != nil {
@@ -454,7 +454,7 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		 WHERE user_id = ? AND work_id = ?
 		   AND book_id IN (
 		       SELECT book_id FROM book_files
-		       WHERE blob_sha256 = ?
+		       WHERE content_sha256 = ?
 		         AND availability IN ('available', 'missing')
 		   )`,
 		newWork.ID, userID, workID, editionSHA); err != nil {

@@ -884,8 +884,213 @@ CREATE INDEX libraries_refresh_due
     ON libraries(refresh, source) WHERE refresh = 'interval';
 `
 
+// migration18 gives a file an identity that does not depend on the
+// server owning a copy of it (ADR-0014).
+//
+// `blob_sha256` used to mean two things at once: which bytes this file
+// is, and where the server's copy of them lives. An in-place file has
+// the first and not the second, so the two are split. `content_sha256`
+// and `content_size_bytes` are the identity — what duplicate detection,
+// edition matching and the cover cache key are about — and are NOT NULL
+// for every row. `blob_sha256` keeps its foreign key and now means "the
+// CAS copy", which an in-place file does not have. A `CHECK` ties the
+// storage mode to which of the two is present, so a row can never claim
+// to be in place and own a blob at the same time.
+//
+// `ingest_jobs` gains the same storage column, so a worker can tell an
+// in-place pass from a staged one, and both tables lose the word
+// `watched` from their source: a file discovered on disk is `scanned`,
+// and how often the server looks is now a separate axis.
+//
+// Three tables are rebuilt because SQLite cannot alter a CHECK: the two
+// above, and `libraries` so that `storage` admits `in_place` from this
+// phase on. Each definition is written against the schema as it stands
+// now, not against migration 6, and each recreates every index it had.
+// The rebuild is safe only because Migrate runs with foreign keys off
+// and legacy_alter_table on, and checks foreign keys again before it
+// commits — see the comment there.
+const migration18 = `
+DROP INDEX libraries_root;
+DROP INDEX libraries_owner;
+DROP INDEX libraries_refresh_due;
+ALTER TABLE libraries RENAME TO libraries_old;
+
+CREATE TABLE libraries (
+    id            TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    quota_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source        TEXT NOT NULL CHECK (source IN ('managed', 'directory')),
+    storage       TEXT NOT NULL CHECK (storage IN ('cas', 'in_place')),
+    refresh       TEXT NOT NULL CHECK (refresh IN ('manual', 'interval')),
+    refresh_interval_seconds INTEGER NOT NULL DEFAULT 900
+        CHECK (refresh_interval_seconds > 0),
+    name          TEXT NOT NULL,
+    root_path     TEXT,
+    config_json   BLOB,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    UNIQUE (id, quota_user_id),
+    CHECK ((source = 'managed' AND root_path IS NULL) OR
+           (source <> 'managed' AND root_path IS NOT NULL)),
+    CHECK (source <> 'managed' OR refresh = 'manual'),
+    -- Bytes the server does not own can only be found again by a path,
+    -- which a managed library does not have.
+    CHECK (storage = 'cas' OR root_path IS NOT NULL)
+);
+
+INSERT INTO libraries
+SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
+       refresh_interval_seconds, name, root_path, config_json,
+       created_at, updated_at
+FROM libraries_old;
+
+DROP TABLE libraries_old;
+
+CREATE UNIQUE INDEX libraries_root
+    ON libraries(root_path) WHERE root_path IS NOT NULL;
+CREATE INDEX libraries_owner ON libraries(owner_user_id);
+CREATE INDEX libraries_refresh_due
+    ON libraries(refresh, source) WHERE refresh = 'interval';
+
+DROP INDEX book_files_book;
+DROP INDEX book_files_blob;
+DROP INDEX book_files_source_path;
+ALTER TABLE book_files RENAME TO book_files_old;
+
+CREATE TABLE book_files (
+    id                   TEXT PRIMARY KEY,
+    library_id           TEXT NOT NULL,
+    book_id              TEXT NOT NULL,
+    storage              TEXT NOT NULL CHECK (storage IN ('cas', 'in_place')),
+    content_sha256       TEXT NOT NULL,
+    content_size_bytes   INTEGER NOT NULL CHECK (content_size_bytes >= 0),
+    blob_sha256          TEXT REFERENCES blobs(sha256) ON DELETE RESTRICT,
+    source               TEXT NOT NULL CHECK (source IN ('upload', 'scanned')),
+    source_relative_path TEXT,
+    original_filename    TEXT NOT NULL DEFAULT '',
+    media_type           TEXT NOT NULL DEFAULT 'application/epub+zip',
+    partial_md5          TEXT,
+    dc_identifier        TEXT,
+    availability         TEXT NOT NULL
+        CHECK (availability IN ('available', 'missing', 'superseded')),
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    source_seen_at       TEXT,
+    source_absent_at     TEXT,
+    source_modified_at   TEXT,
+    UNIQUE (library_id, id),
+    CHECK ((storage = 'cas' AND blob_sha256 IS NOT NULL) OR
+           (storage = 'in_place' AND blob_sha256 IS NULL AND
+            source_relative_path IS NOT NULL)),
+    FOREIGN KEY (library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE CASCADE
+);
+
+INSERT INTO book_files (
+    id, library_id, book_id, storage, content_sha256, content_size_bytes,
+    blob_sha256, source, source_relative_path, original_filename,
+    media_type, partial_md5, dc_identifier, availability,
+    created_at, updated_at, source_seen_at, source_absent_at,
+    source_modified_at
+)
+SELECT f.id, f.library_id, f.book_id, 'cas', f.blob_sha256,
+       COALESCE(b.size_bytes, 0), f.blob_sha256,
+       CASE f.source WHEN 'watched' THEN 'scanned' ELSE f.source END,
+       f.source_relative_path, f.original_filename, f.media_type,
+       f.partial_md5, f.dc_identifier, f.availability,
+       f.created_at, f.updated_at, f.source_seen_at, f.source_absent_at,
+       f.source_modified_at
+FROM book_files_old f
+LEFT JOIN blobs b ON b.sha256 = f.blob_sha256;
+
+DROP TABLE book_files_old;
+
+CREATE INDEX book_files_book ON book_files(library_id, book_id, availability);
+CREATE INDEX book_files_blob ON book_files(blob_sha256)
+    WHERE blob_sha256 IS NOT NULL;
+CREATE INDEX book_files_content ON book_files(content_sha256);
+CREATE INDEX book_files_source_path
+    ON book_files(library_id, source_relative_path);
+
+DROP INDEX ingest_jobs_client_key;
+DROP INDEX ingest_jobs_state;
+DROP INDEX ingest_jobs_library;
+DROP INDEX ingest_jobs_id_quota;
+ALTER TABLE ingest_jobs RENAME TO ingest_jobs_old;
+
+CREATE TABLE ingest_jobs (
+    id                   TEXT PRIMARY KEY,
+    user_id              TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    library_id           TEXT NOT NULL,
+    quota_user_id        TEXT NOT NULL,
+    source               TEXT NOT NULL CHECK (source IN ('upload', 'scanned')),
+    storage              TEXT NOT NULL DEFAULT 'cas'
+        CHECK (storage IN ('cas', 'in_place')),
+    client_key           TEXT,
+    state                TEXT NOT NULL CHECK (state IN ('received', 'staged', 'validated', 'extracted', 'promoted', 'quarantined', 'failed')),
+    bytes_received       INTEGER NOT NULL DEFAULT 0 CHECK (bytes_received >= 0),
+    content_sha256       TEXT,
+    staging_path         TEXT,
+    source_relative_path TEXT,
+    book_library_id      TEXT,
+    book_id              TEXT,
+    error_code           TEXT,
+    error_detail         TEXT,
+    retry_count          INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL,
+    expires_at           TEXT,
+    request_fingerprint  TEXT NOT NULL DEFAULT '',
+    revision             INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    promotion_fingerprint TEXT,
+    artifacts_expired    INTEGER NOT NULL DEFAULT 0
+        CHECK (artifacts_expired IN (0, 1)),
+    artifact_cleanup_pending INTEGER NOT NULL DEFAULT 0
+        CHECK (artifact_cleanup_pending IN (0, 1)),
+    extracted_embedded_metadata_json BLOB,
+    CHECK ((book_library_id IS NULL AND book_id IS NULL) OR
+           (book_library_id IS NOT NULL AND book_id IS NOT NULL AND
+            book_library_id = library_id)),
+    -- An in-place pass has no staged artifact to promote, so it has a
+    -- source path instead: the file it read is the only copy there is.
+    CHECK (storage = 'cas' OR source_relative_path IS NOT NULL),
+    FOREIGN KEY (book_library_id, book_id)
+        REFERENCES books(library_id, id) ON DELETE SET NULL,
+    FOREIGN KEY (library_id, quota_user_id)
+        REFERENCES libraries(id, quota_user_id) ON DELETE CASCADE
+);
+
+INSERT INTO ingest_jobs (
+    id, user_id, library_id, quota_user_id, source, storage, client_key,
+    state, bytes_received, content_sha256, staging_path,
+    source_relative_path, book_library_id, book_id, error_code,
+    error_detail, retry_count, created_at, updated_at, expires_at,
+    request_fingerprint, revision, promotion_fingerprint, artifacts_expired,
+    artifact_cleanup_pending, extracted_embedded_metadata_json
+)
+SELECT id, user_id, library_id, quota_user_id,
+       CASE source WHEN 'watched' THEN 'scanned' ELSE source END,
+       'cas', client_key, state, bytes_received, content_sha256,
+       staging_path, source_relative_path, book_library_id, book_id,
+       error_code, error_detail, retry_count, created_at, updated_at,
+       expires_at, request_fingerprint, revision, promotion_fingerprint,
+       artifacts_expired, artifact_cleanup_pending,
+       extracted_embedded_metadata_json
+FROM ingest_jobs_old;
+
+DROP TABLE ingest_jobs_old;
+
+CREATE UNIQUE INDEX ingest_jobs_client_key
+    ON ingest_jobs(user_id, library_id, client_key)
+    WHERE client_key IS NOT NULL;
+CREATE INDEX ingest_jobs_state ON ingest_jobs(state, updated_at);
+CREATE INDEX ingest_jobs_library ON ingest_jobs(library_id, created_at);
+CREATE UNIQUE INDEX ingest_jobs_id_quota ON ingest_jobs(id, quota_user_id);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
+	migration18,
 }

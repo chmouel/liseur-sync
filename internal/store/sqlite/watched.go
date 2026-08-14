@@ -9,11 +9,12 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// watchedFileColumns joins the blob because a sweep decides whether to
-// reread a source by comparing sizes, and the size the snapshot was taken
-// at is the blob's, not the file row's.
+// watchedFileColumns reads the snapshot a sweep compares against. Both
+// halves of it — which bytes were catalogued and how many there were —
+// live on the file row since ADR-0014, because a file the server keeps
+// no copy of has no blob to ask.
 const watchedFileColumns = `f.id, f.library_id, f.book_id, bk.status,
-	f.source_relative_path, f.blob_sha256, bl.size_bytes,
+	f.source_relative_path, f.content_sha256, f.content_size_bytes,
 	f.source_modified_at, f.availability, f.source_absent_at`
 
 func scanWatchedFile(row interface{ Scan(...any) error }) (store.WatchedFile, error) {
@@ -21,7 +22,7 @@ func scanWatchedFile(row interface{ Scan(...any) error }) (store.WatchedFile, er
 	var path, modified, absent sql.NullString
 	if err := row.Scan(
 		&file.FileID, &file.LibraryID, &file.BookID, &file.BookStatus,
-		&path, &file.BlobSHA256, &file.SizeBytes,
+		&path, &file.ContentSHA256, &file.SizeBytes,
 		&modified, &file.Availability, &absent,
 	); err != nil {
 		return file, err
@@ -53,9 +54,8 @@ func (s *Store) WatchedFilesByPath(
 		`SELECT `+watchedFileColumns+`
 		 FROM book_files f
 		 JOIN books bk ON bk.library_id = f.library_id AND bk.id = f.book_id
-		 JOIN blobs bl ON bl.sha256 = f.blob_sha256
 		 WHERE f.library_id = ? AND f.source_relative_path = ?
-		   AND f.source = 'watched' AND bk.status <> 'trashed'
+		   AND f.source = 'scanned' AND bk.status <> 'trashed'
 		 ORDER BY f.id`, libraryID, sourceRelativePath)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (s *Store) MarkWatchedSourcesSeen(
 			 SET source_seen_at = ?, source_absent_at = NULL,
 			     source_modified_at = ?, updated_at = ?
 			 WHERE library_id = ? AND source_relative_path = ?
-			   AND source = 'watched'`,
+			   AND source = 'scanned'`,
 			stamp, formatTime(p.ModifiedAt.UTC()), stamp,
 			libraryID, p.SourceRelativePath)
 		if err != nil {
@@ -138,7 +138,7 @@ func (s *Store) MarkWatchedSourcesAbsent(
 		`UPDATE book_files SET source_absent_at = ?, updated_at = ?
 		 WHERE id IN (
 		     SELECT f.id FROM book_files f
-		     WHERE f.library_id = ? AND f.source = 'watched'
+		     WHERE f.library_id = ? AND f.source = 'scanned'
 		       AND f.source_absent_at IS NULL
 		       AND f.created_at < ?
 		       AND (f.source_seen_at IS NULL OR f.source_seen_at < ?)

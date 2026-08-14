@@ -93,7 +93,7 @@ func (s *Store) collectSimilarityFacts(
 	}
 
 	if err := scanPairs(
-		`SELECT book_id, blob_sha256, NULL FROM book_files
+		`SELECT book_id, content_sha256, NULL FROM book_files
 		 WHERE library_id = ?`,
 		func(i int, digest string, _ sql.NullFloat64) {
 			candidates[i].Digests = append(candidates[i].Digests, digest)

@@ -268,7 +268,7 @@ func watchedJob(id, userID, libraryID, relative string) store.IngestJob {
 	job.UserID = userID
 	job.LibraryID = libraryID
 	job.QuotaUserID = userID
-	job.Source = store.IngestWatched
+	job.Source = store.IngestScanned
 	job.SourceRelativePath = strptr(relative)
 	job.StagingPath = strptr(contentpath.StagingPath(id))
 	return job
