@@ -11,13 +11,15 @@ import (
 
 // The separate reader origin (ADR-0007 phase 3).
 //
-// A book is laid out by an engine that has to measure it, so the frame
-// holding publication content is same-origin with the reader page. No
-// script inside a book runs — the sandbox grants no allow-scripts — but
-// that is one browser check standing between publisher markup and the
-// page it was laid out in. An operator who does not want to bet a
-// session cookie on that check names a second hostname, and the reader
-// moves there.
+// A book is laid out by an engine that has to reach into the laid-out
+// document, so the frame holding publication content is same-origin
+// with the reader page. No script inside a book runs — the page CSP's
+// nonce-gated script-src is inherited by every chapter document, and
+// the reader strips script elements from each resource besides
+// (ADR-0012) — but that is a policy and a transform standing between
+// publisher markup and the page it was laid out in. An operator who
+// does not want to bet a session cookie on them names a second
+// hostname, and the reader moves there.
 //
 // What the second hostname is worth comes entirely from what it does not
 // have. It serves the reader shell and the static assets, and nothing
@@ -152,7 +154,7 @@ func (s *Server) handleDetachedReaderPage(w http.ResponseWriter, r *http.Request
 	if apiOrigin != "" {
 		back = safeURLOn(apiOrigin, r.URL.Query().Get("back"))
 	}
-	setReaderPolicy(w, apiOrigin)
+	nonce := setReaderPolicy(w, apiOrigin)
 	// Nothing here is per-user, but a cache between the two origins
 	// still must not treat one reader's shell as another's, since the
 	// URL is the only thing that distinguishes them.
@@ -171,6 +173,7 @@ func (s *Server) handleDetachedReaderPage(w http.ResponseWriter, r *http.Request
 		APIBase:     apiBase,
 		DownloadURL: apiBase + "v1/books/" + url.PathEscape(bookID) + "/download",
 		StaticBase:  relPrefix(r.URL.Path) + "static/",
+		ScriptNonce: nonce,
 	}, "").Render(r.Context(), w)
 }
 

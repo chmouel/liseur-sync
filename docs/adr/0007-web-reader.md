@@ -59,22 +59,28 @@ with server-side range extraction. For a personal library this is the
 right trade, and the `immutable` cache headers the download route already
 sets mean it is paid once per book per browser.
 
-### Publication content renders in a sandbox that cannot run scripts
+### Publication content renders in frames that cannot run its scripts
 
 The reader document is ordinary UI, served from the authenticated origin
-and subject to the session cookie. Publication content is rendered inside
-an iframe carrying `sandbox="allow-same-origin"` and nothing else. The
-absence of `allow-scripts` is the load-bearing part: **no script in a
-book ever executes**, so the questions of what origin it would run on and
-what it could read never arise. A book cannot read `document.cookie`,
-cannot reach the parent DOM, and cannot phone home, because it cannot
-run.
+and subject to the session cookie. Publication content is rendered
+inside frames the engine builds. What keeps a book's script from ever
+executing is the reader page's `Content-Security-Policy`, revised by
+ADR-0012 to a per-response nonce with `'strict-dynamic'`: every chapter
+document the engine creates inherits that policy, and the only script it
+admits is the module tag this server wrote into this response and the
+imports that module makes. A publication cannot present the nonce and
+cannot even point a script tag at a same-origin file. The reader
+additionally strips script elements out of every resource before the
+engine touches it, so in the ordinary case there is nothing left for the
+policy to refuse. A book cannot read `document.cookie`, cannot reach the
+parent DOM, and cannot phone home, because nothing in it runs.
 
 The frame is same-origin rather than opaque, which is a change from what
-this ADR first decided. A paginating engine has to measure the laid-out
-document — column widths, page counts, where a CFI lands — and that means
-reading `contentDocument`, which an opaque origin forbids. The original
-design paid for opacity with a renderer that could only scroll.
+this ADR first decided. A paginating engine has to reach into the
+laid-out document — where a CFI lands, what to observe for resizing —
+and that means reading `contentDocument`, which an opaque origin
+forbids. The original design paid for opacity with a renderer that could
+only scroll.
 
 The `Content-Security-Policy` on the reader page is what confines the
 publication now, and it does so directly: a `srcdoc` or `blob:` document
@@ -334,5 +340,5 @@ removes.
   the page-turn bug was reported from Firefox, and Firefox reports a
   refused script as a policy violation that never reaches BiDi's log
   channel at all, so the refusal is asserted structurally there — the
-  frame is sandboxed without `allow-scripts` and the publication's script
-  did not run.
+  chapter frame is unreachable from the page and the publication's
+  script did not run.

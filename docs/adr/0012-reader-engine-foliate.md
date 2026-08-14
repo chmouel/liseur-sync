@@ -75,13 +75,21 @@ What foliate-js changes structurally:
 **Where the script barrier now lives.** foliate's paginator sets
 `sandbox="allow-scripts allow-same-origin"` on its frames — it needs
 its own event listeners inside them. The guarantee that publication
-script never runs therefore rests on two other fences, both already
-built: the page CSP's `script-src 'self'`, which every `blob:` chapter
-document inherits and which has no hole in it; and the reader's
-transform hook, which strips script elements and empties JavaScript
-resources before the engine ever makes a blob of them. The browser test
-keeps asserting the observable fact — the fixture's hostile script does
-not run — rather than the mechanism.
+script never runs therefore rests on two other fences, both under this
+project's control: the reader page CSP, whose `script-src` is a
+per-response nonce plus `'strict-dynamic'` — every `blob:` chapter
+document inherits it, and the only script it admits is the module tag
+the server minted the nonce for and that module's own imports, so even
+a script tag aimed at a same-origin file gets nothing — and the
+reader's transform hook, which parses each (X)HTML and SVG resource
+with `DOMParser` and removes every script element in any namespace
+(regexes miss SVG islands and parser-repaired markup; parsing the
+document exactly as the engine will leaves no second interpretation to
+aim between), besides emptying JavaScript-typed resources outright.
+The browser tests keep asserting the observable facts — the fixture's
+inline, SVG-embedded and same-origin-external scripts do not run, and
+its attempt to reach the parent page changes nothing — rather than the
+mechanism.
 
 ## Consequences
 

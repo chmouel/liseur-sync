@@ -142,6 +142,9 @@ const probe = `(() => {
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
     cfi: loc?.cfi || '',
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
+    svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
+    extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
+    pageTitle: document.title,
   });
 })()`;
 
@@ -251,6 +254,22 @@ const afterClick = JSON.parse(await evalIn(probe));
 check('a click on the blank margin turns the page',
   afterClick.fraction > beforeClick.fraction,
   `${beforeClick.fraction} -> ${afterClick.fraction}`);
+
+// The first chapter carries the full hostile battery: an inline script,
+// a script inside an SVG island, an external script pointing at a real
+// same-origin file, and an attempt to retitle the parent page. Jump
+// there and confirm every one of them came to nothing — the transform
+// strips them, and the nonce-gated CSP refuses whatever a stripper
+// might ever miss.
+await evalIn(`document.querySelector('foliate-view').goTo(1)`);
+await new Promise((r) => setTimeout(r, 900));
+const hostile = JSON.parse(await evalIn(probe));
+check('the inline script did not run', hostile.ran === false, String(hostile.ran));
+check('the SVG script did not run', hostile.svgRan === false, String(hostile.svgRan));
+check('the same-origin external script did not run',
+  hostile.extRan === false, String(hostile.extRan));
+check('the publication could not reach the parent page',
+  !String(hostile.pageTitle).includes('pwned'), hostile.pageTitle);
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.

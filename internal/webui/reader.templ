@@ -14,6 +14,12 @@ type ReaderView struct {
 	APIBase    string
 	StaticBase string
 
+	// ScriptNonce is the per-response CSP nonce for the one module tag
+	// this page carries. Everything else that executes is an import
+	// made by that module ('strict-dynamic'); nothing a publication
+	// smuggles in can present it.
+	ScriptNonce string
+
 	// Detached says the page is being served from the separate reader
 	// origin (ADR-0007 phase 3), where there is no session and no CSRF
 	// token. Everything the reader needs then arrives in the URL
@@ -132,7 +138,7 @@ templ readerPage(v ReaderView, csrf string) {
 				<div id="reader-view"></div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>
-			<script type="module" src={ v.StaticBase + "reader-app.js" }></script>
+			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>
 	</html>
 }

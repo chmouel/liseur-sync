@@ -81,17 +81,25 @@ func browserTestEPUB(t *testing.T) []byte {
 		// retired epub.js here (ADR-0012).
 		"OEBPS/pagetitre.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<head><link rel="stylesheet" href="style.css"/>` +
-			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
+			`<script>document.documentElement.dataset.publicationRan = "yes";` +
+			`try { parent.document.title = "pwned"; } catch (e) {}</script>` +
 			`</head><body>` +
 			`<div class="sectionpp"><p>A title page, absolutely positioned, the way real publishers ship them.</p></div>` +
 			`</body></html>`,
-		// The script is the test: a publication that tries to act must
-		// not be able to. It marks the document, and the browser check
-		// asserts the mark is absent.
+		// The scripts are the test: a publication that tries to act must
+		// not be able to. Each one marks what it would have done — ran at
+		// all, ran from an SVG island, ran a same-origin file, reached
+		// the parent page — and the browser check asserts every mark is
+		// absent.
 		"OEBPS/chapter1.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<head><link rel="stylesheet" href="style.css"/>` +
-			`<script>document.documentElement.dataset.publicationRan = "yes";</script>` +
-			`</head><body>` + offscreen + body + `</body></html>`,
+			`<script>document.documentElement.dataset.publicationRan = "yes";` +
+			`try { parent.document.title = "pwned"; } catch (e) {}</script>` +
+			`<script src="/ui/static/htmx.min.js"></script>` +
+			`</head><body>` + offscreen +
+			`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">` +
+			`<script>document.documentElement.dataset.svgRan = "yes";</script></svg>` +
+			body + `</body></html>`,
 	}
 	manifest := `<item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
     <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
