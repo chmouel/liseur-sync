@@ -71,10 +71,16 @@ func (s *Server) handleSearch(
 		return
 	}
 	v.Truncated = result.Truncated
+	bookIDs := make([]string, 0, len(result.Books))
+	for _, b := range result.Books {
+		bookIDs = append(bookIDs, b.ID)
+	}
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
+
 	loc := userLoc(u)
 	for _, b := range result.Books {
 		v.Books = append(v.Books, BookRow{
-			ID: b.ID, Title: b.Title,
+			ID: b.ID, Title: b.Title, Author: authors[b.ID],
 			Added: b.CreatedAt.In(loc).Format("Jan 2, 2006"),
 		})
 	}

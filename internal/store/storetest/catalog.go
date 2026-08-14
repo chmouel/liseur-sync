@@ -85,6 +85,10 @@ func testAtomicCatalogWorkResolution(t *testing.T, open OpenFunc) {
 	if err != nil || mapping.WorkID != resolved {
 		t.Fatalf("catalog mapping: %+v %v", mapping, err)
 	}
+	wbMap, err := s.WorkBookIDs(ctx, user.ID)
+	if err != nil || wbMap[resolved] != book.ID {
+		t.Fatalf("WorkBookIDs: map=%v, err=%v, want %s for %s", wbMap, err, book.ID, resolved)
+	}
 	works, err := s.ListWorks(ctx, user.ID)
 	if err != nil || len(works) != 1 || works[0].Work.ID != resolved {
 		t.Fatalf("catalog works: %+v %v", works, err)

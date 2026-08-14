@@ -262,7 +262,7 @@ templ booksBody(prefix, csrf string, v BooksView) {
 		<section class="card">
 			<h2>In this library</h2>
 			if len(v.Books) == 0 {
-				<p class="muted">No books yet.</p>
+				@emptyState("No books in this library", "Upload an EPUB above or configure a watched folder to get started.", "", "")
 			} else if v.View == viewList {
 				<table>
 					<tr><th></th><th>Title</th><th>Added</th><th></th><th></th></tr>

@@ -82,8 +82,19 @@ func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.Aut
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	bookIDs := make([]string, 0, len(books))
 	for _, b := range books {
-		row := BookRow{ID: b.ID, Title: b.Title, Added: b.CreatedAt.In(loc).Format("Jan 2, 2006")}
+		bookIDs = append(bookIDs, b.ID)
+	}
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
+
+	for _, b := range books {
+		row := BookRow{
+			ID:     b.ID,
+			Title:  b.Title,
+			Author: authors[b.ID],
+			Added:  b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+		}
 		files, err := s.St.ListBookFiles(r.Context(), u.ID, b.ID, store.LibraryRoleRead)
 		if err == nil {
 			for _, f := range files {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -557,6 +558,70 @@ func (s *Store) UserBookWork(ctx context.Context, userID, bookID string) (store.
 	}
 	mapping.CreatedAt, err = parseTime(created)
 	return mapping, err
+}
+
+func (s *Store) WorkBookIDs(ctx context.Context, userID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT m.work_id, m.book_id
+		 FROM user_book_works m
+		 JOIN libraries l ON l.id = m.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE m.user_id = ?
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))`,
+		userID, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var workID, bookID string
+		if err := rows.Scan(&workID, &bookID); err != nil {
+			return nil, err
+		}
+		if _, ok := out[workID]; !ok {
+			out[workID] = bookID
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error) {
+	if len(bookIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	placeholders := make([]string, len(bookIDs))
+	args := make([]any, len(bookIDs))
+	for i, id := range bookIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT bc.book_id, c.name
+		 FROM book_contributors bc
+		 JOIN contributors c ON c.id = bc.contributor_id
+		 WHERE bc.book_id IN (` + strings.Join(placeholders, ",") + `)
+		 ORDER BY bc.book_id, bc.position`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var bookID, name string
+		if err := rows.Scan(&bookID, &name); err != nil {
+			return nil, err
+		}
+		if existing, ok := out[bookID]; ok {
+			out[bookID] = existing + ", " + name
+		} else {
+			out[bookID] = name
+		}
+	}
+	return out, rows.Err()
 }
 
 // Metadata entity sets are read in one transaction and in a deterministic

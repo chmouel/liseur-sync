@@ -6,6 +6,7 @@ import "github.com/chmouel/liseur-sync/internal/store"
 
 type WorkRow struct {
 	ID          string
+	BookID      string
 	Title       string
 	Author      string
 	Progression *float64
@@ -25,7 +26,7 @@ templ worksBody(prefix, csrf, view string, rows []WorkRow) {
 	</div>
 	<section class="card">
 		if len(rows) == 0 {
-			<p class="muted">No books yet. Resolve one from a client to see it here.</p>
+			@emptyState("No reading history", "Sync reading progress from Liseur, KOReader, or another supported reader to see your books here.", "", "")
 		} else if view == viewGrid {
 			<div class="grid">
 				for _, w := range rows {

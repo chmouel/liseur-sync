@@ -500,6 +500,15 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	:root { --card-min: 7.5rem; }
 }
 
+.empty-state {
+	text-align: center; padding: 3rem 1.5rem;
+	background: var(--surface-1); border: 1px dashed var(--line);
+	border-radius: var(--radius-md); margin: 1rem 0;
+	display: flex; flex-direction: column; align-items: center; gap: .75rem;
+}
+.empty-state h3 { margin: 0; font-size: 1.1rem; color: var(--ink); }
+.empty-state p { margin: 0; max-width: 26rem; font-size: .9rem; color: var(--muted); }
+
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left. */
 .reader-body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
