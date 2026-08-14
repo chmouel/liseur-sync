@@ -164,7 +164,7 @@ func (s *Server) handleTopSearch(
 	if len(libs) == 0 {
 		// Nothing to search yet. The books page explains how to get
 		// something into the catalog, which is the real answer.
-		redirectRel(w, "books", http.StatusSeeOther)
+		redirectRel(w, "library", http.StatusSeeOther)
 		return
 	}
 	text := strings.TrimSpace(r.URL.Query().Get("q"))

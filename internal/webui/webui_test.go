@@ -154,7 +154,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 	}
 
 	// Unauthenticated pages redirect (relatively) to the login page.
-	resp, _ = noRedirect().Get(ts.URL + "/ui/works")
+	resp, _ = noRedirect().Get(ts.URL + "/ui/library")
 	resp.Body.Close()
 	if resp.StatusCode != 303 || resp.Header.Get("Location") != "login" {
 		t.Fatalf("unauth /ui/works: want 303 -> login, got %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
@@ -181,7 +181,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 
-	for _, path := range []string{"/ui", "/ui/", "/ui/works", "/ui/devices", "/ui/settings"} {
+	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/devices", "/ui/settings"} {
 		code, body = page(t, ts, cookie, path)
 		if code != 200 || !strings.Contains(body, "liseur-sync") {
 			t.Fatalf("%s: %d", path, code)
@@ -403,7 +403,7 @@ func TestCrossUserIsolation(t *testing.T) {
 		t.Fatal("bob login failed")
 	}
 	// Bob's library is empty; Alice's work 404s for him.
-	_, body := page(t, ts, bobCookie, "/ui/works")
+	_, body := page(t, ts, bobCookie, "/ui/library")
 	if strings.Contains(body, "Alice's Book") {
 		t.Fatal("cross-user leak in library")
 	}
@@ -420,8 +420,8 @@ func TestCrossUserIsolation(t *testing.T) {
 func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
-		"/ui/", "/ui/login", "/ui/works", "/ui/devices", "/ui/settings", "/ui/admin",
-		"/ui/books", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
+		"/ui/", "/ui/login", "/ui/library", "/ui/devices", "/ui/settings", "/ui/admin",
+		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
@@ -576,7 +576,7 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, body := page(t, ts, cookie, "/ui/works")
+	code, body := page(t, ts, cookie, "/ui/library")
 	if code != 200 {
 		t.Fatalf("works page: %d", code)
 	}

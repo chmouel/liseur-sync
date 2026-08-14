@@ -58,7 +58,13 @@ func sectionOf(path string) string {
 	switch head {
 	case "":
 		return "dashboard"
-	case "works", "books", "devices", "settings", "admin":
+	case "library":
+		return "library"
+	// A single book or work is still the library, as far as the rail is
+	// concerned: there is nowhere else those pages could belong.
+	case "works", "books":
+		return "library"
+	case "devices", "settings", "admin":
 		return head
 	case "libraries":
 		if strings.Contains(rest, "/search") {
@@ -105,6 +111,15 @@ func plural(n int, noun string) string {
 		return "1 " + noun
 	}
 	return strconv.Itoa(n) + " " + noun + "s"
+}
+
+// orDash is orPlaceholder for a table cell, where an empty string is
+// not a missing title but a thing that has not happened yet.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 func orPlaceholder(s string) string {

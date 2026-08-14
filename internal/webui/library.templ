@@ -1,0 +1,452 @@
+package webui
+
+// The library page (ADR-0011): one wall of covers, whatever the row is
+// made of. See library.go for why the two pages this replaces became
+// one, and for what each chip means.
+
+templ libraryPage(prefix string, u userCtx, csrf string, v LibraryView) {
+	@layout("Library", prefix, u, csrf, libraryBody(prefix, csrf, v))
+}
+
+templ libraryBody(prefix, csrf string, v LibraryView) {
+	if v.Problem != "" {
+		<p class="error" role="alert">{ v.Problem }</p>
+	}
+	if v.Notice != "" {
+		<p class="notice" role="status">{ v.Notice }</p>
+	}
+	if len(v.Libraries) == 0 {
+		<h1>Library</h1>
+		<section class="card">
+			<p class="muted">
+				You have no libraries yet. An administrator creates one with
+				<code>liseur-sync admin create-library</code> and grants you access.
+			</p>
+		</section>
+	} else {
+		<div class="toolbar">
+			<form method="get" action={ prefix + "library" }>
+				<label class="visually-hidden" for="library-pick">Library</label>
+				<select id="library-pick" name="library">
+					for _, l := range v.Libraries {
+						if l.Selected {
+							<option value={ l.ID } selected>{ l.Name }</option>
+						} else {
+							<option value={ l.ID }>{ l.Name }</option>
+						}
+					}
+				</select>
+				if v.Filter != filterAll {
+					<input type="hidden" name="filter" value={ v.Filter }/>
+				}
+				if v.Sort != sortRecent {
+					<input type="hidden" name="sort" value={ v.Sort }/>
+				}
+				<noscript><button type="submit">Show</button></noscript>
+			</form>
+			if v.Selected != "" {
+				@searchForm(prefix, SearchView{LibraryID: v.Selected})
+				<div class="chips">
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/series" }>Series</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/contributors" }>Contributors</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/tags" }>Tags</a>
+					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/genres" }>Genres</a>
+				</div>
+			}
+			<span class="spacer"></span>
+			@viewToggle(prefix, csrf, v.Back, v.View)
+		</div>
+		if v.Hero != nil {
+			@heroCard(prefix, *v.Hero)
+		}
+		<div class="toolbar filters">
+			<nav class="chips" aria-label="Filter">
+				for _, c := range v.Chips {
+					if c.Active {
+						<a class="chip on" href={ prefix + c.URL } aria-current="true">{ c.Label }</a>
+					} else {
+						<a class="chip" href={ prefix + c.URL }>{ c.Label }</a>
+					}
+				}
+			</nav>
+			<span class="spacer"></span>
+			<a class="chip sortchip" href={ prefix + v.SortURL }>
+				{ sortLabel(v.Sort) }
+				<span aria-hidden="true">⇅</span>
+			</a>
+		</div>
+		if v.CanWrite {
+			<details class="card">
+				<summary>Upload an EPUB</summary>
+				<p class="muted">
+					The file is stored straight away; the book appears once a
+					background pass has read its metadata, usually within a
+					minute. Reload to see it — an upload that cannot be read
+					is listed below with the reason.
+				</p>
+				<form method="post" action={ prefix + "books/upload" } enctype="multipart/form-data">
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input type="hidden" name="library" value={ v.Selected }/>
+					<input type="file" name="file" accept=".epub,application/epub+zip" required/>
+					<button type="submit">Upload</button>
+				</form>
+			</details>
+		}
+		<section class="card">
+			if len(v.Rows) == 0 {
+				@libraryEmpty(v)
+			} else if v.View == viewList {
+				@libraryTable(prefix, v)
+			} else {
+				<div class="grid">
+					@libraryFragment(prefix, v)
+				</div>
+			}
+		</section>
+		@librarianQueues(prefix, csrf, v)
+	}
+}
+
+// libraryEmpty says why the shelf is empty, which depends entirely on
+// what was asked for: an empty catalog and an empty filter are two
+// different problems with two different answers.
+templ libraryEmpty(v LibraryView) {
+	switch v.Filter {
+		case filterReading:
+			@emptyState("Nothing in progress", "Books you have started and not finished appear here.", "", "")
+		case filterFinished:
+			@emptyState("Nothing finished yet", "Books you have read to the end appear here.", "", "")
+		case filterUnread:
+			@emptyState("Nothing unread", "Every book here has been opened at least once.", "", "")
+		case filterHere:
+			@emptyState("No files on this server", "Upload an EPUB or configure a watched folder to keep the files here.", "", "")
+		default:
+			@emptyState("Nothing here yet", "Upload an EPUB, configure a watched folder, or sync reading progress from Liseur or KOReader.", "", "")
+	}
+}
+
+// heroCard is the way back into whatever was put down last. It repeats a
+// row that is also somewhere in the grid below, on purpose: coming back
+// to a half-read book is the single most common reason to open this
+// page, and hunting for it among four hundred covers is the thing this
+// removes.
+templ heroCard(prefix string, row LibraryRow) {
+	<section class="card resume">
+		<a class="art" href={ row.href(prefix) } title={ row.hint() }>
+			<img
+				src={ prefix + "books/" + row.BookID + "/cover?size=thumbnail" }
+				alt=""
+				loading="lazy"
+				decoding="async"
+				width="333"
+				height="500"
+			/>
+		</a>
+		<div class="herotext">
+			<span class="eyebrow">Continue reading</span>
+			<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+			if row.Author != "" {
+				<span class="by">{ row.Author }</span>
+			}
+			if row.Progression != nil {
+				<div class="bar"><span class={ pctClass(*row.Progression) }></span></div>
+				<span class="muted">
+					{ pct(*row.Progression) }
+					if row.LastActive != "" {
+						{ " · read " + row.LastActive }
+					}
+				</span>
+			}
+			<p class="rowlinks">
+				<a class="btn primary" href={ row.href(prefix) }>Resume</a>
+				if row.WorkID != "" {
+					<a class="btn" href={ prefix + "works/" + row.WorkID }>Stats</a>
+				}
+				<a class="btn" href={ prefix + "books/" + row.BookID }>Details</a>
+			</p>
+		</div>
+	</section>
+}
+
+// libraryFragment is a page of cards plus the sentinel that fetches the
+// next one. It replaces itself, so the cards it brings land inside the
+// grid rather than after it.
+//
+// The sentinel is a link first and a trigger second: with scripting off
+// it is the "next page" the table view has always had.
+templ libraryFragment(prefix string, v LibraryView) {
+	for _, row := range v.Rows {
+		@libraryCard(prefix, row)
+	}
+	if v.NextURL != "" {
+		<div
+			class="more"
+			hx-get={ v.NextURL }
+			hx-trigger="revealed"
+			hx-swap="outerHTML"
+		>
+			<a href={ v.NextURL }>Next page</a>
+		</div>
+	}
+}
+
+// libraryCard is one row on the wall. The cover carries on reading when
+// there is something to carry on with, and everything else lives behind
+// the ⋮ menu.
+//
+// The menu is a <details>, not a script: it opens with JavaScript off,
+// closes on Escape without anybody writing that, and is reachable from a
+// keyboard for free. It is always rendered rather than revealed on
+// hover, because hover does not exist on a phone and long-press is not
+// something a web page can claim — that was the whole reason this page
+// needed designing rather than merging.
+templ libraryCard(prefix string, row LibraryRow) {
+	<article class="bookcard">
+		if row.BookID != "" {
+			<div class="art">
+				<a href={ row.href(prefix) } title={ row.hint() }>
+					<img
+						src={ prefix + "books/" + row.BookID + "/cover?size=thumbnail" }
+						alt=""
+						loading="lazy"
+						decoding="async"
+						width="333"
+						height="500"
+					/>
+				</a>
+				@cardOpen(prefix, row)
+				if row.Progression != nil {
+					<div class="prog"><span class={ pctClass(*row.Progression) }></span></div>
+				}
+			</div>
+		} else {
+			<div class="art art-text">
+				<a class="fill" href={ prefix + "works/" + row.WorkID }>
+					<span class="name">{ orPlaceholder(row.Title) }</span>
+					if row.Author != "" {
+						<span class="count">{ row.Author }</span>
+					}
+					if row.Progression != nil {
+						<span class="big">{ pct(*row.Progression) }</span>
+					}
+					<span class="tag">synced elsewhere</span>
+				</a>
+				@cardOpen(prefix, row)
+			</div>
+		}
+		<nav class="sublinks">
+			if row.BookID != "" {
+				<a href={ prefix + "books/" + row.BookID }>Details</a>
+			}
+			if row.WorkID != "" {
+				<a href={ prefix + "works/" + row.WorkID }>Stats</a>
+				<a href={ prefix + "works/" + row.WorkID + "#sessions" }>Sessions</a>
+			}
+			if row.CanGet && row.BookID != "" {
+				<a href={ prefix + "books/" + row.BookID + "/download" }>Get</a>
+			}
+		</nav>
+		<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+		<span class="by">
+			if row.Pending {
+				pending
+			} else if row.LastActive != "" {
+				{ "read " + row.LastActive }
+			} else if row.Author != "" {
+				{ row.Author }
+			} else {
+				{ row.Added }
+			}
+		</span>
+	</article>
+}
+
+// cardOpen is how a card reaches everything it can do without hover and
+// without long-press.
+//
+// It was a ⋮ menu first — a <details> disclosure, so it would open with
+// scripting off. It looked wrong the moment it met a real cover: the
+// art is an overflow-hidden box, so the panel was clipped by the
+// picture it hung off, and unclipping it meant taking the menu out of
+// the element it belongs to and reinventing a popup by hand.
+//
+// So it is a link. Pressing it opens the page that already holds every
+// action this row has — Read, Download, Delete, statistics — instead of
+// making a small copy of that page float over a cover. One tap, no
+// popup, nothing to close, and the same behaviour on a phone as on a
+// desktop.
+templ cardOpen(prefix string, row LibraryRow) {
+	<a class="cardopen" href={ row.detailURL(prefix) } title={ "Open " + orPlaceholder(row.Title) }>
+		<span aria-hidden="true">›</span>
+		<span class="visually-hidden">{ "Open " + orPlaceholder(row.Title) }</span>
+	</a>
+}
+
+// libraryTable is the same rows for the times when scanning five
+// thousand titles beats looking at five thousand pictures.
+templ libraryTable(prefix string, v LibraryView) {
+	<table>
+		<tr><th></th><th>Title</th><th>Progress</th><th>Last read</th><th>Added</th><th></th></tr>
+		for _, row := range v.Rows {
+			<tr>
+				<td>
+					if row.BookID != "" {
+						<a href={ row.href(prefix) }>
+							<img
+								class="cover-thumb"
+								src={ prefix + "books/" + row.BookID + "/cover?size=thumbnail" }
+								alt=""
+								loading="lazy"
+								width="40"
+								height="60"
+							/>
+						</a>
+					}
+				</td>
+				<td>
+					<a href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+					if row.Pending {
+						<span class="tag">pending</span>
+					}
+					if row.Author != "" {
+						<span class="by">{ row.Author }</span>
+					}
+				</td>
+				<td>
+					if row.Progression != nil {
+						<div class="bar"><span class={ pctClass(*row.Progression) }></span></div>
+						{ pct(*row.Progression) }
+					} else {
+						<span class="muted">—</span>
+					}
+				</td>
+				<td>{ orDash(row.LastActive) }</td>
+				<td>{ orDash(row.Added) }</td>
+				<td><a href={ row.detailURL(prefix) }>Open</a></td>
+			</tr>
+		}
+	</table>
+	if v.NextURL != "" {
+		<p><a href={ v.NextURL }>Next page</a></p>
+	}
+}
+
+// librarianQueues is everything on this page that is a job rather than a
+// book: uploads that have not landed, deletions that can still be undone,
+// and the two kinds of "these might be the same book" the server will not
+// decide by itself. Only somebody who can manage the library sees any of
+// it, because only they could act on it.
+templ librarianQueues(prefix, csrf string, v LibraryView) {
+	if len(v.Uploads) > 0 {
+		<section class="card">
+			<h2>Uploads in progress</h2>
+			<table>
+				<tr><th>Uploaded</th><th>Status</th></tr>
+				for _, up := range v.Uploads {
+					<tr>
+						<td>{ up.When }</td>
+						if up.Pending {
+							<td class="muted">{ up.State }</td>
+						} else {
+							<td class="error">{ up.Reason }</td>
+						}
+					</tr>
+				}
+			</table>
+		</section>
+	}
+	if len(v.Trash) > 0 {
+		<section class="card">
+			<h2>Recently deleted</h2>
+			<p class="muted">
+				These are kept for a while before their files are removed for
+				good. Until then they can be put back.
+			</p>
+			<table>
+				<tr><th>Title</th><th>Kept until</th><th></th></tr>
+				for _, b := range v.Trash {
+					<tr>
+						<td>{ orPlaceholder(b.Title) }</td>
+						<td>{ orPlaceholder(b.Until) }</td>
+						<td>
+							<form method="post" action={ prefix + "books/" + b.ID + "/restore" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<input type="hidden" name="library" value={ v.Selected }/>
+								<button type="submit">Put back</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+		</section>
+	}
+	if len(v.Review) > 0 {
+		<section class="card">
+			<h2>Changed under us</h2>
+			<p class="muted">
+				The file behind each of these was replaced with something
+				different. The copy already stored is still what downloads,
+				because a new file at the same path is not proof that it is
+				the same book. Accept it to put the book back in the catalog,
+				or delete the book if the file is now something else.
+			</p>
+			<table>
+				<tr><th>Title</th><th>Why</th><th></th></tr>
+				for _, b := range v.Review {
+					<tr>
+						<td>{ orPlaceholder(b.Title) }</td>
+						<td class="muted">{ b.Reason }</td>
+						<td>
+							<form method="post" action={ prefix + "books/" + b.ID + "/accept" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<input type="hidden" name="library" value={ v.Selected }/>
+								<button type="submit">Accept this copy</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+		</section>
+	}
+	if len(v.Duplicates) > 0 {
+		<section class="card">
+			<h2>The same file, more than once</h2>
+			<p class="muted">
+				These entries hold identical bytes. The file itself is only
+				stored once, so this costs no space — but if you did not mean
+				to add it twice, deleting the spare tidies the list.
+			</p>
+			for _, group := range v.Duplicates {
+				<ul>
+					for _, title := range group.Titles {
+						<li>{ orPlaceholder(title) }</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+	if len(v.Similar) > 0 {
+		<section class="card">
+			<h2>Possibly the same book</h2>
+			<p class="muted">
+				These have the same title and an author in common, but they
+				are different files — two builds of one book, most likely.
+				This is a guess, so nothing has been changed: open them and
+				decide.
+			</p>
+			for _, group := range v.Similar {
+				<ul>
+					for _, b := range group.Books {
+						<li>
+							<a href={ prefix + "books/" + b.ID }>
+								{ orPlaceholder(b.Title) }
+							</a>
+							{ " · added " }
+							{ b.Added }
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+}

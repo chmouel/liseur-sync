@@ -102,7 +102,7 @@ templ searchBody(prefix, csrf string, v SearchView) {
 			</div>
 		</section>
 	}
-	<p><a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a></p>
+	<p><a href={ prefix + "library?library=" + v.LibraryID }>Back to the library</a></p>
 }
 
 // searchForm is its own template because the books page shows it too:

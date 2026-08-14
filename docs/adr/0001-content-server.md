@@ -99,7 +99,7 @@ precedence engine. Each ADR records its own remaining edges.
 ### To the MVP
 
 1. **Ingest input.** Done: `POST /v1/libraries/{library}/upload` and the
-   upload form on `/ui/books` ([ADR-0005](0005-upload-and-ingestion.md)).
+   upload form on `/ui/library` ([ADR-0005](0005-upload-and-ingestion.md)).
 2. **Admin.** Done: `create-library`, `grant-library`, `revoke-library` and
    `list-libraries` in the `admin` subcommand.
 2. **Catalog output.** Done: libraries, paginated books, book detail and

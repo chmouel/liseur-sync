@@ -39,109 +39,6 @@ type Downloader interface {
 // with the same opaque cursor the API hands out.
 const booksPageSize = 25
 
-func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	libs, err := s.St.ListLibraries(r.Context(), u.ID, store.LibraryRoleRead)
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	v := BooksView{
-		Notice:  r.URL.Query().Get("notice"),
-		Problem: r.URL.Query().Get("problem"),
-		View:    readPrefs(r).View,
-		Back:    "books",
-	}
-	selected := r.URL.Query().Get("library")
-	if selected == "" && len(libs) > 0 {
-		selected = libs[0].Library.ID
-	}
-	for _, l := range libs {
-		v.Libraries = append(v.Libraries, LibraryOption{
-			ID:       l.Library.ID,
-			Name:     l.Library.Name,
-			CanWrite: l.Role == store.LibraryRoleManage,
-			Selected: l.Library.ID == selected,
-		})
-		if l.Library.ID == selected {
-			v.Selected = selected
-			v.CanWrite = l.Role == store.LibraryRoleManage
-		}
-	}
-	// A library id from the query string that the user cannot read is
-	// treated as no selection at all, rather than as an error: it is
-	// most often a stale bookmark.
-	if v.Selected == "" {
-		booksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
-			Render(r.Context(), w)
-		return
-	}
-
-	loc := userLoc(u)
-	books, next, err := s.listBooksPage(r, u.ID, v.Selected)
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	bookIDs := make([]string, 0, len(books))
-	for _, b := range books {
-		bookIDs = append(bookIDs, b.ID)
-	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
-
-	for _, b := range books {
-		row := BookRow{
-			ID:     b.ID,
-			Title:  b.Title,
-			Author: authors[b.ID],
-			Added:  b.CreatedAt.In(loc).Format("Jan 2, 2006"),
-		}
-		files, err := s.St.ListBookFiles(r.Context(), u.ID, b.ID, store.LibraryRoleRead)
-		if err == nil {
-			for _, f := range files {
-				if f.Availability == store.BookFileAvailable {
-					row.CanGet = true
-					row.CanRead = row.CanRead || isEPUB(f.MediaType)
-				}
-			}
-		}
-		v.Books = append(v.Books, row)
-	}
-	if next != "" {
-		v.NextURL = "books?library=" + url.QueryEscape(v.Selected) +
-			"&cursor=" + url.QueryEscape(next)
-	}
-	// The view toggle comes back to this library rather than to the
-	// first one, which is what "keep looking at what I was looking at"
-	// means.
-	v.Back = "books?library=" + url.QueryEscape(v.Selected)
-
-	// An htmx continuation asks for more of one list, not for the page
-	// around it: answering with the whole document would append a second
-	// copy of the shell to the grid, and would make the librarian's
-	// review queries run again for markup nobody is going to look at.
-	if isHTMXRequest(r) {
-		booksFragment(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
-		return
-	}
-	// Only a librarian uploads, so only a librarian is shown what became
-	// of an upload. Without this the page is silent about a file that was
-	// accepted and then rejected, which looks exactly like losing it.
-	if v.CanWrite {
-		v.Uploads = s.uploadActivity(r, u.ID, v.Selected, loc)
-		v.Trash = s.trashActivity(r, u.ID, v.Selected, loc)
-		// Shown to librarians only, for the same reason as the trash: it
-		// is a list of things to do something about, and only a librarian
-		// can do anything about them.
-		v.Duplicates = s.duplicateGroups(r, u.ID, v.Selected)
-		v.Similar = s.similarGroups(r, u.ID, v.Selected, loc)
-		// Same audience, same reason: a watched file that changed is a
-		// decision waiting for somebody who can make it.
-		v.Review = s.reviewRows(r, u.ID, v.Selected)
-	}
-	booksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
-		Render(r.Context(), w)
-}
-
 // isHTMXRequest reports whether this is htmx asking for a fragment.
 // Nothing about access depends on it — the header is a hint about what
 // to render, never about what may be read — so an attacker setting it
@@ -439,7 +336,7 @@ func (s *Server) uploadResult(w http.ResponseWriter, r *http.Request, library, n
 	if problem != "" {
 		q.Set("problem", problem)
 	}
-	target := "books"
+	target := "library"
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}

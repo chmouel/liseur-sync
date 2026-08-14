@@ -164,29 +164,6 @@ func streakFrom(dayMin map[string]float64, u *store.User, now time.Time) int {
 
 // --- works ---
 
-func (s *Server) handleWorks(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	works, err := s.St.ListWorks(r.Context(), u.ID)
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
-	loc := userLoc(u)
-	var rows []WorkRow
-	for _, ws := range works {
-		row := WorkRow{
-			ID: ws.Work.ID, BookID: workBookIDs[ws.Work.ID], Title: ws.Work.Title, Author: ws.Work.Author,
-			Progression: ws.Progression, Pending: ws.Pending,
-		}
-		if ws.LastActive != nil {
-			row.LastActive = ws.LastActive.In(loc).Format("Jan 2")
-		}
-		rows = append(rows, row)
-	}
-	worksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		s.markReadable(r, u.ID, rows)).Render(r.Context(), w)
-}
-
 // readableBooks reports which of the given works' books hold an EPUB
 // this browser could open. It asks once for the whole page rather than
 // once per row, because a shelf of a hundred books would otherwise be a

@@ -38,58 +38,6 @@ func workCardHint(w WorkRow) string {
 	return orPlaceholder(w.Title)
 }
 
-templ worksPage(prefix string, u userCtx, csrf string, rows []WorkRow) {
-	@layout("Reading", prefix, u, csrf, worksBody(prefix, csrf, u.Prefs.View, rows))
-}
-
-templ worksBody(prefix, csrf, view string, rows []WorkRow) {
-	<div class="toolbar">
-		<h1>Reading</h1>
-		<span class="spacer"></span>
-		@viewToggle(prefix, csrf, "works", view)
-	</div>
-	<section class="card">
-		if len(rows) == 0 {
-			@emptyState("No reading history", "Sync reading progress from Liseur, KOReader, or another supported reader to see your books here.", "", "")
-		} else if view == viewGrid {
-			<div class="grid">
-				for _, w := range rows {
-					@workCard(prefix, w)
-				}
-			</div>
-		} else {
-			<table>
-				<tr><th>Title</th><th>Author</th><th>Progress</th><th>Last active</th><th></th></tr>
-				for _, w := range rows {
-					<tr>
-						<td>
-							<a href={ prefix + "works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
-							if w.Pending {
-								<span class="tag">pending</span>
-							}
-						</td>
-						<td>{ w.Author }</td>
-						<td>
-							if w.Progression != nil {
-								<div class="bar"><span class={ pctClass(*w.Progression) }></span></div>
-								{ pct(*w.Progression) }
-							} else {
-								<span class="muted">—</span>
-							}
-						</td>
-						<td>{ w.LastActive }</td>
-						<td>
-							if w.CanRead && w.BookID != "" {
-								<a class="btn" href={ prefix + "books/" + w.BookID + "/read" }>Read</a>
-							}
-						</td>
-					</tr>
-				}
-			</table>
-		}
-	</section>
-}
-
 type WorkDetail struct {
 	Work        store.Work
 	Minutes     float64
