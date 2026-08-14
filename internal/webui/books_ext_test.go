@@ -476,12 +476,18 @@ func TestBooksUIExplainsAnUploadThatNeverBecameABook(t *testing.T) {
 	if !strings.Contains(html, "Uploads in progress") {
 		t.Fatalf("an upload in flight is invisible:\n%s", html)
 	}
+	if !strings.Contains(html, "broken.epub") {
+		t.Fatalf("the upload filename is missing:\n%s", html)
+	}
 
 	f.quarantine(t, "invalid_epub")
 
 	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Not a readable EPUB") {
 		t.Fatalf("a rejected upload is invisible:\n%s", html)
+	}
+	if !strings.Contains(html, "broken.epub") {
+		t.Fatalf("the rejected upload filename is missing:\n%s", html)
 	}
 	// The reason is for the librarian who can do something about it, not
 	// for everyone who can read the library.

@@ -174,6 +174,9 @@ func TestUploadCreatesAStagedJob(t *testing.T) {
 	if job.State != store.IngestStaged {
 		t.Fatalf("persisted state = %s", job.State)
 	}
+	if job.OriginalFilename != "book.epub" {
+		t.Fatalf("filename = %q, want book.epub", job.OriginalFilename)
+	}
 	if job.ContentSHA256 == nil {
 		t.Fatal("job has no content digest")
 	}

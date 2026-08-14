@@ -111,7 +111,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// read. StageUpload reports whether it got as far as reading, so
 	// closing stays on the paths where the body is already consumed.
 	job, replayed, err := s.StageUpload(r.Context(),
-		tok.UserID, libraryID, key, part)
+		tok.UserID, libraryID, key, part.FileName(), part)
 	if err != nil {
 		if !errors.Is(err, errUploadBodyUnread) {
 			part.Close()
@@ -136,7 +136,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // It reports `replayed` when the job already carried its bytes, so a
 // caller can distinguish "stored now" from "stored earlier".
 func (s *Server) StageUpload(
-	ctx context.Context, userID, libraryID, key string, body io.Reader,
+	ctx context.Context, userID, libraryID, key, filename string, body io.Reader,
 ) (store.IngestJob, bool, error) {
 	if s.Content == nil {
 		return store.IngestJob{}, false, errUploadNoStorage
@@ -147,8 +147,9 @@ func (s *Server) StageUpload(
 			ID:                 uploadJobID(userID, libraryID, key),
 			LibraryID:          libraryID,
 			Source:             store.IngestUpload,
+			OriginalFilename:   sanitizeFilename(filename),
 			ClientKey:          &key,
-			RequestFingerprint: uploadFingerprint(userID, libraryID, key),
+			RequestFingerprint: uploadFingerprint(userID, libraryID, key, sanitizeFilename(filename)),
 			CreatedAt:          now,
 		})
 	if err != nil {
@@ -232,11 +233,11 @@ func uploadJobID(userID, libraryID, key string) string {
 }
 
 // uploadFingerprint is what the store compares when a key is replayed. It
-// deliberately covers only the request envelope, because the handler cannot
-// know the content hash until the body has been streamed — and by then the
-// job must already exist to name the staging path.
-func uploadFingerprint(userID, libraryID, key string) string {
-	return "upload|" + userID + "|" + libraryID + "|" + key
+// covers the request envelope, including the filename, because the handler
+// cannot know the content hash until the body has been streamed — and by then
+// the job must already exist to name the staging path.
+func uploadFingerprint(userID, libraryID, key, filename string) string {
+	return "upload|" + userID + "|" + libraryID + "|" + key + "|" + filename
 }
 
 func isMultipartForm(contentType string) bool {

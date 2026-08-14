@@ -10,7 +10,7 @@ import (
 )
 
 const ingestJobColumns = `j.id, j.user_id, j.library_id, j.quota_user_id,
-	j.source, j.storage, j.client_key, j.request_fingerprint,
+	j.source, j.original_filename, j.storage, j.client_key, j.request_fingerprint,
 	j.promotion_fingerprint,
 	j.artifacts_expired, j.artifact_cleanup_pending, j.state,
 	j.bytes_received, j.content_sha256, j.staging_path, j.source_relative_path,
@@ -22,7 +22,7 @@ func scanIngestJob(row interface{ Scan(...any) error }) (store.IngestJob, error)
 	var job store.IngestJob
 	err := row.Scan(
 		&job.ID, &job.UserID, &job.LibraryID, &job.QuotaUserID,
-		&job.Source, &job.Storage, &job.ClientKey, &job.RequestFingerprint,
+		&job.Source, &job.OriginalFilename, &job.Storage, &job.ClientKey, &job.RequestFingerprint,
 		&job.PromotionFingerprint, &job.ArtifactsExpired,
 		&job.ArtifactCleanupPending, &job.State,
 		&job.BytesReceived, &job.ContentSHA256, &job.StagingPath,
@@ -41,6 +41,7 @@ func ingestRequestMatches(job store.IngestJob, actorUserID string, request store
 	return job.UserID == actorUserID &&
 		job.LibraryID == request.LibraryID &&
 		job.Source == request.Source &&
+		job.OriginalFilename == request.OriginalFilename &&
 		job.RequestFingerprint == request.RequestFingerprint &&
 		sameOptionalString(job.ClientKey, request.ClientKey) &&
 		sameOptionalString(job.SourceRelativePath, request.SourceRelativePath)
@@ -75,9 +76,9 @@ func (s *Store) CreateIngestJob(
 	res, err := tx.ExecContext(ctx, q(
 		`INSERT INTO ingest_jobs
 		 (id, user_id, library_id, quota_user_id, source, storage,
-		  client_key, request_fingerprint, state, source_relative_path,
+		  original_filename, client_key, request_fingerprint, state, source_relative_path,
 		  revision, created_at, updated_at)
-		 SELECT ?, ?, l.id, l.quota_user_id, ?, l.storage, ?, ?, 'received', ?, 1, ?, ?
+		 SELECT ?, ?, l.id, l.quota_user_id, ?, l.storage, ?, ?, ?, 'received', ?, 1, ?, ?
 		 FROM libraries l
 		 LEFT JOIN library_access a
 		   ON a.library_id = l.id AND a.user_id = ?
@@ -87,8 +88,8 @@ func (s *Store) CreateIngestJob(
 		        (? = 'scanned' AND l.source <> 'managed')
 		   )
 		 ON CONFLICT DO NOTHING`),
-		request.ID, actorUserID, string(request.Source), request.ClientKey,
-		request.RequestFingerprint, request.SourceRelativePath,
+		request.ID, actorUserID, string(request.Source), request.OriginalFilename,
+		request.ClientKey, request.RequestFingerprint, request.SourceRelativePath,
 		request.CreatedAt.UTC(), request.CreatedAt.UTC(),
 		actorUserID, request.LibraryID, actorUserID,
 		string(request.Source), string(request.Source))

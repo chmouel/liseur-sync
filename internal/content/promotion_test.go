@@ -350,11 +350,9 @@ func TestPromoteIngestJobKeepsAWatchedFilesOrigin(t *testing.T) {
 	}
 }
 
-// An upload was never on disk under a name anybody chose, and the job id it
-// was staged as is a server detail. Reporting that id as the original
-// filename would be a fabricated fact, so the field stays empty.
-func TestPromoteIngestJobLeavesAnUploadUnnamed(t *testing.T) {
+func TestPromoteIngestJobKeepsAnUploadFilename(t *testing.T) {
 	st := &fakePromotionStore{job: extractedJob()}
+	st.job.OriginalFilename = "Dune.epub"
 	blobs := &fakeBlobPromoter{}
 	now := time.Date(2024, 3, 1, 9, 0, 0, 0, time.UTC)
 
@@ -366,8 +364,8 @@ func TestPromoteIngestJobLeavesAnUploadUnnamed(t *testing.T) {
 	if result.File.SourceRelativePath != nil {
 		t.Fatalf("upload carried a path %v", result.File.SourceRelativePath)
 	}
-	if result.File.OriginalFilename != "" {
-		t.Fatalf("filename = %q, want empty", result.File.OriginalFilename)
+	if result.File.OriginalFilename != "Dune.epub" {
+		t.Fatalf("filename = %q, want Dune.epub", result.File.OriginalFilename)
 	}
 }
 
