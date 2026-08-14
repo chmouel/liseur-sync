@@ -530,7 +530,9 @@ templ lookupCandidate(prefix, csrf string, b BookView, c CandidateView) {
 			}
 		</table>
 		if c.Description != "" {
-			<p>{ c.Description }</p>
+			<div class="description">
+				@descriptionHTML(c.Description)
+			</div>
 		}
 		<form method="post" action={ prefix + "books/" + b.ID + "/metadata/apply" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
@@ -606,7 +608,9 @@ templ bookBody(prefix, csrf string, b BookView) {
 	if b.Description != "" {
 		<section class="card">
 			<h2>About</h2>
-			<p>{ b.Description }</p>
+			<div class="description">
+				@descriptionHTML(b.Description)
+			</div>
 		</section>
 	}
 	<section class="card">
