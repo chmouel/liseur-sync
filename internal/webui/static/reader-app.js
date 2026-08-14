@@ -478,6 +478,18 @@ function turn(direction) {
 
 document.getElementById('reader-next').addEventListener('click', () => turn(1));
 document.getElementById('reader-prev').addEventListener('click', () => turn(-1));
+// Any blank margin is a page turn: a click that lands on the stage or
+// on the engine's own chrome (margins, gaps, header, footer — all of
+// which retarget to the foliate-view host from its closed shadow root)
+// turns toward whichever half of the stage it fell in. Clicks inside
+// the chapter itself belong to the chapter — text selection and links
+// stay untouched, because those land in the frame, not here.
+stage.addEventListener('click', (e) => {
+  if (!view) return;
+  if (e.target !== stage && e.target !== view) return;
+  const box = stage.getBoundingClientRect();
+  turn(e.clientX < box.left + box.width / 2 ? -1 : 1);
+});
 document.addEventListener('keydown', (e) => {
   // Arrow keys inside the settings panel adjust its controls, not the
   // book; Escape puts the panel away from the keyboard.
