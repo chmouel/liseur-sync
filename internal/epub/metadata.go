@@ -569,3 +569,27 @@ func appendSeries(
 	seen[value.Name] = struct{}{}
 	*values = append(*values, value)
 }
+
+// ParseMetadataDocument reads a standalone OPF package document — the
+// metadata.opf Calibre writes beside each book, rather than one inside
+// a container.
+//
+// It is the same parser the validator runs on an EPUB's own package
+// document, given no zip entries to resolve against: the fields that
+// depend on the manifest, a cover path above all, come back empty
+// because there is no manifest to point into. Everything the metadata
+// element itself carries is read exactly as it is from a publication,
+// which is the point — one OPF reader in this codebase, not two that
+// disagree in a corner.
+func ParseMetadataDocument(
+	ctx context.Context, document []byte, limits Limits,
+) (Metadata, error) {
+	if !limits.valid() {
+		limits = DefaultLimits()
+	}
+	if int64(len(document)) > limits.MaxMetadataBytes {
+		return Metadata{}, validationError(CodeInvalidEPUB,
+			errors.New("metadata document is larger than the limit"))
+	}
+	return extractPackageMetadata(ctx, document, nil, packageDetails{}, limits)
+}
