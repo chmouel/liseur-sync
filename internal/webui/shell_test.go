@@ -178,3 +178,24 @@ func TestTopSearchResolvesALibrary(t *testing.T) {
 		t.Fatalf("top search lost the query: %q", loc)
 	}
 }
+
+// The two routes the revamp added are ordinary UI routes: signed in, or
+// sent to the login page like everything else.
+func TestNewRoutesRequireASession(t *testing.T) {
+	ts, _ := testServer(t)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/search?q=x", nil)
+	resp, err := noRedirect().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "login" {
+		t.Errorf("unauth /ui/search: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	code, _ := postForm(t, ts, nil, "/ui/preferences", url.Values{"theme": {"light"}})
+	if code != http.StatusSeeOther {
+		t.Errorf("unauth POST /ui/preferences: want a redirect to login, got %d", code)
+	}
+}
