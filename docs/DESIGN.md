@@ -73,9 +73,9 @@ kosync adapter so stock KOReader devices participate without modification.**
    KoInsight-compatible endpoint. Neither contaminates the native model.
 6. **Multi-user** from day one: a family or small community on one
    instance, data strictly scoped per user.
-7. **First-class EPUB catalog**: managed uploads and read-only watched
-   folders, shared through explicit library ACLs without sharing users'
-   positions or sessions.
+7. **First-class EPUB catalog**: managed uploads, read-only directories
+   and Calibre libraries read where they lie, shared through explicit
+   library ACLs without sharing users' positions or sessions.
 8. **Broad reader integration**: a native catalog API for Liseur clients,
    OPDS 1.2 for existing readers, and eventually an isolated web reader using
    the same sync protocol.
@@ -96,7 +96,7 @@ kosync adapter so stock KOReader devices participate without modification.**
                     │  ingest workers       validate/index/cover   │
                     │                                              │
                     │  DB: SQLite or PostgreSQL                    │
-                    │  files: managed CAS + read-only watched roots│
+                    │  files: managed CAS + read-only library roots│
                     └──────────────────────────────────────────────┘
 ```
 
@@ -117,12 +117,15 @@ kosync adapter so stock KOReader devices participate without modification.**
   books may be shared through ACLs. Works, operations, and sessions remain
   per-user and are joined lazily through the mapping in
   [ADR-0003](adr/0003-catalog-work-identity.md).
-- **Ingestion is durable and bounded.** Uploads and watched files pass
+- **Ingestion is durable and bounded.** Uploads and scanned files pass
   through the same persistent state machine and security limits in
-  [ADR-0005](adr/0005-upload-and-ingestion.md). Watched sources remain
-  untouched, but downloads use immutable validated CAS snapshots rather than
-  mutable source paths. A hash-changing source replacement preserves catalog
-  identity only after strong embedded matching or explicit confirmation.
+  [ADR-0005](adr/0005-upload-and-ingestion.md). A library root is never
+  written to. A `cas` library serves immutable validated snapshots rather
+  than mutable source paths; an `in_place` library serves the file itself,
+  and refuses to serve it when its size or mtime no longer matches what was
+  catalogued ([ADR-0014](adr/0014-library-sources-and-storage.md)). A
+  hash-changing source replacement preserves catalog identity only after
+  strong embedded matching or explicit confirmation.
 
 ## 4. Identity: works, editions, aliases
 
@@ -471,9 +474,9 @@ the authenticated UI origin.
   verification.
 - Config: one TOML file + env overrides. Built-in ACME optional;
   reverse-proxy TLS documented as the default posture.
-- Managed content, staging, watched roots, quotas, retention, and maintenance
+- Managed content, staging, library roots, quotas, retention, and maintenance
   mode are explicit configuration. Container deployments mount managed
-  content persistently and watched roots read-only
+  content persistently and library roots read-only
   ([ADR-0002](adr/0002-library-storage-and-ownership.md)).
 
 ### 9.2 Schema (core tables)
@@ -580,7 +583,7 @@ remain local-first, and preserve their existing conflict/cursor guarantees.
 | M6 | Catalog identity, ACLs, scope sets, bounded metadata extraction, and durable ingestion core | Shared catalog without cross-user sync leakage |
 | M7 | Managed upload and library-management UI | Books can be safely added without filesystem access |
 | M8 | Native catalog API and OPDS 1.2 | Liseur and existing readers browse and download |
-| M9 | Read-only watched libraries | Existing EPUB folders can be indexed without mutation |
+| M9 | Read-only directory and Calibre libraries | Existing EPUB folders and Calibre libraries can be indexed without mutation |
 | M10 | Metadata editing, categorization UI, and search | A large library is organized and discoverable |
 | M11 | Isolated web reader | Browser reading uses the same position/session protocol safely (shipped) |
 | M12 | Android and desktop catalog integration | One server supplies content, sync, and statistics |
@@ -619,10 +622,29 @@ books, and OPDS 1.2 puts that same catalog in front of readers that speak
 nothing else. The web UI's books pages close the loop for a browser,
 including deleting a book and putting it back.
 
-M9 makes a folder you already have into a library. A periodic sweep walks
-each watched root by descriptor, skipping symlinks, and ingests the EPUBs
-it finds through the same pipeline uploads use, so a watched book is
-served from a validated snapshot and never from its mutable source. What
+M9 makes a folder you already have into a library. A library is three
+independent things rather than one kind
+([ADR-0014](adr/0014-library-sources-and-storage.md)): a **source**
+(`managed`, `directory` or `calibre`), a **storage** mode (`cas`, which
+copies each book into content-addressed storage, or `in_place`, which
+serves it where it lies and charges no quota) and a **refresh** policy
+(`manual`, or `interval` with a "Refresh now" button).
+
+A `directory` library's sweep walks its root by descriptor, skipping
+symlinks, and ingests the EPUBs it finds through the same pipeline
+uploads use. A `calibre` library does not walk anything: its `metadata.db`
+is opened read-only on every refresh and is authoritative about which
+books exist, where their files are, and what they are called. Calibre's
+metadata arrives as candidates at a `calibre` provenance, which outranks
+what an EPUB says about itself and yields to anything edited here — so a
+title corrected in Calibre lands on the next refresh, and a title
+corrected here never moves again. A book that leaves `metadata.db` leaves
+the catalog; its file is not ours to delete, and the reading history is
+user-scoped, so it survives. A refresh whose inventory hashes to what the
+last one recorded stops before writing anything.
+
+A `cas` book is served from a validated snapshot and never from its
+mutable source. What
 the sweep concludes about absence is tracked separately from whether a
 blob is on disk, and is deliberately timid: only a sweep that finished
 may decide a file is gone, a root that will not open concludes nothing,

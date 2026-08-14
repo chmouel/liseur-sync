@@ -24,7 +24,7 @@ loose ends that must come before any of it, are in
 | ADR | Title | Scope | State | Next |
 |---|---|---|---|---|
 | [0001](0001-content-server.md) | Become a content server | — | MVP implemented | Nothing outstanding |
-| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Implemented | Nothing outstanding |
+| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Implemented; "Library kinds" amended by [0014](0014-library-sources-and-storage.md) | Nothing outstanding |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
 | [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Implemented | Nothing outstanding |
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
@@ -36,7 +36,7 @@ loose ends that must come before any of it, are in
 | [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Implemented | Nothing outstanding |
 | [0012](0012-reader-engine-foliate.md) | Replace the reader engine with foliate-js | Later | Implemented | Nothing outstanding |
 | [0013](0013-admin-panel.md) | The admin panel | Later | Implemented | Nothing outstanding |
-| [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Proposed | Phase 1: the three axes |
+| [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Implemented | Covers from `cover.jpg` are not wired yet |
 
 ## Convention
 

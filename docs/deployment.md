@@ -171,11 +171,17 @@ liseur-sync admin -config liseur-sync.toml add-library alice "Shelf" /srv/books
 ```
 
 A library has three independent properties: a **source** (`managed` for
-uploads, `directory` for a tree of EPUBs), a **storage** mode (`cas`, so
-the bytes are copied, or `in-place`, so they are read where they lie) and
-a **refresh** policy (`manual`, or `interval` every `-interval`).
-`add-library` defaults to a directory source, copied, refreshed on an
-interval — which is what a watch folder was.
+uploads, `directory` for a tree of EPUBs, `calibre` for a Calibre
+library), a **storage** mode (`cas`, so the bytes are copied, or
+`in-place`, so they are read where they lie) and a **refresh** policy
+(`manual`, or `interval` every `-interval`). `add-library` defaults to a
+directory source, copied, refreshed on an interval — which is what a
+watch folder was.
+
+Naming a path on the server is a shell operation, not a browser one, so
+the admin panel creates managed libraries only. It manages every kind,
+though: access, filename layouts, refresh state and **Refresh now** are
+all on the Libraries page.
 
 Mount that directory read-only if you can. The server does not need write
 access and treating the mount as the enforcement point means a bug cannot
@@ -247,9 +253,9 @@ catalog if it still has a servable file. If the new file really is a
 different book, delete the flagged one and let the next sweep ingest the
 path as what it now holds.
 
+### Reading filenames
 
-
-A file that arrives with a path — one found under a watched root rather
+A file that arrives with a path — one found under a library root rather
 than uploaded — can say something about its own author, series and title,
 but only if the server knows how the library is laid out. Two common
 layouts are the same shape on disk: `Author/Title.epub` and
@@ -281,6 +287,49 @@ rather than being read with the wrong layout: the ingest pass counts it as
 `misconfigured` and moves on to the other libraries. Uploads are
 unaffected either way — an upload carries no path, so there is nothing for
 a layout to read.
+
+## A Calibre library, read where it is
+
+If your books are already in Calibre, point the server at the Calibre
+library directory — the one with `metadata.db` in it — and let Calibre
+stay the place you edit them:
+
+```
+liseur-sync admin -config liseur-sync.toml add-library alice "Calibre" \
+    -source calibre /srv/calibre
+```
+
+A Calibre source defaults to `in-place` storage, so nothing is copied and
+nothing is charged against a quota: 200 GB of books stay 200 GB. Pass
+`-storage cas` if you would rather have the server hold its own validated
+copy of everything, at the cost of a second 200 GB.
+
+`metadata.db` is opened read-only and is authoritative. The server does
+not walk the tree: the books that exist are the books Calibre says exist,
+at the paths Calibre records for them, and a book Calibre no longer has
+leaves the catalog on the next refresh. Its file is not deleted — it was
+never the server's — and reading positions and statistics belong to the
+reader rather than to the catalog row, so they survive.
+
+Nothing is ever written to `metadata.db`, or anywhere under the root.
+Edits made in Calibre travel one way, into this server. Custom columns
+are not read; `metadata.opf` fills in what a book's database row left
+empty.
+
+What Calibre says wins over what an EPUB says about itself, and loses to
+what you have edited here. Correct a title in Calibre and it lands on the
+next refresh; correct it on this server's book page and it is yours from
+then on, whatever Calibre later says about that field. A field Calibre
+stops stating — a series it no longer has, say — is cleared rather than
+left behind, unless it was set here.
+
+A refresh reads `metadata.db` and stats each book's file, hashes that
+into one digest, and stops there when it matches the previous refresh. It
+is not enough to stat `metadata.db` alone: Calibre runs SQLite in WAL
+mode, so a change can leave that file untouched.
+
+Covers still come from inside each EPUB; Calibre's `cover.jpg` is not
+used yet.
 
 ## Reading statistics for books nobody has opened yet
 
