@@ -14,7 +14,7 @@ templ bookCard(prefix string, csrf string, library string, canWrite bool, b Book
 		<div class="art">
 			<a href={ prefix + "books/" + b.ID } title={ orPlaceholder(b.Title) }>
 				<img
-					src={ prefix + "books/" + b.ID + "/cover?size=thumb" }
+					src={ prefix + "books/" + b.ID + "/cover?size=thumbnail" }
 					alt=""
 					loading="lazy"
 					decoding="async"
