@@ -47,14 +47,17 @@ templ bookCard(prefix string, csrf string, library string, canWrite bool, b Book
 	</article>
 }
 
-// workCard is a book being read rather than a book that is held. When mapped
-// to a catalog book, it renders the cover art with the reading progress
-// bar across the bottom; when unmapped, it falls back to a text tile.
+// workCard is a book being read rather than a book that is held. The
+// cover carries on reading — that is what somebody looking at their own
+// shelf came for — and the numbers behind it are one sublink away, right
+// under the picture. When the work has no catalog book (progress synced
+// from a device holding a file this server never saw) the cover falls
+// back to a text tile and every link goes to the work's own page.
 templ workCard(prefix string, w WorkRow) {
 	<article class="bookcard">
 		if w.BookID != "" {
 			<div class="art">
-				<a href={ prefix + "works/" + w.ID } title={ orPlaceholder(w.Title) }>
+				<a href={ w.readURL(prefix) } title={ workCardHint(w) }>
 					<img
 						src={ prefix + "books/" + w.BookID + "/cover?size=thumbnail" }
 						alt=""
@@ -64,6 +67,11 @@ templ workCard(prefix string, w WorkRow) {
 						height="500"
 					/>
 				</a>
+				if w.CanRead {
+					<div class="actions">
+						<a class="btn" href={ prefix + "books/" + w.BookID + "/read" }>Read</a>
+					</div>
+				}
 				if w.Progression != nil {
 					<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
 				}
@@ -79,7 +87,14 @@ templ workCard(prefix string, w WorkRow) {
 				}
 			</a>
 		}
-		<a class="title" href={ prefix + "works/" + w.ID }>{ orPlaceholder(w.Title) }</a>
+		<nav class="sublinks">
+			<a href={ prefix + "works/" + w.ID }>Stats</a>
+			<a href={ prefix + "works/" + w.ID + "#sessions" }>Sessions</a>
+			if w.BookID != "" {
+				<a href={ prefix + "books/" + w.BookID }>Book</a>
+			}
+		</nav>
+		<a class="title" href={ w.readURL(prefix) }>{ orPlaceholder(w.Title) }</a>
 		<span class="by">
 			if w.Pending {
 				pending

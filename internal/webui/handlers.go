@@ -84,12 +84,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		}
 		workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
 		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-			sum, heat, recent, continueReading(works, workBookIDs, loc)).Render(r.Context(), w)
+			sum, heat, recent,
+			s.markReadable(r, u.ID, continueReading(works, workBookIDs, loc))).
+			Render(r.Context(), w)
 		return
 	}
 	workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		sum, nil, nil, continueReading(works, workBookIDs, loc)).Render(r.Context(), w)
+		sum, nil, nil,
+		s.markReadable(r, u.ID, continueReading(works, workBookIDs, loc))).
+		Render(r.Context(), w)
 }
 
 // continueReadingLimit is a shelf, not a list: the point is to get back
@@ -179,7 +183,44 @@ func (s *Server) handleWorks(w http.ResponseWriter, r *http.Request, a store.Aut
 		}
 		rows = append(rows, row)
 	}
-	worksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), rows).Render(r.Context(), w)
+	worksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
+		s.markReadable(r, u.ID, rows)).Render(r.Context(), w)
+}
+
+// readableBooks reports which of the given works' books hold an EPUB
+// this browser could open. It asks once for the whole page rather than
+// once per row, because a shelf of a hundred books would otherwise be a
+// hundred file queries to draw one wall of covers.
+func (s *Server) markReadable(r *http.Request, userID string, rows []WorkRow) []WorkRow {
+	ids := make([]string, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row.BookID == "" || seen[row.BookID] {
+			continue
+		}
+		seen[row.BookID] = true
+		ids = append(ids, row.BookID)
+	}
+	if len(ids) == 0 {
+		return rows
+	}
+	types, err := s.St.AvailableBookMediaTypes(r.Context(), userID, ids)
+	if err != nil {
+		return rows
+	}
+	readable := make(map[string]bool, len(types))
+	for bookID, mediaTypes := range types {
+		for _, mt := range mediaTypes {
+			if isEPUB(mt) {
+				readable[bookID] = true
+				break
+			}
+		}
+	}
+	for i := range rows {
+		rows[i].CanRead = readable[rows[i].BookID]
+	}
+	return rows
 }
 
 func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -225,6 +266,38 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		}
 	}
 	loc := userLoc(u)
+	// The work's own book, when it has one: it makes this page a way
+	// back into the reading rather than only a report about it.
+	if mapping, err := s.St.WorkBookIDs(r.Context(), u.ID); err == nil {
+		d.BookID = mapping[workID]
+	}
+	if d.BookID != "" {
+		if types, err := s.St.AvailableBookMediaTypes(
+			r.Context(), u.ID, []string{d.BookID}); err == nil {
+			for _, mt := range types[d.BookID] {
+				if isEPUB(mt) {
+					d.CanRead = true
+					break
+				}
+			}
+		}
+	}
+	// Newest first, and only the sessions still held one by one — the
+	// aged ones live on as the daily totals counted in the statistics
+	// above, which is why this list can be shorter than that count.
+	sessionRows := make([]SessionRow, 0, len(sessions))
+	for i := len(sessions) - 1; i >= 0; i-- {
+		ses := sessions[i]
+		sessionRows = append(sessionRows, SessionRow{
+			When:      ses.StartedAt.In(loc).Format("Jan 2 15:04"),
+			WorkID:    workID,
+			WorkTitle: wk.Title,
+			DeviceID:  ses.DeviceID,
+			Minutes:   int(sessionActiveSeconds(ses) / 60),
+			StartProg: ses.StartProg,
+			EndProg:   ses.EndProg,
+		})
+	}
 	var opRows []OpRow
 	for _, o := range ops {
 		row := OpRow{
@@ -237,7 +310,8 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		}
 		opRows = append(opRows, row)
 	}
-	workPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), d, opRows).Render(r.Context(), w)
+	workPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), d, opRows, sessionRows).
+		Render(r.Context(), w)
 }
 
 func humanDuration(d time.Duration) string {

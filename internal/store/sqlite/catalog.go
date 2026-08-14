@@ -587,6 +587,51 @@ func (s *Store) WorkBookIDs(ctx context.Context, userID string) (map[string]stri
 	return out, rows.Err()
 }
 
+// AvailableBookMediaTypes answers "which of these books could I be given
+// right now, and in what format" for a whole list at once, so a page of
+// books does not need a file query per row. Like every catalog read it
+// is scoped through the library ACL: a book the user cannot read reports
+// nothing rather than reporting that it exists.
+func (s *Store) AvailableBookMediaTypes(
+	ctx context.Context,
+	userID string,
+	bookIDs []string,
+) (map[string][]string, error) {
+	if len(bookIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+	placeholders := make([]string, len(bookIDs))
+	args := []any{userID}
+	for i, id := range bookIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, userID, string(store.BookFileAvailable))
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT f.book_id, f.media_type
+		 FROM book_files f
+		 JOIN libraries l ON l.id = f.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE f.book_id IN (`+strings.Join(placeholders, ",")+`)
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		   AND f.availability = ?
+		 ORDER BY f.book_id, f.created_at DESC, f.id DESC`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string][]string)
+	for rows.Next() {
+		var bookID, mediaType string
+		if err := rows.Scan(&bookID, &mediaType); err != nil {
+			return nil, err
+		}
+		out[bookID] = append(out[bookID], mediaType)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error) {
 	if len(bookIDs) == 0 {
 		return map[string]string{}, nil

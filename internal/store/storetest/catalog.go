@@ -537,6 +537,93 @@ func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testAvailableBookMediaTypes pins the batch lookup a page of covers
+// uses to decide which of them it may offer to open: it reports only
+// files that are actually there, only to somebody who may read the
+// library, and it says nothing at all about a book belonging to
+// somebody else — a caller must not be able to learn that an id exists.
+func testAvailableBookMediaTypes(t *testing.T, open OpenFunc) {
+	s := open(t)
+	inserter, ok := s.(bookFileTestInserter)
+	if !ok {
+		t.Fatalf("%T cannot insert book files for shared tests", s)
+	}
+	ctx := context.Background()
+	owner := MkUser(t, s, "media-types-owner")
+	reader := MkUser(t, s, "media-types-reader")
+	outsider := MkUser(t, s, "media-types-outsider")
+	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+	library := store.Library{
+		ID: "lib-media-types", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Kind: store.LibraryManaged, Name: "Media types", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(
+		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
+		t.Fatal(err)
+	}
+	books := []string{"book-epub", "book-gone", "book-pdf"}
+	for _, id := range books {
+		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
+			ID: id, LibraryID: library.ID, Status: store.BookActive,
+			Title: id, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := []struct {
+		id, book, mediaType string
+		availability        store.BookFileAvailability
+	}{
+		{"mt-epub", "book-epub", "application/epub+zip", store.BookFileAvailable},
+		{"mt-gone", "book-gone", "application/epub+zip", store.BookFileMissing},
+		{"mt-pdf", "book-pdf", "application/pdf", store.BookFileAvailable},
+	}
+	for i, spec := range files {
+		if err := inserter.InsertBookFileForTest(ctx, store.BookFile{
+			ID: spec.id, LibraryID: library.ID, BookID: spec.book,
+			BlobSHA256:       ingestBlob(spec.id, int64(i+1)).SHA256,
+			Source:           store.IngestUpload,
+			OriginalFilename: spec.id,
+			MediaType:        spec.mediaType,
+			Availability:     spec.availability,
+			CreatedAt:        now, UpdatedAt: now,
+		}, int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.AvailableBookMediaTypes(ctx, reader.ID, books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"application/epub+zip"}; fmt.Sprint(got["book-epub"]) != fmt.Sprint(want) {
+		t.Fatalf("epub book: got %v want %v", got["book-epub"], want)
+	}
+	if len(got["book-gone"]) != 0 {
+		t.Fatalf("a missing file was offered: %v", got["book-gone"])
+	}
+	if want := []string{"application/pdf"}; fmt.Sprint(got["book-pdf"]) != fmt.Sprint(want) {
+		t.Fatalf("pdf book: got %v want %v", got["book-pdf"], want)
+	}
+
+	// A stranger learns nothing, not even that the ids resolve.
+	blind, err := s.AvailableBookMediaTypes(ctx, outsider.ID, books)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blind) != 0 {
+		t.Fatalf("outsider saw another user's files: %v", blind)
+	}
+
+	empty, err := s.AvailableBookMediaTypes(ctx, reader.ID, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty request: %v %v", empty, err)
+	}
+}
+
 func testCatalogBookMetadata(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()

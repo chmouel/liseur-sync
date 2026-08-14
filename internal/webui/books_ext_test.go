@@ -829,3 +829,95 @@ func TestBooksHTMXFragmentIsOnlyTheCards(t *testing.T) {
 		}
 	}
 }
+
+// TestReadingCardOffersToCarryOnReading is the shelf's whole point: a
+// book that is being read and that this server holds an EPUB of must be
+// one click from where the reader left off. The cover is that click, the
+// numbers behind it are a sublink away, and a work whose file this
+// server does not hold offers no Read at all rather than a link that
+// leads to an error page.
+func TestReadingCardOffersToCarryOnReading(t *testing.T) {
+	f := newBooksFixture(t)
+	_, html := f.get(t, "/ui/books", f.cookie)
+	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
+		bytes.Repeat([]byte("web-epub"), 50))
+	bookID := f.promote(t, "novel")
+
+	now := time.Now().UTC()
+	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", bookID,
+		store.Work{ID: "w-read", UserID: "u1", Title: "novel", CreatedAt: now},
+		nil, nil, true, now); err != nil {
+		t.Fatal(err)
+	}
+	// A second work with no catalog book at all: progress synced from a
+	// device holding a file this server never saw.
+	if err := f.st.CreateWork(t.Context(),
+		store.Work{ID: "w-elsewhere", UserID: "u1", Title: "Elsewhere", CreatedAt: now},
+		nil, []store.Identifier{{Kind: "sha256", Value: "beef"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, page := f.get(t, "/ui/works", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reading page: %d", resp.StatusCode)
+	}
+	for _, want := range []string{
+		`href="books/` + bookID + `/read"`,
+		`href="works/w-read"`,
+		`href="works/w-read#sessions"`,
+		`href="books/` + bookID + `"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("reading card is missing %s:\n%s", want, page)
+		}
+	}
+	// The cover itself is the click that carries on reading.
+	if !strings.Contains(page, `href="books/`+bookID+`/read" title="Continue reading novel"><img`) {
+		t.Errorf("the cover does not resume reading:\n%s", page)
+	}
+	// The unmapped work keeps its own page as the only destination.
+	if strings.Contains(page, `w-elsewhere/read`) {
+		t.Error("a work with no file here was offered a reader")
+	}
+
+	// The work page is where the numbers live, and it says how to get
+	// back into the book rather than only reporting on it.
+	_, work := f.get(t, "/ui/works/w-read", f.cookie)
+	for _, want := range []string{`id="sessions"`, `id="stats"`,
+		`href="../books/` + bookID + `/read"`} {
+		if !strings.Contains(work, want) {
+			t.Errorf("work page is missing %s:\n%s", want, work)
+		}
+	}
+}
+
+// TestReadingCardHidesReadWithoutAFile pins the other half: a work
+// mapped to a book whose file this server does not have (a placeholder
+// record, a file gone missing) must not offer to open it.
+func TestReadingCardHidesReadWithoutAFile(t *testing.T) {
+	f := newBooksFixture(t)
+	now := time.Now().UTC()
+	if err := f.st.CreateCatalogBook(t.Context(), "u1", store.CatalogBook{
+		ID: "b-empty", LibraryID: f.library, Status: store.BookActive,
+		Title: "Fileless", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", "b-empty",
+		store.Work{ID: "w-empty", UserID: "u1", Title: "Fileless", CreatedAt: now},
+		nil, nil, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	_, page := f.get(t, "/ui/works", f.cookie)
+	if strings.Contains(page, `books/b-empty/read`) {
+		t.Errorf("offered to read a book with no file:\n%s", page)
+	}
+	if !strings.Contains(page, `href="works/w-empty"`) {
+		t.Errorf("the work is not linked at all:\n%s", page)
+	}
+	// The cover still shows, and it goes to the numbers instead.
+	if !strings.Contains(page, `books/b-empty/cover?size=thumbnail`) {
+		t.Errorf("cover missing:\n%s", page)
+	}
+}
