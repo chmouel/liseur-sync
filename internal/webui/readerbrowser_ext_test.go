@@ -275,7 +275,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
 	bookID := f.promote(t, "novel")
 
@@ -335,7 +335,7 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
 	bookID := f.promote(t, "novel")
 	ts, readerHost := splitOriginServer(t, f)
@@ -392,7 +392,7 @@ func TestUIScreenshots(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	csrf := csrfFrom(t, html)
 	for _, name := range []string{"dune", "neuromancer", "solaris", "ubik"} {
 		f.uploadForm(t, f.cookie, csrf, f.library, name+".epub",

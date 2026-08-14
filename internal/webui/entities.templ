@@ -109,7 +109,7 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 	if v.CanWrite && len(v.Entities) > 1 {
 		@mergeForm(prefix, csrf, v)
 	}
-	<p><a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a></p>
+	<p><a href={ prefix + "library?library=" + v.LibraryID }>Back to the library</a></p>
 }
 
 // mergeForm folds two spellings of one thing together. Matching only
@@ -180,6 +180,6 @@ templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
 			All { v.Kind }
 		</a>
 		{ " · " }
-		<a href={ prefix + "books?library=" + v.LibraryID }>Back to the library</a>
+		<a href={ prefix + "library?library=" + v.LibraryID }>Back to the library</a>
 	</p>
 }

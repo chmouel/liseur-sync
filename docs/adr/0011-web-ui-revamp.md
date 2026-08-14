@@ -45,6 +45,48 @@ hero cover — not a pixel copy of its Material components. Ripples,
 elevation transitions and virtualized scrolling are not worth
 hand-writing and are not being written.
 
+**One library page, not a catalog page and a reading page.** The revamp
+shipped `/ui/books` (what this server holds) and `/ui/works` (what has
+been read) as two grids that knew nothing about each other. The same
+book was on both, under two words a reader had to learn, and neither
+list was complete on its own: a book nobody has opened exists only in
+the catalog, and progress synced from a device holding a file this
+server never saw exists only in the reading history. `/ui/library`
+replaces both with their union — keyed by book where there is a book,
+by work where there is not — and the two old paths are deleted rather
+than redirected, this project never having shipped.
+
+Over the grid are filter chips (`All`, `Reading`, `Unread`, `Finished`,
+`On this server`) and a sort, both kept in the URL so a filtered shelf
+is a link somebody can send. Above them is a continue-reading banner:
+the most recently started unfinished book whose file is here, absent
+entirely when there is nothing to go back to. It repeats a card from
+the grid on purpose — coming back to a half-read book is the commonest
+reason to open the page.
+
+The two halves are paged differently, because they are counted
+differently. A reading-state filter is answered from the reading
+history, which is complete in memory and bounded by what one person has
+read; a catalog filter is answered from the cursor-paged catalog. The
+alternative — filtering a page of twenty-five catalog rows — would mean
+clicking "next page" past ninety unread books to find the second book
+you are in the middle of. Sorting alphabetically is missing for the
+same reason and is honest about it: it needs a second cursor ordering
+in the store, not a re-sort of whichever page arrived.
+
+**A cover's actions are a link, not a menu.** Hover does not exist on a
+phone and a web page cannot claim long-press, so the old reveal-on-hover
+overlay left touch users with no way to a book's actions at all. The
+first attempt was a ⋮ disclosure menu on each cover — no script needed,
+Escape closes it for free — and it was wrong on contact: a cover is an
+overflow-hidden box, so the panel was clipped by the picture it hung
+off, and unclipping it meant lifting the menu out of the element it
+belongs to and hand-rolling a popup. So the corner button is a link to
+the book's page, which already lists every action, and the two or three
+worth reaching without a page load (stats, sessions, download) are
+small text sublinks under the cover. No popup, nothing to close, and
+the same behaviour under a finger as under a pointer.
+
 **Dark first.** The default theme is dark, because that is what a
 reading application is for and what the comparison does. Light remains,
 as a full palette rather than a grudging inversion.

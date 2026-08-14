@@ -26,8 +26,7 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 
 	pages := map[string]*http.Cookie{
 		"/ui/":        f.cookie,
-		"/ui/books":   f.cookie,
-		"/ui/works":   f.cookie,
+		"/ui/library": f.cookie,
 		"/ui/devices": f.cookie,
 		// The page a signed-out browser sees, and the one that posts a
 		// password: it needs the policy at least as much as the rest.
@@ -74,7 +73,7 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 // (TestReaderPageIsolatesThePublication does that).
 func TestReaderKeepsItsOwnPolicy(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")

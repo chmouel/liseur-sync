@@ -18,7 +18,7 @@ import (
 // uploadAndPromote is the shortest path to a book with known bytes.
 func (f *booksFixture) uploadAndPromote(t *testing.T, name string, body []byte) string {
 	t.Helper()
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	up := f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, name+".epub", body)
 	if up.StatusCode != http.StatusSeeOther {
 		t.Fatalf("upload: %d", up.StatusCode)
@@ -107,7 +107,7 @@ func TestBooksUIShowsCovers(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.uploadAndPromote(t, "illustrated", coverEPUB(t, 300, 400))
 
-	_, html := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, html := f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if !strings.Contains(html, "books/"+bookID+"/cover") {
 		t.Fatalf("the list shows no cover:\n%s", html)
 	}
@@ -317,7 +317,7 @@ func TestBooksGridAsksForACoverSizeTheServerRenders(t *testing.T) {
 	f := newBooksFixture(t)
 	f.uploadAndPromote(t, "illustrated", coverEPUB(t, 300, 400))
 
-	_, html := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, html := f.get(t, "/ui/library?library="+f.library, f.cookie)
 	sources := coverSources(t, html)
 	if len(sources) == 0 {
 		t.Fatalf("the grid shows no cover images:\n%s", html)

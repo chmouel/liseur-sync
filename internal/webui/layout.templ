@@ -20,6 +20,7 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 			// add live in style.css instead, spelled the same way.
 			<meta name="htmx-config" content="{&#34;includeIndicatorStyles&#34;:false}"/>
 			<title>{ title } · liseur-sync</title>
+			<link rel="icon" href={ prefix + "static/liseur.png" }/>
 			<link rel="stylesheet" href={ prefix + "static/style.css" }/>
 			<script src={ prefix + "static/htmx.min.js" } defer></script>
 			<script src={ prefix + "static/ui.js" } defer></script>
@@ -34,7 +35,16 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<span aria-hidden="true">☰</span>
 							<span class="visually-hidden">Menu</span>
 						</label>
-						<a class="brand" href={ prefix + "." }>liseur-sync</a>
+						<a class="brand" href={ prefix + "." }>
+							<img
+								class="mark"
+								src={ prefix + "static/liseur.png" }
+								alt=""
+								width="128"
+								height="128"
+							/>
+							<span>liseur-sync</span>
+						</a>
 						<form class="topsearch" method="get" action={ prefix + "search" }>
 							<input
 								type="search"
@@ -56,9 +66,7 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					<aside class="rail">
 						<nav aria-label="Sections">
 							@railLink(prefix+".", "Dashboard", u.Section == "dashboard")
-							<span class="rail-head">Library</span>
-							@railLink(prefix+"works", "Reading", u.Section == "works")
-							@railLink(prefix+"books", "Books", u.Section == "books")
+							@railLink(prefix+"library", "Library", u.Section == "library")
 							<span class="rail-head">Account</span>
 							@railLink(prefix+"devices", "Devices", u.Section == "devices")
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")

@@ -166,6 +166,15 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 	display: flex; align-items: center; gap: .5rem;
 }
 .brand:hover { color: var(--primary); }
+/* The Liseur emblem, the same drawing the app wears, so the server and
+   the reader that syncs to it look like one thing. It is decorative —
+   the wordmark next to it is the actual name — so it carries an empty
+   alt. */
+.brand .mark {
+	width: 1.65rem; height: 1.65rem; border-radius: 50%;
+	display: block; flex: none;
+}
+@media (max-width: 32em) { .brand span { display: none; } }
 
 .topsearch { flex: 1; max-width: 34rem; margin: 0; display: flex; }
 .topsearch input {
@@ -625,3 +634,59 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .htmx-indicator { opacity: 0 }
 .htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
 .htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
+
+/* ------------------------------------------------------------- library */
+
+/* The continue-reading banner. It repeats a card that is also in the
+   grid below, which is the point: coming back to a half-read book is
+   the commonest reason to open this page. */
+.resume { display: flex; gap: 1.1rem; align-items: flex-start; }
+.resume .art {
+	flex: 0 0 6.5rem; display: block; overflow: hidden;
+	border-radius: var(--radius-sm); border: 1px solid var(--line);
+	box-shadow: var(--shadow-sm); aspect-ratio: var(--cover-ratio);
+}
+.resume .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.resume .herotext { flex: 1; min-width: 12rem; display: flex; flex-direction: column; gap: .3rem; }
+.resume .eyebrow {
+	font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+	text-transform: uppercase; color: var(--muted);
+}
+.resume .title { font-size: 1.1rem; font-weight: 600; color: var(--ink); text-decoration: none; }
+.resume .title:hover { color: var(--primary); }
+.resume .by { color: var(--muted); font-size: .85rem; }
+.resume .bar { max-width: 22rem; }
+.resume .rowlinks { margin: .5rem 0 0; }
+
+/* The filter row under the banner. A chip is a link, so a filtered
+   shelf has a URL somebody can send. */
+.toolbar.filters { margin: .2rem 0 .9rem; }
+.sortchip { display: inline-flex; gap: .35rem; align-items: center; }
+
+/* The open button on every cover.
+
+   Always visible rather than revealed on hover, because hover does not
+   exist on a phone and a web page cannot claim long-press — which is
+   the whole reason this page needed designing rather than merging. It
+   is a link to the book's page, not a menu: a popup anchored inside an
+   overflow-hidden cover is clipped by the picture it hangs off, and
+   every action it would have listed is on that page already. */
+.cardopen {
+	position: absolute; top: .3rem; right: .3rem; z-index: 2;
+	display: flex; align-items: center; justify-content: center;
+	width: 1.7rem; height: 1.7rem; border-radius: 50%;
+	background: rgb(0 0 0 / .55); color: #fff;
+	font-size: 1.1rem; line-height: 1; text-decoration: none;
+	opacity: .6; transition: opacity .15s ease, background .15s ease;
+}
+.bookcard:hover .cardopen, .cardopen:focus-visible { opacity: 1; }
+.cardopen:hover { opacity: 1; background: var(--primary); color: var(--on-primary); }
+
+/* A text tile needs its link to fill the tile, since the menu sits on
+   top of it and the two must not overlap. */
+.bookcard .art-text .fill {
+	display: flex; flex-direction: column; justify-content: center;
+	gap: .3rem; height: 100%; text-decoration: none; color: inherit;
+}
+.bookcard .art-text .tag { align-self: center; margin-top: .4rem; }
+

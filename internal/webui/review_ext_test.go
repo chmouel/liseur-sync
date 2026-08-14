@@ -26,14 +26,14 @@ func flagForReview(t *testing.T, f *booksFixture, bookID, reason string) {
 
 func TestBooksUIShowsAndAcceptsAChangedWatchedFile(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	csrf := csrfFrom(t, html)
 	f.uploadForm(t, f.cookie, csrf, f.library, "changed.epub",
 		[]byte(strings.Repeat("changed", 40)))
 	bookID := f.promote(t, "changed")
 	flagForReview(t, f, bookID, "the file at this watched path was replaced")
 
-	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if !strings.Contains(html, "Changed under us") ||
 		!strings.Contains(html, "books/"+bookID+"/accept") {
 		t.Fatalf("review queue is not on the page:\n%s", html)
@@ -52,7 +52,7 @@ func TestBooksUIShowsAndAcceptsAChangedWatchedFile(t *testing.T) {
 		t.Fatalf("accept: %d %s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
-	_, html = f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if strings.Contains(html, "Changed under us") {
 		t.Fatalf("accepted book is still in the queue:\n%s", html)
 	}
@@ -74,7 +74,7 @@ func TestBooksUIShowsAndAcceptsAChangedWatchedFile(t *testing.T) {
 
 func TestBooksUIAcceptRequiresManageAndCSRF(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	csrf := csrfFrom(t, html)
 	f.uploadForm(t, f.cookie, csrf, f.library, "guarded.epub",
 		[]byte(strings.Repeat("guarded", 40)))
@@ -92,7 +92,7 @@ func TestBooksUIAcceptRequiresManageAndCSRF(t *testing.T) {
 	// A reader can see the library but must not resolve its librarian's
 	// queue, and must not be shown it either.
 	reader := f.readerCookie(t)
-	_, readerHTML := f.get(t, "/ui/books?library="+f.library, reader)
+	_, readerHTML := f.get(t, "/ui/library?library="+f.library, reader)
 	if strings.Contains(readerHTML, "Changed under us") {
 		t.Fatalf("a reader was shown the review queue:\n%s", readerHTML)
 	}

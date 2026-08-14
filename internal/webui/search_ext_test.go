@@ -92,7 +92,7 @@ func TestSearchIsOfferedOnTheLibraryPageAndScopedToTheLibrary(t *testing.T) {
 	f := newBooksFixture(t)
 	bookWithMetadata(t, f, "offered")
 
-	_, books := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, books := f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if !strings.Contains(books, "/search") {
 		t.Fatalf("the library page offered no way to search it:\n%s", books)
 	}
@@ -126,7 +126,7 @@ func TestBooksPageAsksAboutBooksThatLookAlike(t *testing.T) {
 		}
 	}
 
-	_, page := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, page := f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if !strings.Contains(page, "Possibly the same book") {
 		t.Fatalf("the librarian was not told:\n%s", page)
 	}
@@ -138,7 +138,7 @@ func TestBooksPageAsksAboutBooksThatLookAlike(t *testing.T) {
 
 	// A reader is shown neither report, for the same reason they are
 	// shown no trash: it is a list of things only a librarian can act on.
-	_, readerPage := f.get(t, "/ui/books?library="+f.library, f.readerCookie(t))
+	_, readerPage := f.get(t, "/ui/library?library="+f.library, f.readerCookie(t))
 	if strings.Contains(readerPage, "Possibly the same book") {
 		t.Fatalf("a reader was shown the duplicate report:\n%s", readerPage)
 	}

@@ -15,7 +15,7 @@ import (
 // than metadata the test typed into the form it is testing.
 func bookWithMetadata(t *testing.T, f *booksFixture, name string) string {
 	t.Helper()
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, name+".epub",
 		[]byte(strings.Repeat(name, 40)))
 	return f.promote(t, name)

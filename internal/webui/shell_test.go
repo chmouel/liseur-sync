@@ -17,7 +17,7 @@ func TestShellRendersRailAndTheme(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, body := page(t, ts, cookie, "/ui/books")
+	_, body := page(t, ts, cookie, "/ui/library")
 	for _, want := range []string{
 		`data-theme="dark"`, // dark-first, rendered by the server
 		`class="rail"`,
@@ -29,9 +29,9 @@ func TestShellRendersRailAndTheme(t *testing.T) {
 			t.Errorf("shell missing %q", want)
 		}
 	}
-	// The section marker must be on the Books link, not just anywhere.
+	// The section marker must be on the Library link, not just anywhere.
 	i := strings.Index(body, `aria-current="page"`)
-	if i < 0 || !strings.Contains(body[i:min(i+40, len(body))], "Books") {
+	if i < 0 || !strings.Contains(body[i:min(i+40, len(body))], "Library") {
 		t.Error("aria-current is not on the current section")
 	}
 }
@@ -40,7 +40,7 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, body := page(t, ts, cookie, "/ui/books")
+	_, body := page(t, ts, cookie, "/ui/library")
 	csrf := extractCSRF(t, body)
 
 	code, _ := postForm(t, ts, cookie, "/ui/preferences", url.Values{
@@ -57,7 +57,7 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	}
 
 	// And the next page renders in it, with no script involved.
-	req, _ := http.NewRequest("GET", ts.URL+"/ui/books", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
 	req.AddCookie(cookie)
 	req.AddCookie(pref)
 	resp, err := http.DefaultClient.Do(req)
@@ -98,7 +98,7 @@ func prefCookie(
 func TestPreferencesRejectsForgeryAndOpenRedirect(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/books")
+	_, body := page(t, ts, cookie, "/ui/library")
 	csrf := extractCSRF(t, body)
 
 	if code, _ := postForm(t, ts, cookie, "/ui/preferences", url.Values{
@@ -133,7 +133,7 @@ func TestPreferenceCookieIsNotTrusted(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	req, _ := http.NewRequest("GET", ts.URL+"/ui/books", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
 	req.AddCookie(cookie)
 	req.AddCookie(&http.Cookie{
 		Name:  prefsCookie,
@@ -174,7 +174,7 @@ func TestTopSearchResolvesALibrary(t *testing.T) {
 	if strings.HasPrefix(loc, "/") || strings.Contains(loc, "://") {
 		t.Fatalf("top search redirect is not relative: %q", loc)
 	}
-	if !strings.Contains(loc, "q=whale") && !strings.HasPrefix(loc, "books") {
+	if !strings.Contains(loc, "q=whale") && !strings.HasPrefix(loc, "library") {
 		t.Fatalf("top search lost the query: %q", loc)
 	}
 }

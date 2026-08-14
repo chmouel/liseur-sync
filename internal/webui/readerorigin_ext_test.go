@@ -102,7 +102,7 @@ type readerOrigins struct {
 func readerFixture(t *testing.T) readerOrigins {
 	t.Helper()
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")
@@ -239,7 +239,7 @@ func TestReaderOriginServesOnlyTheReader(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		"/ui/", "/ui/books", "/ui/books/" + bookID, "/ui/settings", "/ui/admin",
+		"/ui/", "/ui/library", "/ui/books/" + bookID, "/ui/settings", "/ui/admin",
 		"/ui/login", "/ui/devices", "/v1/books", "/v1/ops", "/healthz",
 		"/ui/books/" + bookID + "/download", "/opds/v1.2",
 	} {
@@ -267,7 +267,7 @@ func TestReaderOriginServesOnlyTheReader(t *testing.T) {
 	}
 
 	// And the main origin is untouched by any of this.
-	resp, _ = ask(t, ts, http.MethodGet, "main.example.test", "/ui/books", cookie)
+	resp, _ = ask(t, ts, http.MethodGet, "main.example.test", "/ui/library", cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("the main origin lost a page to the split: %d", resp.StatusCode)
 	}
@@ -319,7 +319,7 @@ func TestAPIAnswersTheReaderOriginCrossOrigin(t *testing.T) {
 
 	// The web UI is never cross-origin, whoever asks: its defence is a
 	// CSRF token on a same-origin form, and a hole here would undo it.
-	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/ui/books", nil)
+	req, _ = http.NewRequest(http.MethodGet, ts.URL+"/ui/library", nil)
 	req.Host = "main.example.test"
 	req.Header.Set("Origin", "http://"+readerHost)
 	resp, err = noRedirectClient().Do(req)
@@ -336,7 +336,7 @@ func TestAPIAnswersTheReaderOriginCrossOrigin(t *testing.T) {
 // pays nothing for a feature it did not turn on.
 func TestSameOriginDeploymentIsUnchanged(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")

@@ -188,9 +188,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		}
 		loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "").Render(r.Context(), w)
 	}))
-	mux.Handle("GET /ui/works", sec(s.requireAuth(s.handleWorks)))
+	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
-	mux.Handle("GET /ui/books", sec(s.requireAuth(s.handleBooks)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
 	mux.Handle("GET /ui/books/{id}/cover", sec(s.requireAuth(s.handleBookCover)))

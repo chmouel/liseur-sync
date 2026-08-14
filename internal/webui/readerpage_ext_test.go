@@ -18,7 +18,7 @@ import (
 // is exactly why they are asserted here.
 func TestReaderPageIsolatesThePublication(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")
@@ -97,12 +97,12 @@ func TestReaderPageIsolatesThePublication(t *testing.T) {
 // nothing.
 func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")
 
-	_, list := f.get(t, "/ui/books?library="+f.library, f.cookie)
+	_, list := f.get(t, "/ui/library?library="+f.library, f.cookie)
 	if !strings.Contains(list, "/read") {
 		t.Error("an EPUB in the library is not offered to the reader")
 	}
@@ -117,7 +117,7 @@ func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 // caller has no business with it.
 func TestReaderPageRefusesOtherPeoplesBooks(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/books", f.cookie)
+	_, html := f.get(t, "/ui/library", f.cookie)
 	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
 		[]byte(strings.Repeat("web-epub", 50)))
 	bookID := f.promote(t, "novel")
