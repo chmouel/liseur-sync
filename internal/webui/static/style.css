@@ -360,6 +360,11 @@ code.big { font-size: 1rem; display: inline-block; padding: .45rem .6rem; word-b
 form.inline { display: flex; gap: .6rem; align-items: center; margin-top: .7rem; flex-wrap: wrap; }
 form label { display: block; margin: .6rem 0; color: var(--ink-dim); font-size: .9rem; }
 form label.check { display: flex; gap: .5rem; align-items: center; }
+.narrow form > label {
+	display: grid; grid-template-columns: max-content minmax(0, 1fr);
+	align-items: center; column-gap: .6rem; text-align: right;
+}
+.narrow form > label > input { width: 100%; min-width: 0; }
 input, select, textarea {
 	font: inherit; padding: .4rem .55rem;
 	background: var(--surface-2); color: var(--ink);
