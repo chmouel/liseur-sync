@@ -90,8 +90,9 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				<p class="muted">
 					The file is stored straight away; the book appears once a
 					background pass has read its metadata, usually within a
-					minute. Reload to see it — an upload that cannot be read
-					is listed below with the reason.
+					minute. Reload to see it — an upload that cannot be read is
+					listed in <a href={ prefix + "library/manage?library=" + v.Selected }>Library management</a>
+					with the reason.
 				</p>
 				<form method="post" action={ prefix + "books/upload" } enctype="multipart/form-data">
 					<input type="hidden" name="csrf" value={ csrf }/>
@@ -100,6 +101,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 					<button type="submit">Upload</button>
 				</form>
 			</details>
+			<a class="btn" href={ prefix + "library/manage?library=" + v.Selected }>Manage library</a>
 		}
 		<section class="card">
 			if len(v.Rows) == 0 {
@@ -112,7 +114,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				</div>
 			}
 		</section>
-		@librarianQueues(prefix, csrf, v)
 	}
 }
 
@@ -340,11 +341,11 @@ templ libraryTable(prefix string, v LibraryView) {
 	}
 }
 
-// librarianQueues is everything on this page that is a job rather than a
-// book: uploads that have not landed, deletions that can still be undone,
-// and the two kinds of "these might be the same book" the server will not
-// decide by itself. Only somebody who can manage the library sees any of
-// it, because only they could act on it.
+// librarianQueues is everything in library management that is a job rather
+// than a book: uploads that have not landed, deletions that can still be
+// undone, and the two kinds of "these might be the same book" the server
+// will not decide by itself. Only somebody who can manage the library sees
+// any of it, because only they could act on it.
 templ librarianQueues(prefix, csrf string, v LibraryView) {
 	if len(v.Uploads) > 0 {
 		<section class="card">

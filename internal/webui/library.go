@@ -244,21 +244,6 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		libraryFragment(relPrefix(r.URL.Path), v).Render(r.Context(), w)
 		return
 	}
-	// Only a librarian uploads, so only a librarian is shown what became
-	// of an upload. Without this the page is silent about a file that was
-	// accepted and then rejected, which looks exactly like losing it.
-	if v.CanWrite {
-		v.Uploads = s.uploadActivity(r, u.ID, v.Selected, loc)
-		v.Trash = s.trashActivity(r, u.ID, v.Selected, loc)
-		// Shown to librarians only, for the same reason as the trash: it
-		// is a list of things to do something about, and only a librarian
-		// can do anything about them.
-		v.Duplicates = s.duplicateGroups(r, u.ID, v.Selected)
-		v.Similar = s.similarGroups(r, u.ID, v.Selected, loc)
-		// Same audience, same reason: a watched file that changed is a
-		// decision waiting for somebody who can make it.
-		v.Review = s.reviewRows(r, u.ID, v.Selected)
-	}
 	libraryPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
 		Render(r.Context(), w)
 }
