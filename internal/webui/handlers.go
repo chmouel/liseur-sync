@@ -511,7 +511,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, a 
 		render("Internal error.", true)
 		return
 	}
-	if err := s.St.UpdateUserPassword(r.Context(), u.ID, hash); err != nil {
+	if err := s.St.SetUserPassword(r.Context(), u.ID, hash, a.ID); err != nil {
 		render("Internal error.", true)
 		return
 	}
@@ -530,16 +530,6 @@ var commonZones = []string{
 
 // --- admin ---
 
-func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	s.renderAdmin(w, r, a, u, Flash{})
-}
-
-func (s *Server) renderAdmin(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash) {
-	invites, _ := s.St.ListInvites(r.Context(), u.ID)
-	users, _ := s.St.ListUsers(r.Context())
-	adminPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), invites, users, flash).Render(r.Context(), w)
-}
-
 func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	if !s.checkCSRF(r, a) {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -550,9 +540,12 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a st
 	id, _ := auth.NewSecret()
 	_ = s.St.CreateInvite(r.Context(), store.Invite{
 		ID: id, CodeSHA256: auth.HashSecret(code), CreatedBy: u.ID,
-		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(inviteTTL),
 	})
-	s.renderAdmin(w, r, a, u, Flash{Secret: code, SecretLabel: "Invite code (7 days, single use)"})
+	s.renderAdminUsers(w, r, a, u, Flash{
+		Secret:      code,
+		SecretLabel: "Invite code (7 days, single use)",
+	})
 }
 
 func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -561,5 +554,5 @@ func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request, a st
 		return
 	}
 	_ = s.St.RevokeInvite(r.Context(), u.ID, r.PathValue("id"))
-	s.renderAdmin(w, r, a, u, Flash{Notice: "Invite revoked."})
+	s.renderAdminUsers(w, r, a, u, Flash{Notice: "Invite revoked."})
 }

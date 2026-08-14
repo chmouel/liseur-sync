@@ -1,0 +1,162 @@
+package postgres
+
+// The admin panel's library reads and writes (ADR-0013), the twin of
+// the SQLite file of the same name. See it for why the ACL join is
+// absent.
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
+)
+
+func (s *Store) AdminListLibraries(ctx context.Context, after string, limit int) ([]store.Library, error) {
+	name, id := store.SplitLibraryCursor(after)
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT id, owner_user_id, quota_user_id, kind, name, root_path,
+		        config_json, created_at, updated_at
+		 FROM libraries
+		 WHERE ? = '' OR (name, id) > (?, ?)
+		 ORDER BY name, id
+		 LIMIT ?`),
+		after, name, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Library
+	for rows.Next() {
+		l, err := scanPlainLibrary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AdminUserLibraries(ctx context.Context, userID, after string, limit int) ([]store.AccessibleLibrary, error) {
+	name, id := store.SplitLibraryCursor(after)
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT l.id, l.owner_user_id, l.quota_user_id, l.kind, l.name, l.root_path,
+		        l.config_json, l.created_at, l.updated_at,
+		        CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END
+		 FROM libraries l
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE (l.owner_user_id = ? OR a.role IS NOT NULL)
+		   AND (? = '' OR (l.name, l.id) > (?, ?))
+		 ORDER BY l.name, l.id
+		 LIMIT ?`),
+		userID, userID, userID, after, name, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.AccessibleLibrary
+	for rows.Next() {
+		l, err := scanLibrary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AdminLibraryGrants(ctx context.Context, libraryID string, limit int) ([]store.LibraryGrant, error) {
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT a.library_id, a.user_id, u.name, a.role, a.created_at
+		 FROM library_access a
+		 JOIN users u ON u.id = a.user_id
+		 WHERE a.library_id = ?
+		 ORDER BY a.created_at DESC, a.user_id
+		 LIMIT ?`),
+		libraryID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.LibraryGrant
+	for rows.Next() {
+		var g store.LibraryGrant
+		if err := rows.Scan(&g.LibraryID, &g.UserID, &g.UserName, &g.Role, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		g.CreatedAt = g.CreatedAt.UTC()
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AdminSetLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role *store.LibraryRole, at time.Time) error {
+	_ = actorUserID
+	if role == nil {
+		res, err := s.db.ExecContext(ctx, q(
+			`DELETE FROM library_access WHERE library_id = ? AND user_id = ?`),
+			libraryID, userID)
+		return affectedOne(res, err)
+	}
+	if err := checkLibraryRole(*role); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, q(
+		`INSERT INTO library_access (library_id, user_id, role, created_at)
+		 SELECT l.id, ?, ?, ?
+		 FROM libraries l
+		 WHERE l.id = ? AND l.owner_user_id <> ?
+		 ON CONFLICT (library_id, user_id) DO UPDATE SET role = excluded.role`),
+		userID, string(*role), at.UTC(), libraryID, userID)
+	return affectedOne(res, err)
+}
+
+func (s *Store) AdminSetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error {
+	_ = actorUserID
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE libraries SET config_json = ?, updated_at = ? WHERE id = ?`),
+		configJSON, at.UTC(), libraryID)
+	return affectedOne(res, err)
+}
+
+// affectedOne turns "the WHERE clause matched nothing" into ErrNotFound.
+func affectedOne(res sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+// scanPlainLibrary reads a library row with no role column.
+func scanPlainLibrary(row interface{ Scan(...any) error }) (store.Library, error) {
+	var l store.Library
+	var root sql.NullString
+	if err := row.Scan(&l.ID, &l.OwnerUserID, &l.QuotaUserID, &l.Kind, &l.Name,
+		&root, &l.ConfigJSON, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		return l, err
+	}
+	if root.Valid {
+		l.RootPath = &root.String
+	}
+	l.CreatedAt, l.UpdatedAt = l.CreatedAt.UTC(), l.UpdatedAt.UTC()
+	return l, nil
+}
+
+func (s *Store) AdminLibraryByID(ctx context.Context, libraryID string) (store.Library, error) {
+	l, err := scanPlainLibrary(s.db.QueryRowContext(ctx, q(
+		`SELECT id, owner_user_id, quota_user_id, kind, name, root_path,
+		        config_json, created_at, updated_at
+		 FROM libraries WHERE id = ?`), libraryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.Library{}, store.ErrNotFound
+	}
+	return l, err
+}

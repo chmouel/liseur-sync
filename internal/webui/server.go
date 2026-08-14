@@ -57,6 +57,15 @@ type Server struct {
 	// the API's /v1/login uses, so the two surfaces share one budget
 	// per IP and the form cannot be used to sidestep the API's limit.
 	LoginLimiter *auth.RateLimiter
+	// AdminReauthUserLimiter and AdminReauthIPLimiter throttle the
+	// admin panel's password re-verification on two independent
+	// budgets, both of which must allow an attempt (ADR-0013). One is
+	// keyed on the acting administrator, so an attacker who moves
+	// between addresses still runs out; the other on the remote
+	// address, so one account cannot spend the instance's whole budget.
+	// Mount fills in defaults when they are nil.
+	AdminReauthUserLimiter *auth.RateLimiter
+	AdminReauthIPLimiter   *auth.RateLimiter
 }
 
 const cookieName = "liseur_session"
@@ -153,6 +162,17 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	// the stylesheet keeps the "https required" page readable.
 	sec := func(h http.HandlerFunc) http.Handler { return secure(pagePolicy(h)) }
 
+	// The re-verification budgets are stricter than the login limiter
+	// (10 a minute): this verifier sits behind an authenticated session
+	// and guards taking over another account, so an operator who
+	// mistypes twice is expected, and a script is not.
+	if s.AdminReauthUserLimiter == nil {
+		s.AdminReauthUserLimiter = auth.NewRateLimiter(5, 15*time.Minute)
+	}
+	if s.AdminReauthIPLimiter == nil {
+		s.AdminReauthIPLimiter = auth.NewRateLimiter(10, 15*time.Minute)
+	}
+
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
@@ -186,8 +206,10 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 			redirectRel(w, "./", http.StatusSeeOther)
 			return
 		}
-		loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "").Render(r.Context(), w)
+		s.unauthenticatedLanding(w, r)
 	}))
+	mux.Handle("GET /ui/setup", sec(s.handleSetupPage))
+	mux.Handle("POST /ui/setup", sec(s.rateLimited(s.handleSetup)))
 	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
@@ -212,7 +234,12 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/search", sec(s.requireAuth(s.handleTopSearch)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
-	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdmin)))
+	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdminOverview)))
+	mux.Handle("GET /ui/admin/users", sec(s.requireAdmin(s.handleAdminUsers)))
+	mux.Handle("GET /ui/admin/users/{id}", sec(s.requireAdmin(s.handleAdminUser)))
+	mux.Handle("GET /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminLibraries)))
+	mux.Handle("GET /ui/admin/maintenance",
+		sec(s.requireAdmin(s.handleAdminMaintenance)))
 
 	mux.Handle("POST /ui/login", sec(s.rateLimited(s.handleLogin)))
 	mux.Handle("POST /ui/logout", sec(s.handleLogout))
@@ -228,6 +255,26 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))
 	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))
+	mux.Handle("POST /ui/admin/users", sec(s.requireAdmin(s.handleAdminCreateUser)))
+	mux.Handle("POST /ui/admin/users/{id}/password",
+		sec(s.requireAdmin(s.handleAdminSetPassword)))
+	mux.Handle("POST /ui/admin/users/{id}/admin",
+		sec(s.requireAdmin(s.handleAdminSetRole)))
+	mux.Handle("POST /ui/admin/users/{id}/disabled",
+		sec(s.requireAdmin(s.handleAdminSetDisabled)))
+	mux.Handle("POST /ui/admin/users/{id}/credentials/revoke",
+		sec(s.requireAdmin(s.handleAdminRevokeCredentials)))
+	mux.Handle("POST /ui/admin/users/{id}/tokens/{tokenID}/revoke",
+		sec(s.requireAdmin(s.handleAdminRevokeToken)))
+	mux.Handle("POST /ui/admin/users/{id}/kosync/{slot}/revoke",
+		sec(s.requireAdmin(s.handleAdminRevokeKosync)))
+	mux.Handle("POST /ui/admin/users/{id}/koplugin/{deviceID}/revoke",
+		sec(s.requireAdmin(s.handleAdminRevokeKoplugin)))
+	mux.Handle("POST /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminCreateLibrary)))
+	mux.Handle("POST /ui/admin/libraries/{id}/access",
+		sec(s.requireAdmin(s.handleAdminLibraryAccess)))
+	mux.Handle("POST /ui/admin/libraries/{id}/layout",
+		sec(s.requireAdmin(s.handleAdminLibraryLayout)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }
@@ -242,21 +289,43 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store
 			redirectRel(w, relPrefix(r.URL.Path)+"login", http.StatusSeeOther)
 			return
 		}
-		next(w, r, a, u)
+		next(w, withAdmin(r, s.adminFlag(r, u)), a, u)
 	}
+}
+
+// adminFlag resolves the signed-in user's admin rights once per
+// request, so the shell can decide whether to draw the Admin rail entry
+// and requireAdmin can gate on the same answer without asking twice. A
+// store failure is nil rather than false: "we could not tell" is a 500
+// on an admin route, not a silent denial.
+func (s *Server) adminFlag(r *http.Request, u *store.User) *bool {
+	isAdmin, err := s.Auth.IsAdmin(r.Context(), u.ID)
+	if err != nil {
+		return nil
+	}
+	return &isAdmin
 }
 
 // requireAdmin additionally demands admin rights, per the single
 // definition in auth.Service.IsAdmin (an active admin-scope token,
-// which only the admin CLI or an existing admin can mint).
+// which only the admin CLI or an existing admin can mint). A user
+// without them never sees a link here, so arriving is either a typed
+// URL or a stale bookmark: both deserve a page that says what happened.
 func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, store.AuthSession, *store.User)) http.HandlerFunc {
 	return s.requireAuth(func(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-		isAdmin, err := s.Auth.IsAdmin(r.Context(), u.ID)
-		if err != nil {
+		isAdmin := adminFromContext(r)
+		if isAdmin == nil {
 			http.Error(w, "internal", http.StatusInternalServerError)
 			return
 		}
-		if !isAdmin {
+		if !*isAdmin {
+			if r.Method == http.MethodGet {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusForbidden)
+				forbiddenPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a)).
+					Render(r.Context(), w)
+				return
+			}
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -301,17 +370,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
 		return
 	}
-	secret, _ := auth.NewSecret()
-	csrf, _ := auth.NewSecret()
-	id, _ := auth.NewSecret()
+	if err := s.startSession(w, r, u); err != nil {
+		loginPage(prefix, uiCtx(r, nil), "internal error").Render(r.Context(), w)
+		return
+	}
+	redirectRel(w, "./", http.StatusSeeOther)
+}
+
+// startSession mints a web session for u and sets the cookie. Sign-in
+// and first-run setup share it so that an account created by setup is
+// signed in on exactly the same terms as one that typed its password.
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u store.User) error {
+	secret, err := auth.NewSecret()
+	if err != nil {
+		return err
+	}
+	csrf, err := auth.NewSecret()
+	if err != nil {
+		return err
+	}
+	id, err := auth.NewSecret()
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	if err := s.St.CreateAuthSession(r.Context(), store.AuthSession{
 		ID: id, UserID: u.ID, SHA256: auth.HashSecret(secret), Kind: "web",
 		CSRFHash: auth.HashSecret(csrf), CreatedAt: now,
 		ExpiresAt: now.Add(7 * 24 * time.Hour),
 	}); err != nil {
-		loginPage(prefix, uiCtx(r, nil), "internal error").Render(r.Context(), w)
-		return
+		return err
 	}
 	// No Path attribute: the RFC 6265 default-path (the directory of
 	// the request URL) scopes the cookie to /ui/ — or to the proxy
@@ -322,7 +410,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:  !s.Cfg.InsecureHTTP,
 		Expires: now.Add(7 * 24 * time.Hour),
 	})
-	redirectRel(w, "./", http.StatusSeeOther)
+	return nil
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

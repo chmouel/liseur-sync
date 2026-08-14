@@ -131,15 +131,25 @@ func contains(s, sub string) bool {
 func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var u store.User
 	var tz string
-	var kosync, koplugin int
+	var kosync, koplugin, isAdmin int
 	var created string
-	err := row.Scan(&u.ID, &u.Name, &u.Argon2Hash, &tz, &kosync, &koplugin, &created)
+	var disabled sql.NullString
+	err := row.Scan(&u.ID, &u.Name, &u.Argon2Hash, &tz, &kosync, &koplugin,
+		&isAdmin, &disabled, &created)
 	if err != nil {
 		return u, err
 	}
 	u.Timezone = tz
 	u.KosyncEnabled = kosync != 0
 	u.KopluginEnabled = koplugin != 0
+	u.IsAdmin = isAdmin != 0
+	if disabled.Valid {
+		t, err := parseTime(disabled.String)
+		if err != nil {
+			return u, err
+		}
+		u.DisabledAt = &t
+	}
 	u.CreatedAt, err = parseTime(created)
 	return u, err
 }

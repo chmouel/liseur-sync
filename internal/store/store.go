@@ -30,6 +30,14 @@ var (
 	ErrContentMismatch     = errors.New("store: content mismatch")
 	ErrPromotionConflict   = errors.New("store: promotion conflict")
 	ErrInvariantViolation  = errors.New("store: invariant violation")
+	// ErrLastAdmin refuses the demotion or disabling that would leave
+	// the instance with no enabled administrator. The CLI is the
+	// recovery path, so the panel must never be able to close it.
+	ErrLastAdmin = errors.New("store: last enabled admin")
+	// ErrAdminGrantRequiresAdmin refuses an admin-scoped token to an
+	// account that is not an enabled admin. It is enforced inside the
+	// transaction that writes the token, so it cannot race a demotion.
+	ErrAdminGrantRequiresAdmin = errors.New("store: admin scope requires an admin account")
 )
 
 // TokenPurgeGrace is how long expired or revoked tokens remain listed
@@ -132,7 +140,50 @@ type User struct {
 	Timezone        string // IANA
 	KosyncEnabled   bool
 	KopluginEnabled bool
-	CreatedAt       time.Time
+	// IsAdmin is the single definition of an administrator (ADR-0013).
+	// It is a property of the account, not of a credential: a token
+	// carries capabilities, the account carries the role.
+	IsAdmin bool
+	// DisabledAt stops every credential the account holds. Nil is an
+	// active account.
+	DisabledAt *time.Time
+	CreatedAt  time.Time
+}
+
+// Enabled reports whether the account may authenticate at all.
+func (u User) Enabled() bool { return u.DisabledAt == nil }
+
+// AdminCounts is the whole aggregate state the admin panel reports:
+// integers and timestamps, no identifying strings (ADR-0013). It is one
+// round trip because an overview that issues fifteen queries is an
+// overview somebody eventually stops loading.
+type AdminCounts struct {
+	Users         int
+	AdminUsers    int
+	DisabledUsers int
+
+	Libraries        int
+	ManagedLibraries int
+	WatchedLibraries int
+
+	// BooksByStatus is keyed by the status values books.status allows:
+	// active, missing, trashed, review.
+	BooksByStatus map[string]int
+	// TrashNextExpiry is the earliest trash_expires_at still pending,
+	// which is when the trash worker next has something to do.
+	TrashNextExpiry *time.Time
+
+	Blobs        int
+	BlobBytes    int64
+	OrphanBlobs  int
+	BlobsPending int // reserved but not yet promoted
+
+	// JobsByState is keyed by ingest_jobs.state. OldestJobByState
+	// carries the created_at of the oldest job in each *non-terminal*
+	// state, which is the number that answers "is ingest stuck?"
+	// without naming a file.
+	JobsByState     map[string]int
+	OldestJobByState map[string]time.Time
 }
 
 // Token is a per-device API token. Hash is SHA-256 of the secret.
@@ -191,6 +242,37 @@ type Library struct {
 type AccessibleLibrary struct {
 	Library Library
 	Role    LibraryRole
+}
+
+// LibraryGrant is one row of a library's access list, with the grantee's
+// name resolved so that the admin panel does not have to look up each
+// id separately. It is only ever produced by AdminLibraryGrants.
+type LibraryGrant struct {
+	LibraryID string
+	UserID    string
+	UserName  string
+	Role      LibraryRole
+	CreatedAt time.Time
+}
+
+// LibraryCursor is the opaque pagination cursor of the admin library
+// list. The list is ordered by name and then id, because a name alone
+// is not unique across owners and a cursor that can repeat is a cursor
+// that can skip a row.
+// The id comes first because it cannot contain a space, whereas a
+// library name can contain anything: cutting at the first space is then
+// unambiguous whatever somebody called their library. It also has to
+// survive a round trip through a PostgreSQL text parameter, which rules
+// out the NUL byte an in-band separator would otherwise reach for.
+func LibraryCursor(l Library) string { return l.ID + " " + l.Name }
+
+// SplitLibraryCursor undoes LibraryCursor. An unparseable cursor reads
+// as "start from the beginning" rather than as an error: it can only
+// come from a URL somebody edited, and a first page is a better answer
+// than a 400.
+func SplitLibraryCursor(c string) (name, id string) {
+	id, name, _ = strings.Cut(c, " ")
+	return name, id
 }
 
 // BookStatus is the catalog lifecycle state.
@@ -1362,6 +1444,53 @@ type Store interface {
 	UserByID(ctx context.Context, userID string) (User, error)
 	UserIDs(ctx context.Context) ([]string, error)
 	ListUsers(ctx context.Context) ([]User, error)
+	// ListUsersPage is the admin panel's user list: cursor-paginated by
+	// name, because the list grows with the instance. Ask for one row
+	// more than you display and the extra row is the answer to "is
+	// there another page", with no second counting query.
+	ListUsersPage(ctx context.Context, afterName string, limit int) ([]User, error)
+	// SetUserAdmin moves the admin flag. It is the only way the flag
+	// moves, and it does three things in one locked transaction so that
+	// nothing can interleave: it applies the last-enabled-admin guard
+	// (ErrLastAdmin), it writes the flag, and on demotion it revokes
+	// every unrevoked admin-scoped token the account holds — ScopeAdmin
+	// implies every other scope, so a token outliving the role would
+	// keep full API authority.
+	SetUserAdmin(ctx context.Context, userID string, admin bool) error
+	// SetUserDisabled stops an account, or starts it again. Disabling
+	// applies the last-enabled-admin guard, sets disabled_at and
+	// revokes every web and login session, in one transaction — there
+	// is no moment where the account is disabled but a session
+	// survives, and a failure is a failure rather than a half-done
+	// disable.
+	//
+	// Enabling clears the flag and nothing else. API tokens, kosync
+	// slots and koplugin capabilities resume working, because they were
+	// never revoked; sessions do not, because they were.
+	//
+	// The refusal that matters is not here: the credential lookups
+	// themselves (AuthSessionByHash, TokenByHashGlobal,
+	// KosyncDeviceByKey, RedeemPairingCode, KopluginDeviceByToken) all
+	// join against users and behave as if the credential did not exist
+	// while its owner is disabled, so no handler can forget a check it
+	// does not make.
+	SetUserDisabled(ctx context.Context, userID string, disabled bool, at time.Time) error
+	// CreateFirstAdmin creates an account with the admin flag already
+	// set, but only while the instance holds no users at all;
+	// otherwise it returns ErrConflict. It exists for the web UI's
+	// first-run setup, which is the one place an unauthenticated caller
+	// may make an administrator, and the emptiness check has to be
+	// inside the same locked transaction as the insert or two people
+	// opening the page at once both become one.
+	CreateFirstAdmin(ctx context.Context, u User) error
+	// AdminCounts is the one aggregate read the admin panel makes. It
+	// crosses users deliberately and is listed here beside ListUsers
+	// for the same reason: it is instance administration, not access to
+	// anybody's data. It returns integers and timestamps only — never a
+	// title, a path, an error string or another user's id — which is
+	// what lets the overview and maintenance pages exist without
+	// weakening a single tenant-isolation guarantee.
+	AdminCounts(ctx context.Context) (AdminCounts, error)
 
 	// Tokens.
 	CreateToken(ctx context.Context, t Token) error
@@ -1382,6 +1511,40 @@ type Store interface {
 	SetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
 	GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role LibraryRole, at time.Time) error
 	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
+
+	// Admin library administration (ADR-0013). These five deliberately
+	// skip the ACL check that every method above enforces, because an
+	// administrator who has to grant themselves manage on a library
+	// before they can fix its grants has silently become a reader of
+	// that library — the bypass is safer named than improvised. They
+	// take the acting admin's id for the record, and none of them reads
+	// a book row: the panel administers accounts and the shape of their
+	// libraries, never their contents.
+
+	// AdminListLibraries pages through every library on the instance,
+	// ordered by name then id. after is a LibraryCursor, empty for the
+	// first page; ask for one row more than you display and the extra
+	// row is the answer to "is there another page".
+	AdminListLibraries(ctx context.Context, after string, limit int) ([]Library, error)
+	// AdminLibraryByID reads one library without an ACL, for the two
+	// admin writes that rewrite a record they must first read whole —
+	// a configuration document is edited by key, so the keys this
+	// server does not know about have to survive the edit.
+	AdminLibraryByID(ctx context.Context, libraryID string) (Library, error)
+	// AdminUserLibraries pages through the libraries one account owns or
+	// was granted, with the role that account holds. Ownership reads as
+	// manage, exactly as it does for the owner's own requests.
+	AdminUserLibraries(ctx context.Context, userID, after string, limit int) ([]AccessibleLibrary, error)
+	// AdminLibraryGrants lists who was granted access to one library,
+	// newest grant first. The owner is not a grant and is not listed.
+	AdminLibraryGrants(ctx context.Context, libraryID string, limit int) ([]LibraryGrant, error)
+	// AdminSetLibraryAccess grants a role, or revokes when role is nil.
+	// It refuses to write a grant for the owner, who already has
+	// everything and whose row would then outlive a change of owner.
+	AdminSetLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role *LibraryRole, at time.Time) error
+	// AdminSetLibraryConfig replaces a library's configuration document
+	// without requiring the acting admin to hold manage on it.
+	AdminSetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
 	// CatalogBookByID reads one book the caller may see. Trashed books are
 	// not visible through it at any role: a deleted book is deleted as far
@@ -1636,7 +1799,22 @@ type Store interface {
 
 	// User settings.
 	UpdateUserSettings(ctx context.Context, userID, timezone string, kosyncEnabled, kopluginEnabled bool) error
-	UpdateUserPassword(ctx context.Context, userID, argon2Hash string) error
+	// SetUserPassword writes the argon2id hash and revokes the
+	// account's auth sessions — web and login both — in one
+	// transaction, so there is no moment where the password has changed
+	// and a session opened with the old one still works. keepSessionID
+	// spares one session: the self-service form passes the caller's own
+	// so that changing your password does not sign you out of the tab
+	// you did it in, and an administrator's reset passes "" so that
+	// nothing survives.
+	SetUserPassword(ctx context.Context, userID, argon2Hash, keepSessionID string) error
+	// RevokeAllUserCredentials revokes, in one transaction, every way
+	// the account can authenticate: API tokens, kosync device slots,
+	// koplugin capabilities, auth sessions, and unredeemed pairing
+	// codes. The pairing codes are the reason this is one method rather
+	// than five calls — a code left behind mints a fresh device slot
+	// minutes after the operator was told everything was gone.
+	RevokeAllUserCredentials(ctx context.Context, userID string, at time.Time) error
 
 	// Invites (admin).
 	CreateInvite(ctx context.Context, inv Invite) error

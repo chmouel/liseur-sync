@@ -99,12 +99,67 @@ If one ever needs WAN access, exempt `/adapter/*` from the proxy auth
 
 ## First run
 
+Start the server and open `/ui/`. While the instance has no accounts at
+all, it offers a one-time setup page instead of a sign-in form: pick a
+name and a password and the account it makes is the first
+administrator. The page closes for good the moment that account exists,
+and everything after it happens in the admin panel at `/ui/admin`.
+
+The same thing from a shell, when you would rather not open a browser
+first:
+
 ```
 liseur-sync admin -config liseur-sync.toml create-user alice
+liseur-sync admin -config liseur-sync.toml grant-admin alice        # first administrator
 liseur-sync admin -config liseur-sync.toml mint-token alice "Boox Palma"
 liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReader kosync
 liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
 ```
+
+`grant-admin` is how the shell path makes the *first* administrator —
+`create-user` alone makes an ordinary account, and prints a reminder
+when the instance has no administrator yet. After that, the admin panel
+promotes and demotes accounts. The role lives on the account, so
+granting it hands nobody a secret, and the last enabled administrator
+cannot be demoted.
+
+## The admin panel
+
+`/ui/admin` is where an administrator runs the instance without a
+shell. It holds four things:
+
+- **Overview** — version, build and uptime, how many accounts,
+  libraries, books and devices there are, and the effective
+  configuration with the database URL left out on purpose.
+- **Users** — the account list, and a page per account: rename nothing,
+  but reset a password, grant or revoke the administrator role, revoke a
+  device credential, disable or enable the account, and see which
+  libraries it can reach. Every one of those asks for *your* password
+  again, and every attempt is logged.
+- **Libraries** — every library on the instance with its owner, who else
+  may read or write it, and its filing layout. Create a library and hand
+  it to somebody in one step.
+- **Maintenance** — what the background jobs are doing: ingest queue by
+  state with the age of the oldest item, books waiting for review, trash
+  and when it next expires, blob count and orphans. Read-only; there is
+  no button that runs a job early.
+
+The panel administers accounts, not their contents: it never shows what
+anybody is reading, and no page there can open a book.
+
+Disabling an account is the reversible half of deleting one. Every way
+in stops at once — password, web session, API token, kosync device,
+koplugin device, pairing code — and sessions are revoked, so a signed-in
+user is out on their next click. Enabling it restores exactly what it
+had; nothing is minted or revoked in between:
+
+```
+liseur-sync admin -config liseur-sync.toml disable-user alice
+liseur-sync admin -config liseur-sync.toml enable-user alice
+```
+
+The last enabled administrator can be neither demoted nor disabled, from
+the panel or the shell, so an instance cannot lock itself out.
 
 ## Watching a folder you already have
 

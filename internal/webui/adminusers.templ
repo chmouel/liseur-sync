@@ -1,0 +1,306 @@
+package webui
+
+import "github.com/chmouel/liseur-sync/internal/store"
+
+// The users pages. Nothing here renders another account's books,
+// reading history or statistics — an administrator operates accounts,
+// and the private contents of one are not needed to do that
+// (ADR-0013).
+
+templ adminFlash(flash Flash) {
+	if flash.Error != "" {
+		<p class="error">{ flash.Error }</p>
+	}
+	if flash.Notice != "" {
+		<p class="notice">{ flash.Notice }</p>
+	}
+	if flash.Secret != "" {
+		<div class="card secret">
+			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
+			<code class="big">{ flash.Secret }</code>
+		</div>
+	}
+}
+
+templ adminUsersBody(prefix string, csrf string, users []store.User, next string, invites []store.Invite, flash Flash) {
+	<h1>Users</h1>
+	@adminFlash(flash)
+	<section class="card">
+		<h2>Accounts</h2>
+		<table>
+			<tr><th>Name</th><th>Role</th><th>Created</th></tr>
+			for _, usr := range users {
+				<tr>
+					<td><a href={ prefix + "admin/users/" + usr.ID }>{ usr.Name }</a></td>
+					<td>
+						if !usr.Enabled() {
+							<span class="tag">disabled</span>
+						} else if usr.IsAdmin {
+							<span class="tag">admin</span>
+						} else {
+							<span class="muted">user</span>
+						}
+					</td>
+					<td>{ usr.CreatedAt.Format("2006-01-02") }</td>
+				</tr>
+			}
+		</table>
+		if next != "" {
+			<p><a href={ prefix + "admin/users?after=" + next }>Next page →</a></p>
+		}
+	</section>
+	<section class="card">
+		<h2>Create an account</h2>
+		<p class="muted">
+			The password is set here and shown to nobody afterwards. Tell the
+			person what it is and let them change it, or send an invite code
+			instead and let them choose their own.
+		</p>
+		<form method="post" action={ prefix + "admin/users" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Name <input name="name" required autocomplete="off"/></label>
+			<label>Password <input name="password" type="password" required autocomplete="new-password"/></label>
+			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			<button type="submit" class="primary">Create</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Invite codes</h2>
+		<p class="muted">Registration is invite-only. Codes expire after 7 days and are single-use.</p>
+		<form method="post" action={ prefix + "admin/invites" } class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit" class="primary">New invite</button>
+		</form>
+		if len(invites) > 0 {
+			<table>
+				<tr><th>Created</th><th>Expires</th><th>State</th><th></th></tr>
+				for _, inv := range invites {
+					<tr>
+						<td>{ inv.ExpiresAt.AddDate(0, 0, -7).Format("2006-01-02 15:04") }</td>
+						<td>{ inv.ExpiresAt.Format("2006-01-02 15:04") }</td>
+						<td>
+							if inv.UsedAt != nil {
+								used
+							} else {
+								open
+							}
+						</td>
+						<td>
+							if inv.UsedAt == nil {
+								<form method="post" action={ prefix + "admin/invites/" + inv.ID + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+		}
+	</section>
+}
+
+templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
+	<h1>{ v.User.Name }</h1>
+	<p class="muted">
+		<code>{ v.User.ID }</code> · created { v.User.CreatedAt.Format("2006-01-02") }
+		if v.User.IsAdmin {
+			· administrator
+		}
+		if !v.User.Enabled() {
+			· disabled
+		}
+	</p>
+	@adminFlash(flash)
+	@adminUserLibrariesSection(prefix, v.Libraries, v.MoreLibraries)
+	<section class="card">
+		<h2>API tokens</h2>
+		if len(v.Tokens) == 0 {
+			<p class="muted">None.</p>
+		} else {
+			<table>
+				<tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr>
+				for _, t := range v.Tokens {
+					<tr>
+						<td>{ t.Name }</td>
+						<td><code>{ t.Scopes.String() }</code></td>
+						<td>{ t.CreatedAt.Format("2006-01-02") }</td>
+						<td>{ stamp(t.LastUsed) }</td>
+						<td>{ stamp(t.RevokedAt) }</td>
+						<td>
+							if t.RevokedAt == nil {
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens/" + t.ID + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+			if v.MoreTokens > 0 {
+				<p class="muted">{ moreNote(v.MoreTokens) }</p>
+			}
+		}
+	</section>
+	<section class="card">
+		<h2>kosync devices</h2>
+		if len(v.Kosync) == 0 {
+			<p class="muted">None.</p>
+		} else {
+			<table>
+				<tr><th>Slot</th><th>Label</th><th>Revoked</th><th></th></tr>
+				for _, d := range v.Kosync {
+					<tr>
+						<td><code>{ d.DeviceSlot }</code></td>
+						<td>{ orDash(d.Label) }</td>
+						<td>{ stamp(d.RevokedAt) }</td>
+						<td>
+							if d.RevokedAt == nil {
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/kosync/" + d.DeviceSlot + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+			if v.MoreKosync > 0 {
+				<p class="muted">{ moreNote(v.MoreKosync) }</p>
+			}
+		}
+	</section>
+	<section class="card">
+		<h2>Statistics plugin devices</h2>
+		if len(v.Koplugin) == 0 {
+			<p class="muted">None.</p>
+		} else {
+			<table>
+				<tr><th>Label</th><th>Device</th><th>Created</th><th>Revoked</th><th></th></tr>
+				for _, d := range v.Koplugin {
+					<tr>
+						<td>{ orDash(d.Label) }</td>
+						<td><code>{ d.DeviceID }</code></td>
+						<td>{ d.CreatedAt.Format("2006-01-02") }</td>
+						<td>{ stamp(d.RevokedAt) }</td>
+						<td>
+							if d.RevokedAt == nil {
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin/" + d.ID + "/revoke" }>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+			if v.MoreKoplugin > 0 {
+				<p class="muted">{ moreNote(v.MoreKoplugin) }</p>
+			}
+		}
+	</section>
+	<section class="card">
+		<h2>Reset the password</h2>
+		<p class="muted">
+			Revokes { v.User.Name }'s web and login sessions. Their API tokens,
+			kosync slots and statistics devices keep working — a password
+			nobody used on those is not a reason to unpair a household's
+			e-readers.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/password" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>New password <input name="password" type="password" required autocomplete="new-password"/></label>
+			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			@adminPasswordField(csrf)
+			<button type="submit" class="danger">Reset password</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Administrator rights</h2>
+		if v.Self {
+			<p class="muted">
+				This is your own account. Give up your administrator rights from
+				another administrator's account, so that a mistake is somebody
+				else's to undo.
+			</p>
+		} else {
+			<p class="muted">
+				An administrator can reach every page in this section. Removing
+				the rights also revokes any admin-scoped API token the account
+				holds, and the last remaining administrator cannot be demoted.
+			</p>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/admin" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				if v.User.IsAdmin {
+					<input type="hidden" name="admin" value="off"/>
+				} else {
+					<input type="hidden" name="admin" value="on"/>
+				}
+				@adminPasswordField(csrf)
+				if v.User.IsAdmin {
+					<button type="submit" class="danger">Remove administrator rights</button>
+				} else {
+					<button type="submit" class="primary">Make administrator</button>
+				}
+			</form>
+		}
+	</section>
+	<section class="card">
+		<h2>Account status</h2>
+		if v.Self {
+			<p class="muted">
+				This is your own account. Disable it from another
+				administrator's, so that somebody is left who can turn it back
+				on.
+			</p>
+		} else {
+			<p class="muted">
+				A disabled account cannot sign in and every credential it holds
+				— tokens, kosync slots, statistics devices, pairing codes — is
+				refused as if it did not exist. Nothing is deleted: enabling it
+				again brings the tokens and devices back. Web sessions do not
+				come back, because disabling revoked them.
+			</p>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/disabled" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				if v.User.Enabled() {
+					<input type="hidden" name="disabled" value="on"/>
+				} else {
+					<input type="hidden" name="disabled" value="off"/>
+				}
+				@adminPasswordField(csrf)
+				if v.User.Enabled() {
+					<button type="submit" class="danger">Disable this account</button>
+				} else {
+					<button type="submit" class="primary">Enable this account</button>
+				}
+			</form>
+		}
+	</section>
+	<section class="card">
+		<h2>Revoke every credential</h2>
+		<p class="muted">
+			For a password known to be compromised: API tokens, web and login
+			sessions, kosync slots, statistics devices and any unused pairing
+			code, all at once. The account keeps its password — reset that as
+			well when the password is what leaked.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/credentials/revoke" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			@adminPasswordField(csrf)
+			<button type="submit" class="danger">Revoke everything</button>
+		</form>
+	</section>
+	<p><a href={ prefix + "admin/users" }>← All users</a></p>
+}
+
+// adminPasswordField is the re-verification every high-impact action
+// carries. A seven-day session cookie is not a good enough
+// authorization for taking over somebody else's account.
+templ adminPasswordField(csrf string) {
+	<label>
+		Your own password
+		<input name="admin_password" type="password" required autocomplete="current-password"/>
+	</label>
+}

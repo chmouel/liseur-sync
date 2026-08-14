@@ -17,10 +17,14 @@ jobs:
       - name: Generate templ
         run: go tool templ generate ./internal/webui/
       - name: Build static binaries (amd64 + arm64)
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'dev' }}
         run: |
+          PKG=github.com/chmouel/liseur-sync/internal/buildinfo
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -trimpath -ldflags='-s -w' \
+              go build -trimpath \
+              -ldflags="-s -w -X $PKG.Version=$VERSION -X $PKG.Revision=${{ github.sha }}" \
               -o dist/liseur-sync-linux-$arch ./cmd/liseur-sync
           done
       - uses: actions/upload-artifact@v4

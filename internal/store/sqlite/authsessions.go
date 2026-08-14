@@ -28,7 +28,9 @@ func (s *Store) AuthSessionByHash(ctx context.Context, sha256 string) (store.Aut
 	var revoked sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, user_id, sha256, kind, csrf_token_sha256, created_at, expires_at, revoked_at
-		 FROM auth_sessions WHERE sha256 = ?`, sha256).
+		 FROM auth_sessions WHERE sha256 = ?
+		   AND EXISTS (SELECT 1 FROM users u
+		               WHERE u.id = auth_sessions.user_id AND u.disabled_at IS NULL)`, sha256).
 		Scan(&a.ID, &a.UserID, &a.SHA256, &a.Kind, &csrf, &created, &expires, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, store.ErrNotFound

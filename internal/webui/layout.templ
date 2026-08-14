@@ -64,7 +64,9 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<span class="rail-head">Account</span>
 							@railLink(prefix+"devices", "Devices", u.Section == "devices")
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")
-							@railLink(prefix+"admin", "Admin", u.Section == "admin")
+							if u.IsAdmin {
+								@railLink(prefix+"admin", "Admin", u.Section == "admin")
+							}
 						</nav>
 					</aside>
 					<main id="content">
@@ -110,6 +112,27 @@ templ themeToggle(prefix string, csrf string, u userCtx) {
 	</form>
 }
 
+// forbiddenPage is what a non-admin gets for typing an admin URL. It is
+// the shell rather than a bare error string so the reader keeps a way
+// out, and it says how admin rights are granted, since the answer is
+// not "ask the UI" — there is no button for it anywhere.
+templ forbiddenPage(prefix string, u userCtx, csrf string) {
+	@layout("Not allowed", prefix, u, csrf, forbiddenBody(prefix))
+}
+
+templ forbiddenBody(prefix string) {
+	<section class="card narrow">
+		<h1>Not allowed</h1>
+		<p>This page is for administrators, and this account is not one.</p>
+		<p class="muted">
+			Administrator rights belong to the account, not to a token. An
+			existing administrator grants them, or the operator does with
+			<code>liseur-sync admin grant-admin</code>.
+		</p>
+		<p><a href={ prefix + "." }>Back to the dashboard</a></p>
+	</section>
+}
+
 // loginPage is the unauthenticated entry point, rendered at /ui/login
 // (or re-rendered from POST /ui/login on bad credentials).
 templ loginPage(prefix string, u userCtx, errMsg string) {
@@ -126,6 +149,37 @@ templ loginBody(prefix string, errMsg string) {
 			<label>Username <input name="username" required autofocus/></label>
 			<label>Password <input name="password" type="password" required/></label>
 			<button type="submit" class="primary">Sign in</button>
+		</form>
+	</section>
+}
+
+// setupPage is the first-run screen: the only page in the UI that an
+// anonymous visitor may act on, and only while the instance has no
+// accounts.
+templ setupPage(prefix string, u userCtx, errMsg string) {
+	@layout("Set up", prefix, u, "", setupBody(prefix, errMsg))
+}
+
+templ setupBody(prefix string, errMsg string) {
+	<section class="card narrow">
+		<h1>Welcome</h1>
+		<p class="muted">
+			This instance has no accounts yet. The account you make here is the
+			first one, and it is an administrator: it can create the others,
+			reset passwords and reach the admin section. This page closes as
+			soon as it exists.
+		</p>
+		if errMsg != "" {
+			<p class="error">{ errMsg }</p>
+		}
+		<form method="post" action={ prefix + "setup" }>
+			<label>Username <input name="username" required autofocus autocomplete="username"/></label>
+			<label>
+				Password
+				<input name="password" type="password" required autocomplete="new-password" minlength={ minPasswordLength }/>
+			</label>
+			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			<button type="submit" class="primary">Create administrator</button>
 		</form>
 	</section>
 }

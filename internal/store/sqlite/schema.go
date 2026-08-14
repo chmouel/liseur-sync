@@ -793,8 +793,35 @@ CREATE VIRTUAL TABLE book_search USING fts5(
 );
 `
 
+// migration16 makes administration an account property rather than a
+// credential (ADR-0013). "Is an admin" was "holds a live admin-scope
+// token", which cannot be granted without handing somebody a bearer
+// secret, cannot be revoked without destroying unrelated scopes on a
+// multi-scope token, and cannot be counted atomically — so the last
+// administrator could be demoted twice concurrently and lock the
+// instance out. The backfill is exactly the set the old definition
+// returned true for, so no instance gains or loses an administrator
+// here.
+//
+// disabled_at arrives in the same migration although nothing sets it
+// yet: every rule written against is_admin says "enabled admin", and a
+// guard that has to be rewritten when its second column appears is a
+// guard written twice.
+const migration16 = `
+ALTER TABLE users
+    ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0
+        CHECK (is_admin IN (0, 1));
+ALTER TABLE users
+    ADD COLUMN disabled_at TEXT;
+UPDATE users SET is_admin = 1 WHERE id IN (
+    SELECT ts.user_id FROM token_scopes ts
+    JOIN tokens t ON t.id = ts.token_id
+    WHERE ts.scope = 'admin' AND t.revoked_at IS NULL
+);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14, migration15,
+	migration13, migration14, migration15, migration16,
 }

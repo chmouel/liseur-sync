@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"net/url"
@@ -36,6 +37,9 @@ type userCtx struct {
 	Prefs   prefs
 	Section string
 	Back    string
+	// IsAdmin decides whether the rail offers the Admin entry at all.
+	// Hiding it is presentation only: requireAdmin is what enforces it.
+	IsAdmin bool
 }
 
 // uiCtx assembles that from a request, so a page does not have to think
@@ -46,7 +50,30 @@ func uiCtx(r *http.Request, u *store.User) userCtx {
 		Prefs:   readPrefs(r),
 		Section: sectionOf(r.URL.Path),
 		Back:    backTo(r.URL),
+		IsAdmin: isAdmin(r),
 	}
+}
+
+// adminCtxKey carries the per-request answer to "is this user an
+// admin", resolved once in requireAuth. It is a request-context value
+// rather than another uiCtx argument so that no page has to thread it
+// through, and none can forget to.
+type adminCtxKey struct{}
+
+func withAdmin(r *http.Request, v *bool) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), adminCtxKey{}, v))
+}
+
+// adminFromContext returns the resolved flag, or nil when it could not
+// be resolved (or was never asked for, as on the unauthenticated pages).
+func adminFromContext(r *http.Request) *bool {
+	v, _ := r.Context().Value(adminCtxKey{}).(*bool)
+	return v
+}
+
+func isAdmin(r *http.Request) bool {
+	v := adminFromContext(r)
+	return v != nil && *v
 }
 
 // sectionOf names the rail entry a path belongs to. The rail is short

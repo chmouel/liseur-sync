@@ -40,8 +40,9 @@ The design rationale (why the API looks like this) is in
    implies every scope. No other implication exists.
 
    `admin` is not self-grantable: requesting it returns `403` unless
-   the caller already holds an admin token. The first one comes from
-   `liseur-sync admin mint-token -scope admin`. Clients never need it.
+   the account already carries the administrator role. That role is
+   granted by another administrator, or out of band with
+   `liseur-sync admin grant-admin alice`. Clients never need it.
 
 All API calls then use `Authorization: Bearer <token secret>`.
 

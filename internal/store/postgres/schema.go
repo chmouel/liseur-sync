@@ -758,8 +758,21 @@ ALTER TABLE books ADD COLUMN search_vector tsvector;
 CREATE INDEX books_search_idx ON books USING GIN (search_vector);
 `
 
+// migration16 makes administration an account property rather than a
+// credential (ADR-0013). See the SQLite copy for why; the backfill is
+// the same set, expressed against the same tables.
+const migration16 = `
+ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN disabled_at TIMESTAMPTZ;
+UPDATE users SET is_admin = TRUE WHERE id IN (
+    SELECT ts.user_id FROM token_scopes ts
+    JOIN tokens t ON t.id = ts.token_id
+    WHERE ts.scope = 'admin' AND t.revoked_at IS NULL
+);
+`
+
 var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
-	migration13, migration14, migration15,
+	migration13, migration14, migration15, migration16,
 }

@@ -8,3 +8,9 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      # Same stamp as the static binaries (build.yaml): the overview
+      # page has to name a build for the deployment least able to find
+      # out any other way. A checkout with no tag stamps the branch's
+      # commit, which buildinfo shortens.
+      - -X github.com/chmouel/liseur-sync/internal/buildinfo.Version={{.Git.Tag}}
+      - -X github.com/chmouel/liseur-sync/internal/buildinfo.Revision={{.Git.FullCommit}}

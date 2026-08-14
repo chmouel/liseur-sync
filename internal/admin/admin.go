@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -32,8 +31,20 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return UsageError{ExitCode: 0}
 	case "create-user":
 		return createUser(ctx, st, args[1:])
+	case "reset-password":
+		return resetPassword(ctx, st, args[1:])
+	case "revoke-credentials":
+		return revokeCredentials(ctx, st, args[1:])
 	case "mint-token":
 		return mintToken(ctx, st, args[1:])
+	case "grant-admin":
+		return setAdminCmd(ctx, st, args[1:], true)
+	case "revoke-admin":
+		return setAdminCmd(ctx, st, args[1:], false)
+	case "disable-user":
+		return setDisabledCmd(ctx, st, args[1:], true)
+	case "enable-user":
+		return setDisabledCmd(ctx, st, args[1:], false)
 	case "list-tokens":
 		return listTokens(ctx, st, args[1:])
 	case "revoke-token":
@@ -90,6 +101,20 @@ func (e UsageError) Error() string {
 const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
 
   create-user <name>            create a user (password from TTY/stdin)
+  reset-password <user>         set a new password (from TTY/stdin) and
+                                revoke the account's web and login
+                                sessions; devices keep working
+  revoke-credentials <user>     revoke every credential the account
+                                holds: tokens, sessions, kosync slots,
+                                koplugin devices and unused pairing codes
+  grant-admin <user>            make a user an administrator
+  revoke-admin <user>           take administrator rights away; refuses
+                                to remove the last enabled admin
+  disable-user <user>           stop an account: every credential it
+                                holds is refused and its sessions are
+                                revoked; nothing is deleted
+  enable-user <user>            start it again; tokens and devices
+                                resume working, sessions do not
   mint-token <user> <name>      create a device token
                                 flags: -scope <scope>[,<scope>...]
   list-tokens <user>            list tokens for a user
@@ -133,41 +158,121 @@ func createUser(ctx context.Context, st store.Store, args []string) error {
 		return errors.New("usage: create-user <name>")
 	}
 	name := args[0]
-	pw, err := readPassword("password for " + name + ": ")
+	pw, err := readPasswordTwice("password for " + name + ": ")
 	if err != nil {
 		return err
+	}
+	u, err := CreateUser(ctx, st, name, pw)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("created user %q (id %s)\n", u.Name, u.ID)
+	// A brand-new instance has nobody who can reach the admin panel,
+	// and the operator who just made the only account is the one person
+	// who wants to know that. (The web UI's first-run page grants the
+	// flag by itself; this path is the shell one, which does not.)
+	if counts, err := st.AdminCounts(ctx); err == nil && counts.AdminUsers == 0 {
+		fmt.Printf("this instance has no administrator yet; run:\n"+
+			"  liseur-sync admin grant-admin %s\n", u.Name)
+	}
+	return nil
+}
+
+// readPasswordTwice prompts and confirms. Both the CLI's create-user
+// and its reset-password use it, so a typo costs one retry rather than
+// an account nobody can sign in to.
+func readPasswordTwice(prompt string) (string, error) {
+	pw, err := readPassword(prompt)
+	if err != nil {
+		return "", err
 	}
 	pw2, err := readPassword("repeat password: ")
 	if err != nil {
-		return err
+		return "", err
 	}
-	if pw != pw2 {
-		return errors.New("passwords do not match")
+	if err := ValidatePassword(pw, pw2); err != nil {
+		return "", err
 	}
-	if len(pw) < 8 {
-		return errors.New("password must be at least 8 characters")
+	return pw, nil
+}
+
+func resetPassword(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: reset-password <user>")
 	}
-	hash, err := auth.HashPassword(pw)
+	u, err := st.UserByName(ctx, args[0])
 	if err != nil {
 		return err
 	}
-	id, err := auth.NewSecret()
+	pw, err := readPasswordTwice("new password for " + u.Name + ": ")
 	if err != nil {
 		return err
 	}
-	u := store.User{
-		ID:              id[:16],
-		Name:            name,
-		Argon2Hash:      hash,
-		Timezone:        "UTC",
-		KosyncEnabled:   true,
-		KopluginEnabled: true,
-		CreatedAt:       time.Now(),
-	}
-	if err := st.CreateUser(ctx, u); err != nil {
+	// No session is spared: an operator resetting somebody else's
+	// password is not signed in as them.
+	if err := SetPassword(ctx, st, u.ID, pw, ""); err != nil {
 		return err
 	}
-	fmt.Printf("created user %q (id %s)\n", name, u.ID)
+	fmt.Printf("password changed for %q (id %s); web and login sessions revoked\n",
+		u.Name, u.ID)
+	return nil
+}
+
+func revokeCredentials(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: revoke-credentials <user>")
+	}
+	u, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if err := RevokeAllCredentials(ctx, st, u.ID); err != nil {
+		return err
+	}
+	fmt.Printf("revoked every credential for %q (id %s): tokens, sessions, "+
+		"kosync slots, koplugin devices and unused pairing codes\n", u.Name, u.ID)
+	return nil
+}
+
+// SetAdmin grants or removes administrator rights on an account. It is
+// exported because the CLI and (from ADR-0013 phase 3) the web panel
+// must be one implementation: the guard against removing the last
+// enabled administrator lives in the store, and the message an operator
+// reads about it lives here.
+func SetAdmin(ctx context.Context, st store.Store, name string, admin bool) (store.User, error) {
+	u, err := st.UserByName(ctx, name)
+	if err != nil {
+		return u, err
+	}
+	if err := st.SetUserAdmin(ctx, u.ID, admin); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			return u, fmt.Errorf(
+				"%q is the last enabled administrator: grant admin to somebody else first", name)
+		}
+		return u, err
+	}
+	u.IsAdmin = admin
+	return u, nil
+}
+
+func setAdminCmd(ctx context.Context, st store.Store, args []string, admin bool) error {
+	verb := "grant-admin"
+	if !admin {
+		verb = "revoke-admin"
+	}
+	if len(args) != 1 {
+		return errors.New("usage: " + verb + " <user>")
+	}
+	u, err := SetAdmin(ctx, st, args[0], admin)
+	if err != nil {
+		return err
+	}
+	if admin {
+		fmt.Printf("%q (id %s) is now an administrator\n", u.Name, u.ID)
+		return nil
+	}
+	fmt.Printf("%q (id %s) is no longer an administrator; admin-scoped tokens revoked\n",
+		u.Name, u.ID)
 	return nil
 }
 
@@ -209,6 +314,11 @@ func mintToken(ctx context.Context, st store.Store, args []string) error {
 	svc := auth.NewService(st)
 	secret, tok, err := svc.MintToken(ctx, u.ID, rest[1], scopes, nil)
 	if err != nil {
+		if errors.Is(err, store.ErrAdminGrantRequiresAdmin) {
+			return fmt.Errorf(
+				"the admin scope belongs to an admin account: run `liseur-sync admin grant-admin %s` first",
+				u.Name)
+		}
 		return err
 	}
 	fmt.Printf("token id:     %s\ndevice id:    %s\nscopes:       %s\nsecret (shown once): %s\n",
@@ -352,21 +462,8 @@ func createLibrary(ctx context.Context, st store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	name := strings.TrimSpace(args[1])
-	if name == "" {
-		return errors.New("library name must not be blank")
-	}
-	lib := store.Library{
-		ID:          uuid.New().String(),
-		OwnerUserID: u.ID,
-		// The owner pays for what the library holds, including bytes
-		// uploaded by others they grant access to (ADR-0002).
-		QuotaUserID: u.ID,
-		Kind:        store.LibraryManaged,
-		Name:        name,
-		CreatedAt:   time.Now().UTC(),
-	}
-	if err := st.CreateLibrary(ctx, lib); err != nil {
+	lib, err := NewManagedLibrary(ctx, st, u.ID, args[1])
+	if err != nil {
 		return err
 	}
 	fmt.Printf("created library %q (id %s) owned by %s\n", lib.Name, lib.ID, u.Name)
@@ -492,5 +589,45 @@ func revokeLibrary(ctx context.Context, st store.Store, args []string) error {
 		return err
 	}
 	fmt.Printf("revoked %s's access to library %s\n", target.Name, args[1])
+	return nil
+}
+
+// SetDisabled stops or restarts an account. Like SetAdmin it exists so
+// that the CLI and the panel are one implementation, and so that the
+// last-enabled-administrator refusal reads the same on both.
+func SetDisabled(ctx context.Context, st store.Store, name string, disabled bool) (store.User, error) {
+	u, err := st.UserByName(ctx, name)
+	if err != nil {
+		return u, err
+	}
+	if err := st.SetUserDisabled(ctx, u.ID, disabled, time.Now().UTC()); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			return u, fmt.Errorf(
+				"%q is the last enabled administrator: make somebody else an admin first", name)
+		}
+		return u, err
+	}
+	return u, nil
+}
+
+func setDisabledCmd(ctx context.Context, st store.Store, args []string, disabled bool) error {
+	verb := "disable-user"
+	if !disabled {
+		verb = "enable-user"
+	}
+	if len(args) != 1 {
+		return errors.New("usage: " + verb + " <user>")
+	}
+	u, err := SetDisabled(ctx, st, args[0], disabled)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		fmt.Printf("%q (id %s) is disabled: its credentials are refused and its "+
+			"sessions were revoked. Nothing was deleted.\n", u.Name, u.ID)
+		return nil
+	}
+	fmt.Printf("%q (id %s) is enabled again. Tokens and devices work; "+
+		"web sessions do not, so they sign in again.\n", u.Name, u.ID)
 	return nil
 }

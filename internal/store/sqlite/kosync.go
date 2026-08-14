@@ -37,7 +37,10 @@ func (s *Store) RedeemPairingCode(ctx context.Context, codeSHA256 string, at tim
 	var expires string
 	var used sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT id, user_id, code_sha256, expires_at, used_at FROM pairing_codes WHERE code_sha256 = ?`,
+		`SELECT id, user_id, code_sha256, expires_at, used_at FROM pairing_codes
+		 WHERE code_sha256 = ?
+		   AND EXISTS (SELECT 1 FROM users u
+		               WHERE u.id = pairing_codes.user_id AND u.disabled_at IS NULL)`,
 		codeSHA256).Scan(&p.ID, &p.UserID, &p.CodeSHA256, &expires, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, store.ErrNotFound
@@ -78,7 +81,9 @@ func (s *Store) KosyncDeviceByKey(ctx context.Context, keySHA256 string) (store.
 	var revoked sql.NullString
 	err := s.db.QueryRowContext(ctx,
 		`SELECT user_id, device_slot, key_sha256, label, revoked_at
-		 FROM kosync_devices WHERE key_sha256 = ?`, keySHA256).
+		 FROM kosync_devices WHERE key_sha256 = ?
+		   AND EXISTS (SELECT 1 FROM users u
+		               WHERE u.id = kosync_devices.user_id AND u.disabled_at IS NULL)`, keySHA256).
 		Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, store.ErrNotFound
