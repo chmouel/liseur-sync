@@ -1,6 +1,6 @@
 # ADR-0014: Library sources, storage modes and Calibre
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-15
 - **Depends on:** [ADR-0002](0002-library-storage-and-ownership.md),
   [ADR-0003](0003-catalog-work-identity.md),

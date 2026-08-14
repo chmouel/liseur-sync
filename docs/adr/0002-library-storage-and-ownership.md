@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0001](0001-content-server.md)
+- **Amended by:** [ADR-0014](0014-library-sources-and-storage.md), which
+  replaces "Library kinds" below with three independent axes and adds a
+  storage mode that serves bytes where they lie.
 
 ## Context
 
@@ -17,6 +20,16 @@ sessions, and tokens private to each account.
 ## Decision
 
 ### Library kinds
+
+> **Amended by [ADR-0014](0014-library-sources-and-storage.md).** A library
+> is no longer one *kind*. It is a **source** (`managed`, `directory` or
+> `calibre`), a **storage** mode (`cas` or `in_place`) and a **refresh**
+> policy (`manual` or `interval`). What this section calls *watched* is
+> exactly `directory` + `cas` + `interval`. The read-only promise below
+> still holds for every one of them; the CAS copy does not, because an
+> `in_place` library serves its bytes where they lie and takes no
+> snapshot. The paragraphs that follow are kept for the reasoning; read
+> them with that substitution.
 
 An instance can contain multiple libraries:
 
@@ -48,8 +61,9 @@ size, creation time, and orphan-mark time. `book_files` references blobs.
 Physical deduplication is instance-wide, but authorization is always checked
 through the user's accessible library and book references.
 
-Every managed or watched library has a `quota_user_id`, defaulting to its
-owner. Managed uploads and watched CAS snapshots are both charged to that
+Every library that stores bytes has a `quota_user_id`, defaulting to its
+owner. An `in_place` library stores none and so charges none
+([ADR-0014](0014-library-sources-and-storage.md)). Managed uploads and watched CAS snapshots are both charged to that
 principal. A watched scan that would exceed quota records a bounded failed
 job and does not replace the current snapshot. Granting read or manage access
 does not charge the grantee, and an upload by a manager does not silently
