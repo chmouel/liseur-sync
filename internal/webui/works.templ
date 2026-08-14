@@ -12,6 +12,30 @@ type WorkRow struct {
 	Progression *float64
 	LastActive  string
 	Pending     bool
+	// CanRead is set when the mapped catalog book has an EPUB the
+	// browser could open, which is what makes the cover a "carry on
+	// reading" link rather than a link to the statistics.
+	CanRead bool
+}
+
+// readURL is where a work's cover goes: back into the book when there is
+// one to open, and to the work's own page otherwise. Picking the book up
+// again is what a reader clicking their own shelf almost always means;
+// the numbers are a sublink away.
+func (w WorkRow) readURL(prefix string) string {
+	if w.CanRead && w.BookID != "" {
+		return prefix + "books/" + w.BookID + "/read"
+	}
+	return prefix + "works/" + w.ID
+}
+
+// workCardHint says what the cover will do, since it does two different
+// things depending on whether there is a file here to open.
+func workCardHint(w WorkRow) string {
+	if w.CanRead && w.BookID != "" {
+		return "Continue reading " + orPlaceholder(w.Title)
+	}
+	return orPlaceholder(w.Title)
 }
 
 templ worksPage(prefix string, u userCtx, csrf string, rows []WorkRow) {
@@ -35,7 +59,7 @@ templ worksBody(prefix, csrf, view string, rows []WorkRow) {
 			</div>
 		} else {
 			<table>
-				<tr><th>Title</th><th>Author</th><th>Progress</th><th>Last active</th></tr>
+				<tr><th>Title</th><th>Author</th><th>Progress</th><th>Last active</th><th></th></tr>
 				for _, w := range rows {
 					<tr>
 						<td>
@@ -54,6 +78,11 @@ templ worksBody(prefix, csrf, view string, rows []WorkRow) {
 							}
 						</td>
 						<td>{ w.LastActive }</td>
+						<td>
+							if w.CanRead && w.BookID != "" {
+								<a class="btn" href={ prefix + "books/" + w.BookID + "/read" }>Read</a>
+							}
+						</td>
 					</tr>
 				}
 			</table>
@@ -68,6 +97,11 @@ type WorkDetail struct {
 	Sessions    int
 	CurrentProg float64
 	ETAHuman    string
+	// BookID and CanRead are the catalog book this work is mapped to,
+	// when there is one, so the page that shows the numbers can also be
+	// the way back into the book.
+	BookID  string
+	CanRead bool
 }
 
 type OpRow struct {
@@ -78,16 +112,24 @@ type OpRow struct {
 	ForeignPos  string
 }
 
-templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow) {
-	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(d, ops))
+templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
+	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(prefix, d, ops, sessions))
 }
 
-templ workBody(d WorkDetail, ops []OpRow) {
+templ workBody(prefix string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
 	<h1>{ orPlaceholder(d.Work.Title) }</h1>
 	if d.Work.Author != "" {
 		<p class="muted">{ d.Work.Author }</p>
 	}
-	<section class="cards">
+	if d.BookID != "" {
+		<p class="rowlinks">
+			if d.CanRead {
+				<a class="btn primary" href={ prefix + "books/" + d.BookID + "/read" }>Read</a>
+			}
+			<a class="btn" href={ prefix + "books/" + d.BookID }>Book details</a>
+		</p>
+	}
+	<section class="cards" id="stats">
 		<div class="stat"><span class="num">{ pct(d.CurrentProg) }</span><span class="lbl">read</span></div>
 		<div class="stat"><span class="num">{ f0(d.Minutes) }</span><span class="lbl">minutes</span></div>
 		if d.Pages > 0 {
@@ -96,6 +138,28 @@ templ workBody(d WorkDetail, ops []OpRow) {
 		<div class="stat"><span class="num">{ i2s(d.Sessions) }</span><span class="lbl">sessions</span></div>
 		if d.ETAHuman != "" {
 			<div class="stat"><span class="num">{ d.ETAHuman }</span><span class="lbl">left (est.)</span></div>
+		}
+	</section>
+	// The sessions this work still has in full. Older ones have been
+	// rolled up into daily totals (they are counted in the statistics
+	// above but no longer exist one by one), which is why this list can
+	// be shorter than the session count.
+	<section class="card" id="sessions">
+		<h2>Sessions</h2>
+		if len(sessions) == 0 {
+			<p class="muted">No sessions recorded yet — they appear once a device reports reading time.</p>
+		} else {
+			<table>
+				<tr><th>When</th><th>Device</th><th>Duration</th><th>Progress</th></tr>
+				for _, s := range sessions {
+					<tr>
+						<td>{ s.When }</td>
+						<td><code>{ s.DeviceID }</code></td>
+						<td>{ i2s(s.Minutes) } min</td>
+						<td>{ pct(s.StartProg) } → { pct(s.EndProg) }</td>
+					</tr>
+				}
+			</table>
 		}
 	</section>
 	<section class="card">

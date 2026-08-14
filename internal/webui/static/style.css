@@ -418,6 +418,19 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* The sublinks under a reading cover. The cover itself carries on
+   reading, so the ways to the numbers behind it live here, small and
+   quiet, directly under the picture. */
+.bookcard .sublinks {
+	display: flex; flex-wrap: wrap; gap: .1rem .5rem;
+	font-size: .74rem; margin-top: -.15rem;
+}
+.bookcard .sublinks a { color: var(--muted); text-decoration: none; }
+.bookcard .sublinks a:hover, .bookcard .sublinks a:focus-visible {
+	color: var(--primary); text-decoration: underline;
+}
+.rowlinks { display: flex; gap: .5rem; align-items: center; margin: .6rem 0 1rem; }
+
 /* Progress across the foot of the cover. The width is a class rather
    than a style attribute — see ADR-0011 — so the stylesheet keeps every
    declaration and a CSP for /ui stays possible. */

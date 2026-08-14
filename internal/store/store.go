@@ -1471,6 +1471,11 @@ type Store interface {
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
 	WorkBookIDs(ctx context.Context, userID string) (map[string]string, error)
 	CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string]string, error)
+	// AvailableBookMediaTypes reports, per book, the media types the user
+	// can actually be served right now — files that are present, in a
+	// library they may read. It exists so a list of books can be told
+	// which of them the browser could open without a query per row.
+	AvailableBookMediaTypes(ctx context.Context, userID string, bookIDs []string) (map[string][]string, error)
 
 	// Ingestion jobs.
 	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
