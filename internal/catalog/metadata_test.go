@@ -3,6 +3,7 @@ package catalog
 import (
 	"testing"
 
+	"github.com/chmouel/liseur-sync/internal/calibre"
 	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -282,5 +283,81 @@ func TestResolveManualProposalClearsASeriesPosition(t *testing.T) {
 	}
 	if len(resolved.Series) != 1 || resolved.Series[0].Position != nil {
 		t.Fatalf("manual clear was overruled: %+v", resolved.Series)
+	}
+}
+
+func TestResolveClearsWhatCalibreNoLongerStates(t *testing.T) {
+	t.Parallel()
+	current := store.BookMetadata{
+		Book: store.CatalogBook{
+			ID: "book", LibraryID: "lib",
+			Title:             "Small Gods",
+			TitleSource:       store.MetadataCalibre,
+			Subtitle:          "A Discworld Novel",
+			SubtitleSource:    store.MetadataEmbedded,
+			Description:       "A blurb Calibre used to have",
+			DescriptionSource: store.MetadataCalibre,
+			Publisher:         "Gollancz",
+			PublisherSource:   store.MetadataEmbedded,
+		},
+		Tags: []store.BookTaxon{{
+			ID: "t1", Name: "Fantasy", NormalizedName: "fantasy",
+			Source: store.MetadataCalibre,
+		}},
+	}
+	proposal := metadata.FromCalibre(calibre.Book{
+		ID: 1, Title: "Small Gods", Tags: []string{"Comedy"},
+	})
+
+	next, changed := Resolve(current, proposal)
+	if !changed {
+		t.Fatal("a Calibre read that emptied fields changed nothing")
+	}
+	// Cleared, with the provenance kept, which is what stops the EPUB
+	// refilling it on the next extraction.
+	if next.Book.Description != "" ||
+		next.Book.DescriptionSource != store.MetadataCalibre {
+		t.Errorf("description = %q from %q", next.Book.Description,
+			next.Book.DescriptionSource)
+	}
+	// The publisher was the EPUB's and Calibre outranks it, so Calibre
+	// having none clears that too.
+	if next.Book.Publisher != "" {
+		t.Errorf("publisher = %q, want cleared", next.Book.Publisher)
+	}
+	// Calibre has no subtitle column, so it does not get an opinion.
+	if next.Book.Subtitle != "A Discworld Novel" {
+		t.Errorf("subtitle = %q, want left alone", next.Book.Subtitle)
+	}
+	// Its sets are complete, so a tag it no longer lists is gone.
+	if len(next.Tags) != 1 || next.Tags[0].Name != "Comedy" {
+		t.Errorf("tags = %+v", next.Tags)
+	}
+
+	// And the tombstone holds: the EPUB cannot put the description back.
+	refilled, changed := Resolve(next, metadata.FromEmbedded(epub.Metadata{
+		Title: "small gods", Description: "The blurb from the file",
+	}))
+	if changed && refilled.Book.Description != "" {
+		t.Errorf("the EPUB refilled a description Calibre cleared: %q",
+			refilled.Book.Description)
+	}
+}
+
+func TestResolveKeepsAManualEditThroughACalibreRefresh(t *testing.T) {
+	t.Parallel()
+	current := store.BookMetadata{
+		Book: store.CatalogBook{
+			ID: "book", LibraryID: "lib",
+			Title:       "The Title I Chose",
+			TitleSource: store.MetadataManual,
+			TitleLocked: true,
+		},
+	}
+	next, _ := Resolve(current, metadata.FromCalibre(calibre.Book{
+		ID: 1, Title: "The Title Calibre Has",
+	}))
+	if next.Book.Title != "The Title I Chose" {
+		t.Fatalf("title = %q, want the manual one", next.Book.Title)
 	}
 }

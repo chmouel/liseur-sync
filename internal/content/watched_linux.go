@@ -52,6 +52,9 @@ const (
 // ScannedLibrary is the one library a sweep is asked about.
 type ScannedLibrary struct {
 	ID string
+	// Source decides how the library's books are discovered: by walking
+	// the root, or by reading the metadata.db that describes it.
+	Source store.LibrarySource
 	// Storage decides what discovering a file means: copying it into
 	// content-addressed storage, or cataloguing it where it lies.
 	Storage store.LibraryStorage
@@ -62,6 +65,10 @@ type ScannedLibrary struct {
 	// A sweep runs on the server's behalf, so this is the library's owner
 	// rather than whoever happens to be logged in.
 	ActorUserID string
+	// InventoryDigest is what the last Calibre refresh of this library
+	// recorded. A refresh that computes the same value stops there. It is
+	// empty for every other source, which have no such gate.
+	InventoryDigest string
 }
 
 // WatchedSyncReport totals one library's sweep.
@@ -559,7 +566,7 @@ func isRetryableWatchedFailure(err error) bool {
 // refreshed by hand and a library on a five-minute interval are the
 // same mechanism with different triggers.
 type refreshableLibraryStore interface {
-	watchedStore
+	calibreStore
 	ClaimLibraryRefresh(context.Context, time.Time) (store.Library, bool, error)
 	FinishLibraryRefresh(context.Context, string, time.Time, string) error
 }
@@ -583,13 +590,30 @@ type WatchedScanReport struct {
 	Review       int
 	MarkedAbsent int
 	Failed       int
+	// Skipped counts Calibre libraries whose inventory digest had not
+	// moved, so the refresh stopped at the gate without a catalog write.
+	Skipped int
+	// Deleted counts catalog books removed because Calibre no longer has
+	// them, and MetadataUpdated books Calibre described differently than
+	// the catalog did.
+	Deleted         int
+	MetadataUpdated int
+}
+
+// boolCount counts a flag, so a report can total what happened across
+// libraries without a branch at every call site.
+func boolCount(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Changed reports whether the pass did anything worth logging.
 func (r WatchedScanReport) Changed() bool {
 	return r.Ingested != 0 || r.Rehashed != 0 || r.Review != 0 ||
 		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0 ||
-		r.Errored != 0
+		r.Errored != 0 || r.Deleted != 0 || r.MetadataUpdated != 0
 }
 
 // maxRefreshesPerPass bounds one pass. A claim stamps the attempt, so a
@@ -639,16 +663,32 @@ func RunRefreshPass(
 			continue
 		}
 		report.Libraries++
-		result, syncErr := SyncScannedLibrary(ctx, st, blobs, ScannedLibrary{
+		scanned := ScannedLibrary{
 			ID:       library.ID,
+			Source:   library.Source,
 			Storage:  library.Storage,
 			RootPath: *library.RootPath,
 			// The owner is the principal the jobs belong to. The quota
 			// principal is charged separately by the commit, so an owner
 			// who is not the payer still cannot spend somebody else's
 			// allowance by being named here.
-			ActorUserID: library.OwnerUserID,
-		}, opts, clock)
+			ActorUserID:     library.OwnerUserID,
+			InventoryDigest: library.LastInventoryDigest,
+		}
+		var result WatchedSyncReport
+		var syncErr error
+		if library.Source == store.LibraryCalibre {
+			var calibreResult CalibreSyncReport
+			calibreResult, syncErr = SyncCalibreLibrary(
+				ctx, st, blobs, scanned, opts, clock)
+			result = calibreResult.Sync
+			report.Skipped += boolCount(calibreResult.Skipped)
+			report.Deleted += calibreResult.Deleted
+			report.MetadataUpdated += calibreResult.MetadataUpdated
+		} else {
+			result, syncErr = SyncScannedLibrary(
+				ctx, st, blobs, scanned, opts, clock)
+		}
 		report.Ingested += result.Ingested
 		report.Unchanged += result.Unchanged
 		report.Rehashed += result.Rehashed
