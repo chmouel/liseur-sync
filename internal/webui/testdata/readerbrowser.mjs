@@ -145,6 +145,9 @@ const probe = `(() => {
     svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
     pageTitle: document.title,
+    fontSize: body ? doc.defaultView.getComputedStyle(body).fontSize : '',
+    wrapMaxWidth: body && body.firstElementChild
+      ? doc.defaultView.getComputedStyle(body.firstElementChild).maxWidth : '',
   });
 })()`;
 
@@ -270,6 +273,26 @@ check('the same-origin external script did not run',
   hostile.extRan === false, String(hostile.extRan));
 check('the publication could not reach the parent page',
   !String(hostile.pageTitle).includes('pwned'), hostile.pageTitle);
+
+// The font-size slider at full stretch has to mean it: the chapter's
+// type is really 250% of the 16px default, and the publication's own
+// width cap — a wrapper div's max-width, which would otherwise keep
+// the old, short lines pinned to the left of a much wider column — is
+// lifted, so the bigger type gets the page. Both were user reports
+// before they were checks.
+check('a book that caps its own width starts capped',
+  hostile.wrapMaxWidth === '480px', hostile.wrapMaxWidth);
+await evalIn(`(() => {
+  const slider = document.querySelector('#reader-settings-form input[name="size"]');
+  slider.value = '250';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await new Promise((r) => setTimeout(r, 900));
+const sized = JSON.parse(await evalIn(probe));
+check('the font-size slider actually sizes the type',
+  sized.fontSize === '40px', sized.fontSize);
+check("the slider lifts the publication's own width cap",
+  sized.wrapMaxWidth === 'none', sized.wrapMaxWidth);
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.
