@@ -62,6 +62,14 @@ The store test suite is shared across backends in
 `LISEUR_PG_TEST_DSN` is set (a dev database lives on civuole; DSN is in
 the gitignored `.env`).
 
+This project **has never shipped**. There are no deployments to keep
+working, so nothing here owes backwards compatibility to an earlier
+version of itself: when a page, route or shape is replaced, replace it
+— no deprecation shims, no compatibility redirects, no migration UI.
+(The compatibility that *does* matter is with other people's software:
+the kosync and koplugin wire protocols, and the EPUB and OPDS formats.
+Those are not ours to change.)
+
 ## Rules that must not be broken
 
 These come straight from the design and its review; tests enforce most

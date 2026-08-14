@@ -68,9 +68,34 @@ works without JavaScript, and htmx only removes a full page load.
 
 **A progress bar's width is a class, not a style attribute.** A
 rounded ladder of percentage classes keeps every declaration in the
-stylesheet. `/ui` sets no Content-Security-Policy today — only the
-reader does — and this decision means adding one later will not first
-require unpicking a hundred inline styles.
+stylesheet. When this was written `/ui` set no Content-Security-Policy
+— only the reader did — and the point of the rule was that adding one
+later would not first require unpicking a hundred inline styles. It
+since has been added, and it cost nothing:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self';
+img-src 'self' data:; font-src 'self'; connect-src 'self';
+object-src 'none'; base-uri 'none'; form-action 'self';
+frame-ancestors 'none'
+```
+
+Three things had to move for it: the layout's inline `<script>` and the
+library picker's `onchange` both went into `static/ui.js`, the UI's only
+script, and htmx was told not to inject its indicator stylesheet
+(`includeIndicatorStyles: false` via a `<meta name="htmx-config">`,
+with those rules moved into `style.css`). The reader keeps its own,
+stricter, per-response nonce policy, which it sets after this one and
+therefore replaces.
+
+The policy matters because everything this UI renders about a book —
+title, author, series, description — arrived inside somebody's EPUB,
+and the description is HTML. The sanitizer is what removes the
+dangerous parts of it; the policy is what makes a mistake in the
+sanitizer survivable. `TestTemplatesStayPolicyClean` fails the build if
+a template reintroduces a style attribute, an `on*=` handler, or an
+un-nonced inline script, because each of those works perfectly in
+development and breaks silently in production.
 
 **The reader is out of scope.** Its chrome is deliberately excluded.
 It has an open rendering problem, and mixing a layout rewrite into a
