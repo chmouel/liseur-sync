@@ -112,7 +112,16 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/",
-		http.FileServerFS(staticContent())))
+		// The files are embedded, so they carry no modification time
+		// and the response has no validator a browser could ask about
+		// — left alone, a browser that cached yesterday's reader keeps
+		// running it against today's binary with no error anywhere.
+		// no-cache means revalidate, which without a validator means
+		// fetch: correct beats cached for a LAN-sized server.
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			http.FileServerFS(staticContent()).ServeHTTP(w, r)
+		})))
 
 	// /ui normalizes to /ui/ so the dashboard shares the /ui/ base
 	// directory with the other top-level pages and relative links

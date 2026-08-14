@@ -146,8 +146,10 @@ const probe = `(() => {
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
     pageTitle: document.title,
     fontSize: body ? doc.defaultView.getComputedStyle(body).fontSize : '',
-    wrapMaxWidth: body && body.firstElementChild
-      ? doc.defaultView.getComputedStyle(body.firstElementChild).maxWidth : '',
+    wrapWidth: body && body.firstElementChild
+      ? doc.defaultView.getComputedStyle(body.firstElementChild).width : '',
+    wrapMaxWidth: body && body.firstElementChild && body.firstElementChild.firstElementChild
+      ? doc.defaultView.getComputedStyle(body.firstElementChild.firstElementChild).maxWidth : '',
   });
 })()`;
 
@@ -276,12 +278,13 @@ check('the publication could not reach the parent page',
 
 // The font-size slider at full stretch has to mean it: the chapter's
 // type is really 250% of the 16px default, and the publication's own
-// width cap — a wrapper div's max-width, which would otherwise keep
-// the old, short lines pinned to the left of a much wider column — is
-// lifted, so the bigger type gets the page. Both were user reports
-// before they were checks.
+// width caps — a wrapper's width and a nested wrapper's max-width,
+// which would otherwise keep the old, short lines pinned to the left
+// of a much wider column — are lifted, so the bigger type gets the
+// page. All of these were user reports before they were checks.
 check('a book that caps its own width starts capped',
-  hostile.wrapMaxWidth === '480px', hostile.wrapMaxWidth);
+  hostile.wrapMaxWidth === '480px' && hostile.wrapWidth === '480px',
+  `max-width ${hostile.wrapMaxWidth}, width ${hostile.wrapWidth}`);
 await evalIn(`(() => {
   const slider = document.querySelector('#reader-settings-form input[name="size"]');
   slider.value = '250';
@@ -291,8 +294,9 @@ await new Promise((r) => setTimeout(r, 900));
 const sized = JSON.parse(await evalIn(probe));
 check('the font-size slider actually sizes the type',
   sized.fontSize === '40px', sized.fontSize);
-check("the slider lifts the publication's own width cap",
-  sized.wrapMaxWidth === 'none', sized.wrapMaxWidth);
+check("the slider lifts the publication's own width caps",
+  sized.wrapMaxWidth === 'none' && sized.wrapWidth !== '480px',
+  `max-width ${sized.wrapMaxWidth}, width ${sized.wrapWidth}`);
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.

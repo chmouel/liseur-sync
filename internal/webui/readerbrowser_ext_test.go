@@ -94,21 +94,21 @@ func browserTestEPUB(t *testing.T) []byte {
 		// not be able to. Each one marks what it would have done — ran at
 		// all, ran from an SVG island, ran a same-origin file, reached
 		// the parent page — and the browser check asserts every mark is
-		// absent. The wrapper div's max-width is a different publisher
-		// habit: a book that caps its own measure through a top-level
-		// wrapper (the engine already lifts caps on the body itself)
-		// must lose that cap when the reader's font-size slider moves,
-		// or a bigger type arrives as blank page instead of longer
-		// lines.
+		// absent. The wrapper divs' width and max-width are a different
+		// publisher habit: a book that caps its own measure through
+		// wrappers (the engine already lifts caps on the body itself,
+		// but nowhere deeper, and never lifts width) must lose those
+		// caps when the reader's font-size slider moves, or a bigger
+		// type arrives as blank page instead of longer lines.
 		"OEBPS/chapter1.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<head><link rel="stylesheet" href="style.css"/>` +
 			`<script>document.documentElement.dataset.publicationRan = "yes";` +
 			`try { parent.document.title = "pwned"; } catch (e) {}</script>` +
 			`<script src="/ui/static/htmx.min.js"></script>` +
-			`</head><body><div style="max-width: 30em">` + offscreen +
+			`</head><body><div style="width: 30em"><div style="max-width: 30em">` + offscreen +
 			`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">` +
 			`<script>document.documentElement.dataset.svgRan = "yes";</script></svg>` +
-			body + `</div></body></html>`,
+			body + `</div></div></body></html>`,
 	}
 	manifest := `<item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
     <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>`
