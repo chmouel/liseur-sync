@@ -232,9 +232,7 @@ func (s *Store) ListBooksInReview(
 // what the server was configured to sweep, not what the caller can see.
 func (s *Store) ListScannableLibraries(ctx context.Context) ([]store.Library, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, owner_user_id, quota_user_id, source, storage, refresh,
-		        refresh_interval_seconds, name, root_path,
-		        config_json, created_at, updated_at
+		`SELECT `+plainLibraryColumns+`
 		 FROM libraries
 		 WHERE source <> 'managed' AND root_path IS NOT NULL AND root_path <> ''
 		 ORDER BY created_at, id`)
@@ -244,20 +242,8 @@ func (s *Store) ListScannableLibraries(ctx context.Context) ([]store.Library, er
 	defer rows.Close()
 	var out []store.Library
 	for rows.Next() {
-		var lib store.Library
-		var created, updated string
-		var refreshSeconds int64
-		if err := rows.Scan(&lib.ID, &lib.OwnerUserID, &lib.QuotaUserID,
-			&lib.Source, &lib.Storage, &lib.Refresh, &refreshSeconds,
-			&lib.Name, &lib.RootPath, &lib.ConfigJSON,
-			&created, &updated); err != nil {
-			return nil, err
-		}
-		lib.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
-		if lib.CreatedAt, err = parseTime(created); err != nil {
-			return nil, err
-		}
-		if lib.UpdatedAt, err = parseTime(updated); err != nil {
+		lib, err := scanPlainLibrary(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, lib)

@@ -117,6 +117,41 @@ func TestAdminLibrariesPage(t *testing.T) {
 		t.Fatal("clearing the layout left it configured")
 	}
 
+	// "Refresh now" queues a refresh rather than performing one, and a
+	// managed library — which has no source — is told so instead.
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/lib-bob/refresh", url.Values{
+		"csrf": {csrf},
+	})
+	if !strings.Contains(body, "Queued a refresh of Bobs shelf") {
+		t.Fatalf("refresh now: %s", body)
+	}
+	lib, _ = st.AdminLibraryByID(ctx, "lib-bob")
+	if lib.RefreshRequestedAt == nil {
+		t.Fatal("the button recorded no request on the library")
+	}
+	if !strings.Contains(body, "A refresh is queued") {
+		t.Fatalf("the page does not say a refresh is queued:\n%s", body)
+	}
+	managed, err := st.ListLibraries(ctx, bob.ID, store.LibraryRoleManage)
+	if err != nil || len(managed) == 0 {
+		t.Fatalf("list bob's libraries: %v", err)
+	}
+	var managedID string
+	for _, l := range managed {
+		if l.Library.Source == store.LibraryManaged {
+			managedID = l.Library.ID
+		}
+	}
+	if managedID == "" {
+		t.Fatal("the managed library created above was not found")
+	}
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/"+managedID+"/refresh", url.Values{
+		"csrf": {csrf},
+	})
+	if !strings.Contains(body, "no source to refresh from") {
+		t.Fatalf("refreshing a managed library: %s", body)
+	}
+
 	// A mutation with no CSRF token is refused before anything else.
 	if code, _ := postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
 		"owner": {"bob"}, "name": {"Nope"},

@@ -14,7 +14,8 @@ import (
 
 func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, error) {
 	var out store.AccessibleLibrary
-	var root sql.NullString
+	var root, refreshError sql.NullString
+	var lastRefresh, lastAttempt, requested sql.NullString
 	var created, updated string
 	var refreshSeconds int64
 	err := row.Scan(
@@ -30,6 +31,10 @@ func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, 
 		&out.Library.ConfigJSON,
 		&created,
 		&updated,
+		&lastRefresh,
+		&lastAttempt,
+		&refreshError,
+		&requested,
 		&out.Role,
 	)
 	if err != nil {
@@ -38,11 +43,23 @@ func scanLibrary(row interface{ Scan(...any) error }) (store.AccessibleLibrary, 
 	if root.Valid {
 		out.Library.RootPath = &root.String
 	}
+	if refreshError.Valid {
+		out.Library.LastRefreshError = &refreshError.String
+	}
 	out.Library.RefreshInterval = store.RefreshIntervalFrom(refreshSeconds)
 	if out.Library.CreatedAt, err = parseTime(created); err != nil {
 		return out, err
 	}
-	out.Library.UpdatedAt, err = parseTime(updated)
+	if out.Library.UpdatedAt, err = parseTime(updated); err != nil {
+		return out, err
+	}
+	if out.Library.LastRefreshAt, err = parseTimePtr(lastRefresh); err != nil {
+		return out, err
+	}
+	if out.Library.LastRefreshAttemptAt, err = parseTimePtr(lastAttempt); err != nil {
+		return out, err
+	}
+	out.Library.RefreshRequestedAt, err = parseTimePtr(requested)
 	return out, err
 }
 
@@ -130,6 +147,8 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 const libraryColumns = `l.id, l.owner_user_id, l.quota_user_id,
 	l.source, l.storage, l.refresh, l.refresh_interval_seconds, l.name,
 	l.root_path, l.config_json, l.created_at, l.updated_at,
+	l.last_refresh_at, l.last_refresh_attempt_at, l.last_refresh_error,
+	l.refresh_requested_at,
 	CASE WHEN l.owner_user_id = ? THEN 'manage' ELSE a.role END`
 
 const bookColumns = `b.id, b.library_id, b.status,

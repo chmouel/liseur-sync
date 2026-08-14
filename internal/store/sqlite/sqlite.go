@@ -36,6 +36,18 @@ func formatTime(t time.Time) string { return t.UTC().Format(timeFormat) }
 // rows written before the padding above still load.
 func parseTime(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano, s) }
 
+// parseTimePtr reads a nullable timestamp column.
+func parseTimePtr(ns sql.NullString) (*time.Time, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	t, err := parseTime(ns.String)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 func formatTimePtr(t *time.Time) sql.NullString {
 	if t == nil {
 		return sql.NullString{}

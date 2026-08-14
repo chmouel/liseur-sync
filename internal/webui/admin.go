@@ -45,7 +45,7 @@ func describeConfig(c config.Config) configFacts {
 	add("Failed upload retention", hours(c.Content.FailureRetentionHours))
 	add("Orphan blob grace", hours(c.Content.OrphanGraceHours))
 	add("Ingest worker interval", seconds(c.Content.IngestWorkerInterval))
-	add("Watched library scan", secondsOr(c.Content.WatchedScanInterval, "never"))
+	add("Library refresh tick", secondsOr(c.Content.RefreshTick, "never"))
 	add("Op log retention", plural(c.Ops.RetentionDays, "day"))
 	add("Op log compaction", onOff(c.Ops.CompactionEnabled))
 	add("kosync adapter", onOff(c.Adapters.Kosync))

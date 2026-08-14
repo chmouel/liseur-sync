@@ -58,6 +58,48 @@ templ adminMaintenanceBody(prefix string, v maintenanceView) {
 		</dl>
 	</section>
 	<section class="card">
+		<h2>Library refresh</h2>
+		if v.Refresh.Sources == 0 {
+			<p class="muted">No library reads a directory on this server.</p>
+		} else {
+			<dl class="facts">
+				<dt>Sources</dt>
+				<dd>{ i2s(v.Refresh.Sources) } <span class="muted">{ "(" + i2s(v.Refresh.Scheduled) + " on a schedule)" }</span></dd>
+				<dt>Server looks every</dt>
+				<dd>{ v.RefreshTick }</dd>
+				<dt>Overdue</dt>
+				<dd>{ i2s(v.Refresh.Overdue) }</dd>
+				<dt>Queued by hand</dt>
+				<dd>{ i2s(v.Refresh.Queued) }</dd>
+				<dt>Last refresh failed</dt>
+				<dd>{ i2s(v.Refresh.Failing) }</dd>
+				<dt>Least recently refreshed</dt>
+				<dd>
+					if v.Refresh.Oldest != "" {
+						{ v.Refresh.Oldest }
+					} else {
+						<span class="muted">—</span>
+					}
+				</dd>
+				<dt>Never refreshed</dt>
+				<dd>{ i2s(v.Refresh.Never) }</dd>
+			</dl>
+			<p class="muted">
+				A library is counted overdue once a whole extra interval has
+				passed without a refresh, so a healthy server reads zero here.
+				Which library it is, and what went wrong, is on
+				<a href={ prefix + "admin/libraries" }>Libraries</a>, next to
+				the button that tries again.
+			</p>
+			if v.Refresh.Truncated {
+				<p class="muted">
+					More libraries than this page counts; these figures cover
+					the first { i2s(refreshHealthPage * refreshHealthPages) }.
+				</p>
+			}
+		}
+	</section>
+	<section class="card">
 		<h2>Stored files</h2>
 		<dl class="facts">
 			<dt>Blobs</dt>

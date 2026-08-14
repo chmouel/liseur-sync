@@ -882,5 +882,19 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18,
+	migration18, migration19,
 }
+
+// migration19 is the PostgreSQL half of the refresh history. See the
+// SQLite migration for what each column is for.
+const migration19 = `
+ALTER TABLE libraries
+    ADD COLUMN last_refresh_at TIMESTAMPTZ,
+    ADD COLUMN last_refresh_attempt_at TIMESTAMPTZ,
+    ADD COLUMN last_refresh_error TEXT,
+    ADD COLUMN refresh_requested_at TIMESTAMPTZ;
+
+CREATE INDEX libraries_refresh_requested
+    ON libraries(refresh_requested_at)
+    WHERE refresh_requested_at IS NOT NULL;
+`
