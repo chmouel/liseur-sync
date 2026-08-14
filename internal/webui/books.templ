@@ -25,6 +25,7 @@ type BookRow struct {
 // UploadRow is one upload that has not become a book: still working, or
 // stopped for a reason the person who uploaded it deserves to see.
 type UploadRow struct {
+	Filename string
 	When     string
 	State    string
 	Pending  bool

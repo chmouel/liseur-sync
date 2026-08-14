@@ -882,7 +882,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19, migration20, migration21,
+	migration18, migration19, migration20, migration21, migration22,
 }
 
 // migration19 is the PostgreSQL half of the refresh history. See the
@@ -935,4 +935,9 @@ ALTER TABLE libraries
     ADD COLUMN refresh_lease_until TIMESTAMPTZ,
     ADD COLUMN last_refresh_code TEXT,
     DROP COLUMN last_refresh_error;
+`
+
+const migration22 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN original_filename TEXT NOT NULL DEFAULT '';
 `

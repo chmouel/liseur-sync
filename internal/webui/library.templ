@@ -351,9 +351,16 @@ templ librarianQueues(prefix, csrf string, v LibraryView) {
 		<section class="card">
 			<h2>Uploads in progress</h2>
 			<table>
-				<tr><th>Uploaded</th><th>Status</th></tr>
+				<tr><th>File</th><th>Uploaded</th><th>Status</th></tr>
 				for _, up := range v.Uploads {
 					<tr>
+						<td>
+							if up.Filename != "" {
+								<code>{ up.Filename }</code>
+							} else {
+								<span class="muted">Filename unavailable</span>
+							}
+						</td>
 						<td>{ up.When }</td>
 						if up.Pending {
 							<td class="muted">{ up.State }</td>

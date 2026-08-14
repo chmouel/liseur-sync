@@ -866,6 +866,9 @@ type IngestJob struct {
 	LibraryID   string
 	QuotaUserID string
 	Source      IngestSource
+	// OriginalFilename is the client-provided name for an upload. It is a
+	// label only; it is never used as a filesystem path.
+	OriginalFilename string
 	// Storage is the library's own storage mode, copied onto the job so
 	// that a worker knows without a second read whether there is a
 	// staged artifact to find. An in-place job has none by construction,
@@ -899,6 +902,7 @@ type IngestJobRequest struct {
 	ID                 string
 	LibraryID          string
 	Source             IngestSource
+	OriginalFilename   string
 	ClientKey          *string
 	RequestFingerprint string
 	SourceRelativePath *string
@@ -1482,10 +1486,16 @@ func ValidateIngestJobRequest(request IngestJobRequest) error {
 	}
 	switch request.Source {
 	case IngestUpload:
+		if len(request.OriginalFilename) > 200 {
+			return errors.New("ingest filename is too long")
+		}
 		if request.SourceRelativePath != nil {
 			return errors.New("upload job cannot have a source path")
 		}
 	case IngestScanned:
+		if request.OriginalFilename != "" {
+			return errors.New("scanned job cannot have an upload filename")
+		}
 		if request.SourceRelativePath == nil || *request.SourceRelativePath == "" ||
 			len(*request.SourceRelativePath) > 4096 {
 			return errors.New("watched job requires a source path")

@@ -25,7 +25,7 @@ import (
 // bytes and their cleanup are subtle, and two implementations would
 // diverge.
 type Uploader interface {
-	StageUpload(ctx context.Context, userID, libraryID, key string, body io.Reader) (store.IngestJob, bool, error)
+	StageUpload(ctx context.Context, userID, libraryID, key, filename string, body io.Reader) (store.IngestJob, bool, error)
 }
 
 // Downloader serves a book's bytes for a caller identified some other
@@ -67,8 +67,9 @@ func (s *Server) uploadActivity(
 	rows := make([]UploadRow, 0, len(jobs))
 	for _, job := range jobs {
 		row := UploadRow{
-			When:  job.CreatedAt.In(loc).Format("Jan 2, 2006 15:04"),
-			State: "still being read",
+			Filename: job.OriginalFilename,
+			When:     job.CreatedAt.In(loc).Format("Jan 2, 2006 15:04"),
+			State:    "still being read",
 		}
 		switch job.State {
 		case store.IngestQuarantined, store.IngestFailed:
@@ -280,7 +281,7 @@ func (s *Server) handleUploadBook(w http.ResponseWriter, r *http.Request, a stor
 			return
 		}
 		if p.FileName() != "" && p.FormName() == "file" {
-			part = &multipartPart{p}
+			part = &multipartPart{ReadCloser: p, filename: p.FileName()}
 			break
 		}
 		value, err := io.ReadAll(io.LimitReader(p, 4<<10))
@@ -310,7 +311,7 @@ func (s *Server) handleUploadBook(w http.ResponseWriter, r *http.Request, a stor
 	// gets two jobs, but the content-addressed store gives them one
 	// blob, and the second job is a no-op once ingest deduplicates it.
 	key := "web-" + uuid.New().String()
-	_, _, err = s.Uploads.StageUpload(r.Context(), u.ID, library, key, part)
+	_, _, err = s.Uploads.StageUpload(r.Context(), u.ID, library, key, part.filename, part)
 	if err != nil {
 		part.Close()
 		s.uploadResult(w, r, library, "", uploadProblem(err))
@@ -323,7 +324,10 @@ func (s *Server) handleUploadBook(w http.ResponseWriter, r *http.Request, a stor
 // multipartPart exists so the reader handed to StageUpload cannot be
 // closed by it: closing a multipart part drains the rest of it, which
 // after a refused upload is the data we declined to read.
-type multipartPart struct{ io.ReadCloser }
+type multipartPart struct {
+	io.ReadCloser
+	filename string
+}
 
 func (s *Server) uploadResult(w http.ResponseWriter, r *http.Request, library, notice, problem string) {
 	q := url.Values{}

@@ -1092,7 +1092,7 @@ var migrations = []string{
 	schema, migration2, migration3, migration4, migration5, migration6,
 	migration7, migration8, migration9, migration10, migration11, migration12,
 	migration13, migration14, migration15, migration16, migration17,
-	migration18, migration19, migration20, migration21,
+	migration18, migration19, migration20, migration21, migration22,
 }
 
 // migration19 records what happened the last time a library's root was
@@ -1237,4 +1237,9 @@ ALTER TABLE libraries ADD COLUMN refresh_lease_owner TEXT;
 ALTER TABLE libraries ADD COLUMN refresh_lease_until TEXT;
 ALTER TABLE libraries ADD COLUMN last_refresh_code TEXT;
 ALTER TABLE libraries DROP COLUMN last_refresh_error;
+`
+
+const migration22 = `
+ALTER TABLE ingest_jobs
+    ADD COLUMN original_filename TEXT NOT NULL DEFAULT '';
 `

@@ -249,10 +249,12 @@ func promotedBook(
 	return resolved.Book
 }
 
-// promotionFilename recovers the name the file was found under. An upload
-// carries no path, and the job id it was staged as is a server detail rather
-// than a name anybody chose, so it stays empty rather than invented.
+// promotionFilename recovers the name the file was found under, or the name
+// the client supplied for an upload. Neither value is used as a path.
 func promotionFilename(job store.IngestJob) string {
+	if job.Source == store.IngestUpload {
+		return job.OriginalFilename
+	}
 	if job.SourceRelativePath == nil || *job.SourceRelativePath == "" {
 		return ""
 	}
