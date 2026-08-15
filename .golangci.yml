@@ -1,0 +1,44 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+
+linters:
+  enable:
+    - copyloopvar
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - predeclared
+    - staticcheck
+    - unconvert
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (github.com/a-h/templ.Component).Render
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Conn).Close
+        - (*os.File).Close
+        - (*os.Root).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (net/http.ResponseWriter).Write
+        - (io.Writer).Write
+        - (*mime/multipart.Part).Close
+        - (*mime/multipart.Writer).Close
+        - (*mime/multipart.Writer).WriteField
+        - (*github.com/jackc/pgx/v5/pgxpool.Pool).Close
+        - (github.com/chmouel/liseur-sync/internal/store.Store).Close
+        - (*github.com/chmouel/liseur-sync/internal/store/sqlite.Store).Close
+        - (*github.com/chmouel/liseur-sync/internal/store/postgres.Store).Close
+        - (*github.com/chmouel/liseur-sync/internal/content.CAS).Close
+        - (*github.com/chmouel/liseur-sync/internal/calibre.Library).Close
+        - golang.org/x/sys/unix.Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln

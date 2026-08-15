@@ -17,6 +17,7 @@ section.
 ```
 go build ./...          # build everything
 go vet ./...            # vet
+golangci-lint run ./... # lint (or `make lint` for all linters including openapi)
 go test -race ./...     # full suite, always run with -race
 go tool templ generate ./internal/webui/    # regenerate after editing .templ files
 ```
