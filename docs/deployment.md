@@ -355,17 +355,31 @@ used yet.
 ## Reading statistics for books nobody has opened yet
 
 A book is joined to a reader's sync work the first time a client resolves
-it, so a freshly imported library reports no reading statistics until each
-book has been opened at least once. To map a whole catalog in one pass:
+it. A sweep that ingests new books now does that join for the library's
+owner as soon as it finishes, so a folder you have just pointed the
+server at appears on the owner's shelf — covers, **Read** and all —
+without anyone asking for it.
+
+Two cases still need asking, and both are on the library's card in the
+admin panel under **Showing up on <owner>'s shelf**:
+
+- Books that match an existing work on title and author alone are counted
+  as `needs-confirmation` and left unmapped — only the reader can say
+  whether two similarly titled books are the same one, and a wrong guess
+  merges two reading histories. Confirm them, then press the button to
+  map the rest.
+- Accounts a library is *shared* with are not mapped automatically. The
+  join is per reader, so doing it for every account on every sweep would
+  cost readers × books to save a click that many of them never need.
+
+The same pass, for one account and all of its libraries:
 
 ```
 liseur-sync admin -config liseur-sync.toml backfill-works alice
 ```
 
-It is safe to re-run and reports what it did. Books that match an existing
-work on title and author alone are counted as `needs-confirmation` and
-left unmapped — only the reader can say whether two similarly titled books
-are the same one, and a wrong guess merges two reading histories.
+It is safe to re-run and reports what it did: books already mapped are
+skipped.
 
 ## Sizing the content disk
 

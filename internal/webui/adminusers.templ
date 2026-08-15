@@ -254,11 +254,12 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 	<section class="card">
 		<h2>Map books to works</h2>
 		<p class="muted">
-			Book-to-work mapping happens the first time a book is opened, so a
-			freshly filled library shows empty statistics until every book has
-			been read once. This maps the lot in one pass. It is safe to run
-			again: books that already map are left alone, and ones that would
-			need a guess are counted rather than guessed at.
+			Books this account can read are joined to its own copy of them
+			as soon as a library is read, so this is here for the ones that
+			could not be joined without a guess, and for accounts a library
+			was shared with rather than owned by. It is safe to run again:
+			books that already map are left alone, and ones that would need
+			a guess are counted rather than guessed at.
 		</p>
 		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/backfill" }>
 			<input type="hidden" name="csrf" value={ csrf }/>

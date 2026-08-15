@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -676,15 +677,22 @@ type WatchedScanReport struct {
 	// Errored counts libraries whose refresh failed for a reason that is
 	// not the root being unreachable. The reason itself is on the
 	// library row, not here.
-	Errored      int
-	Ingested     int
-	Unchanged    int
-	Rehashed     int
-	Review       int
-	Relocated    int
-	Superseded   int
-	MarkedAbsent int
-	Failed       int
+	Errored  int
+	Ingested int
+	// IngestedOwners names the owner of each library whose sweep
+	// ingested at least one book, in the order first seen. A book only
+	// joins a reader's sync work when something maps it, so a library
+	// that just gained books has readers whose shelves cannot show them
+	// yet. The pass reports who that is and lets its caller decide;
+	// mapping is a work-graph write, which is not this package's job.
+	IngestedOwners []string
+	Unchanged      int
+	Rehashed       int
+	Review         int
+	Relocated      int
+	Superseded     int
+	MarkedAbsent   int
+	Failed         int
 	// Skipped counts Calibre libraries whose inventory digest had not
 	// moved, so the refresh stopped at the gate without a catalog write.
 	Skipped int
@@ -700,6 +708,20 @@ type WatchedScanReport struct {
 	// offered without waiting for a restart.
 	FilesUnavailable int
 	FilesRestored    int
+}
+
+// noteIngestedOwner records an owner once. One pass sweeps at most a
+// handful of libraries, so a linear scan beats carrying a set around,
+// and preserving the order keeps a pass's log and its follow-up work
+// deterministic.
+func (r *WatchedScanReport) noteIngestedOwner(userID string) {
+	if userID == "" {
+		return
+	}
+	if slices.Contains(r.IngestedOwners, userID) {
+		return
+	}
+	r.IngestedOwners = append(r.IngestedOwners, userID)
 }
 
 // boolCount counts a flag, so a report can total what happened across
@@ -839,6 +861,9 @@ func refreshDueLibraries(
 				ctx, st, blobs, scanned, opts, clock)
 		}
 		report.Ingested += result.Ingested
+		if result.Ingested > 0 {
+			report.noteIngestedOwner(library.OwnerUserID)
+		}
 		report.Unchanged += result.Unchanged
 		report.Rehashed += result.Rehashed
 		report.Relocated += result.Relocated

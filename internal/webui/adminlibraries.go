@@ -367,6 +367,48 @@ func (s *Server) handleAdminRefreshLibrary(
 	})
 }
 
+// handleAdminJoinLibraryShelf maps the library owner's catalog books to
+// their sync works. The sweep does this on its own for books it has just
+// ingested, so this button is the escape hatch rather than the path: it
+// re-runs after a reader has confirmed the near-matches a sweep is not
+// allowed to guess at, and it covers a library filled before this server
+// mapped anything automatically.
+//
+// It lives here and not only on the Users page because this is where the
+// question is asked. Somebody who has just pointed the server at a
+// folder is looking at the library they made, not at an account.
+//
+// The work is the owner's whole catalog, not this library alone —
+// Backfill is per reader — which is honest enough: a book already mapped
+// is skipped, so the cost is a walk, and the notice counts what moved.
+func (s *Server) handleAdminJoinLibraryShelf(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.runLibraryMutation(w, r, a, u, "backfill-works", func() (string, error) {
+		lib, err := s.St.AdminLibraryByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			return "", err
+		}
+		owner, err := s.St.UserByID(r.Context(), lib.OwnerUserID)
+		if err != nil {
+			return "", err
+		}
+		report, err := admin.BackfillWorks(r.Context(), s.St, owner.ID)
+		if err != nil {
+			return "", err
+		}
+		notice := "Joined " + strconv.Itoa(report.Created+report.Linked) +
+			" of " + strconv.Itoa(report.Books) + " books to " +
+			owner.Name + "'s shelf."
+		if report.Fuzzy > 0 {
+			notice += " " + strconv.Itoa(report.Fuzzy) +
+				" look like books already on the shelf; only " + owner.Name +
+				" can say whether they are the same book, so they were left alone."
+		}
+		return notice, nil
+	})
+}
+
 // createRootLibrary is the folder branch of the add-library form: a
 // library over a directory that already exists on this server — a plain
 // tree or a Calibre library — with ADR-0014's axes behind the form's
