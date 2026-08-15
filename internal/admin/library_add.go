@@ -137,9 +137,16 @@ func CheckLibraryRoot(root string, source store.LibrarySource) error {
 	if source != store.LibraryCalibre {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(root, "metadata.db")); err != nil {
+	metadataDB := filepath.Join(root, "metadata.db")
+	st, err := os.Lstat(metadataDB)
+	if err != nil {
 		return fmt.Errorf(
 			"%q holds no metadata.db, so it is not a Calibre library", root)
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf(
+			"%q has a metadata.db that is not a regular file, so it is not a Calibre library",
+			root)
 	}
 	return nil
 }

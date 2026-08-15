@@ -331,6 +331,22 @@ func TestAddLibraryDefaultsToADirectoryOnAnInterval(t *testing.T) {
 	}
 }
 
+func TestCheckLibraryRootRejectsMetadataDBSymlink(t *testing.T) {
+	// The refresh reader uses Lstat and refuses a symlink before opening
+	// SQLite, so explicit validation must agree.
+	linked := t.TempDir()
+	target := filepath.Join(t.TempDir(), "metadata.db")
+	if err := os.WriteFile(target, []byte("sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(linked, "metadata.db")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckLibraryRoot(linked, store.LibraryCalibre); err == nil {
+		t.Fatal("Calibre root with a metadata.db symlink was accepted")
+	}
+}
+
 func TestAddLibraryReadsItsFlags(t *testing.T) {
 	st := newAdminStore(t)
 	owner := addUser(t, st, "ada")
