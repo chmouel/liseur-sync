@@ -268,6 +268,9 @@ func TestFullSyncFlow(t *testing.T) {
 			"progression": 0.41, "locator": map[string]any{"href": "/text/ch4.xhtml"},
 		}},
 	})
+	if code != 200 {
+		t.Fatalf("duplicate push: %d %v", code, out)
+	}
 	// NB: client_ts differs here (time.Now() called again), which makes
 	// this a payload mismatch -> conflict. That's the correct contract;
 	// for a true retry the client replays the exact same op.

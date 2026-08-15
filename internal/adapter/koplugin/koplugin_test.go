@@ -31,10 +31,10 @@ func testServer(t *testing.T) (*httptest.Server, store.Store, string) {
 		t.Fatal(err)
 	}
 	// Capability credential.
-	ccap, _ := auth.NewSecret()
+	capToken, _ := auth.NewSecret()
 	id, _ := auth.NewSecret()
 	if err := st.CreateKopluginDevice(t.Context(), store.KopluginDevice{
-		ID: id, UserID: u.ID, TokenSHA256: auth.HashSecret(ccap),
+		ID: id, UserID: u.ID, TokenSHA256: auth.HashSecret(capToken),
 		Label: "kobo", DeviceID: "koplugin:kobo", CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
@@ -49,13 +49,13 @@ func testServer(t *testing.T) (*httptest.Server, store.Store, string) {
 	})
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return ts, st, ccap
+	return ts, st, capToken
 }
 
-func upload(t *testing.T, ts *httptest.Server, ccap string, body any) (int, map[string]any) {
+func upload(t *testing.T, ts *httptest.Server, capToken string, body any) (int, map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(body)
-	resp, err := http.Post(ts.URL+"/adapter/koplugin/"+ccap+"/api/plugin/upload",
+	resp, err := http.Post(ts.URL+"/adapter/koplugin/"+capToken+"/api/plugin/upload",
 		"application/json", bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)
@@ -69,19 +69,19 @@ func upload(t *testing.T, ts *httptest.Server, ccap string, body any) (int, map[
 func base() time.Time { return time.Unix(1_754_800_000, 0) }
 
 func TestUploadInsertDuplicateSupersede(t *testing.T) {
-	ts, st, ccap := testServer(t)
+	ts, st, capToken := testServer(t)
 
 	row := map[string]any{
 		"book_md5": "abc123", "page": 42, "total_pages": 300,
 		"start_time": base().Unix(), "duration": 900,
 	}
 	// First upload.
-	code, out := upload(t, ts, ccap, map[string]any{"version": "0.3.0", "rows": []any{row}})
+	code, out := upload(t, ts, capToken, map[string]any{"version": "0.3.0", "rows": []any{row}})
 	if code != 200 || out["inserted"].(float64) != 1 {
 		t.Fatalf("insert: %d %v", code, out)
 	}
 	// Identical re-upload -> duplicate.
-	code, out = upload(t, ts, ccap, map[string]any{"version": "0.3.0", "rows": []any{row}})
+	code, out = upload(t, ts, capToken, map[string]any{"version": "0.3.0", "rows": []any{row}})
 	if code != 200 || out["duplicate"].(float64) != 1 {
 		t.Fatalf("dup: %d %v", code, out)
 	}
@@ -90,13 +90,13 @@ func TestUploadInsertDuplicateSupersede(t *testing.T) {
 		"book_md5": "abc123", "page": 42, "total_pages": 300,
 		"start_time": base().Unix(), "duration": 1200,
 	}
-	code, out = upload(t, ts, ccap, map[string]any{"version": "0.3.0", "rows": []any{row2}})
+	code, out = upload(t, ts, capToken, map[string]any{"version": "0.3.0", "rows": []any{row2}})
 	if code != 200 || out["superseded"].(float64) != 1 {
 		t.Fatalf("supersede: %d %v", code, out)
 	}
 	// Re-upload the ORIGINAL payload again: it is a known session_id but
 	// not current — duplicate (no new revision churn).
-	code, out = upload(t, ts, ccap, map[string]any{"version": "0.3.0", "rows": []any{row}})
+	code, out = upload(t, ts, capToken, map[string]any{"version": "0.3.0", "rows": []any{row}})
 	if code != 200 || out["duplicate"].(float64) != 1 {
 		t.Fatalf("re-upload old payload: %d %v", code, out)
 	}
@@ -126,8 +126,8 @@ func TestUploadInsertDuplicateSupersede(t *testing.T) {
 // TestRejectsLoud: rows the legacy protocol would silently drop are
 // rejected with 422 listing reasons.
 func TestRejectsLoud(t *testing.T) {
-	ts, _, ccap := testServer(t)
-	code, out := upload(t, ts, ccap, map[string]any{"rows": []any{
+	ts, _, capToken := testServer(t)
+	code, out := upload(t, ts, capToken, map[string]any{"rows": []any{
 		map[string]any{"book_md5": "abc", "page": 1, "total_pages": 100, "start_time": base().Unix(), "duration": 0},
 		map[string]any{"book_md5": "abc", "page": 1, "total_pages": 0, "start_time": base().Unix(), "duration": 60},
 		map[string]any{"book_md5": "abc", "page": 200, "total_pages": 100, "start_time": base().Unix(), "duration": 60},

@@ -123,7 +123,7 @@ func ReadCover(
 // directory claims, because that claim is written by whoever built the
 // archive and a lying header is the whole problem.
 func readCoverEntry(
-	ctx context.Context, file *zip.File, max int64,
+	ctx context.Context, file *zip.File, maxBytes int64,
 ) ([]byte, error) {
 	handle, err := file.Open()
 	if err != nil {
@@ -131,14 +131,14 @@ func readCoverEntry(
 	}
 	defer handle.Close()
 	data, err := io.ReadAll(io.LimitReader(
-		contextReader{ctx: ctx, src: handle}, max+1))
+		contextReader{ctx: ctx, src: handle}, maxBytes+1))
 	if err != nil {
 		if errors.Is(err, ctx.Err()) && ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, validationError(CodeInvalidEPUB, err)
 	}
-	if int64(len(data)) > max {
+	if int64(len(data)) > maxBytes {
 		return nil, validationError(CodeArchiveLimits,
 			fmt.Errorf("cover %q exceeds limit", file.Name))
 	}

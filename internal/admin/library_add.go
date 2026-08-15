@@ -31,10 +31,10 @@ type RootLibraryOptions struct {
 var (
 	ErrSourceNotRootBacked = errors.New(
 		"a root-backed library is a directory or a Calibre library")
-	ErrStorageInvalid = errors.New("storage is cas or in-place")
-	ErrRefreshInvalid = errors.New("refresh is manual or on an interval")
+	ErrStorageInvalid   = errors.New("storage is cas or in-place")
+	ErrRefreshInvalid   = errors.New("refresh is manual or on an interval")
 	ErrIntervalTooShort = errors.New(
-		"a refresh interval of less than a minute would sweep the disk "+
+		"a refresh interval of less than a minute would sweep the disk " +
 			"more often than it can finish")
 )
 

@@ -201,7 +201,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 	}
 	// Every admin page is forbidden to an ordinary account, and the
 	// rail does not advertise the section in the first place.
-	code, body = page(t, ts, cookie, "/ui")
+	_, body = page(t, ts, cookie, "/ui")
 	if strings.Contains(body, `>Admin<`) {
 		t.Fatal("rail offers Admin to a non-admin")
 	}

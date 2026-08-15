@@ -94,7 +94,7 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
 		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
 		"source": {"directory"}, "storage": {"in-place"},
-		"refresh": {"30m"},
+		"refresh":        {"30m"},
 		"admin_password": {"hunter2hunter"},
 	})
 	if !strings.Contains(body, "Added Shelf for bob as a folder of books") {
@@ -137,7 +137,7 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	}
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
 		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Calibre"}, "root": {calibre},
-		"refresh": {"manual"},
+		"refresh":        {"manual"},
 		"admin_password": {"hunter2hunter"},
 	})
 	if !strings.Contains(body, "Added Calibre for bob as a Calibre library") {
@@ -172,7 +172,7 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	}
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
 		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Flat"}, "root": {mixed},
-		"source": {"directory"},
+		"source":         {"directory"},
 		"admin_password": {"hunter2hunter"},
 	})
 	if !strings.Contains(body, "Added Flat for bob as a folder of books") {

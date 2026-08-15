@@ -419,12 +419,12 @@ func (s *Store) CreateFirstAdmin(ctx context.Context, u store.User) error {
 	if err := lockAdminRole(ctx, tx); err != nil {
 		return err
 	}
-	var any int
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users)`).Scan(&any)
+	var exists int
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users)`).Scan(&exists)
 	if err != nil {
 		return err
 	}
-	if any != 0 {
+	if exists != 0 {
 		return store.ErrConflict
 	}
 	_, err = tx.ExecContext(ctx,
