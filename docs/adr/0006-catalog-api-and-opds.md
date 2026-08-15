@@ -4,6 +4,9 @@
 - **Date:** 2026-08-12
 - **Depends on:** [ADR-0003](0003-catalog-work-identity.md),
   [ADR-0004](0004-metadata-and-categorization.md)
+- **Amended by:** [ADR-0015](0015-catalog-payloads-for-clients.md) (the book
+  payload), [ADR-0016](0016-token-self-introspection.md) (a token reading its
+  own scopes)
 
 ## Context
 
@@ -69,7 +72,8 @@ List endpoints use stable cursor pagination. Responses can include the
 current user's optional `work_id`, position, completion, or reading-state
 fields only when the token also has `sync`, and never include another user's
 mapping. Aggregated statistics additionally require `read-insights`.
-`library-read` by itself returns catalog metadata only.
+`library-read` by itself returns catalog metadata only. What a book payload
+contains is [ADR-0015](0015-catalog-payloads-for-clients.md).
 
 OPDS feeds are always catalog-only. They suppress work mappings, positions,
 completion, reading-state filters, and statistics even when the Basic token

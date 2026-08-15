@@ -3,7 +3,9 @@
 - **Status:** Proposed
 - **Date:** 2026-08-12
 - **Target repository:** `../liseur-desktop`
-- **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md)
+- **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md),
+  [ADR-0015](0015-catalog-payloads-for-clients.md),
+  [ADR-0016](0016-token-self-introspection.md)
 
 ## Context
 
@@ -29,6 +31,9 @@ Do not create renderer networking or a parallel catalog subsystem.
   device ID, secret, and server-side retry identity. Do not replace an active
   sync token merely to add catalog capability.
 - Retain compatibility with servers that return legacy singleton `scope`.
+- Read the token's own scopes through
+  [ADR-0016](0016-token-self-introspection.md) rather than inferring them
+  from failed requests, so a pasted token shows the right features.
 - Keep secrets only in Electron `safeStorage`; the worker receives headers in
   memory as it does today.
 - Generate and persist a random per-installation device key in the protected
@@ -78,7 +83,10 @@ renderer.
 - For users currently using liseur-sync only for positions, upgrade the same
   connection to catalog capability after feature detection and explicit user
   confirmation.
-- Match already-downloaded local EPUBs by SHA-256 and work identifiers.
+- Match already-downloaded local EPUBs by SHA-256 and work identifiers. The
+  digest comes from the catalog listing under
+  [ADR-0015](0015-catalog-payloads-for-clients.md); matching must not walk
+  the catalog one detail request per book.
 - Keep sync queue, conflicts, annotations, and reading sessions intact.
 
 ## Repository updates
