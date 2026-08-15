@@ -3,7 +3,9 @@
 - **Status:** Proposed
 - **Date:** 2026-08-12
 - **Target repository:** `../liseur`
-- **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md)
+- **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md),
+  [ADR-0015](0015-catalog-payloads-for-clients.md),
+  [ADR-0016](0016-token-self-introspection.md)
 
 ## Context
 
@@ -27,7 +29,9 @@ contracts, not as conditionals in screens or workers.
   `liseur-sync:<book_id>`
   remote URL prefix and Room migration.
 - Implement `LiseurSyncCatalogClient`, `LiseurSyncFileSource`, and setup
-  capability detection under `data/liseursync/`.
+  capability detection under `data/liseursync/`. Capability detection reads
+  the token's own scopes through
+  [ADR-0016](0016-token-self-introspection.md) instead of probing routes.
 - Add a catalog-account `PositionSync` entry to `RemoteRouter.positions`.
   Its cursor, credentials, and work mappings are tied to the catalog account,
   not the singleton optional `SyncAccount`.
@@ -57,6 +61,9 @@ deduplicates the peer instead of pushing and pulling twice.
 - Store both `book_id` and resolved `work_id`; use `book_id` for catalog
   identity and `work_id` only for sync.
 - Show library/series/contributor/tag filters as provider capabilities permit.
+- Render authors, series and file sizes from the catalog page itself
+  ([ADR-0015](0015-catalog-payloads-for-clients.md)); a shelf must never cost
+  one request per book.
 
 OPDS is a compatibility fallback and diagnostic path, not the primary Android
 integration; the native API exposes richer metadata and identity.
@@ -74,8 +81,9 @@ integration; the native API exposes richer metadata and identity.
 
 - Offer a guided path from a Komga/calibre catalog to liseur-sync; never
   silently change the connected server.
-- Match local books to the new catalog by SHA-256, source aliases where
-  available, then low-confidence title/author confirmation.
+- Match local books to the new catalog by the content SHA-256 carried in the
+  catalog listing ([ADR-0015](0015-catalog-payloads-for-clients.md)), source
+  aliases where available, then low-confidence title/author confirmation.
 - Keep downloaded files and all reading data during account changes.
 - Explain the difference between catalog access and optional independent
   sync peers when both are configured.

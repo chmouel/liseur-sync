@@ -172,9 +172,14 @@ new decision, which means a new ADR rather than an item here.
 
 The client work in [ADR-0008](0008-liseur-android-client.md) and
 [ADR-0009](0009-liseur-desktop-client.md) is independent of all of the
-above: it depends only on the MVP API surface, which is now stable and
+above: it depends only on the MVP API surface, which is stable and
 includes `POST /v1/books/{id}/resolve`, the route a downloaded book needs
-before it can sync.
+before it can sync. Building against it found two things missing from
+that surface, in this order:
+[ADR-0015](0015-catalog-payloads-for-clients.md), because without it a
+shelf costs one request per book, and then
+[ADR-0016](0016-token-self-introspection.md), because a pasted token
+cannot otherwise tell a client what it may do.
 
 ## Consequences
 
