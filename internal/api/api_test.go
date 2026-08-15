@@ -463,6 +463,15 @@ func TestScopeEnforcement(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("read-insights summary: want 200, got %d", code)
 	}
+	// Both describe themselves. GET /v1/token is the one route that
+	// requires no scope, so the tokens refused each other's routes above
+	// are both allowed here — that is the point of it (ADR-0016).
+	for name, secret := range map[string]string{"sync": syncSecret, "read-insights": roSecret} {
+		code, out := get(t, ts.URL+"/v1/token", secret)
+		if code != 200 || out["scope"] != name {
+			t.Fatalf("%s self-read: %d %v", name, code, out)
+		}
+	}
 }
 
 func TestSessionsAndInsights(t *testing.T) {

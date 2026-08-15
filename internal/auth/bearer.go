@@ -54,6 +54,20 @@ func RequireAllScopes(svc *Service, scopes []store.Scope, next http.Handler) htt
 	})
 }
 
+// RequireToken authenticates the bearer and requires no scope at all.
+//
+// It exists for the one route whose subject is the credential itself
+// (ADR-0016): a token asking what it is learns nothing it did not
+// already possess, because it is holding the credential. Requiring a
+// scope here would mean the narrowest tokens — the ones whose limits
+// most need discovering — are the ones that cannot ask.
+//
+// This is not an open route. It authenticates like every other route;
+// it simply has no capability to check afterwards.
+func RequireToken(svc *Service, next http.Handler) http.Handler {
+	return RequireAllScopes(svc, nil, next)
+}
+
 func scopeAllowed(have store.ScopeSet, want []store.Scope) bool {
 	for _, scope := range want {
 		if !have.Allows(scope) {

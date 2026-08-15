@@ -1,6 +1,6 @@
 # ADR-0016: Token self-introspection
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-15
 - **Depends on:** [ADR-0006](0006-catalog-api-and-opds.md)
 
@@ -55,6 +55,15 @@ untouched — expansion still requires a fresh login credential through
 `PATCH /v1/tokens/{id}`. Introspection tells a client where the wall is; it
 does not move it.
 
+The one thing a call does write is the token's `last_used` timestamp, which
+every bearer route already writes on every authenticated request: it is a
+property of authenticating, not of this route. The rule is that nothing about
+the credential's *authority* changes — scopes, device binding, expiry,
+revocation and the secret itself are all exactly as they were. Access
+bookkeeping moving is what makes a "last seen" column in the devices page
+honest, and suppressing it here would make this route the one way to use a
+credential without leaving a trace.
+
 ### It is not for OPDS
 
 OPDS clients authenticate with HTTP Basic and have no use for this route.
@@ -88,7 +97,11 @@ provided the tests pin the fact that it never reveals a second token.
 - The response never contains a token secret, a secret hash, or any token
   other than the caller's.
 - A revoked or expired token gets 401, and an absent token gets 401.
-- The route appears in the scope matrix test in `internal/api` and is not in
-  the open-route set that the open-route regression test guards.
-- No mutation is possible through it, and a bearer still cannot change its
-  own scopes.
+- The route appears in `TestScopeEnforcement` in `internal/api`, which is
+  this repository's scope matrix, asserting that both a `sync`-only and a
+  `read-insights`-only token can read it where each is refused the other's
+  routes. It is not in the open-route set.
+- No credential authority changes through it — not scopes, device binding,
+  expiry, revocation or the secret — and a bearer still cannot change its own
+  scopes. The `last_used` timestamp that authenticating writes on every
+  bearer route is not authority.
