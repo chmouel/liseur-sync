@@ -146,6 +146,13 @@ type WatchedSyncReport struct {
 	// previous sweep had already queued and that have not been promoted
 	// yet — those re-enter their existing job rather than creating one.
 	Ingested int
+	// Refused counts paths that have no catalog file and a job that has
+	// already settled — in practice a file the server read once and would
+	// not publish, such as an EPUB that fails structural validation. The
+	// sweep meets them again on every pass and must not mistake them for
+	// arrivals: they are the reason a library can be short a book with
+	// nothing going wrong.
+	Refused int
 	// Unchanged counts paths whose recorded snapshot still describes what
 	// is on disk, which on a steady-state library is all of them.
 	Unchanged int
@@ -367,9 +374,9 @@ func reconcileWatchedFile(
 
 	switch len(known) {
 	case 0:
-		if err := ingestDiscoveredFile(
-			ctx, st, blobs, root, library, file, opts, clock,
-		); err != nil {
+		outcome, err := ingestDiscoveredFile(
+			ctx, st, blobs, root, library, file, opts, clock)
+		if err != nil {
 			if isRetryableWatchedFailure(err) {
 				report.Failed++
 				report.Scan.Complete = false
@@ -377,7 +384,13 @@ func reconcileWatchedFile(
 			}
 			return err
 		}
-		report.Ingested++
+		switch outcome {
+		case ingestQueued:
+			report.Ingested++
+		case ingestRefused:
+			report.Refused++
+		case ingestPending:
+		}
 		return nil
 	case 1:
 	default:
@@ -452,6 +465,37 @@ func watchedFileUnchanged(existing store.WatchedFile, file ScannedFile) bool {
 
 // ingestDiscoveredFile publishes one newly discovered path, by whichever
 // route its library's storage mode calls for.
+// ingestOutcome says what one attempt at a discovered path did. The
+// distinction matters because a sweep meets every path again on every
+// pass: without it, a file the server has already refused counts as an
+// arrival forever, and a library that has settled never stops reporting
+// that something happened.
+type ingestOutcome int
+
+const (
+	// ingestQueued: this pass read the file and started publishing it.
+	ingestQueued ingestOutcome = iota
+	// ingestPending: an earlier pass queued it and the workers have not
+	// finished. The pass that queued it already counted it.
+	ingestPending
+	// ingestRefused: the server read this file and will not publish it —
+	// an EPUB that fails structural validation, say. Reading it again
+	// could only reach the same answer.
+	ingestRefused
+)
+
+// outcomeOfSettledJob reads an existing job that this pass must not
+// touch. Quarantine and failure are the server's final word on a file;
+// anything else is work in progress.
+func outcomeOfSettledJob(state store.IngestState) ingestOutcome {
+	if state == store.IngestQuarantined || state == store.IngestFailed {
+		return ingestRefused
+	}
+	return ingestPending
+}
+
+// ingestDiscoveredFile publishes one discovered path and says what it
+// did.
 func ingestDiscoveredFile(
 	ctx context.Context,
 	st watchedStore,
@@ -461,7 +505,7 @@ func ingestDiscoveredFile(
 	file ScannedFile,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
-) error {
+) (ingestOutcome, error) {
 	if library.Storage == store.LibraryStorageInPlace {
 		return ingestInPlaceFile(ctx, st, root, library, file, opts, clock)
 	}
@@ -482,7 +526,7 @@ func ingestWatchedFile(
 	file ScannedFile,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
-) error {
+) (ingestOutcome, error) {
 	relativePath := file.RelativePath
 	jobID := watchedJobID(library.ID, file)
 	now := clock().UTC()
@@ -496,25 +540,27 @@ func ingestWatchedFile(
 			CreatedAt:          now,
 		})
 	if err != nil {
-		return fmt.Errorf("queue watched path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf(
+			"queue watched path %q: %w", relativePath, err)
 	}
 	// A job that already carries its bytes is one an earlier sweep staged
 	// and the workers have not finished with. Re-reading the source would
 	// either discard what was already committed or contradict a digest the
 	// database has, so it is left to finish.
 	if !created && job.State != store.IngestReceived {
-		return nil
+		return outcomeOfSettledJob(job.State), nil
 	}
 
 	src, err := openWatchedSource(root, relativePath)
 	if err != nil {
-		return err
+		return ingestPending, err
 	}
 	defer src.Close()
 
 	staged, err := blobs.Stage(ctx, job.ID, src, opts.MaxFileBytes)
 	if err != nil {
-		return fmt.Errorf("stage watched path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf(
+			"stage watched path %q: %w", relativePath, err)
 	}
 	if _, err := st.CommitIngestStage(ctx, library.ActorUserID, job.ID,
 		store.CommitIngestStageRequest{
@@ -530,9 +576,10 @@ func ingestWatchedFile(
 		// sweep that created it drops it rather than leaving a library
 		// over quota able to fill the disk one scan at a time.
 		_ = blobs.RemoveStage(ctx, staged.Path)
-		return fmt.Errorf("commit watched path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf(
+			"commit watched path %q: %w", relativePath, err)
 	}
-	return nil
+	return ingestQueued, nil
 }
 
 // openWatchedSource opens one publication read-only, relative to the root's
@@ -679,6 +726,9 @@ type WatchedScanReport struct {
 	// library row, not here.
 	Errored  int
 	Ingested int
+	// Refused counts paths the sweep met again that it had already
+	// refused to publish. See WatchedSyncReport.Refused.
+	Refused int
 	// IngestedOwners names the owner of each library whose sweep
 	// ingested at least one book, in the order first seen. A book only
 	// joins a reader's sync work when something maps it, so a library
@@ -861,6 +911,7 @@ func refreshDueLibraries(
 				ctx, st, blobs, scanned, opts, clock)
 		}
 		report.Ingested += result.Ingested
+		report.Refused += result.Refused
 		if result.Ingested > 0 {
 			report.noteIngestedOwner(library.OwnerUserID)
 		}

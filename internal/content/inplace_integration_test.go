@@ -216,8 +216,9 @@ func TestInPlaceSweepQuarantinesAnUnreadableFile(t *testing.T) {
 	f.write("broken.epub", []byte("this is not a zip archive"))
 
 	report := f.sync()
-	if report.Ingested != 1 {
-		t.Fatalf("report %+v, want the path accounted for", report)
+	if report.Ingested != 0 || report.Refused != 1 {
+		t.Fatalf("report %+v, want the path counted as refused, not ingested",
+			report)
 	}
 	if books := f.books(); len(books) != 0 {
 		t.Fatalf("catalog holds %d books, want none", len(books))
