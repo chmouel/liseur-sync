@@ -14,7 +14,7 @@ import (
 // it's redeemed atomically single-use.
 func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Invite  string `json:"invite"`
+		Invite   string `json:"invite"`
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Timezone string `json:"timezone,omitempty"`

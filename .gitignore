@@ -1,3 +1,4 @@
 *_templ.go
 liseur-sync.db*
 .env
+/bin/liseur-sync

@@ -218,7 +218,6 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	}
 	// Editions are unique per (user, sha256); on collision keep the
 	// target's edition row but point the records at the shared edition.
-	type ed struct{ sha string }
 	rows, err := tx.QueryContext(ctx,
 		`SELECT sha256 FROM editions WHERE user_id = ? AND work_id = ?`, userID, fromWorkID)
 	if err != nil {

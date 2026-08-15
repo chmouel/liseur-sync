@@ -113,10 +113,10 @@ func (s *Server) HandleChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	if page.ResyncNeeded {
 		writeJSON(w, http.StatusGone, map[string]any{
-			"error":           "resync_required",
-			"high_water":      page.HighWater,
-			"heads_endpoint":  "/v1/heads",
-			"message":         "since is below the compaction horizon; fetch /v1/heads and resume from high_water",
+			"error":          "resync_required",
+			"high_water":     page.HighWater,
+			"heads_endpoint": "/v1/heads",
+			"message":        "since is below the compaction horizon; fetch /v1/heads and resume from high_water",
 		})
 		return
 	}

@@ -25,11 +25,11 @@ import (
 
 // Server is the kosync adapter.
 type Server struct {
-	St           store.Store
-	OpenReg      bool // open_registration config
-	PairingTTL   time.Duration
-	AuthRateLim  *auth.RateLimiter
-	PairingUser  func(r *http.Request) string // reserved for future web pairing
+	St          store.Store
+	OpenReg     bool // open_registration config
+	PairingTTL  time.Duration
+	AuthRateLim *auth.RateLimiter
+	PairingUser func(r *http.Request) string // reserved for future web pairing
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -145,10 +145,10 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := store.KosyncDevice{
-		UserID:    p.UserID,
+		UserID:     p.UserID,
 		DeviceSlot: req.Username, // kosync "username" names the device slot
-		KeySHA256: auth.HashSecret(md5hex(req.Password)),
-		Label:     "kosync:" + req.Username,
+		KeySHA256:  auth.HashSecret(md5hex(req.Password)),
+		Label:      "kosync:" + req.Username,
 	}
 	if err := s.St.CreateKosyncDevice(ctx, d); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "device slot already paired"})
