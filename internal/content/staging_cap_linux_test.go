@@ -90,8 +90,8 @@ func TestStagingCapReservesTheWorstCase(t *testing.T) {
 // they all take it.
 func TestStagingCapHoldsAcrossConcurrentUploads(t *testing.T) {
 	cas := openTestCAS(t)
-	const cap, each = 1000, 400
-	cas.SetStagingCap(cap)
+	const maxCap, each = 1000, 400
+	cas.SetStagingCap(maxCap)
 
 	var wg sync.WaitGroup
 	results := make([]error, 8)
@@ -126,8 +126,8 @@ func TestStagingCapHoldsAcrossConcurrentUploads(t *testing.T) {
 	}
 	// Whatever got through must fit: that is the whole guarantee.
 	used := incomingSize(t, cas)
-	if used > cap {
-		t.Fatalf("staged %d bytes over a cap of %d", used, cap)
+	if used > maxCap {
+		t.Fatalf("staged %d bytes over a cap of %d", used, maxCap)
 	}
 }
 

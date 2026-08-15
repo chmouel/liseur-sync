@@ -34,8 +34,6 @@ type resolveResponse struct {
 	Created    bool   `json:"created"`
 }
 
-var aliasOrder = workident.AliasOrder
-
 // HandleResolve implements POST /v1/works/resolve. One store transaction
 // checks that all matching aliases agree, creates the work when none match,
 // and promotes missing aliases only for a high-confidence or confirmed hit.

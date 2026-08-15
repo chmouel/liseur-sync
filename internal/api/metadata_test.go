@@ -32,7 +32,7 @@ func (f *uploadFixture) send(
 	}
 	defer resp.Body.Close()
 	out := map[string]any{}
-	json.NewDecoder(resp.Body).Decode(&out)
+	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp, out
 }
 
@@ -103,7 +103,9 @@ func TestMetadataEditLocksTheFieldAgainstLaterExtraction(t *testing.T) {
 		t.Fatalf("book: %d", resp.StatusCode)
 	}
 	book := map[string]any{}
-	json.Unmarshal(raw, &book)
+	if err := json.Unmarshal(raw, &book); err != nil {
+		t.Fatal(err)
+	}
 	if book["title"] != "Dune" {
 		t.Fatalf("catalog title after edit: %v", book["title"])
 	}
@@ -198,7 +200,9 @@ func TestEntityRoutesListRenameAndMerge(t *testing.T) {
 		t.Fatalf("entities: %d %s", resp.StatusCode, raw)
 	}
 	page := map[string]any{}
-	json.Unmarshal(raw, &page)
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatal(err)
+	}
 	entities, _ := page["entities"].([]any)
 	if len(entities) != 2 {
 		t.Fatalf("entities: %v", page)
@@ -234,15 +238,22 @@ func TestEntityRoutesListRenameAndMerge(t *testing.T) {
 		t.Fatalf("entity books: %d %s", resp.StatusCode, raw)
 	}
 	page = map[string]any{}
-	json.Unmarshal(raw, &page)
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatal(err)
+	}
 	if books, _ := page["books"].([]any); len(books) != 2 {
 		t.Fatalf("books after merge: %v", page)
 	}
 
 	// The losing entity is gone, not merely emptied.
 	resp, raw = f.get(t, base, manage)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("entities: %d %s", resp.StatusCode, raw)
+	}
 	page = map[string]any{}
-	json.Unmarshal(raw, &page)
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatal(err)
+	}
 	if entities, _ := page["entities"].([]any); len(entities) != 1 {
 		t.Fatalf("entities after merge: %s", raw)
 	}

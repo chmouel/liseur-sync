@@ -24,10 +24,10 @@ const coverManifest = `
  </manifest>
 </package>`
 
-func readCoverBytes(t *testing.T, data []byte, max int64) (CoverImage, error) {
+func readCoverBytes(t *testing.T, data []byte, maxBytes int64) (CoverImage, error) {
 	t.Helper()
 	return ReadCover(context.Background(), bytes.NewReader(data),
-		int64(len(data)), DefaultLimits(), max)
+		int64(len(data)), DefaultLimits(), maxBytes)
 }
 
 func TestReadCoverReturnsTheDeclaredImage(t *testing.T) {

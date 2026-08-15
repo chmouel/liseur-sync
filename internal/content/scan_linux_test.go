@@ -81,10 +81,10 @@ func TestScanSkipsSymlinks(t *testing.T) {
 	outside := t.TempDir()
 	mkFile(t, outside, "secret.epub", "not yours")
 	root := t.TempDir()
-	real := mkFile(t, root, "real.epub", "real")
+	realFile := mkFile(t, root, "real.epub", "real")
 
 	for name, target := range map[string]string{
-		"inside.epub":  real,
+		"inside.epub":  realFile,
 		"outside.epub": filepath.Join(outside, "secret.epub"),
 		"broken.epub":  filepath.Join(root, "nothing-here.epub"),
 	} {

@@ -40,11 +40,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // deviceFrom resolves the capability URL credential.
 func (s *Server) deviceFrom(r *http.Request) (store.KopluginDevice, error) {
-	ccap := r.PathValue("capability")
-	if ccap == "" {
+	capability := r.PathValue("capability")
+	if capability == "" {
 		return store.KopluginDevice{}, errAuth
 	}
-	d, err := s.St.KopluginDeviceByToken(r.Context(), auth.HashSecret(ccap))
+	d, err := s.St.KopluginDeviceByToken(r.Context(), auth.HashSecret(capability))
 	if err != nil || d.RevokedAt != nil {
 		return store.KopluginDevice{}, errAuth
 	}

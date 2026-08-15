@@ -166,7 +166,7 @@ func TestBooksUIDrawsAPlaceholderForBooksWithoutACover(t *testing.T) {
 func TestBooksUICoverOfAnotherUsersBookIsNotDrawn(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.uploadAndPromote(t, "private", coverEPUB(t, 300, 400))
-	real := f.uploadAndPromote(t, "plain-for-comparison", []byte("not an epub"))
+	plain := f.uploadAndPromote(t, "plain-for-comparison", []byte("not an epub"))
 	bob := f.login(t, "bob")
 
 	_, mine := f.fetchCover(t, "/ui/books/"+bookID+"/cover", f.cookie)
@@ -174,7 +174,7 @@ func TestBooksUICoverOfAnotherUsersBookIsNotDrawn(t *testing.T) {
 	if bytes.Equal(theirs, mine) {
 		t.Fatalf("another user's cover was served: %d", resp.StatusCode)
 	}
-	_, placeholder := f.fetchCover(t, "/ui/books/"+real+"/cover", f.cookie)
+	_, placeholder := f.fetchCover(t, "/ui/books/"+plain+"/cover", f.cookie)
 	if !bytes.Equal(theirs, placeholder) {
 		t.Fatal("a stranger can tell someone else's book from a coverless one")
 	}

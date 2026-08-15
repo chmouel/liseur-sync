@@ -537,7 +537,7 @@ func (r contextReader) Read(buffer []byte) (int, error) {
 func drainEntry(
 	ctx context.Context,
 	file *zip.File,
-	max int64,
+	maxBytes int64,
 ) (uint64, error) {
 	reader, err := file.Open()
 	if err != nil {
@@ -545,26 +545,26 @@ func drainEntry(
 	}
 	defer reader.Close()
 	written, err := io.Copy(
-		io.Discard, io.LimitReader(contextReader{ctx: ctx, src: reader}, max+1))
+		io.Discard, io.LimitReader(contextReader{ctx: ctx, src: reader}, maxBytes+1))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, ctxErr
 		}
 		return 0, validationError(CodeInvalidEPUB, err)
 	}
-	if written > max {
+	if written > maxBytes {
 		return 0, validationError(
 			CodeArchiveLimits, fmt.Errorf("ZIP entry %q exceeds limit", file.Name))
 	}
 	return uint64(written), nil
 }
 
-func validateMimetype(ctx context.Context, file *zip.File, max int64) error {
+func validateMimetype(ctx context.Context, file *zip.File, maxBytes int64) error {
 	if file.Method != zip.Store {
 		return validationError(
 			CodeInvalidEPUB, errors.New("mimetype entry must be uncompressed"))
 	}
-	value, err := readMetadata(ctx, file, max)
+	value, err := readMetadata(ctx, file, maxBytes)
 	if err != nil {
 		return err
 	}
@@ -578,9 +578,9 @@ func validateMimetype(ctx context.Context, file *zip.File, max int64) error {
 func readMetadata(
 	ctx context.Context,
 	file *zip.File,
-	max int64,
+	maxBytes int64,
 ) ([]byte, error) {
-	if file.UncompressedSize64 > uint64(max) {
+	if file.UncompressedSize64 > uint64(maxBytes) {
 		return nil, validationError(
 			CodeArchiveLimits, fmt.Errorf("metadata %q exceeds limit", file.Name))
 	}
@@ -590,14 +590,14 @@ func readMetadata(
 	}
 	defer reader.Close()
 	value, err := io.ReadAll(
-		io.LimitReader(contextReader{ctx: ctx, src: reader}, max+1))
+		io.LimitReader(contextReader{ctx: ctx, src: reader}, maxBytes+1))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, validationError(CodeInvalidEPUB, err)
 	}
-	if int64(len(value)) > max {
+	if int64(len(value)) > maxBytes {
 		return nil, validationError(
 			CodeArchiveLimits, fmt.Errorf("metadata %q exceeds limit", file.Name))
 	}

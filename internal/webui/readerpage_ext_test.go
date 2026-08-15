@@ -133,16 +133,3 @@ func TestReaderPageRefusesOtherPeoplesBooks(t *testing.T) {
 		t.Errorf("unknown book: want 404, got %d", resp.StatusCode)
 	}
 }
-
-// attr pulls one attribute value out of the rendered page, so a test
-// reads what the browser would rather than what the handler meant.
-func attr(t *testing.T, html, name string) string {
-	t.Helper()
-	marker := name + `="`
-	i := strings.Index(html, marker)
-	if i < 0 {
-		return ""
-	}
-	rest := html[i+len(marker):]
-	return rest[:strings.Index(rest, `"`)]
-}

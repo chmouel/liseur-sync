@@ -235,9 +235,9 @@ func TestOpenRefusesWhatIsNotACalibreLibrary(t *testing.T) {
 
 func TestOpenRefusesASymlinkedMetadataDB(t *testing.T) {
 	t.Parallel()
-	real := writeCalibre(t)
+	realDir := writeCalibre(t)
 	decoy := t.TempDir()
-	if err := os.Symlink(filepath.Join(real, MetadataDB),
+	if err := os.Symlink(filepath.Join(realDir, MetadataDB),
 		filepath.Join(decoy, MetadataDB)); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
