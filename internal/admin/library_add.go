@@ -129,6 +129,20 @@ func NewRootLibrary(
 	return lib, nil
 }
 
+// DetectLibrarySource guesses the source of a root that has already
+// resolved to a readable directory: a tree holding metadata.db is a
+// Calibre library, anything else a plain directory. It is the guess
+// that lets the admin panel's form skip asking; CheckLibraryRoot stays
+// the proof, and the form keeps an override for when the guess is
+// wrong.
+func DetectLibrarySource(root string) store.LibrarySource {
+	if st, err := os.Lstat(filepath.Join(root, "metadata.db")); err == nil &&
+		st.Mode().IsRegular() {
+		return store.LibraryCalibre
+	}
+	return store.LibraryDirectory
+}
+
 // CheckLibraryRoot is the source-specific half of naming a root: a
 // Calibre library that holds no metadata.db is a directory somebody
 // pointed at by mistake, and saying so now is cheaper than a refresh

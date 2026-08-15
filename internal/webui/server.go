@@ -291,8 +291,6 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/users/{id}/backfill",
 		sec(s.requireAdmin(s.handleAdminBackfillWorks)))
 	mux.Handle("POST /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminCreateLibrary)))
-	mux.Handle("POST /ui/admin/libraries/root",
-		sec(s.requireAdmin(s.handleAdminCreateRootLibrary)))
 	mux.Handle("POST /ui/admin/libraries/{id}/review/{bookID}/clear",
 		sec(s.requireAdmin(s.handleAdminClearReview)))
 	mux.Handle("POST /ui/admin/maintenance/verify",

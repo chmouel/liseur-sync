@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,13 +14,12 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// The libraries page (ADR-0013 phase 4).
+// The libraries page (ADR-0013 phase 4, amended).
 //
 // It shows every library on the instance — its kind, owner, root and
-// grants — and never a book. Creating a *watched* library names a path
-// on the server's filesystem, which is a privilege this page
-// deliberately does not hand to a browser; that stays a subcommand and
-// the page says so.
+// grants — and never a book. Creating a folder-backed library names a
+// path on the server's filesystem, a privilege the page hands over only
+// against the administrator's own password (see createRootLibrary).
 
 // adminLibrariesPerPage is how many libraries one page shows.
 const adminLibrariesPerPage = 25
@@ -47,16 +47,45 @@ type adminLibraryView struct {
 	LayoutError string
 }
 
-// libraryAxes renders a library's three axes as one line: where its
-// books come from, where their bytes live, and how often the source is
-// read again. The three are independent, so the page shows all three
-// rather than the single word `kind` used to be.
+// libraryAxes says what a library is in one line: where its books come
+// from, where their bytes live, and how often the source is read again.
+// The three are independent, but the reader of this page is not the
+// reader of ADR-0014, so the line is in words rather than in the
+// column values (`cas`, `in_place`) they stand for. An uploads library
+// has nothing to say about the other two axes: they are not choices
+// anybody made.
 func libraryAxes(l store.Library) string {
-	refresh := string(l.Refresh)
-	if l.Refresh == store.LibraryRefreshInterval {
-		refresh = "every " + humanDuration(l.RefreshInterval)
+	if l.Source == store.LibraryManaged {
+		return "Uploads"
 	}
-	return string(l.Source) + " · " + string(l.Storage) + " · " + refresh
+	kind := "Folder of books"
+	if l.Source == store.LibraryCalibre {
+		kind = "Calibre library"
+	}
+	storage := "the server keeps its own copies"
+	if l.Storage == store.LibraryStorageInPlace {
+		storage = "read straight from its folder"
+	}
+	refresh := "updated only when asked"
+	if l.Refresh == store.LibraryRefreshInterval {
+		refresh = "looks for new books every " + friendlyEvery(l.RefreshInterval)
+	}
+	return kind + " · " + storage + " · " + refresh
+}
+
+// friendlyEvery renders an interval the way a person would say it after
+// "every": "15 minutes", "hour", "6 hours", "day".
+func friendlyEvery(d time.Duration) string {
+	switch {
+	case d == 24*time.Hour:
+		return "day"
+	case d == time.Hour:
+		return "hour"
+	case d > time.Hour && d%time.Hour == 0:
+		return strconv.Itoa(int(d.Hours())) + " hours"
+	default:
+		return strconv.Itoa(int(d.Minutes())) + " minutes"
+	}
 }
 
 // RefreshState is the sentence the library card shows about the last
@@ -70,14 +99,14 @@ func (v adminLibraryView) RefreshState() string {
 	}
 	switch {
 	case l.RefreshRequestedAt != nil:
-		return "A refresh is queued and starts on the next tick."
+		return "The server will look for new books shortly."
 	case l.LastRefreshAt != nil:
-		return "Last refreshed " + l.LastRefreshAt.Format("2006-01-02 15:04") + "."
+		return "Last checked " + l.LastRefreshAt.Format("2006-01-02 15:04") + "."
 	case l.LastRefreshAttemptAt != nil:
 		return "Tried " + l.LastRefreshAttemptAt.Format("2006-01-02 15:04") +
 			" and has never completed."
 	default:
-		return "Never refreshed."
+		return "Not checked yet."
 	}
 }
 
@@ -93,10 +122,10 @@ func (v adminLibraryView) RefreshFailure() string {
 	case store.RefreshCodeNone:
 		return ""
 	case store.RefreshCodeRootUnavailable:
-		return "this library's directory could not be read; the catalog " +
+		return "this library's folder could not be read; the catalog " +
 			"was left exactly as it was"
 	case store.RefreshCodeNoRootPath:
-		return "this library has no directory to read"
+		return "this library has no folder to read"
 	case store.RefreshCodeUnreadableDatabase:
 		return "this library's Calibre database could not be read"
 	case store.RefreshCodeUnsupportedSchema:
@@ -157,8 +186,25 @@ func (s *Server) renderAdminLibraries(
 	prefix := relPrefix(r.URL.Path)
 	adminPage("Libraries", prefix, uiCtx(r, u), csrfFor(a), "libraries",
 		adminLibrariesBody(prefix, csrfFor(a), views, next,
-			s.Cfg.Content.LibraryRoots, flash)).
+			s.Cfg.Content.LibraryRoots, s.ownerNames(r), flash)).
 		Render(r.Context(), w)
+}
+
+// ownerNames feeds the add-library and access forms' account dropdowns:
+// typing an account name blind is the easiest way to give a library to
+// the wrong person. Bounded, and best-effort — with more accounts than
+// the bound, or a listing error, the dropdown is simply shorter than
+// the instance.
+func (s *Server) ownerNames(r *http.Request) []string {
+	users, err := s.St.ListUsersPage(r.Context(), "", 200)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(users))
+	for _, u := range users {
+		names = append(names, u.Name)
+	}
+	return names
 }
 
 // libraryView fills in what the page shows around one library row. The
@@ -190,10 +236,22 @@ func (s *Server) libraryView(r *http.Request, l store.Library, names map[string]
 	return v
 }
 
+// handleAdminCreateLibrary is the one "Add a library" form. It
+// dispatches on where the books come from: an uploads library is a row
+// and nothing else, a folder-backed one names a server path and goes
+// through the guarded branch below.
 func (s *Server) handleAdminCreateLibrary(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
+	if r.FormValue("from") == "folder" {
+		s.createRootLibrary(w, r, a, u)
+		return
+	}
 	s.runLibraryMutation(w, r, a, u, "create-library", func() (string, error) {
+		if r.FormValue("action") == "check" {
+			return "", errors.New(
+				"a library people upload to has no folder to test")
+		}
 		owner, err := s.St.UserByName(r.Context(), strings.TrimSpace(r.FormValue("owner")))
 		if err != nil {
 			return "", errNoSuchUser
@@ -203,7 +261,8 @@ func (s *Server) handleAdminCreateLibrary(
 		if err != nil {
 			return "", err
 		}
-		return "Created " + lib.Name + " for " + owner.Name + ".", nil
+		return "Added " + lib.Name + " for " + owner.Name +
+			". Books can now be uploaded to it from the Library page.", nil
 	})
 }
 
@@ -244,7 +303,10 @@ func (s *Server) handleAdminLibraryAccess(
 		if role == nil {
 			return target.Name + " can no longer reach this library.", nil
 		}
-		return target.Name + " can now " + string(*role) + " this library.", nil
+		if *role == store.LibraryRoleManage {
+			return target.Name + " can now manage this library.", nil
+		}
+		return target.Name + " can now read the books in this library.", nil
 	})
 }
 
@@ -294,20 +356,21 @@ func (s *Server) handleAdminRefreshLibrary(
 		}
 		if lib.RootPath == nil || *lib.RootPath == "" {
 			return "", errors.New(
-				"a managed library has no source to refresh from")
+				"an uploads library has no folder to check")
 		}
 		if err := s.St.AdminRequestLibraryRefresh(
 			r.Context(), u.ID, lib.ID, time.Now().UTC()); err != nil {
 			return "", err
 		}
-		return "Queued a refresh of " + lib.Name +
-			"; the server picks it up on its next tick.", nil
+		return "The server will look for new books in " + lib.Name +
+			" shortly.", nil
 	})
 }
 
-// handleAdminCreateRootLibrary creates a library over a directory that
-// already exists on this server — a plain tree or a Calibre library —
-// with all three of ADR-0014's axes on the form.
+// createRootLibrary is the folder branch of the add-library form: a
+// library over a directory that already exists on this server — a plain
+// tree or a Calibre library — with ADR-0014's axes behind the form's
+// advanced disclosure.
 //
 // ADR-0013 kept this a subcommand because naming a server path from a
 // browser is a filesystem-existence oracle and a way to make the
@@ -322,7 +385,7 @@ func (s *Server) handleAdminRefreshLibrary(
 //   - `content.library_roots`, when set, is the only place a root may
 //     be; and
 //   - every attempt, refused or not, is one audit line.
-func (s *Server) handleAdminCreateRootLibrary(
+func (s *Server) createRootLibrary(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
 	check := r.FormValue("action") == "check"
@@ -342,12 +405,22 @@ func (s *Server) handleAdminCreateRootLibrary(
 		if !s.rootAllowed(root) {
 			return "", errRootNotAllowed
 		}
+		// A blank source is the form's default: sniff the directory
+		// rather than make the administrator read a tree the server is
+		// about to read anyway. The form keeps an override for when the
+		// sniff is wrong.
+		if opts.Source == "" {
+			opts.Source = admin.DetectLibrarySource(root)
+		}
+		if err := opts.Normalize(); err != nil {
+			return "", err
+		}
 		if err := admin.CheckLibraryRoot(root, opts.Source); err != nil {
 			return "", err
 		}
 		if check {
-			return root + " is readable and can be used as a " +
-				string(opts.Source) + " library.", nil
+			return "The server can read " + root +
+				" and would add it as " + sourceNoun(opts.Source) + ".", nil
 		}
 		owner, err := s.St.UserByName(r.Context(), strings.TrimSpace(r.FormValue("owner")))
 		if err != nil {
@@ -358,34 +431,53 @@ func (s *Server) handleAdminCreateRootLibrary(
 		if err != nil {
 			return "", err
 		}
-		return "Created the " + string(lib.Source) + " library " + lib.Name +
-			" for " + owner.Name + " over " + *lib.RootPath +
-			". The server reads that directory and never writes below it.", nil
+		return "Added " + lib.Name + " for " + owner.Name + " as " +
+			sourceNoun(lib.Source) + " — the server reads " + *lib.RootPath +
+			" and never changes anything inside.", nil
 	})
 }
 
-// rootLibraryOptions reads the three axes off the form. A blank axis is
-// left blank rather than defaulted here, so that the defaults are the
-// subcommand's defaults — one implementation, in the admin package.
+// sourceNoun is a library source with an article, for sentences.
+func sourceNoun(src store.LibrarySource) string {
+	if src == store.LibraryCalibre {
+		return "a Calibre library"
+	}
+	return "a folder of books"
+}
+
+// roleWords is a grant role in words, for the access tables.
+func roleWords(r store.LibraryRole) string {
+	if r == store.LibraryRoleManage {
+		return "manage the library"
+	}
+	return "read the books"
+}
+
+// rootLibraryOptions reads the folder branch's advanced controls off
+// the form. Source and storage are left as chosen — including blank —
+// so that the defaults are the subcommand's defaults, filled in by
+// Normalize in the admin package; a blank source is the caller's cue to
+// sniff the directory first. The one "look for new books" control folds
+// refresh and interval together: it is either "manual" or how often.
 func rootLibraryOptions(r *http.Request) (admin.RootLibraryOptions, error) {
 	opts := admin.RootLibraryOptions{
 		Source:  store.LibrarySource(r.FormValue("source")),
 		Storage: store.LibraryStorage(strings.ReplaceAll(r.FormValue("storage"), "-", "_")),
-		Refresh: store.LibraryRefresh(r.FormValue("refresh")),
 	}
-	if value := strings.TrimSpace(r.FormValue("interval")); value != "" {
+	switch value := strings.TrimSpace(r.FormValue("refresh")); value {
+	case "":
+	case "manual":
+		opts.Refresh = store.LibraryRefreshManual
+	default:
 		d, err := time.ParseDuration(value)
 		if err != nil {
 			return opts, errors.New(
-				"a refresh interval reads like 15m, 2h or 24h")
+				"choose how often the server looks for new books")
 		}
+		opts.Refresh = store.LibraryRefreshInterval
 		opts.Interval = d
 	}
-	// Normalized here rather than at the store call, so that the page
-	// can say which kind of library it just checked a directory for.
-	// The defaults are the subcommand's, filled in by the same code.
-	err := opts.Normalize()
-	return opts, err
+	return opts, nil
 }
 
 // The two refusals a root can meet. Neither repeats what the server
@@ -394,10 +486,10 @@ func rootLibraryOptions(r *http.Request) (admin.RootLibraryOptions, error) {
 // can describe a tree they were guessing at.
 var (
 	errUnusableRoot = errors.New(
-		"that path is not a directory this server can read")
+		"the server cannot read a folder at that path")
 	errRootNotAllowed = errors.New(
-		"that path is not under any directory this instance allows " +
-			"libraries in (content.library_roots)")
+		"that folder is not inside any of the places this server " +
+			"allows libraries (content.library_roots)")
 )
 
 // rootAllowed applies the configured allowlist. Empty means anywhere,

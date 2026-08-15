@@ -365,7 +365,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 // authorization for taking over somebody else's account.
 templ adminPasswordField(csrf string) {
 	<label>
-		Your own password
+		Confirm with your password
 		<input name="admin_password" type="password" required autocomplete="current-password"/>
 	</label>
 }

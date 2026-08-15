@@ -185,10 +185,15 @@ library), a **storage** mode (`cas`, so the bytes are copied, or
 directory source, copied, refreshed on an interval — which is what a
 watch folder was.
 
-The same library can be attached from the panel's Libraries page, with
-the three properties as form fields and a **Check the directory** button
-that reports whether the path is readable — and, for a Calibre library,
-whether it holds a `metadata.db` — before anything is created.
+The same library can be added from the panel's Libraries page, whose
+one "Add a library" form asks only where the books come from: uploads,
+or a folder on this server. For a folder, the source is detected — a
+tree holding `metadata.db` is a Calibre library, anything else a plain
+directory — and the three properties follow the source's defaults; an
+**Advanced options** disclosure holds the overrides for when the guess
+or the defaults are wrong. A **Test this folder** button reports
+whether the path is readable and what it was recognized as before
+anything is created.
 
 Naming a path on the server is a privilege beyond administering the
 application: the form is a filesystem-existence oracle and a way to make

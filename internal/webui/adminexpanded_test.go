@@ -44,13 +44,13 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	cookie := loginCookie(t, ts)
 	_, body := page(t, ts, cookie, "/ui/admin/libraries")
 	csrf := extractCSRF(t, body)
-	if !strings.Contains(body, "Attach a directory or Calibre library") {
-		t.Fatalf("the attach form is not on the page:\n%s", body)
+	if !strings.Contains(body, "Add a library") {
+		t.Fatalf("the add form is not on the page:\n%s", body)
 	}
 
 	// A wrong password is refused before anything is looked at on disk.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
 		"admin_password": {"not-it"},
 	})
 	if !strings.Contains(body, "your password is wrong") {
@@ -58,11 +58,11 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	}
 
 	// Checking a directory reports on it and creates nothing.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
 		"action": {"check"}, "admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "is readable and can be used as a directory library") {
+	if !strings.Contains(body, "would add it as a folder of books") {
 		t.Fatalf("check: %s", body)
 	}
 	if libs, _ := st.AdminListLibraries(ctx, "", 10); len(libs) != 0 {
@@ -71,18 +71,19 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 
 	// A path that is not a directory says so without describing the
 	// filesystem beyond what was typed.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Shelf"},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"},
 		"root": {filepath.Join(root, "nope")}, "admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "not a directory this server can read") {
+	if !strings.Contains(body, "cannot read a folder at that path") {
 		t.Fatalf("missing directory: %s", body)
 	}
 
-	// A Calibre library without metadata.db is a directory somebody
-	// pointed at by mistake.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Calibre"}, "root": {root},
+	// Forcing the source is the advanced override: asking for Calibre on
+	// a tree with no metadata.db is a directory somebody pointed at by
+	// mistake.
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Calibre"}, "root": {root},
 		"source": {"calibre"}, "admin_password": {"hunter2hunter"},
 	})
 	if !strings.Contains(body, "metadata.db") {
@@ -90,13 +91,13 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	}
 
 	// The real thing, with every axis set by hand.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"}, "root": {root},
 		"source": {"directory"}, "storage": {"in-place"},
-		"refresh": {"interval"}, "interval": {"30m"},
+		"refresh": {"30m"},
 		"admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "Created the directory library Shelf for bob") {
+	if !strings.Contains(body, "Added Shelf for bob as a folder of books") {
 		t.Fatalf("attach: %s", body)
 	}
 	libs, err := st.AdminListLibraries(ctx, "", 10)
@@ -119,18 +120,27 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 		t.Fatalf("owner = %q", lib.OwnerUserID)
 	}
 
-	// A Calibre library defaults to being read where it lies.
+	// The simple flow names no source at all: a tree holding
+	// metadata.db is recognized as a Calibre library, checked as one,
+	// and read where it lies.
 	calibre := t.TempDir()
 	if err := os.WriteFile(
 		filepath.Join(calibre, "metadata.db"), []byte("sqlite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Calibre"}, "root": {calibre},
-		"source": {"calibre"}, "refresh": {"manual"},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Calibre"}, "root": {calibre},
+		"action": {"check"}, "admin_password": {"hunter2hunter"},
+	})
+	if !strings.Contains(body, "would add it as a Calibre library") {
+		t.Fatalf("check calibre: %s", body)
+	}
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Calibre"}, "root": {calibre},
+		"refresh": {"manual"},
 		"admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "Created the calibre library Calibre for bob") {
+	if !strings.Contains(body, "Added Calibre for bob as a Calibre library") {
 		t.Fatalf("attach calibre: %s", body)
 	}
 	libs, _ = st.AdminListLibraries(ctx, "", 10)
@@ -151,6 +161,22 @@ func TestAdminAttachesARootLibrary(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the Calibre library was not created")
+	}
+
+	// The override beats the sniff: a tree with metadata.db attached
+	// as a plain directory stays a plain directory.
+	mixed := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(mixed, "metadata.db"), []byte("sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Flat"}, "root": {mixed},
+		"source": {"directory"},
+		"admin_password": {"hunter2hunter"},
+	})
+	if !strings.Contains(body, "Added Flat for bob as a folder of books") {
+		t.Fatalf("attach override: %s", body)
 	}
 }
 
@@ -178,8 +204,8 @@ func TestAdminRootLibraryHonoursTheAllowlist(t *testing.T) {
 	if !strings.Contains(body, allowed) {
 		t.Fatalf("the page does not say where libraries may live:\n%s", body)
 	}
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Nope"}, "root": {elsewhere},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Nope"}, "root": {elsewhere},
 		"admin_password": {"hunter2hunter"},
 	})
 	if !strings.Contains(body, "content.library_roots") {
@@ -189,11 +215,11 @@ func TestAdminRootLibraryHonoursTheAllowlist(t *testing.T) {
 		t.Fatalf("a refused root still created %d libraries", len(libs))
 	}
 	// A directory below an allowed root is allowed.
-	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/root", url.Values{
-		"csrf": {csrf}, "owner": {"bob"}, "name": {"Shelf"}, "root": {inside},
+	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
+		"csrf": {csrf}, "from": {"folder"}, "owner": {"bob"}, "name": {"Shelf"}, "root": {inside},
 		"admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "Created the directory library Shelf for bob") {
+	if !strings.Contains(body, "Added Shelf for bob as a folder of books") {
 		t.Fatalf("a root below an allowed one was refused: %s", body)
 	}
 }

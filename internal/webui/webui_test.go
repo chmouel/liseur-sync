@@ -226,7 +226,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/libraries/l1/access", "/ui/admin/libraries/l1/layout",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
-		"/ui/admin/libraries/root", "/ui/admin/libraries/l1/review/b1/clear",
+		"/ui/admin/libraries/l1/review/b1/clear",
 		"/ui/admin/maintenance/verify",
 	} {
 		if code, _ := postForm(t, ts, cookie, p, url.Values{}); code != 403 {
@@ -513,7 +513,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/libraries", "/ui/admin/libraries/l1/access",
-		"/ui/admin/libraries/l1/layout", "/ui/admin/libraries/root",
+		"/ui/admin/libraries/l1/layout",
 		"/ui/admin/libraries/l1/review/b1/clear",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",

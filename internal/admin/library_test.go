@@ -331,6 +331,28 @@ func TestAddLibraryDefaultsToADirectoryOnAnInterval(t *testing.T) {
 	}
 }
 
+func TestDetectLibrarySource(t *testing.T) {
+	calibre := t.TempDir()
+	if got := DetectLibrarySource(calibre); got != store.LibraryDirectory {
+		t.Fatalf("empty tree detected as %q, want directory", got)
+	}
+	if err := os.WriteFile(
+		filepath.Join(calibre, "metadata.db"), []byte("sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := DetectLibrarySource(calibre); got != store.LibraryCalibre {
+		t.Fatalf("tree with metadata.db detected as %q, want calibre", got)
+	}
+	// A directory named metadata.db is not a Calibre library.
+	plain := t.TempDir()
+	if err := os.Mkdir(filepath.Join(plain, "metadata.db"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := DetectLibrarySource(plain); got != store.LibraryDirectory {
+		t.Fatalf("tree with a metadata.db directory detected as %q, want directory", got)
+	}
+}
+
 func TestCheckLibraryRootRejectsMetadataDBSymlink(t *testing.T) {
 	// The refresh reader uses Lstat and refuses a symlink before opening
 	// SQLite, so explicit validation must agree.

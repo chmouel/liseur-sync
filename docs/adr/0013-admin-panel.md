@@ -208,7 +208,7 @@ thing being avoided. So the panel offers it, priced:
   meant to serve rather than the whole disk;
 - every attempt, refused or not, is one audit line, and no refusal
   repeats what the server found on disk beyond the path that was typed;
-- a **Check the directory** button exists so the common case — a typo
+- a **Test this folder** button exists so the common case — a typo
   in a path — is answered without creating anything.
 
 Creating a **managed** library from the panel needs none of that: it
@@ -383,7 +383,7 @@ with a flash:
 `/ui/admin/users/{id}/koplugin/{deviceID}/revoke`,
 `/ui/admin/users/{id}/tokens`, `/ui/admin/users/{id}/pairing`,
 `/ui/admin/users/{id}/koplugin`, `/ui/admin/users/{id}/backfill`,
-`/ui/admin/libraries`, `/ui/admin/libraries/root`,
+`/ui/admin/libraries`,
 `/ui/admin/libraries/{id}/access`, `/ui/admin/libraries/{id}/layout`,
 `/ui/admin/libraries/{id}/refresh`,
 `/ui/admin/libraries/{id}/review/{bookID}/clear`,
