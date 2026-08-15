@@ -424,6 +424,27 @@ future uploads cannot change the CAS:
 
 ## Upgrades
 
+A new image reaches a running container only through
+`docker compose up -d`. `docker pull` alone is not enough and neither is
+`docker restart`: a container is bound to the image *id* it was created
+from, so pulling moves the `latest` tag while the old container keeps
+running, and restarting re-runs that same old container. `up -d` is the
+command that notices the id moved and replaces it. `compose.yaml` sets
+`pull_policy: always` so a single `up -d` both re-resolves the tag and
+recreates.
+
+To check what is actually running, ask the server rather than the
+registry:
+
+```
+curl -s https://books.example.com/healthz
+{"status":"ok","version":"v1.2.3","revision":"46ac8da1b2c3"}
+```
+
+That is the stamp from the binary itself, so it cannot disagree with the
+code that is answering. It is also the quickest way to tell a deploy
+that did nothing from one that did.
+
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start (non-zero exit, clear log) rather
 than run against a partially migrated schema. Back up before upgrades.

@@ -45,9 +45,28 @@ paths:
   /healthz:
     get:
       summary: Liveness probe (unauthenticated)
+      description: |
+        Also reports which build is answering, so an operator can tell a
+        stale container from a current one without signing in. The image
+        carries no OCI labels; this is the stamp from the binary itself.
       security: []
       responses:
-        "200": { $ref: "#/components/responses/StatusOK" }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version:
+                    type: string
+                    description: Release tag, an abbreviated revision, or `dev`; suffixed `(modified)` when built from a dirty tree.
+                    example: v1.2.3
+                  revision:
+                    type: string
+                    description: Abbreviated VCS revision. Omitted when unknown.
+                    example: 46ac8da1b2c3
 
   /v1/login:
     post:

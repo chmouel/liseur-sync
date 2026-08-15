@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/buildinfo"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -293,7 +294,18 @@ func (s *Server) Routes() *http.ServeMux {
 
 	// Unauthenticated.
 	mux.Handle("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		// The build is here and not only on the admin overview page
+		// because the operator who most needs it — someone whose
+		// container is serving an image older than they think — cannot
+		// always log in to find out, and the image carries no OCI
+		// labels to read from outside. A struct rather than a map so
+		// `status` stays first for anything grepping the first line.
+		b := buildinfo.Get()
+		writeJSON(w, http.StatusOK, struct {
+			Status   string `json:"status"`
+			Version  string `json:"version"`
+			Revision string `json:"revision,omitempty"`
+		}{"ok", b.Short(), b.ShortRevision()})
 	}))
 	mux.Handle("POST /v1/login",
 		auth.RequireSecureTransport(s.Cfg,
