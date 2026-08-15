@@ -42,6 +42,14 @@ a `srcdoc` document inherits the framing page's policy, so a page CSP
 that is slightly too strict renders a blank frame with no error
 anywhere.
 
+The README's screenshots are made by `make screenshots`
+(`scripts/screenshots.sh`): it fetches real books from Standard Ebooks,
+seeds a throwaway server with them and photographs four pages through
+the same CDP walk the UI tests use
+(`internal/webui/testdata/uishots.mjs`). It needs the network, a
+browser, node and jq, so it is never part of a test run. Retake them
+when a page in a shot changes shape.
+
 ## Architecture in one paragraph
 
 One binary, two subcommands (`serve`, `admin`). Storage goes through the

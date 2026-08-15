@@ -138,3 +138,10 @@ dev: generate $(CONFIG) ## Run the server and restart it on every change (needs 
 .PHONY: admin
 admin: $(CONFIG) ## Run an admin subcommand: make admin ARGS="create-user alice"
 	go run $(PKG) admin -config $(CONFIG) $(ARGS)
+
+# The README's images. This one goes to the network — it fetches real
+# books from Standard Ebooks — and needs a browser, so it is a target
+# you ask for rather than one anything depends on.
+.PHONY: screenshots
+screenshots: generate ## Retake the README screenshots (needs chromium, node, jq)
+	scripts/screenshots.sh
