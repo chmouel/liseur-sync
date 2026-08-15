@@ -11,6 +11,13 @@
 x-app: &app
   image: ghcr.io/chmouel/liseur-sync:latest
   build: .
+  # Upgrades are `docker compose up -d`, and that only works if the tag
+  # is re-resolved: `docker pull` alone updates the tag while the
+  # running container stays bound to the image id it was created from,
+  # and `docker restart` never re-creates it. Installations made by
+  # scripts/install.sh fetch this file alone, so there is no build
+  # context there to fall back to either.
+  pull_policy: always
   command: ["serve"]
   restart: unless-stopped
   ports:
