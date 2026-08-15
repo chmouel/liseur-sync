@@ -241,6 +241,25 @@ func TestInPlaceSweepQuarantinesAnUnreadableFile(t *testing.T) {
 		t.Errorf("an in-place job claims a staged artifact: %q",
 			*jobs[0].StagingPath)
 	}
+
+	// The verdict is reached once. A sweep meets this file again on every
+	// pass for the life of the library, and until this it counted as a
+	// fresh arrival each time: a settled library that never stopped
+	// claiming work, and — once an arrival buys its owner a catalog walk
+	// — one unreadable file costing a full walk every quarter of an hour.
+	again := f.sync()
+	if again.Ingested != 0 || again.Refused != 0 {
+		t.Fatalf("report %+v, want a re-sweep of a refused file to count nothing",
+			again)
+	}
+	jobs, err = f.store.ListIngestJobs(
+		f.ctx, f.library.OwnerUserID, f.library.ID, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("library holds %d jobs after a re-sweep, want 1", len(jobs))
+	}
 }
 
 // Availability for a book the server does not store is a statement about

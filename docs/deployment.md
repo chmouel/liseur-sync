@@ -276,21 +276,25 @@ path as what it now holds.
 
 ### Books the server will not publish
 
-The refresh log ends every pass with a tally:
+The refresh log reports a pass that did something, and refusing a file is
+something:
 
 ```
-library refresh pass complete libraries=1 swept=1 ingested=0 refused=1 unchanged=70 …
+library refresh pass complete libraries=1 swept=1 ingested=69 refused=1 unchanged=0 …
 ```
 
-`refused` counts files the server read once and would not publish — an
-EPUB that fails structural validation, most often a truncated download or
-a file that is not really an EPUB. They are the reason a library can be
-short a book with nothing else going wrong, and they stay refused: a
-sweep meets them on every pass and does not read them again. To see which
-ones and why, list the library's ingest jobs; a refused file is a
-`quarantined` job carrying an `error_code` and the path it came from.
+`refused` counts files the server read and would not publish — an EPUB
+that fails structural validation, most often a truncated download or a
+file that is not really an EPUB. They are the reason a library can be
+short a book with nothing else going wrong.
 
-Replace the file and the next sweep publishes it — the fingerprint covers
+It is said once, on the pass that reaches the verdict: later sweeps meet
+the same file, leave it alone and report nothing, so a settled library
+goes quiet. To see what was refused after the fact, list the library's
+ingest jobs — a refused file is a `quarantined` job carrying an
+`error_code` and the path it came from.
+
+Replace the file and the next sweep publishes it: the fingerprint covers
 size and modification time, so different bytes are a new question.
 
 
