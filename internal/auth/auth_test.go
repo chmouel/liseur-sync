@@ -31,7 +31,7 @@ func TestNewSecretUnique(t *testing.T) {
 		t.Fatalf("bad secrets: %q %q", a, b)
 	}
 	// HashSecret is deterministic.
-	if HashSecret(a) != HashSecret(a) {
+	if HashSecret(a) != HashSecret(a) { //nolint SA4000
 		t.Fatal("hash not deterministic")
 	}
 }
@@ -53,7 +53,7 @@ func TestScopeAllowed(t *testing.T) {
 
 func TestRateLimiter(t *testing.T) {
 	rl := NewRateLimiter(2, 60_000_000_000)
-	if !rl.Allow("ip1") || !rl.Allow("ip1") {
+	if !rl.Allow("ip1") || !rl.Allow("ip1") { //nolint SA4000
 		t.Fatal("first two should pass")
 	}
 	if rl.Allow("ip1") {

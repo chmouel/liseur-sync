@@ -12,14 +12,14 @@ import (
 
 // sessionJSON is the wire shape of a reading session (design §6.1).
 type sessionJSON struct {
-	SessionID string  `json:"session_id"`
-	WorkID    string  `json:"work_id"`
+	SessionID  string  `json:"session_id"`
+	WorkID     string  `json:"work_id"`
 	EditionSHA *string `json:"edition_sha,omitempty"`
-	StartedAt string  `json:"started_at"`
-	EndedAt   string  `json:"ended_at"`
-	StartProg float64 `json:"start_progression"`
-	EndProg   float64 `json:"end_progression"`
-	IdleMs    int64   `json:"idle_ms,omitempty"`
+	StartedAt  string  `json:"started_at"`
+	EndedAt    string  `json:"ended_at"`
+	StartProg  float64 `json:"start_progression"`
+	EndProg    float64 `json:"end_progression"`
+	IdleMs     int64   `json:"idle_ms,omitempty"`
 }
 
 // HandlePushSessions implements POST /v1/sessions — batch, idempotent

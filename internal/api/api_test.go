@@ -251,7 +251,7 @@ func TestFullSyncFlow(t *testing.T) {
 	}
 
 	// Duplicate push -> duplicate status.
-	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
+	_, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
 		"ops": []map[string]any{{
 			"op_id": "018e6f1a-0000-7000-8000-000000000001", "work_id": workID,
 			"edition_sha": "abc123", "client_ts": time.Now().UTC().Format(time.RFC3339Nano),

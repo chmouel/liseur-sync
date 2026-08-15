@@ -48,8 +48,7 @@ const usage = `usage: liseur-sync admin <subcommand>
   list-tokens <user>            list tokens for a user
   revoke-token <user> <tokenID> revoke a token
   pairing-code <user>           generate a kosync pairing code (15 min TTL)
-  koplugin-device <user> <name> create a statistics-plugin capability URL
-`
+  koplugin-device <user> <name> create a statistics-plugin capability URL`
 
 func createUser(ctx context.Context, st store.Store, args []string) error {
 	if len(args) != 1 {

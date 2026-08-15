@@ -146,7 +146,7 @@ func cmdAdmin(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return errors.New("usage: liseur-sync admin [-config f] <create-user|mint-token|list-tokens|revoke-token> ...")
+		return errors.New("usage: liseur-sync admin [-config f] <create-user|mint-token|list-tokens|revoke-token>")
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
