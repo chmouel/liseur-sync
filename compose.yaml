@@ -7,6 +7,13 @@
 #
 # All variants publish on localhost only; terminate TLS at your reverse
 # proxy (see docs/deployment.md). Single replica.
+#
+# To index a folder of EPUBs or a Calibre library you already have,
+# uncomment the two `books` lines in the service you run. The admin
+# panel can only name a path this container can see, and library_roots
+# bounds it to that one tree. Mount it read-only: the server opens
+# library files O_RDONLY and Calibre's metadata.db with `mode=ro`, so
+# the mount costs nothing and makes a bug incapable of data loss.
 
 x-app: &app
   image: ghcr.io/chmouel/liseur-sync:latest
@@ -32,8 +39,10 @@ services:
       LISEUR_DATABASE_DRIVER: sqlite
       LISEUR_DATABASE_URL: /data/liseur-sync.db
       LISEUR_CONTENT_ROOT: /data/content
+      # LISEUR_LIBRARY_ROOTS: /books
     volumes:
       - sqlite-data:/data
+      # - /srv/books:/books:ro
     depends_on:
       sqlite-init:
         condition: service_completed_successfully
@@ -72,8 +81,10 @@ services:
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: postgres://liseur:${POSTGRES_PASSWORD}@postgres:5432/liseur_sync
       LISEUR_CONTENT_ROOT: /data/content
+      # LISEUR_LIBRARY_ROOTS: /books
     volumes:
       - content-data:/data
+      # - /srv/books:/books:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,11 +99,13 @@ services:
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
       LISEUR_CONTENT_ROOT: /data/content
+      # LISEUR_LIBRARY_ROOTS: /books
       # Reverse proxy on the docker host reaches the app via the bridge
       # gateway; trust X-Forwarded-Proto from the stack's subnet.
       LISEUR_TRUSTED_PROXIES: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}
     volumes:
       - content-data:/data
+      # - /srv/books:/books:ro
     depends_on:
       content-init:
         condition: service_completed_successfully
