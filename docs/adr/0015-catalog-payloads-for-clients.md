@@ -1,6 +1,6 @@
 # ADR-0015: Catalog payloads clients can walk
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-15
 - **Depends on:** [ADR-0004](0004-metadata-and-categorization.md),
   [ADR-0006](0006-catalog-api-and-opds.md),

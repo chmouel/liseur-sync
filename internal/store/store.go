@@ -642,6 +642,43 @@ type BookContributor struct {
 	Locked         bool
 }
 
+// CatalogBookFile is one downloadable file as a catalog payload
+// describes it: what the bytes are, how many of them there were, and
+// what to call them. It is deliberately not BookFile. The blob address,
+// the source path and the storage mode belong to the quota,
+// garbage-collection, reconciliation and download paths that own them
+// (ADR-0015), and a read that exists only to render JSON must not put
+// them within reach of a handler that could serialize one by accident.
+type CatalogBookFile struct {
+	ID     string
+	BookID string
+	// ContentSHA256 is the digest of the bytes — the thing a client
+	// matches its own copy against. It is present whoever owns the
+	// bytes, including a library the server keeps no copy of.
+	ContentSHA256 string
+	// SizeBytes is the length those bytes had when the server last read
+	// them, which for an in-place file describes the last look rather
+	// than the file now.
+	SizeBytes int64
+	MediaType string
+	Filename  string
+}
+
+// CatalogBookRelations holds the relationship rows a catalog payload is
+// drawn from, for a whole page of books at once, keyed by book id. It is
+// deliberately narrower than BookMetadata: this answers "what does a
+// shelf need to show these books", not "what is this book's complete
+// metadata".
+//
+// Files are the available ones only, because a superseded or missing
+// file is not something a client can download and listing it invites a
+// client to try.
+type CatalogBookRelations struct {
+	Contributors map[string][]BookContributor
+	Series       map[string][]BookSeries
+	Files        map[string][]CatalogBookFile
+}
+
 // BookMetadata is one book's scalar fields together with every metadata
 // entity set attached to it, read in one transaction so the precedence
 // engine merges against a consistent snapshot. Rows come back in a
@@ -1966,6 +2003,18 @@ type Store interface {
 	// what makes restore a relink; deciding whether they may be served is
 	// the catalog's job, not this one's.
 	ListBookFiles(ctx context.Context, userID, bookID string, required LibraryRole) ([]BookFile, error)
+	// CatalogBookRelationsForBooks reads the contributors, series and
+	// available files of a page of books in one query per kind, so that
+	// rendering a shelf is a bounded number of round trips regardless of
+	// how many books are on it (ADR-0015). Books the caller cannot read
+	// are absent from every map rather than reported as empty, so the
+	// method cannot be used to probe for book ids.
+	//
+	// Trashed books contribute nothing, for the same reason
+	// CatalogBookByID cannot see them: a deleted book is deleted as far as
+	// every reader is concerned, and a relation read must not be the one
+	// way back into it.
+	CatalogBookRelationsForBooks(ctx context.Context, userID string, bookIDs []string) (CatalogBookRelations, error)
 	// CatalogBookMetadata reads one book's scalar fields and every metadata
 	// entity set attached to it in a single transaction, so a caller can run
 	// the precedence engine against a consistent snapshot.

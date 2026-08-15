@@ -203,7 +203,11 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 				continue
 			}
 			v.Files = append(v.Files, BookFileRow{
-				Name: f.OriginalFilename, MediaType: f.MediaType, SHA256: f.BlobSHA256,
+				// The content digest, never the blob address: the address
+				// is the server's own copy and is empty for an in-place
+				// library, which would show a book with no digest at all.
+				Name: f.OriginalFilename, MediaType: f.MediaType,
+				SHA256: f.ContentSHA256,
 			})
 			v.CanRead = v.CanRead || isEPUB(f.MediaType)
 		}

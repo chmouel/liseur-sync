@@ -1162,3 +1162,223 @@ func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
 		t.Fatalf("empty request: %v %v", empty, err)
 	}
 }
+
+// testCatalogBookRelationsForBooks covers the batched read every catalog
+// payload is drawn from (ADR-0015): complete contributor and series sets,
+// available files only, and a content digest that is present for an
+// in-place file, which has no copy in content-addressed storage at all.
+func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	inserter, ok := s.(bookFileTestInserter)
+	if !ok {
+		t.Fatalf("%T cannot insert book files for shared tests", s)
+	}
+	ctx := context.Background()
+	owner := MkUser(t, s, "relations-owner")
+	reader := MkUser(t, s, "relations-reader")
+	outsider := MkUser(t, s, "relations-outsider")
+	now := time.Date(2026, time.August, 15, 10, 0, 0, 0, time.UTC)
+	library := store.Library{
+		ID: "lib-relations", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Source:  store.LibraryManaged,
+		Storage: store.LibraryStorageCAS,
+		Refresh: store.LibraryRefreshManual, Name: "Relations", CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, library); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.GrantLibraryAccess(
+		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"book-full", "book-bare"} {
+		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
+			ID: id, LibraryID: library.ID, Status: store.BookActive,
+			Title: id, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadata, err := s.CatalogBookMetadata(
+		ctx, owner.ID, "book-full", store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := 3.0
+	metadata.Contributors = []store.BookContributor{
+		{ContributorID: "rc-gibson", Name: "William Gibson",
+			NormalizedName: "william gibson", Role: store.ContributorRoleAuthor,
+			Position: 1, Source: store.MetadataEmbedded},
+		{ContributorID: "rc-bell", Name: "Anthea Bell",
+			NormalizedName: "anthea bell", Role: "translator",
+			Position: 2, Source: store.MetadataEmbedded},
+	}
+	metadata.Series = []store.BookSeries{
+		// A book in two series, one of which never said where.
+		{SeriesID: "rs-sprawl", Name: "Sprawl", NormalizedName: "sprawl",
+			Position: &first, Source: store.MetadataEmbedded},
+		{SeriesID: "rs-omnibus", Name: "Omnibus", NormalizedName: "omnibus",
+			Source: store.MetadataEmbedded},
+	}
+	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
+		store.ApplyBookMetadataRequest{
+			Metadata:         metadata,
+			ExpectedRevision: metadata.Book.Revision,
+			UpdatedAt:        now,
+		}); err != nil {
+		t.Fatal(err)
+	}
+	blob := ingestBlob("relations-file", 4096)
+	for _, spec := range []struct {
+		id           string
+		availability store.BookFileAvailability
+		digest       store.BlobInfo
+	}{
+		{"rf-available", store.BookFileAvailable, blob},
+		{"rf-gone", store.BookFileMissing, ingestBlob("relations-gone", 17)},
+	} {
+		if err := inserter.InsertBookFileForTest(ctx, store.BookFile{
+			ID: spec.id, LibraryID: library.ID, BookID: "book-full",
+			BlobSHA256:       spec.digest.SHA256,
+			Source:           store.IngestUpload,
+			OriginalFilename: spec.id + ".epub",
+			MediaType:        "application/epub+zip",
+			Availability:     spec.availability,
+			CreatedAt:        now, UpdatedAt: now,
+		}, spec.digest.SizeBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.CatalogBookRelationsForBooks(
+		ctx, reader.ID, []string{"book-full", "book-bare"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	people := got.Contributors["book-full"]
+	if len(people) != 2 || people[0].Name != "William Gibson" ||
+		people[1].Role != "translator" {
+		t.Fatalf("contributors: %+v", people)
+	}
+	series := got.Series["book-full"]
+	if len(series) != 2 {
+		t.Fatalf("series: %+v", series)
+	}
+	byName := map[string]store.BookSeries{}
+	for _, row := range series {
+		byName[row.Name] = row
+	}
+	if row := byName["Sprawl"]; row.Position == nil || *row.Position != first {
+		t.Fatalf("series position: %+v", row)
+	}
+	// A series nobody placed the book in stays unplaced: inventing a
+	// position would put the book first in a series it may end.
+	if row := byName["Omnibus"]; row.Position != nil {
+		t.Fatalf("a missing series position was invented: %+v", row)
+	}
+	files := got.Files["book-full"]
+	if len(files) != 1 || files[0].ID != "rf-available" {
+		t.Fatalf("files: %+v", files)
+	}
+	if files[0].ContentSHA256 != blob.SHA256 ||
+		files[0].SizeBytes != blob.SizeBytes {
+		t.Fatalf("file digest and size: %+v", files[0])
+	}
+	// A book with nothing attached is absent rather than wrong: the
+	// payload builder turns a missing key into an empty list.
+	if len(got.Contributors["book-bare"]) != 0 ||
+		len(got.Series["book-bare"]) != 0 || len(got.Files["book-bare"]) != 0 {
+		t.Fatalf("a bare book grew relations: %+v", got)
+	}
+
+	// An in-place file has no copy in content-addressed storage, and its
+	// content digest is what a client matching local books goes by.
+	shelfRoot := "/srv/relations"
+	shelf := store.Library{
+		ID: "lib-relations-shelf", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
+		Source:  store.LibraryDirectory,
+		Storage: store.LibraryStorageInPlace,
+		Refresh: store.LibraryRefreshManual, Name: "Shelf",
+		RootPath: &shelfRoot, CreatedAt: now,
+	}
+	if err := s.CreateLibrary(ctx, shelf); err != nil {
+		t.Fatal(err)
+	}
+	scanned := inPlaceJob(t, s, owner.ID, shelf.ID, "relations-scan",
+		"Gibson/Neuromancer.epub", now)
+	inPlaceBlob := ingestBlob("relations-in-place", 8192)
+	if _, err := s.CommitInPlaceBook(ctx, owner.ID, scanned.ID,
+		inPlaceRequest(scanned, inPlaceBlob, "shelf-book", "shelf-file", now),
+	); err != nil {
+		t.Fatal(err)
+	}
+	shelved, err := s.CatalogBookRelationsForBooks(
+		ctx, owner.ID, []string{"shelf-book"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shelfFiles := shelved.Files["shelf-book"]
+	if len(shelfFiles) != 1 {
+		t.Fatalf("in-place files: %+v", shelfFiles)
+	}
+	if shelfFiles[0].ContentSHA256 != inPlaceBlob.SHA256 ||
+		shelfFiles[0].SizeBytes != inPlaceBlob.SizeBytes {
+		t.Fatalf("in-place digest and size: %+v", shelfFiles[0])
+	}
+	// The file this describes genuinely has no copy in content-addressed
+	// storage, so the digest above could only be the content digest.
+	stored, err := s.ListBookFiles(
+		ctx, owner.ID, "shelf-book", store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[0].BlobSHA256 != "" {
+		t.Fatalf("an in-place file claimed a blob: %+v", stored[0])
+	}
+
+	// A trashed book is deleted as far as every reader is concerned, so
+	// its relations are not the way back into it: a reader who guessed
+	// the id of a book somebody deleted learns nothing about it.
+	if _, err := s.TrashCatalogBook(ctx, owner.ID, "book-full",
+		now.Add(time.Hour), now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.CatalogBookRelationsForBooks(
+		ctx, reader.ID, []string{"book-full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted.Contributors) != 0 || len(deleted.Series) != 0 ||
+		len(deleted.Files) != 0 {
+		t.Fatalf("a trashed book still reported its relations: %+v", deleted)
+	}
+	if _, err := s.RestoreCatalogBook(
+		ctx, owner.ID, "book-full", now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := s.CatalogBookRelationsForBooks(
+		ctx, reader.ID, []string{"book-full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Contributors["book-full"]) != 2 {
+		t.Fatalf("a restored book lost its relations: %+v", restored)
+	}
+
+	// A stranger learns nothing, not even that the ids resolve.
+	blind, err := s.CatalogBookRelationsForBooks(
+		ctx, outsider.ID, []string{"book-full", "shelf-book"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blind.Contributors) != 0 || len(blind.Series) != 0 ||
+		len(blind.Files) != 0 {
+		t.Fatalf("outsider read another user's books: %+v", blind)
+	}
+
+	empty, err := s.CatalogBookRelationsForBooks(ctx, reader.ID, nil)
+	if err != nil || len(empty.Contributors) != 0 || len(empty.Series) != 0 ||
+		len(empty.Files) != 0 {
+		t.Fatalf("empty request: %+v %v", empty, err)
+	}
+}

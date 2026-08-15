@@ -700,6 +700,153 @@ func (s *Store) CatalogAuthorsForBooks(
 	return out, rows.Err()
 }
 
+// CatalogBookRelationsForBooks reads the contributors, series and
+// available files of a page of books in three queries, so that enriching
+// a listing costs a bounded number of round trips rather than one per
+// book (ADR-0015). Every query carries the same library ACL join the
+// listing itself used, so a book the caller cannot read contributes no
+// rows to any map, and every query excludes trashed books, which no
+// ordinary catalog read may see whatever role the caller holds.
+func (s *Store) CatalogBookRelationsForBooks(
+	ctx context.Context,
+	userID string,
+	bookIDs []string,
+) (store.CatalogBookRelations, error) {
+	out := store.CatalogBookRelations{
+		Contributors: map[string][]store.BookContributor{},
+		Series:       map[string][]store.BookSeries{},
+		Files:        map[string][]store.CatalogBookFile{},
+	}
+	if len(bookIDs) == 0 {
+		return out, nil
+	}
+	ids, args := bookIDArgs(userID, bookIDs)
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT bc.book_id, c.id, c.name, c.normalized_name, bc.role,
+		        bc.position, bc.source, bc.locked
+		 FROM book_contributors bc
+		 JOIN contributors c
+		   ON c.library_id = bc.library_id AND c.id = bc.contributor_id
+		 JOIN books b ON b.id = bc.book_id AND b.status <> 'trashed'
+		 JOIN libraries l ON l.id = bc.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE bc.book_id IN (`+ids+`)
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		 ORDER BY bc.book_id, bc.position, bc.role, c.normalized_name, c.id`,
+		args...)
+	if err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var bookID string
+		var row store.BookContributor
+		var locked int
+		if err := scan(&bookID, &row.ContributorID, &row.Name,
+			&row.NormalizedName, &row.Role, &row.Position, &row.Source,
+			&locked); err != nil {
+			return err
+		}
+		row.Locked = locked != 0
+		out.Contributors[bookID] = append(out.Contributors[bookID], row)
+		return nil
+	}); err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+
+	rows, err = s.db.QueryContext(ctx,
+		`SELECT bs.book_id, s.id, s.name, s.normalized_name, bs.position,
+		        bs.source, bs.locked
+		 FROM book_series bs
+		 JOIN series s ON s.library_id = bs.library_id AND s.id = bs.series_id
+		 JOIN books b ON b.id = bs.book_id AND b.status <> 'trashed'
+		 JOIN libraries l ON l.id = bs.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE bs.book_id IN (`+ids+`)
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		 ORDER BY bs.book_id, s.normalized_name, s.id`,
+		args...)
+	if err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var bookID string
+		var row store.BookSeries
+		var position sql.NullFloat64
+		var locked int
+		if err := scan(&bookID, &row.SeriesID, &row.Name, &row.NormalizedName,
+			&position, &row.Source, &locked); err != nil {
+			return err
+		}
+		if position.Valid {
+			value := position.Float64
+			row.Position = &value
+		}
+		row.Locked = locked != 0
+		out.Series[bookID] = append(out.Series[bookID], row)
+		return nil
+	}); err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+
+	// Only the columns a payload renders. The blob address, the source
+	// path and the storage mode are not selected at all, so nothing
+	// downstream of here can serialize one by reaching for the wrong
+	// field.
+	rows, err = s.db.QueryContext(ctx,
+		`SELECT f.id, f.book_id, f.content_sha256, f.content_size_bytes,
+		        f.media_type, f.original_filename
+		 FROM book_files f
+		 JOIN books b ON b.id = f.book_id AND b.status <> 'trashed'
+		 JOIN libraries l ON l.id = f.library_id
+		 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
+		 WHERE f.book_id IN (`+ids+`)
+		   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
+		   AND f.availability = ?
+		 ORDER BY f.book_id, f.created_at DESC, f.id DESC`,
+		append(args, string(store.BookFileAvailable))...)
+	if err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var row store.CatalogBookFile
+		if err := scan(&row.ID, &row.BookID, &row.ContentSHA256,
+			&row.SizeBytes, &row.MediaType, &row.Filename); err != nil {
+			return err
+		}
+		out.Files[row.BookID] = append(out.Files[row.BookID], row)
+		return nil
+	}); err != nil {
+		return store.CatalogBookRelations{}, err
+	}
+	return out, nil
+}
+
+// bookIDArgs builds the IN list of a batched book read together with its
+// arguments: the ACL user comes first because the library_access join
+// precedes the WHERE clause, and again after the ids for the ownership
+// test.
+func bookIDArgs(userID string, bookIDs []string) (string, []any) {
+	placeholders := make([]string, len(bookIDs))
+	args := []any{userID}
+	for i, id := range bookIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, userID)
+	return strings.Join(placeholders, ","), args
+}
+
+func eachRow(rows *sql.Rows, each func(scan func(...any) error) error) error {
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows.Scan); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // Metadata entity sets are read in one transaction and in a deterministic
 // order, so a caller merging a proposal always sees a consistent snapshot
 // and produces the same result for the same inputs.
