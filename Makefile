@@ -75,7 +75,7 @@ cover: generate ## Write and open a coverage profile
 
 .PHONY: fmt
 fmt: ## Format the tree
-	gofmt -w ./cmd ./internal
+	golangci-lint fmt ./cmd ./internal
 
 .PHONY: vet
 vet: generate ## go vet
