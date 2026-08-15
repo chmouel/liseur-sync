@@ -201,6 +201,71 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		}
 	</section>
 	<section class="card">
+		<h2>Mint an API token</h2>
+		<p class="muted">
+			A working credential for { v.User.Name }'s account, shown once and
+			stored hashed. Mint one while you are setting up somebody's
+			reader with them; otherwise let them make their own under
+			Devices. The admin scope can only go on an administrator's
+			account.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Name <input name="name" required autocomplete="off" placeholder="Boox Palma"/></label>
+			@scopeChoice(store.ScopeSync, true)
+			@scopeChoice(store.ScopeReadInsights, false)
+			@scopeChoice(store.ScopeLibraryRead, false)
+			@scopeChoice(store.ScopeLibraryManage, false)
+			if v.User.IsAdmin {
+				@scopeChoice(store.ScopeAdmin, false)
+			}
+			@adminPasswordField(csrf)
+			<button type="submit" class="primary">Mint token</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Pair a KOReader (kosync)</h2>
+		<p class="muted">
+			A single-use code, shown once. In KOReader's kosync settings:
+			username = a device name, password = the code, custom server =
+			<code>https://&lt;host&gt;/adapter/kosync</code>. The code is a
+			pairing credential bound to one device slot, never the account
+			password.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/pairing" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			@adminPasswordField(csrf)
+			<button type="submit" class="primary">Generate pairing code</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Add a statistics plugin device</h2>
+		<p class="muted">
+			A capability URL for KOReader's statistics plugin, shown once. The
+			plugin's server is <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Device name <input name="name" required autocomplete="off" placeholder="Kobo Libra"/></label>
+			@adminPasswordField(csrf)
+			<button type="submit" class="primary">Create capability</button>
+		</form>
+	</section>
+	<section class="card">
+		<h2>Map books to works</h2>
+		<p class="muted">
+			Book-to-work mapping happens the first time a book is opened, so a
+			freshly filled library shows empty statistics until every book has
+			been read once. This maps the lot in one pass. It is safe to run
+			again: books that already map are left alone, and ones that would
+			need a guess are counted rather than guessed at.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/backfill" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit">Backfill works</button>
+		</form>
+	</section>
+	<section class="card">
 		<h2>Reset the password</h2>
 		<p class="muted">
 			Revokes { v.User.Name }'s web and login sessions. Their API tokens,

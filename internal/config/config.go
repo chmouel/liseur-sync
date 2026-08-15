@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,19 @@ type Config struct {
 		// working rather than a tuning knob.
 		WatchedMaxFiles int `toml:"watched_max_files"`
 		WatchedMaxDepth int `toml:"watched_max_depth"`
+		// LibraryRoots bounds where the admin panel may point a
+		// directory or Calibre library. Creating one names a path on
+		// this machine, which is a privilege beyond "can administer
+		// this application" (ADR-0013): an operator who lists the
+		// directories their libraries live under turns the panel's form
+		// from a filesystem-wide oracle into a choice among trees they
+		// already meant to serve.
+		//
+		// Empty is the default and means "anywhere the server can
+		// read", which is what the `add-library` subcommand has always
+		// allowed. A root must be an absolute path; a library root is
+		// accepted when it is one of these or below one.
+		LibraryRoots []string `toml:"library_roots"`
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -206,7 +220,7 @@ func Default() Config {
 // LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
 // (comma-separated), LISEUR_METADATA_PROVIDERS (comma-separated),
-// LISEUR_READER_ORIGIN.
+// LISEUR_READER_ORIGIN, LISEUR_LIBRARY_ROOTS (comma-separated).
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -241,6 +255,7 @@ func (c *Config) applyEnv() {
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
 	setList(&c.Metadata.Providers, "LISEUR_METADATA_PROVIDERS")
+	setList(&c.Content.LibraryRoots, "LISEUR_LIBRARY_ROOTS")
 }
 
 // Validate checks the config is coherent.
@@ -310,6 +325,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.WatchedMaxDepth < 1 || c.Content.WatchedMaxDepth > 256 {
 		return fmt.Errorf("content.watched_max_depth must be between 1 and 256")
+	}
+	for i, root := range c.Content.LibraryRoots {
+		trimmed := strings.TrimSpace(root)
+		if !filepath.IsAbs(trimmed) {
+			return fmt.Errorf(
+				"content.library_roots[%d] (%q) must be an absolute path", i, root)
+		}
+		c.Content.LibraryRoots[i] = filepath.Clean(trimmed)
 	}
 	if c.Content.EPUBMaxRatio < 1 {
 		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")

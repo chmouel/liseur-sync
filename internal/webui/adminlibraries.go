@@ -3,6 +3,7 @@ package webui
 import (
 	"errors"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -155,7 +156,8 @@ func (s *Server) renderAdminLibraries(
 	}
 	prefix := relPrefix(r.URL.Path)
 	adminPage("Libraries", prefix, uiCtx(r, u), csrfFor(a), "libraries",
-		adminLibrariesBody(prefix, csrfFor(a), views, next, flash)).
+		adminLibrariesBody(prefix, csrfFor(a), views, next,
+			s.Cfg.Content.LibraryRoots, flash)).
 		Render(r.Context(), w)
 }
 
@@ -303,6 +305,209 @@ func (s *Server) handleAdminRefreshLibrary(
 	})
 }
 
+// handleAdminCreateRootLibrary creates a library over a directory that
+// already exists on this server — a plain tree or a Calibre library —
+// with all three of ADR-0014's axes on the form.
+//
+// ADR-0013 kept this a subcommand because naming a server path from a
+// browser is a filesystem-existence oracle and a way to make the
+// scanner ingest any readable tree on the host. That reasoning is
+// unchanged; what changed is that an operator who has to reach a shell
+// to attach the Calibre library the whole instance exists to serve is
+// an operator who runs the shell as root anyway. So the privilege is
+// offered with the guards the reasoning asks for:
+//
+//   - the acting administrator types their own password, rate-limited
+//     per account and per address, so a stolen session cannot probe;
+//   - `content.library_roots`, when set, is the only place a root may
+//     be; and
+//   - every attempt, refused or not, is one audit line.
+func (s *Server) handleAdminCreateRootLibrary(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	check := r.FormValue("action") == "check"
+	action := "add-library"
+	if check {
+		action = "check-library-root"
+	}
+	s.runLibraryMutationReauth(w, r, a, u, action, func() (string, error) {
+		opts, err := rootLibraryOptions(r)
+		if err != nil {
+			return "", err
+		}
+		root, err := admin.ResolveLibraryRoot(r.FormValue("root"))
+		if err != nil {
+			return "", errUnusableRoot
+		}
+		if !s.rootAllowed(root) {
+			return "", errRootNotAllowed
+		}
+		if err := admin.CheckLibraryRoot(root, opts.Source); err != nil {
+			return "", err
+		}
+		if check {
+			return root + " is readable and can be used as a " +
+				string(opts.Source) + " library.", nil
+		}
+		owner, err := s.St.UserByName(r.Context(), strings.TrimSpace(r.FormValue("owner")))
+		if err != nil {
+			return "", errNoSuchUser
+		}
+		lib, err := admin.NewRootLibrary(
+			r.Context(), s.St, owner.ID, r.FormValue("name"), root, opts)
+		if err != nil {
+			return "", err
+		}
+		return "Created the " + string(lib.Source) + " library " + lib.Name +
+			" for " + owner.Name + " over " + *lib.RootPath +
+			". The server reads that directory and never writes below it.", nil
+	})
+}
+
+// rootLibraryOptions reads the three axes off the form. A blank axis is
+// left blank rather than defaulted here, so that the defaults are the
+// subcommand's defaults — one implementation, in the admin package.
+func rootLibraryOptions(r *http.Request) (admin.RootLibraryOptions, error) {
+	opts := admin.RootLibraryOptions{
+		Source:  store.LibrarySource(r.FormValue("source")),
+		Storage: store.LibraryStorage(strings.ReplaceAll(r.FormValue("storage"), "-", "_")),
+		Refresh: store.LibraryRefresh(r.FormValue("refresh")),
+	}
+	if value := strings.TrimSpace(r.FormValue("interval")); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return opts, errors.New(
+				"a refresh interval reads like 15m, 2h or 24h")
+		}
+		opts.Interval = d
+	}
+	// Normalized here rather than at the store call, so that the page
+	// can say which kind of library it just checked a directory for.
+	// The defaults are the subcommand's, filled in by the same code.
+	err := opts.Normalize()
+	return opts, err
+}
+
+// The two refusals a root can meet. Neither repeats what the server
+// found on disk: the administrator typed the path, so echoing it back
+// tells them nothing they did not know, but the reason a stat failed
+// can describe a tree they were guessing at.
+var (
+	errUnusableRoot = errors.New(
+		"that path is not a directory this server can read")
+	errRootNotAllowed = errors.New(
+		"that path is not under any directory this instance allows " +
+			"libraries in (content.library_roots)")
+)
+
+// rootAllowed applies the configured allowlist. Empty means anywhere,
+// which is what the subcommand has always allowed.
+func (s *Server) rootAllowed(root string) bool {
+	allowed := s.Cfg.Content.LibraryRoots
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, prefix := range allowed {
+		prefix = filepath.Clean(prefix)
+		if root == prefix {
+			return true
+		}
+		if strings.HasPrefix(root, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// adminReviewLimit bounds one library's review listing on the panel. A
+// queue longer than this is a sign something is wrong with the root
+// rather than with the queue.
+const adminReviewLimit = 200
+
+// adminReviewRow is one book awaiting a decision, as the panel shows
+// it: an id, why it is here, and when it happened.
+//
+// No title, no author, no path. The queue belongs to somebody else's
+// library and ADR-0013 keeps their books off these pages; the library's
+// own manager sees the titles under Manage. What an administrator needs
+// here is whether the queue is draining and the ability to say "the
+// copy being served is fine".
+type adminReviewRow struct {
+	BookID  string
+	Reason  string
+	Updated string
+}
+
+type adminReviewView struct {
+	Library store.Library
+	Rows    []adminReviewRow
+	Capped  bool
+}
+
+func (s *Server) handleAdminLibraryReview(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.renderAdminLibraryReview(w, r, a, u, Flash{})
+}
+
+func (s *Server) renderAdminLibraryReview(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
+) {
+	lib, err := s.St.AdminLibraryByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "no such library", http.StatusNotFound)
+		return
+	}
+	view := adminReviewView{Library: lib}
+	// Read as the owner rather than as the administrator: the owner
+	// always manages their own library, so this needs no store method
+	// that crosses users to answer a question about one library.
+	books, err := s.St.ListBooksInReview(
+		r.Context(), lib.OwnerUserID, lib.ID, adminReviewLimit)
+	if err != nil {
+		flash.Error = "This library's review queue could not be read."
+	}
+	for _, b := range books {
+		view.Rows = append(view.Rows, adminReviewRow{
+			BookID:  b.ID,
+			Reason:  b.ReviewReason,
+			Updated: b.UpdatedAt.UTC().Format("2006-01-02 15:04"),
+		})
+	}
+	view.Capped = len(books) == adminReviewLimit
+	prefix := relPrefix(r.URL.Path)
+	adminPage("Review", prefix, uiCtx(r, u), csrfFor(a), "libraries",
+		adminLibraryReviewBody(prefix, csrfFor(a), view, flash)).
+		Render(r.Context(), w)
+}
+
+// handleAdminClearReview accepts the copy the catalog is serving for
+// one book. It changes no credential and reveals nothing about the
+// book, so it carries no password re-verification (ADR-0013).
+func (s *Server) handleAdminClearReview(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	bookID := r.PathValue("bookID")
+	changed, err := admin.ClearBookReview(
+		r.Context(), s.St, r.PathValue("id"), bookID)
+	logAdminAction(r, u, "clear-review", bookID, err)
+	switch {
+	case err != nil:
+		s.renderAdminLibraryReview(w, r, a, u, Flash{Error: err.Error()})
+	case !changed:
+		s.renderAdminLibraryReview(w, r, a, u, Flash{
+			Error: "That book was not awaiting review."})
+	default:
+		s.renderAdminLibraryReview(w, r, a, u, Flash{
+			Notice: "Cleared. The book returns to the catalog on the next " +
+				"availability pass if it still has a servable file."})
+	}
+}
+
 var errNoSuchUser = errors.New("no account by that name")
 
 // runLibraryMutation is the shape every library POST shares: CSRF,
@@ -313,9 +518,38 @@ func (s *Server) runLibraryMutation(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 	action string, do func() (string, error),
 ) {
+	s.libraryMutation(w, r, a, u, action, false, do)
+}
+
+// runLibraryMutationReauth is the same shape for the one library action
+// that is a privilege rather than a permission: naming a directory on
+// this machine. It costs the acting administrator their own password,
+// on the same two budgets the account actions use.
+func (s *Server) runLibraryMutationReauth(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+	action string, do func() (string, error),
+) {
+	s.libraryMutation(w, r, a, u, action, true, do)
+}
+
+func (s *Server) libraryMutation(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+	action string, reverify bool, do func() (string, error),
+) {
 	if !s.checkCSRF(r, a) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
+	}
+	if reverify {
+		if err := s.reauth(r, u); err != nil {
+			logAdminAction(r, u, action, r.PathValue("id"), err)
+			if errors.Is(err, errRateLimited) {
+				w.Header().Set("Retry-After", "60")
+				w.WriteHeader(http.StatusTooManyRequests)
+			}
+			s.renderAdminLibraries(w, r, a, u, Flash{Error: err.Error()})
+			return
+		}
 	}
 	notice, err := do()
 	logAdminAction(r, u, action, r.PathValue("id"), err)

@@ -207,7 +207,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
-		"/ui/admin/maintenance",
+		"/ui/admin/libraries/l1/review", "/ui/admin/maintenance",
 	} {
 		code, body = page(t, ts, cookie, p)
 		if code != 403 {
@@ -224,6 +224,10 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke", "/ui/admin/libraries",
 		"/ui/admin/libraries/l1/access", "/ui/admin/libraries/l1/layout",
+		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
+		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
+		"/ui/admin/libraries/root", "/ui/admin/libraries/l1/review/b1/clear",
+		"/ui/admin/maintenance/verify",
 	} {
 		if code, _ := postForm(t, ts, cookie, p, url.Values{}); code != 403 {
 			t.Fatalf("POST %s as a non-admin: want 403, got %d", p, code)
@@ -492,7 +496,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/devices", "/ui/settings",
 		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
-		"/ui/admin/maintenance",
+		"/ui/admin/libraries/l1/review", "/ui/admin/maintenance",
 		"/ui/library", "/ui/library/manage", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
@@ -509,7 +513,11 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/libraries", "/ui/admin/libraries/l1/access",
-		"/ui/admin/libraries/l1/layout",
+		"/ui/admin/libraries/l1/layout", "/ui/admin/libraries/root",
+		"/ui/admin/libraries/l1/review/b1/clear",
+		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
+		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
+		"/ui/admin/maintenance/verify",
 		"/ui/books/upload", "/ui/reader/token",
 		"/ui/preferences",
 	} {

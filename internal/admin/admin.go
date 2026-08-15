@@ -502,6 +502,13 @@ func listLibraries(ctx context.Context, st store.Store, args []string) error {
 	return nil
 }
 
+// BackfillWorks maps every catalog book one account can read to a sync
+// work. Both the subcommand and the panel call it, so the identifiers
+// minted from a browser are the ones minted from a shell.
+func BackfillWorks(ctx context.Context, st store.Store, userID string) (workident.Report, error) {
+	return workident.Backfill(ctx, st, userID, newWorkID, time.Now)
+}
+
 // backfillWorks exists because the book-to-work mapping is created
 // lazily, on first resolve. A reader who uploads a library and then looks
 // at their statistics sees an empty catalog until they have opened every
@@ -514,7 +521,7 @@ func backfillWorks(ctx context.Context, st store.Store, args []string) error {
 	if err != nil {
 		return err
 	}
-	report, err := workident.Backfill(ctx, st, u.ID, newWorkID, time.Now)
+	report, err := BackfillWorks(ctx, st, u.ID)
 	// The report is printed even on failure: a run that stops halfway has
 	// still committed everything it counted, and the operator needs to
 	// know what was done before deciding whether to re-run it.

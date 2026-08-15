@@ -501,17 +501,23 @@ failure is therefore recorded as a bounded code (`unreadable_database`,
 `root_missing`, `unsupported_schema`, …) which the panel renders, with
 the underlying error going to the log where paths are allowed.
 
-### What stays out of the browser
+### What naming a path in a browser costs
 
 ADR-0013 kept `watch-library` a subcommand on purpose: naming a server
 filesystem path in a browser hands a remote administrator a
 filesystem-existence oracle and a way to point the scanner at any
-readable tree on the host. Nothing here weakens that. Creating a
-`directory` or `calibre` library remains CLI-only, and so does choosing
-its storage mode, which is a property of how it was ingested rather than
-a setting. The panel shows all three axes, sets the refresh policy and
-interval, triggers a refresh, and keeps the grants and layout controls it
-already has.
+readable tree on the host. That reasoning stands, and ADR-0013 has since
+been amended to price the privilege rather than refuse it: attaching a
+`directory` or `calibre` library from the panel costs the acting
+administrator their own password, is confined to `content.library_roots`
+when an operator sets it, and is audited. All three axes are on that
+form, storage included — it is a property of how the library will be
+ingested, and picking it wrong is why the form explains what each mode
+does.
+
+Storage stays fixed after creation: it describes how the rows that
+already exist were made, so changing it in place would describe files
+that were never ingested that way.
 
 ## Migration
 
@@ -652,11 +658,11 @@ and write-back in particular is a promise about somebody else's schema.
 
 **Phase 1 — The axes.** The migration, the type split, the rename of the
 watched vocabulary, `add-library` with `-source`/`-storage`/`-refresh`
-flags, and the three axes shown on the admin panel's library list. The panel's
-create form still makes managed libraries only — a root-backed library
-names a path, and ADR-0013 keeps that out of the browser. Pure
-refactor: the suite stays green throughout and no behaviour
-changes.
+flags, and the three axes shown on the admin panel's library list. The
+panel's create form made managed libraries only at the time; attaching a
+root-backed library from the panel landed later, under the amendment to
+ADR-0013. Pure refactor: the suite stays green throughout and no
+behaviour changes.
 
 **Phase 2 — In place.** `content_sha256`, `content_size_bytes` and
 `storage` on `book_files`; the read path taking a `BookFile` and

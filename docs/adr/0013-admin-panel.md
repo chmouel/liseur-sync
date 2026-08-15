@@ -183,18 +183,36 @@ That is the complete list of global reads this ADR adds — six methods.
 **No global read of reading data** — no cross-user ops, sessions,
 rollups, positions or works — is added, now or later, under this ADR.
 
-### Watched libraries stay CLI-only
+### Naming a server path, and what it costs
 
-Creating a watched library names a server filesystem path. Exposing that
-to a browser hands a remote administrator a filesystem-existence oracle
-and a way to make the scanner ingest any readable EPUB tree on the host
-— a material privilege increase over "can administer this application",
-and one that survives a stolen admin session. The panel *shows* watched
-libraries and can set their layout and grants; `watch-library` remains a
-subcommand, which is also the honest place for a path that has to exist
-on the machine you are typing on.
+Creating a root-backed library names a server filesystem path. Exposing
+that to a browser hands a remote administrator a filesystem-existence
+oracle and a way to make the scanner ingest any readable EPUB tree on
+the host — a material privilege increase over "can administer this
+application", and one that survives a stolen admin session.
 
-Creating a **managed** library from the panel is fine: it names no path.
+This ADR originally concluded from that that the panel would create
+managed libraries only, and that `add-library` would stay a subcommand.
+That is now amended. The argument establishes what the privilege costs,
+not that nobody may buy it: the operator who has to find a shell to
+attach the Calibre library the instance exists to serve is an operator
+who ends up running a shell as root, which is strictly worse than the
+thing being avoided. So the panel offers it, priced:
+
+- the acting administrator re-types **their own password**, on the two
+  independent budgets (per account, per address) every high-impact
+  action here uses, so a stolen session alone cannot probe the
+  filesystem;
+- `content.library_roots`, when an operator sets it, is the only place
+  a root may be — the form becomes a choice among trees they already
+  meant to serve rather than the whole disk;
+- every attempt, refused or not, is one audit line, and no refusal
+  repeats what the server found on disk beyond the path that was typed;
+- a **Check the directory** button exists so the common case — a typo
+  in a path — is answered without creating anything.
+
+Creating a **managed** library from the panel needs none of that: it
+names no path.
 
 ### Disabling an account, and every credential it holds
 
@@ -351,6 +369,7 @@ Admin entry, shown only to admins.
 | `GET /ui/admin/users` | Users (paginated) and invites |
 | `GET /ui/admin/users/{id}` | One user: tokens, devices, libraries, actions |
 | `GET /ui/admin/libraries` | Every library, its kind, owner, root and grants |
+| `GET /ui/admin/libraries/{id}/review` | One library's review queue, by book id |
 | `GET /ui/admin/maintenance` | Aggregate ingest, review, trash, blob state |
 
 Mutations, each `POST` with the per-session CSRF token, redirecting back
@@ -362,8 +381,22 @@ with a flash:
 `/ui/admin/users/{id}/tokens/{tokenID}/revoke`,
 `/ui/admin/users/{id}/kosync/{slot}/revoke`,
 `/ui/admin/users/{id}/koplugin/{deviceID}/revoke`,
-`/ui/admin/libraries`, `/ui/admin/libraries/{id}/access`,
-`/ui/admin/libraries/{id}/layout`, and the two existing invite routes.
+`/ui/admin/users/{id}/tokens`, `/ui/admin/users/{id}/pairing`,
+`/ui/admin/users/{id}/koplugin`, `/ui/admin/users/{id}/backfill`,
+`/ui/admin/libraries`, `/ui/admin/libraries/root`,
+`/ui/admin/libraries/{id}/access`, `/ui/admin/libraries/{id}/layout`,
+`/ui/admin/libraries/{id}/refresh`,
+`/ui/admin/libraries/{id}/review/{bookID}/clear`,
+`/ui/admin/maintenance/verify`, and the two existing invite routes.
+
+The panel is a superset of the `admin` subcommands, not a subset of
+them: every subcommand has a control here, and the ones that mint a
+credential for somebody else — `mint-token`, `pairing-code`,
+`koplugin-device` — go through the same re-verification as a password
+reset, since each hands out a working way into another account. The
+shared implementation lives in `internal/admin` as plain functions over
+a `store.Store`, so a library attached from a browser is the same row as
+one attached from a shell.
 
 Server-rendered HTML, no new JavaScript, htmx only where a fragment
 genuinely beats a reload. The CSP is unchanged, so no inline styles and
@@ -506,7 +539,8 @@ column already exists from Phase 1.
   test each. Re-enabling restores paths 2, 3, 5, 6 and 8; paths 1 and 4
   require a fresh sign-in, which the test asserts rather than assumes.
 - No page renders `database.url`, a password hash, a token hash, a
-  filesystem path other than a watched root, or any string drawn from
+  filesystem path other than a library root (one an operator configured,
+  or one they just typed into the attach form), or any string drawn from
   another user's books. A test plants a Postgres DSN with a password and
   a distinctively titled book in another user's library, then asserts
   neither appears anywhere under `/ui/admin`.
