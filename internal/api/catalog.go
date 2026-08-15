@@ -116,9 +116,10 @@ func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
 	}
-	out := make([]map[string]any, 0, len(books))
-	for _, b := range books {
-		out = append(out, catalogBookJSON(b))
+	out, err := s.catalogBooksJSON(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
 	}
 	body := map[string]any{"books": out}
 	// Only advertise a cursor on a full page. A short page is the end of
@@ -133,9 +134,9 @@ func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// HandleBook implements GET /v1/books/{id}, the detail view. It
-// includes the book's files so a client can choose what to download
-// without a second round trip.
+// HandleBook implements GET /v1/books/{id}, the detail view. It returns
+// the same shape as a listing row — files included — so a client parses
+// one representation of a book and not two.
 func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
 	tok, ok := auth.TokenFrom(r)
 	if !ok {
@@ -148,25 +149,11 @@ func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	files, err := s.St.ListBookFiles(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "book lookup failed")
 		return
 	}
-	body := catalogBookJSON(book)
-	out := make([]map[string]any, 0, len(files))
-	for _, f := range files {
-		if f.Availability != store.BookFileAvailable {
-			continue
-		}
-		out = append(out, map[string]any{
-			"file_id":    f.ID,
-			"media_type": f.MediaType,
-			"sha256":     f.BlobSHA256,
-			"filename":   f.OriginalFilename,
-		})
-	}
-	body["files"] = out
 	writeJSON(w, http.StatusOK, body)
 }
 
@@ -329,7 +316,17 @@ func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
 	writeError(w, http.StatusInternalServerError, "catalog lookup failed")
 }
 
-func catalogBookJSON(b store.CatalogBook) map[string]any {
+// catalogBookJSON renders the one shape every book-bearing route
+// returns (ADR-0015). There is a single representation of a catalog
+// book: list, search, entity listings, duplicates and detail all render
+// this, so a client parses one shape rather than two, and the one it got
+// wrong would have been the listing it draws a thousand times.
+//
+// rel is the book's slice of a batched relations read. A book with no
+// contributors, no series or no available files still carries the
+// fields, empty: an absent field and an empty one are different bugs to
+// a client, and only one of them is true here.
+func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[string]any {
 	out := map[string]any{
 		"book_id":    b.ID,
 		"library_id": b.LibraryID,
@@ -356,7 +353,85 @@ func catalogBookJSON(b store.CatalogBook) map[string]any {
 			out[key] = value
 		}
 	}
+
+	// Every contributor in every role, not just the authors: which of
+	// them a shelf shows is the client's decision, and the two clients we
+	// have disagree about it. Roles are normalized on the way in, so a
+	// client selects authors by role rather than by guessing.
+	contributors := make([]map[string]any, 0, len(rel.Contributors[b.ID]))
+	for _, c := range rel.Contributors[b.ID] {
+		contributors = append(contributors, map[string]any{
+			"id": c.ContributorID, "name": c.Name, "role": c.Role,
+		})
+	}
+	out["contributors"] = contributors
+
+	// Every series row, because the catalog has always allowed several
+	// and a payload reporting one of them silently picks a winner.
+	series := make([]map[string]any, 0, len(rel.Series[b.ID]))
+	for _, s := range rel.Series[b.ID] {
+		row := map[string]any{"id": s.SeriesID, "name": s.Name}
+		// A position nobody recorded is left out rather than sent as
+		// zero, which would read as "first in the series".
+		if s.Position != nil {
+			row["position"] = *s.Position
+		}
+		series = append(series, row)
+	}
+	out["series"] = series
+
+	files := make([]map[string]any, 0, len(rel.Files[b.ID]))
+	for _, f := range rel.Files[b.ID] {
+		files = append(files, map[string]any{
+			"file_id":    f.ID,
+			"media_type": f.MediaType,
+			"filename":   f.Filename,
+			// The content digest — what the bytes are — and never the
+			// blob address, which is the server's own copy and is empty
+			// for the in-place libraries of ADR-0014, exactly the books a
+			// migrating client is trying to match by digest.
+			"sha256": f.ContentSHA256,
+			// The length those bytes had when the server last read them.
+			// For an in-place file that is a fact about the last look,
+			// not a promise about now; the download is still the truth.
+			"size_bytes": f.SizeBytes,
+		})
+	}
+	out["files"] = files
 	return out
+}
+
+// catalogBooksJSON renders a page of books, reading their relations in
+// one batch rather than one lookup per row: a page of books is a bounded
+// number of rows, and must be a bounded number of queries too.
+func (s *Server) catalogBooksJSON(
+	ctx context.Context, userID string, books []store.CatalogBook,
+) ([]map[string]any, error) {
+	ids := make([]string, 0, len(books))
+	for _, b := range books {
+		ids = append(ids, b.ID)
+	}
+	rel, err := s.St.CatalogBookRelationsForBooks(ctx, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(books))
+	for _, b := range books {
+		out = append(out, catalogBookJSON(b, rel))
+	}
+	return out, nil
+}
+
+// catalogBookBodyJSON is the same shape for a single book. Detail is not
+// a richer shape than a listing row; it is the same one.
+func (s *Server) catalogBookBodyJSON(
+	ctx context.Context, userID string, book store.CatalogBook,
+) (map[string]any, error) {
+	out, err := s.catalogBooksJSON(ctx, userID, []store.CatalogBook{book})
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
 }
 
 func catalogPageSize(raw string) (int, error) {
@@ -501,7 +576,12 @@ func (s *Server) HandleTrashBook(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, catalogBookJSON(book))
+	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "book lookup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // HandleRestoreBook implements POST /v1/books/{id}/restore, the undo for
@@ -524,7 +604,12 @@ func (s *Server) HandleRestoreBook(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, catalogBookJSON(book))
+	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "book lookup failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // HandleLibraryDuplicates reports books in one library that hold
@@ -560,6 +645,32 @@ func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
 		return
 	}
+	// The weaker report rides along rather than living at its own route:
+	// it answers the same question a librarian came here with, and two
+	// routes would mean a page that shows one and not the other.
+	similar, err := s.St.ListSimilarBooks(r.Context(), tok.UserID, libraryID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
+		return
+	}
+	// Both reports are enriched from one batch: two groupings of the same
+	// library's books are still one page, and paying for two round trips
+	// per kind would be the N+1 this route just moved off the client.
+	ids := make([]string, 0, len(books))
+	for _, duplicate := range books {
+		ids = append(ids, duplicate.Book.ID)
+	}
+	for _, group := range similar {
+		for _, b := range group.Books {
+			ids = append(ids, b.ID)
+		}
+	}
+	rel, err := s.St.CatalogBookRelationsForBooks(r.Context(), tok.UserID, ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
+		return
+	}
+
 	// Grouped by digest rather than returned flat, because a client that
 	// had to group them itself would have to know the ordering rule to do
 	// it, and one that guessed would show a book duplicating itself.
@@ -575,7 +686,7 @@ func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request)
 		}
 		last := groups[len(groups)-1]
 		last["books"] = append(
-			last["books"].([]map[string]any), catalogBookJSON(duplicate.Book))
+			last["books"].([]map[string]any), catalogBookJSON(duplicate.Book, rel))
 	}
 	// A group cut in half by the limit is dropped: one book on its own is
 	// not a duplicate of anything, and saying so would be wrong rather
@@ -585,19 +696,11 @@ func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request)
 			groups = groups[:n-1]
 		}
 	}
-	// The weaker report rides along rather than living at its own route:
-	// it answers the same question a librarian came here with, and two
-	// routes would mean a page that shows one and not the other.
-	similar, err := s.St.ListSimilarBooks(r.Context(), tok.UserID, libraryID, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
-		return
-	}
 	similarOut := make([]map[string]any, 0, len(similar))
 	for _, group := range similar {
 		books := make([]map[string]any, 0, len(group.Books))
 		for _, b := range group.Books {
-			books = append(books, catalogBookJSON(b))
+			books = append(books, catalogBookJSON(b, rel))
 		}
 		similarOut = append(similarOut, map[string]any{
 			"normalized_title": group.Title, "books": books,

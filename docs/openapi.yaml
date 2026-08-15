@@ -896,7 +896,7 @@ paths:
   /v1/books/{id}:
     get:
       tags: [library]
-      summary: One book, with its downloadable files
+      summary: One book, in the same shape every listing returns
       security: [{ deviceToken: [] }]  # requires library-read scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -905,21 +905,7 @@ paths:
           description: The book
           content:
             application/json:
-              schema:
-                allOf:
-                  - $ref: "#/components/schemas/CatalogBook"
-                  - type: object
-                    properties:
-                      files:
-                        type: array
-                        description: Available files only.
-                        items:
-                          type: object
-                          properties:
-                            file_id: { type: string }
-                            media_type: { type: string }
-                            sha256: { type: string }
-                            filename: { type: string }
+              schema: { $ref: "#/components/schemas/CatalogBook" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
     delete:
       tags: [library]
@@ -1758,10 +1744,27 @@ components:
     CatalogBook:
       type: object
       description: |
-        One book in a library. Optional metadata fields are omitted when
-        unknown rather than sent empty, so a client can tell "no
-        publisher recorded" from "publisher is blank".
-      required: [book_id, library_id, title, status, created_at, updated_at]
+        One book in a library, and the only shape a book is ever returned
+        in: the library listing, search, entity listings, duplicate groups
+        and `GET /v1/books/{id}` all return exactly this. Detail is not a
+        richer shape.
+
+        Optional metadata fields are omitted when unknown rather than sent
+        empty, so a client can tell "no publisher recorded" from
+        "publisher is blank". The relationship fields are the opposite:
+        `contributors`, `series` and `files` are always present, and empty
+        when the book has none.
+      required:
+        - book_id
+        - library_id
+        - title
+        - status
+        - created_at
+        - updated_at
+        - cover_url
+        - contributors
+        - series
+        - files
       properties:
         book_id: { type: string, format: uuid }
         library_id: { type: string, format: uuid }
@@ -1773,6 +1776,71 @@ components:
         status: { type: string, enum: [active, missing, trashed, review] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        cover_url:
+          type: string
+          description: |
+            Offered for every book, whether or not one is known: a client
+            that asks and gets 404 has learned the same thing at the same
+            cost as a flag would have told it.
+        contributors:
+          type: array
+          description: |
+            Every contributor in every role, in the order the book stores
+            them — not just the authors. Roles are normalized, so select
+            authors with `role == "author"` rather than by guessing.
+          items:
+            type: object
+            required: [id, name, role]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              role: { type: string, example: author }
+        series:
+          type: array
+          description: |
+            Every series the book belongs to. A book may be in more than
+            one, and reporting a single series would silently pick one.
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              position:
+                type: number
+                description: |
+                  Omitted when the book's place in the series is unknown.
+                  It is never invented: 0 would mean "first".
+        files:
+          type: array
+          description: |
+            The available files only, and empty for a book that has
+            nothing to download — including a trashed one, whose files
+            come back only if it is restored. A superseded or missing
+            file is not something a client can download.
+          items:
+            type: object
+            required: [file_id, media_type, filename, sha256, size_bytes]
+            properties:
+              file_id: { type: string, format: uuid }
+              media_type: { type: string }
+              filename: { type: string }
+              sha256:
+                type: string
+                description: |
+                  The digest of the file's **content** — what the bytes
+                  are. It is present whoever owns the bytes, including
+                  libraries the server reads in place and keeps no copy
+                  of, and it is what a client matches its own copies
+                  against. It is never the address of the server's
+                  internal copy, which is not in this API at all.
+              size_bytes:
+                type: integer
+                format: int64
+                description: |
+                  The length those bytes had when the server last read
+                  them. For a file the server reads in place that is a
+                  fact about the last look, not a promise about now.
     CatalogEntity:
       type: object
       description: |

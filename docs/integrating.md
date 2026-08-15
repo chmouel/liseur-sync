@@ -305,6 +305,51 @@ carry one across a change of `order`. An unrecognized `order` is a `400`
 rather than a default: a typo that silently reverses a listing is worse
 than an error.
 
+Every route that returns books returns the same book: the library
+listing, `GET /v1/libraries/{library}/search`, the entity listings, the
+duplicate groups and `GET /v1/books/{id}` all hand back one shape, and
+detail is not a richer one. Parse it once.
+
+```json
+{"book_id": "...", "library_id": "...", "title": "Neuromancer",
+ "status": "active", "cover_url": "/v1/books/.../cover",
+ "created_at": "...", "updated_at": "...",
+ "contributors": [{"id": "...", "name": "William Gibson", "role": "author"}],
+ "series": [{"id": "...", "name": "Sprawl", "position": 1}],
+ "files": [{"file_id": "...", "media_type": "application/epub+zip",
+            "filename": "neuromancer.epub",
+            "sha256": "9797d5f3...", "size_bytes": 431109}]}
+```
+
+`contributors` carries every credit in every role rather than only the
+authors — pick the authors with `role == "author"`, which is normalized
+for you, and do not match on what the file happened to say. `series`
+carries every series the book is in, because a book can be in more than
+one; a `position` that nobody recorded is left out rather than sent as
+`0`, which would read as "first". All three relationship fields are
+always present, and empty for a book that has no contributors, no series
+or nothing to download.
+
+### Matching books you already have
+
+`files[].sha256` is the digest of the file's **content** — what the
+bytes are. It is the same digest `GET /v1/books/{id}/download` returns
+as its `ETag`, so a client holding a local library can hash its own
+files once, page the catalog, and match on equality without downloading
+anything.
+
+It is present for every file the catalog offers, including files in
+libraries the server reads in place and keeps no copy of — which is what
+a user who pointed the server at their existing shelf has. A book with
+nothing to download has an empty `files`, and a trashed book has one
+too. It is never the address of the server's internal copy; that is a
+storage detail and is not in this API.
+
+`size_bytes` is the length the server last saw. For a file read in
+place it describes the last look rather than the file now, so treat a
+mismatch as "re-check", not as "different book" — the digest is what
+decides identity.
+
 `GET /v1/books/{id}/download` serves the file. It supports `HEAD`,
 byte ranges and conditional requests, and its `ETag` is the content
 digest, so a stored `ETag` stays valid forever: if the server answers

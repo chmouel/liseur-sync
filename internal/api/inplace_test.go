@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -134,5 +135,56 @@ func TestDownloadRefusesAnInPlaceBookThatChangedOnDisk(t *testing.T) {
 	}
 	if review[0].ReviewReason == "" {
 		t.Error("a book in review must say why")
+	}
+}
+
+// The digest a client matches its own copy against must be the digest of
+// the bytes, not the address of the server's copy — an in-place library
+// has no copy of anything, and its readers are exactly the migrating
+// users who arrive holding the files already (ADR-0015).
+func TestCatalogPayloadReportsAnInPlaceContentDigest(t *testing.T) {
+	f := newUploadFixture(t)
+	body := []byte("bytes the server never copied anywhere")
+	bookID, libraryID, _ := f.publishInPlace(t, "digest", body)
+
+	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, f.token)
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %v", code, detail)
+	}
+	files, _ := detail["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %v", detail["files"])
+	}
+	file, _ := files[0].(map[string]any)
+	if file["sha256"] != sha256Hex(body) {
+		t.Errorf("sha256 = %v, want the content digest %s",
+			file["sha256"], sha256Hex(body))
+	}
+	if file["size_bytes"] != float64(len(body)) {
+		t.Errorf("size_bytes = %v, want %d", file["size_bytes"], len(body))
+	}
+
+	// The store agrees there is no blob here, so the payload above could
+	// only have come from the content digest.
+	stored, err := f.st.ListBookFiles(
+		t.Context(), f.user.ID, bookID, store.LibraryRoleRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[0].BlobSHA256 != "" {
+		t.Fatalf("an in-place file claimed a blob: %+v", stored[0])
+	}
+
+	// The listing says the same thing, because it is the same shape.
+	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+libraryID+"/books", f.token)
+	if code != http.StatusOK {
+		t.Fatalf("books: %d %v", code, page)
+	}
+	books, _ := page["books"].([]any)
+	if len(books) != 1 {
+		t.Fatalf("books = %v", page["books"])
+	}
+	if row, _ := books[0].(map[string]any); !reflect.DeepEqual(row, detail) {
+		t.Errorf("listing row differs from detail:\n%v\n%v", row, detail)
 	}
 }

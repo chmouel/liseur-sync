@@ -39,7 +39,7 @@ loose ends that must come before any of it, are in
 | [0012](0012-reader-engine-foliate.md) | Replace the reader engine with foliate-js | Later | Implemented | Nothing outstanding |
 | [0013](0013-admin-panel.md) | The admin panel | Later | Implemented | Nothing outstanding |
 | [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Implemented | Covers from `cover.jpg` are not wired yet |
-| [0015](0015-catalog-payloads-for-clients.md) | Catalog payloads clients can walk | Client | Proposed | Batch store reads for a page's contributors, series and files |
+| [0015](0015-catalog-payloads-for-clients.md) | Catalog payloads clients can walk | Client | Implemented | Nothing outstanding |
 | [0016](0016-token-self-introspection.md) | Token self-introspection | Client | Proposed | `GET /v1/token` and its scope-table entry |
 
 ## Convention

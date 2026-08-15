@@ -357,9 +357,10 @@ func (s *Server) HandleEntityBooks(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	out := make([]map[string]any, 0, len(books))
-	for _, b := range books {
-		out = append(out, catalogBookJSON(b))
+	out, err := s.catalogBooksJSON(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
 	}
 	body := map[string]any{
 		"entity": map[string]any{

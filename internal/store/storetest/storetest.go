@@ -59,6 +59,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogAuthorsForBooks", func(t *testing.T) {
 		testCatalogAuthorsForBooks(t, open)
 	})
+	t.Run("CatalogBookRelationsForBooks", func(t *testing.T) {
+		testCatalogBookRelationsForBooks(t, open)
+	})
 	t.Run("AtomicCatalogWorkResolution", func(t *testing.T) {
 		testAtomicCatalogWorkResolution(t, open)
 	})

@@ -73,9 +73,10 @@ func (s *Server) HandleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "library not found")
 		return
 	}
-	books := make([]map[string]any, 0, len(result.Books))
-	for _, b := range result.Books {
-		books = append(books, catalogBookJSON(b))
+	books, err := s.catalogBooksJSON(r.Context(), tok.UserID, result.Books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "search failed")
+		return
 	}
 	facets := make([]map[string]any, 0, len(result.Facets))
 	for _, f := range result.Facets {
