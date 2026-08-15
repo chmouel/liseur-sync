@@ -148,6 +148,35 @@ func (s *Server) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
 }
 
+// HandleToken implements GET /v1/token — what the bearer that presented
+// it is allowed to do (ADR-0016).
+//
+// Singular against the plural /v1/tokens on purpose: one is the token
+// you are, the other is the tokens you have. They are different
+// resources with different credentials, and the URL says so.
+//
+// The field names are the ones GET /v1/tokens already uses for the same
+// things, so a client parses one token shape. Nothing else is returned:
+// not the secret, not its hash, not the other tokens on the account, not
+// the user's identity beyond what the caller already proved.
+func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		ID       string         `json:"id"`
+		DeviceID string         `json:"device_id"`
+		Name     string         `json:"name"`
+		Scope    *store.Scope   `json:"scope,omitempty"`
+		Scopes   store.ScopeSet `json:"scopes"`
+	}{
+		ID: tok.ID, DeviceID: tok.DeviceID, Name: tok.Name,
+		Scope: legacyScope(tok.Scopes), Scopes: tok.Scopes,
+	})
+}
+
 // HandleUpdateTokenScopes changes a token's capabilities without replacing
 // its secret, device identity, or retry identity.
 func (s *Server) HandleUpdateTokenScopes(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +437,15 @@ func (s *Server) Routes() *http.ServeMux {
 	// would all fail to load.
 	mux.Handle("GET /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
 	mux.Handle("HEAD /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
+
+	// Authenticated, no scope required. A token describing itself is the
+	// one route whose subject is the credential presenting it, so there
+	// is no capability left to check (ADR-0016). It is emphatically not
+	// an open route: an absent, revoked or expired token gets 401 here
+	// like anywhere else.
+	mux.Handle("GET /v1/token",
+		auth.RequireSecureTransport(s.Cfg,
+			auth.RequireToken(s.Auth, http.HandlerFunc(s.HandleToken))))
 
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {

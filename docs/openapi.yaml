@@ -113,6 +113,53 @@ paths:
         "403": { $ref: "#/components/responses/Error", description: "Invalid or expired invite" }
         "409": { $ref: "#/components/responses/Error", description: "Username taken" }
 
+  /v1/token:
+    get:
+      tags: [auth]
+      summary: Describe the calling token
+      description: |
+        Returns the device token that made the request: its id, its
+        device id, its name and its scopes. Call it once at startup and
+        draw the interface from the answer, rather than probing routes
+        and reading `403`s.
+
+        Authenticated like every other route — an absent, revoked or
+        expired token gets `401` — but it requires no particular scope.
+        The subject of the response is the credential presenting it, so
+        the narrowest token can ask about itself.
+
+        It never returns a secret, a secret hash, or any token other
+        than the caller's. To enumerate the account's tokens, use
+        `GET /v1/tokens`, which needs the login credential.
+
+        `HEAD` is served as the status line of the `GET`, which is what
+        makes it a cheap liveness check for a stored credential. Every
+        other method is `405`.
+
+        Like every authenticated route, a call updates the token's
+        last-used timestamp. Nothing about the credential's authority —
+        its scopes, device binding, expiry or secret — changes.
+      security: [{ deviceToken: [] }]
+      responses:
+        "200":
+          description: The calling token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenSelf" }
+        "401": { $ref: "#/components/responses/Error" }
+    head:
+      tags: [auth]
+      summary: Check the calling token is still live
+      description: |
+        The status line of the `GET`, with no body. The cheapest way for
+        a client holding a stored secret to find out whether it is still
+        good before using it: `200` if the token authenticates, `401` if
+        it is absent, revoked or expired.
+      security: [{ deviceToken: [] }]
+      responses:
+        "200": { description: The token is live }
+        "401": { $ref: "#/components/responses/Error" }
+
   /v1/tokens:
     post:
       tags: [auth]
@@ -2186,6 +2233,24 @@ components:
         scopes: { $ref: "#/components/schemas/ScopeSet" }
         created_at: { type: string, format: date-time }
         revoked: { type: boolean }
+    TokenSelf:
+      type: object
+      description: |
+        A token's description of itself. The same field names TokenInfo
+        uses for the same things; `created_at` and `revoked` are absent
+        because a caller that reaches this route is neither revoked nor
+        expired.
+      required: [id, device_id, name, scopes]
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        name: { type: string }
+        scope:
+          allOf:
+            - { $ref: "#/components/schemas/Scope" }
+          deprecated: true
+          description: "Present only for singleton scope sets."
+        scopes: { $ref: "#/components/schemas/ScopeSet" }
     OpInput:
       type: object
       required: [op_id, work_id, client_ts, progression]

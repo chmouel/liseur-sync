@@ -46,6 +46,45 @@ The design rationale (why the API looks like this) is in
 
 All API calls then use `Authorization: Bearer <token secret>`.
 
+### Finding out what your token can do
+
+A client is usually handed a secret it did not mint — pasted into a
+settings field, copied from another device, restored from a backup —
+and has no idea what it is allowed to do. Ask:
+
+```
+GET /v1/token
+```
+
+```json
+{
+  "id": "tok_7f3a",
+  "device_id": "dev_9c21",
+  "name": "Boox Palma",
+  "scopes": ["sync", "library-read"]
+}
+```
+
+Call this once at startup and draw the interface from the answer: show
+the library browser when `library-read` is present, the reading
+statistics when `read-insights` is. Probing routes and reading `403`s
+works, but it means the first thing the user sees is an error the
+client could have avoided.
+
+The route needs no particular scope — the narrowest token can ask about
+itself — but it is still authenticated: an absent, revoked or expired
+credential gets `401`. Treating that `401` as "this secret is no longer
+good, ask the user for a new one" is the correct reaction, and it is
+the cheapest way to check that a stored credential is still live.
+
+`HEAD /v1/token` is the same check without the body — `200` if the
+secret is still good, `401` if it is not — for a client that only wants
+to know whether the credential it stored last month still works.
+
+It describes the calling token and nothing else. To list every token on
+the account, use `GET /v1/tokens`, which needs the short-lived login
+credential from `POST /v1/login`.
+
 ### A credential for code running in the browser
 
 A reader or dashboard running as a page inside the web UI does not go
