@@ -6,104 +6,122 @@ import "github.com/chmouel/liseur-sync/internal/metadata"
 // who was granted access, how its filenames are read — and never what
 // it holds (ADR-0013).
 
-templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, next string, roots []string, flash Flash) {
+templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, next string, roots []string, owners []string, flash Flash) {
 	<h1>Libraries</h1>
 	@adminFlash(flash)
-	<section class="card">
-		<h2>Create a managed library</h2>
-		<p class="muted">
-			A managed library holds what people upload to it and names no path
-			on this server.
-		</p>
-		<form method="post" action={ prefix + "admin/libraries" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Owner <input name="owner" required autocomplete="off" placeholder="account name"/></label>
-			<label>Name <input name="name" required autocomplete="off"/></label>
-			<button type="submit" class="primary">Create managed library</button>
-		</form>
-	</section>
-	@adminRootLibraryForm(prefix, csrf, roots)
+	@adminAddLibraryForm(prefix, csrf, roots, owners)
 	if len(libs) == 0 {
 		<section class="card"><p class="muted">No libraries yet.</p></section>
 	}
 	for _, lib := range libs {
-		@adminLibraryCard(prefix, csrf, lib)
+		@adminLibraryCard(prefix, csrf, lib, owners)
 	}
 	if next != "" {
 		<p><a href={ prefix + "admin/libraries?after=" + next }>Next page →</a></p>
 	}
 }
 
-// adminRootLibraryForm attaches a directory that already exists on this
-// server: a plain tree, or a Calibre library read where it lies. It is
-// the one form on the panel that names a server path, which is why it
-// asks for the administrator's password and says plainly what the
-// server will and will not do below that path.
-templ adminRootLibraryForm(prefix string, csrf string, roots []string) {
-	<section class="card">
-		<h2>Attach a directory or Calibre library</h2>
-		<p class="muted">
-			The server reads this directory and never writes, renames or
-			deletes anything below it. A Calibre library is the tree holding
-			<code>metadata.db</code>; its books are read where they lie, so
-			nothing is copied and nothing is charged against a quota.
-		</p>
-		if len(roots) == 0 {
-			<p class="muted">
-				Any directory this server can read may be used. Set
-				<code>content.library_roots</code> to keep this form to the
-				trees you meant to serve.
-			</p>
-		} else {
-			<p class="muted">
-				Allowed roots:
-				for i, root := range roots {
-					if i > 0 {
-						{ ", " }
-					}
-					<code>{ root }</code>
-				}
-			</p>
-		}
-		<form method="post" action={ prefix + "admin/libraries/root" }>
+// adminAddLibraryForm is the one way a library is made from the panel.
+// The only question it insists on is where the books come from; picking
+// "a folder on this server" reveals the folder fields (pure CSS — a
+// browser without :has() simply shows everything, which is the same
+// form with more on it). Naming a server path is the one privilege here
+// beyond administering the application, which is why that branch, and
+// only that branch, asks the administrator to confirm with their own
+// password.
+templ adminAddLibraryForm(prefix string, csrf string, roots []string, owners []string) {
+	<section class="card addlib">
+		<h2>Add a library</h2>
+		<form method="post" action={ prefix + "admin/libraries" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Owner <input name="owner" required autocomplete="off" placeholder="account name"/></label>
-			<label>Name <input name="name" required autocomplete="off"/></label>
-			<label>Directory <input name="root" required autocomplete="off" placeholder="/srv/books"/></label>
 			<label>
-				Source
-				<select name="source">
-					<option value="directory">directory — a tree of files</option>
-					<option value="calibre">calibre — a tree with metadata.db</option>
+				Whose library is it?
+				<select name="owner" required>
+					<option value="" disabled selected>Choose an account…</option>
+					for _, name := range owners {
+						<option value={ name }>{ name }</option>
+					}
 				</select>
 			</label>
-			<label>
-				Storage
-				<select name="storage">
-					<option value="">default for the source</option>
-					<option value="cas">cas — copy each file into content storage</option>
-					<option value="in-place">in-place — serve the files where they lie</option>
-				</select>
-			</label>
-			<label>
-				Refresh
-				<select name="refresh">
-					<option value="interval">on an interval</option>
-					<option value="manual">only when asked</option>
-				</select>
-			</label>
-			<label>
-				Interval
-				<input name="interval" autocomplete="off" placeholder="15m"/>
-			</label>
-			@adminPasswordField(csrf)
-			<button type="submit" name="action" value="check">Check the directory</button>
-			<button type="submit" class="primary">Attach library</button>
+			<label>Name <input name="name" required autocomplete="off" placeholder="Family bookshelf"/></label>
+			<fieldset class="choice">
+				<legend>Where do its books come from?</legend>
+				<label class="check">
+					<input type="radio" name="from" value="uploads" checked/>
+					People upload them — books are added from the browser, one file at a time.
+				</label>
+				<label class="check">
+					<input type="radio" name="from" value="folder"/>
+					A folder on this server — the server reads it and keeps the
+					library up to date. It never changes anything inside.
+				</label>
+			</fieldset>
+			<div class="folder-only">
+				<label>Folder <input name="root" autocomplete="off" placeholder="/srv/books"/></label>
+				<p class="muted">
+					A Calibre library is recognised on its own — just point at
+					the folder that holds it.
+				</p>
+				if len(roots) > 0 {
+					<p class="muted">
+						Folders must be inside:
+						for i, root := range roots {
+							if i > 0 {
+								{ ", " }
+							}
+							<code>{ root }</code>
+						}
+					</p>
+				}
+				<details class="advanced">
+					<summary>Advanced options</summary>
+					<label>
+						What's in the folder
+						<select name="source">
+							<option value="">Work it out automatically (recommended)</option>
+							<option value="directory">Just book files</option>
+							<option value="calibre">A Calibre library</option>
+						</select>
+					</label>
+					<label>
+						Server copies
+						<select name="storage">
+							<option value="">Recommended for what's in the folder</option>
+							<option value="cas">Keep the server's own copies of the books</option>
+							<option value="in-place">Read the books straight from the folder</option>
+						</select>
+					</label>
+					<label>
+						Look for new books
+						<select name="refresh">
+							<option value="15m">Every 15 minutes</option>
+							<option value="30m">Every 30 minutes</option>
+							<option value="1h">Every hour</option>
+							<option value="6h">Every 6 hours</option>
+							<option value="24h">Once a day</option>
+							<option value="manual">Only when I ask</option>
+						</select>
+					</label>
+					if len(roots) == 0 {
+						<p class="muted">
+							Any folder this server can read may be used. The
+							<code>content.library_roots</code> setting narrows
+							this form to the folders you meant to serve.
+						</p>
+					}
+				</details>
+				<label>
+					Confirm with your password
+					<input name="admin_password" type="password" autocomplete="current-password"/>
+				</label>
+				<button type="submit" name="action" value="check">Test this folder</button>
+			</div>
+			<button type="submit" class="primary">Add library</button>
 		</form>
 	</section>
 }
 
-templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
+templ adminLibraryCard(prefix string, csrf string, v adminLibraryView, owners []string) {
 	<section class="card">
 		<h2>{ v.Library.Name }</h2>
 		<p class="muted">
@@ -118,31 +136,31 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
 			· created { v.Library.CreatedAt.Format("2006-01-02") }
 		</p>
 		if v.Refreshable() {
-			<p class="muted">Root: <code>{ v.Root() }</code></p>
+			<p class="muted">Folder: <code>{ v.Root() }</code></p>
 			<p class="muted">{ v.RefreshState() }</p>
 			if v.RefreshFailure() != "" {
-				<p class="error">Last refresh failed: { v.RefreshFailure() }</p>
+				<p class="error">The last check failed: { v.RefreshFailure() }</p>
 			}
 			<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/refresh" } class="inline">
 				<input type="hidden" name="csrf" value={ csrf }/>
-				<button type="submit">Refresh now</button>
+				<button type="submit">Look for new books now</button>
 			</form>
 			<p class="muted">
 				<a href={ prefix + "admin/libraries/" + v.Library.ID + "/review" }>Review queue →</a>
-				books whose source file changed under us, which the server
-				will not reinterpret on its own.
+				books whose file changed on disk; the server asks instead of
+				guessing.
 			</p>
 		}
-		<h3>Access</h3>
+		<h3>Who can use it</h3>
 		if len(v.Grants) == 0 {
 			<p class="muted">Only the owner.</p>
 		} else {
 			<table>
-				<tr><th>Account</th><th>Role</th><th>Since</th></tr>
+				<tr><th>Account</th><th>Can</th><th>Since</th></tr>
 				for _, g := range v.Grants {
 					<tr>
 						<td>{ g.UserName }</td>
-						<td>{ string(g.Role) }</td>
+						<td>{ roleWords(g.Role) }</td>
 						<td>{ g.CreatedAt.Format("2006-01-02") }</td>
 					</tr>
 				}
@@ -153,13 +171,21 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
 		}
 		<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/access" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Account <input name="user" required autocomplete="off"/></label>
 			<label>
-				Role
+				Account
+				<select name="user" required>
+					<option value="" disabled selected>Choose an account…</option>
+					for _, name := range owners {
+						<option value={ name }>{ name }</option>
+					}
+				</select>
+			</label>
+			<label>
+				Can
 				<select name="role">
-					<option value="read">read</option>
-					<option value="manage">manage</option>
-					<option value="none">no access</option>
+					<option value="read">Read the books</option>
+					<option value="manage">Manage the library</option>
+					<option value="none">Nothing — remove access</option>
 				</select>
 			</label>
 			<button type="submit" class="primary">Apply</button>
@@ -201,7 +227,7 @@ templ adminUserLibrariesSection(prefix string, libs []adminUserLibrary, more boo
 			<p class="muted">This account owns no libraries and was granted none.</p>
 		} else {
 			<table>
-				<tr><th>Library</th><th>Source</th><th>Access</th></tr>
+				<tr><th>Library</th><th>Kind</th><th>Access</th></tr>
 				for _, l := range libs {
 					<tr>
 						<td>{ l.Library.Name }</td>
@@ -210,7 +236,7 @@ templ adminUserLibrariesSection(prefix string, libs []adminUserLibrary, more boo
 							if l.Owner {
 								owner
 							} else {
-								{ string(l.Role) }
+								{ roleWords(l.Role) }
 							}
 						</td>
 					</tr>

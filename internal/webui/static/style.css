@@ -278,6 +278,25 @@ details.card > summary {
 details.card > summary::before { content: "+"; color: var(--muted); }
 details.card[open] > summary::before { content: "−"; }
 
+/* A disclosure inside a form (the root-library form's advanced axes):
+   quieter than a card summary, since the action below it is the point. */
+details.advanced { margin: 0 0 .8rem; }
+details.advanced > summary {
+	cursor: pointer; color: var(--muted); list-style: none;
+	display: flex; align-items: center; gap: .5rem; font-size: .95rem;
+}
+details.advanced > summary::before { content: "+"; }
+details.advanced[open] > summary::before { content: "−"; }
+
+/* The add-library form: the folder fields only matter once "a folder on
+   this server" is picked. Hidden with :has() so it needs no script; a
+   browser without :has() shows the whole form, which still works. */
+.addlib .choice { border: 0; padding: 0; margin: 0 0 .8rem; }
+.addlib .choice legend { font-weight: 600; padding: 0 0 .3rem; }
+.addlib:has(input[name="from"][value="uploads"]:checked) .folder-only {
+	display: none;
+}
+
 .narrow { max-width: 23rem; margin: 4rem auto; }
 
 /* The admin section's own navigation: one rail entry, several pages. */

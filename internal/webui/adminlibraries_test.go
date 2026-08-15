@@ -38,7 +38,10 @@ func TestAdminLibrariesPage(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("libraries page: %d", code)
 	}
-	for _, want := range []string{"Bobs shelf", "directory · cas", "bob", root, "Only the owner."} {
+	for _, want := range []string{
+		"Bobs shelf", "Folder of books · the server keeps its own copies",
+		"bob", root, "Only the owner.",
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("libraries page is missing %q:\n%s", want, body)
 		}
@@ -59,7 +62,7 @@ func TestAdminLibrariesPage(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries", url.Values{
 		"csrf": {csrf}, "owner": {"bob"}, "name": {"Comics"},
 	})
-	if !strings.Contains(body, "Created Comics for bob.") {
+	if !strings.Contains(body, "Added Comics for bob") {
 		t.Fatalf("create library: %s", body)
 	}
 
@@ -73,7 +76,7 @@ func TestAdminLibrariesPage(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/lib-bob/access", url.Values{
 		"csrf": {csrf}, "user": {"alice"}, "role": {"read"},
 	})
-	if !strings.Contains(body, "alice can now read this library.") {
+	if !strings.Contains(body, "alice can now read the books in this library.") {
 		t.Fatalf("grant: %s", body)
 	}
 	if _, err := st.LibraryByID(ctx, "u1", "lib-bob", store.LibraryRoleRead); err != nil {
@@ -122,14 +125,14 @@ func TestAdminLibrariesPage(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/lib-bob/refresh", url.Values{
 		"csrf": {csrf},
 	})
-	if !strings.Contains(body, "Queued a refresh of Bobs shelf") {
+	if !strings.Contains(body, "The server will look for new books in Bobs shelf") {
 		t.Fatalf("refresh now: %s", body)
 	}
 	lib, _ = st.AdminLibraryByID(ctx, "lib-bob")
 	if lib.RefreshRequestedAt == nil {
 		t.Fatal("the button recorded no request on the library")
 	}
-	if !strings.Contains(body, "A refresh is queued") {
+	if !strings.Contains(body, "The server will look for new books shortly.") {
 		t.Fatalf("the page does not say a refresh is queued:\n%s", body)
 	}
 	managed, err := st.ListLibraries(ctx, bob.ID, store.LibraryRoleManage)
@@ -148,7 +151,7 @@ func TestAdminLibrariesPage(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/libraries/"+managedID+"/refresh", url.Values{
 		"csrf": {csrf},
 	})
-	if !strings.Contains(body, "no source to refresh from") {
+	if !strings.Contains(body, "has no folder to check") {
 		t.Fatalf("refreshing a managed library: %s", body)
 	}
 
