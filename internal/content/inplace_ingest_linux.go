@@ -41,7 +41,7 @@ func ingestInPlaceFile(
 	file ScannedFile,
 	opts WatchedSyncOptions,
 	clock func() time.Time,
-) error {
+) (ingestOutcome, error) {
 	relativePath := file.RelativePath
 	jobID := watchedJobID(library.ID, file)
 	now := clock().UTC()
@@ -55,35 +55,35 @@ func ingestInPlaceFile(
 			CreatedAt:          now,
 		})
 	if err != nil {
-		return fmt.Errorf("queue in-place path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf("queue in-place path %q: %w", relativePath, err)
 	}
 	if !created && job.State != store.IngestReceived {
 		// Already published, already refused, or being published by
 		// another pass. Reading the file again could only produce a
 		// second answer to a question that has one.
-		return nil
+		return outcomeOfSettledJob(job.State), nil
 	}
 
 	src, err := openWatchedSource(root, relativePath)
 	if err != nil {
-		return err
+		return ingestPending, err
 	}
 	defer src.Close()
 
 	before, err := src.Stat()
 	if err != nil {
-		return err
+		return ingestPending, err
 	}
 	if !before.Mode().IsRegular() {
-		return fmt.Errorf("read in-place path %q: %w", relativePath, ErrUnsafePath)
+		return ingestPending, fmt.Errorf("read in-place path %q: %w", relativePath, ErrUnsafePath)
 	}
 	if before.Size() > opts.MaxFileBytes {
-		return fmt.Errorf("read in-place path %q: %w", relativePath, ErrTooLarge)
+		return ingestPending, fmt.Errorf("read in-place path %q: %w", relativePath, ErrTooLarge)
 	}
 
 	digest := sha256.New()
 	if _, err := copyBounded(ctx, io.Discard, digest, src, opts.MaxFileBytes); err != nil {
-		return fmt.Errorf("read in-place path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf("read in-place path %q: %w", relativePath, err)
 	}
 	contentSHA := hex.EncodeToString(digest.Sum(nil))
 
@@ -93,9 +93,9 @@ func ingestInPlaceFile(
 	if err != nil {
 		code, contentFailure := epub.ErrorCode(err)
 		if !contentFailure {
-			return fmt.Errorf("validate in-place path %q: %w", relativePath, err)
+			return ingestPending, fmt.Errorf("validate in-place path %q: %w", relativePath, err)
 		}
-		return quarantineInPlaceJob(ctx, st, job, string(code),
+		return ingestRefused, quarantineInPlaceJob(ctx, st, job, string(code),
 			"EPUB content failed structural validation", opts, clock)
 	}
 
@@ -105,20 +105,20 @@ func ingestInPlaceFile(
 	// catalogue a book that never existed in that form.
 	after, err := src.Stat()
 	if err != nil {
-		return err
+		return ingestPending, err
 	}
 	if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
-		return fmt.Errorf("read in-place path %q: %w", relativePath, ErrSourceRaced)
+		return ingestPending, fmt.Errorf("read in-place path %q: %w", relativePath, ErrSourceRaced)
 	}
 
 	metadataJSON, err := json.Marshal(publication.Metadata)
 	if err != nil {
-		return fmt.Errorf(
+		return ingestPending, fmt.Errorf(
 			"marshal metadata for in-place path %q: %w", relativePath, err)
 	}
 	patterns, err := inPlacePatterns(ctx, opts.Patterns, job)
 	if err != nil {
-		return err
+		return ingestPending, err
 	}
 	commitAt := clock().UTC()
 	request := newInPlaceBook(job, metadataJSON, patterns, store.BookFile{
@@ -129,19 +129,19 @@ func ingestInPlaceFile(
 	result, err := st.CommitInPlaceBook(
 		ctx, library.ActorUserID, job.ID, request)
 	if err != nil {
-		return fmt.Errorf("commit in-place path %q: %w", relativePath, err)
+		return ingestPending, fmt.Errorf("commit in-place path %q: %w", relativePath, err)
 	}
 	if result.Replayed {
-		return nil
+		return ingestQueued, nil
 	}
 	if _, _, err := MaterializeBookMetadata(
 		ctx, st, result.Job, patterns, clock); err != nil {
 		// The book, its file and its title are durable and correct. A tag
 		// that did not attach is worth another pass, not undoing a good
 		// publication.
-		return nil
+		return ingestQueued, nil
 	}
-	return nil
+	return ingestQueued, nil
 }
 
 // newInPlaceBook describes the book and file one in-place job becomes.

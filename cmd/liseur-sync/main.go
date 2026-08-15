@@ -316,6 +316,7 @@ func runLibraryRefreshWorker(
 				"unavailable", report.Unavailable,
 				"errored", report.Errored,
 				"ingested", report.Ingested,
+				"refused", report.Refused,
 				"unchanged", report.Unchanged,
 				"rehashed", report.Rehashed,
 				"review", report.Review,

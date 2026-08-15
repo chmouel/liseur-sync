@@ -274,7 +274,26 @@ catalog if it still has a servable file. If the new file really is a
 different book, delete the flagged one and let the next sweep ingest the
 path as what it now holds.
 
-### Reading filenames
+### Books the server will not publish
+
+The refresh log ends every pass with a tally:
+
+```
+library refresh pass complete libraries=1 swept=1 ingested=0 refused=1 unchanged=70 …
+```
+
+`refused` counts files the server read once and would not publish — an
+EPUB that fails structural validation, most often a truncated download or
+a file that is not really an EPUB. They are the reason a library can be
+short a book with nothing else going wrong, and they stay refused: a
+sweep meets them on every pass and does not read them again. To see which
+ones and why, list the library's ingest jobs; a refused file is a
+`quarantined` job carrying an `error_code` and the path it came from.
+
+Replace the file and the next sweep publishes it — the fingerprint covers
+size and modification time, so different bytes are a new question.
+
+
 
 A file that arrives with a path — one found under a library root rather
 than uploaded — can say something about its own author, series and title,
