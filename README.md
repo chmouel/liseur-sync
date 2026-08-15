@@ -1,101 +1,116 @@
 # liseur-sync
 
-A self-hostable server for the books you read and the place you got to
-in them. It is the companion to [Liseur](https://github.com/chmouel/liseur),
-and it talks to stock KOReader too, through a kosync-compatible adapter.
+A self-hosted synchronization server for your books and reading progress.
 
-One static Go binary. SQLite by default, PostgreSQL if you would rather.
-Multi-user.
+It is designed as the server companion to [Liseur](https://github.com/chmouel/liseur), with support for stock KOReader through a kosync-compatible API.
+
+`liseur-sync` is distributed as a single Go binary. It uses SQLite by default, supports PostgreSQL, and is built for multiple users.
 
 ![The library](docs/screenshots/library.png)
 
-## What it does
+## Features
 
-**It remembers where you were.** Not with last-write-wins, which is how
-you lose an afternoon's reading to a phone that woke up in your pocket,
-but with a per-user log of every position any device reported. Nothing
-overwrites anything; the history is there to look at, as sessions and
-statistics that come from what your readers actually reported rather
-than from a page number nobody can agree on. It also recognises a book
-across a Calibre re-encode, a rename, or a move to another shelf, so
-switching devices does not mean starting the chapter again.
+### Reading progress sync
 
-**It holds the books.** Upload an EPUB through the web UI or the API and
-it is checked, stored once whatever the file is called, and handed to any
-reader that speaks OPDS 1.2 — KOReader included. One server supplies the
-file and the position that goes with it. If you already have a directory
-of EPUBs, or a Calibre library, point it there instead: the server reads
-what is on disk and never writes to it.
+`liseur-sync` keeps a per-user history of reading positions reported by every device.
 
-**It lets you fix the metadata.** Browse by series, contributor, tag or
-genre, search the lot, correct anything, and — if the operator turns it
-on — ask OpenLibrary or Google Books and accept what comes back. A
-correction is yours: re-reading the file never undoes it.
+Instead of relying on last-write-wins synchronization, each position update is recorded. This avoids an older or stale device silently overwriting newer progress and also provides the data used for reading sessions and statistics.
+
+Books are identified independently of their filename, so renaming, moving, or re-encoding an EPUB with Calibre does not necessarily make it appear as a different book.
+
+### Book hosting and OPDS
+
+Upload EPUB files through the web interface or API and serve them to compatible readers through OPDS 1.2, including KOReader.
+
+Uploaded files are validated and stored by content rather than filename, avoiding unnecessary duplicates.
+
+You can also point `liseur-sync` at an existing directory of EPUBs or a Calibre library. In this mode, the source library is treated as read-only: the server indexes the files but does not modify them.
+
+### Metadata management
+
+Browse your library by series, contributor, tag, or genre, and search across the collection.
+
+Metadata can be edited directly from the web interface. When enabled by the administrator, metadata can also be looked up from OpenLibrary or Google Books before being reviewed and applied.
+
+Manual corrections are preserved and are not overwritten when the underlying EPUB is scanned again.
 
 ![A book](docs/screenshots/book.png)
 
-## Read it in the browser
+## Web reader
 
 ![The reader](docs/screenshots/reader.png)
 
-The reader unpacks the publication in your browser, so no route ever
-serves publisher markup and no script inside a book gets to run. It
-reports its position like any other client, so you can close the laptop
-and pick the chapter up on an e-ink device. Details, including the
-optional second hostname for the paranoid, are in
-[ADR-0007](docs/adr/0007-web-reader.md).
+`liseur-sync` includes a browser-based EPUB reader.
+
+Books are unpacked and rendered in the browser without exposing publisher content directly through application routes, and scripts contained inside EPUBs are not executed.
+
+Reading progress is synchronized through the same API used by other clients, so you can move between the web reader, Liseur, KOReader, and other compatible clients without maintaining separate progress.
+
+The design and security model are described in [ADR-0007](docs/adr/0007-web-reader.md), including the optional use of a separate hostname for the reader.
 
 ## Quick start
 
-The installer detects Docker (or sets up rootless Podman with a systemd
-user service), asks which database you want, starts the server and walks
-you through your first account:
+The installer detects Docker or configures rootless Podman with a systemd user service. It then lets you choose the database, starts the server, and guides you through creation of the first account.
 
-```
+```sh
 curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/install.sh | bash
 ```
 
-Clone the repo and run `scripts/install.sh` if piping the internet into
-bash makes you uneasy; pin a release with `LISEUR_VERSION=vX.Y.Z`.
+If you prefer not to pipe a remote script directly into a shell, clone the repository and run:
 
-With Docker Compose, three database postures:
-
-```
-docker compose --profile sqlite up -d        # single-file SQLite
-docker compose --profile postgres up -d      # bundled Postgres
-docker compose --profile external up -d      # your existing Postgres
+```sh
+scripts/install.sh
 ```
 
-Or from source:
+You can install a specific release with:
 
+```sh
+LISEUR_VERSION=vX.Y.Z scripts/install.sh
 ```
+
+### Docker Compose
+
+Three database configurations are provided:
+
+```sh
+docker compose --profile sqlite up -d        # SQLite
+docker compose --profile postgres up -d      # bundled PostgreSQL
+docker compose --profile external up -d      # existing PostgreSQL server
+```
+
+### Build from source
+
+```sh
 go build ./cmd/liseur-sync
 ./liseur-sync serve
 ```
 
-Either way, open `/ui/`. A server with no accounts offers a setup page,
-and the account you make there is the first administrator. Everything
-after that — accounts, libraries, tokens, pairing a reader — is in the
-panel, and in the `admin` subcommands for people who prefer a shell.
+Once the server is running, open `/ui/`.
+
+If no accounts exist yet, the setup page is displayed automatically. The first account created becomes the initial administrator.
+
+Users, libraries, API tokens, and reader pairing can then be managed from the administration interface or through the `admin` CLI commands.
 
 ![The admin panel](docs/screenshots/admin.png)
 
-Pairing KOReader, TLS, watched folders, Calibre and backups are covered
-in [docs/deployment.md](docs/deployment.md).
+KOReader pairing, TLS configuration, watched directories, Calibre integration, and backups are documented in [docs/deployment.md](docs/deployment.md).
 
-## Writing a client
+## Client integration
 
-[liseur](https://github.com/chmouel/liseur) is the reference client. For
-another one, start with [docs/integrating.md](docs/integrating.md) — it
-explains why the protocol is shaped the way it is — and keep
-[docs/openapi.yaml](docs/openapi.yaml) open for the exact shapes.
+[Liseur](https://github.com/chmouel/liseur) is the reference client.
+
+If you are implementing another client, start with [docs/integrating.md](docs/integrating.md) for an overview of the synchronization model and protocol design.
+
+The complete API specification is available in [docs/openapi.yaml](docs/openapi.yaml).
 
 ## Security
 
-See [SECURITY.md](SECURITY.md). Please do not open a public issue.
+See [SECURITY.md](SECURITY.md) for reporting security issues.
+
+Please do not report security vulnerabilities through public GitHub issues.
 
 ## License
 
-MIT. The screenshots show [Standard Ebooks](https://standardebooks.org)
-editions, which are public domain, and are made by
-`scripts/screenshots.sh`.
+MIT.
+
+The screenshots use public-domain editions from [Standard Ebooks](https://standardebooks.org) and are generated by `scripts/screenshots.sh`.
