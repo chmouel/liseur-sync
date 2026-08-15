@@ -32,15 +32,15 @@ loose ends that must come before any of it, are in
 | [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
 | [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Implemented; book payload amended by [0015](0015-catalog-payloads-for-clients.md) | Nothing outstanding |
 | [0007](0007-web-reader.md) | Web reader | Later | Implemented | Nothing outstanding |
-| [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Server side unblocked: [0015](0015-catalog-payloads-for-clients.md) and [0016](0016-token-self-introspection.md) are implemented |
-| [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Server side unblocked: [0015](0015-catalog-payloads-for-clients.md) and [0016](0016-token-self-introspection.md) are implemented |
+| [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Add stable account identity in [0016](0016-token-self-introspection.md) so replacement tokens do not force a full replay |
+| [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Add stable account identity in [0016](0016-token-self-introspection.md) so replacement tokens do not force a full replay |
 | [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Implemented | Nothing outstanding |
 | [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Implemented | Nothing outstanding |
 | [0012](0012-reader-engine-foliate.md) | Replace the reader engine with foliate-js | Later | Implemented | Nothing outstanding |
 | [0013](0013-admin-panel.md) | The admin panel | Later | Implemented | Nothing outstanding |
 | [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Implemented | Covers from `cover.jpg` are not wired yet |
 | [0015](0015-catalog-payloads-for-clients.md) | Catalog payloads clients can walk | Client | Implemented | Nothing outstanding |
-| [0016](0016-token-self-introspection.md) | Token self-introspection | Client | Implemented | Nothing outstanding |
+| [0016](0016-token-self-introspection.md) | Token self-introspection | Client | Accepted; phases 1–2 implemented | Return a stable opaque `account_id` for safe reconnect detection |
 
 ## Convention
 
