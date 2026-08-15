@@ -66,6 +66,15 @@ type Server struct {
 	// Mount fills in defaults when they are nil.
 	AdminReauthUserLimiter *auth.RateLimiter
 	AdminReauthIPLimiter   *auth.RateLimiter
+	// Backups verifies that the database and the content directory are
+	// a restorable pair, for the maintenance page's backup check. Nil
+	// means the page says the check is unavailable rather than offering
+	// a button that cannot work.
+	Backups BackupVerifier
+	// backup holds the last verification. It is the one piece of state
+	// this server keeps between requests, because the check outlives
+	// the request that started it.
+	backup backupRun
 }
 
 const cookieName = "liseur_session"
@@ -239,6 +248,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/admin/users", sec(s.requireAdmin(s.handleAdminUsers)))
 	mux.Handle("GET /ui/admin/users/{id}", sec(s.requireAdmin(s.handleAdminUser)))
 	mux.Handle("GET /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminLibraries)))
+	mux.Handle("GET /ui/admin/libraries/{id}/review",
+		sec(s.requireAdmin(s.handleAdminLibraryReview)))
 	mux.Handle("GET /ui/admin/maintenance",
 		sec(s.requireAdmin(s.handleAdminMaintenance)))
 
@@ -271,7 +282,21 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminRevokeKosync)))
 	mux.Handle("POST /ui/admin/users/{id}/koplugin/{deviceID}/revoke",
 		sec(s.requireAdmin(s.handleAdminRevokeKoplugin)))
+	mux.Handle("POST /ui/admin/users/{id}/tokens",
+		sec(s.requireAdmin(s.handleAdminMintToken)))
+	mux.Handle("POST /ui/admin/users/{id}/pairing",
+		sec(s.requireAdmin(s.handleAdminPairingCode)))
+	mux.Handle("POST /ui/admin/users/{id}/koplugin",
+		sec(s.requireAdmin(s.handleAdminCreateKoplugin)))
+	mux.Handle("POST /ui/admin/users/{id}/backfill",
+		sec(s.requireAdmin(s.handleAdminBackfillWorks)))
 	mux.Handle("POST /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminCreateLibrary)))
+	mux.Handle("POST /ui/admin/libraries/root",
+		sec(s.requireAdmin(s.handleAdminCreateRootLibrary)))
+	mux.Handle("POST /ui/admin/libraries/{id}/review/{bookID}/clear",
+		sec(s.requireAdmin(s.handleAdminClearReview)))
+	mux.Handle("POST /ui/admin/maintenance/verify",
+		sec(s.requireAdmin(s.handleAdminVerifyBackup)))
 	mux.Handle("POST /ui/admin/libraries/{id}/access",
 		sec(s.requireAdmin(s.handleAdminLibraryAccess)))
 	mux.Handle("POST /ui/admin/libraries/{id}/layout",

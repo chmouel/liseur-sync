@@ -26,9 +26,6 @@ var (
 		"a library name may be at most %d characters", MaxLibraryNameLength)
 	ErrGrantToOwner = errors.New(
 		"the owner already has full access to this library")
-	ErrRootLibraryFromUI = errors.New(
-		"a directory or Calibre library names a path on the server and is " +
-			"created with the add-library subcommand")
 )
 
 // ValidateLibraryName is the one definition of an acceptable name. It

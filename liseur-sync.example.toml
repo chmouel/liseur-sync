@@ -89,6 +89,19 @@ refresh_tick_seconds = 60
 watched_max_files = 200000
 watched_max_depth = 32
 
+# Where the admin panel may point a directory or Calibre library.
+#
+# Attaching one names a path on this machine, which is a privilege
+# beyond "can administer this application": the form is a filesystem
+# oracle and a way to make the scanner read any tree the server can. It
+# is behind the administrator's own password, rate-limited and audited,
+# and listing the trees you meant to serve here narrows it further. A
+# root is accepted when it is one of these or below one.
+#
+# Empty (the default) means anywhere the server can read, which is what
+# `liseur-sync admin add-library` has always allowed.
+# library_roots = ["/srv/books", "/srv/calibre"]
+
 # Optional lookups against external metadata services. Off unless you
 # list a provider here: nothing else in the server makes an outbound
 # request, and no scan or ingest ever does — lookup happens only when a

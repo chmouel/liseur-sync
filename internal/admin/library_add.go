@@ -14,30 +14,142 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// addLibrary registers an existing directory as a root-backed library.
-//
-// The three axes ADR-0014 separates are three flags here. Defaults
-// follow the source: a plain directory is copied into content-addressed
-// storage on the terms an upload gets, a Calibre library is read where
-// it lies because copying somebody's whole Calibre tree a second time is
-// the cost this exists to avoid.
+// RootLibraryOptions is how a root-backed library is described, on the
+// three axes ADR-0014 separates: where its books come from, where their
+// bytes live, and how often the source is read again. Both surfaces —
+// the `add-library` subcommand and the admin panel's form — fill this
+// in and hand it to NewRootLibrary, so a library made from a browser is
+// the same row as one made from a shell.
+type RootLibraryOptions struct {
+	Source   store.LibrarySource
+	Storage  store.LibraryStorage
+	Refresh  store.LibraryRefresh
+	Interval time.Duration
+}
+
+// Errors both surfaces render when the axes do not make sense.
+var (
+	ErrSourceNotRootBacked = errors.New(
+		"a root-backed library is a directory or a Calibre library")
+	ErrStorageInvalid = errors.New("storage is cas or in-place")
+	ErrRefreshInvalid = errors.New("refresh is manual or on an interval")
+	ErrIntervalTooShort = errors.New(
+		"a refresh interval of less than a minute would sweep the disk "+
+			"more often than it can finish")
+)
+
+// Normalize fills in the defaults and refuses the combinations that are
+// not libraries. Defaults follow the source: a plain directory is
+// copied into content-addressed storage on the terms an upload gets, a
+// Calibre library is read where it lies because copying somebody's
+// whole Calibre tree a second time is the cost this exists to avoid.
+func (o *RootLibraryOptions) Normalize() error {
+	if o.Source == "" {
+		o.Source = store.LibraryDirectory
+	}
+	if !o.Source.RootBacked() {
+		return ErrSourceNotRootBacked
+	}
+	if o.Storage == "" {
+		o.Storage = store.LibraryStorageCAS
+		if o.Source == store.LibraryCalibre {
+			o.Storage = store.LibraryStorageInPlace
+		}
+	}
+	if !o.Storage.Valid() {
+		return ErrStorageInvalid
+	}
+	if o.Refresh == "" {
+		o.Refresh = store.LibraryRefreshInterval
+	}
+	if !o.Refresh.Valid() {
+		return ErrRefreshInvalid
+	}
+	if o.Refresh != store.LibraryRefreshInterval {
+		o.Interval = 0
+		return nil
+	}
+	if o.Interval == 0 {
+		o.Interval = store.DefaultRefreshInterval
+	}
+	if o.Interval < time.Minute {
+		return ErrIntervalTooShort
+	}
+	return nil
+}
+
+// NewRootLibrary registers an existing directory as a root-backed
+// library owned by ownerUserID.
 //
 // The root is checked here, at the moment an administrator names it,
 // rather than left for the first sweep to complain about in a log nobody
-// is reading. A typo in a path is the likeliest thing to go wrong with
-// this command and the cheapest to catch.
+// is reading. A typo in a path is the likeliest thing to go wrong and
+// the cheapest to catch.
 //
 // The path is stored absolute. A relative one would resolve against
 // whatever directory the server was started from, which is not the
 // directory the administrator was standing in when they typed it.
+func NewRootLibrary(
+	ctx context.Context,
+	st store.Store,
+	ownerUserID, name, root string,
+	opts RootLibraryOptions,
+) (store.Library, error) {
+	if err := opts.Normalize(); err != nil {
+		return store.Library{}, err
+	}
+	if err := ValidateLibraryName(name); err != nil {
+		return store.Library{}, err
+	}
+	absolute, err := ResolveLibraryRoot(root)
+	if err != nil {
+		return store.Library{}, err
+	}
+	if err := CheckLibraryRoot(absolute, opts.Source); err != nil {
+		return store.Library{}, err
+	}
+	lib := store.Library{
+		ID:          uuid.New().String(),
+		OwnerUserID: ownerUserID,
+		// The owner pays for the CAS snapshots taken from the root, on
+		// the same terms as an upload (ADR-0002). An in-place library
+		// copies nothing, so it charges nothing.
+		QuotaUserID:     ownerUserID,
+		Source:          opts.Source,
+		Storage:         opts.Storage,
+		Refresh:         opts.Refresh,
+		RefreshInterval: opts.Interval,
+		Name:            strings.TrimSpace(name),
+		RootPath:        &absolute,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := st.CreateLibrary(ctx, lib); err != nil {
+		return store.Library{}, err
+	}
+	return lib, nil
+}
+
+// CheckLibraryRoot is the source-specific half of naming a root: a
+// Calibre library that holds no metadata.db is a directory somebody
+// pointed at by mistake, and saying so now is cheaper than a refresh
+// that fails every interval.
+func CheckLibraryRoot(root string, source store.LibrarySource) error {
+	if source != store.LibraryCalibre {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(root, "metadata.db")); err != nil {
+		return fmt.Errorf(
+			"%q holds no metadata.db, so it is not a Calibre library", root)
+	}
+	return nil
+}
+
+// addLibrary registers an existing directory as a root-backed library.
 func addLibrary(ctx context.Context, st store.Store, args []string) error {
 	const usage = "usage: add-library [-source directory|calibre] " +
 		"[-storage cas|in-place] [-refresh manual|interval] " +
 		"[-interval <duration>] <owner> <name> <root>"
-	source := store.LibraryDirectory
-	storage := store.LibraryStorage("")
-	refresh := store.LibraryRefreshInterval
-	interval := store.DefaultRefreshInterval
+	var opts RootLibraryOptions
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		flag := args[i]
@@ -52,23 +164,23 @@ func addLibrary(ctx context.Context, st store.Store, args []string) error {
 		i++
 		switch flag {
 		case "-source":
-			source = store.LibrarySource(value)
-			if source == store.LibraryManaged || !source.Valid() {
+			opts.Source = store.LibrarySource(value)
+			if !opts.Source.RootBacked() {
 				return fmt.Errorf(
 					"-source must be directory or calibre, got %q", value)
 			}
 		case "-storage":
 			// The wire and the column spell it in_place; a person
 			// typing it at a shell reaches for the hyphen.
-			storage = store.LibraryStorage(
+			opts.Storage = store.LibraryStorage(
 				strings.ReplaceAll(value, "-", "_"))
-			if !storage.Valid() {
+			if !opts.Storage.Valid() {
 				return fmt.Errorf(
 					"-storage must be cas or in-place, got %q", value)
 			}
 		case "-refresh":
-			refresh = store.LibraryRefresh(value)
-			if !refresh.Valid() {
+			opts.Refresh = store.LibraryRefresh(value)
+			if !opts.Refresh.Valid() {
 				return fmt.Errorf(
 					"-refresh must be manual or interval, got %q", value)
 			}
@@ -77,10 +189,7 @@ func addLibrary(ctx context.Context, st store.Store, args []string) error {
 			if err != nil {
 				return fmt.Errorf("-interval %q: %w", value, err)
 			}
-			if d < time.Minute {
-				return errors.New("-interval must be at least 1m")
-			}
-			interval = d
+			opts.Interval = d
 		default:
 			return fmt.Errorf("unknown flag %q\n%s", flag, usage)
 		}
@@ -88,54 +197,16 @@ func addLibrary(ctx context.Context, st store.Store, args []string) error {
 	if len(rest) != 3 {
 		return errors.New(usage)
 	}
-	if storage == "" {
-		storage = store.LibraryStorageCAS
-		if source == store.LibraryCalibre {
-			storage = store.LibraryStorageInPlace
-		}
-	}
 	u, err := st.UserByName(ctx, rest[0])
 	if err != nil {
 		return err
 	}
-	name := strings.TrimSpace(rest[1])
-	if err := ValidateLibraryName(name); err != nil {
-		return err
-	}
-	root, err := libraryRoot(rest[2])
+	lib, err := NewRootLibrary(ctx, st, u.ID, rest[1], rest[2], opts)
 	if err != nil {
 		return err
 	}
-	if source == store.LibraryCalibre {
-		if _, err := os.Stat(filepath.Join(root, "metadata.db")); err != nil {
-			return fmt.Errorf(
-				"%q holds no metadata.db, so it is not a Calibre library: %w",
-				root, err)
-		}
-	}
-	if refresh != store.LibraryRefreshInterval {
-		interval = 0
-	}
-	lib := store.Library{
-		ID:          uuid.New().String(),
-		OwnerUserID: u.ID,
-		// The owner pays for the CAS snapshots taken from the root, on
-		// the same terms as an upload (ADR-0002). An in-place library
-		// copies nothing, so it charges nothing.
-		QuotaUserID:     u.ID,
-		Source:          source,
-		Storage:         storage,
-		Refresh:         refresh,
-		RefreshInterval: interval,
-		Name:            name,
-		RootPath:        &root,
-		CreatedAt:       time.Now().UTC(),
-	}
-	if err := st.CreateLibrary(ctx, lib); err != nil {
-		return err
-	}
 	fmt.Printf("created %s library %q (id %s) owned by %s over %s\n",
-		lib.Source, lib.Name, lib.ID, u.Name, root)
+		lib.Source, lib.Name, lib.ID, u.Name, *lib.RootPath)
 	fmt.Printf("storage: %s; refresh: %s\n", lib.Storage, refreshDescription(lib))
 	fmt.Println(
 		"the server reads this directory and never writes, renames or " +
@@ -151,9 +222,11 @@ func refreshDescription(l store.Library) string {
 	return "manual"
 }
 
-// libraryRoot resolves and checks the directory a root-backed library covers.
-
-func libraryRoot(path string) (string, error) {
+// ResolveLibraryRoot resolves and checks the directory a root-backed
+// library covers, and is the one definition of an acceptable root: both
+// the subcommand and the panel go through it, so a path one accepts is
+// a path the other accepts.
+func ResolveLibraryRoot(path string) (string, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
 		return "", errors.New("library root must not be blank")

@@ -67,10 +67,13 @@ the library directory with `-source calibre` instead: `metadata.db` is
 read live and nothing is copied, so keep editing in Calibre and this
 server follows.
 
-An administrator also gets `/ui/admin`: accounts (create, reset a
-password, grant the role, disable), libraries and who may read them,
-and what the background jobs are doing. It administers accounts, not
-their contents — it never shows what anybody is reading.
+An administrator also gets `/ui/admin`, which does everything the
+`admin` subcommands do: accounts (create, reset a password, mint a
+token, pair a reader, grant the role, disable), libraries of every kind
+including attaching a Calibre or directory tree that already exists on
+the server, review queues, and what the background jobs are doing —
+plus the backup check. It administers accounts, not their contents: it
+never shows what anybody is reading.
 
 Or with Docker Compose, three database postures:
 

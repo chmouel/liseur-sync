@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
@@ -300,6 +301,171 @@ func (s *Server) handleAdminRevokeKoplugin(
 			return "", err
 		}
 		return "Statistics device revoked.", nil
+	})
+}
+
+// The credential-minting actions. Each one hands out a working way into
+// somebody else's account, so each is behind the acting administrator's
+// own password — the same gate a password reset carries, for the same
+// reason. The secret is shown exactly once, on the page that made it,
+// and stored hashed.
+
+// handleAdminMintToken creates an API token for another account, with
+// the scopes the form asked for. It is the panel's `mint-token`: the
+// operator who has just enrolled somebody's e-reader for them should
+// not have to reach a shell to produce the token it needs.
+func (s *Server) handleAdminMintToken(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.withTargetSecret(w, r, a, u, "mint-token",
+		func(target store.User) (string, string, error) {
+			scopes, err := formScopes(r)
+			if err != nil {
+				return "", "", err
+			}
+			name := strings.TrimSpace(r.FormValue("name"))
+			if name == "" {
+				return "", "", errors.New("a token needs a name")
+			}
+			secret, tok, err := s.Auth.MintToken(r.Context(), target.ID, name, scopes, nil)
+			if err != nil {
+				if errors.Is(err, store.ErrAdminGrantRequiresAdmin) ||
+					errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
+					return "", "", errors.New(
+						"the admin scope belongs to an admin account: make " +
+							target.Name + " an administrator first")
+				}
+				return "", "", err
+			}
+			return secret, "Token for " + target.Name + " (" +
+				tok.Scopes.String() + "), shown once", nil
+		})
+}
+
+// handleAdminPairingCode mints a kosync pairing code for another
+// account: 128 bits, hashed at rest, single-use, short-lived.
+func (s *Server) handleAdminPairingCode(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.withTargetSecret(w, r, a, u, "pairing-code",
+		func(target store.User) (string, string, error) {
+			code, err := auth.NewSecret()
+			if err != nil {
+				return "", "", err
+			}
+			code = code[:32]
+			id, err := auth.NewSecret()
+			if err != nil {
+				return "", "", err
+			}
+			ttl := time.Duration(s.Cfg.PairingCodeTTLMin) * time.Minute
+			if ttl <= 0 {
+				ttl = 15 * time.Minute
+			}
+			if err := s.St.CreatePairingCode(r.Context(), store.PairingCode{
+				ID: id, UserID: target.ID, CodeSHA256: auth.HashSecret(code),
+				ExpiresAt: time.Now().Add(ttl),
+			}); err != nil {
+				return "", "", err
+			}
+			return code, "kosync pairing code for " + target.Name +
+				" (" + humanDuration(ttl) + ", single use)", nil
+		})
+}
+
+// handleAdminCreateKoplugin mints a statistics-plugin capability for
+// another account. The capability is the whole credential, so it is
+// shown once and stored hashed.
+func (s *Server) handleAdminCreateKoplugin(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.withTargetSecret(w, r, a, u, "koplugin-device",
+		func(target store.User) (string, string, error) {
+			label := strings.TrimSpace(r.FormValue("name"))
+			if label == "" {
+				return "", "", errors.New("a statistics device needs a name")
+			}
+			capability, err := auth.NewSecret()
+			if err != nil {
+				return "", "", err
+			}
+			id, err := auth.NewSecret()
+			if err != nil {
+				return "", "", err
+			}
+			if err := s.St.CreateKopluginDevice(r.Context(), store.KopluginDevice{
+				ID: id, UserID: target.ID, TokenSHA256: auth.HashSecret(capability),
+				Label: label, DeviceID: "koplugin:" + label,
+				CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				return "", "", err
+			}
+			return capability, "Capability for " + target.Name +
+				": put it in the plugin's server URL, /adapter/koplugin/<capability>", nil
+		})
+}
+
+// handleAdminBackfillWorks maps every catalog book this account can
+// read to a sync work, so that statistics do not wait for each book to
+// be opened. It reads and writes the account's own catalog and hands
+// out nothing, so it carries no password re-verification; the report is
+// counts, which is all the CLI prints too.
+func (s *Server) handleAdminBackfillWorks(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.withTargetNoReauth(w, r, a, u, "backfill-works", func(target store.User) (string, error) {
+		report, err := admin.BackfillWorks(r.Context(), s.St, target.ID)
+		// The report is reported even on failure: a run that stops
+		// halfway has still committed everything it counted.
+		notice := "Mapped " + target.Name + "'s books to works: " +
+			strconv.Itoa(report.Books) + " looked at, " +
+			strconv.Itoa(report.Created) + " new, " +
+			strconv.Itoa(report.Linked) + " linked, " +
+			strconv.Itoa(report.Fuzzy) + " needing confirmation, " +
+			strconv.Itoa(report.Conflicted) + " conflicted, " +
+			strconv.Itoa(report.Skipped) + " skipped."
+		if err != nil {
+			return "", errors.New(notice + " It stopped early: " + err.Error())
+		}
+		return notice, nil
+	})
+}
+
+// withTargetSecret is withTarget for the actions whose result is a
+// secret: the value is put in the flash rather than in the notice, so
+// that the one template that knows how to show a secret once is the one
+// that shows it.
+func (s *Server) withTargetSecret(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+	action string, do func(store.User) (secret string, label string, err error),
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	targetID := r.PathValue("id")
+	target, err := s.St.UserByID(r.Context(), targetID)
+	if err != nil {
+		http.Error(w, "no such user", http.StatusNotFound)
+		return
+	}
+	if err := s.reauth(r, u); err != nil {
+		logAdminAction(r, u, action, targetID, err)
+		if errors.Is(err, errRateLimited) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+		s.renderAdminUser(w, r, a, u, targetID, Flash{Error: err.Error()})
+		return
+	}
+	secret, label, err := do(target)
+	logAdminAction(r, u, action, targetID, err)
+	if err != nil {
+		s.renderAdminUser(w, r, a, u, targetID, Flash{Error: err.Error()})
+		return
+	}
+	s.renderAdminUser(w, r, a, u, targetID, Flash{
+		Secret: secret, SecretLabel: label,
 	})
 }
 

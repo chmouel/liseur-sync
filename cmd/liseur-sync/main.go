@@ -572,6 +572,7 @@ func cmdServe(args []string) error {
 		Uploads:      apiSrv,
 		Downloads:    apiSrv,
 		Covers:       apiSrv,
+		Backups:      &backupVerifier{st: st, cas: cas},
 	}
 	mux := apiSrv.Handler()
 

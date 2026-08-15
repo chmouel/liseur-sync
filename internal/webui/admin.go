@@ -55,6 +55,8 @@ func describeConfig(c config.Config) configFacts {
 	add("Trusted proxies", listOr(c.TrustedProxies, "none"))
 	add("CORS origins", listOr(c.CORSAllowedOrigins, "none"))
 	add("Reader origin", orValue(c.ReaderOrigin, "same origin"))
+	add("Library roots for the panel", listOr(c.Content.LibraryRoots,
+		"anywhere the server can read"))
 	add("Metadata providers", listOr(c.Metadata.Providers, "none (external lookup off)"))
 	return f
 }

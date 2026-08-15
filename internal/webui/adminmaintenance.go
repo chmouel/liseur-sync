@@ -39,6 +39,10 @@ type maintenanceView struct {
 	RefreshTick string
 	Refresh     refreshHealth
 	Now         time.Time
+	// Backup is the last backup verification this server ran, and
+	// BackupAvailable says whether it can run one at all.
+	Backup          backupRunView
+	BackupAvailable bool
 }
 
 // refreshHealth is what the page says about library refreshes: counts,
@@ -147,6 +151,12 @@ type jobStateRow struct {
 func (s *Server) handleAdminMaintenance(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
+	s.renderAdminMaintenance(w, r, a, u, Flash{})
+}
+
+func (s *Server) renderAdminMaintenance(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
+) {
 	counts, err := s.St.AdminCounts(r.Context())
 	if err != nil {
 		http.Error(w, "counts unavailable", http.StatusInternalServerError)
@@ -161,9 +171,11 @@ func (s *Server) handleAdminMaintenance(
 	}
 	view.Refresh = s.libraryRefreshHealth(r, view.Now)
 	view.Jobs = jobRows(counts, view.Now)
+	view.Backup = s.backup.snapshot()
+	view.BackupAvailable = s.backupsAvailable()
 	prefix := relPrefix(r.URL.Path)
 	adminPage("Maintenance", prefix, uiCtx(r, u), csrfFor(a), "maintenance",
-		adminMaintenanceBody(prefix, view)).
+		adminMaintenanceBody(prefix, csrfFor(a), view, flash)).
 		Render(r.Context(), w)
 }
 

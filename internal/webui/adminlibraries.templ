@@ -6,17 +6,14 @@ import "github.com/chmouel/liseur-sync/internal/metadata"
 // who was granted access, how its filenames are read — and never what
 // it holds (ADR-0013).
 
-templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, next string, flash Flash) {
+templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, next string, roots []string, flash Flash) {
 	<h1>Libraries</h1>
 	@adminFlash(flash)
 	<section class="card">
-		<h2>Create a library</h2>
+		<h2>Create a managed library</h2>
 		<p class="muted">
 			A managed library holds what people upload to it and names no path
-			on this server. A <i>directory</i> or <i>Calibre</i> library
-			indexes a tree that already exists here, so it is created with
-			<code>liseur-sync admin add-library</code> — naming a server
-			path is not something a browser session should be able to do.
+			on this server.
 		</p>
 		<form method="post" action={ prefix + "admin/libraries" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
@@ -25,6 +22,7 @@ templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, ne
 			<button type="submit" class="primary">Create managed library</button>
 		</form>
 	</section>
+	@adminRootLibraryForm(prefix, csrf, roots)
 	if len(libs) == 0 {
 		<section class="card"><p class="muted">No libraries yet.</p></section>
 	}
@@ -34,6 +32,75 @@ templ adminLibrariesBody(prefix string, csrf string, libs []adminLibraryView, ne
 	if next != "" {
 		<p><a href={ prefix + "admin/libraries?after=" + next }>Next page →</a></p>
 	}
+}
+
+// adminRootLibraryForm attaches a directory that already exists on this
+// server: a plain tree, or a Calibre library read where it lies. It is
+// the one form on the panel that names a server path, which is why it
+// asks for the administrator's password and says plainly what the
+// server will and will not do below that path.
+templ adminRootLibraryForm(prefix string, csrf string, roots []string) {
+	<section class="card">
+		<h2>Attach a directory or Calibre library</h2>
+		<p class="muted">
+			The server reads this directory and never writes, renames or
+			deletes anything below it. A Calibre library is the tree holding
+			<code>metadata.db</code>; its books are read where they lie, so
+			nothing is copied and nothing is charged against a quota.
+		</p>
+		if len(roots) == 0 {
+			<p class="muted">
+				Any directory this server can read may be used. Set
+				<code>content.library_roots</code> to keep this form to the
+				trees you meant to serve.
+			</p>
+		} else {
+			<p class="muted">
+				Allowed roots:
+				for i, root := range roots {
+					if i > 0 {
+						{ ", " }
+					}
+					<code>{ root }</code>
+				}
+			</p>
+		}
+		<form method="post" action={ prefix + "admin/libraries/root" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>Owner <input name="owner" required autocomplete="off" placeholder="account name"/></label>
+			<label>Name <input name="name" required autocomplete="off"/></label>
+			<label>Directory <input name="root" required autocomplete="off" placeholder="/srv/books"/></label>
+			<label>
+				Source
+				<select name="source">
+					<option value="directory">directory — a tree of files</option>
+					<option value="calibre">calibre — a tree with metadata.db</option>
+				</select>
+			</label>
+			<label>
+				Storage
+				<select name="storage">
+					<option value="">default for the source</option>
+					<option value="cas">cas — copy each file into content storage</option>
+					<option value="in-place">in-place — serve the files where they lie</option>
+				</select>
+			</label>
+			<label>
+				Refresh
+				<select name="refresh">
+					<option value="interval">on an interval</option>
+					<option value="manual">only when asked</option>
+				</select>
+			</label>
+			<label>
+				Interval
+				<input name="interval" autocomplete="off" placeholder="15m"/>
+			</label>
+			@adminPasswordField(csrf)
+			<button type="submit" name="action" value="check">Check the directory</button>
+			<button type="submit" class="primary">Attach library</button>
+		</form>
+	</section>
 }
 
 templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
@@ -60,6 +127,11 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView) {
 				<input type="hidden" name="csrf" value={ csrf }/>
 				<button type="submit">Refresh now</button>
 			</form>
+			<p class="muted">
+				<a href={ prefix + "admin/libraries/" + v.Library.ID + "/review" }>Review queue →</a>
+				books whose source file changed under us, which the server
+				will not reinterpret on its own.
+			</p>
 		}
 		<h3>Access</h3>
 		if len(v.Grants) == 0 {
@@ -152,4 +224,49 @@ templ adminUserLibrariesSection(prefix string, libs []adminUserLibrary, more boo
 			}
 		}
 	</section>
+}
+
+// adminLibraryReviewBody is one library's review queue. It shows an id,
+// a reason and a time, and deliberately no title: the queue belongs to
+// somebody else's library, and the manager who knows the book sees it
+// under Manage (ADR-0013).
+templ adminLibraryReviewBody(prefix string, csrf string, v adminReviewView, flash Flash) {
+	<h1>Review queue</h1>
+	<p class="muted">
+		{ v.Library.Name } · <code>{ v.Library.ID }</code>
+	</p>
+	@adminFlash(flash)
+	<section class="card">
+		<p class="muted">
+			A watched sweep found the file behind one of these books
+			replaced. It cannot know whether the new bytes are a better scan
+			of the same book or an entirely different one, so it asks.
+			Accepting keeps the copy the catalog is serving; the book returns
+			to the catalog on the next availability pass.
+		</p>
+		if len(v.Rows) == 0 {
+			<p class="muted">Nothing is awaiting review.</p>
+		} else {
+			<table>
+				<tr><th>Book</th><th>Why</th><th>Since</th><th></th></tr>
+				for _, row := range v.Rows {
+					<tr>
+						<td><code>{ row.BookID }</code></td>
+						<td>{ orDash(row.Reason) }</td>
+						<td>{ row.Updated }</td>
+						<td>
+							<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/review/" + row.BookID + "/clear" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit">Keep this copy</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+			if v.Capped {
+				<p class="muted">Showing the first { i2s(len(v.Rows)) } only.</p>
+			}
+		}
+	</section>
+	<p><a href={ prefix + "admin/libraries" }>← All libraries</a></p>
 }

@@ -48,6 +48,20 @@ func listReview(ctx context.Context, st store.Store, args []string) error {
 	return nil
 }
 
+// ClearBookReview records that somebody has looked at a book and is
+// content with the copy the catalog is serving. It reports whether the
+// book was in review at all, so a surface can tell "cleared" from
+// "there was nothing to clear" rather than claiming both.
+//
+// It clears the flag and nothing else: the book returns to `missing`
+// and the availability pass, which is the only thing allowed to call a
+// book servable, restores it on its next run. Re-ingesting the changed
+// file instead would be this guessing the answer to the question review
+// exists to ask.
+func ClearBookReview(ctx context.Context, st store.Store, libraryID, bookID string) (bool, error) {
+	return st.SetCatalogBookReview(ctx, libraryID, bookID, "", time.Now().UTC())
+}
+
 // clearReview records that an administrator has looked at a book and is
 // content with the copy the catalog is serving.
 //
@@ -63,7 +77,7 @@ func clearReview(ctx context.Context, st store.Store, args []string) error {
 	if _, err := st.UserByName(ctx, args[0]); err != nil {
 		return err
 	}
-	changed, err := st.SetCatalogBookReview(ctx, args[1], args[2], "", time.Now().UTC())
+	changed, err := ClearBookReview(ctx, st, args[1], args[2])
 	if err != nil {
 		return err
 	}

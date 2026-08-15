@@ -131,18 +131,25 @@ shell. It holds four things:
 - **Overview** — version, build and uptime, how many accounts,
   libraries, books and devices there are, and the effective
   configuration with the database URL left out on purpose.
-- **Users** — the account list, and a page per account: rename nothing,
-  but reset a password, grant or revoke the administrator role, revoke a
-  device credential, disable or enable the account, and see which
-  libraries it can reach. Every one of those asks for *your* password
-  again, and every attempt is logged.
+- **Users** — the account list, and a page per account: reset a
+  password, grant or revoke the administrator role, revoke a device
+  credential or every credential at once, disable or enable the account,
+  mint an API token with the scopes you choose, generate a kosync
+  pairing code, add a statistics-plugin capability, map the account's
+  books to works, and see which libraries it can reach. Everything that
+  hands out or takes away a way into the account asks for *your*
+  password again, and every attempt is logged.
 - **Libraries** — every library on the instance with its owner, who else
-  may read or write it, and its filing layout. Create a library and hand
-  it to somebody in one step.
+  may read or write it, and its filing layout. Create a managed library
+  and hand it to somebody in one step, attach a directory or Calibre
+  library that already exists on the server, queue a refresh, and work
+  through a library's review queue.
 - **Maintenance** — what the background jobs are doing: ingest queue by
   state with the age of the oldest item, books waiting for review, trash
-  and when it next expires, blob count and orphans. Read-only; there is
-  no button that runs a job early.
+  and when it next expires, blob count and orphans, and the backup
+  check. No background job has a "run now" button — each is periodic and
+  safe to repeat, so a button would only start a second pass over the
+  same rows.
 
 The panel administers accounts, not their contents: it never shows what
 anybody is reading, and no page there can open a book.
@@ -178,10 +185,19 @@ library), a **storage** mode (`cas`, so the bytes are copied, or
 directory source, copied, refreshed on an interval — which is what a
 watch folder was.
 
-Naming a path on the server is a shell operation, not a browser one, so
-the admin panel creates managed libraries only. It manages every kind,
-though: access, filename layouts, refresh state and **Refresh now** are
-all on the Libraries page.
+The same library can be attached from the panel's Libraries page, with
+the three properties as form fields and a **Check the directory** button
+that reports whether the path is readable — and, for a Calibre library,
+whether it holds a `metadata.db` — before anything is created.
+
+Naming a path on the server is a privilege beyond administering the
+application: the form is a filesystem-existence oracle and a way to make
+the scanner read any tree this server can. So it costs the acting
+administrator their own password, on the same rate-limited budgets as a
+password reset, and every attempt is logged. Narrow it further with
+`content.library_roots`, which lists the directories a library may be
+under; unset, any readable directory is allowed, as with the
+subcommand.
 
 Mount that directory read-only if you can. The server does not need write
 access and treating the mount as the enforcement point means a bug cannot
@@ -393,6 +409,13 @@ future uploads cannot change the CAS:
    the backup cannot be restored from, so a backup script can act on it.
    It changes neither side, so it is also safe to run against the live
    server.
+
+   The admin panel's Maintenance page runs the same check against the
+   *running* server's own database and content directory — the question
+   somebody asks after restoring onto a new machine. It runs in the
+   background because it re-hashes every referenced file, and the result
+   stays on the page until the next run replaces it. Checking a copy
+   without starting a server for it is still the subcommand's job.
 
 ## Upgrades
 
