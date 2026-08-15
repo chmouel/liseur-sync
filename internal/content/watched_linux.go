@@ -146,12 +146,11 @@ type WatchedSyncReport struct {
 	// previous sweep had already queued and that have not been promoted
 	// yet — those re-enter their existing job rather than creating one.
 	Ingested int
-	// Refused counts paths that have no catalog file and a job that has
-	// already settled — in practice a file the server read once and would
-	// not publish, such as an EPUB that fails structural validation. The
-	// sweep meets them again on every pass and must not mistake them for
-	// arrivals: they are the reason a library can be short a book with
-	// nothing going wrong.
+	// Refused counts files this pass read and would not publish, such as
+	// an EPUB that fails structural validation. Like Ingested it is a
+	// verdict reached once: later sweeps meet the same path, leave it
+	// alone and count nothing. It exists so that a library that is short
+	// a book says so at the moment it happens.
 	Refused int
 	// Unchanged counts paths whose recorded snapshot still describes what
 	// is on disk, which on a steady-state library is all of them.
@@ -475,24 +474,17 @@ type ingestOutcome int
 const (
 	// ingestQueued: this pass read the file and started publishing it.
 	ingestQueued ingestOutcome = iota
-	// ingestPending: an earlier pass queued it and the workers have not
-	// finished. The pass that queued it already counted it.
+	// ingestPending: this pass had nothing to do. Either an earlier pass
+	// queued the file and the workers have not finished, or the server
+	// has already refused it. Both were counted by the pass that reached
+	// the verdict, and counting them again on every sweep is what made a
+	// settled library report work forever.
 	ingestPending
-	// ingestRefused: the server read this file and will not publish it —
+	// ingestRefused: this pass read the file and will not publish it —
 	// an EPUB that fails structural validation, say. Reading it again
-	// could only reach the same answer.
+	// could only reach the same answer, so it is said once.
 	ingestRefused
 )
-
-// outcomeOfSettledJob reads an existing job that this pass must not
-// touch. Quarantine and failure are the server's final word on a file;
-// anything else is work in progress.
-func outcomeOfSettledJob(state store.IngestState) ingestOutcome {
-	if state == store.IngestQuarantined || state == store.IngestFailed {
-		return ingestRefused
-	}
-	return ingestPending
-}
 
 // ingestDiscoveredFile publishes one discovered path and says what it
 // did.
@@ -548,7 +540,7 @@ func ingestWatchedFile(
 	// either discard what was already committed or contradict a digest the
 	// database has, so it is left to finish.
 	if !created && job.State != store.IngestReceived {
-		return outcomeOfSettledJob(job.State), nil
+		return ingestPending, nil
 	}
 
 	src, err := openWatchedSource(root, relativePath)
@@ -726,8 +718,8 @@ type WatchedScanReport struct {
 	// library row, not here.
 	Errored  int
 	Ingested int
-	// Refused counts paths the sweep met again that it had already
-	// refused to publish. See WatchedSyncReport.Refused.
+	// Refused counts files this pass would not publish. See
+	// WatchedSyncReport.Refused.
 	Refused int
 	// IngestedOwners names the owner of each library whose sweep
 	// ingested at least one book, in the order first seen. A book only
@@ -785,7 +777,7 @@ func boolCount(b bool) int {
 
 // Changed reports whether the pass did anything worth logging.
 func (r WatchedScanReport) Changed() bool {
-	return r.Ingested != 0 || r.Rehashed != 0 || r.Review != 0 ||
+	return r.Ingested != 0 || r.Refused != 0 || r.Rehashed != 0 || r.Review != 0 ||
 		r.Relocated != 0 || r.Superseded != 0 ||
 		r.MarkedAbsent != 0 || r.Failed != 0 || r.Unavailable != 0 ||
 		r.Errored != 0 || r.Deleted != 0 || r.MetadataUpdated != 0 ||

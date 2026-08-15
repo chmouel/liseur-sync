@@ -61,7 +61,7 @@ func ingestInPlaceFile(
 		// Already published, already refused, or being published by
 		// another pass. Reading the file again could only produce a
 		// second answer to a question that has one.
-		return outcomeOfSettledJob(job.State), nil
+		return ingestPending, nil
 	}
 
 	src, err := openWatchedSource(root, relativePath)
