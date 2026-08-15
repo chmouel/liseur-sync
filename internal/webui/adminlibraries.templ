@@ -151,6 +151,18 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView, owners []
 				guessing.
 			</p>
 		}
+		<h3>Showing up on { v.OwnerName }'s shelf</h3>
+		<p class="muted">
+			A book reaches a shelf when it is joined to that reader's own
+			copy of it, which happens on its own once the server has read
+			the library. Books it could not join without guessing wait
+			here: two books with the same title and author might be one
+			book, and only the reader knows.
+		</p>
+		<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/backfill" } class="inline">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<button type="submit">Join these books to { v.OwnerName }'s shelf</button>
+		</form>
 		<h3>Who can use it</h3>
 		if len(v.Grants) == 0 {
 			<p class="muted">Only the owner.</p>

@@ -324,6 +324,7 @@ func runLibraryRefreshWorker(
 				"restored_files", report.FilesRestored,
 				"failed", report.Failed)
 		}
+		mapIngestedBooks(ctx, st, report.IngestedOwners)
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
@@ -333,6 +334,49 @@ func runLibraryRefreshWorker(
 			return nil
 		case <-timer.C:
 		}
+	}
+}
+
+// mapIngestedBooks joins newly ingested catalog books to their owner's
+// sync works. Without it a book is mapped the first time a client
+// resolves it, which means a freshly filled library shows its owner a
+// shelf of text tiles — no cover, no Read — until every book has been
+// opened once. That surprised the only operator who has ever run this,
+// so a sweep that ingested something now finishes the job.
+//
+// Only the owner is mapped. Backfill is per reader, so doing it for
+// every account a library is shared with would cost readers × books on
+// each sweep to save them a click they may never need; they keep the
+// panel's button. It is safe to repeat — already-mapped books are
+// skipped, and a book that matches an existing work on title and author
+// alone is counted rather than guessed at, because a wrong guess merges
+// two reading histories.
+//
+// Failure is logged, never fatal: a pass that swept correctly has done
+// the part that cannot be redone, and the next tick tries again.
+func mapIngestedBooks(ctx context.Context, st store.Store, owners []string) {
+	for _, owner := range owners {
+		if ctx.Err() != nil {
+			return
+		}
+		report, err := admin.BackfillWorks(ctx, st, owner)
+		if err != nil {
+			slog.Error("mapping new books to works failed",
+				"user", owner, "err", err)
+			continue
+		}
+		if report.Created == 0 && report.Linked == 0 &&
+			report.Fuzzy == 0 && report.Conflicted == 0 {
+			continue
+		}
+		slog.Info("mapped new books to works",
+			"user", owner,
+			"books", report.Books,
+			"created", report.Created,
+			"linked", report.Linked,
+			"needs_confirmation", report.Fuzzy,
+			"conflicted", report.Conflicted,
+			"skipped", report.Skipped)
 	}
 }
 
