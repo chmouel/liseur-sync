@@ -10,3 +10,4 @@ liseur-sync.dev.toml
 bin/
 dist/
 coverage.out
+/liseur-sync
