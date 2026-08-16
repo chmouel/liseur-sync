@@ -44,7 +44,7 @@ loose ends that must come before any of it, are in
 | [0017](0017-folders-not-pipelines.md) | Folders, watched — not an ingest pipeline | MVP | Implemented | Nothing outstanding |
 | [0018](0018-series-overrides.md) | Series a reader can shape | Later | Accepted | Phases 1–4; Calibre write-back deferred to its own ADR |
 | [0019](0019-library-wide-entities.md) | Catalog entities belong to the library | Later | Accepted | Series renaming decided in [0020](0020-series-renaming.md); explicit merge remains undecided |
-| [0020](0020-series-renaming.md) | Renaming a series | Later | Accepted; phases 1–3 implemented | The Android client; merge and split deferred |
+| [0020](0020-series-renaming.md) | Renaming a series | Later | Accepted; implemented | Merge and split deferred |
 
 ## Convention
 
