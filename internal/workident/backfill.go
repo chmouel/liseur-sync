@@ -9,6 +9,11 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+// ErrCursorStalled reports a paged walk that stopped making progress.
+// It can only come from a store whose listing disagrees with its own
+// cursor, so it is a bug rather than a condition to retry.
+var ErrCursorStalled = errors.New("workident: paging cursor did not advance")
+
 // backfillPage is how many books are read per query. Small enough that a
 // large library does not hold one oversized result set in memory, large
 // enough that the per-book metadata reads dominate the cost.
@@ -78,13 +83,28 @@ func Backfill(
 					}
 				}
 				last := books[len(books)-1]
-				cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+				next := store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+				// A page that ends where the last one ended is a walk
+				// that will read the same books forever. Nothing here
+				// can fix it, and a background job that spins is worse
+				// than one that stops and says why.
+				if cursor != nil && next.CreatedAt.Equal(cursor.CreatedAt) && next.ID == cursor.ID {
+					return report, fmt.Errorf(
+						"%w: books in folder %s stopped advancing at %s",
+						ErrCursorStalled, folder.ID, next.ID)
+				}
+				cursor = &next
 			}
 		}
 		if len(folders) < backfillPage {
 			break
 		}
-		folderCursor = store.FolderCursor(folders[len(folders)-1])
+		next := store.FolderCursor(folders[len(folders)-1])
+		if next == folderCursor {
+			return report, fmt.Errorf(
+				"%w: folders stopped advancing at %q", ErrCursorStalled, next)
+		}
+		folderCursor = next
 	}
 	return report, nil
 }

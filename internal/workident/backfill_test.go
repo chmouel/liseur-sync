@@ -440,6 +440,100 @@ func TestBackfillStopsOnAStoreFailure(t *testing.T) {
 	}
 }
 
+// stuckStore is a store whose listing ignores the cursor it was given,
+// which is what a paging bug looks like from here: every page is the
+// first page.
+type stuckStore struct {
+	store.Store
+}
+
+func (ss stuckStore) ListCatalogBooks(
+	ctx context.Context, folderID string, _ *store.CatalogBookCursor, limit int,
+) ([]store.CatalogBook, error) {
+	return ss.Store.ListCatalogBooks(ctx, folderID, nil, limit)
+}
+
+func (ss stuckStore) ListFolders(
+	ctx context.Context, _ string, limit int,
+) ([]store.Folder, error) {
+	return ss.Store.ListFolders(ctx, "", limit)
+}
+
+// stuckFolderStore is the same bug one level up: a full page of folders
+// that is always the same page. The book walk cannot reach this, because
+// it only runs once per folder; the folder cursor has to catch it.
+type stuckFolderStore struct {
+	store.Store
+}
+
+func (ss stuckFolderStore) ListFolders(
+	ctx context.Context, _ string, _ int,
+) ([]store.Folder, error) {
+	folders := make([]store.Folder, backfillPage)
+	for i := range folders {
+		folders[i] = store.Folder{
+			ID: fmt.Sprintf("f%03d", i), Name: fmt.Sprintf("Folder %03d", i),
+			Kind: store.FolderPlain,
+		}
+	}
+	return folders, nil
+}
+
+func (stuckFolderStore) ListCatalogBooks(
+	context.Context, string, *store.CatalogBookCursor, int,
+) ([]store.CatalogBook, error) {
+	return nil, nil
+}
+
+func TestBackfillStopsWhenTheFolderCursorDoesNot(t *testing.T) {
+	f := newBackfillFixture(t)
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		defer close(done)
+		_, err = Backfill(context.Background(),
+			stuckFolderStore{Store: f.st}, f.user.ID,
+			func() (string, error) { return "work-1", nil },
+			func() time.Time { return f.now })
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the backfill is still walking a folder cursor that never moves")
+	}
+	if !errors.Is(err, ErrCursorStalled) {
+		t.Fatalf("err = %v, want ErrCursorStalled", err)
+	}
+}
+
+// TestBackfillStopsWhenACursorDoesNot: a walk whose cursor stops moving
+// reads the same page forever. Nothing the job can do fixes that, and a
+// background task that spins is worse than one that stops and says why,
+// so it is an error rather than a loop.
+func TestBackfillStopsWhenACursorDoesNot(t *testing.T) {
+	f := newBackfillFixture(t)
+	f.shelf(t, backfillPage+3, "Ada Author")
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		defer close(done)
+		_, err = Backfill(context.Background(),
+			stuckStore{Store: f.st}, f.user.ID,
+			func() (string, error) { return "work-1", nil },
+			func() time.Time { return f.now })
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the backfill is still walking a cursor that never moves")
+	}
+	if !errors.Is(err, ErrCursorStalled) {
+		t.Fatalf("err = %v, want ErrCursorStalled", err)
+	}
+}
+
 // conflictingStore stands in for identifiers that name two different
 // works. The store refuses to guess which one is right; the backfill has
 // to record that and keep going rather than abandon the catalog.
