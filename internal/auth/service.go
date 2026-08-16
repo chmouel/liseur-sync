@@ -129,34 +129,69 @@ func (s *Service) MintToken(ctx context.Context, userID, name string, requested 
 // would turn one person reading one book into several competing heads,
 // and "where did I stop" would depend on which window asked.
 //
-// Previous reader tokens are left alone unless they have already
-// expired. Revoking them here would let two open tabs invalidate each
-// other's credential in a loop, each re-minting in response to the
-// other's failure.
+// A live predecessor is left strictly alone. Revoking one here would let
+// two open tabs invalidate each other's credential in a loop, each
+// re-minting in response to the other's failure.
+//
+// A dead one is deleted rather than revoked. The reader asks for a
+// credential on every open and again every hour, so anything kept
+// accumulates for as long as somebody reads; and there is nothing to
+// keep, since nobody asked for these and a revoked row only means
+// something when a person cut a device off. The newest per device
+// survives whatever its state, because it carries the device id the
+// next mint inherits — delete that and a browser left closed overnight
+// comes back as a stranger to the op log.
 func (s *Service) MintReaderToken(ctx context.Context, userID string) (string, store.Token, error) {
 	existing, err := s.St.ListTokens(ctx, userID)
 	if err != nil {
 		return "", store.Token{}, fmt.Errorf("list tokens: %w", err)
 	}
 	now := s.Now()
-	deviceID := ""
-	var newest time.Time
+
+	newestPerDevice := map[string]store.Token{}
 	for _, t := range existing {
 		if t.Name != ReaderTokenName {
 			continue
 		}
-		// The device id is a label in the op log, not a credential, so
-		// even a revoked predecessor is the right thing to inherit: it
-		// is the same browser, and the reading history says so.
+		if cur, ok := newestPerDevice[t.DeviceID]; !ok || t.CreatedAt.After(cur.CreatedAt) {
+			newestPerDevice[t.DeviceID] = t
+		}
+	}
+
+	// The device id is a label in the op log, not a credential, so even
+	// an expired or revoked predecessor is the right thing to inherit:
+	// it is the same browser, and the reading history says so.
+	deviceID := ""
+	var newest time.Time
+	for _, t := range newestPerDevice {
 		if deviceID == "" || t.CreatedAt.After(newest) {
 			deviceID, newest = t.DeviceID, t.CreatedAt
 		}
-		if t.RevokedAt == nil && t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
-			_ = s.St.RevokeToken(ctx, userID, t.ID)
+	}
+
+	expiresAt := now.Add(ReaderTokenTTL)
+	secret, minted, err := s.mintToken(ctx, userID, ReaderTokenName, readerScopes, &expiresAt, deviceID)
+	if err != nil {
+		return "", store.Token{}, err
+	}
+
+	// Reaping after the mint, not before, is what keeps the count at one
+	// for a person reading in one browser: the token just issued is now
+	// the newest for this device and carries the id, so the dead ones it
+	// replaces have nothing left to hold. Another browser's newest is
+	// still spared, dead or not — that is its op-log identity.
+	for _, t := range existing {
+		if t.Name != ReaderTokenName {
+			continue
+		}
+		if t.DeviceID != minted.DeviceID && t.ID == newestPerDevice[t.DeviceID].ID {
+			continue
+		}
+		if t.RevokedAt != nil || (t.ExpiresAt != nil && now.After(*t.ExpiresAt)) {
+			_ = s.St.DeleteToken(ctx, userID, t.ID)
 		}
 	}
-	expiresAt := now.Add(ReaderTokenTTL)
-	return s.mintToken(ctx, userID, ReaderTokenName, readerScopes, &expiresAt, deviceID)
+	return secret, minted, nil
 }
 
 // RevokeReaderTokens ends browser reading for a user. Signing out has to

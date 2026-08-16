@@ -219,6 +219,31 @@ func testTokens(t *testing.T, open OpenFunc) {
 	if err := s.RevokeToken(ctx, u.ID, "t1"); err != store.ErrNotFound {
 		t.Fatalf("double revoke: want ErrNotFound, got %v", err)
 	}
+
+	// Deleting is not revoking. A revoked row stays as a record; a
+	// deleted one is gone, which is what the reader's hourly credentials
+	// need so the table does not grow for as long as someone reads.
+	second := tok
+	second.ID, second.SHA256 = "t2", "feedface"
+	if err := s.CreateToken(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteToken(ctx, "u-other", "t1"); err != store.ErrNotFound {
+		t.Fatalf("cross-user token delete: want ErrNotFound, got %v", err)
+	}
+	if err := s.DeleteToken(ctx, u.ID, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteToken(ctx, u.ID, "t1"); err != store.ErrNotFound {
+		t.Fatalf("double delete: want ErrNotFound, got %v", err)
+	}
+	listed, err = s.ListTokens(ctx, u.ID)
+	if err != nil || len(listed) != 1 || listed[0].ID != "t2" {
+		t.Fatalf("delete took a sibling with it: %+v %v", listed, err)
+	}
+	if _, err := s.TokenByHash(ctx, u.ID, "deadbeef"); err != store.ErrNotFound {
+		t.Fatalf("deleted token still authenticates: %v", err)
+	}
 }
 
 func testResolveAliases(t *testing.T, open OpenFunc) {
