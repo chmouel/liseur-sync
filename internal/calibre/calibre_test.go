@@ -206,12 +206,12 @@ func TestBooksReadsTheWholeLibrary(t *testing.T) {
 	if len(second.Formats) != 2 {
 		t.Fatalf("formats = %v, want two", second.Formats)
 	}
-	epub, ok := second.EPUB()
-	if !ok {
-		t.Fatal("no EPUB format on a book that has one")
+	readable := second.ReadableFormats()
+	if len(readable) != 1 {
+		t.Fatalf("readable formats = %v, want just the EPUB", readable)
 	}
-	if want := "Terry Pratchett/Good Omens (2)/Good Omens.epub"; second.RelativePath(epub) != want {
-		t.Errorf("epub path = %q, want %q", second.RelativePath(epub), want)
+	if want := "Terry Pratchett/Good Omens (2)/Good Omens.epub"; second.RelativePath(readable[0]) != want {
+		t.Errorf("epub path = %q, want %q", second.RelativePath(readable[0]), want)
 	}
 	// Identifier types are lowercased, so a hand-edited ISBN and
 	// Calibre's own isbn are the same key.
@@ -592,3 +592,48 @@ const goodOmensOPF = `<?xml version="1.0" encoding="utf-8"?>
   </metadata>
 </package>
 `
+
+// TestReadableFormatsPrefersEPUBAndAcceptsKEPUB. A KEPUB is an EPUB
+// with Kobo's spans injected, so a book Calibre holds only as a KEPUB
+// belongs in the catalog rather than being skipped as unservable. When
+// both exist the plain EPUB is preferred, whatever order Calibre lists
+// them in.
+func TestReadableFormatsPrefersEPUBAndAcceptsKEPUB(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		formats []Format
+		want    []string
+	}{{
+		name:    "kepub listed first still yields epub first",
+		formats: []Format{{Format: "KEPUB"}, {Format: "EPUB"}},
+		want:    []string{"EPUB", "KEPUB"},
+	}, {
+		name:    "kepub only is readable",
+		formats: []Format{{Format: "KEPUB"}},
+		want:    []string{"KEPUB"},
+	}, {
+		name:    "lowercase in the database is the same format",
+		formats: []Format{{Format: "kepub"}},
+		want:    []string{"kepub"},
+	}, {
+		name:    "formats this server cannot serve are not offered",
+		formats: []Format{{Format: "MOBI"}, {Format: "PDF"}, {Format: "AZW3"}},
+		want:    nil,
+	}, {
+		name:    "a book with no formats at all",
+		formats: nil,
+		want:    nil,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Book{Formats: tc.formats}.ReadableFormats()
+			if len(got) != len(tc.want) {
+				t.Fatalf("readable = %v, want %v", got, tc.want)
+			}
+			for i, f := range got {
+				if f.Format != tc.want[i] {
+					t.Errorf("readable[%d] = %q, want %q", i, f.Format, tc.want[i])
+				}
+			}
+		})
+	}
+}

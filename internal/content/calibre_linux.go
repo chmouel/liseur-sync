@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"syscall"
@@ -76,14 +78,14 @@ func (r *Reconciler) reconcileCalibre(
 		if err := ctx.Err(); err != nil {
 			return store.ReconcileResult{}, err
 		}
-		format, ok := book.EPUB()
-		if !ok {
+		formats := book.ReadableFormats()
+		if len(formats) == 0 {
 			// A book Calibre holds in some other format is a book this
 			// server cannot serve. Skipping it is not incompleteness:
 			// the pass saw it and knows exactly what it is.
 			continue
 		}
-		obs, err := r.readCalibreBook(ctx, root, book, format)
+		obs, err := r.readCalibreBookFormats(ctx, root, book, formats)
 		if err != nil {
 			r.log.Warn("skipping unreadable calibre book",
 				"folder", folder.ID, "calibre_id", book.ID, "error", err)
@@ -93,6 +95,40 @@ func (r *Reconciler) reconcileCalibre(
 		observed = append(observed, obs)
 	}
 	return r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, r.now())
+}
+
+// readCalibreBookFormats reads the first of a book's formats that is
+// actually on the disk.
+//
+// Calibre's format rows outlive the files they name: deleting a book's
+// EPUB after converting it to KEPUB leaves the EPUB row behind, and a
+// reader that insisted on the first row would call a book unreadable
+// while its file sat in the same directory. A missing file is therefore
+// a reason to try the next format, not a reason to give up.
+//
+// The error returned when every format fails is the first one, which is
+// the one about the format the library prefers.
+func (r *Reconciler) readCalibreBookFormats(
+	ctx context.Context, root *os.Root, book calibre.Book, formats []calibre.Format,
+) (store.ObservedBook, error) {
+	var first error
+	for _, format := range formats {
+		obs, err := r.readCalibreBook(ctx, root, book, format)
+		if err == nil {
+			return obs, nil
+		}
+		if first == nil {
+			first = err
+		}
+		// Anything other than an absent file is a real failure to read a
+		// file that is there — a permission, a device error, a symlink
+		// refused — and the pass must not paper over it by silently
+		// serving a different edition of the book.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return store.ObservedBook{}, err
+		}
+	}
+	return store.ObservedBook{}, first
 }
 
 // readCalibreBook builds one observation from Calibre's row plus the

@@ -497,6 +497,14 @@ and the chosen `cover.jpg` change in `metadata.db` without touching the
 publication file. The server records a digest of `cover.jpg` so the
 cover cache invalidates when the curator replaces it.
 
+A book is served from the first of its formats that is actually on the
+disk, EPUB before KEPUB. Both are the same zip container — a KEPUB is an
+EPUB with Kobo's reading spans injected — so a book Calibre holds only
+as a KEPUB is a book rather than a gap, and a format row left behind by
+a deleted file falls through to the file next to it instead of making
+the pass incomplete. EPUB is preferred because those injected spans
+shift the document structure a reading position is expressed against.
+
 Two-way Calibre synchronization is future work.
 
 ### 9.5 Watching
