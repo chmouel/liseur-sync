@@ -96,7 +96,8 @@ is an inconsistency, not a contradiction, and it is a separate decision.
 Full-text search is unchanged: `book_search.subjects` still indexes the
 names a pass observed, as it did before ADR-0018.
 
-Series *renaming* remains unsolved. A claim states membership, and a
+Series *renaming* remains unsolved here. A claim states membership, and a
 rename is a property of the entity, so no claim can express one. Making
 entities library-wide makes a rename more valuable — it would apply
-everywhere at once — without making it expressible.
+everywhere at once — without making it expressible. That is
+[ADR-0020](0020-series-renaming.md).
