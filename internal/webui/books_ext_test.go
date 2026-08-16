@@ -561,7 +561,8 @@ func TestReadingCardOffersToCarryOnReading(t *testing.T) {
 
 // TestReadingCardHidesReadWithoutAFile pins the other half: a work
 // mapped to a book whose file this server cannot open any more must not
-// offer to open it.
+// offer to open it, and must not offer a cover either. It becomes a
+// text tile, the same as a work this server never held a file for.
 func TestReadingCardHidesReadWithoutAFile(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "vanished", []byte(strings.Repeat("web-epub", 50)))
@@ -581,11 +582,19 @@ func TestReadingCardHidesReadWithoutAFile(t *testing.T) {
 	if strings.Contains(page, `books/`+bookID+`/read`) {
 		t.Errorf("offered to read a book whose file is gone:\n%s", page)
 	}
+	// The reading history survives the file: the work is still on the
+	// shelf and still reachable.
 	if !strings.Contains(page, `href="works/w-empty"`) {
 		t.Errorf("the work is not linked at all:\n%s", page)
 	}
-	// The cover still shows, and it goes to the numbers instead.
-	if !strings.Contains(page, `books/`+bookID+`/cover?size=thumbnail`) {
-		t.Errorf("cover missing:\n%s", page)
+	// No cover, because the cover route answers 410 for a book that is
+	// not here and an <img> at a 410 is a broken tile, not information.
+	if strings.Contains(page, `books/`+bookID+`/cover`) {
+		t.Errorf("offered a cover for a book whose file is gone:\n%s", page)
+	}
+	// The book itself is gone from the catalog listing, which is the
+	// half of the page that says what you can read from this server.
+	if strings.Contains(page, `href="books/`+bookID+`"`) {
+		t.Errorf("listed a book whose file is gone:\n%s", page)
 	}
 }

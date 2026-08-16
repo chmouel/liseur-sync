@@ -153,7 +153,7 @@ func (s *Store) SearchCatalogBooks(
 		args = append(args, matchExpression(terms))
 	}
 	sqlText.WriteString(`
-	 WHERE b.folder_id = ?`)
+	 WHERE b.folder_id = ? AND b.status = 'active'`)
 	args = append(args, query.FolderID)
 	// A filter narrows by entity id whatever kind it is, because a caller
 	// holding an id from a facet should not have to tell the server what

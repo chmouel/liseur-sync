@@ -141,7 +141,7 @@ func (s *Store) SearchCatalogBooks(
 	}
 	sqlText.WriteString(`
 	 FROM books b
-	 WHERE b.folder_id = ?`)
+	 WHERE b.folder_id = ? AND b.status = 'active'`)
 	args = append(args, query.FolderID)
 	if scored {
 		sqlText.WriteString(`

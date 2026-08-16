@@ -287,8 +287,15 @@ fix is to let exactly one machine write the library.
 ### Missing books
 
 A book whose file is not observed by a complete pass is marked
-`missing`. It stays in the catalog, and the reader's work mapping stays
-with it, because a disconnected disk is not a deleted book.
+`missing`. It stays in the catalog and the reader's work mapping stays
+with it, because a disconnected disk is not a deleted book. It does
+drop out of the listings: browse, search and the entity pages offer
+only active books, because the download and cover routes answer `410`
+for anything else and listing a book the server will refuse to serve is
+advertising a dead end. The reading it already has is still reachable —
+a work whose book is missing appears on the shelf as a text tile, the
+same as a work this server never held a file for. The book returns to
+the listing whole as soon as a complete pass sees its file again.
 
 Two safety rules stop a transient mount problem from hiding a whole
 shelf. A pass that did not fully succeed never marks anything missing;

@@ -333,7 +333,10 @@ metadata fields such as `subtitle`, `description`, `publisher` and
 `published_date` are omitted when unknown. `contributors` and `series`
 are always present, and empty when the book has none. Status is either
 `active` or `missing`; a missing book stays in the catalog because a
-disconnected disk is not a deleted book.
+disconnected disk is not a deleted book, but it is left out of the
+listing and search responses, because fetching it would answer `410`.
+It is still readable by id, so a client holding one can tell the
+difference between a book that went away and a book that never existed.
 
 `contributors` carries every credit in every role rather than only the
 authors. Pick authors with `role == "author"`. `series` carries every
