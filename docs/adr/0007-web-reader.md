@@ -250,8 +250,18 @@ hour. Four properties make this safe and workable:
 Tabs do not coordinate. A tab whose token has expired mints another; it
 does not invalidate anyone else's, because a mint that revoked its
 predecessors would let two open tabs invalidate each other in a loop.
-Expired reader tokens are cleaned up when the next one is minted, so the
-credential list does not grow without bound.
+
+Dead reader tokens are deleted when the next one is minted, not revoked:
+nobody asked for them, so there is no cut-off device for a revoked row to
+record, and one row an hour for as long as somebody reads is a leak. The
+newest per device survives whatever its state, because it carries the
+device id the next mint inherits.
+
+None of this appears in the credential list. A reader token is not
+something a person made or can manage — it is replaced before they could
+finish reading its name — so the Devices page counts browsers instead,
+one row per device id, with a single button that ends browser reading
+everywhere.
 
 ## Consequences
 

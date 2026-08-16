@@ -505,7 +505,8 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/ui/login", "/ui/setup", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
-		"/ui/tokens/example/scopes", "/ui/settings", "/ui/settings/password",
+		"/ui/tokens/example/scopes", "/ui/browsers/revoke",
+		"/ui/settings", "/ui/settings/password",
 		"/ui/admin/invites", "/ui/admin/users", "/ui/admin/users/u1/password",
 		"/ui/admin/users/u1/admin", "/ui/admin/users/u1/disabled",
 		"/ui/admin/users/u1/credentials/revoke",

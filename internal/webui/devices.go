@@ -3,7 +3,9 @@ package webui
 import (
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -97,4 +99,56 @@ func sortKopluginDevices(devs []store.KopluginDevice) {
 		}
 		return strings.ToLower(devs[i].Label) < strings.ToLower(devs[j].Label)
 	})
+}
+
+// browserSession is one browser that has read here, as the Devices page
+// shows it: not a credential, since the reader's credential lasts an
+// hour and is replaced without anyone asking, but the browser behind
+// however many of them there have been.
+type browserSession struct {
+	DeviceID string
+	LastUsed time.Time
+	Active   bool
+}
+
+// splitReaderTokens separates the credentials a person made from the
+// ones the server issued to itself.
+//
+// The reader mints a token on every open and again every hour. Listing
+// those beside a Boox's token, with a Revoke link and scope checkboxes,
+// says they are the same kind of thing and invites managing something
+// that will be replaced before the page is closed. So they are counted
+// as browsers instead — one row per device id, however many tokens that
+// took — and the table keeps only what somebody chose to create.
+func splitReaderTokens(toks []store.Token) (mine []store.Token, browsers []browserSession) {
+	byDevice := map[string]browserSession{}
+	for _, t := range toks {
+		if t.Name != auth.ReaderTokenName {
+			mine = append(mine, t)
+			continue
+		}
+		b := byDevice[t.DeviceID]
+		b.DeviceID = t.DeviceID
+		if t.RevokedAt == nil {
+			b.Active = true
+		}
+		when := t.CreatedAt
+		if t.LastUsed != nil && t.LastUsed.After(when) {
+			when = *t.LastUsed
+		}
+		if when.After(b.LastUsed) {
+			b.LastUsed = when
+		}
+		byDevice[t.DeviceID] = b
+	}
+	for _, b := range byDevice {
+		browsers = append(browsers, b)
+	}
+	sort.Slice(browsers, func(i, j int) bool {
+		if browsers[i].LastUsed.Equal(browsers[j].LastUsed) {
+			return browsers[i].DeviceID < browsers[j].DeviceID
+		}
+		return browsers[i].LastUsed.After(browsers[j].LastUsed)
+	})
+	return mine, browsers
 }
