@@ -339,64 +339,32 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/insights/works/{id}", insH(s.HandleInsightsWork))
 	mux.Handle("GET /v1/insights/calendar", insH(s.HandleInsightsCalendar))
 
-	// library-manage scope: writing to a library. The store additionally
-	// requires manage access to the specific library through its ACL, so
-	// the token capability alone never grants access to someone else's
-	// books.
-	manageH := func(h http.HandlerFunc) http.Handler {
-		return auth.RequireSecureTransport(s.Cfg,
-			auth.RequireScope(s.Auth, store.ScopeLibraryManage, h))
-	}
-	mux.Handle("POST /v1/libraries/{library}/upload", manageH(s.HandleUpload))
-	// Deleting is a manage capability, and it is reversible until the
-	// retention window closes.
-	mux.Handle("DELETE /v1/books/{id}", manageH(s.HandleTrashBook))
-	mux.Handle("POST /v1/books/{id}/restore", manageH(s.HandleRestoreBook))
-	// Correcting a book and reshaping the entities its library shares are
-	// the same capability: both change what every reader of that library
-	// sees.
-	mux.Handle("PUT /v1/books/{id}/metadata", manageH(s.HandleUpdateBookMetadata))
-	// Asking an external service about a book is a manage capability
-	// even though it writes nothing: the answer is only useful to
-	// somebody who could apply it, and a read-only credential should not
-	// be able to make this server talk to a third party about a book.
-	mux.Handle("POST /v1/books/{id}/metadata/lookup",
-		manageH(s.HandleBookMetadataLookup))
-	// Accepting a candidate is an ordinary metadata write that happens
-	// to name its source, so it lives beside the edit route and obeys
-	// the same revision check and the same locks.
-	mux.Handle("POST /v1/books/{id}/metadata/apply",
-		manageH(s.HandleApplyBookMetadataCandidate))
-	mux.Handle("PATCH /v1/libraries/{library}/entities/{kind}/{entity}",
-		manageH(s.HandleRenameEntity))
-	mux.Handle("POST /v1/libraries/{library}/entities/{kind}/merge",
-		manageH(s.HandleMergeEntities))
-
-	// library-read scope: a job resource describes the caller's own
-	// upload, and is user-scoped in the store.
+	// library-read scope: the catalog. Every signed-in reader sees every
+	// folder's books — the catalog is deliberately shared (ADR-0017) —
+	// while reading state stays strictly per user.
+	//
+	// There is no library-manage scope. With uploads and metadata
+	// editing gone, nothing writes to the catalog but a reconcile pass,
+	// and a pass answers to the disk rather than to a token. Managing
+	// folders is an admin capability because it names paths on this
+	// machine.
 	readH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryRead, h))
 	}
 	// Collection and member paths are kept apart on purpose. A single
-	// /v1/library/{library}/... space cannot also hold /v1/library/jobs/{id}
-	// or /v1/library/books/{id}: net/http rejects the pair as ambiguous,
-	// because "jobs" and "books" are indistinguishable from a library id.
-	mux.Handle("GET /v1/ingest/jobs/{id}", readH(s.HandleIngestJob))
-	mux.Handle("GET /v1/libraries", readH(s.HandleLibraries))
-	mux.Handle("GET /v1/libraries/{library}/books", readH(s.HandleLibraryBooks))
-	mux.Handle("GET /v1/libraries/{library}/duplicates", readH(s.HandleLibraryDuplicates))
+	// /v1/folders/{folder}/... space cannot also hold /v1/folders/books/{id}:
+	// net/http rejects the pair as ambiguous, because "books" is
+	// indistinguishable from a folder id.
+	mux.Handle("GET /v1/folders", readH(s.HandleFolders))
+	mux.Handle("GET /v1/folders/{folder}/books", readH(s.HandleFolderBooks))
 	// Finding one book among many is a read of the catalog, so it asks
 	// for nothing beyond the scope that lists it.
-	mux.Handle("GET /v1/libraries/{library}/search", readH(s.HandleLibrarySearch))
+	mux.Handle("GET /v1/folders/{folder}/search", readH(s.HandleFolderSearch))
 	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
-	// Provenance is editor data, so it is a resource of its own rather
-	// than more fields on the book: a catalog client wants the title, not
-	// where the title came from.
-	mux.Handle("GET /v1/books/{id}/metadata", readH(s.HandleBookMetadata))
-	mux.Handle("GET /v1/libraries/{library}/entities/{kind}",
-		readH(s.HandleLibraryEntities))
-	mux.Handle("GET /v1/libraries/{library}/entities/{kind}/{entity}/books",
+	mux.Handle("GET /v1/folders/{folder}/entities/{kind}",
+		readH(s.HandleFolderEntities))
+	mux.Handle("GET /v1/folders/{folder}/entities/{kind}/{entity}/books",
 		readH(s.HandleEntityBooks))
 	// Download serves HEAD too: ServeContent handles it, and catalog
 	// clients probe with HEAD before fetching.
@@ -432,15 +400,15 @@ func (s *Server) Routes() *http.ServeMux {
 	// answer every unknown path under /opds/v1.2 with the root feed,
 	// which hides client typos instead of reporting them.
 	mux.Handle("GET /opds/v1.2/{$}", opdsH(s.HandleOPDSRoot))
-	mux.Handle("GET /opds/v1.2/libraries/{library}", opdsH(s.HandleOPDSLibrary))
+	mux.Handle("GET /opds/v1.2/folders/{folder}", opdsH(s.HandleOPDSFolder))
 	// A reader discovers these through links in the feeds above rather
 	// than being configured with them, which is the point of OPDS.
-	mux.Handle("GET /opds/v1.2/libraries/{library}/search.xml",
+	mux.Handle("GET /opds/v1.2/folders/{folder}/search.xml",
 		opdsH(s.HandleOPDSSearchDescription))
-	mux.Handle("GET /opds/v1.2/libraries/{library}/search", opdsH(s.HandleOPDSSearch))
-	mux.Handle("GET /opds/v1.2/libraries/{library}/recent", opdsH(s.HandleOPDSRecent))
-	mux.Handle("GET /opds/v1.2/libraries/{library}/{kind}", opdsH(s.HandleOPDSEntities))
-	mux.Handle("GET /opds/v1.2/libraries/{library}/{kind}/{entity}",
+	mux.Handle("GET /opds/v1.2/folders/{folder}/search", opdsH(s.HandleOPDSSearch))
+	mux.Handle("GET /opds/v1.2/folders/{folder}/recent", opdsH(s.HandleOPDSRecent))
+	mux.Handle("GET /opds/v1.2/folders/{folder}/{kind}", opdsH(s.HandleOPDSEntities))
+	mux.Handle("GET /opds/v1.2/folders/{folder}/{kind}/{entity}",
 		opdsH(s.HandleOPDSEntityBooks))
 	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
 	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))

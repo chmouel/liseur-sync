@@ -3,7 +3,6 @@
 package content
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -209,36 +208,6 @@ func TestRemovingCoversOfABlobThatHasNoneSucceeds(t *testing.T) {
 	cas := openTestCAS(t)
 	if err := cas.RemoveCovers(context.Background(), digestOf([]byte("book"))); err != nil {
 		t.Fatalf("removing nothing: %v", err)
-	}
-}
-
-// A deleted book's cover is a picture nothing can reach and nothing else
-// will ever clean up, so deleting the blob has to take it along.
-func TestRemovingABlobRemovesItsCachedCovers(t *testing.T) {
-	cas := openTestCAS(t)
-	ctx := context.Background()
-	data := minimalEPUB(t)
-	digest := digestOf(data)
-	staged, err := cas.Stage(ctx, "cover-removal", bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cas.Promote(ctx, staged.Path, staged.SHA256, staged.Size); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := cas.StoreCover(ctx, digest, "thumbnail", []byte("cover")); err != nil {
-		t.Fatal(err)
-	}
-	removed, err := cas.RemoveBlob(ctx, digest, int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !removed {
-		t.Fatal("the blob was not removed")
-	}
-	if _, _, err := cas.OpenCover(ctx, digest, "thumbnail"); !errors.Is(err, ErrStageMissing) {
-		t.Errorf("cover after blob removal: got %v, want ErrStageMissing", err)
 	}
 }
 

@@ -27,17 +27,17 @@ type parsedSearchDescription struct {
 // TestOPDSReaderDiscoversSearchAndUsesIt walks the way a reader does: it
 // is told nothing but the root, and has to find the search from there.
 func TestOPDSReaderDiscoversSearchAndUsesIt(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	f.publishAs(t, "found", "The Left Hand of Darkness", []byte("left hand bytes"))
 	f.publishAs(t, "other", "A Wizard of Earthsea", []byte("earthsea bytes"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	libHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
-	_, raw = f.opds(t, libHref, "token", read)
+	folderHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
+	_, raw = f.opds(t, folderHref, "token", read)
 	descHref := linkHref(t, parseFeed(t, raw).Links, "search")
 	if descHref == "" {
-		t.Fatalf("the library feed advertised no search:\n%s", raw)
+		t.Fatalf("the folder feed advertised no search:\n%s", raw)
 	}
 
 	resp, raw := f.opds(t, descHref, "token", read)
@@ -77,27 +77,18 @@ func TestOPDSReaderDiscoversSearchAndUsesIt(t *testing.T) {
 	}
 }
 
+// TestOPDSBrowsesBySeriesAndContributor walks the facet links from the
+// folder feed to a contributor and on to their books. The contributor
+// comes from a real dc:creator, since there is no metadata-edit route
+// left to attach one after the fact (ADR-0017 deleted it).
 func TestOPDSBrowsesBySeriesAndContributor(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publishAs(t, "browsed", "Dune", []byte("dune bytes"))
-	manage := f.mintScopes(t, f.user.ID, "editor",
-		store.ScopeLibraryRead, store.ScopeLibraryManage)
-	before := f.metadata(t, bookID, manage)
-	resp, out := f.send(t, http.MethodPut, "/v1/books/"+bookID+"/metadata", manage,
-		map[string]any{
-			"revision": before["revision"],
-			"contributors": map[string]any{
-				"entries": []map[string]any{{"name": "Frank Herbert", "role": "author"}},
-			},
-		})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("edit: %d %v", resp.StatusCode, out)
-	}
+	f := newFolderFixture(t)
+	f.publishWithAuthor(t, "browsed", "Dune", "Frank Herbert", []byte("dune bytes"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	libHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
-	_, raw = f.opds(t, libHref, "token", read)
+	folderHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
+	_, raw = f.opds(t, folderHref, "token", read)
 	facet := ""
 	for _, l := range parseFeed(t, raw).Links {
 		if l.Rel == "http://opds-spec.org/facet" && strings.HasSuffix(l.Href, "/contributors") {
@@ -105,10 +96,10 @@ func TestOPDSBrowsesBySeriesAndContributor(t *testing.T) {
 		}
 	}
 	if facet == "" {
-		t.Fatalf("the library feed offered no way to browse:\n%s", raw)
+		t.Fatalf("the folder feed offered no way to browse:\n%s", raw)
 	}
 
-	resp, raw = f.opds(t, facet, "token", read)
+	resp, raw := f.opds(t, facet, "token", read)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("contributors: %d %s", resp.StatusCode, raw)
 	}
@@ -134,39 +125,28 @@ func TestOPDSBrowsesBySeriesAndContributor(t *testing.T) {
 	}
 }
 
-func TestOPDSBrowsingRefusesWhatTheCredentialMayNotSee(t *testing.T) {
-	f := newUploadFixture(t)
-	f.publishAs(t, "hidden", "Dune", []byte("dune bytes"))
-	stranger := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
-	base := "/opds/v1.2/libraries/" + f.library
-
-	for _, path := range []string{
-		base + "/search.xml",
-		base + "/search?q=dune",
-		base + "/tags",
-	} {
-		resp, raw := f.opds(t, path, "token", stranger)
-		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("%s: %d, want 404: %s", path, resp.StatusCode, raw)
-		}
-	}
-
+// TestOPDSEntitiesRefuseAnUnknownKind covers the one input-validation edge
+// left in this route now that there is no per-folder ACL to test: a kind
+// segment that names no table is a 404, not a query that reaches SQL with
+// a caller's string spliced into a table name.
+func TestOPDSEntitiesRefuseAnUnknownKind(t *testing.T) {
+	f := newFolderFixture(t)
+	f.publishAs(t, "present", "Dune", []byte("dune bytes"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	// An unknown kind names no resource, so it is a 404 rather than a
-	// path segment reaching the store.
-	resp, _ := f.opds(t, base+"/publishers", "token", read)
+
+	resp, _ := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID+"/publishers", "token", read)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown kind: %d, want 404", resp.StatusCode)
 	}
 }
 
 func TestRecentlyAddedIsTheCatalogFromTheOtherEnd(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	f.publishAs(t, "first", "The Older One", []byte("older bytes"))
 	f.publishAs(t, "second", "The Newer One", []byte("newer bytes"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	path := "/v1/libraries/" + f.library + "/books?order=recent"
+	path := "/v1/folders/" + f.folder.ID + "/books?order=recent"
 	code, page := getJSON(t, f.ts.URL+path, read)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d: %v", code, page)
@@ -181,15 +161,15 @@ func TestRecentlyAddedIsTheCatalogFromTheOtherEnd(t *testing.T) {
 	}
 
 	// A typo must not silently read the catalog backwards.
-	code, _ = getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books?order=newest", read)
+	code, _ = getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/books?order=newest", read)
 	if code != http.StatusBadRequest {
 		t.Fatalf("unknown order: %d, want 400", code)
 	}
 
-	// The same order is a feed a reader finds from the library's own.
+	// The same order is a feed a reader finds from the folder's own.
 	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	libHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
-	_, raw = f.opds(t, libHref, "token", read)
+	folderHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
+	_, raw = f.opds(t, folderHref, "token", read)
 	recent := linkHref(t, parseFeed(t, raw).Links, "http://opds-spec.org/sort/new")
 	if recent == "" {
 		t.Fatalf("no recently-added link:\n%s", raw)

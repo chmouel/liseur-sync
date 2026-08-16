@@ -12,6 +12,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/api"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/webui"
 )
 
@@ -55,12 +56,12 @@ func wholeServer(t *testing.T, f *booksFixture, ts *httptest.Server, readerOrigi
 	apiSrv := &api.Server{
 		St: f.st, Auth: auth.NewService(f.st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Content:      f.cas, Blobs: f.cas, Covers: f.cas,
+		Files:        content.NewFiles(f.st), Covers: f.cache,
 	}
 	apiSrv.WebUI = &webui.Server{
 		St: f.st, Auth: auth.NewService(f.st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Uploads:      apiSrv, Downloads: apiSrv, Covers: apiSrv,
+		Downloads:    apiSrv, Covers: apiSrv,
 	}
 	ts.Config = &http.Server{Handler: apiSrv.Handler(), ReadHeaderTimeout: time.Minute}
 	ts.Start()
@@ -102,10 +103,7 @@ type readerOrigins struct {
 func readerFixture(t *testing.T) readerOrigins {
 	t.Helper()
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 	ts, readerHost := splitOriginServer(t, f)
 	return readerOrigins{f: f, ts: ts, book: bookID, reader: readerHost}
 }
@@ -180,13 +178,12 @@ func TestReaderHandoffCarriesTheCredentialInTheFragment(t *testing.T) {
 		t.Fatal("the handed credential could delete a book")
 	}
 
-	// A book the user cannot read is refused on the origin that knows
-	// who they are, rather than handed off and failing later.
-	bobs := f.loginTo(t, ts, "bob")
+	// A book that is not there is refused on the origin that knows who
+	// the reader is, rather than handed off and failing later.
 	resp, _ = ask(t, ts, http.MethodGet, "main.example.test",
-		"/ui/books/"+bookID+"/read", bobs)
+		"/ui/books/does-not-exist/read", cookie)
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("another user's book handed off anyway: %d", resp.StatusCode)
+		t.Fatalf("a book that is not there was handed off anyway: %d", resp.StatusCode)
 	}
 }
 
@@ -336,10 +333,7 @@ func TestAPIAnswersTheReaderOriginCrossOrigin(t *testing.T) {
 // pays nothing for a feature it did not turn on.
 func TestSameOriginDeploymentIsUnchanged(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
 	resp, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
 	if resp.StatusCode != http.StatusOK {

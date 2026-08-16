@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -39,18 +40,15 @@ func reindexBookTx(ctx context.Context, tx *sql.Tx, bookID string) error {
 	if err != nil {
 		return err
 	}
-	// Series sit with tags and genres rather than with people: somebody
+	// Series sit with tags rather than with people: somebody
 	// typing "discworld" is naming what the book is about as surely as
 	// somebody typing "fantasy".
 	subjects, err := indexedNamesTx(ctx, tx, bookID, q(
 		`SELECT t.name FROM book_tags m JOIN tags t ON t.id = m.tag_id
 		   WHERE m.book_id = ?
 		 UNION ALL
-		 SELECT g.name FROM book_genres m JOIN genres g ON g.id = m.genre_id
-		   WHERE m.book_id = ?
-		 UNION ALL
 		 SELECT s.name FROM book_series m JOIN series s ON s.id = m.series_id
-		   WHERE m.book_id = ?`), bookID, bookID)
+		   WHERE m.book_id = ?`), bookID)
 	if err != nil {
 		return err
 	}
@@ -96,39 +94,6 @@ func indexedNamesTx(
 	return strings.Join(names, "\n"), rows.Err()
 }
 
-// reindexEntityBooksTx reindexes every book claiming one entity, which is
-// what a rename or a merge changes: the book did not move, but what it is
-// findable by did.
-func reindexEntityBooksTx(
-	ctx context.Context, tx *sql.Tx, tables entityTables, entityID string,
-) error {
-	rows, err := tx.QueryContext(ctx, q(
-		`SELECT book_id FROM `+tables.membership+` WHERE `+tables.column+` = ?`),
-		entityID)
-	if err != nil {
-		return err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := reindexBookTx(ctx, tx, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // matchExpression turns words into a tsquery. Each term gets a prefix
 // wildcard, so a person typing three letters of an author's name finds
 // the author, and every term must match because narrowing is what
@@ -145,20 +110,17 @@ func matchExpression(terms []string) string {
 }
 
 func (s *Store) SearchCatalogBooks(
-	ctx context.Context, userID string, query store.SearchQuery,
+	ctx context.Context, query store.SearchQuery,
 ) (store.SearchResult, error) {
 	if query.Limit < 1 || query.Limit > store.MaxSearchLimit {
-		return store.SearchResult{}, store.ErrInvalidTransition
-	}
-	if _, err := s.LibraryByID(
-		ctx, userID, query.LibraryID, store.LibraryRoleRead); err != nil {
-		return store.SearchResult{}, err
+		return store.SearchResult{}, fmt.Errorf(
+			"%w: search limit %d", store.ErrInvalidInput, query.Limit)
 	}
 	terms := store.SearchTerms(query.Text)
 	scored := len(terms) > 0
 	if !scored && len(query.Entities) == 0 {
 		// No words and no filter is not an error and not the whole
-		// library: it is a search box nobody has typed in yet.
+		// folder: it is a search box nobody has typed in yet.
 		return store.SearchResult{}, nil
 	}
 
@@ -173,10 +135,8 @@ func (s *Store) SearchCatalogBooks(
 	}
 	sqlText.WriteString(`
 	 FROM books b
-	 JOIN libraries l ON l.id = b.library_id
-	 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
-	 WHERE b.status <> 'trashed' AND b.library_id = ?`)
-	args = append(args, userID, query.LibraryID)
+	 WHERE b.folder_id = ?`)
+	args = append(args, query.FolderID)
 	if scored {
 		sqlText.WriteString(`
 		   AND b.search_vector @@ to_tsquery('simple', ?)`)
@@ -190,20 +150,14 @@ func (s *Store) SearchCatalogBooks(
 		   AND EXISTS (
 		       SELECT 1 FROM book_tags m WHERE m.book_id = b.id AND m.tag_id = ?
 		       UNION ALL
-		       SELECT 1 FROM book_genres m WHERE m.book_id = b.id AND m.genre_id = ?
-		       UNION ALL
 		       SELECT 1 FROM book_series m WHERE m.book_id = b.id AND m.series_id = ?
 		       UNION ALL
 		       SELECT 1 FROM book_contributors m
 		         WHERE m.book_id = b.id AND m.contributor_id = ?)`)
-		args = append(args, id, id, id, id)
+		args = append(args, id, id, id)
 	}
-	// The ACL is repeated inside the query, as in every other catalog
-	// read here, so it stays safe if a future caller forgets the gate.
 	sqlText.WriteString(`
-	   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
 	 ORDER BY `)
-	args = append(args, userID)
 	if scored {
 		sqlText.WriteString(rank + ` DESC, `)
 		args = append(args, matchExpression(terms))
@@ -280,8 +234,7 @@ func (s *Store) searchFacets(
 	}
 	var out []store.SearchFacet
 	for _, kind := range []store.EntityKind{
-		store.EntitySeries, store.EntityContributor,
-		store.EntityTag, store.EntityGenre,
+		store.EntitySeries, store.EntityContributor, store.EntityTag,
 	} {
 		tables, err := tablesFor(kind)
 		if err != nil {

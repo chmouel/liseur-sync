@@ -5,6 +5,9 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"errors"
 	"image"
 	"image/color"
@@ -17,7 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -98,8 +102,13 @@ func decodeCover(t *testing.T, body []byte) image.Config {
 	return config
 }
 
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func TestCoverIsServedAsABoundedImage(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "illustrated", coverEPUB(t, 900, 1200, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -129,7 +138,7 @@ func TestCoverIsServedAsABoundedImage(t *testing.T) {
 // The two sizes must actually differ, or asking for one is asking for the
 // other and the parameter is decoration.
 func TestFullCoverIsLargerThanTheThumbnail(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "sizes", coverEPUB(t, 900, 1200, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -145,7 +154,7 @@ func TestFullCoverIsLargerThanTheThumbnail(t *testing.T) {
 // The variant becomes a cache path, so an unknown one is refused rather
 // than mapped to a default.
 func TestUnknownCoverSizeIsRefused(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "badsize", coverEPUB(t, 60, 90, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -158,7 +167,7 @@ func TestUnknownCoverSizeIsRefused(t *testing.T) {
 }
 
 func TestBookWithoutACoverReports404(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "plain", coverEPUB(t, 0, 0, ""))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -168,10 +177,11 @@ func TestBookWithoutACoverReports404(t *testing.T) {
 	}
 }
 
-// A book that is not an archive at all must not become a 500: uploaded
-// bytes are client input, and client input never produces a server error.
+// A book that is not an archive at all must not become a 500: a folder
+// is somebody else's filesystem, and a corrupt or half-written file is
+// ordinary input, not a server error.
 func TestUnreadableBookReportsNoCoverRatherThanFailing(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "notazip", []byte("this is not an archive"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -185,7 +195,7 @@ func TestUnreadableBookReportsNoCoverRatherThanFailing(t *testing.T) {
 // case success cannot cache. Without the negative marker, every scroll
 // past a coverless book re-opens the archive.
 func TestAbsentCoverIsRememberedWithoutReopeningTheBook(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, digest := f.publish(t, "remembered", coverEPUB(t, 0, 0, ""))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -194,7 +204,7 @@ func TestAbsentCoverIsRememberedWithoutReopeningTheBook(t *testing.T) {
 	}
 	// The answer is recorded where a later request will find it, so the
 	// archive is not opened again.
-	if _, _, err := f.cas.OpenCover(t.Context(), digest, "thumbnail"); !errors.Is(
+	if _, _, err := f.cache.OpenCover(t.Context(), digest, "thumbnail"); !errors.Is(
 		err, content.ErrNoCover,
 	) {
 		t.Fatalf("cache after a coverless book: %v, want ErrNoCover", err)
@@ -206,38 +216,11 @@ func TestAbsentCoverIsRememberedWithoutReopeningTheBook(t *testing.T) {
 	}
 }
 
-// A rendered cover must come back from the cache rather than be rebuilt,
-// which is only observable by making rebuilding impossible.
-func TestRenderedCoverIsServedFromTheCache(t *testing.T) {
-	f := newUploadFixture(t)
-	data := coverEPUB(t, 300, 400, "cover.png")
-	bookID, digest := f.publish(t, "cached", data)
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	resp, first := f.get(t, "/v1/books/"+bookID+"/cover", read)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("first request: %d %s", resp.StatusCode, first)
-	}
-	removed, err := f.cas.RemoveBlob(t.Context(), digest, int64(len(data)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !removed {
-		t.Fatal("the blob was not removed")
-	}
-	// RemoveBlob drops cached covers with the blob, so the cache is now
-	// empty too and the second request must report the content gone
-	// rather than serve a picture of a book that no longer exists.
-	if resp, _ := f.get(t, "/v1/books/"+bookID+"/cover", read); resp.StatusCode != http.StatusGone {
-		t.Fatalf("after removal: %d, want 410", resp.StatusCode)
-	}
-}
-
 // The digest names the source bytes and the variant names the pipeline, so
 // the two together are a strong validator: a client that has one may skip
 // the transfer entirely.
 func TestCoverSupportsConditionalRequests(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "conditional", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -266,7 +249,7 @@ func TestCoverSupportsConditionalRequests(t *testing.T) {
 // Two sizes of one book must not share a cache entry, or asking for a
 // thumbnail after a full cover returns the wrong picture.
 func TestCoverSizesAreCachedSeparately(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "twosizes", coverEPUB(t, 900, 1200, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -279,17 +262,6 @@ func TestCoverSizesAreCachedSeparately(t *testing.T) {
 	}
 	if decodeCover(t, again).Height >= decodeCover(t, full).Height {
 		t.Fatal("the cached thumbnail is not a thumbnail")
-	}
-}
-
-func TestCoverOfAnotherUsersBookIsNotFound(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "private-cover", coverEPUB(t, 300, 400, "cover.png"))
-	stranger := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
-
-	resp, body := f.get(t, "/v1/books/"+bookID+"/cover", stranger)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("code = %d, want 404: %s", resp.StatusCode, body)
 	}
 }
 
@@ -312,12 +284,12 @@ func jpegBytes(t *testing.T, width, height int) []byte {
 // with a recognisable picture is the only way to tell a cache hit from a
 // re-render that happens to produce the same bytes.
 func TestACachedCoverIsServedInsteadOfRendering(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, digest := f.publish(t, "poisoned", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 	planted := jpegBytes(t, 7, 11)
 
-	if err := f.cas.StoreCover(t.Context(), digest, "thumbnail", planted); err != nil {
+	if err := f.cache.StoreCover(t.Context(), digest, "thumbnail", planted); err != nil {
 		t.Fatal(err)
 	}
 	resp, body := f.get(t, "/v1/books/"+bookID+"/cover", read)
@@ -332,11 +304,11 @@ func TestACachedCoverIsServedInsteadOfRendering(t *testing.T) {
 // A recorded "no cover" answer must be believed, or the marker saves
 // nothing.
 func TestARememberedAbsentCoverIsBelieved(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, digest := f.publish(t, "marked", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	if err := f.cas.MarkCoverAbsent(t.Context(), digest); err != nil {
+	if err := f.cache.MarkCoverAbsent(t.Context(), digest); err != nil {
 		t.Fatal(err)
 	}
 	if resp, body := f.get(t, "/v1/books/"+bookID+"/cover", read); resp.StatusCode != http.StatusNotFound {
@@ -347,7 +319,7 @@ func TestARememberedAbsentCoverIsBelieved(t *testing.T) {
 // Rendering once and keeping nothing would make every request pay for the
 // decode again.
 func TestARenderedCoverIsWrittenToTheCache(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, digest := f.publish(t, "stored", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -355,7 +327,7 @@ func TestARenderedCoverIsWrittenToTheCache(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("code = %d: %s", resp.StatusCode, served)
 	}
-	cached, _, err := f.cas.OpenCover(t.Context(), digest, "thumbnail")
+	cached, _, err := f.cache.OpenCover(t.Context(), digest, "thumbnail")
 	if err != nil {
 		t.Fatalf("nothing was cached: %v", err)
 	}
@@ -374,7 +346,7 @@ func TestARenderedCoverIsWrittenToTheCache(t *testing.T) {
 // difference is to plant bytes of another type: sniffing would report
 // them, and this route must not.
 func TestCoverContentTypeIsNotSniffedFromTheBytes(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, digest := f.publish(t, "sniffed", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -382,7 +354,7 @@ func TestCoverContentTypeIsNotSniffedFromTheBytes(t *testing.T) {
 	if err := png.Encode(&planted, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.cas.StoreCover(t.Context(), digest, "thumbnail", planted.Bytes()); err != nil {
+	if err := f.cache.StoreCover(t.Context(), digest, "thumbnail", planted.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	resp, _ := f.get(t, "/v1/books/"+bookID+"/cover", read)
@@ -394,7 +366,7 @@ func TestCoverContentTypeIsNotSniffedFromTheBytes(t *testing.T) {
 // An ETag shared between sizes would let a cached thumbnail satisfy a
 // request for the full cover.
 func TestCoverSizesHaveDifferentValidators(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "validators", coverEPUB(t, 900, 1200, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -405,57 +377,12 @@ func TestCoverSizesHaveDifferentValidators(t *testing.T) {
 	}
 }
 
-// A deleted book must not keep illustrating itself. The catalog decides
-// what may be served, and asking the files alone would happily produce a
-// picture of a book that is in the trash.
-func TestCoverOfATrashedBookIsNotServed(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "trashed-cover", coverEPUB(t, 300, 400, "cover.png"))
-	manage := f.mintToken(t, f.user.ID, store.ScopeLibraryManage)
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	if resp, raw := f.req(
-		t, http.MethodDelete, "/v1/books/"+bookID, manage,
-	); resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete: %d %s", resp.StatusCode, raw)
-	}
-	if resp, _ := f.get(t, "/v1/books/"+bookID+"/cover", read); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("trashed book still has a cover: %d", resp.StatusCode)
-	}
-}
-
-// A file reconciliation has marked missing is not a file. The blob is
-// deliberately left on disk here: if the handler consulted the files
-// without checking availability, it would find bytes and serve a cover
-// for something the catalog has already withdrawn.
-func TestCoverOfAnUnavailableFileReportsItGone(t *testing.T) {
-	f := newUploadFixture(t)
-	data := coverEPUB(t, 300, 400, "cover.png")
-	bookID, digest := f.publish(t, "unavailable-cover", data)
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	now := time.Now().UTC()
-	if _, err := f.st.ReconcileBlob(t.Context(),
-		store.BlobInfo{SHA256: digest, SizeBytes: int64(len(data))}, false, now,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := content.ReconcileCatalogAvailability(
-		t.Context(), f.st, now, 100); err != nil {
-		t.Fatal(err)
-	}
-	resp, body := f.get(t, "/v1/books/"+bookID+"/cover", read)
-	if resp.StatusCode != http.StatusGone {
-		t.Fatalf("code = %d, want 410: %s", resp.StatusCode, body)
-	}
-}
-
 // A client cannot guess where a cover lives, so the book record has to
 // say. It is advertised for every book: a client that asks and gets 404
 // has learned the same thing as one told in advance, without the server
-// having to record the answer for every book ever uploaded.
+// having to record the answer for every book ever catalogued.
 func TestBookRecordAdvertisesItsCover(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "advertised", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -474,7 +401,7 @@ func TestBookRecordAdvertisesItsCover(t *testing.T) {
 
 	// And the listing carries it too, so a grid does not need a request
 	// per book to find out.
-	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books", read)
+	code, page := getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/books", read)
 	if code != http.StatusOK {
 		t.Fatalf("listing: %d %v", code, page)
 	}
@@ -494,7 +421,7 @@ func chosenCover(t *testing.T, width, height int) []byte {
 	t.Helper()
 	picture := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(picture, picture.Bounds(),
-		&image.Uniform{color.RGBA{R: 10, G: 200, B: 90, A: 255}},
+		&image.Uniform{C: color.RGBA{R: 10, G: 200, B: 90, A: 255}},
 		image.Point{}, draw.Src)
 	var encoded bytes.Buffer
 	if err := jpeg.Encode(&encoded, picture, nil); err != nil {
@@ -503,56 +430,179 @@ func chosenCover(t *testing.T, width, height int) []byte {
 	return encoded.Bytes()
 }
 
+// calibreSchema is the subset of Calibre's own schema the calibre package
+// reads, copied here rather than imported because it lives in that
+// package's _test.go file. It is deliberately the same DDL: a mismatch
+// here would be testing a library format Calibre does not produce.
+const calibreSchema = `
+CREATE TABLE books (
+	id INTEGER PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT 'Unknown',
+	sort TEXT,
+	timestamp TIMESTAMP,
+	pubdate TIMESTAMP,
+	series_index REAL NOT NULL DEFAULT 1.0,
+	path TEXT NOT NULL DEFAULT '',
+	has_cover BOOL DEFAULT 0,
+	last_modified TIMESTAMP NOT NULL DEFAULT '2000-01-01 00:00:00+00:00'
+);
+CREATE TABLE data (
+	id INTEGER PRIMARY KEY,
+	book INTEGER NOT NULL,
+	format TEXT NOT NULL,
+	uncompressed_size INTEGER NOT NULL,
+	name TEXT NOT NULL
+);
+CREATE TABLE authors (
+	id INTEGER PRIMARY KEY, name TEXT NOT NULL, sort TEXT);
+CREATE TABLE books_authors_link (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL, author INTEGER NOT NULL);
+CREATE TABLE series (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE books_series_link (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL, series INTEGER NOT NULL);
+CREATE TABLE publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE books_publishers_link (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL, publisher INTEGER NOT NULL);
+CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE books_tags_link (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL, tag INTEGER NOT NULL);
+CREATE TABLE languages (id INTEGER PRIMARY KEY, lang_code TEXT NOT NULL);
+CREATE TABLE books_languages_link (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL,
+	lang_code INTEGER NOT NULL, item_order INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE comments (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL, text TEXT NOT NULL);
+CREATE TABLE identifiers (
+	id INTEGER PRIMARY KEY, book INTEGER NOT NULL,
+	type TEXT NOT NULL DEFAULT 'isbn', val TEXT NOT NULL);
+`
+
+// calibreBook is one row this test's library builds; each is its own
+// directory so that two books can share one EPUB's bytes while keeping
+// their own cover.jpg, which is the whole point of the test that uses
+// this.
+type calibreBook struct {
+	id       int
+	title    string
+	dir      string
+	epub     []byte
+	hasCover bool
+	cover    []byte
+}
+
+// writeCalibreLibrary builds a minimal, real Calibre library on disk —
+// metadata.db plus the files it points at — and registers it as a
+// store.FolderCalibre. It returns the folder so the caller can reconcile
+// it with the fixture's own reconciler, exercising the real
+// reconcileCalibre path rather than an invented one.
+func (f *folderFixture) writeCalibreLibrary(t *testing.T, books []calibreBook) store.Folder {
+	t.Helper()
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(t.Context(), calibreSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range books {
+		hasCover := 0
+		if b.hasCover {
+			hasCover = 1
+		}
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO books
+			(id, title, sort, timestamp, pubdate, series_index, path,
+			 has_cover, last_modified)
+			VALUES (?, ?, ?, '2020-01-01 00:00:00+00:00',
+			 '2020-01-01 00:00:00+00:00', 1.0, ?, ?,
+			 '2020-01-01 00:00:00+00:00')`,
+			b.id, b.title, b.title, b.dir, hasCover); err != nil {
+			t.Fatal(err)
+		}
+		name := b.title
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO data
+			(id, book, format, uncompressed_size, name)
+			VALUES (?, ?, 'EPUB', ?, ?)`,
+			b.id, b.id, len(b.epub), name); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(root, filepath.FromSlash(b.dir))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(dir, name+".epub"), b.epub, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if b.cover != nil {
+			if err := os.WriteFile(
+				filepath.Join(dir, "cover.jpg"), b.cover, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	folder := store.Folder{
+		ID: store.NewID(), Name: "Calibre", RootPath: root,
+		Kind: store.FolderCalibre,
+	}
+	if err := f.st.CreateFolder(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+	return folder
+}
+
 // TestChosenCoverBeatsTheOneInsideTheBook is the Calibre case: cover.jpg
 // beside the book is a picture somebody chose, and two books sharing one
-// EPUB keep their own (ADR-0014). If the cache were keyed by the
-// publication alone, the second book here would be served the first
-// one's cover.
+// EPUB keep their own (ADR-0014, carried over unchanged by ADR-0017 —
+// only how a book enters the catalog changed, not what a cover is). If
+// the cache were keyed by the publication alone, the second book here
+// would be served the first one's cover.
 func TestChosenCoverBeatsTheOneInsideTheBook(t *testing.T) {
-	f := newUploadFixture(t)
-	body := coverEPUB(t, 900, 1200, "cover.png")
+	f := newFolderFixture(t)
+	epubBody := coverEPUB(t, 900, 1200, "cover.png")
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	type shelved struct {
-		bookID string
-		cover  []byte
+	first := chosenCover(t, 400, 100)
+	second := chosenCover(t, 800, 200)
+	folder := f.writeCalibreLibrary(t, []calibreBook{
+		{id: 1, title: "Chosen A", dir: "Author/Chosen A (1)",
+			epub: epubBody, hasCover: true, cover: first},
+		{id: 2, title: "Chosen B", dir: "Author/Chosen B (2)",
+			epub: epubBody, hasCover: true, cover: second},
+	})
+	f.reconcileFolder(t, folder)
+
+	known, err := f.st.BooksInFolder(t.Context(), folder.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var books []shelved
-	for i, size := range []int{400, 800} {
-		bookID, libraryID, full := f.publishInPlace(
-			t, "chosen-"+string(rune('a'+i)), body)
-		chosen := chosenCover(t, size, size/4)
-		coverPath := filepath.Join(filepath.Dir(full), "cover.jpg")
-		if err := os.WriteFile(coverPath, chosen, 0o644); err != nil {
-			t.Fatal(err)
+	bookByTitle := map[string]string{}
+	for _, b := range known {
+		if strings.Contains(b.RelativePath, "Chosen A") {
+			bookByTitle["A"] = b.ID
 		}
-		files, err := f.st.ListBookFiles(
-			t.Context(), f.user.ID, bookID, store.LibraryRoleManage)
-		if err != nil {
-			t.Fatal(err)
+		if strings.Contains(b.RelativePath, "Chosen B") {
+			bookByTitle["B"] = b.ID
 		}
-		if _, err := f.st.SetBookFileCover(t.Context(), libraryID,
-			files[0].ID, "cover.jpg", sha256Hex(chosen),
-			time.Now().UTC()); err != nil {
-			t.Fatal(err)
-		}
-		books = append(books, shelved{bookID: bookID, cover: chosen})
+	}
+	if bookByTitle["A"] == "" || bookByTitle["B"] == "" {
+		t.Fatalf("both books were not catalogued: %+v", known)
 	}
 
 	var served []image.Config
-	for _, book := range books {
-		resp, raw := f.get(t, "/v1/books/"+book.bookID+"/cover?size=full", read)
+	for name, cover := range map[string][]byte{"A": first, "B": second} {
+		resp, raw := f.get(t, "/v1/books/"+bookByTitle[name]+"/cover?size=full", read)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("cover: %d %s", resp.StatusCode, raw)
+			t.Fatalf("cover of %s: %d %s", name, resp.StatusCode, raw)
 		}
 		config := decodeCover(t, raw)
 		if config.Width <= config.Height {
-			t.Fatalf("the publication's own cover was served: %dx%d",
-				config.Width, config.Height)
+			t.Fatalf("the publication's own cover was served for %s: %dx%d",
+				name, config.Width, config.Height)
 		}
-		if got := resp.Header.Get("ETag"); !strings.Contains(
-			got, sha256Hex(book.cover)) {
-			t.Errorf("ETag %q does not name the cover it served", got)
+		if got := resp.Header.Get("ETag"); !strings.Contains(got, sha256Hex(cover)) {
+			t.Errorf("%s: ETag %q does not name the cover it served", name, got)
 		}
 		served = append(served, config)
 	}
@@ -562,50 +612,45 @@ func TestChosenCoverBeatsTheOneInsideTheBook(t *testing.T) {
 		t.Fatalf("two books sharing one EPUB were served one cover: %+v", served)
 	}
 
-	// A cover that went away is not an error: the book still has the one
-	// inside it.
-	_, libraryID, _ := f.publishInPlace(t, "chosen-gone", body)
-	files, err := f.st.ListBookFiles(
-		t.Context(), f.user.ID, "book-in-place-chosen-gone",
-		store.LibraryRoleManage)
-	if err != nil {
+	// A cover.jpg that goes away is not an error: the book still has the
+	// one inside its EPUB, and must fall back to it rather than fail.
+	if err := os.Remove(filepath.Join(folder.RootPath, "Author/Chosen A (1)/cover.jpg")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.SetBookFileCover(t.Context(), libraryID, files[0].ID,
-		"cover.jpg", sha256Hex([]byte("a cover.jpg nobody wrote")),
-		time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	resp, raw := f.get(
-		t, "/v1/books/book-in-place-chosen-gone/cover?size=full", read)
+	// The store still has the old digest recorded; OpenBookCover finds no
+	// file at all now, which the handler treats the same as a changed
+	// one and falls back to the publication's own cover rather than
+	// erroring. size=thumbnail (never requested for this book before)
+	// is used here rather than size=full, because size=full for this
+	// book's still-recorded CoverSHA256 was already rendered and cached
+	// above: re-requesting it would be answered from the cache without
+	// ever touching renderStoredCover, and would tell us nothing about
+	// the fallback.
+	resp, raw := f.get(t, "/v1/books/"+bookByTitle["A"]+"/cover?size=thumbnail", read)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("a missing cover.jpg cost the book its cover: %d %s",
-			resp.StatusCode, raw)
+		t.Fatalf("a missing cover.jpg cost the book its cover: %d %s", resp.StatusCode, raw)
 	}
 	if config := decodeCover(t, raw); config.Width >= config.Height {
 		t.Fatalf("the fallback is not the publication's own: %dx%d",
 			config.Width, config.Height)
 	}
-	if got := resp.Header.Get("ETag"); strings.Contains(
-		got, sha256Hex([]byte("a cover.jpg nobody wrote"))) {
+	if got := resp.Header.Get("ETag"); strings.Contains(got, sha256Hex(first)) {
 		t.Errorf("the fallback borrowed the missing cover's ETag: %q", got)
 	}
 
-	// And the fallback did not take the cover's place in the cache: the
-	// moment the file turns up, it is what gets served. Caching under the
-	// cover's key would have made a transient absence permanent, since
-	// the key is the same bytes it always was.
-	chosen := chosenCover(t, 320, 80)
-	if _, err := f.st.SetBookFileCover(t.Context(), libraryID, files[0].ID,
-		"cover.jpg", sha256Hex(chosen), time.Now().UTC()); err != nil {
+	// And the fallback did not take the cover's place in the cache: once
+	// a fresh pass re-records a chosen cover, it is what gets served.
+	// Caching under the fallback's own digest (the EPUB's) would have
+	// made a transient absence permanent, since that digest never
+	// changes.
+	replacement := chosenCover(t, 320, 80)
+	if err := os.WriteFile(
+		filepath.Join(folder.RootPath, "Author/Chosen A (1)/cover.jpg"),
+		replacement, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(
-		f.root, "shelf-chosen-gone", "cover.jpg"), chosen, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	resp, raw = f.get(
-		t, "/v1/books/book-in-place-chosen-gone/cover?size=full", read)
+	f.reconcileFolder(t, folder)
+	resp, raw = f.get(t, "/v1/books/"+bookByTitle["A"]+"/cover?size=full", read)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the returned cover: %d %s", resp.StatusCode, raw)
 	}

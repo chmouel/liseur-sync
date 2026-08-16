@@ -8,131 +8,37 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// publish drives a real upload all the way to a catalog book: the bytes go
-// through the upload endpoint into the CAS, get promoted into the final
-// tree, and the book and its file are committed together. Faking any of
-// that would let a download test pass against content that was never
-// really stored.
-func (f *uploadFixture) publish(t *testing.T, name string, body []byte) (string, string) {
-	t.Helper()
-	return f.publishAs(t, name, "Title of "+name, body)
-}
-
-// publishAs is publish with the title spelled out, for tests that care
-// what the metadata says rather than only that a book exists.
-func (f *uploadFixture) publishAs(
-	t *testing.T, name, title string, body []byte,
-) (string, string) {
-	t.Helper()
-	code, out := f.upload(t, f.token, f.library, "publish-"+name, body)
-	if code != http.StatusAccepted {
-		t.Fatalf("upload %s: %d %v", name, code, out)
-	}
-	jobID := out["job_id"].(string)
-	job, err := f.st.IngestJobByID(t.Context(), f.user.ID, jobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blob, err := f.cas.Promote(t.Context(), *job.StagingPath,
-		*job.ContentSHA256, job.BytesReceived)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	at := time.Now().UTC()
-	job, err = f.st.TransitionIngestJob(t.Context(), f.user.ID, job.ID,
-		store.IngestJobTransition{
-			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState: store.IngestValidated, UpdatedAt: at,
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err = f.st.TransitionIngestJob(t.Context(), f.user.ID, job.ID,
-		store.IngestJobTransition{
-			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState:                     store.IngestExtracted,
-			ExtractedEmbeddedMetadataJSON: []byte(`{"title":"Extracted"}`),
-			UpdatedAt:                     at.Add(time.Second),
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bookID, fileID := "book-"+name, "file-"+name
-	if _, err := f.st.CommitNewBookPromotion(t.Context(), f.user.ID, job.ID,
-		store.CommitNewBookPromotionRequest{
-			ExpectedRevision: job.Revision,
-			Blob:             store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size},
-			Book: store.CatalogBook{
-				ID: bookID, LibraryID: f.library, Status: store.BookActive,
-				Title: title, TitleSource: store.MetadataEmbedded,
-				Publisher: "A Publisher", PublisherSource: store.MetadataEmbedded,
-				CreatedAt: at, UpdatedAt: at,
-			},
-			File: store.BookFile{
-				ID: fileID, LibraryID: f.library, BookID: bookID,
-				BlobSHA256: blob.SHA256, Source: store.IngestUpload,
-				OriginalFilename: name + ".epub",
-				MediaType:        "application/epub+zip",
-				Availability:     store.BookFileAvailable,
-				CreatedAt:        at, UpdatedAt: at,
-			},
-			UpdatedAt: at.Add(2 * time.Second),
-		}); err != nil {
-		t.Fatal(err)
-	}
-	return bookID, blob.SHA256
-}
-
-func (f *uploadFixture) get(t *testing.T, path, token string) (*http.Response, []byte) {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, f.ts.URL+path, nil)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp, raw
-}
-
-// TestCatalogRoundTripsAnUploadedBook is the MVP in one test: a book that
-// was uploaded can be found through the library listing and downloaded
-// byte-for-byte.
-func TestCatalogRoundTripsAnUploadedBook(t *testing.T) {
-	f := newUploadFixture(t)
+// TestCatalogRoundTripsAPublishedBook is the MVP in one test: a book a
+// reconcile pass found under a folder's root can be found through the
+// folder listing and downloaded byte-for-byte.
+func TestCatalogRoundTripsAPublishedBook(t *testing.T) {
+	f := newFolderFixture(t)
 	body := bytes.Repeat([]byte("epub-bytes"), 100)
 	bookID, digest := f.publish(t, "roundtrip", body)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	code, libs := getJSON(t, f.ts.URL+"/v1/libraries", read)
+	code, folders := getJSON(t, f.ts.URL+"/v1/folders", read)
 	if code != http.StatusOK {
-		t.Fatalf("libraries: %d %v", code, libs)
+		t.Fatalf("folders: %d %v", code, folders)
 	}
-	entries := libs["libraries"].([]any)
+	entries := folders["folders"].([]any)
 	if len(entries) != 1 {
-		t.Fatalf("libraries = %v", entries)
+		t.Fatalf("folders = %v", entries)
 	}
-	if got := entries[0].(map[string]any)["library_id"]; got != f.library {
-		t.Fatalf("library_id = %v", got)
+	if got := entries[0].(map[string]any)["folder_id"]; got != f.folder.ID {
+		t.Fatalf("folder_id = %v", got)
 	}
 
-	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books", read)
+	code, page := getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/books", read)
 	if code != http.StatusOK {
 		t.Fatalf("books: %d %v", code, page)
 	}
@@ -140,7 +46,7 @@ func TestCatalogRoundTripsAnUploadedBook(t *testing.T) {
 	if len(books) != 1 || books[0].(map[string]any)["book_id"] != bookID {
 		t.Fatalf("books = %v", books)
 	}
-	if got := books[0].(map[string]any)["title"]; got != "Title of roundtrip" {
+	if got := books[0].(map[string]any)["title"]; got != "roundtrip" {
 		t.Fatalf("title = %v", got)
 	}
 
@@ -148,9 +54,8 @@ func TestCatalogRoundTripsAnUploadedBook(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("detail: %d %v", code, detail)
 	}
-	files := detail["files"].([]any)
-	if len(files) != 1 || files[0].(map[string]any)["sha256"] != digest {
-		t.Fatalf("files = %v", files)
+	if detail["sha256"] != digest {
+		t.Fatalf("sha256 = %v, want %s", detail["sha256"], digest)
 	}
 
 	resp, raw := f.get(t, "/v1/books/"+bookID+"/download", read)
@@ -162,9 +67,6 @@ func TestCatalogRoundTripsAnUploadedBook(t *testing.T) {
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/epub+zip" {
 		t.Fatalf("Content-Type = %q", ct)
-	}
-	if etag := resp.Header.Get("ETag"); etag != `"`+digest+`"` {
-		t.Fatalf("ETag = %q, want the content digest", etag)
 	}
 	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "roundtrip.epub") {
 		t.Fatalf("Content-Disposition = %q", cd)
@@ -178,7 +80,7 @@ func TestCatalogRoundTripsAnUploadedBook(t *testing.T) {
 // reader actually does: resume an interrupted transfer, and skip a
 // re-download it already has.
 func TestDownloadServesRangesAndConditionalRequests(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	body := []byte("0123456789abcdefghij")
 	bookID, digest := f.publish(t, "ranges", body)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
@@ -202,7 +104,7 @@ func TestDownloadServesRangesAndConditionalRequests(t *testing.T) {
 
 	req, _ = http.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("Authorization", "Bearer "+read)
-	req.Header.Set("If-None-Match", `"`+digest+`"`)
+	req.Header.Set("If-None-Match", `W/"`+digest+`"`)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -231,106 +133,119 @@ func TestDownloadServesRangesAndConditionalRequests(t *testing.T) {
 	}
 }
 
-// TestCatalogIsScopedToTheCallersLibraries is the tenant boundary. A
-// stranger holding a perfectly valid library-read token must not see, read
-// or download anything in a library they were never granted.
-func TestCatalogIsScopedToTheCallersLibraries(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "private", []byte("secret book"))
-	stranger := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
+// TestTheCatalogIsSharedAcrossEveryReader is ADR-0017's central claim
+// checked over HTTP: every signed-in account sees the same folder's
+// books, with no grant involved, while a reading position stays private
+// to whoever set it.
+func TestTheCatalogIsSharedAcrossEveryReader(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publish(t, "shared", []byte("a shared book"))
+	mine := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
+	theirs := f.mintToken(t, f.other.ID, store.ScopeLibraryRead, store.ScopeSync)
 
-	code, libs := getJSON(t, f.ts.URL+"/v1/libraries", stranger)
-	if code != http.StatusOK {
-		t.Fatalf("libraries: %d", code)
-	}
-	if entries := libs["libraries"].([]any); len(entries) != 0 {
-		t.Fatalf("stranger sees %v", entries)
-	}
-	for _, path := range []string{
-		"/v1/libraries/" + f.library + "/books",
-		"/v1/books/" + bookID,
-		"/v1/books/" + bookID + "/download",
-		"/v1/books/" + bookID + "/cover",
-	} {
-		t.Run(path, func(t *testing.T) {
-			resp, raw := f.get(t, path, stranger)
-			if resp.StatusCode != http.StatusNotFound {
-				t.Fatalf("code = %d, want 404: %s", resp.StatusCode, raw)
-			}
-		})
+	for _, tok := range []string{mine, theirs} {
+		code, page := getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/books", tok)
+		if code != http.StatusOK {
+			t.Fatalf("books: %d %v", code, page)
+		}
+		books := page["books"].([]any)
+		if len(books) != 1 || books[0].(map[string]any)["book_id"] != bookID {
+			t.Fatalf("books = %v", books)
+		}
+		resp, _ := f.get(t, "/v1/books/"+bookID+"/download", tok)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("download: %d", resp.StatusCode)
+		}
 	}
 
-	// And a grant is what changes that, so the 404 above is really the ACL
-	// and not something incidental.
-	if err := f.st.GrantLibraryAccess(t.Context(), f.user.ID, f.library,
-		f.other.ID, store.LibraryRoleRead, time.Now().UTC()); err != nil {
-		t.Fatal(err)
+	// Both readers can join the same catalog book to a work of their
+	// own, and the two mappings must not collide.
+	respA, a := f.resolveBook(t, bookID, mine)
+	respB, b := f.resolveBook(t, bookID, theirs)
+	if respA.StatusCode != http.StatusCreated || respB.StatusCode != http.StatusCreated {
+		t.Fatalf("resolves: %d %d", respA.StatusCode, respB.StatusCode)
 	}
-	// Read is genuinely enough: every catalog route must work for someone
-	// holding the read role, not merely for the owner.
-	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/books", stranger)
-	if code != http.StatusOK {
-		t.Fatalf("listing after read grant: %d %v", code, page)
+	if a.WorkID == "" || a.WorkID == b.WorkID {
+		t.Fatalf("two readers of a shared book got the same work: %q %q",
+			a.WorkID, b.WorkID)
 	}
-	if books := page["books"].([]any); len(books) != 1 {
-		t.Fatalf("read-only user sees %v", books)
+	mapping, err := f.st.UserBookWork(t.Context(), f.user.ID, bookID)
+	if err != nil || mapping.WorkID != a.WorkID {
+		t.Fatalf("user's own mapping: %+v %v", mapping, err)
 	}
-	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, stranger)
-	if code != http.StatusOK {
-		t.Fatalf("detail after read grant: %d %v", code, detail)
-	}
-	// The detail view must list the file too, or a read-only user has no
-	// way to know there is anything to download.
-	if files, _ := detail["files"].([]any); len(files) != 1 {
-		t.Fatalf("read-only user sees files %v", detail["files"])
-	}
-	resp, raw := f.get(t, "/v1/books/"+bookID+"/download", stranger)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("after grant: %d %s", resp.StatusCode, raw)
-	}
-	if string(raw) != "secret book" {
-		t.Fatalf("body = %q", raw)
+	mapping, err = f.st.UserBookWork(t.Context(), f.other.ID, bookID)
+	if err != nil || mapping.WorkID != b.WorkID {
+		t.Fatalf("other's own mapping: %+v %v", mapping, err)
 	}
 }
 
-// TestDownloadReportsContentThatIsNoLongerStored separates "no such book"
-// from "the bytes are gone". A client that gets 404 retries elsewhere; one
-// that gets 410 knows the catalog entry is real and the file is not.
-func TestDownloadReportsContentThatIsNoLongerStored(t *testing.T) {
-	f := newUploadFixture(t)
-	body := []byte("about to vanish")
-	bookID, digest := f.publish(t, "vanishing", body)
+// TestRootPathNeverReachesANonAdminResponse is the ADR-0017 obligation
+// that a folder's root_path — a path on this machine's filesystem — is
+// never handed to a reader. There is no admin-scoped HTTP route to
+// compare against here (folder management is admin-CLI-only), so the
+// only thing worth asserting is the negative: whatever a library-read
+// token can reach, root_path is not in it. A substring search over the
+// raw bytes is deliberate rather than decoding each shape and checking
+// named fields, so a field added later that happens to carry the path
+// cannot slip past this test unnoticed.
+func TestRootPathNeverReachesANonAdminResponse(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publishWithAuthor(t, "leaky", "Leaky Book", "Some Author", []byte("body"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+	needle := []byte(f.folder.RootPath)
 
-	removed, err := f.cas.RemoveBlob(t.Context(), digest, int64(len(body)))
-	if err != nil || !removed {
-		t.Fatalf("remove blob: %v %v", removed, err)
+	assertClean := func(label string, raw []byte) {
+		t.Helper()
+		if bytes.Contains(raw, needle) {
+			t.Fatalf("%s leaked the folder's root_path:\n%s", label, raw)
+		}
 	}
 
-	// The catalog entry still exists...
-	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
+	_, raw := f.get(t, "/v1/folders", read)
+	assertClean("folder list", raw)
+
+	_, raw = f.get(t, "/v1/folders/"+f.folder.ID+"/books", read)
+	assertClean("folder books", raw)
+
+	_, raw = f.get(t, "/v1/books/"+bookID, read)
+	assertClean("book detail", raw)
+
+	code, entities := getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/entities/contributors", read)
 	if code != http.StatusOK {
-		t.Fatalf("detail: %d %v", code, detail)
+		t.Fatalf("entities: %d %v", code, entities)
 	}
-	// ...but its content does not.
-	resp, raw := f.get(t, "/v1/books/"+bookID+"/download", read)
-	if resp.StatusCode != http.StatusGone {
-		t.Fatalf("code = %d, want 410: %s", resp.StatusCode, raw)
+	list := entities["entities"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("contributors = %v", list)
 	}
+	entityID := list[0].(map[string]any)["id"].(string)
+	_, raw = f.get(t, "/v1/folders/"+f.folder.ID+"/entities/contributors/"+entityID+"/books", read)
+	assertClean("entity books", raw)
+
+	_, raw = f.opds(t, "/opds/v1.2", "token", read)
+	assertClean("OPDS root feed", raw)
+
+	_, raw = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
+	assertClean("OPDS folder feed", raw)
+
+	_, raw = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID+"/contributors", "token", read)
+	assertClean("OPDS entity-kind feed", raw)
+
+	_, raw = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID+"/contributors/"+entityID, "token", read)
+	assertClean("OPDS entity-books feed", raw)
 }
 
 // TestCatalogRequiresTheLibraryReadScope keeps the capability check
-// independent of the ACL: owning the library is not enough if the token
-// cannot read catalogs.
+// independent of anything else: a token without library-read cannot
+// reach the catalog no matter whose folder it is.
 func TestCatalogRequiresTheLibraryReadScope(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "scoped", []byte("scoped book"))
 	syncOnly := f.mintToken(t, f.user.ID, store.ScopeSync)
 
 	for _, path := range []string{
-		"/v1/libraries",
-		"/v1/libraries/" + f.library + "/books",
-		"/v1/libraries/" + f.library + "/duplicates",
+		"/v1/folders",
+		"/v1/folders/" + f.folder.ID + "/books",
 		"/v1/books/" + bookID,
 		"/v1/books/" + bookID + "/download",
 		"/v1/books/" + bookID + "/cover",
@@ -348,11 +263,11 @@ func TestCatalogRequiresTheLibraryReadScope(t *testing.T) {
 	}
 }
 
-// TestCatalogPagesWithoutGapsOrRepeats walks the whole catalog one book at
-// a time. Books published in a tight loop share a creation instant, which
-// is exactly when a cursor on time alone loses or repeats rows.
+// TestCatalogPagesWithoutGapsOrRepeats walks the whole catalog one book
+// at a time. Books published in a tight loop share a creation instant,
+// which is exactly when a cursor on time alone loses or repeats rows.
 func TestCatalogPagesWithoutGapsOrRepeats(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	const total = 7
 	want := map[string]bool{}
 	for i := range total {
@@ -365,7 +280,7 @@ func TestCatalogPagesWithoutGapsOrRepeats(t *testing.T) {
 	seen := map[string]int{}
 	pages := 0
 	lastPageHadCursor := false
-	url := "/v1/libraries/" + f.library + "/books?limit=2"
+	url := "/v1/folders/" + f.folder.ID + "/books?limit=2"
 	for range total + 3 {
 		resp, raw := f.get(t, url, read)
 		if resp.StatusCode != http.StatusOK {
@@ -389,7 +304,7 @@ func TestCatalogPagesWithoutGapsOrRepeats(t *testing.T) {
 		if !ok {
 			break
 		}
-		url = "/v1/libraries/" + f.library + "/books?limit=2&cursor=" + next
+		url = "/v1/folders/" + f.folder.ID + "/books?limit=2&cursor=" + next
 	}
 
 	if pages == 0 || lastPageHadCursor {
@@ -410,9 +325,9 @@ func TestCatalogPagesWithoutGapsOrRepeats(t *testing.T) {
 }
 
 func TestCatalogRejectsMalformedPagingWithout5xx(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	base := "/v1/libraries/" + f.library + "/books"
+	base := "/v1/folders/" + f.folder.ID + "/books"
 
 	for _, tc := range []struct{ name, query string }{
 		{"zero limit", "?limit=0"},
@@ -433,8 +348,9 @@ func TestCatalogRejectsMalformedPagingWithout5xx(t *testing.T) {
 }
 
 // TestDownloadFilenameCannotEscapeOrForgeHeaders covers a filename that
-// arrived in a multipart header and is therefore attacker-controlled. It
-// must never act as a path, and never break out of the header it sits in.
+// arrived in an EPUB's own path on disk and is therefore whoever curates
+// the folder's choice, not this server's. It must never act as a path,
+// and never break out of the header it sits in.
 func TestDownloadFilenameCannotEscapeOrForgeHeaders(t *testing.T) {
 	for _, tc := range []struct{ raw, want string }{
 		{"book.epub", "book.epub"},
@@ -458,7 +374,7 @@ func TestDownloadFilenameCannotEscapeOrForgeHeaders(t *testing.T) {
 		"line\r\nX-Injected: yes", "semi;colon.epub",
 	} {
 		header := contentDisposition(downloadFilename(
-			store.BookFile{OriginalFilename: raw}))
+			store.CatalogBook{OriginalFilename: raw}))
 		if strings.ContainsAny(header, "\r\n") {
 			t.Errorf("header for %q contains a newline: %q", raw, header)
 		}
@@ -492,7 +408,7 @@ func TestDownloadRefusesAMisleadingMediaType(t *testing.T) {
 // answer with plain text and leave the attachment headers on, so the
 // wrapper that corrects it needs pinning.
 func TestDownloadRejectsABadRangeInJSON(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	body := bytes.Repeat([]byte("x"), 64)
 	bookID, _ := f.publish(t, "badrange", body)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
@@ -534,7 +450,7 @@ func TestDownloadRejectsABadRangeInJSON(t *testing.T) {
 // TestDownloadStillServesGoodRanges guards the wrapper from over-reaching:
 // resuming a partial download is the normal case and must keep working.
 func TestDownloadStillServesGoodRanges(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	body := []byte("0123456789abcdefghij")
 	bookID, _ := f.publish(t, "goodrange", body)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
@@ -560,219 +476,41 @@ func TestDownloadStillServesGoodRanges(t *testing.T) {
 	}
 }
 
-// TestReconciliationHidesABookWhoseBytesAreGone is the end of the chain
-// the store and content passes start: losing a blob must take the book
-// out of the catalog a reader browses, not merely fail at download time.
-func TestReconciliationHidesABookWhoseBytesAreGone(t *testing.T) {
-	f := newUploadFixture(t)
-	body := []byte("about to vanish under reconciliation")
-	bookID, digest := f.publish(t, "vanishing", body)
-	keptID, _ := f.publish(t, "surviving", []byte("still here"))
+// TestAMissingBookIsListedButItsDownloadFailsCleanly is the third
+// obligation of the redesign: a file a pass could not find is not
+// deleted from the catalog (ADR-0017 draws that line at the disk, not at
+// the server), so it must still be listed — but its download has to
+// report the truth rather than serve stale bytes or panic.
+func TestAMissingBookIsListedButItsDownloadFailsCleanly(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publish(t, "vanishing", []byte("about to be removed"))
+	// A folder emptied down to nothing is a zero-observation pass, and
+	// rule 2 of ADR-0017 forbids marking anything missing from one — an
+	// unmounted disk is usually still readable and empty. A surviving
+	// book is what makes this pass see something and therefore be
+	// allowed an opinion about the file that is gone.
+	f.publish(t, "surviving", []byte("still here"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	removed, err := f.cas.RemoveBlob(t.Context(), digest, int64(len(body)))
-	if err != nil || !removed {
-		t.Fatalf("remove blob: %v %v", removed, err)
+	if err := os.Remove(filepath.Join(f.root, "vanishing.epub")); err != nil {
+		t.Fatal(err)
 	}
+	f.reconcile(t)
 
-	// Before reconciliation the catalog still advertises a file it can no
-	// longer serve.
 	code, detail := getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
 	if code != http.StatusOK {
-		t.Fatalf("detail before: %d %v", code, detail)
-	}
-	if files, _ := detail["files"].([]any); len(files) != 1 {
-		t.Fatalf("expected a stale file entry before reconciliation: %v", detail)
-	}
-
-	now := time.Now().UTC()
-	if _, err := content.ReconcileBlobInventory(
-		t.Context(), f.st, f.cas, now, 100); err != nil {
-		t.Fatal(err)
-	}
-	report, err := content.ReconcileCatalogAvailability(
-		t.Context(), f.st, now, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.FilesMarkedMissing != 1 || report.BooksMarkedMissing != 1 {
-		t.Fatalf("reconciliation report: %+v", report)
-	}
-
-	code, detail = getJSON(t, f.ts.URL+"/v1/books/"+bookID, read)
-	if code != http.StatusOK {
-		t.Fatalf("detail after: %d %v", code, detail)
-	}
-	if files, _ := detail["files"].([]any); len(files) != 0 {
-		t.Fatalf("catalog still offers a file it cannot serve: %v", detail)
+		t.Fatalf("a missing book must still be listed: %d %v", code, detail)
 	}
 	if detail["status"] != string(store.BookMissing) {
-		t.Fatalf("status after reconciliation: %v", detail["status"])
+		t.Fatalf("status = %v, want missing", detail["status"])
 	}
 
 	resp, raw := f.get(t, "/v1/books/"+bookID+"/download", read)
 	if resp.StatusCode != http.StatusGone {
-		t.Fatalf("download = %d, want 410: %s", resp.StatusCode, raw)
+		t.Fatalf("download of a missing book = %d, want 410: %s", resp.StatusCode, raw)
 	}
-
-	// The book that kept its bytes must be untouched.
-	code, kept := getJSON(t, f.ts.URL+"/v1/books/"+keptID, read)
-	if code != http.StatusOK {
-		t.Fatalf("kept detail: %d %v", code, kept)
-	}
-	if files, _ := kept["files"].([]any); len(files) != 1 {
-		t.Fatalf("reconciliation hid a book that was fine: %v", kept)
-	}
-	if kept["status"] != string(store.BookActive) {
-		t.Fatalf("kept status: %v", kept["status"])
-	}
-	resp, raw = f.get(t, "/v1/books/"+keptID+"/download", read)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("kept download = %d: %s", resp.StatusCode, raw)
-	}
-}
-
-func (f *uploadFixture) req(
-	t *testing.T, method, path, token string,
-) (*http.Response, []byte) {
-	t.Helper()
-	req, _ := http.NewRequest(method, f.ts.URL+path, nil)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp, raw
-}
-
-// TestDeleteTakesABookOutOfTheCatalogAndRestorePutsItBack is the deletion
-// path as a caller sees it: gone from the catalog and undownloadable
-// immediately, and recoverable until retention closes.
-func TestDeleteTakesABookOutOfTheCatalogAndRestorePutsItBack(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "doomed", []byte("doomed book"))
-	manage := f.mintToken(t, f.user.ID, store.ScopeLibraryManage)
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	if resp, raw := f.req(t, http.MethodDelete, "/v1/books/"+bookID, manage); resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete: %d %s", resp.StatusCode, raw)
-	}
-	if resp, _ := f.get(t, "/v1/books/"+bookID, read); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("deleted book still readable: %d", resp.StatusCode)
-	}
-	if resp, _ := f.get(t, "/v1/books/"+bookID+"/download", read); resp.StatusCode == http.StatusOK {
-		t.Fatal("deleted book is still downloadable")
-	}
-	// Deleting twice would silently extend the retention window.
-	if resp, _ := f.req(t, http.MethodDelete, "/v1/books/"+bookID, manage); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("double delete: %d", resp.StatusCode)
-	}
-
-	if resp, raw := f.req(
-		t, http.MethodPost, "/v1/books/"+bookID+"/restore", manage,
-	); resp.StatusCode != http.StatusOK {
-		t.Fatalf("restore: %d %s", resp.StatusCode, raw)
-	}
-	if resp, _ := f.get(t, "/v1/books/"+bookID+"/download", read); resp.StatusCode != http.StatusOK {
-		t.Fatalf("restored book is not downloadable: %d", resp.StatusCode)
-	}
-	// Restoring what is not in the trash is not an undo.
-	if resp, _ := f.req(
-		t, http.MethodPost, "/v1/books/"+bookID+"/restore", manage,
-	); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("restore of a live book: %d", resp.StatusCode)
-	}
-}
-
-// TestDeleteRequiresTheManageScope: reading a library must never be
-// enough to destroy what is in it, and an anonymous caller must not learn
-// whether the book exists.
-func TestDeleteRequiresTheManageScope(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "protected", []byte("protected book"))
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	for _, tc := range []struct {
-		method, path string
-	}{
-		{http.MethodDelete, "/v1/books/" + bookID},
-		{http.MethodPost, "/v1/books/" + bookID + "/restore"},
-	} {
-		if resp, _ := f.req(t, tc.method, tc.path, read); resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("%s with read scope: %d", tc.method, resp.StatusCode)
-		}
-		if resp, _ := f.req(t, tc.method, tc.path, ""); resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("%s unauthenticated: %d", tc.method, resp.StatusCode)
-		}
-	}
-	// The book is untouched by all that.
-	if resp, _ := f.get(t, "/v1/books/"+bookID, read); resp.StatusCode != http.StatusOK {
-		t.Fatalf("book damaged by refused deletes: %d", resp.StatusCode)
-	}
-}
-
-// TestDuplicatesGroupBooksThatAreTheSameFile is the API half of
-// duplicate detection. A client asks what is duplicated and gets groups
-// it can act on; a book nothing else shares is not one of them, and
-// resolving a group is an ordinary delete.
-func TestDuplicatesGroupBooksThatAreTheSameFile(t *testing.T) {
-	f := newUploadFixture(t)
-	same := []byte("identical bytes for two books")
-	firstID, _ := f.publishAs(t, "copy-one", "Morning Star", same)
-	secondID, _ := f.publishAs(t, "copy-two", "Morning Star Again", same)
-	f.publishAs(t, "unique", "Only Copy", []byte("nothing else has these"))
-	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-
-	path := "/v1/libraries/" + f.library + "/duplicates"
-	code, page := getJSON(t, f.ts.URL+path, read)
-	if code != http.StatusOK {
-		t.Fatalf("code = %d: %v", code, page)
-	}
-	groups, _ := page["duplicates"].([]any)
-	if len(groups) != 1 {
-		t.Fatalf("duplicates = %v, want one group", page["duplicates"])
-	}
-	group, _ := groups[0].(map[string]any)
-	if sha, _ := group["sha256"].(string); len(sha) != 64 {
-		t.Fatalf("group digest = %v", group["sha256"])
-	}
-	books, _ := group["books"].([]any)
-	if len(books) != 2 {
-		t.Fatalf("group holds %d books, want 2", len(books))
-	}
-	got := map[string]bool{}
-	for _, entry := range books {
-		book, _ := entry.(map[string]any)
-		id, _ := book["book_id"].(string)
-		got[id] = true
-		if _, ok := book["title"].(string); !ok {
-			t.Fatalf("book in a group is not described: %v", book)
-		}
-	}
-	if !got[firstID] || !got[secondID] {
-		t.Fatalf("group = %v, want %s and %s", got, firstID, secondID)
-	}
-
-	// Deleting one settles it, which is the whole resolution story: there
-	// is no separate merge, and nothing was decided for the caller.
-	manage := f.mintToken(t, f.user.ID, store.ScopeLibraryManage)
-	if resp, _ := f.req(
-		t, http.MethodDelete, "/v1/books/"+secondID, manage,
-	); resp.StatusCode != http.StatusOK {
-		t.Fatalf("delete: %d", resp.StatusCode)
-	}
-	code, page = getJSON(t, f.ts.URL+path, read)
-	if code != http.StatusOK {
-		t.Fatalf("code = %d: %v", code, page)
-	}
-	if groups, _ := page["duplicates"].([]any); len(groups) != 0 {
-		t.Fatalf("duplicates after deleting one = %v", page["duplicates"])
+	resp, raw = f.get(t, "/v1/books/"+bookID+"/cover", read)
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("cover of a missing book = %d, want 410: %s", resp.StatusCode, raw)
 	}
 }

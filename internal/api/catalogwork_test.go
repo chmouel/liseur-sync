@@ -15,7 +15,7 @@ import (
 
 // postRaw sends a body the JSON encoder did not produce, which is the only
 // way to test what the handler does with one.
-func (f *uploadFixture) postRaw(
+func (f *folderFixture) postRaw(
 	t *testing.T, path, token, body string,
 ) (*http.Response, []byte) {
 	t.Helper()
@@ -36,7 +36,7 @@ func (f *uploadFixture) postRaw(
 	return resp, raw
 }
 
-func (f *uploadFixture) resolveBook(
+func (f *folderFixture) resolveBook(
 	t *testing.T, bookID, token string,
 ) (*http.Response, catalogResolveResponse) {
 	t.Helper()
@@ -45,7 +45,7 @@ func (f *uploadFixture) resolveBook(
 }
 
 // postResolve is resolveBook with a request body, for confirmation.
-func (f *uploadFixture) postResolve(
+func (f *folderFixture) postResolve(
 	t *testing.T, bookID, token, body string,
 ) (*http.Response, catalogResolveResponse) {
 	t.Helper()
@@ -70,10 +70,9 @@ func decodeResolve(
 // exists: a reader who got a book from the catalog must be able to sync a
 // position for it, which needs a work ID.
 func TestResolveJoinsADownloadedBookToTheReadersWork(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, sha := f.publish(t, "resolvable", []byte("a book to resolve"))
-	tok := f.mintScopes(t, f.user.ID, "reader",
-		store.ScopeLibraryRead, store.ScopeSync)
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	resp, out := f.resolveBook(t, bookID, tok)
 	if resp.StatusCode != http.StatusCreated {
@@ -115,20 +114,15 @@ func TestResolveJoinsADownloadedBookToTheReadersWork(t *testing.T) {
 	}
 }
 
-// TestResolveGivesEachReaderTheirOwnWork is the privacy property: a shared
-// book must not become a shared work, or one reader's position would be
-// another's.
+// TestResolveGivesEachReaderTheirOwnWork is the privacy property: a
+// shared catalog book must not become a shared work, or one reader's
+// position would be another's. Unlike the old library-ACL world there is
+// no grant to set up: every reader already sees this book.
 func TestResolveGivesEachReaderTheirOwnWork(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "shared", []byte("a shared book"))
-	if err := f.st.GrantLibraryAccess(t.Context(), f.user.ID, f.library,
-		f.other.ID, store.LibraryRoleRead, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	mine := f.mintScopes(t, f.user.ID, "mine",
-		store.ScopeLibraryRead, store.ScopeSync)
-	theirs := f.mintScopes(t, f.other.ID, "theirs",
-		store.ScopeLibraryRead, store.ScopeSync)
+	mine := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
+	theirs := f.mintToken(t, f.other.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	respA, a := f.resolveBook(t, bookID, mine)
 	respB, b := f.resolveBook(t, bookID, theirs)
@@ -140,28 +134,11 @@ func TestResolveGivesEachReaderTheirOwnWork(t *testing.T) {
 	}
 }
 
-// TestResolveRefusesABookTheCallerCannotSee keeps the route from becoming a
-// way to prove a book exists in someone else's library.
-func TestResolveRefusesABookTheCallerCannotSee(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publish(t, "private", []byte("a private book"))
-	outsider := f.mintScopes(t, f.other.ID, "outsider",
-		store.ScopeLibraryRead, store.ScopeSync)
-
-	resp, _ := f.resolveBook(t, bookID, outsider)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("outsider resolve: %d, want 404", resp.StatusCode)
-	}
-	if _, err := f.st.UserBookWork(t.Context(), f.other.ID, bookID); err != store.ErrNotFound {
-		t.Fatalf("outsider got a mapping: %v", err)
-	}
-}
-
 // TestResolveNeedsBothCapabilities pins the decision that this route spans
 // two layers. A catalog-only credential must not touch the work graph, and
 // a sync-only one must not read the catalog.
 func TestResolveNeedsBothCapabilities(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "twoscope", []byte("needs both"))
 
 	for name, token := range map[string]string{
@@ -188,16 +165,15 @@ func TestResolveNeedsBothCapabilities(t *testing.T) {
 // TestResolveRejectsAMalformedBodyWithout5xx: the body is optional, so both
 // "no body" and "garbage" have to be handled, and neither is a server bug.
 func TestResolveRejectsAMalformedBodyWithout5xx(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "malformed", []byte("malformed body"))
-	tok := f.mintScopes(t, f.user.ID, "reader",
-		store.ScopeLibraryRead, store.ScopeSync)
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	resp, raw := f.postRaw(t, "/v1/books/"+bookID+"/resolve", tok, "{not json")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("malformed body: %d %s", resp.StatusCode, raw)
 	}
-	// A missing book is a 404 even for a caller who may read the library.
+	// A missing book is a 404 even for a caller who may read the catalog.
 	resp, _ = f.resolveBook(t, "book-does-not-exist", tok)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown book: %d", resp.StatusCode)
@@ -208,10 +184,9 @@ func TestResolveRejectsAMalformedBodyWithout5xx(t *testing.T) {
 // guess. Acting on it unasked would silently merge two different books into
 // one reading history, which is the mistake ADR-0003 exists to prevent.
 func TestResolveHonoursConfirmationForAFuzzyMatch(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publishAs(t, "fuzzy", "Ambiguous Book", []byte("fuzzy body"))
-	tok := f.mintScopes(t, f.user.ID, "reader",
-		store.ScopeLibraryRead, store.ScopeSync)
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	// A work the reader already has, reachable only by title/author.
 	existing := store.Work{
@@ -252,10 +227,9 @@ func TestResolveHonoursConfirmationForAFuzzyMatch(t *testing.T) {
 // points at two different works, guessing one would corrupt a reading
 // history. The reader is told instead.
 func TestResolveReportsIdentifiersSpanningTwoWorks(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, sha := f.publishAs(t, "split", "Split Book", []byte("split body"))
-	tok := f.mintScopes(t, f.user.ID, "reader",
-		store.ScopeLibraryRead, store.ScopeSync)
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	now := time.Now().UTC()
 	// One work already claims the file's digest.

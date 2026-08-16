@@ -43,14 +43,17 @@ type adminUserView struct {
 	MoreTokens   int
 	MoreKosync   int
 	MoreKoplugin int
-	// Libraries is what this account owns or was granted, one page of
-	// it; the whole instance's list lives on the libraries page.
-	Libraries     []adminUserLibrary
-	MoreLibraries bool
 	// Self marks the acting admin's own account: demoting or disabling
 	// yourself is not offered, since the last-admin guard would be the
 	// only thing standing between an operator and a locked instance.
 	Self bool
+	// Browsers counts the browsers this account has read in, which is
+	// not the same as the number of reader tokens it has held.
+	Browsers int
+	// Base is this server's absolute origin as the browser reached it,
+	// for the addresses an operator has to read out to whoever owns the
+	// device being paired.
+	Base string
 }
 
 // reauth is the shared gate in front of every high-impact mutation: the
@@ -171,11 +174,16 @@ func (s *Server) renderAdminUser(
 		http.Error(w, "no such user", http.StatusNotFound)
 		return
 	}
-	view := adminUserView{User: target, Self: target.ID == u.ID}
-	view.Tokens, view.MoreTokens = capSlice(listOrNil(s.St.ListTokens(r.Context(), target.ID)))
+	view := adminUserView{User: target, Self: target.ID == u.ID, Base: s.serverBaseURL(r)}
+	// Browser-reader tokens are the server's own machinery — one an hour
+	// for as long as someone reads — so they are counted, not listed.
+	// An admin looking at an account wants the credentials it was given,
+	// and how many browsers it reads in, not a log of refreshes.
+	ownTokens, browsers := splitReaderTokens(listOrNil(s.St.ListTokens(r.Context(), target.ID)))
+	view.Tokens, view.MoreTokens = capSlice(ownTokens)
+	view.Browsers = len(browsers)
 	view.Kosync, view.MoreKosync = capSlice(listOrNil(s.St.ListKosyncDevices(r.Context(), target.ID)))
 	view.Koplugin, view.MoreKoplugin = capSlice(listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)))
-	view.Libraries, view.MoreLibraries = s.userLibraries(r, target.ID)
 
 	prefix := relPrefix(r.URL.Path)
 	adminPage(target.Name, prefix, uiCtx(r, u), csrfFor(a), "users",
@@ -524,6 +532,21 @@ func stamp(t *time.Time) string {
 		return "—"
 	}
 	return t.UTC().Format("2006-01-02 15:04")
+}
+
+// browserNote says how many browsers the account reads in. It is a
+// sentence rather than a table because there is nothing to do to a
+// browser from here: the credential behind it is replaced hourly, and
+// cutting an account off is what Disable is for.
+func browserNote(n int) string {
+	switch n {
+	case 0:
+		return "Has not read in a browser."
+	case 1:
+		return "Reads in 1 browser."
+	default:
+		return "Reads in " + strconv.Itoa(n) + " browsers."
+	}
 }
 
 func moreNote(n int) string {

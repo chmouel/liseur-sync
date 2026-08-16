@@ -32,14 +32,10 @@ func progressOn(t *testing.T, f *booksFixture, workID, opID string, at float64, 
 func libraryFixture(t *testing.T) (*booksFixture, map[string]string) {
 	t.Helper()
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
 	ids := map[string]string{}
 
 	for _, name := range []string{"midway", "done", "fresh"} {
-		f.uploadForm(t, f.cookie, csrf, f.library, name+".epub",
-			bytes.Repeat([]byte(name+"-epub"), 50))
-		ids[name] = f.promote(t, name)
+		ids[name] = f.addBook(t, name, bytes.Repeat([]byte(name+"-epub"), 50))
 	}
 
 	now := time.Now().UTC()
@@ -87,7 +83,7 @@ func grid(page string) string {
 func TestLibraryPageIsTheUnionOfBothOldPages(t *testing.T) {
 	f, ids := libraryFixture(t)
 
-	_, page := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	for what, want := range map[string]string{
 		"a book that has been read":       `books/` + ids["midway"],
 		"a book that has never been read": `books/` + ids["fresh"],
@@ -123,7 +119,7 @@ func TestLibraryChipsMeanWhatTheySay(t *testing.T) {
 		{"unread", []string{ids["fresh"]}, []string{ids["midway"], ids["done"]}},
 		{"here", []string{ids["midway"], ids["fresh"], ids["done"]}, []string{"w-elsewhere"}},
 	} {
-		_, page := f.get(t, "/ui/library?library="+f.library+"&filter="+tc.filter, f.cookie)
+		_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter="+tc.filter, f.cookie)
 		body := grid(page)
 		for _, want := range tc.want {
 			if !strings.Contains(body, want) {
@@ -149,7 +145,7 @@ func TestLibraryChipsMeanWhatTheySay(t *testing.T) {
 func TestLibraryHeroResumesTheLastBook(t *testing.T) {
 	f, ids := libraryFixture(t)
 
-	_, page := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	hero := page[strings.Index(page, `class="card resume"`):]
 	hero = hero[:strings.Index(hero, "</section>")]
 	if !strings.Contains(hero, `books/`+ids["midway"]+`/read`) {
@@ -176,7 +172,7 @@ func TestLibraryHeroResumesTheLastBook(t *testing.T) {
 func TestLibraryCardOpensTheBookRatherThanAMenu(t *testing.T) {
 	f, ids := libraryFixture(t)
 
-	_, page := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	if !strings.Contains(page, `class="cardopen" href="books/`+ids["fresh"]+`"`) {
 		t.Errorf("a card has no way to its book's page:\n%s", page)
 	}
@@ -194,7 +190,7 @@ func TestLibraryCardOpensTheBookRatherThanAMenu(t *testing.T) {
 func TestLibraryFragmentIsCardsOnly(t *testing.T) {
 	f, _ := libraryFixture(t)
 
-	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/library?library="+f.library, nil)
+	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/library?folder="+f.folder, nil)
 	req.AddCookie(f.cookie)
 	req.Header.Set("HX-Request", "true")
 	resp, err := noRedirectClient().Do(req)
@@ -214,17 +210,23 @@ func TestLibraryFragmentIsCardsOnly(t *testing.T) {
 	}
 }
 
-// TestLibraryIsScopedToTheSignedInUser extends the tenant matrix onto
-// the new route. Every other page in this UI is scoped; a new one that
-// forgot would be the first.
-func TestLibraryIsScopedToTheSignedInUser(t *testing.T) {
+// TestLibraryShowsTheSharedShelfButNotAnotherAccountsReading draws the
+// line ADR-0017 moved. The catalog is the server's, so bob sees the same
+// books alice does — but what alice has read is hers, and none of her
+// works reach his page.
+func TestLibraryShowsTheSharedShelfButNotAnotherAccountsReading(t *testing.T) {
 	f, ids := libraryFixture(t)
 
 	bob := f.login(t, "bob")
-	_, page := f.get(t, "/ui/library?library="+f.library, bob)
-	for _, secret := range []string{ids["midway"], ids["fresh"], "w-elsewhere", "w-midway"} {
-		if strings.Contains(page, secret) {
-			t.Errorf("another user's library leaked %s:\n%s", secret, page)
+	_, page := f.get(t, "/ui/library?folder="+f.folder, bob)
+	for _, shared := range []string{ids["midway"], ids["fresh"]} {
+		if !strings.Contains(page, shared) {
+			t.Errorf("the shared catalog hid %s from a second account:\n%s", shared, page)
+		}
+	}
+	for _, hers := range []string{"w-elsewhere", "w-midway", "w-done"} {
+		if strings.Contains(page, hers) {
+			t.Errorf("another account's reading leaked %s:\n%s", hers, page)
 		}
 	}
 }
@@ -236,35 +238,23 @@ func TestLibraryIsScopedToTheSignedInUser(t *testing.T) {
 // the card.
 func TestLibraryCardsNameTheAuthor(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	f.uploadForm(t, f.cookie, csrf, f.library, "credited.epub",
-		bytes.Repeat([]byte("credited"), 50))
-	book := f.promote(t, "credited")
-
-	metadata, err := f.st.CatalogBookMetadata(
-		t.Context(), "u1", book, store.LibraryRoleRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadata.Contributors = []store.BookContributor{
-		{ContributorID: "c-lem", Name: "Stanisław Lem",
-			NormalizedName: "stanisław lem", Role: store.ContributorRoleAuthor,
-			Position: 1, Source: store.MetadataEmbedded},
-		{ContributorID: "c-kilmartin", Name: "Joanna Kilmartin",
-			NormalizedName: "joanna kilmartin", Role: "translator",
-			Position: 2, Source: store.MetadataEmbedded},
-	}
-	if _, err := f.st.ApplyCatalogBookMetadata(t.Context(), "u1",
-		store.ApplyBookMetadataRequest{
-			Metadata:         metadata,
-			ExpectedRevision: metadata.Book.Revision,
-			UpdatedAt:        time.Now().UTC(),
-		}); err != nil {
+	// Contributors come off the file the pass read, so they are seeded
+	// the same way a pass would report them.
+	now := time.Now().UTC()
+	if _, err := f.st.ReconcileFolder(t.Context(), f.folder, []store.ObservedBook{{
+		RelativePath: "credited.epub", SizeBytes: 400, MTime: now,
+		ContentSHA256:    strings.Repeat("c", 64),
+		OriginalFilename: "credited.epub", MediaType: "application/epub+zip",
+		Title: "Solaris",
+		Contributors: []store.ObservedContributor{
+			{Name: "Stanisław Lem", Role: store.ContributorRoleAuthor, Position: 1},
+			{Name: "Joanna Kilmartin", Role: "translator", Position: 2},
+		},
+	}}, true, now); err != nil {
 		t.Fatal(err)
 	}
 
-	_, page := f.get(t, "/ui/library", f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	if !strings.Contains(page, "Stanisław Lem") {
 		t.Error("the card does not say who wrote the book")
 	}
@@ -279,21 +269,24 @@ func TestLibraryCardsNameTheAuthor(t *testing.T) {
 // closed to them.
 func TestAnEmptyLibraryPointsAdminsAtTheAdminPanel(t *testing.T) {
 	f := newBooksFixture(t)
+	if err := f.st.DeleteFolder(t.Context(), f.folder); err != nil {
+		t.Fatal(err)
+	}
 	bob := f.login(t, "bob")
 
 	_, html := f.get(t, "/ui/library", bob)
-	if !strings.Contains(html, "You have no libraries yet") {
+	if !strings.Contains(html, "watches no folders yet") {
 		t.Fatalf("empty shelf not shown: %s", html)
 	}
-	if strings.Contains(html, `href="admin/libraries"`) {
-		t.Fatal("a plain reader was offered the admin libraries page")
+	if strings.Contains(html, `href="admin/folders"`) {
+		t.Fatal("a plain reader was offered the admin folders page")
 	}
 
 	if err := f.st.SetUserAdmin(t.Context(), "u2", true); err != nil {
 		t.Fatal(err)
 	}
 	_, html = f.get(t, "/ui/library", bob)
-	if !strings.Contains(html, `href="admin/libraries"`) {
-		t.Fatalf("an administrator was not offered the admin libraries page: %s", html)
+	if !strings.Contains(html, `href="admin/folders"`) {
+		t.Fatalf("an administrator was not offered the admin folders page: %s", html)
 	}
 }

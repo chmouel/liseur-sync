@@ -1,0 +1,87 @@
+package webui
+
+// The folders page: the only page that renders a root path, because it
+// is the only page whose subject is the disk rather than a book
+// (ADR-0017).
+
+templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, flash Flash) {
+	<h1>Folders</h1>
+	<p class="muted">
+		Directories this server reads. It reads them and nothing else: it
+		never writes, moves or renames anything under a root, and removing
+		a folder here forgets this server's record of it while leaving
+		every file where it is.
+	</p>
+	<p class="muted">
+		A folder is read when it changes and again on a slow timer, so
+		this page is not usually where books come from. Scan now is for
+		when it is: a network share, where the kernel tells this server
+		nothing at all about what changed.
+	</p>
+	@adminFlash(flash)
+	<section class="card">
+		<h2>Watched</h2>
+		if len(folders) == 0 {
+			<p class="muted">
+				No folders yet. Add one below and its books appear as the
+				server reads them.
+			</p>
+		} else {
+			<table>
+				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Added</th><th></th></tr>
+				for _, f := range folders {
+					<tr>
+						<td>{ f.Folder.Name }</td>
+						<td class="muted">{ f.Kind() }</td>
+						<td><code>{ f.Folder.RootPath }</code></td>
+						<td>{ f.Folder.CreatedAt.Format("2006-01-02") }</td>
+						<td>
+							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit">Scan now</button>
+							</form>
+							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/delete" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit">Stop watching</button>
+							</form>
+						</td>
+					</tr>
+				}
+			</table>
+			if next != "" {
+				<p><a href={ next }>Next page →</a></p>
+			}
+		}
+	</section>
+	<section class="card">
+		<h2>Watch a folder</h2>
+		<p class="muted">
+			Give a directory on this machine. Whether it is an ordinary tree
+			of books or a Calibre library is read off the disk, not chosen
+			here.
+		</p>
+		if len(roots) > 0 {
+			<p class="muted">
+				This server accepts roots under:
+				for i, root := range roots {
+					if i > 0 {
+						{ ", " }
+					}
+					<code>{ root }</code>
+				}
+			</p>
+		}
+		<form method="post" action={ prefix + "admin/folders" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>
+				Name
+				<input type="text" name="name" required maxlength="120"/>
+			</label>
+			<label>
+				Root path
+				<input type="text" name="root" required placeholder="/srv/books"/>
+			</label>
+			<button type="submit">Watch it</button>
+		</form>
+	</section>
+}

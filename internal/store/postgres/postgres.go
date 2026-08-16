@@ -109,3 +109,31 @@ var _ = store.ErrConflict
 func tsEqual(a, b time.Time) bool {
 	return a.UTC().Truncate(time.Microsecond).Equal(b.UTC().Truncate(time.Microsecond))
 }
+
+// withTx runs fn in a transaction, rolling back on any error. It exists
+// because every multi-statement write in this backend wants the same
+// three lines and getting one of them wrong leaks a connection.
+func (s *Store) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// nullStr binds an optional string, so an absent value is SQL NULL
+// rather than the empty string, which means something different.
+func nullStr(p *string) sql.NullString {
+	if p == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *p, Valid: true}
+}
+
+// The compiler, not a reviewer, is what keeps the two backends in step
+// with the interface.
+var _ store.Store = (*Store)(nil)

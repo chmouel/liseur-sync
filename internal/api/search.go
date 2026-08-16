@@ -19,7 +19,7 @@ const maxSearchTextBytes = 512
 // ways has already found its book.
 const maxSearchEntityFilters = 8
 
-// HandleLibrarySearch implements GET /v1/libraries/{library}/search.
+// HandleFolderSearch implements GET /v1/folders/{folder}/search.
 //
 // The answer is unpaged on purpose. A relevance order has no stable
 // cursor, and search answers "where is that book" rather than "show me
@@ -30,15 +30,14 @@ const maxSearchEntityFilters = 8
 // A catalog-only credential must not be able to observe reading state,
 // and the surest way to keep that true is for this route to have no
 // vocabulary for it.
-func (s *Server) HandleLibrarySearch(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+func (s *Server) HandleFolderSearch(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
 	query := r.URL.Query()
@@ -53,7 +52,7 @@ func (s *Server) HandleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, id := range entities {
-		if id == "" || len(id) > maxLibraryIDBytes {
+		if id == "" || len(id) > maxFolderIDBytes {
 			writeError(w, http.StatusBadRequest, "malformed entity filter")
 			return
 		}
@@ -63,17 +62,17 @@ func (s *Server) HandleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := s.St.SearchCatalogBooks(r.Context(), tok.UserID, store.SearchQuery{
-		LibraryID: libraryID,
-		Text:      text,
-		Entities:  entities,
-		Limit:     limit,
+	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
+		FolderID: folderID,
+		Text:     text,
+		Entities: entities,
+		Limit:    limit,
 	})
 	if err != nil {
-		writeCatalogError(w, err, "library not found")
+		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	books, err := s.catalogBooksJSON(r.Context(), tok.UserID, result.Books)
+	books, err := s.catalogBooksJSON(r.Context(), result.Books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return

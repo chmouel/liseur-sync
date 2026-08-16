@@ -1,18 +1,18 @@
 //go:build linux
 
 // Package webui_test exercises the books UI against the real content
-// server rather than against fakes. It lives outside the package because
-// the API server imports this one, and a browser upload is only worth
-// anything if it reaches the same store and CAS a token upload does.
+// package rather than against fakes. It lives outside the package
+// because the API server imports this one, and a page that claims a
+// book can be downloaded is only worth anything if the bytes behind it
+// came off a real folder the way a scan puts them there.
 package webui_test
 
 import (
-	"bytes"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,20 +28,26 @@ import (
 )
 
 type booksFixture struct {
-	ts      *httptest.Server
-	st      store.Store
-	cas     *content.CAS
-	api     *api.Server
-	ui      *webui.Server
-	cfg     config.Config
-	cookie  *http.Cookie
-	library string
+	ts     *httptest.Server
+	st     store.Store
+	cache  *content.Cache
+	rec    *content.Reconciler
+	api    *api.Server
+	ui     *webui.Server
+	cfg    config.Config
+	cookie *http.Cookie
+	// folder is the id of the watched folder, and root is where it is on
+	// disk. Every book in these tests is a file written under root and
+	// then reconciled, because that is the only way a book gets into the
+	// catalog now (ADR-0017).
+	folder string
+	root   string
 }
 
 func newBooksFixture(t *testing.T) *booksFixture {
 	t.Helper()
-	root := t.TempDir()
-	st, err := sqlite.Open(filepath.Join(root, "t.db"))
+	dir := t.TempDir()
+	st, err := sqlite.Open(filepath.Join(dir, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +55,15 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	if err := st.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	cas, err := content.Open(filepath.Join(root, "content"))
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := content.OpenCache(cacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cas.Close() })
+	t.Cleanup(func() { _ = cache.Close() })
 
 	hash, _ := auth.HashPassword("hunter2hunter")
 	for _, u := range []store.User{
@@ -65,17 +75,29 @@ func newBooksFixture(t *testing.T) *booksFixture {
 		}
 	}
 
+	root := filepath.Join(dir, "books")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	folder := store.Folder{
+		ID: "folder-web", Name: "Alice's Books", RootPath: root,
+		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
+	}
+	if err := st.CreateFolder(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
 	apiSrv := &api.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Content:      cas, Blobs: cas, Covers: cas,
+		Files:        content.NewFiles(st), Covers: cache,
 	}
 	ui := &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Uploads:      apiSrv, Downloads: apiSrv, Covers: apiSrv,
+		Downloads:    apiSrv, Covers: apiSrv,
 	}
 	mux := http.NewServeMux()
 	ui.Mount(mux, func(h http.Handler) http.Handler { return h })
@@ -83,18 +105,91 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	t.Cleanup(ts.Close)
 
 	f := &booksFixture{
-		ts: ts, st: st, cas: cas, api: apiSrv, ui: ui, cfg: cfg, library: "lib-web",
-	}
-	if err := st.CreateLibrary(t.Context(), store.Library{
-		ID: f.library, OwnerUserID: "u1", QuotaUserID: "u1",
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Alice's Books", CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatal(err)
+		ts: ts, st: st, cache: cache, api: apiSrv, ui: ui, cfg: cfg,
+		folder: folder.ID, root: root,
+		rec: content.NewReconciler(st, content.ScanLimits{},
+			cfg.EPUBLimits(), nil),
 	}
 	f.cookie = f.login(t, "alice")
 	return f
+}
+
+// addBook writes a publication into the watched folder and runs the pass
+// that puts it in the catalog, then returns the book id the store minted
+// for it. This is the only way books arrive now: there is no upload.
+func (f *booksFixture) addBook(t *testing.T, name string, body []byte) string {
+	t.Helper()
+	relative := name + ".epub"
+	if err := os.WriteFile(filepath.Join(f.root, relative), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcile(t)
+	return f.bookAt(t, relative)
+}
+
+// observe states one book to the catalog without a file behind it, for
+// the tests that care what a page does with metadata rather than with
+// bytes. complete is false, which is the store's word for "this pass has
+// no opinion about what it did not see" — so seeding one book does not
+// declare every other one missing.
+func (f *booksFixture) observe(t *testing.T, obs store.ObservedBook) string {
+	t.Helper()
+	if _, err := f.st.ReconcileFolder(t.Context(), f.folder,
+		[]store.ObservedBook{obs}, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	return f.bookAt(t, obs.RelativePath)
+}
+
+// bookWithMetadata catalogues a book carrying the metadata a pass reads
+// out of a file, without needing a file that really holds it.
+func bookWithMetadata(t *testing.T, f *booksFixture, name string) string {
+	t.Helper()
+	return f.observe(t, store.ObservedBook{
+		RelativePath: name + ".epub", SizeBytes: 4096, MTime: time.Now().UTC(),
+		ContentSHA256:    strings.Repeat(name[:1], 64),
+		OriginalFilename: name + ".epub", MediaType: "application/epub+zip",
+		Title:         "Title of " + name,
+		Description:   "A book about " + name + ".",
+		Publisher:     "A Publisher",
+		PublishedDate: "1979",
+		Tags:          []string{"fiction"},
+		Series:        []store.ObservedSeries{{Name: "A Series"}},
+		Contributors: []store.ObservedContributor{
+			{Name: "Ann Author", Role: store.ContributorRoleAuthor, Position: 1},
+		},
+	})
+}
+
+// reconcile runs one pass over the fixture's folder, exactly as the
+// watcher does.
+func (f *booksFixture) reconcile(t *testing.T) {
+	t.Helper()
+	folder, err := f.st.FolderByID(t.Context(), f.folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.rec.Reconcile(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bookAt finds the catalogued book for one relative path. A path is the
+// identity of a book in a plain folder, so this is a lookup rather than
+// a guess.
+func (f *booksFixture) bookAt(t *testing.T, relative string) string {
+	t.Helper()
+	books, err := f.st.ListCatalogBooks(t.Context(), f.folder, nil, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range books {
+		if b.RelativePath == relative {
+			return b.ID
+		}
+	}
+	t.Fatalf("no catalogued book at %q", relative)
+	return ""
 }
 
 // uiWithoutCovers is the same UI on the same data with content storage
@@ -133,6 +228,13 @@ func (f *booksFixture) loginTo(
 	return nil
 }
 
+// readerCookie signs in a second account. It needs no grant: every
+// signed-in account reads every folder (ADR-0017).
+func (f *booksFixture) readerCookie(t *testing.T) *http.Cookie {
+	t.Helper()
+	return f.login(t, "bob")
+}
+
 func noRedirectClient() *http.Client {
 	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -165,371 +267,6 @@ func csrfFrom(t *testing.T, html string) string {
 	return rest[:strings.Index(rest, `"`)]
 }
 
-// uploadForm posts the multipart body the books page's form produces.
-// The csrf field comes first on purpose: the handler must be able to
-// reject a forged request before it streams the file anywhere.
-func (f *booksFixture) uploadForm(
-	t *testing.T, cookie *http.Cookie, csrf, library, filename string, body []byte,
-) *http.Response {
-	t.Helper()
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	if csrf != "" {
-		mw.WriteField("csrf", csrf)
-	}
-	if library != "" {
-		mw.WriteField("library", library)
-	}
-	if filename != "" {
-		part, err := mw.CreateFormFile("file", filename)
-		if err != nil {
-			t.Fatal(err)
-		}
-		part.Write(body)
-	}
-	mw.Close()
-
-	req, _ := http.NewRequest(http.MethodPost, f.ts.URL+"/ui/books/upload", &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	if cookie != nil {
-		req.AddCookie(cookie)
-	}
-	resp, err := noRedirectClient().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	return resp
-}
-
-// promote finishes the ingest the upload started, so the browser test
-// can see a real book. The background worker does this in production;
-// running it inline keeps the test about the UI.
-func (f *booksFixture) promote(t *testing.T, name string) string {
-	t.Helper()
-	jobs, err := f.st.ListIngestJobs(t.Context(), "u1", f.library, nil, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) == 0 {
-		t.Fatal("no ingest job to promote")
-	}
-	job := jobs[len(jobs)-1]
-	blob, err := f.cas.Promote(t.Context(), *job.StagingPath, *job.ContentSHA256, job.BytesReceived)
-	if err != nil {
-		t.Fatal(err)
-	}
-	at := time.Now().UTC()
-	job, err = f.st.TransitionIngestJob(t.Context(), "u1", job.ID, store.IngestJobTransition{
-		ExpectedState: job.State, ExpectedRevision: job.Revision,
-		NextState: store.IngestValidated, UpdatedAt: at,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err = f.st.TransitionIngestJob(t.Context(), "u1", job.ID, store.IngestJobTransition{
-		ExpectedState: job.State, ExpectedRevision: job.Revision,
-		NextState:                     store.IngestExtracted,
-		ExtractedEmbeddedMetadataJSON: []byte(`{"title":"x"}`),
-		UpdatedAt:                     at.Add(time.Second),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bookID := "book-" + name
-	if _, err := f.st.CommitNewBookPromotion(t.Context(), "u1", job.ID,
-		store.CommitNewBookPromotionRequest{
-			ExpectedRevision: job.Revision,
-			Blob:             store.BlobInfo{SHA256: blob.SHA256, SizeBytes: blob.Size},
-			Book: store.CatalogBook{
-				ID: bookID, LibraryID: f.library, Status: store.BookActive,
-				Title: name, TitleSource: store.MetadataEmbedded,
-				CreatedAt: at, UpdatedAt: at,
-			},
-			File: store.BookFile{
-				ID: "file-" + name, LibraryID: f.library, BookID: bookID,
-				BlobSHA256: blob.SHA256, Source: store.IngestUpload,
-				OriginalFilename: name + ".epub", MediaType: "application/epub+zip",
-				Availability: store.BookFileAvailable,
-				CreatedAt:    at, UpdatedAt: at,
-			},
-			UpdatedAt: at.Add(2 * time.Second),
-		}); err != nil {
-		t.Fatal(err)
-	}
-	return bookID
-}
-
-// TestBooksUIUploadsAndServesABook is the browser half of the MVP: sign
-// in, upload a file with the form on the page, then find and download
-// the book that results.
-func TestBooksUIUploadsAndServesABook(t *testing.T) {
-	f := newBooksFixture(t)
-	resp, html := f.get(t, "/ui/library", f.cookie)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("books page: %d", resp.StatusCode)
-	}
-	// The apostrophe arrives escaped, which is the point of rendering
-	// through templ rather than concatenating strings.
-	if !strings.Contains(html, "Alice&#39;s Books") {
-		t.Fatalf("library not offered:\n%s", html)
-	}
-	csrf := csrfFrom(t, html)
-
-	body := bytes.Repeat([]byte("web-epub"), 50)
-	up := f.uploadForm(t, f.cookie, csrf, f.library, "novel.epub", body)
-	if up.StatusCode != http.StatusSeeOther {
-		t.Fatalf("upload: %d", up.StatusCode)
-	}
-	if loc := up.Header.Get("Location"); strings.Contains(loc, "problem=") {
-		t.Fatalf("upload reported a problem: %s", loc)
-	}
-
-	bookID := f.promote(t, "novel")
-
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
-	if !strings.Contains(html, "novel") {
-		t.Fatalf("book missing from the list:\n%s", html)
-	}
-	_, html = f.get(t, "/ui/books/"+bookID, f.cookie)
-	if !strings.Contains(html, "novel.epub") {
-		t.Fatalf("file missing from the detail page:\n%s", html)
-	}
-
-	resp, got := f.get(t, "/ui/books/"+bookID+"/download", f.cookie)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("download: %d", resp.StatusCode)
-	}
-	if got != string(body) {
-		t.Fatalf("downloaded %d bytes, want %d", len(got), len(body))
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "application/epub+zip" {
-		t.Fatalf("content-type = %q", ct)
-	}
-}
-
-// TestBooksUIUploadRequiresCSRF: the upload is a mutation, and the form
-// carries the token in the multipart body. A missing or wrong token must
-// be refused, and refused before any file is stored — otherwise a
-// cross-site form could fill someone's quota even if the page never
-// renders.
-func TestBooksUIUploadRequiresCSRF(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	good := csrfFrom(t, html)
-
-	for _, csrf := range []string{"", "not-the-token", good + "x"} {
-		resp := f.uploadForm(t, f.cookie, csrf, f.library, "x.epub", []byte("data"))
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("csrf %q: status %d, want 403", csrf, resp.StatusCode)
-		}
-	}
-	jobs, err := f.st.ListIngestJobs(t.Context(), "u1", f.library, nil, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 0 {
-		t.Fatalf("a forged upload created %d ingest jobs", len(jobs))
-	}
-}
-
-// TestBooksUIIsScopedToTheSignedInUser: bob has no libraries, cannot see
-// alice's books, and cannot download one by guessing its id.
-func TestBooksUIIsScopedToTheSignedInUser(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "private.epub", []byte("secret"))
-	bookID := f.promote(t, "private")
-
-	bob := f.login(t, "bob")
-	_, html = f.get(t, "/ui/library", bob)
-	if strings.Contains(html, "Alice&#39;s Books") || strings.Contains(html, "private") {
-		t.Fatalf("cross-user leak on the books page:\n%s", html)
-	}
-	if resp, _ := f.get(t, "/ui/books/"+bookID, bob); resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("book detail for a stranger: %d", resp.StatusCode)
-	}
-	if resp, body := f.get(t, "/ui/books/"+bookID+"/download", bob); resp.StatusCode == http.StatusOK {
-		t.Fatalf("stranger downloaded the book: %s", body)
-	}
-	// Naming alice's library in the query string must not reveal it
-	// either — the id is guessable in a way the ACL is not.
-	if _, html := f.get(t, "/ui/library?library="+f.library, bob); strings.Contains(html, "private") {
-		t.Fatalf("library query string bypassed the ACL:\n%s", html)
-	}
-
-	resp := f.uploadForm(t, f.cookie, "", f.library, "x.epub", []byte("x"))
-	_ = resp
-	// A read-only grantee sees the books but is offered no upload form.
-	if err := f.st.GrantLibraryAccess(t.Context(), "u1", f.library, "u2",
-		store.LibraryRoleRead, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	_, html = f.get(t, "/ui/library", bob)
-	if !strings.Contains(html, "private") {
-		t.Fatalf("grantee cannot see the shared books:\n%s", html)
-	}
-	if strings.Contains(html, `action="books/upload"`) {
-		t.Fatalf("read-only grantee was offered an upload form:\n%s", html)
-	}
-}
-
-// TestBooksUIRejectsAnEmptyOrLibrarylessUpload: the browser can submit a
-// form with nothing chosen, and that must be a message rather than a
-// stack trace or a stored empty file.
-func TestBooksUIRejectsAnEmptyOrLibrarylessUpload(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-
-	for _, tc := range []struct{ library, filename string }{
-		{f.library, ""},
-		{"", "x.epub"},
-		{"lib-that-does-not-exist", "x.epub"},
-	} {
-		resp := f.uploadForm(t, f.cookie, csrf, tc.library, tc.filename, []byte("x"))
-		if resp.StatusCode != http.StatusSeeOther {
-			t.Fatalf("library=%q file=%q: status %d", tc.library, tc.filename, resp.StatusCode)
-		}
-		if loc := resp.Header.Get("Location"); !strings.Contains(loc, "problem=") {
-			t.Fatalf("library=%q file=%q: no problem reported (%s)",
-				tc.library, tc.filename, loc)
-		}
-	}
-}
-
-// TestBooksUIRequiresASession: every books route is behind the session,
-// including the download, which would otherwise be an unauthenticated
-// read of the whole library.
-func TestBooksUIRequiresASession(t *testing.T) {
-	f := newBooksFixture(t)
-	for _, path := range []string{
-		"/ui/library", "/ui/books/anything", "/ui/books/anything/download",
-	} {
-		resp, _ := f.get(t, path, nil)
-		if resp.StatusCode == http.StatusOK {
-			t.Fatalf("%s served without a session", path)
-		}
-	}
-	// The upload redirects to the login page like every other route, so
-	// the status alone proves nothing: what matters is that no bytes
-	// were taken.
-	f.uploadForm(t, nil, "x", f.library, "x.epub", []byte("x"))
-	jobs, err := f.st.ListIngestJobs(t.Context(), "u1", f.library, nil, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 0 {
-		t.Fatalf("an unauthenticated upload created %d ingest jobs", len(jobs))
-	}
-}
-
-// TestBooksUIUploadHonoursTheACLNotJustTheForm: the upload form is hidden
-// from a read-only grantee, but hiding it is presentation. Someone who
-// posts the form anyway — a stale page, a hand-built request — must still
-// be refused, and refused by the library ACL rather than by the UI.
-func TestBooksUIUploadHonoursTheACLNotJustTheForm(t *testing.T) {
-	f := newBooksFixture(t)
-	if err := f.st.GrantLibraryAccess(t.Context(), "u1", f.library, "u2",
-		store.LibraryRoleRead, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	bob := f.login(t, "bob")
-	_, html := f.get(t, "/ui/library", bob)
-
-	resp := f.uploadForm(t, bob, csrfFrom(t, html), f.library, "sneaky.epub", []byte("data"))
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("status = %d", resp.StatusCode)
-	}
-	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "problem=") {
-		t.Fatalf("read-only grantee's upload was accepted: %s", loc)
-	}
-	jobs, err := f.st.ListIngestJobs(t.Context(), "u1", f.library, nil, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 0 {
-		t.Fatalf("read-only grantee created %d ingest jobs", len(jobs))
-	}
-}
-
-// TestBooksUIExplainsAnUploadThatNeverBecameABook is the regression for
-// the reported bug: a file was accepted, quarantined by validation, and
-// the page then showed nothing at all — indistinguishable from the server
-// losing it. The upload must be listed with a reason a person can act on.
-func TestBooksUIExplainsAnUploadThatNeverBecameABook(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	if up := f.uploadForm(
-		t, f.cookie, csrf, f.library, "broken.epub", []byte("not an epub"),
-	); up.StatusCode != http.StatusSeeOther {
-		t.Fatalf("upload: %d", up.StatusCode)
-	}
-
-	// While it is working, the management page says so rather than staying silent.
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
-	if strings.Contains(html, "Uploads in progress") {
-		t.Fatalf("the catalog page contains upload activity:\n%s", html)
-	}
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if !strings.Contains(html, "Uploads in progress") {
-		t.Fatalf("an upload in flight is invisible:\n%s", html)
-	}
-	if !strings.Contains(html, "broken.epub") {
-		t.Fatalf("the upload filename is missing:\n%s", html)
-	}
-
-	f.quarantine(t, "invalid_epub")
-
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if !strings.Contains(html, "Not a readable EPUB") {
-		t.Fatalf("a rejected upload is invisible:\n%s", html)
-	}
-	if !strings.Contains(html, "broken.epub") {
-		t.Fatalf("the rejected upload filename is missing:\n%s", html)
-	}
-	// The reason is for the librarian who can do something about it, not
-	// for everyone who can read the library.
-	_, readerHTML := f.get(t, "/ui/library?library="+f.library, f.readerCookie(t))
-	if strings.Contains(readerHTML, "Not a readable EPUB") ||
-		strings.Contains(readerHTML, "Uploads in progress") {
-		t.Fatalf("a reader was shown ingest internals:\n%s", readerHTML)
-	}
-}
-
-// quarantine drives the newest job to quarantined, the way the validation
-// worker does when a file turns out not to be an EPUB.
-func (f *booksFixture) quarantine(t *testing.T, code string) {
-	t.Helper()
-	jobs, err := f.st.ListIngestActivity(t.Context(), "u1", f.library, 100)
-	if err != nil || len(jobs) == 0 {
-		t.Fatalf("no job to quarantine: %v %v", jobs, err)
-	}
-	job := jobs[0]
-	at := time.Now().UTC()
-	expires := at.Add(72 * time.Hour)
-	if _, err := f.st.TransitionIngestJob(t.Context(), "u1", job.ID,
-		store.IngestJobTransition{
-			ExpectedState: job.State, ExpectedRevision: job.Revision,
-			NextState: store.IngestQuarantined, ErrorCode: code,
-			ErrorDetail: "validation refused it", ExpiresAt: &expires,
-			UpdatedAt: at,
-		}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// readerCookie signs in a user granted read access to the fixture library.
-func (f *booksFixture) readerCookie(t *testing.T) *http.Cookie {
-	t.Helper()
-	if err := f.st.GrantLibraryAccess(t.Context(), "u1", f.library, "u2",
-		store.LibraryRoleRead, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	return f.login(t, "bob")
-}
-
 // postForm posts a urlencoded form the way the page's buttons do.
 func (f *booksFixture) postForm(
 	t *testing.T, path string, cookie *http.Cookie, form url.Values,
@@ -549,199 +286,131 @@ func (f *booksFixture) postForm(
 	return resp
 }
 
-// TestBooksUIDeletesAndRestoresABook walks the deletion path the way a
-// person does: press Delete, see the book gone and its download refused,
-// find it under "Recently deleted", press Put back, download it again.
-func TestBooksUIDeletesAndRestoresABook(t *testing.T) {
+// TestBooksUIServesABook is the browser half of the MVP: a file appears
+// in a watched folder, a pass catalogues it, and the page it gets is a
+// page you can download the same bytes from.
+func TestBooksUIServesABook(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	body := bytes.Repeat([]byte("deletable"), 40)
-	f.uploadForm(t, f.cookie, csrf, f.library, "regret.epub", body)
-	bookID := f.promote(t, "regret")
+	body := []byte(strings.Repeat("web-epub", 50))
+	bookID := f.addBook(t, "moby", body)
 
-	form := url.Values{"csrf": {csrf}, "library": {f.library}}
-	if resp := f.postForm(
-		t, "/ui/books/"+bookID+"/delete", f.cookie, form,
-	); resp.StatusCode != http.StatusSeeOther ||
-		strings.Contains(resp.Header.Get("Location"), "problem=") {
-		t.Fatalf("delete: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	resp, html := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("library: %d", resp.StatusCode)
+	}
+	if !strings.Contains(html, bookID) {
+		t.Fatalf("the book is not on the shelf:\n%s", html)
 	}
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
-	if strings.Contains(html, "books/"+bookID+"/download") {
-		t.Fatalf("deleted book still offered for download:\n%s", html)
+	resp, page := f.get(t, "/ui/books/"+bookID, f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("book page: %d", resp.StatusCode)
 	}
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if !strings.Contains(html, "Recently deleted") ||
-		!strings.Contains(html, "books/"+bookID+"/restore") {
-		t.Fatalf("deleted book is not restorable from the page:\n%s", html)
+	if !strings.Contains(page, "moby.epub") {
+		t.Errorf("the book page does not name its file:\n%s", page)
 	}
-	if resp, _ := f.get(
-		t, "/ui/books/"+bookID+"/download", f.cookie,
-	); resp.StatusCode == http.StatusOK {
-		t.Fatal("deleted book is still downloadable")
-	}
-
-	if resp := f.postForm(
-		t, "/ui/books/"+bookID+"/restore", f.cookie, form,
-	); resp.StatusCode != http.StatusSeeOther ||
-		strings.Contains(resp.Header.Get("Location"), "problem=") {
-		t.Fatalf("restore: %d %s", resp.StatusCode, resp.Header.Get("Location"))
-	}
-	resp, got := f.get(t, "/ui/books/"+bookID+"/download", f.cookie)
-	if resp.StatusCode != http.StatusOK || got != string(body) {
-		t.Fatalf("restored download: %d, %d bytes", resp.StatusCode, len(got))
-	}
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if strings.Contains(html, "Recently deleted") {
-		t.Fatalf("restored book still in the trash:\n%s", html)
-	}
-}
-
-// TestBooksUIDeleteRequiresCSRFAndAccess: deletion is the most damaging
-// button on the page, so a forged form and another user's cookie must
-// both fail, and the book must survive both.
-func TestBooksUIDeleteRequiresCSRFAndAccess(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	body := []byte("protected bytes")
-	f.uploadForm(t, f.cookie, csrf, f.library, "safe.epub", body)
-	bookID := f.promote(t, "safe")
-
-	for _, bad := range []string{"", "not-the-token"} {
-		if resp := f.postForm(t, "/ui/books/"+bookID+"/delete", f.cookie,
-			url.Values{"csrf": {bad}, "library": {f.library}},
-		); resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("csrf %q: %d, want 403", bad, resp.StatusCode)
+	// Nothing on this page changes anything: the folder is somebody
+	// else's and this server only reads it.
+	for _, gone := range []string{"/metadata", "/delete", "/restore", "/accept"} {
+		if strings.Contains(page, gone) {
+			t.Errorf("book page still offers %q", gone)
 		}
 	}
 
-	// Bob has a valid session and his own token, but no access to the
-	// book. He must not be able to delete it.
+	resp, download := f.get(t, "/ui/books/"+bookID+"/download", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("download: %d", resp.StatusCode)
+	}
+	if download != string(body) {
+		t.Error("the download is not the bytes that were put in the folder")
+	}
+}
+
+// TestBookPageIsANotFoundForAnUnknownID: an id that is not a book is a
+// 404, not a blank page and not a 500.
+func TestBookPageIsANotFoundForAnUnknownID(t *testing.T) {
+	f := newBooksFixture(t)
+	resp, _ := f.get(t, "/ui/books/no-such-book", f.cookie)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown book: %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestBooksUIIsSharedByEverySignedInAccount pins ADR-0017's decision:
+// the catalog is the server's, not an account's. There is no owner and
+// no grant, so bob sees the same shelf alice does.
+func TestBooksUIIsSharedByEverySignedInAccount(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "shared", []byte(strings.Repeat("shared-bytes", 40)))
+
 	bob := f.login(t, "bob")
-	_, bobHTML := f.get(t, "/ui/library", bob)
-	resp := f.postForm(t, "/ui/books/"+bookID+"/delete", bob,
-		url.Values{"csrf": {csrfFrom(t, bobHTML)}})
-	if resp.StatusCode == http.StatusOK ||
-		!strings.Contains(resp.Header.Get("Location"), "problem=") {
-		t.Fatalf("stranger's delete was not refused: %d %s",
-			resp.StatusCode, resp.Header.Get("Location"))
+	resp, html := f.get(t, "/ui/library?folder="+f.folder, bob)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bob's library: %d", resp.StatusCode)
 	}
-
-	if resp, got := f.get(
-		t, "/ui/books/"+bookID+"/download", f.cookie,
-	); resp.StatusCode != http.StatusOK || got != string(body) {
-		t.Fatalf("book damaged by refused deletes: %d", resp.StatusCode)
+	if !strings.Contains(html, bookID) {
+		t.Fatalf("bob cannot see the shared catalog:\n%s", html)
 	}
-}
-
-// TestBooksUIRestoreSaysWhenTheFileIsGone covers the corner where the
-// undo cannot fully undo: the bytes were lost while the book sat in the
-// trash. The entry comes back, but calling that "restored" and leaving a
-// dead Download link would be a lie.
-func TestBooksUIRestoreSaysWhenTheFileIsGone(t *testing.T) {
-	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	body := []byte("bytes that will vanish")
-	f.uploadForm(t, f.cookie, csrf, f.library, "doomed.epub", body)
-	bookID := f.promote(t, "doomed")
-
-	files, err := f.st.ListBookFiles(t.Context(), "u1", bookID, store.LibraryRoleRead)
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no file to lose: %+v %v", files, err)
+	resp, _ = f.get(t, "/ui/books/"+bookID, bob)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bob's book page: %d", resp.StatusCode)
 	}
-	form := url.Values{"csrf": {csrf}, "library": {f.library}}
-	f.postForm(t, "/ui/books/"+bookID+"/delete", f.cookie, form)
-
-	// The bytes go missing while the book is in the trash.
-	if _, err := f.st.ReconcileBlob(t.Context(), store.BlobInfo{
-		SHA256: files[0].BlobSHA256, SizeBytes: int64(len(body)),
-	}, false, time.Now().UTC()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.st.ReconcileCatalogAvailability(
-		t.Context(), time.Now().UTC(), 100,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := f.postForm(t, "/ui/books/"+bookID+"/restore", f.cookie, form)
-	loc := resp.Header.Get("Location")
-	if strings.Contains(loc, "problem=") {
-		t.Fatalf("restore refused: %s", loc)
-	}
-	if !strings.Contains(loc, "upload+it+again") {
-		t.Fatalf("restore claimed success with no file: %s", loc)
-	}
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
-	if strings.Contains(html, "books/"+bookID+"/download") {
-		t.Fatalf("download offered for a book with no bytes:\n%s", html)
+	resp, _ = f.get(t, "/ui/books/"+bookID+"/download", bob)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("bob's download: %d", resp.StatusCode)
 	}
 }
 
-// TestBooksUIPointsOutTheSameFileTwice: uploading one file twice is
-// allowed on purpose — a second catalog entry for deduplicated bytes may
-// be exactly what somebody meant — so the page owes the user the fact
-// that it happened rather than a silent pair of identical rows. Deleting
-// one settles it.
-func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
+// TestBooksUIRequiresASession: every books route is behind the session,
+// so an unauthenticated request is sent to the login page rather than
+// being answered.
+func TestBooksUIRequiresASession(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-
-	body := bytes.Repeat([]byte("same-bytes"), 40)
-	for _, name := range []string{"first", "second"} {
-		if up := f.uploadForm(
-			t, f.cookie, csrf, f.library, name+".epub", body,
-		); up.StatusCode != http.StatusSeeOther {
-			t.Fatalf("upload %s: %d", name, up.StatusCode)
-		}
-		f.promote(t, name)
-	}
-	// A book nothing else shares must not be dragged into the report.
-	if up := f.uploadForm(t, f.cookie, csrf, f.library, "alone.epub",
-		bytes.Repeat([]byte("different"), 40),
-	); up.StatusCode != http.StatusSeeOther {
-		t.Fatalf("upload alone: %d", up.StatusCode)
-	}
-	f.promote(t, "alone")
-
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if !strings.Contains(html, "The same file, more than once") {
-		t.Fatalf("duplicates not reported:\n%s", html)
-	}
-	section := html[strings.Index(html, "The same file, more than once"):]
-	section = section[:strings.Index(section, "</section>")]
-	for _, want := range []string{"first", "second"} {
-		if !strings.Contains(section, want) {
-			t.Fatalf("%q missing from the duplicate report:\n%s", want, section)
+	bookID := f.addBook(t, "private", []byte(strings.Repeat("bytes", 40)))
+	for _, path := range []string{
+		"/ui/library",
+		"/ui/books/" + bookID,
+		"/ui/books/" + bookID + "/download",
+		"/ui/books/" + bookID + "/cover",
+		"/ui/folders/" + f.folder + "/search",
+		"/ui/folders/" + f.folder + "/series",
+	} {
+		resp, _ := f.get(t, path, nil)
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Errorf("%s: %d, want a redirect to login", path, resp.StatusCode)
 		}
 	}
-	if strings.Contains(section, "alone") {
-		t.Fatalf("a book with unique bytes was reported:\n%s", section)
-	}
+}
 
-	// A reader may see the library but is shown nothing to act on, since
-	// acting on it is a deletion they cannot perform. Checked while the
-	// duplicate is still there, or this proves nothing.
-	_, readerHTML := f.get(t, "/ui/library?library="+f.library, f.readerCookie(t))
-	if strings.Contains(readerHTML, "The same file, more than once") {
-		t.Fatalf("a reader was shown librarian work:\n%s", readerHTML)
-	}
+// TestBooksUIDropsAMissingBooksDownload: a file that leaves the folder
+// keeps its row — everybody's reading positions hang off it — but the
+// page stops offering bytes it no longer has.
+func TestBooksUIDropsAMissingBooksDownload(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "vanishing", []byte(strings.Repeat("gone-soon", 40)))
+	// A second book that stays: a pass that sees nothing at all is
+	// indistinguishable from an unmounted disk, so the store declines to
+	// conclude anything from an empty folder.
+	f.addBook(t, "staying", []byte(strings.Repeat("still-here", 40)))
 
-	// Deleting the spare resolves it, and the page stops nagging.
-	resp := f.postForm(t, "/ui/books/book-second/delete", f.cookie, url.Values{
-		"csrf": {csrf}, "library": {f.library},
-	})
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("delete: %d", resp.StatusCode)
+	if err := os.Remove(filepath.Join(f.root, "vanishing.epub")); err != nil {
+		t.Fatal(err)
 	}
-	_, html = f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if strings.Contains(html, "The same file, more than once") {
-		t.Fatalf("duplicates still reported after deleting one:\n%s", html)
+	f.reconcile(t)
+
+	book, err := f.st.CatalogBookByID(t.Context(), bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Status != store.BookMissing {
+		t.Fatalf("status = %q, want missing", book.Status)
+	}
+	_, page := f.get(t, "/ui/books/"+bookID, f.cookie)
+	if strings.Contains(page, `books/`+bookID+`/download"`) {
+		t.Errorf("a missing book still offers a download:\n%s", page)
+	}
+	if strings.Contains(page, `books/`+bookID+`/read"`) {
+		t.Errorf("a missing book still offers a reader:\n%s", page)
 	}
 }
 
@@ -750,12 +419,10 @@ func TestBooksUIPointsOutTheSameFileTwice(t *testing.T) {
 // books either way.
 func TestBooksGridAndListViews(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	f.uploadForm(t, f.cookie, csrf, f.library, "moby.epub", bytes.Repeat([]byte("web-epub"), 50))
-	bookID := f.promote(t, "moby")
+	bookID := f.addBook(t, "moby", []byte(strings.Repeat("web-epub", 50)))
 
-	_, html = f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	csrf := csrfFrom(t, html)
 	if !strings.Contains(html, `class="grid"`) || !strings.Contains(html, `class="bookcard"`) {
 		t.Fatal("default browse view is not a grid of cards")
 	}
@@ -767,23 +434,15 @@ func TestBooksGridAndListViews(t *testing.T) {
 	}
 
 	// Switching to the list is a form post like every other mutation,
-	// and it comes back to the library that was being looked at.
-	req, _ := http.NewRequest("POST", f.ts.URL+"/ui/preferences", strings.NewReader(
-		url.Values{
-			"csrf": {csrf}, "view": {"list"},
-			"back": {"library?library=" + f.library},
-		}.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(f.cookie)
-	resp, err := noRedirectClient().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
+	// and it comes back to the folder that was being looked at.
+	resp := f.postForm(t, "/ui/preferences", f.cookie, url.Values{
+		"csrf": {csrf}, "view": {"list"},
+		"back": {"library?folder=" + f.folder},
+	})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("view toggle: want 303, got %d", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "library?library="+f.library {
+	if loc := resp.Header.Get("Location"); loc != "library?folder="+f.folder {
 		t.Errorf("view toggle returned to %q", loc)
 	}
 	var pref *http.Cookie
@@ -796,10 +455,10 @@ func TestBooksGridAndListViews(t *testing.T) {
 		t.Fatal("view toggle set no preference cookie")
 	}
 
-	req, _ = http.NewRequest("GET", f.ts.URL+"/ui/library?library="+f.library, nil)
+	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/library?folder="+f.folder, nil)
 	req.AddCookie(f.cookie)
 	req.AddCookie(pref)
-	resp, err = noRedirectClient().Do(req)
+	resp, err := noRedirectClient().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,12 +477,9 @@ func TestBooksGridAndListViews(t *testing.T) {
 // htmx gets cards and a sentinel, never a second copy of the shell.
 func TestBooksHTMXFragmentIsOnlyTheCards(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
-	f.uploadForm(t, f.cookie, csrf, f.library, "moby.epub", bytes.Repeat([]byte("web-epub"), 50))
-	f.promote(t, "moby")
+	f.addBook(t, "moby", []byte(strings.Repeat("web-epub", 50)))
 
-	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/library?library="+f.library, nil)
+	req, _ := http.NewRequest("GET", f.ts.URL+"/ui/library?folder="+f.folder, nil)
 	req.AddCookie(f.cookie)
 	req.Header.Set("HX-Request", "true")
 	resp, err := noRedirectClient().Do(req)
@@ -851,10 +507,7 @@ func TestBooksHTMXFragmentIsOnlyTheCards(t *testing.T) {
 // leads to an error page.
 func TestReadingCardOffersToCarryOnReading(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		bytes.Repeat([]byte("web-epub"), 50))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
 	now := time.Now().UTC()
 	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", bookID,
@@ -907,32 +560,32 @@ func TestReadingCardOffersToCarryOnReading(t *testing.T) {
 }
 
 // TestReadingCardHidesReadWithoutAFile pins the other half: a work
-// mapped to a book whose file this server does not have (a placeholder
-// record, a file gone missing) must not offer to open it.
+// mapped to a book whose file this server cannot open any more must not
+// offer to open it.
 func TestReadingCardHidesReadWithoutAFile(t *testing.T) {
 	f := newBooksFixture(t)
+	bookID := f.addBook(t, "vanished", []byte(strings.Repeat("web-epub", 50)))
+	f.addBook(t, "staying", []byte(strings.Repeat("still-here", 40)))
 	now := time.Now().UTC()
-	if err := f.st.CreateCatalogBook(t.Context(), "u1", store.CatalogBook{
-		ID: "b-empty", LibraryID: f.library, Status: store.BookActive,
-		Title: "Fileless", CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", "b-empty",
-		store.Work{ID: "w-empty", UserID: "u1", Title: "Fileless", CreatedAt: now},
+	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", bookID,
+		store.Work{ID: "w-empty", UserID: "u1", Title: "Vanished", CreatedAt: now},
 		nil, nil, true, now); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(filepath.Join(f.root, "vanished.epub")); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcile(t)
 
 	_, page := f.get(t, "/ui/library", f.cookie)
-	if strings.Contains(page, `books/b-empty/read`) {
-		t.Errorf("offered to read a book with no file:\n%s", page)
+	if strings.Contains(page, `books/`+bookID+`/read`) {
+		t.Errorf("offered to read a book whose file is gone:\n%s", page)
 	}
 	if !strings.Contains(page, `href="works/w-empty"`) {
 		t.Errorf("the work is not linked at all:\n%s", page)
 	}
 	// The cover still shows, and it goes to the numbers instead.
-	if !strings.Contains(page, `books/b-empty/cover?size=thumbnail`) {
+	if !strings.Contains(page, `books/`+bookID+`/cover?size=thumbnail`) {
 		t.Errorf("cover missing:\n%s", page)
 	}
 }

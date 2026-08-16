@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ErrNoCover means this blob has already been examined and has no cover
+// ErrNoCover means this book has already been examined and has no cover
 // worth serving. It is a cached answer, not a failure: a book with no
 // cover would otherwise be re-opened and re-parsed on every request that
 // wants a thumbnail for it.
@@ -34,7 +34,7 @@ const coverAbsentMarker = "absent"
 // ErrStageMissing, which the caller answers by rendering one; a blob known
 // to have no cover is ErrNoCover, which it answers without opening
 // anything.
-func (c *CAS) OpenCover(ctx context.Context, digest, variant string) (*os.File, int64, error) {
+func (c *Cache) OpenCover(ctx context.Context, digest, variant string) (*os.File, int64, error) {
 	if !validSHA256(digest) || !validCoverVariant(variant) {
 		return nil, 0, ErrUnsafePath
 	}
@@ -77,7 +77,7 @@ func (c *CAS) OpenCover(ctx context.Context, digest, variant string) (*os.File, 
 // StoreCover caches one rendered variant. Failing to cache is not failing
 // to serve: the caller has the bytes in hand, so a full disk costs the
 // next request a re-render rather than an error.
-func (c *CAS) StoreCover(ctx context.Context, digest, variant string, data []byte) error {
+func (c *Cache) StoreCover(ctx context.Context, digest, variant string, data []byte) error {
 	if !validSHA256(digest) || !validCoverVariant(variant) || len(data) == 0 {
 		return ErrUnsafePath
 	}
@@ -86,7 +86,7 @@ func (c *CAS) StoreCover(ctx context.Context, digest, variant string, data []byt
 
 // MarkCoverAbsent records that a blob has no cover to serve, so the next
 // request for one costs a lookup instead of an archive parse.
-func (c *CAS) MarkCoverAbsent(ctx context.Context, digest string) error {
+func (c *Cache) MarkCoverAbsent(ctx context.Context, digest string) error {
 	if !validSHA256(digest) {
 		return ErrUnsafePath
 	}
@@ -96,7 +96,7 @@ func (c *CAS) MarkCoverAbsent(ctx context.Context, digest string) error {
 // RemoveCovers deletes every cached cover for a blob. It is called when
 // the blob itself goes: a cover kept after its book was deleted is a
 // picture of that book that nothing can ever reach or clean up.
-func (c *CAS) RemoveCovers(ctx context.Context, digest string) error {
+func (c *Cache) RemoveCovers(ctx context.Context, digest string) error {
 	if !validSHA256(digest) {
 		return ErrUnsafePath
 	}
@@ -149,7 +149,7 @@ func (c *CAS) RemoveCovers(ctx context.Context, digest string) error {
 // writeCoverFile writes one file into a blob's cover directory, replacing
 // any previous content atomically. The temporary name carries the target
 // name so two variants rendered at once cannot collide.
-func (c *CAS) writeCoverFile(
+func (c *Cache) writeCoverFile(
 	ctx context.Context, digest, name string, data []byte,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -187,7 +187,7 @@ func (c *CAS) writeCoverFile(
 	return nil
 }
 
-func (c *CAS) openCoverDirectories(digest string, create bool) (int, error) {
+func (c *Cache) openCoverDirectories(digest string, create bool) (int, error) {
 	open := openDirectoryAt
 	if create {
 		open = ensureDirectoryAt

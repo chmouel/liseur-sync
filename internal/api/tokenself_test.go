@@ -45,7 +45,7 @@ func TestTokenDescribesItselfWhateverItsScopes(t *testing.T) {
 		{"narrow", store.ScopeSet{store.ScopeSync}, "sync"},
 		{"insights", store.ScopeSet{store.ScopeReadInsights}, "read-insights"},
 		{"wide", store.ScopeSet{
-			store.ScopeSync, store.ScopeLibraryRead, store.ScopeLibraryManage,
+			store.ScopeSync, store.ScopeReadInsights, store.ScopeLibraryRead,
 		}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,199 +2,50 @@ package webui
 
 // The maintenance page: aggregate state only. Nothing here identifies a
 // book, a file or an account — the question it answers is "is anything
-// stuck?", and a count with an age answers it (ADR-0013).
+// stuck?", and a count answers it (ADR-0013).
 
-templ adminMaintenanceBody(prefix string, csrf string, v maintenanceView, flash Flash) {
+templ adminMaintenanceBody(prefix string, v maintenanceView, flash Flash) {
 	<h1>Maintenance</h1>
 	<p class="muted">
-		What the background workers have left to do, as the database sees it.
-		There is no "run now" for any of them: each runs on its own schedule
-		and is safe to repeat, so a button would only start a second pass
-		over the same rows. The one thing to press is the backup check,
-		which nothing runs on its own.
+		What this server is reflecting, as the database sees it. Nothing
+		here is a job to start or a queue to drain: a folder is read when
+		it changes and again on a slow timer. If a count looks wrong,
+		<a href={ prefix + "admin/folders" }>Folders</a> has a Scan now for
+		each one — which is what a network share needs, because the kernel
+		does not report changes on those.
 	</p>
 	@adminFlash(flash)
 	<section class="card">
-		<h2>Ingest</h2>
-		<table>
-			<tr><th>State</th><th>Jobs</th><th>Oldest</th></tr>
-			for _, row := range v.Jobs {
-				<tr>
-					<td>{ row.State }</td>
-					<td>{ i2s(row.Count) }</td>
-					<td>
-						if row.Oldest != "" {
-							{ row.Oldest }
-						} else {
-							<span class="muted">—</span>
-						}
-					</td>
-				</tr>
-			}
-		</table>
-		<p class="muted">
-			An oldest age is shown only for the states a job can sit in. A
-			pending or running job that keeps getting older is the shape of a
-			stuck worker.
-		</p>
-	</section>
-	<section class="card">
-		<h2>Review and trash</h2>
+		<h2>Folders</h2>
 		<dl class="facts">
-			<dt>Held for review</dt>
-			<dd>{ i2s(v.Counts.BooksByStatus["review"]) }</dd>
-			<dt>In trash</dt>
-			<dd>{ i2s(v.Counts.BooksByStatus["trashed"]) }</dd>
-			<dt>Next expiry</dt>
-			<dd>
-				if until(v.Counts.TrashNextExpiry, v.Now) != "" {
-					{ until(v.Counts.TrashNextExpiry, v.Now) }
-				} else {
-					<span class="muted">nothing pending</span>
-				}
-			</dd>
-			<dt>Retention</dt>
-			<dd>{ v.TrashRetention }</dd>
-			<dt>Missing files</dt>
-			<dd>{ i2s(v.Counts.BooksByStatus["missing"]) }</dd>
-		</dl>
-	</section>
-	<section class="card">
-		<h2>Library refresh</h2>
-		if v.Refresh.Sources == 0 {
-			<p class="muted">No library reads a directory on this server.</p>
-		} else {
-			<dl class="facts">
-				<dt>Sources</dt>
-				<dd>{ i2s(v.Refresh.Sources) } <span class="muted">{ "(" + i2s(v.Refresh.Scheduled) + " on a schedule)" }</span></dd>
-				<dt>Server looks every</dt>
-				<dd>{ v.RefreshTick }</dd>
-				<dt>Overdue</dt>
-				<dd>{ i2s(v.Refresh.Overdue) }</dd>
-				<dt>Queued by hand</dt>
-				<dd>{ i2s(v.Refresh.Queued) }</dd>
-				<dt>Last refresh failed</dt>
-				<dd>{ i2s(v.Refresh.Failing) }</dd>
-				<dt>Least recently refreshed</dt>
-				<dd>
-					if v.Refresh.Oldest != "" {
-						{ v.Refresh.Oldest }
-					} else {
-						<span class="muted">—</span>
-					}
-				</dd>
-				<dt>Never refreshed</dt>
-				<dd>{ i2s(v.Refresh.Never) }</dd>
-			</dl>
-			<p class="muted">
-				A library is counted overdue once a whole extra interval has
-				passed without a refresh, so a healthy server reads zero here.
-				Which library it is, and what went wrong, is on
-				<a href={ prefix + "admin/libraries" }>Libraries</a>, next to
-				the button that tries again.
-			</p>
-			if v.Refresh.Truncated {
-				<p class="muted">
-					More libraries than this page counts; these figures cover
-					the first { i2s(refreshHealthPage * refreshHealthPages) }.
-				</p>
+			<dt>Watched</dt>
+			<dd>{ i2s(v.Counts.Folders) }</dd>
+			for _, row := range v.Kinds {
+				<dt>{ row.Label }</dt>
+				<dd>{ i2s(row.Count) }</dd>
 			}
-		}
-	</section>
-	<section class="card">
-		<h2>Stored files</h2>
-		<dl class="facts">
-			<dt>Blobs</dt>
-			<dd>{ i2s(v.Counts.Blobs) } <span class="muted">{ "(" + humanBytes(v.Counts.BlobBytes) + ")" }</span></dd>
-			<dt>Reserved, not yet promoted</dt>
-			<dd>{ i2s(v.Counts.BlobsPending) }</dd>
-			<dt>Orphaned</dt>
-			<dd>{ i2s(v.Counts.OrphanBlobs) }</dd>
-			<dt>Orphan grace</dt>
-			<dd>{ v.OrphanGrace }</dd>
 		</dl>
 		<p class="muted">
-			An orphaned blob is one no book file points at any more. They are
-			kept for the grace period above, so a number here is not a
-			problem until it stops going back down.
+			A folder's kind is read off the disk rather than chosen: a tree
+			holding a Calibre database is a Calibre folder, and everything
+			else is a plain one. They are listed, with their roots, on
+			<a href={ prefix + "admin/folders" }>Folders</a>.
 		</p>
 	</section>
-	@adminBackupSection(prefix, csrf, v)
-}
-
-// The backup check. It is the `verify-backup` subcommand, run from the
-// page an operator has open after a restore.
-templ adminBackupSection(prefix string, csrf string, v maintenanceView) {
 	<section class="card">
-		<h2>Backup check</h2>
+		<h2>Books</h2>
+		<dl class="facts">
+			for _, row := range v.Books {
+				<dt>{ row.Label }</dt>
+				<dd>{ i2s(row.Count) }</dd>
+			}
+		</dl>
 		<p class="muted">
-			Compares what the database says must exist against what the
-			content directory holds, and re-hashes every referenced file. It
-			reads both and repairs neither. Run it against a copy you have
-			just restored, or against this server to find rot before a
-			restore does.
+			A missing book is one the last completed pass could not find on
+			disk. Its row stays, with everybody's reading positions against
+			it, and it comes back on its own if the file does — so a few are
+			ordinary, and a great many at once usually mean a folder's disk
+			is not mounted where it was.
 		</p>
-		if !v.BackupAvailable {
-			<p class="muted">This server has no content directory to check.</p>
-		} else {
-			if v.Backup.Running {
-				<p class="notice">
-					Running since { v.Backup.Started.Format("15:04:05") }.
-					Reload the page to see the result.
-				</p>
-			} else {
-				<form method="post" action={ prefix + "admin/maintenance/verify" } class="inline">
-					<input type="hidden" name="csrf" value={ csrf }/>
-					<button type="submit" class="primary">Check the backup</button>
-				</form>
-			}
-			if v.Backup.Ran {
-				if v.Backup.Error != "" {
-					<p class="error">The last check did not finish: { v.Backup.Error }</p>
-				} else if v.Backup.Report.Valid {
-					<p class="notice">This backup is restorable.</p>
-				} else {
-					<p class="error">
-						This backup is not restorable: content is missing or does
-						not match the database.
-					</p>
-				}
-				<dl class="facts">
-					<dt>Checked</dt>
-					<dd>
-						{ v.Backup.Finished.Format("2006-01-02 15:04") }
-						if v.Backup.Took() != "" {
-							<span class="muted">{ "(took " + v.Backup.Took() + ")" }</span>
-						}
-					</dd>
-					<dt>Referenced files</dt>
-					<dd>{ i2s(v.Backup.Report.ReferencedBlobs) }</dd>
-					<dt>Present</dt>
-					<dd>{ i2s(v.Backup.Report.PresentBlobs) }</dd>
-					<dt>Missing</dt>
-					<dd>{ i2s(v.Backup.Report.MissingBlobs) }</dd>
-					<dt>Wrong size</dt>
-					<dd>{ i2s(v.Backup.Report.MismatchedBlobs) }</dd>
-					<dt>Corrupt</dt>
-					<dd>{ i2s(v.Backup.Report.CorruptBlobs) }</dd>
-					<dt>Unreferenced</dt>
-					<dd>
-						{ i2s(v.Backup.Report.ExtraBlobs) }
-						<span class="muted">(left for ordinary reconciliation)</span>
-					</dd>
-				</dl>
-				if len(v.Backup.Report.Problems) > 0 {
-					<table>
-						<tr><th>File</th></tr>
-						for _, problem := range v.Backup.Report.Problems {
-							<tr><td><code>{ problem }</code></td></tr>
-						}
-					</table>
-					if v.Backup.Report.More > 0 {
-						<p class="muted">{ "and " + i2s(v.Backup.Report.More) + " more" }</p>
-					}
-				}
-			}
-		}
 	</section>
 }

@@ -26,21 +26,22 @@ loose ends that must come before any of it, are in
 | ADR | Title | Scope | State | Next |
 |---|---|---|---|---|
 | [0001](0001-content-server.md) | Become a content server | — | MVP implemented | Nothing outstanding |
-| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Implemented; "Library kinds" amended by [0014](0014-library-sources-and-storage.md) | Nothing outstanding |
+| [0002](0002-library-storage-and-ownership.md) | Library storage and ownership | MVP | Superseded by [0017](0017-folders-not-pipelines.md) | Nothing outstanding |
 | [0003](0003-catalog-work-identity.md) | Catalog and sync work identity | MVP | Implemented | Nothing outstanding |
-| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Implemented | Nothing outstanding |
-| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Implemented | Nothing outstanding |
+| [0004](0004-metadata-and-categorization.md) | Metadata and categorization | MVP | Implemented; external lookup and manual editing superseded by [0017](0017-folders-not-pipelines.md) | Nothing outstanding |
+| [0005](0005-upload-and-ingestion.md) | Upload and ingestion pipeline | MVP | Superseded by [0017](0017-folders-not-pipelines.md) | Nothing outstanding |
 | [0006](0006-catalog-api-and-opds.md) | Catalog API and OPDS | MVP | Implemented; book payload amended by [0015](0015-catalog-payloads-for-clients.md) | Nothing outstanding |
 | [0007](0007-web-reader.md) | Web reader | Later | Implemented | Nothing outstanding |
 | [0008](0008-liseur-android-client.md) | Liseur Android client plan | Later | Other repository | Add stable account identity in [0016](0016-token-self-introspection.md) so replacement tokens do not force a full replay |
 | [0009](0009-liseur-desktop-client.md) | Liseur Desktop client plan | Later | Other repository | Add stable account identity in [0016](0016-token-self-introspection.md) so replacement tokens do not force a full replay |
-| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Implemented | Nothing outstanding |
+| [0010](0010-duplicate-detection.md) | Duplicate detection | MVP | Superseded by [0017](0017-folders-not-pipelines.md) | Nothing outstanding |
 | [0011](0011-web-ui-revamp.md) | Web UI revamp | Later | Implemented | Nothing outstanding |
 | [0012](0012-reader-engine-foliate.md) | Replace the reader engine with foliate-js | Later | Implemented | Nothing outstanding |
 | [0013](0013-admin-panel.md) | The admin panel | Later | Implemented | Nothing outstanding |
-| [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Implemented | Covers from `cover.jpg` are not wired yet |
+| [0014](0014-library-sources-and-storage.md) | Library sources, storage modes and Calibre | Later | Implemented; storage modes, refresh leases and the review queue superseded by [0017](0017-folders-not-pipelines.md) | Nothing outstanding |
 | [0015](0015-catalog-payloads-for-clients.md) | Catalog payloads clients can walk | Client | Implemented | Nothing outstanding |
 | [0016](0016-token-self-introspection.md) | Token self-introspection | Client | Accepted; phases 1–2 implemented | Return a stable opaque `account_id` for safe reconnect detection |
+| [0017](0017-folders-not-pipelines.md) | Folders, watched — not an ingest pipeline | MVP | Implemented | Nothing outstanding |
 
 ## Convention
 

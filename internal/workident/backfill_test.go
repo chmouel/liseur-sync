@@ -8,17 +8,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 )
 
 type backfillFixture struct {
-	st    store.Store
-	user  store.User
-	lib   store.Library
-	now   time.Time
-	seqNo int
+	st     store.Store
+	user   store.User
+	folder store.Folder
+	now    time.Time
+	seqNo  int
+	// observed accumulates every book the fixture has recorded. A
+	// reconcile pass is the whole folder, so adding one book means
+	// replaying the ones before it — a pass that observed only the new
+	// file would mark every earlier book missing.
+	observed []store.ObservedBook
+	// ids maps the name a test gave a book to the id the store minted
+	// for it. Reconcile owns book ids — a catalog row is a consequence
+	// of a file, not something a caller names.
+	ids map[string]string
 }
 
 func newBackfillFixture(t *testing.T) *backfillFixture {
@@ -40,56 +48,76 @@ func newBackfillFixture(t *testing.T) *backfillFixture {
 	if err := st.CreateUser(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	lib := store.Library{
-		ID: "lib-backfill", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Backfill", CreatedAt: now,
+	folder := store.Folder{
+		ID: "f-backfill", Name: "Backfill", RootPath: "/srv/books",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := st.CreateLibrary(ctx, lib); err != nil {
+	if err := st.CreateFolder(ctx, folder); err != nil {
 		t.Fatal(err)
 	}
-	return &backfillFixture{st: st, user: user, lib: lib, now: now}
+	return &backfillFixture{
+		st: st, user: user, folder: folder, now: now,
+		ids: map[string]string{},
+	}
 }
 
-// book creates a catalog book. Timestamps step forward so that the paging
-// cursor has a strict order to walk.
-func (f *backfillFixture) book(t *testing.T, id, title, author string) store.CatalogBook {
+// book records one book in the folder, the only way a book gets into the
+// catalog now: one reconcile pass per call, which is what a watcher does
+// when a file lands. Timestamps step forward so the paging cursor has a
+// strict order to walk.
+func (f *backfillFixture) book(t *testing.T, name, title, author string) string {
 	t.Helper()
 	f.seqNo++
-	book := store.CatalogBook{
-		ID: id, LibraryID: f.lib.ID, Status: store.BookActive,
-		Title: title, TitleSource: store.MetadataEmbedded,
-		CreatedAt: f.now.Add(time.Duration(f.seqNo) * time.Millisecond),
+	at := f.now.Add(time.Duration(f.seqNo) * time.Millisecond)
+	obs := store.ObservedBook{
+		RelativePath:     name + ".epub",
+		SizeBytes:        int64(1000 + f.seqNo),
+		MTime:            at,
+		ContentSHA256:    fmt.Sprintf("%064x", f.seqNo),
+		OriginalFilename: name + ".epub",
+		MediaType:        "application/epub+zip",
+		Title:            title,
 	}
-	if err := f.st.CreateCatalogBook(context.Background(), f.user.ID, book); err != nil {
-		t.Fatal(err)
+	if title == "" {
+		// A book with neither a title nor a digest has nothing another
+		// device could recognise it by. It is the one shape the
+		// backfill has to refuse, so the fixture spells it with an
+		// empty title.
+		obs.ContentSHA256 = ""
 	}
 	if author != "" {
-		f.contributor(t, id, author)
+		obs.Contributors = []store.ObservedContributor{
+			{Name: author, Role: "author", Position: 0},
+		}
 	}
-	return book
-}
-
-func (f *backfillFixture) contributor(t *testing.T, bookID, name string) {
-	t.Helper()
-	ctx := context.Background()
-	meta, err := f.st.CatalogBookMetadata(ctx, f.user.ID, bookID, store.LibraryRoleRead)
+	f.observed = append(f.observed, obs)
+	if _, err := f.st.ReconcileFolder(
+		context.Background(), f.folder.ID, f.observed, true, at,
+	); err != nil {
+		t.Fatal(err)
+	}
+	known, err := f.st.BooksInFolder(context.Background(), f.folder.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta.Contributors = []store.BookContributor{{
-		ContributorID:  "c-" + metadata.NormalizeName(name),
-		Name:           name,
-		NormalizedName: metadata.NormalizeName(name),
-		Role:           "author",
-		Source:         store.MetadataEmbedded,
-	}}
-	if _, err := f.st.ApplyCatalogBookMetadata(ctx, f.user.ID, store.ApplyBookMetadataRequest{
-		Metadata: meta, ExpectedRevision: meta.Book.Revision, UpdatedAt: f.now,
-	}); err != nil {
-		t.Fatal(err)
+	for _, k := range known {
+		if k.RelativePath == obs.RelativePath {
+			f.ids[name] = k.ID
+			return k.ID
+		}
 	}
+	t.Fatalf("book %q was not recorded", name)
+	return ""
+}
+
+// id is the store-minted id of a book a test named earlier.
+func (f *backfillFixture) id(t *testing.T, name string) string {
+	t.Helper()
+	id, ok := f.ids[name]
+	if !ok {
+		t.Fatalf("no book named %q", name)
+	}
+	return id
 }
 
 func (f *backfillFixture) run(t *testing.T) Report {
@@ -106,9 +134,9 @@ func (f *backfillFixture) run(t *testing.T) Report {
 }
 
 // TestBackfillMapsEveryBook: the mapping is created lazily on first
-// resolve, so a freshly uploaded library reports no statistics at all
-// until every book has been opened. The backfill is what makes those
-// books countable without a reader visiting each one.
+// resolve, so a folder that has just been scanned reports no statistics
+// at all until every book has been opened. The backfill is what makes
+// those books countable without a reader visiting each one.
 func TestBackfillMapsEveryBook(t *testing.T) {
 	f := newBackfillFixture(t)
 	f.book(t, "b1", "Dune", "Frank Herbert")
@@ -118,7 +146,8 @@ func TestBackfillMapsEveryBook(t *testing.T) {
 	if report.Books != 2 || report.Created != 2 {
 		t.Fatalf("report = %+v, want 2 books and 2 creations", report)
 	}
-	for _, id := range []string{"b1", "b2"} {
+	for _, name := range []string{"b1", "b2"} {
+		id := f.id(t, name)
 		mapping, err := f.st.UserBookWork(context.Background(), f.user.ID, id)
 		if err != nil {
 			t.Fatalf("%s not mapped: %v", id, err)
@@ -167,7 +196,7 @@ func TestBackfillLeavesFuzzyMatchesUnmapped(t *testing.T) {
 	if report.Linked != 0 {
 		t.Fatalf("a fuzzy match was counted as linked: %+v", report)
 	}
-	if _, err := f.st.UserBookWork(context.Background(), f.user.ID, "b2"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.st.UserBookWork(context.Background(), f.user.ID, f.id(t, "b2")); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("fuzzy match was mapped anyway: %v", err)
 	}
 }
@@ -208,40 +237,11 @@ func TestBackfillPagesPastOneQuery(t *testing.T) {
 	}
 }
 
-// TestBackfillSkipsLibrariesTheUserCannotRead: the walk goes through the
-// same ACL-checked calls the API uses, so a library shared with somebody
-// else is invisible to it.
-func TestBackfillSkipsLibrariesTheUserCannotRead(t *testing.T) {
-	f := newBackfillFixture(t)
-	f.book(t, "b1", "Dune", "Frank Herbert")
-
-	ctx := context.Background()
-	other := store.User{
-		ID: "u-other", Name: "other", Argon2Hash: "x",
-		Timezone: "UTC", CreatedAt: f.now,
-	}
-	if err := f.st.CreateUser(ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	report, err := Backfill(ctx, f.st, other.ID,
-		func() (string, error) { return "work-x", nil },
-		func() time.Time { return f.now })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Books != 0 {
-		t.Fatalf("outsider saw %d books", report.Books)
-	}
-	if _, err := f.st.UserBookWork(ctx, other.ID, "b1"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("outsider was mapped to another user's book: %v", err)
-	}
-}
-
-// TestBackfillMapsASharedLibraryPerUser: a library shared read-only is
-// part of the reader's catalog, so their backfill has to cover it. The
-// mapping it creates is theirs alone — reading history is per user, which
-// is what keeps a shared library from also sharing what its readers read.
-func TestBackfillMapsASharedLibraryPerUser(t *testing.T) {
+// TestBackfillMapsPerUser: the catalog is shared — every logged-in user
+// sees every folder — but a work mapping is not. Two users backfilling
+// the same folder each get their own works, which is what keeps a shared
+// shelf from also sharing what its readers read.
+func TestBackfillMapsPerUser(t *testing.T) {
 	f := newBackfillFixture(t)
 	f.book(t, "b1", "Dune", "Frank Herbert")
 	ctx := context.Background()
@@ -253,11 +253,11 @@ func TestBackfillMapsASharedLibraryPerUser(t *testing.T) {
 	if err := f.st.CreateUser(ctx, reader); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.GrantLibraryAccess(ctx, f.user.ID, f.lib.ID, reader.ID,
-		store.LibraryRoleRead, f.now); err != nil {
-		t.Fatal(err)
-	}
 
+	owner := f.run(t)
+	if owner.Books != 1 || owner.Created != 1 {
+		t.Fatalf("owner report = %+v, want the book mapped", owner)
+	}
 	report, err := Backfill(ctx, f.st, reader.ID,
 		func() (string, error) { return "work-reader", nil },
 		func() time.Time { return f.now })
@@ -267,8 +267,16 @@ func TestBackfillMapsASharedLibraryPerUser(t *testing.T) {
 	if report.Books != 1 || report.Created != 1 {
 		t.Fatalf("reader report = %+v, want the shared book mapped", report)
 	}
-	if _, err := f.st.UserBookWork(ctx, f.user.ID, "b1"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("the owner was mapped by the reader's backfill: %v", err)
+	ownerWork, err := f.st.UserBookWork(ctx, f.user.ID, f.id(t, "b1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerWork, err := f.st.UserBookWork(ctx, reader.ID, f.id(t, "b1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownerWork.WorkID == readerWork.WorkID {
+		t.Fatal("two readers of one shelf were given the same work")
 	}
 }
 
@@ -315,21 +323,21 @@ func TestBackfillContinuesPastAResolutionItCannotMake(t *testing.T) {
 	}
 }
 
-// vanishingStore is a book that is trashed between being listed and being
-// read. A backfill over a live server will hit this, and stopping the
+// vanishingStore is a book whose file disappeared between being listed
+// and being read. A backfill over a live server will hit this, and stopping the
 // whole run because one book went away would be the wrong trade.
 type vanishingStore struct {
 	store.Store
 	gone string
 }
 
-func (v vanishingStore) CatalogBookMetadata(
-	ctx context.Context, userID, bookID string, required store.LibraryRole,
-) (store.BookMetadata, error) {
+func (v vanishingStore) CatalogBookIdentifiers(
+	ctx context.Context, bookID string,
+) ([]store.BookIdentifier, error) {
 	if bookID == v.gone {
-		return store.BookMetadata{}, store.ErrNotFound
+		return nil, store.ErrNotFound
 	}
-	return v.Store.CatalogBookMetadata(ctx, userID, bookID, required)
+	return v.Store.CatalogBookIdentifiers(ctx, bookID)
 }
 
 func TestBackfillContinuesPastABookThatVanished(t *testing.T) {
@@ -339,7 +347,7 @@ func TestBackfillContinuesPastABookThatVanished(t *testing.T) {
 
 	ids := 0
 	report, err := Backfill(context.Background(),
-		vanishingStore{Store: f.st, gone: "b1"}, f.user.ID,
+		vanishingStore{Store: f.st, gone: f.id(t, "b1")}, f.user.ID,
 		func() (string, error) { ids++; return fmt.Sprintf("work-%d", ids), nil },
 		func() time.Time { return f.now })
 	if err != nil {
@@ -358,9 +366,9 @@ type failingStore struct {
 	err error
 }
 
-func (fs failingStore) ListBookFiles(
-	ctx context.Context, userID, bookID string, required store.LibraryRole,
-) ([]store.BookFile, error) {
+func (fs failingStore) CatalogBookIdentifiers(
+	ctx context.Context, bookID string,
+) ([]store.BookIdentifier, error) {
 	return nil, fs.err
 }
 

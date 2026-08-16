@@ -4,12 +4,12 @@ import "testing"
 
 func TestNormalizeScopes(t *testing.T) {
 	got, err := NormalizeScopes([]Scope{
-		ScopeLibraryManage, ScopeSync, ScopeLibraryManage, ScopeReadInsights,
+		ScopeLibraryRead, ScopeSync, ScopeLibraryRead, ScopeReadInsights,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.String() != "sync,read-insights,library-manage" {
+	if got.String() != "sync,read-insights,library-read" {
 		t.Fatalf("canonical scopes = %q", got)
 	}
 	if _, err := NormalizeScopes(nil); err == nil {

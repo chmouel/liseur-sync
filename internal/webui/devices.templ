@@ -4,8 +4,8 @@ import "github.com/chmouel/liseur-sync/internal/store"
 
 // Devices page: tokens, kosync slots, koplugin capabilities, pairing.
 
-templ devicesPage(prefix string, u userCtx, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
-	@layout("Devices", prefix, u, csrf, devicesBody(prefix, csrf, toks, kosyncDevs, kopluginDevs, flash))
+templ devicesPage(prefix string, u userCtx, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
+	@layout("Devices", prefix, u, csrf, devicesBody(prefix, csrf, toks, browsers, kosyncDevs, kopluginDevs, base, flash))
 }
 
 // Flash carries one-time results (a shown-once secret).
@@ -19,7 +19,7 @@ type Flash struct {
 	Error string
 }
 
-templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, flash Flash) {
+templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
 	<h1>Devices</h1>
 	if flash.Secret != "" {
 		<div class="card secret">
@@ -52,7 +52,6 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 								@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
 								@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
 								@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
-								@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
 								<button type="submit">Update</button>
 							</form>
 						} else {
@@ -84,14 +83,51 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 			@scopeChoice(store.ScopeSync, true)
 			@scopeChoice(store.ScopeReadInsights, false)
 			@scopeChoice(store.ScopeLibraryRead, false)
-			@scopeChoice(store.ScopeLibraryManage, false)
 			<button type="submit" class="primary">New token</button>
 		</form>
 	</section>
 
 	<section class="card">
+		<h2>Browsers</h2>
+		<p class="muted">
+			Reading in a browser needs a credential too, but the server
+			issues that one to itself and replaces it every hour, so
+			there is nothing here to name or hand out. One row per
+			browser, however many credentials it has been through.
+		</p>
+		if len(browsers) == 0 {
+			<p class="muted">You have not read in a browser on this account.</p>
+		} else {
+			<table>
+				<tr><th>Device id</th><th>Last read</th><th>State</th></tr>
+				for _, b := range browsers {
+					<tr>
+						<td><code>{ b.DeviceID }</code></td>
+						<td>{ b.LastUsed.Format("2006-01-02 15:04") }</td>
+						<td>
+							if b.Active {
+								active
+							} else {
+								<span class="muted">signed out</span>
+							}
+						</td>
+					</tr>
+				}
+			</table>
+			<form method="post" action={ prefix + "browsers/revoke" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<button type="submit" class="danger">Sign out of browser reading</button>
+			</form>
+		}
+	</section>
+
+	<section class="card">
 		<h2>KOReader (kosync)</h2>
-		<p class="muted">Generate a pairing code, then in KOReader's kosync settings: username = device name, password = code, server = <code>https://&lt;host&gt;/adapter/kosync</code>.</p>
+		<p class="muted">
+			Generate a pairing code, then in KOReader's kosync settings:
+			username = device name, password = code, server =
+			<code>{ base + "/adapter/kosync" }</code>.
+		</p>
 		<form method="post" action={ prefix + "pairing" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<button type="submit">Generate pairing code</button>
@@ -133,7 +169,10 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 
 	<section class="card">
 		<h2>KOReader statistics plugin</h2>
-		<p class="muted">Point the plugin's server at <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.</p>
+		<p class="muted">
+			Point the plugin's server at
+			<code>{ base + "/adapter/koplugin/<capability>" }</code>.
+		</p>
 		<form method="post" action={ prefix + "koplugin" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<input name="name" placeholder="Kobo Clara" required/>
@@ -172,6 +211,25 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, kosyncDevs []s
 				}
 			</table>
 		}
+	</section>
+
+	<section class="card">
+		<h2>OPDS catalog</h2>
+		<p class="muted">
+			The address to give a reading app that browses catalogs —
+			KOReader, Moon+ Reader, KyBook, Thorium and most others. It
+			serves the same books as the Library page.
+		</p>
+		<p><code class="big">{ base + "/opds/v1.2" }</code></p>
+		<p class="muted">
+			When it asks for a login, the password is an API token secret
+			from above — not your account password, which the catalog does
+			not accept. The username is that token's name — or the word
+			<code>token</code>, for an app that insists on one it can
+			remember. The token needs the
+			<code>{ string(store.ScopeLibraryRead) }</code> scope; one
+			without it can sync positions but cannot see a book.
+		</p>
 	</section>
 }
 

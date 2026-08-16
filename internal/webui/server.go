@@ -5,6 +5,7 @@
 package webui
 
 import (
+	"context"
 	"crypto/subtle"
 	"embed"
 	"io/fs"
@@ -40,19 +41,21 @@ type Server struct {
 	// backend is spoken to over HTTP, so r.TLS is nil even though the
 	// browser is on HTTPS.
 	Cfg config.Config
-	// Uploads and Downloads delegate the content server's byte-handling
-	// to the API's implementation. They are interfaces rather than a
-	// concrete server so that this package keeps depending on nothing
-	// but the store — and, more importantly, so that there is exactly
-	// one implementation of the staging and download rules.
-	Uploads   Uploader
+	// Downloads delegates the content server's byte-handling to the
+	// API's implementation. It is an interface rather than a concrete
+	// server so that this package keeps depending on nothing but the
+	// store — and, more importantly, so that there is exactly one
+	// implementation of the download rules.
 	Downloads Downloader
-	// Lookup asks external metadata services about a book. Nil is the
-	// default and means the page does not offer to ask anybody.
-	Lookup Lookup
 	// Covers renders book covers. Nil shows the placeholder everywhere,
 	// which is a page that looks plain rather than a page that fails.
 	Covers CoverServer
+	// Watching is told about a folder the moment somebody adds or
+	// removes one, so "add a folder and the books show up" is true
+	// without a restart. Nil means the server was started without a
+	// watcher: a new folder is still catalogued, but not until the
+	// periodic safety pass notices it, which is up to half an hour.
+	Watching FolderWatcher
 	// LoginLimiter throttles the login form. It is the same limiter
 	// the API's /v1/login uses, so the two surfaces share one budget
 	// per IP and the form cannot be used to sidestep the API's limit.
@@ -66,15 +69,18 @@ type Server struct {
 	// Mount fills in defaults when they are nil.
 	AdminReauthUserLimiter *auth.RateLimiter
 	AdminReauthIPLimiter   *auth.RateLimiter
-	// Backups verifies that the database and the content directory are
-	// a restorable pair, for the maintenance page's backup check. Nil
-	// means the page says the check is unavailable rather than offering
-	// a button that cannot work.
-	Backups BackupVerifier
-	// backup holds the last verification. It is the one piece of state
-	// this server keeps between requests, because the check outlives
-	// the request that started it.
-	backup backupRun
+}
+
+// FolderWatcher is the watcher surface the admin panel needs. It is an
+// interface so this package keeps depending on nothing but the store,
+// and so a test can add a folder without an inotify instance.
+type FolderWatcher interface {
+	Add(ctx context.Context, folder store.Folder)
+	Remove(folderID string)
+	// Scan asks for a pass over one folder now. It returns before the
+	// pass finishes: reading a large folder takes longer than a request
+	// should.
+	Scan(folderID string)
 }
 
 const cookieName = "liseur_session"
@@ -220,36 +226,23 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/setup", sec(s.handleSetupPage))
 	mux.Handle("POST /ui/setup", sec(s.rateLimited(s.handleSetup)))
 	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
-	mux.Handle("GET /ui/library/manage", sec(s.requireAuth(s.handleLibraryManage)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
 	mux.Handle("GET /ui/books/{id}/cover", sec(s.requireAuth(s.handleBookCover)))
-	mux.Handle("POST /ui/books/upload", sec(s.requireAuth(s.handleUploadBook)))
-	mux.Handle("POST /ui/books/{id}/delete", sec(s.requireAuth(s.handleDeleteBook)))
-	mux.Handle("POST /ui/books/{id}/restore", sec(s.requireAuth(s.handleRestoreBook)))
 	// Registered ahead of the {kind} pattern only for the reader's sake;
 	// the router prefers the literal segment either way.
-	mux.Handle("GET /ui/libraries/{library}/search", sec(s.requireAuth(s.handleSearch)))
-	mux.Handle("GET /ui/libraries/{library}/{kind}", sec(s.requireAuth(s.handleEntities)))
-	mux.Handle("GET /ui/libraries/{library}/{kind}/{entity}", sec(s.requireAuth(s.handleEntityBooks)))
-	mux.Handle("POST /ui/libraries/{library}/{kind}/merge", sec(s.requireAuth(s.handleMergeEntities)))
-	mux.Handle("POST /ui/libraries/{library}/{kind}/{entity}/rename", sec(s.requireAuth(s.handleRenameEntity)))
-	mux.Handle("POST /ui/books/{id}/metadata", sec(s.requireAuth(s.handleEditBookMetadata)))
-	mux.Handle("POST /ui/books/{id}/metadata/lookup",
-		sec(s.requireAuth(s.handleBookMetadataLookup)))
-	mux.Handle("POST /ui/books/{id}/metadata/apply",
-		sec(s.requireAuth(s.handleApplyBookMetadataCandidate)))
-	mux.Handle("POST /ui/books/{id}/accept", sec(s.requireAuth(s.handleAcceptBook)))
+	mux.Handle("GET /ui/folders/{folder}/search", sec(s.requireAuth(s.handleSearch)))
+	mux.Handle("GET /ui/folders/{folder}/{kind}", sec(s.requireAuth(s.handleEntities)))
+	mux.Handle("GET /ui/folders/{folder}/{kind}/{entity}",
+		sec(s.requireAuth(s.handleEntityBooks)))
 	mux.Handle("GET /ui/search", sec(s.requireAuth(s.handleTopSearch)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
 	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdminOverview)))
 	mux.Handle("GET /ui/admin/users", sec(s.requireAdmin(s.handleAdminUsers)))
 	mux.Handle("GET /ui/admin/users/{id}", sec(s.requireAdmin(s.handleAdminUser)))
-	mux.Handle("GET /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminLibraries)))
-	mux.Handle("GET /ui/admin/libraries/{id}/review",
-		sec(s.requireAdmin(s.handleAdminLibraryReview)))
+	mux.Handle("GET /ui/admin/folders", sec(s.requireAdmin(s.handleAdminFolders)))
 	mux.Handle("GET /ui/admin/maintenance",
 		sec(s.requireAdmin(s.handleAdminMaintenance)))
 
@@ -258,6 +251,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/tokens", sec(s.requireAuth(s.handleCreateToken)))
 	mux.Handle("POST /ui/tokens/{id}/scopes", sec(s.requireAuth(s.handleUpdateTokenScopes)))
 	mux.Handle("POST /ui/tokens/{id}/revoke", sec(s.requireAuth(s.handleRevokeToken)))
+	mux.Handle("POST /ui/browsers/revoke", sec(s.requireAuth(s.handleRevokeBrowsers)))
 	mux.Handle("POST /ui/pairing", sec(s.requireAuth(s.handlePairing)))
 	mux.Handle("POST /ui/koplugin", sec(s.requireAuth(s.handleCreateKoplugin)))
 	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
@@ -290,21 +284,11 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminCreateKoplugin)))
 	mux.Handle("POST /ui/admin/users/{id}/backfill",
 		sec(s.requireAdmin(s.handleAdminBackfillWorks)))
-	mux.Handle("POST /ui/admin/libraries", sec(s.requireAdmin(s.handleAdminCreateLibrary)))
-	mux.Handle("POST /ui/admin/libraries/{id}/review/{bookID}/clear",
-		sec(s.requireAdmin(s.handleAdminClearReview)))
-	mux.Handle("POST /ui/admin/maintenance/verify",
-		sec(s.requireAdmin(s.handleAdminVerifyBackup)))
-	mux.Handle("POST /ui/admin/libraries/{id}/access",
-		sec(s.requireAdmin(s.handleAdminLibraryAccess)))
-	mux.Handle("POST /ui/admin/libraries/{id}/layout",
-		sec(s.requireAdmin(s.handleAdminLibraryLayout)))
-	mux.Handle("POST /ui/admin/libraries/{id}/refresh",
-		sec(s.requireAdmin(s.handleAdminRefreshLibrary)))
-	mux.Handle("POST /ui/admin/libraries/{id}/backfill",
-		sec(s.requireAdmin(s.handleAdminJoinLibraryShelf)))
-	mux.Handle("POST /ui/admin/libraries/{id}/delete",
-		sec(s.requireAdmin(s.handleAdminDeleteLibrary)))
+	mux.Handle("POST /ui/admin/folders", sec(s.requireAdmin(s.handleAdminCreateFolder)))
+	mux.Handle("POST /ui/admin/folders/{id}/scan",
+		sec(s.requireAdmin(s.handleAdminScanFolder)))
+	mux.Handle("POST /ui/admin/folders/{id}/delete",
+		sec(s.requireAdmin(s.handleAdminDeleteFolder)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }

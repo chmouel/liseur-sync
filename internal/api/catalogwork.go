@@ -55,14 +55,14 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bookID := r.PathValue("id")
-	meta, err := s.St.CatalogBookMetadata(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	book, err := s.St.CatalogBookByID(r.Context(), bookID)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	files, err := s.St.ListBookFiles(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "book lookup failed")
+	bookIDs, author, err := workident.Evidence(r.Context(), s.St, bookID)
+	if err != nil {
+		writeCatalogError(w, err, "book not found")
 		return
 	}
 
@@ -71,15 +71,15 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "id generation failed")
 		return
 	}
-	proposed, editions, ids := workident.Plan(tok.UserID, workID, meta, files)
+	proposed, editions, ids := workident.Plan(tok.UserID, workID, book, bookIDs, author)
 	proposed.CreatedAt = time.Now()
 
 	result, err := s.St.ResolveCatalogBookWork(r.Context(), tok.UserID, bookID,
 		proposed, editions, ids, req.Confirmed, time.Now())
 	if err != nil {
-		// The metadata read above already refused a book this caller
-		// cannot see, so reaching this means the book was trashed or
-		// purged in between. A race is still a 404, not a 500.
+		// The read above already found the book, so reaching this means
+		// it was replaced or its folder removed in between. A race is
+		// still a 404, not a 500.
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "book not found")
 			return

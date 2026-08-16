@@ -115,9 +115,11 @@ check: generate ## Everything CI checks: fresh templ, gofmt, vet, race suite
 # credential. Both are wrong for a real deployment, which is why this
 # file is not liseur-sync.toml and is gitignored.
 $(CONFIG): liseur-sync.example.toml
-	@sed -e 's|^insecure_http = false|insecure_http = true|' \
+	sed -e 's|^insecure_http = false|insecure_http = true|' \
+	 		 -e 's|^listen_addr = "127.0.0.1:8585"|listen_addr = "0.0.0.0:8585"|' \
 	     -e 's|^url = "liseur-sync.db"|url = "$(DEVDIR)/liseur-sync.db"|' \
 	     -e 's|^root = "content"|root = "$(DEVDIR)/content"|' \
+	     -e 's|^cache_dir = "cache"|cache_dir = "$(DEVDIR)/cache"|' \
 	     $< > $@
 	@echo "wrote $@ (plain HTTP, data under $(DEVDIR)/) — edit it freely, it is gitignored"
 

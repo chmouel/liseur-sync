@@ -3,47 +3,43 @@
 ## Install script
 
 `scripts/install.sh` automates the two most common setups: Docker
-Compose (sqlite or bundled-postgres profile) when Docker is present,
-and a rootless Podman + systemd user quadlet otherwise (it offers to
-install podman). It starts the server, waits for `/healthz`, and
-optionally creates the first user, a device token, and a kosync
-pairing code.
+Compose (sqlite or bundled-postgres profile) when Docker is present, and
+a rootless Podman + systemd user quadlet otherwise (it offers to install
+podman). It starts the server, waits for `/healthz`, and optionally
+creates the first user, a device token, and a kosync pairing code.
 
 ```
 curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/install.sh | bash
 ```
 
-Knobs: `LISEUR_VERSION` (image tag, default `latest`), `LISEUR_REF`
-(git ref for the fetched `compose.yaml`, default `main`),
-`LISEUR_COMPOSE_URL` (full URL override), and `--yes --db=…
---runtime=… --port=…` for non-interactive runs. The rest of this
-document applies regardless of how the server was installed.
+Knobs: `LISEUR_VERSION` (image tag, default `latest`), `LISEUR_REF` (git
+ref for the fetched `compose.yaml`, default `main`),
+`LISEUR_COMPOSE_URL` (full URL override), and `--yes --db=… --runtime=…
+--port=…` for non-interactive runs. The rest of this document applies
+regardless of how the server was installed.
 
 ## Postures
 
-One static binary, one config file, one database, and one private content
-directory. Three supported
-database setups, all covered by `compose.yaml`:
+One static binary, one config file, one database, one disposable cover
+cache, and one or more folders that already hold books. Three supported
+database setups are covered by `compose.yaml`:
 
 | Posture | Command | Notes |
 |---|---|---|
-| SQLite (default) | `docker compose --profile sqlite up -d` | Database and CAS share the persistent app volume |
-| Bundled Postgres | `docker compose --profile postgres up -d` | Set `POSTGRES_PASSWORD` in `.env`; CAS uses a separate persistent volume |
-| External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights (migrations run at startup); CAS remains local and persistent |
+| SQLite (default) | `docker compose --profile sqlite up -d` | Database and cache share the persistent app volume |
+| Bundled Postgres | `docker compose --profile postgres up -d` | Set `POSTGRES_PASSWORD` in `.env`; the cache remains local |
+| External Postgres | `docker compose --profile external up -d` | Set `LISEUR_DATABASE_URL` in `.env`; the database and role must exist, with DDL rights |
 
-Or run the binary directly: `liseur-sync serve -config liseur-sync.toml`.
-Setting `LISEUR_CONFIG` instead is equivalent when `-config` is
-omitted, which is more convenient for compose/systemd units that only
-want to inject an environment variable.
-`content.root` defaults to `./content`; it must be owned by the server user
-and have mode `0700`, since anything looser exposes every stored book. The
-server creates it that way; a directory you make yourself gets `0755` from
-`mkdir` and is refused, with a message naming the directory and the fix.
-Startup also runs recovery for every pre-existing nonterminal ingest, and
-reclaims uploads a previous crash left half-received, before listening.
-When SQLite uses an absolute database path, a relative content root resolves
-beside that database; container deployments still set `/data/content`
-explicitly.
+Or run the binary directly: `liseur-sync serve -config
+liseur-sync.toml`. Setting `LISEUR_CONFIG` instead is equivalent
+when `-config` is omitted, which is more convenient for
+compose/systemd units that only want to inject an environment
+variable.
+
+`[content].cache_dir` defaults to `./cache`. It holds rendered covers
+and nothing else. It is safe to delete while the server is running; the
+cost is a re-render on the next cover request. Do not put books there.
+Books are read from the folders you register.
 
 ## TLS
 
@@ -61,8 +57,8 @@ reader.example.com {
 }
 ```
 
-nginx example — the koplugin capability URLs carry a secret in the
-path. The app redacts it from its own logs; do the same at the proxy:
+nginx example — the koplugin capability URLs carry a secret in the path.
+The app redacts it from its own logs; do the same at the proxy:
 
 ```nginx
 map $uri $redacted_uri {
@@ -82,78 +78,83 @@ location / {
 `insecure_http = true` exists only for LAN-only setups where TLS is
 genuinely out of scope. It is a top-level key, so it must appear above
 the first `[table]` header in the config file — TOML binds a bare key to
-the table above it, and `insecure_http` written under `[content]` becomes
-`content.insecure_http`. The server refuses to start on an unrecognized
-key rather than ignoring one, so a misplaced setting is reported instead
-of silently doing nothing.
+the table above it, and `insecure_http` written under `[content]`
+becomes `content.insecure_http`. The server refuses to start on an
+unrecognized key rather than ignoring one, so a misplaced setting is
+reported instead of silently doing nothing.
 
 ### Optional: extra auth at the proxy
 
 The API is fully authenticated by design, but you can put an extra
-basicauth layer in front of the whole path for non-LAN clients (the
-civuole deployment does this with Caddy's `import auth` snippet; LAN
-devices bypass it). Caveat: kosync clients cannot send HTTP basic-auth
-headers, so this only works while KOReader devices sync from the LAN.
-If one ever needs WAN access, exempt `/adapter/*` from the proxy auth
-— the adapter authenticates with its own credentials either way.
+basicauth layer in front of the whole path for non-LAN clients. Caveat:
+kosync clients cannot send HTTP basic-auth headers, so this only works
+while KOReader devices sync from the LAN. If one ever needs WAN access,
+exempt `/adapter/*` from the proxy auth — the adapter authenticates with
+its own credentials either way.
 
 ## First run
 
 Start the server and open `/ui/`. While the instance has no accounts at
 all, it offers a one-time setup page instead of a sign-in form: pick a
-name and a password and the account it makes is the first
-administrator. The page closes for good the moment that account exists,
-and everything after it happens in the admin panel at `/ui/admin`.
+name and a password and the account it makes is the first administrator.
+The page closes for good the moment that account exists.
 
 The same thing from a shell, when you would rather not open a browser
 first:
 
 ```
 liseur-sync admin -config liseur-sync.toml create-user alice
-liseur-sync admin -config liseur-sync.toml grant-admin alice        # first administrator
+liseur-sync admin -config liseur-sync.toml grant-admin alice
 liseur-sync admin -config liseur-sync.toml mint-token alice "Boox Palma"
-liseur-sync admin -config liseur-sync.toml pairing-code alice      # for KOReader kosync
-liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo  # stats plugin
+liseur-sync admin -config liseur-sync.toml pairing-code alice
+liseur-sync admin -config liseur-sync.toml koplugin-device alice kobo
 ```
 
-`grant-admin` is how the shell path makes the *first* administrator —
+`grant-admin` is how the shell path makes the first administrator.
 `create-user` alone makes an ordinary account, and prints a reminder
 when the instance has no administrator yet. After that, the admin panel
 promotes and demotes accounts. The role lives on the account, so
 granting it hands nobody a secret, and the last enabled administrator
 cannot be demoted.
 
+Now add the books:
+
+```
+liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books
+```
+
+That is the import story. The path must already exist and be readable by
+the server. The server detects the kind: a root with `metadata.db` is a
+Calibre folder, anything else is a plain folder. The running server
+reconciles the folder immediately and watches it without a restart.
+
 ## The admin panel
 
-`/ui/admin` is where an administrator runs the instance without a
-shell. It holds four things:
+`/ui/admin` is where an administrator runs the instance without a shell.
+It holds four things:
 
-- **Overview** — version, build and uptime, how many accounts,
-  libraries, books and devices there are, and the effective
-  configuration with the database URL left out on purpose.
-- **Users** — the account list, and a page per account: reset a
-  password, grant or revoke the administrator role, revoke a device
-  credential or every credential at once, disable or enable the account,
-  mint an API token with the scopes you choose, generate a kosync
-  pairing code, add a statistics-plugin capability, map the account's
-  books to works, and see which libraries it can reach. Everything that
-  hands out or takes away a way into the account asks for *your*
-  password again, and every attempt is logged.
-- **Libraries** — every library on the instance with its owner, who else
-  may read or write it, and its filing layout. Create a managed library
-  and hand it to somebody in one step, attach a directory or Calibre
-  library that already exists on the server, queue a refresh, work
-  through a library's review queue, and remove a library you no longer
-  want.
-- **Maintenance** — what the background jobs are doing: ingest queue by
-  state with the age of the oldest item, books waiting for review, trash
-  and when it next expires, blob count and orphans, and the backup
-  check. No background job has a "run now" button — each is periodic and
-  safe to repeat, so a button would only start a second pass over the
-  same rows.
+- **Overview** — version, build and uptime, how many accounts, folders,
+  books and devices there are, and the effective configuration with the
+  database URL left out on purpose.
+- **Users** — the account list, and
+  a page per account: reset a password, grant or revoke the
+  administrator role, revoke a device credential or every credential at
+  once, disable or enable the account, mint an API token with the scopes
+  you choose, generate a kosync pairing code, add a statistics-plugin
+  capability, and map the account's books to works. Everything that
+  hands out or takes away a way into the account asks for your password
+  again, and every attempt is logged.
+- **Folders** — every watched
+  folder on the instance. Add a plain or Calibre folder by naming an
+  existing path, or remove one the server should stop reflecting. Only
+  this page shows `root_path`.
+- **Maintenance** — background health:
+  whether scheduled jobs are running, whether folders have missing
+  books, and the backup check.
 
-The panel administers accounts, not their contents: it never shows what
-anybody is reading, and no page there can open a book.
+The panel administers accounts and folders. It never shows what anybody
+is reading, and no page there can open another user's private reading
+state.
 
 Disabling an account is the reversible half of deleting one. Every way
 in stops at once — password, web session, API token, kosync device,
@@ -169,342 +170,174 @@ liseur-sync admin -config liseur-sync.toml enable-user alice
 The last enabled administrator can be neither demoted nor disabled, from
 the panel or the shell, so an instance cannot lock itself out.
 
-## Watching a folder you already have
+## Watching folders
 
-A directory library indexes an existing directory of EPUBs without ever
-writing to it:
+A folder is a database row: `id`, `name`, `root_path`, and `kind`. It
+has no owner and no access list. Every logged-in user sees every
+folder's books; only an admin sees or changes folders, because a folder
+is the only place a filesystem path appears.
 
-```
-liseur-sync admin -config liseur-sync.toml add-library alice "Shelf" /srv/books
-```
-
-A library has three independent properties: a **source** (`managed` for
-uploads, `directory` for a tree of EPUBs, `calibre` for a Calibre
-library), a **storage** mode (`cas`, so the bytes are copied, or
-`in-place`, so they are read where they lie) and a **refresh** policy
-(`manual`, or `interval` every `-interval`). `add-library` defaults to a
-directory source, copied, refreshed on an interval — which is what a
-watch folder was.
-
-The same library can be added from the panel's Libraries page, whose
-one "Add a library" form asks only where the books come from: uploads,
-or a folder on this server. For a folder, the source is detected — a
-tree holding `metadata.db` is a Calibre library, anything else a plain
-directory — and the three properties follow the source's defaults; an
-**Advanced options** disclosure holds the overrides for when the guess
-or the defaults are wrong. A **Test this folder** button reports
-whether the path is readable and what it was recognized as before
-anything is created.
-
-Naming a path on the server is a privilege beyond administering the
-application: the form is a filesystem-existence oracle and a way to make
-the scanner read any tree this server can. So it costs the acting
-administrator their own password, on the same rate-limited budgets as a
-password reset, and every attempt is logged. Narrow it further with
-`content.library_roots`, which lists the directories a library may be
-under; unset, any readable directory is allowed, as with the
-subcommand.
-
-Mount that directory read-only if you can. The server does not need write
-access and treating the mount as the enforcement point means a bug cannot
-become a data loss. Point it at the directory itself, not at a parent that
-happens to contain it: the sweep walks everything below the root, and
-`watched_max_files` and `watched_max_depth` exist to stop a mistake there
-from becoming a very long sweep.
-
-Each library is swept on its own `-interval`, and the server looks for
-one that has come due every `refresh_tick_seconds` (60 by default; 0
-turns refreshing off entirely). A library set to `manual` is only swept
-when somebody asks, with **Refresh now** on the admin panel's Libraries
-page or:
+Add one from `/ui/admin/folders`, or from a shell:
 
 ```
-liseur-sync admin -config liseur-sync.toml refresh-library alice <library-id>
+liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books
+liseur-sync admin -config liseur-sync.toml list-folders
+liseur-sync admin -config liseur-sync.toml remove-folder <folder-id>
 ```
 
-Both queue the work for the running server rather than doing it
-themselves, so neither holds a terminal or a browser open for the length
-of a sweep, and neither can start a second sweep of a root that is
-already being read.
+Removing a folder removes the catalog rows that came from it and stops
+watching the root. Nothing below the root is touched. Adding it back
+reads the same files again.
 
-What each sweep found — when it last succeeded, and what went wrong if it
-did not — is on that library's card, and the count of libraries that are
-overdue or failing is on the Maintenance page.
+A folder root needs only read access. Mount it read-only if you can;
+that makes the rule enforceable by the operating system, not just by
+this program. The server opens books and Calibre's `metadata.db`
+read-only, refuses symlinks inside a watched tree, and never writes,
+renames or deletes anything below the root.
+or deletes anything below the root. The cover cache is the only
+directory it writes to.
 
-The EPUBs a sweep finds are ingested through the same pipeline uploads
-use. For a `cas` library the bytes are copied, so books are served from a
-validated copy in `content.root` and editing a file under the root does
-not change what readers are being served; the library costs disk like a
-managed one. An `in-place` library copies nothing and costs no quota, and
-its books are read from the source file at download time.
+The browser form can be narrowed with `content.folder_roots`, which
+lists the directories an admin may choose from. Empty means anywhere the
+server can read, which is what the CLI allows. A root is accepted when
+it is one of those paths or below one:
 
-What the sweep concludes about files that are *not* there is deliberately
-cautious:
-
-- A file that disappears is only marked missing by a sweep that finished.
-  A sweep that hit `watched_max_files` or `watched_max_depth` saw part of
-  a root and is not allowed to speak for the rest of it.
-- A root that cannot be opened at all changes nothing. An unmounted volume
-  and a deleted library look identical from here, and only one of them is
-  a reason to empty a catalog.
-- A path whose contents changed does not silently become a new edition of
-  the same book. The book is flagged for review and keeps the copy it was
-  promoted with, because a file appearing at a path proves nothing about
-  whether it is the same work — replacing `Author/Title.epub` with an
-  unrelated book must not inherit the first one's reading history.
-- Renaming a file is an unrecognized path plus a missing one, for the same
-  reason. Identity is not transferred on a matching hash alone.
-
-Symlinks under the root are skipped rather than followed, and the sweep
-walks by file descriptor rather than by path, so renaming a directory
-mid-sweep cannot redirect it outside the root.
-
-### Books waiting on your decision
-
-A changed path leaves a book flagged rather than reingested, so somebody
-has to be asked:
-
-```
-liseur-sync admin -config liseur-sync.toml list-review alice <library-id>
-liseur-sync admin -config liseur-sync.toml clear-review alice <library-id> <book-id>
+```toml
+[content]
+cache_dir = "cache"
+folder_roots = ["/srv/books", "/srv/calibre"]
 ```
 
-`clear-review` says only that you are content with the copy being served;
-the book leaves review and the next availability pass puts it back in the
-catalog if it still has a servable file. If the new file really is a
-different book, delete the flagged one and let the next sweep ingest the
-path as what it now holds.
+The watcher runs a pass at startup, on debounced filesystem events, and
+on a slow safety timer. inotify is an optimization, not the source of
+truth. If the server cannot create an inotify watcher, or if one root
+cannot be watched because a kernel limit was reached or the mount does
+not support events, the server logs a warning and keeps reconciling on
+the periodic pass. The catalog may lag; the server does not fail to
+start and the folder does not become unusable.
 
-### Books the server will not publish
+A network mount is the case where this matters. NFS and SMB report
+nothing to inotify, so such a folder is only ever read by the periodic
+pass, which is up to half an hour behind. **Admin → Folders** has a
+*Scan now* for each folder that runs a pass immediately. It is safe to
+press at any time and safe to press twice: a pass is idempotent, so
+asking again is asking once.
 
-The refresh log reports a pass that did something, and refusing a file is
-something:
+`scan_max_files` and `scan_max_depth` bound one pass. They are guards
+against pointing at too much, not tuning knobs. A pass that hits either
+bound is incomplete: it may add or update what it saw, but it is not
+allowed to mark anything missing because it did not see the whole tree.
+Raise them only when the folder really is that large.
 
-```
-library refresh pass complete libraries=1 swept=1 ingested=69 refused=1 unchanged=0 …
-```
+### Plain folders
 
-`refused` counts files the server read and would not publish — an EPUB
-that fails structural validation, most often a truncated download or a
-file that is not really an EPUB. They are the reason a library can be
-short a book with nothing else going wrong.
+A plain folder is keyed by relative path. Size and modification time
+decide whether metadata needs to be read again. A subdirectory of EPUBs
+is a series named after that directory, and the files in it are the
+volumes. Files at the root belong to no series.
 
-It is said once, on the pass that reaches the verdict: later sweeps meet
-the same file, leave it alone and report nothing, so a settled library
-goes quiet. To see what was refused after the fact, list the library's
-ingest jobs — a refused file is a `quarantined` job carrying an
-`error_code` and the path it came from.
+If bytes change at a path, the next pass treats that as a new catalog
+book rather than as identity transfer. Reading state belongs to a user's
+work graph, not to a path that may now hold a different book.
 
-Replace the file and the next sweep publishes it: the fingerprint covers
-size and modification time, so different bytes are a new question.
+### Calibre folders
 
+A Calibre folder is a directory with `metadata.db` at its root. The
+server opens that database read-only and treats Calibre's rows as the
+catalog. Books are keyed by Calibre id, never by path, because Calibre
+renames a book's directory when its title or author changes.
 
+Calibre metadata is read on every pass. Series, tags, descriptions and
+the chosen `cover.jpg` can change in `metadata.db` without touching the
+EPUB, so a stat gate on the publication file would miss the change.
+Nothing is ever written to `metadata.db`, to `metadata.opf`, or anywhere
+else under the folder.
 
-A file that arrives with a path — one found under a library root rather
-than uploaded — can say something about its own author, series and title,
-but only if the server knows how the library is laid out. Two common
-layouts are the same shape on disk: `Author/Title.epub` and
-`Series/Author - Title.epub` are both one directory and one file, and only
-you know which one your library uses.
+Two-way Calibre synchronization is future work. For now Calibre is where
+you edit a Calibre collection, and this server reflects it.
 
-```
-liseur-sync admin -config liseur-sync.toml library-layout alice <library-id>
-liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> series/author-title
-liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> none
-liseur-sync admin -config liseur-sync.toml library-layout alice <library-id> default
-```
+### Missing books
 
-With no layout argument it prints what the library uses now and what it
-could use. The layouts are tried in the order you list them, which is how
-you resolve two that claim the same shape. `none` turns filename parsing
-off for that library, and `default` restores the conservative built-in
-list — `author/title`, `author/series/title` and `author-series-title`,
-which leaves out `series/author-title` precisely because it would
-otherwise reinterpret every `Author/Title.epub` library as a series
-library.
+A book whose file is not observed by a complete pass is marked
+`missing`. It stays in the catalog, and the reader's work mapping stays
+with it, because a disconnected disk is not a deleted book.
 
-Changing this affects files ingested afterwards. Books already in the
-catalog keep the metadata they were promoted with; a wrong layout is
-corrected by editing those books, not by re-reading their names.
-
-A library whose configuration cannot be parsed stops being promoted
-rather than being read with the wrong layout: the ingest pass counts it as
-`misconfigured` and moves on to the other libraries. Uploads are
-unaffected either way — an upload carries no path, so there is nothing for
-a layout to read.
-
-## A Calibre library, read where it is
-
-If your books are already in Calibre, point the server at the Calibre
-library directory — the one with `metadata.db` in it — and let Calibre
-stay the place you edit them:
-
-```
-liseur-sync admin -config liseur-sync.toml add-library alice "Calibre" \
-    -source calibre /srv/calibre
-```
-
-A Calibre source defaults to `in-place` storage, so nothing is copied and
-nothing is charged against a quota: 200 GB of books stay 200 GB. Pass
-`-storage cas` if you would rather have the server hold its own validated
-copy of everything, at the cost of a second 200 GB.
-
-`metadata.db` is opened read-only and is authoritative. The server does
-not walk the tree: the books that exist are the books Calibre says exist,
-at the paths Calibre records for them, and a book Calibre no longer has
-leaves the catalog on the next refresh. Its file is not deleted — it was
-never the server's — and reading positions and statistics belong to the
-reader rather than to the catalog row, so they survive.
-
-Nothing is ever written to `metadata.db`, or anywhere under the root.
-Edits made in Calibre travel one way, into this server. Custom columns
-are not read; `metadata.opf` fills in what a book's database row left
-empty.
-
-What Calibre says wins over what an EPUB says about itself, and loses to
-what you have edited here. Correct a title in Calibre and it lands on the
-next refresh; correct it on this server's book page and it is yours from
-then on, whatever Calibre later says about that field. A field Calibre
-stops stating — a series it no longer has, say — is cleared rather than
-left behind, unless it was set here.
-
-A refresh reads `metadata.db` and stats each book's file, hashes that
-into one digest, and stops there when it matches the previous refresh. It
-is not enough to stat `metadata.db` alone: Calibre runs SQLite in WAL
-mode, so a change can leave that file untouched.
-
-Covers still come from inside each EPUB; Calibre's `cover.jpg` is not
-used yet.
+Two safety rules stop a transient mount problem from hiding a whole
+shelf. A pass that did not fully succeed never marks anything missing;
+one unreadable file, one parse failure, or one bound hit is enough to
+make the pass incomplete. A pass that observed no books also marks
+nothing missing, even if the root was readable, because an unmounted
+mount point can look like an empty directory.
 
 ## Reading statistics for books nobody has opened yet
 
-A book is joined to a reader's sync work the first time a client resolves
-it. A sweep that ingests new books now does that join for the library's
-owner as soon as it finishes, so a folder you have just pointed the
-server at appears on the owner's shelf — covers, **Read** and all —
-without anyone asking for it.
-
-Two cases still need asking, and both are on the library's card in the
-admin panel under **Showing up on <owner>'s shelf**:
-
-- Books that match an existing work on title and author alone are counted
-  as `needs-confirmation` and left unmapped — only the reader can say
-  whether two similarly titled books are the same one, and a wrong guess
-  merges two reading histories. Confirm them, then press the button to
-  map the rest.
-- Accounts a library is *shared* with are not mapped automatically. The
-  join is per reader, so doing it for every account on every sweep would
-  cost readers × books to save a click that many of them never need.
-
-The same pass, for one account and all of its libraries:
+A book is joined to a reader's sync work the first time a client
+resolves it. The admin panel and CLI can run the same backfill for an
+account so books already visible in the catalog appear on that reader's
+shelf with a work mapping:
 
 ```
 liseur-sync admin -config liseur-sync.toml backfill-works alice
 ```
 
-It is safe to re-run and reports what it did: books already mapped are
-skipped.
+It is safe to re-run and reports what it did. A title-and-author-only
+match still needs confirmation from the reader, because a wrong answer
+would merge reading histories.
 
-## Removing a library
+## Configuration
 
-**Admin → Libraries → Remove this library**, or from a shell:
+The content block is intentionally small:
 
+```toml
+[content]
+cache_dir = "cache"
+folder_roots = ["/srv/books"]
+scan_max_files = 200000
+scan_max_depth = 32
+
+epub_max_entries = 10000
+epub_max_directory_bytes = 67108864
+epub_max_expanded_bytes = 2147483648
+epub_max_entry_bytes = 536870912
+epub_max_compression_ratio = 1000
+epub_max_metadata_bytes = 4194304
+epub_max_xml_depth = 128
 ```
-liseur-sync admin -config liseur-sync.toml delete-library alice <library-id>
-```
 
-Either way it asks for your own password, because it is the one control
-on that page that can lose somebody's books.
-
-What it costs depends on where the books actually live:
-
-- **A library read in place** — a folder or Calibre library the server
-  serves straight from disk — is removed at once. Only what the server
-  knew about those books goes; not one file under the library's root is
-  touched, and adding the library back finds all of them again. Removing
-  it is a way to make the server forget a folder, not a way to delete
-  books.
-- **A library holding the server's own copies** (uploads, or a watched
-  folder set to copy) loses its books to the trash first and keeps its
-  row. They are restorable for the ordinary trash retention, and the
-  quota stays charged while they are. Repeat the removal once they are
-  in the trash and the library goes, taking them with it — that second
-  press is the confirmation.
-
-Reading history survives either way. A reader's works, progress and
-statistics belong to the account, not to the library, so removing a
-library costs them the file, not what they read.
-
-Permanently removing books releases the quota they held and hands their
-bytes to the orphan sweep, which reclaims the disk after the grace
-period — the same path as an expired trash purge, because it is that
-path.
-
-## Sizing the content disk
-
-Uploads land in `content.root/.incoming` while they are received and
-verified, and only then move to permanent storage. `max_staging_bytes`
-(8 GiB by default) bounds what that directory holds at once; uploads that
-would exceed it are answered `503` with `Retry-After`. Neither
-`max_upload_bytes` nor a user's `quota_bytes` can do this job, since every
-upload can be inside both and still, together, fill the disk.
-
-Size it for the concurrency you expect — it must be at least
-`max_upload_bytes`, or no upload could ever fit — and leave the permanent
-library room to grow beside it. Setting it to `0` restores unbounded
-staging, which only makes sense where the disk is bounded another way.
+Environment overrides follow the same names: `LISEUR_CACHE_DIR` for the
+cover cache and `LISEUR_FOLDER_ROOTS` for the comma-separated allowed
+roots. `LISEUR_LISTEN_ADDR`, `LISEUR_DATABASE_DRIVER`,
+`LISEUR_DATABASE_URL`, `LISEUR_INSECURE_HTTP`,
+`LISEUR_OPEN_REGISTRATION`, `LISEUR_CORS_ORIGINS`,
+`LISEUR_TRUSTED_PROXIES`, and `LISEUR_READER_ORIGIN` keep their usual
+meanings.
 
 ## Backup
 
-The database and `content.root` are one backup unit. Until maintenance mode
-is implemented, stop the app process before backup so ingestion recovery or
-future uploads cannot change the CAS:
+Back up the database. It holds users, tokens, reading state, folder rows
+and catalog metadata. For SQLite, use the SQLite backup command rather
+than copying live `.db` and `.wal` files; for Postgres, use `pg_dump` or
+your ordinary database backup.
 
-1. back up the database first;
-   - **SQLite:** use `sqlite3 liseur-sync.db '.backup /backups/ls.db'`;
-     never copy live `.db`/`.wal` files;
-   - **Postgres:** use `pg_dump` as usual;
-2. copy the content directory while the app remains stopped, with a tool
-   that preserves permissions (`cp -a`, `tar -p`, `rsync -a`). A copy that
-   widens them is refused on restore: the CAS requires a private root
-   (`chmod 700`), and a world-readable content directory is a library
-   anybody with a shell can read.
+Back up the folders themselves with whatever already protects your book
+collection. They are not owned by this server, and restoring the server
+database without restoring the same mounted folders simply leaves books
+`missing` until the paths return.
 
-   `covers/` inside it may be skipped, and may be deleted at any time to
-   reclaim space: every file in it is a rendered copy of a cover that
-   lives inside a book, and the next request for one rebuilds it. Nothing
-   else in the content directory is regenerable;
-3. check the copy is restorable:
-
-   ```
-   liseur-sync admin -config backup-copy.toml verify-backup
-   ```
-
-   Point the config at the copy — its database and its content directory.
-   The command compares the two and reports any blob the database
-   references that the backup does not hold, holds at the wrong size, or
-   holds with damaged bytes, naming each digest. It exits non-zero when
-   the backup cannot be restored from, so a backup script can act on it.
-   It changes neither side, so it is also safe to run against the live
-   server.
-
-   The admin panel's Maintenance page runs the same check against the
-   *running* server's own database and content directory — the question
-   somebody asks after restoring onto a new machine. It runs in the
-   background because it re-hashes every referenced file, and the result
-   stays on the page until the next run replaces it. Checking a copy
-   without starting a server for it is still the subcommand's job.
+The cache directory may be skipped. Every file in it is a rendered cover
+that can be produced again from a book. If you do copy it, it does not
+need to be consistent with the database; stale entries are just cache
+misses by another name.
 
 ## Upgrades
 
-A new image reaches a running container only through
-`docker compose up -d`. `docker pull` alone is not enough and neither is
-`docker restart`: a container is bound to the image *id* it was created
-from, so pulling moves the `latest` tag while the old container keeps
-running, and restarting re-runs that same old container. `up -d` is the
-command that notices the id moved and replaces it. `compose.yaml` sets
-`pull_policy: always` so a single `up -d` both re-resolves the tag and
-recreates.
+A new image reaches a running container only through `docker compose up
+-d`. `docker pull` alone is not enough and neither is `docker restart`:
+a container is bound to the image id it was created from, so pulling
+moves the `latest` tag while the old container keeps running, and
+restarting re-runs that same old container. `up -d` is the command that
+notices the id moved and replaces it. `compose.yaml` sets `pull_policy:
+always` so a single `up -d` both re-resolves the tag and recreates.
 
 To check what is actually running, ask the server rather than the
 registry:
@@ -519,8 +352,8 @@ code that is answering. It is also the quickest way to tell a deploy
 that did nothing from one that did.
 
 Migrations run at startup under a cross-process lock. If a migration
-fails, the server refuses to start (non-zero exit, clear log) rather
-than run against a partially migrated schema. Back up before upgrades.
+fails, the server refuses to start rather than run against a partially
+migrated schema. Back up before upgrades.
 
 Compaction and session rollups delete old rows, and SQLite reuses those
 freed pages for future writes, so steady-state growth is bounded. The

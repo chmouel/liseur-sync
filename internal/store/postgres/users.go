@@ -343,6 +343,22 @@ func (s *Store) RevokeToken(ctx context.Context, userID, tokenID string) error {
 	return nil
 }
 
+func (s *Store) DeleteToken(ctx context.Context, userID, tokenID string) error {
+	res, err := s.db.ExecContext(ctx, q(
+		`DELETE FROM tokens WHERE user_id = ? AND id = ?`), userID, tokenID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, q(
 		`UPDATE tokens SET last_used = ? WHERE user_id = ? AND id = ?`), at.UTC(), userID, tokenID)

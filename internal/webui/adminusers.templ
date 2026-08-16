@@ -112,7 +112,6 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		}
 	</p>
 	@adminFlash(flash)
-	@adminUserLibrariesSection(prefix, v.Libraries, v.MoreLibraries)
 	<section class="card">
 		<h2>API tokens</h2>
 		if len(v.Tokens) == 0 {
@@ -142,6 +141,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				<p class="muted">{ moreNote(v.MoreTokens) }</p>
 			}
 		}
+		<p class="muted">{ browserNote(v.Browsers) }</p>
 	</section>
 	<section class="card">
 		<h2>kosync devices</h2>
@@ -215,7 +215,6 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			@scopeChoice(store.ScopeSync, true)
 			@scopeChoice(store.ScopeReadInsights, false)
 			@scopeChoice(store.ScopeLibraryRead, false)
-			@scopeChoice(store.ScopeLibraryManage, false)
 			if v.User.IsAdmin {
 				@scopeChoice(store.ScopeAdmin, false)
 			}
@@ -228,7 +227,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		<p class="muted">
 			A single-use code, shown once. In KOReader's kosync settings:
 			username = a device name, password = the code, custom server =
-			<code>https://&lt;host&gt;/adapter/kosync</code>. The code is a
+			<code>{ v.Base + "/adapter/kosync" }</code>. The code is a
 			pairing credential bound to one device slot, never the account
 			password.
 		</p>
@@ -242,7 +241,8 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		<h2>Add a statistics plugin device</h2>
 		<p class="muted">
 			A capability URL for KOReader's statistics plugin, shown once. The
-			plugin's server is <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.
+			plugin's server is
+			<code>{ v.Base + "/adapter/koplugin/<capability>" }</code>.
 		</p>
 		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
@@ -254,12 +254,11 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 	<section class="card">
 		<h2>Map books to works</h2>
 		<p class="muted">
-			Books this account can read are joined to its own copy of them
-			as soon as a library is read, so this is here for the ones that
-			could not be joined without a guess, and for accounts a library
-			was shared with rather than owned by. It is safe to run again:
-			books that already map are left alone, and ones that would need
-			a guess are counted rather than guessed at.
+			A catalogued book is joined to this account's own copy of it as
+			the folder is read, so this is here for the ones that could not
+			be joined without a guess. It is safe to run again: books that
+			already map are left alone, and ones that would need a guess are
+			counted rather than guessed at.
 		</p>
 		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/backfill" }>
 			<input type="hidden" name="csrf" value={ csrf }/>

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -18,12 +19,12 @@ import (
 // them each caller touched. Reading it back costs one query on a write
 // path that is already several.
 func reindexBookTx(ctx context.Context, tx *sql.Tx, bookID string) error {
-	var libraryID, title, subtitle, description, publisher string
+	var folderID, title, subtitle, description, publisher string
 	err := tx.QueryRowContext(ctx,
-		`SELECT library_id, title, COALESCE(subtitle, ''),
+		`SELECT folder_id, title, COALESCE(subtitle, ''),
 		        COALESCE(description, ''), COALESCE(publisher, '')
 		 FROM books WHERE id = ?`, bookID).
-		Scan(&libraryID, &title, &subtitle, &description, &publisher)
+		Scan(&folderID, &title, &subtitle, &description, &publisher)
 	if err != nil {
 		// A book that is gone has nothing to index, and its row goes with
 		// it. Deleting unconditionally means a delete needs no separate
@@ -41,18 +42,15 @@ func reindexBookTx(ctx context.Context, tx *sql.Tx, bookID string) error {
 	if err != nil {
 		return err
 	}
-	// Series are searchable alongside tags and genres rather than
+	// Series are searchable alongside tags rather than
 	// alongside people: somebody typing "discworld" is naming what the
 	// book is about as surely as somebody typing "fantasy".
 	subjects, err := indexedNamesTx(ctx, tx, bookID,
 		`SELECT t.name FROM book_tags m JOIN tags t ON t.id = m.tag_id
 		   WHERE m.book_id = ?
 		 UNION ALL
-		 SELECT g.name FROM book_genres m JOIN genres g ON g.id = m.genre_id
-		   WHERE m.book_id = ?
-		 UNION ALL
 		 SELECT s.name FROM book_series m JOIN series s ON s.id = m.series_id
-		   WHERE m.book_id = ?`, bookID, bookID)
+		   WHERE m.book_id = ?`, bookID)
 	if err != nil {
 		return err
 	}
@@ -62,10 +60,10 @@ func reindexBookTx(ctx context.Context, tx *sql.Tx, bookID string) error {
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO book_search (
-		     book_id, library_id, title, subtitle, description,
+		     book_id, folder_id, title, subtitle, description,
 		     publisher, people, subjects)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		bookID, libraryID, title, subtitle, description, publisher,
+		bookID, folderID, title, subtitle, description, publisher,
 		people, subjects)
 	return err
 }
@@ -93,39 +91,6 @@ func indexedNamesTx(
 	return strings.Join(names, "\n"), rows.Err()
 }
 
-// reindexEntityBooksTx reindexes every book claiming one entity, which is
-// what a rename or a merge changes: the book did not move, but what it is
-// findable by did.
-func reindexEntityBooksTx(
-	ctx context.Context, tx *sql.Tx, tables entityTables, entityID string,
-) error {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT book_id FROM `+tables.membership+` WHERE `+tables.column+` = ?`,
-		entityID)
-	if err != nil {
-		return err
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if err := reindexBookTx(ctx, tx, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // matchExpression turns words into an FTS5 query. Each term is written as
 // a quoted string with a prefix wildcard, so a person typing three
 // letters of an author's name finds the author, and every term must match
@@ -150,20 +115,17 @@ func matchExpression(terms []string) string {
 const bm25Weights = `bm25(book_search, 0.0, 0.0, 10.0, 5.0, 1.0, 2.0, 6.0, 4.0)`
 
 func (s *Store) SearchCatalogBooks(
-	ctx context.Context, userID string, query store.SearchQuery,
+	ctx context.Context, query store.SearchQuery,
 ) (store.SearchResult, error) {
 	if query.Limit < 1 || query.Limit > store.MaxSearchLimit {
-		return store.SearchResult{}, store.ErrInvalidTransition
-	}
-	if _, err := s.LibraryByID(
-		ctx, userID, query.LibraryID, store.LibraryRoleRead); err != nil {
-		return store.SearchResult{}, err
+		return store.SearchResult{}, fmt.Errorf(
+			"%w: search limit %d", store.ErrInvalidInput, query.Limit)
 	}
 	terms := store.SearchTerms(query.Text)
 	scored := len(terms) > 0
 	if !scored && len(query.Entities) == 0 {
 		// No words and no filter is not an error and not the whole
-		// library: it is a search box nobody has typed in yet.
+		// folder: it is a search box nobody has typed in yet.
 		return store.SearchResult{}, nil
 	}
 
@@ -185,10 +147,8 @@ func (s *Store) SearchCatalogBooks(
 		args = append(args, matchExpression(terms))
 	}
 	sqlText.WriteString(`
-	 JOIN libraries l ON l.id = b.library_id
-	 LEFT JOIN library_access a ON a.library_id = l.id AND a.user_id = ?
-	 WHERE b.status <> 'trashed' AND b.library_id = ?`)
-	args = append(args, userID, query.LibraryID)
+	 WHERE b.folder_id = ?`)
+	args = append(args, query.FolderID)
 	// A filter narrows by entity id whatever kind it is, because a caller
 	// holding an id from a facet should not have to tell the server what
 	// kind of thing it named.
@@ -197,20 +157,14 @@ func (s *Store) SearchCatalogBooks(
 		   AND EXISTS (
 		       SELECT 1 FROM book_tags m WHERE m.book_id = b.id AND m.tag_id = ?
 		       UNION ALL
-		       SELECT 1 FROM book_genres m WHERE m.book_id = b.id AND m.genre_id = ?
-		       UNION ALL
 		       SELECT 1 FROM book_series m WHERE m.book_id = b.id AND m.series_id = ?
 		       UNION ALL
 		       SELECT 1 FROM book_contributors m
 		         WHERE m.book_id = b.id AND m.contributor_id = ?)`)
-		args = append(args, id, id, id, id)
+		args = append(args, id, id, id)
 	}
-	// The ACL is repeated inside the query, as in every other catalog
-	// read here, so it stays safe if a future caller forgets the gate.
 	sqlText.WriteString(`
-	   AND (l.owner_user_id = ? OR a.role IN ('read', 'manage'))
 	 ORDER BY `)
-	args = append(args, userID)
 	if scored {
 		sqlText.WriteString(bm25Weights + `, `)
 	}
@@ -286,8 +240,7 @@ func (s *Store) searchFacets(
 	}
 	var out []store.SearchFacet
 	for _, kind := range []store.EntityKind{
-		store.EntitySeries, store.EntityContributor,
-		store.EntityTag, store.EntityGenre,
+		store.EntitySeries, store.EntityContributor, store.EntityTag,
 	} {
 		tables, err := tablesFor(kind)
 		if err != nil {

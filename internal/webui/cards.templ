@@ -9,7 +9,10 @@ package webui
 // bookCard is one book in a grid. The cover carries the link, the
 // actions appear on hover or on focus, and every number that varies is
 // a class rather than a style attribute.
-templ bookCard(prefix string, csrf string, library string, canWrite bool, b BookRow) {
+//
+// There is no action here that changes anything: a folder's books are
+// somebody else's files, and this server only reads them (ADR-0017).
+templ bookCard(prefix string, b BookRow) {
 	<article class="bookcard">
 		<div class="art">
 			<a href={ prefix + "books/" + b.ID } title={ orPlaceholder(b.Title) }>
@@ -28,13 +31,6 @@ templ bookCard(prefix string, csrf string, library string, canWrite bool, b Book
 				}
 				if b.CanGet {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Get</a>
-				}
-				if canWrite {
-					<form method="post" action={ prefix + "books/" + b.ID + "/delete" }>
-						<input type="hidden" name="csrf" value={ csrf }/>
-						<input type="hidden" name="library" value={ library }/>
-						<button class="btn" type="submit">Delete</button>
-					</form>
 				}
 			</div>
 		</div>
@@ -126,32 +122,13 @@ templ viewToggle(prefix string, csrf string, back string, current string) {
 }
 
 // entityCard is an author, a series or a tag: no cover of its own, so
-// the tile says the name and how much of it there is. Rename stays on
-// the card rather than moving to a separate page, because renaming is
-// what a librarian came here to do.
-templ entityCard(prefix, csrf string, v EntitiesView, e EntityRow) {
+// the tile says the name and how much of it there is.
+templ entityCard(prefix string, v EntitiesView, e EntityRow) {
 	<article class="bookcard entitycard">
-		<a class="art" href={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID }>
+		<a class="art" href={ prefix + "folders/" + v.FolderID + "/" + v.Kind + "/" + e.ID }>
 			<span class="name">{ e.Name }</span>
 			<span class="count">{ plural(e.BookCount, "book") }</span>
 		</a>
-		if v.CanWrite {
-			<form
-				class="rename"
-				method="post"
-				action={ prefix + "libraries/" + v.LibraryID + "/" + v.Kind + "/" + e.ID + "/rename" }
-			>
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<input
-					type="text"
-					name="name"
-					value={ e.Name }
-					aria-label={ "Rename this " + v.Singular }
-					required
-				/>
-				<button type="submit">Rename</button>
-			</form>
-		}
 	</article>
 }
 
