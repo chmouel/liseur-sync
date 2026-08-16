@@ -482,7 +482,8 @@ fallback. Files at the root are not in a series.
 
 What the directory tree says is not the last word: a reader can restate
 a book's series over it, for themselves or — as an admin — for everyone
-(ADR-0018). The claim never reaches the disk; §9.2 rule 3 stands.
+(ADR-0018), and rename the series itself (ADR-0020). Neither reaches
+the disk; §9.2 rule 3 stands.
 
 ### 9.4 Calibre folders
 
@@ -550,6 +551,8 @@ book_series_overrides       folder_id, book_id, scope_user, updated_at,
                             updated_by
 book_series_override_items  folder_id, book_id, scope_user, series_id,
                             position?
+series_name_overrides       series_id, scope_user, name, normalized_name,
+                            updated_at, updated_by
 user_book_works    user_id, folder_id, book_id, work_id
 ```
 
@@ -579,6 +582,17 @@ so every series-bearing read takes the reader's id, and every series a
 payload names carries the layer it came from. A claim speaks for the
 whole book: its empty form is the statement "this book is in no series",
 which is why the claim is a row of its own rather than a set of items.
+A series also carries a name layer, in the same two scopes
+(ADR-0020). `series_name_overrides` says what a reader calls a shelf;
+`series.name` and `series.normalized_name` keep meaning what the last
+scan observed, and the normalized one stays the only thing a pass
+resolves an observed name against. That separation is the whole design:
+a rename that moved the fold key would be undone by the next pass, and
+a folder still calling the series by its old name would start a shelf
+of its own. Renaming onto a name already visible in the caller's scope
+is refused, because giving two shelves one name is a merge, and merging
+is not decided.
+
 Nothing here writes under a watched folder or into Calibre's
 `metadata.db`; write-back is a later milestone with its own ADR.
 

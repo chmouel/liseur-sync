@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"math"
 	"net/http"
 	"net/url"
@@ -44,8 +45,30 @@ type SeriesShelfView struct {
 	Gaps []string
 	// Source names the layer the shelf's memberships came from, and is
 	// empty when they are not all from the same one.
-	Source  string
-	NextURL string
+	Source string
+	// ScannedName is what the last pass called this series, and
+	// NameSource is the layer the displayed name came from — together
+	// they are what lets the shelf offer a revert and say what it would
+	// revert to (ADR-0020).
+	ScannedName string
+	NameSource  string
+	// CanShare is an admin: only they rename for everybody.
+	CanShare bool
+	NextURL  string
+}
+
+// CanRevert reports whether this reader can undo the rename in force. A
+// reader can always undo their own; the shared one only an admin can,
+// which is why a plain reader looking at a curated shelf is offered no
+// button that would do nothing.
+func (v SeriesShelfView) CanRevert() bool {
+	switch v.NameSource {
+	case "personal":
+		return true
+	case "shared":
+		return v.CanShare
+	}
+	return false
 }
 
 // SeriesVolume is one book on the shelf, with this reader's own progress
@@ -120,10 +143,13 @@ func (s *Server) handleSeriesShelf(
 	progress := s.readerProgress(r, u, bookIDs)
 
 	v := SeriesShelfView{
-		SeriesID: entity.ID,
-		Name:     entity.Name,
-		Notice:   r.URL.Query().Get("notice"),
-		Problem:  r.URL.Query().Get("problem"),
+		SeriesID:    entity.ID,
+		Name:        entity.Name,
+		ScannedName: entity.ScannedName,
+		NameSource:  string(entity.NameSource),
+		CanShare:    u != nil && u.IsAdmin,
+		Notice:      r.URL.Query().Get("notice"),
+		Problem:     r.URL.Query().Get("problem"),
 	}
 	sources := map[string]bool{}
 	for _, b := range books {
@@ -264,6 +290,67 @@ func formatSeriesPosition(p *float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(*p, 'f', -1, 64)
+}
+
+// -------------------------------------------------------------------
+// Renaming
+// -------------------------------------------------------------------
+
+// handleSeriesRename takes the rename form on the shelf (ADR-0020). It
+// redirects rather than swapping a fragment, because the name is in the
+// page title, the heading and the breadcrumb: reloading the shelf is
+// the honest way to show it changed.
+func (s *Server) handleSeriesRename(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	entityID := r.PathValue("entity")
+	back := "../" + url.PathEscape(entityID)
+	scope := store.SeriesSourcePersonal
+	if r.FormValue("scope") == string(store.SeriesSourceShared) {
+		if u == nil || !u.IsAdmin {
+			redirectRel(w, back+"?problem="+url.QueryEscape(
+				"Only an administrator changes what everybody sees."),
+				http.StatusSeeOther)
+			return
+		}
+		scope = store.SeriesSourceShared
+	}
+
+	var err error
+	notice := "Renamed."
+	if r.FormValue("reset") != "" {
+		notice = "Back to the name in the library."
+		err = s.St.ClearSeriesName(r.Context(), readerID(u), entityID, scope)
+	} else {
+		err = s.St.SetSeriesName(r.Context(), readerID(u), entityID, scope,
+			r.FormValue("name"), time.Now().UTC())
+	}
+	if err != nil {
+		redirectRel(w, back+"?problem="+url.QueryEscape(renameProblem(err)),
+			http.StatusSeeOther)
+		return
+	}
+	redirectRel(w, back+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
+}
+
+// renameProblem says what went wrong in the reader's terms. A conflict
+// is the one worth spelling out: it is not a failure so much as a
+// request the server cannot honour, because merging two shelves is not
+// something it can do.
+func renameProblem(err error) string {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		return "Another series already has that name. " +
+			"Two shelves cannot be merged by giving them one name."
+	case errors.Is(err, store.ErrInvalidInput):
+		return "A series needs a name."
+	default:
+		return "That could not be saved."
+	}
 }
 
 // -------------------------------------------------------------------

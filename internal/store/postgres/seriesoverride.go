@@ -13,12 +13,43 @@ import (
 // Series claims (ADR-0018). See the SQLite copy for why the resolution
 // is a read-time layer over `book_series` rather than a rewrite of it.
 
+// seriesNamesCTE resolves each series' display name for one reader
+// (ADR-0020). See the SQLite copy for why the scanned normalized_name
+// is never resolved away.
+const seriesNamesCTE = `series_names AS (
+    SELECT s.id AS series_id,
+           COALESCE(p.name, sh.name, s.name) AS name,
+           COALESCE(p.normalized_name, sh.normalized_name, s.normalized_name)
+               AS normalized_name,
+           s.name AS scanned_name,
+           (CASE WHEN p.series_id IS NOT NULL THEN 'personal'
+                 WHEN sh.series_id IS NOT NULL THEN 'shared'
+                 ELSE 'folder' END)::text AS name_source
+      FROM series s
+      LEFT JOIN series_name_overrides p
+             ON p.series_id = s.id AND p.scope_user = ?
+      LEFT JOIN series_name_overrides sh
+             ON sh.series_id = s.id AND sh.scope_user = '')`
+
+// seriesNamesOnlyCTE is for reads that display a series without
+// resolving membership.
+const seriesNamesOnlyCTE = "\nWITH " + seriesNamesCTE + "\n"
+
+// seriesNamesArgs is the name CTE's single bind parameter.
+func seriesNamesArgs(userID string) []any {
+	if userID == "" {
+		userID = store.NoReaderScope
+	}
+	return []any{userID}
+}
+
 // effectiveSeriesCTE is the WITH prefix every series read is built on.
 // The literals are cast explicitly because a bare string literal in a
 // UNION arm is of unknown type to Postgres, and the column has to agree
 // with the CASE it is unioned against.
 const effectiveSeriesCTE = `
-WITH eff_series AS (
+WITH ` + seriesNamesCTE + `,
+eff_series AS (
     SELECT bs.folder_id, bs.book_id, bs.series_id, bs.position,
            'folder'::text AS source
       FROM book_series bs
@@ -37,12 +68,13 @@ WITH eff_series AS (
                 THEN ? ELSE '' END))
 `
 
-// effectiveSeriesArgs are the CTE's bind parameters, in order.
+// effectiveSeriesArgs are the CTE's bind parameters, in order: the name
+// layer's reader first, then the claim layer's.
 func effectiveSeriesArgs(userID string) []any {
 	if userID == "" {
 		userID = store.NoReaderScope
 	}
-	return []any{userID, userID, userID}
+	return []any{userID, userID, userID, userID}
 }
 
 func seriesReadArgs(userID string, rest ...any) []any {
@@ -244,11 +276,13 @@ func (s *Store) BookSeriesLayers(
 	}
 
 	if out.Folder, err = seriesRows(ctx, s.db, q(
-		`SELECT s.id, s.name, s.normalized_name, bs.position
-		   FROM book_series bs JOIN series s ON s.id = bs.series_id
+		seriesNamesOnlyCTE+`
+		SELECT n.series_id, n.name, n.normalized_name, bs.position
+		   FROM book_series bs JOIN series_names n ON n.series_id = bs.series_id
 		  WHERE bs.book_id = ?
-		  ORDER BY s.normalized_name, s.id`),
-		store.SeriesSourceFolder, bookID); err != nil {
+		  ORDER BY n.normalized_name, n.series_id`),
+		store.SeriesSourceFolder,
+		append(seriesNamesArgs(userID), bookID)...); err != nil {
 		return out, err
 	}
 
@@ -307,15 +341,16 @@ func claimedLayers(
 		return out, err
 	}
 
-	claimQuery := q(`
-		SELECT s.id, s.name, s.normalized_name, i.position
+	claimQuery := q(seriesNamesOnlyCTE + `
+		SELECT n.series_id, n.name, n.normalized_name, i.position
 		  FROM book_series_override_items i
-		  JOIN series s ON s.id = i.series_id
+		  JOIN series_names n ON n.series_id = i.series_id
 		 WHERE i.book_id = ? AND i.scope_user = ?
-		 ORDER BY s.normalized_name, s.id`)
+		 ORDER BY n.normalized_name, n.series_id`)
 	if out.hasShared {
 		out.shared, err = seriesRows(ctx, db, claimQuery,
-			store.SeriesSourceShared, bookID, store.SharedSeriesScope)
+			store.SeriesSourceShared,
+			append(seriesNamesArgs(userID), bookID, store.SharedSeriesScope)...)
 		if err != nil {
 			return out, err
 		}
@@ -325,7 +360,8 @@ func claimedLayers(
 	}
 	if out.hasPersonal {
 		out.personal, err = seriesRows(ctx, db, claimQuery,
-			store.SeriesSourcePersonal, bookID, userID)
+			store.SeriesSourcePersonal,
+			append(seriesNamesArgs(userID), bookID, userID)...)
 		if err != nil {
 			return out, err
 		}
@@ -341,10 +377,10 @@ func effectiveSeriesForBookTx(
 ) ([]store.BookSeries, error) {
 	rows, err := tx.QueryContext(ctx, q(
 		effectiveSeriesCTE+`
-		SELECT s.id, s.name, s.normalized_name, e.position
-		  FROM eff_series e JOIN series s ON s.id = e.series_id
+		SELECT n.series_id, n.name, n.normalized_name, e.position
+		  FROM eff_series e JOIN series_names n ON n.series_id = e.series_id
 		 WHERE e.book_id = ?
-		 ORDER BY s.normalized_name, s.id`),
+		 ORDER BY n.normalized_name, n.series_id`),
 		seriesReadArgs(userID, bookID)...)
 	if err != nil {
 		return nil, err

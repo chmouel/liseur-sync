@@ -27,6 +27,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 	if v.Notice != "" {
 		<p class="notice" role="status">{ v.Notice }</p>
 	}
+	@seriesRenameForm(prefix, csrf, v)
 	if v.NextUp != nil {
 		<section class="hero">
 			<div class="art">
@@ -100,6 +101,54 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 		{ " · " }
 		<a href={ prefix + "library" }>Back to the library</a>
 	</p>
+}
+
+templ seriesRenameForm(prefix, csrf string, v SeriesShelfView) {
+	<details class="card">
+		<summary>Rename this shelf</summary>
+		<p class="muted">
+			if v.NameSource == "personal" {
+				{ "You renamed this shelf. The library calls it " + v.ScannedName + "." }
+			} else if v.NameSource == "shared" {
+				{ "An administrator renamed this shelf. The library calls it " + v.ScannedName + "." }
+			} else {
+				This is the name the folder gave the series.
+			}
+		</p>
+		<form
+			method="post"
+			action={ prefix + "entities/series/" + v.SeriesID + "/name" }
+		>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>
+				Name
+				<input type="text" name="name" value={ v.Name } maxlength="512" required/>
+			</label>
+			if v.CanShare {
+				<label class="check">
+					<input
+						type="checkbox"
+						name="scope"
+						value="shared"
+						checked?={ v.NameSource == "shared" }
+					/>
+					Everybody sees this
+				</label>
+			}
+			<div class="cta">
+				<button class="btn primary" type="submit">Rename</button>
+				if v.CanRevert() {
+					<button class="btn" type="submit" name="reset" value="1">
+						{ "Back to " + v.ScannedName }
+					</button>
+				}
+			</div>
+		</form>
+		<p class="muted">
+			Only the name changes. The books stay where they are, and a scan
+			that still sees the old name finds this same shelf.
+		</p>
+	</details>
 }
 
 templ seriesVolumeRow(prefix string, vol SeriesVolume) {

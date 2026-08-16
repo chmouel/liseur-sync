@@ -1052,6 +1052,69 @@ paths:
         "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
         "404": { $ref: "#/components/responses/Error", description: "No such series, book, or reorderable kind" }
 
+  /v1/entities/{kind}/{entity}/name:
+    put:
+      tags: [library]
+      summary: Rename a series
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Renames one series in one layer (ADR-0020). Only `kind=series`
+        is accepted; other entity kinds are `404`, because a name a scan
+        gave a tag or a contributor has no layer over it.
+
+        The rename is a display layer. The name the scan observed is
+        left alone and stays what a folder pass matches against, so a
+        series renamed here still absorbs a folder that goes on calling
+        it by its old name — which is the point, and is why a rename
+        survives a rescan.
+
+        The default scope is `personal`; `shared` also requires `admin`.
+
+        A name that already belongs to another series in the caller's
+        view is a `409`. That is a request to merge two shelves, which
+        this API does not do.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SeriesRename" }
+      responses:
+        "200":
+          description: The series as it now reads
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogEntity" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body, empty name, or a name over 512 bytes" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, or a kind that cannot be renamed" }
+        "409": { $ref: "#/components/responses/Error", description: "That name already belongs to another series" }
+    delete:
+      tags: [library]
+      summary: Undo a rename
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Drops one layer's rename so the series falls back to the layer
+        beneath it, and ultimately to the name the scan gave it.
+        Clearing a name that was never set is not an error.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: scope
+          in: query
+          schema: { type: string, enum: [personal, shared], default: personal }
+      responses:
+        "200":
+          description: The series as it now reads
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogEntity" }
+        "400": { $ref: "#/components/responses/Error", description: "Unknown scope" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, or a kind that cannot be renamed" }
+
   /v1/books/{id}/resolve:
     post:
       tags: [library, sync]
@@ -1667,6 +1730,17 @@ components:
                 type: number
                 description: Omitted when the book is unplaced; NaN and infinities are rejected.
 
+    SeriesRename:
+      type: object
+      description: |
+        A new display name for one series, in one layer. The name is
+        trimmed; a name that is empty once trimmed is rejected, because
+        a shelf nobody can name is a shelf nobody can find.
+      required: [name]
+      properties:
+        scope: { $ref: "#/components/schemas/SeriesClaimScope" }
+        name: { type: string, minLength: 1, maxLength: 512 }
+
     CatalogEntity:
       type: object
       description: |
@@ -1678,7 +1752,22 @@ components:
       required: [id, name, book_count]
       properties:
         id: { type: string, format: uuid }
-        name: { type: string, description: The display spelling. }
+        name:
+          type: string
+          description: |
+            The display spelling as this reader sees it. For a series
+            that can be a rename (ADR-0020).
+        scanned_name:
+          type: string
+          description: |
+            What the last scan called it. Equal to `name` unless a
+            series has been renamed; it is what a revert would restore.
+        name_source:
+          type: string
+          enum: [folder, shared, personal]
+          description: |
+            Which layer `name` came from. Always `folder` for a
+            contributor or a tag, which have no rename layer.
         book_count:
           type: integer
           description: Books claiming it whose file is present.

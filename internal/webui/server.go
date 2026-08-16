@@ -270,6 +270,11 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
 	mux.Handle("POST /ui/books/{id}/series/reset",
 		sec(s.requireAuth(s.handleSeriesReset)))
+	// Renaming a series (ADR-0020). The reset arrives on the same route
+	// as a submit button, because the form is one decision: what this
+	// shelf is called.
+	mux.Handle("POST /ui/entities/series/{entity}/name",
+		sec(s.requireAuth(s.handleSeriesRename)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))

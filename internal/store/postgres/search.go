@@ -251,6 +251,7 @@ func (s *Store) searchFacets(
 			return nil, err
 		}
 		prefix, membership, args := tables.membershipFor(kind, userID)
+		nameJoin, name, normalized, _, _ := tables.nameColumns(kind)
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(bookIDs)), ",")
 		for _, id := range bookIDs {
 			args = append(args, id)
@@ -258,12 +259,13 @@ func (s *Store) searchFacets(
 		args = append(args, store.MaxSearchFacets)
 		rows, err := s.db.QueryContext(ctx, q(
 			prefix+
-				`SELECT e.id, e.name, COUNT(*) AS n
+				`SELECT e.id, `+name+`, COUNT(*) AS n
 				 FROM `+membership+` m
-				 JOIN `+tables.entity+` e ON e.id = m.`+tables.column+`
+				 JOIN `+tables.entity+` e ON e.id = m.`+tables.column+
+				nameJoin+`
 				 WHERE m.book_id IN (`+placeholders+`)
-				 GROUP BY e.id, e.name, e.normalized_name
-				 ORDER BY n DESC, e.normalized_name
+				 GROUP BY e.id, `+name+`, `+normalized+`
+				 ORDER BY n DESC, `+normalized+`
 				 LIMIT ?`), args...)
 		if err != nil {
 			return nil, err

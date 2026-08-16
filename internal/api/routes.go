@@ -393,6 +393,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("DELETE /v1/books/{id}/series", manageH(s.HandleClearBookSeries))
 	mux.Handle("PUT /v1/entities/{kind}/{entity}/order",
 		manageH(s.HandleReorderSeries))
+	// Renaming a series (ADR-0020). Same two layers as a claim, and the
+	// same rule: the name a scan observed is never touched.
+	mux.Handle("PUT /v1/entities/{kind}/{entity}/name",
+		manageH(s.HandleSetSeriesName))
+	mux.Handle("DELETE /v1/entities/{kind}/{entity}/name",
+		manageH(s.HandleClearSeriesName))
 
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog

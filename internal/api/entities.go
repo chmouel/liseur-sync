@@ -59,10 +59,7 @@ func (s *Server) HandleEntities(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(entities))
 	for _, entity := range entities {
-		out = append(out, map[string]any{
-			"id": entity.ID, "name": entity.Name,
-			"book_count": entity.BookCount,
-		})
+		out = append(out, entityJSON(entity))
 	}
 	body := map[string]any{"entities": out}
 	if len(entities) == limit {
@@ -110,11 +107,8 @@ func (s *Server) HandleEntityBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := map[string]any{
-		"entity": map[string]any{
-			"id": entity.ID, "name": entity.Name,
-			"book_count": entity.BookCount,
-		},
-		"books": out,
+		"entity": entityJSON(entity),
+		"books":  out,
 	}
 	if next != nil {
 		body["next_cursor"] = encodeCatalogCursor(*next)

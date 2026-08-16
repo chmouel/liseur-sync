@@ -405,6 +405,28 @@ CREATE TABLE book_series_override_items (
 CREATE INDEX book_series_override_items_series
     ON book_series_override_items(series_id, scope_user);
 
+-- A renamed series (ADR-0020). The name a reader gives a series is a
+-- display layer over series.name; series.normalized_name stays what a
+-- scan said and stays the only thing a pass resolves an observed name
+-- against, so a rename cannot undo itself on the next pass by moving
+-- the key out from under it.
+--
+-- normalized_name is stored rather than derived because it is what the
+-- listing orders and pages by, and what a collision is checked against.
+-- scope_user follows the claim layer: '' is the shared name an admin
+-- writes, a user id is one reader's own.
+CREATE TABLE series_name_overrides (
+    series_id       TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    scope_user      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    updated_by      TEXT NOT NULL,
+    PRIMARY KEY (series_id, scope_user)
+);
+CREATE INDEX series_name_overrides_scope
+    ON series_name_overrides(scope_user, normalized_name);
+
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,

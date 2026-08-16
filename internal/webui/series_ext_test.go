@@ -321,3 +321,129 @@ func TestSeriesPagesNeedASession(t *testing.T) {
 		}
 	}
 }
+
+// The rename form (ADR-0020). The store suite owns the layering; these
+// are about the page: that a reader can rename a shelf and put it back,
+// that renaming for everybody takes an admin, that a collision is
+// explained rather than swallowed, and that the write is CSRF-checked.
+
+func TestSeriesRenameAndRevert(t *testing.T) {
+	f := newBooksFixture(t)
+	seriesBook(t, f, "one", "Foundation", 1)
+	id := seriesIDFor(t, f, "Foundation")
+	shelf := "/ui/entities/series/" + id
+
+	_, page := f.get(t, shelf, f.cookie)
+	csrf := csrfFrom(t, page)
+	// A shelf nobody has renamed offers no way to put it back.
+	if strings.Contains(page, `name="reset"`) {
+		t.Error("an unrenamed shelf offered a revert")
+	}
+
+	resp, _ := f.postFragment(t, shelf+"/name", f.cookie,
+		url.Values{"csrf": {csrf}, "name": {"The Foundation Saga"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("rename: %d, want 303", resp.StatusCode)
+	}
+	_, page = f.get(t, shelf, f.cookie)
+	if !strings.Contains(page, "The Foundation Saga") {
+		t.Fatalf("the shelf kept the scanned name:\n%s", page)
+	}
+	// The scanned name is still on the page, because that is what the
+	// revert button promises to restore.
+	if !strings.Contains(page, "Back to Foundation") {
+		t.Fatalf("no revert to the scanned name:\n%s", page)
+	}
+	// Nobody else sees it: a rename with no scope is personal.
+	bob := f.login(t, "bob")
+	_, other := f.get(t, shelf, bob)
+	if strings.Contains(other, "The Foundation Saga") {
+		t.Errorf("a personal rename leaked to another reader:\n%s", other)
+	}
+
+	resp, _ = f.postFragment(t, shelf+"/name", f.cookie,
+		url.Values{"csrf": {csrf}, "reset": {"1"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("revert: %d, want 303", resp.StatusCode)
+	}
+	_, page = f.get(t, shelf, f.cookie)
+	if strings.Contains(page, "The Foundation Saga") {
+		t.Errorf("the rename survived its own revert:\n%s", page)
+	}
+}
+
+func TestSeriesRenameRefusesAnOccupiedName(t *testing.T) {
+	f := newBooksFixture(t)
+	seriesBook(t, f, "one", "Foundation", 1)
+	seriesBook(t, f, "two", "Discworld", 1)
+	shelf := "/ui/entities/series/" + seriesIDFor(t, f, "Foundation")
+
+	_, page := f.get(t, shelf, f.cookie)
+	resp, _ := f.postFragment(t, shelf+"/name", f.cookie,
+		url.Values{"csrf": {csrfFrom(t, page)}, "name": {"Discworld"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("a colliding rename: %d, want 303", resp.StatusCode)
+	}
+	// The complaint travels on the redirect, so the reader lands back on
+	// the shelf being told why nothing changed.
+	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "problem=") {
+		t.Fatalf("a collision was swallowed: %q", loc)
+	}
+	_, page = f.get(t, shelf+"?problem=x", f.cookie)
+	if strings.Contains(page, "Discworld") {
+		t.Errorf("the colliding rename was applied anyway:\n%s", page)
+	}
+}
+
+func TestSeriesRenameForEverybodyNeedsAdmin(t *testing.T) {
+	f := newBooksFixture(t)
+	seriesBook(t, f, "one", "Foundation", 1)
+	shelf := "/ui/entities/series/" + seriesIDFor(t, f, "Foundation")
+
+	_, page := f.get(t, shelf, f.cookie)
+	if strings.Contains(page, `name="scope" value="shared"`) {
+		t.Error("a non-admin was offered the shared name")
+	}
+	resp, _ := f.postFragment(t, shelf+"/name", f.cookie,
+		url.Values{
+			"csrf": {csrfFrom(t, page)}, "scope": {"shared"},
+			"name": {"Everyone's Name"},
+		})
+	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "Only+an+administrator") {
+		t.Fatalf("a non-admin renamed for everybody: %q", loc)
+	}
+
+	if err := f.st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	admin := f.login(t, "alice")
+	_, page = f.get(t, shelf, admin)
+	if !strings.Contains(page, `name="scope" value="shared"`) {
+		t.Fatalf("an admin was not offered the shared name:\n%s", page)
+	}
+	resp, _ = f.postFragment(t, shelf+"/name", admin,
+		url.Values{
+			"csrf": {csrfFrom(t, page)}, "scope": {"shared"},
+			"name": {"Everyone's Name"},
+		})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("an admin renaming for everybody: %d", resp.StatusCode)
+	}
+	bob := f.login(t, "bob")
+	_, other := f.get(t, shelf, bob)
+	if !strings.Contains(other, "Everyone&#39;s Name") &&
+		!strings.Contains(other, "Everyone's Name") {
+		t.Errorf("the shared rename did not reach another reader:\n%s", other)
+	}
+}
+
+func TestSeriesRenameNeedsCSRF(t *testing.T) {
+	f := newBooksFixture(t)
+	seriesBook(t, f, "one", "Foundation", 1)
+	shelf := "/ui/entities/series/" + seriesIDFor(t, f, "Foundation")
+	resp, _ := f.postFragment(t, shelf+"/name", f.cookie,
+		url.Values{"csrf": {"wrong"}, "name": {"Nope"}})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("renaming without a CSRF token: %d, want 403", resp.StatusCode)
+	}
+}

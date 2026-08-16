@@ -73,6 +73,21 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("EntityGCKeepsWhatAScanStillNames", func(t *testing.T) {
 		testEntityGCKeepsWhatAScanStillNames(t, open)
 	})
+	t.Run("SeriesRenameLayers", func(t *testing.T) {
+		testSeriesRenameLayers(t, open)
+	})
+	t.Run("SeriesRenameSurvivesAScan", func(t *testing.T) {
+		testSeriesRenameSurvivesAScan(t, open)
+	})
+	t.Run("SeriesRenameRefusals", func(t *testing.T) {
+		testSeriesRenameRefusals(t, open)
+	})
+	t.Run("SeriesRenamePagesOnTheNameShown", func(t *testing.T) {
+		testSeriesRenamePagesOnTheNameShown(t, open)
+	})
+	t.Run("SeriesRenameDiesWithItsSeries", func(t *testing.T) {
+		testSeriesRenameDiesWithItsSeries(t, open)
+	})
 	t.Run("SeriesClaimLayers", func(t *testing.T) {
 		testSeriesClaimLayers(t, open)
 	})

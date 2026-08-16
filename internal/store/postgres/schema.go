@@ -372,6 +372,20 @@ CREATE TABLE book_series_override_items (
 CREATE INDEX book_series_override_items_series
     ON book_series_override_items(series_id, scope_user);
 
+-- A renamed series (ADR-0020); see the SQLite copy for why the scanned
+-- name stays the fold key and why normalized_name is stored.
+CREATE TABLE series_name_overrides (
+    series_id       TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    scope_user      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL,
+    updated_by      TEXT NOT NULL,
+    PRIMARY KEY (series_id, scope_user)
+);
+CREATE INDEX series_name_overrides_scope
+    ON series_name_overrides(scope_user, normalized_name);
+
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,

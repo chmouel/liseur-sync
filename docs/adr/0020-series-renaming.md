@@ -1,6 +1,6 @@
 # ADR-0020: Renaming a series
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-16
 - **Depends on:** [ADR-0018](0018-series-overrides.md),
   [ADR-0019](0019-library-wide-entities.md)
@@ -35,14 +35,19 @@ name lives in a new table keyed by the entity:
 
 ```sql
 CREATE TABLE series_name_overrides (
-    series_id  TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
-    scope_user TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    updated_by TEXT NOT NULL,
+    series_id       TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    scope_user      TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    updated_by      TEXT NOT NULL,
     PRIMARY KEY (series_id, scope_user)
 );
 ```
+
+The override carries its own `normalized_name` because that is what the
+listing orders and pages by, and what a collision is checked against.
+The scanned one it shadows is left exactly as the pass wrote it.
 
 Everything that displays a series name resolves it: personal override,
 then shared override, then the scanned name. That is the same ladder,
@@ -128,18 +133,17 @@ the right place:
 
 ## Implementation phases
 
-1. **Storage and resolution.** The table, the effective-name resolution
-   in both backends, and the listing cursor moved onto the effective
-   name. No write path yet; no behaviour change while no override
-   exists.
-2. **Writing.** Store set/clear methods, the collision refusal,
-   `PUT`/`DELETE /v1/entities/series/{entity}/name` under
-   `library-manage`, and enough on the read payload — the scanned name,
-   and which layer the effective one came from — for a client to offer
-   a revert.
-3. **Web UI.** Rename inline on the series shelf header, with the shared
-   layer offered to an admin and a revert shown when a name is
-   overridden.
+1. **Storage and resolution.** Implemented. A `series_names` CTE
+   resolves the name beside the claim layer's `eff_series`, so a read
+   that shows a series never asks twice; the entity listing orders and
+   pages on the resolved name.
+2. **Writing.** Implemented. `SetSeriesName`/`ClearSeriesName`, the
+   collision refusal, and `PUT`/`DELETE
+   /v1/entities/series/{entity}/name` under `library-manage`. Entity
+   payloads carry `scanned_name` and `name_source`.
+3. **Web UI.** Implemented, as a disclosure on the shelf that redirects
+   back to it: the name is in the title, the heading and the
+   breadcrumb, so reloading is the honest way to show it changed.
 4. **Client.** A rename action in the Liseur Android client.
 
 ## Acceptance criteria
