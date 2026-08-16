@@ -144,7 +144,9 @@ the right place:
 3. **Web UI.** Implemented, as a disclosure on the shelf that redirects
    back to it: the name is in the title, the heading and the
    breadcrumb, so reloading is the honest way to show it changed.
-4. **Client.** A rename action in the Liseur Android client.
+4. **Client.** Implemented. The Liseur Android client renames from the
+   shelf's menu, follows the shelf to its new key, and refuses a rename
+   made offline rather than queueing one — it has no outbox.
 
 ## Acceptance criteria
 
