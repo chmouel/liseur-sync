@@ -189,9 +189,15 @@ place to look when a shelf holds books whose folders disagree with it.
 3. **Web UI.** Merge offered from the refusal a rename returns; a
    folder-wise split offered on a shelf holding books from more than one
    folder; the names a shelf absorbs listed with an undo.
-4. **Client.** Nothing. The Android client renders what the API returns,
-   so a merged shelf needs no change — only a check that a merge does not
-   strand an open shelf, which is keyed by name there.
+4. **Client.** Nothing, as expected. The Android client folds shelves
+   from each book's series name rather than being sent them, so a merge
+   arrives as the books having been renamed and they regroup by
+   themselves; the absorbed shelf's key then matches nothing, which
+   closes that screen and leaves the reader in the library with their
+   books on the survivor. Pinned by a test there rather than left as a
+   claim.
+
+All four are implemented.
 
 ## Acceptance criteria
 

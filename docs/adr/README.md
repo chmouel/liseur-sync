@@ -45,7 +45,7 @@ loose ends that must come before any of it, are in
 | [0018](0018-series-overrides.md) | Series a reader can shape | Later | Accepted | Phases 1–4; Calibre write-back deferred to its own ADR |
 | [0019](0019-library-wide-entities.md) | Catalog entities belong to the library | Later | Accepted | Renaming decided in [0020](0020-series-renaming.md), merge and split in [0021](0021-series-merge-split.md) |
 | [0020](0020-series-renaming.md) | Renaming a series | Later | Accepted; implemented | Merge and split decided in [0021](0021-series-merge-split.md) |
-| [0021](0021-series-merge-split.md) | Merging and splitting a series | Later | Accepted | All four phases; Calibre write-back constrained here, decided in its own ADR |
+| [0021](0021-series-merge-split.md) | Merging and splitting a series | Later | Accepted; implemented | All four phases; Calibre write-back constrained here, decided in its own ADR |
 
 ## Convention
 
