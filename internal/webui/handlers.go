@@ -286,11 +286,12 @@ func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.A
 	toks, _ := s.St.ListTokens(r.Context(), u.ID)
 	kosyncDevs, _ := s.St.ListKosyncDevices(r.Context(), u.ID)
 	kopluginDevs, _ := s.St.ListKopluginDevices(r.Context(), u.ID)
+	toks, browsers := splitReaderTokens(toks)
 	sortTokens(toks)
 	sortKosyncDevices(kosyncDevs)
 	sortKopluginDevices(kopluginDevs)
 	devicesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		toks, kosyncDevs, kopluginDevs, s.serverBaseURL(r), flash).
+		toks, browsers, kosyncDevs, kopluginDevs, s.serverBaseURL(r), flash).
 		Render(r.Context(), w)
 }
 
@@ -383,6 +384,28 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a sto
 	}
 	_ = s.St.RevokeToken(r.Context(), u.ID, r.PathValue("id"))
 	s.renderDevices(w, r, a, u, Flash{Notice: "Token revoked."})
+}
+
+// handleRevokeBrowsers ends browser reading everywhere, for the case
+// this page exists to answer: a machine you no longer have, or no longer
+// trust, that you were signed in on.
+//
+// It takes this browser down with the others rather than sparing it,
+// because sparing it would mean deciding which credential is "this one"
+// from a form post that carries no credential — and a button that
+// mostly signs you out is worse than one that plainly does.
+func (s *Server) handleRevokeBrowsers(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if err := s.Auth.RevokeReaderTokens(r.Context(), u.ID); err != nil {
+		s.renderDevices(w, r, a, u, Flash{Error: "Could not sign browsers out."})
+		return
+	}
+	s.renderDevices(w, r, a, u, Flash{
+		Notice: "Browser reading signed out. Reopen a book to read here again.",
+	})
 }
 
 func (s *Server) handlePairing(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {

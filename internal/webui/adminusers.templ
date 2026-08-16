@@ -141,6 +141,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				<p class="muted">{ moreNote(v.MoreTokens) }</p>
 			}
 		}
+		<p class="muted">{ browserNote(v.Browsers) }</p>
 	</section>
 	<section class="card">
 		<h2>kosync devices</h2>
