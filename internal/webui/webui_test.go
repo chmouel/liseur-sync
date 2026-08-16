@@ -738,3 +738,21 @@ func TestDevicesShowsTheOPDSAddress(t *testing.T) {
 	}
 }
 
+// TestAdminRailGoesToFolders pins where the Admin entry lands. The
+// overview only summarises the pages beside it, so it is a poor front
+// door: an operator opens Admin to add or check a folder.
+func TestAdminRailGoesToFolders(t *testing.T) {
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/library")
+
+	if !strings.Contains(body, `href="admin/folders"`) {
+		t.Fatal("the rail's Admin entry does not point at Folders")
+	}
+	if strings.Contains(body, `href="admin"`) {
+		t.Fatal("the rail still points at the admin overview")
+	}
+}
