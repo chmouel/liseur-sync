@@ -516,15 +516,28 @@ func (k EntityKind) Valid() bool {
 }
 
 // CatalogEntity is one library-wide series, contributor or tag, together
-// with how many of the folder's active books claim it.
+// with how many of the library's active books claim it.
+//
+// Name is what the asking reader sees. For a series that can be a
+// rename (ADR-0020), in which case ScannedName still holds what the last
+// pass observed and NameSource names the layer the display name came
+// from — the two things a client needs to offer a revert. For every
+// other kind the two names are equal and the source is the folder.
 type CatalogEntity struct {
 	ID             string
 	Kind           EntityKind
 	Name           string
 	NormalizedName string
+	ScannedName    string
+	NameSource     SeriesSource
 	BookCount      int
 	CreatedAt      time.Time
 }
+
+// MaxSeriesNameBytes bounds a series name, whether a pass observed it or
+// a reader typed it: a renamed series and a scanned one are the same
+// kind of thing.
+const MaxSeriesNameBytes = 512
 
 // MaxEntityListLimit bounds one entity listing. Entity lists are browsed
 // by a person, and a folder with more distinct tags than this has a
@@ -1118,6 +1131,25 @@ type Store interface {
 	// can show what the folder said, what was claimed, and which of them
 	// is in force.
 	BookSeriesLayers(ctx context.Context, userID, bookID string) (BookSeriesLayers, error)
+
+	// -----------------------------------------------------------------
+	// Series names (ADR-0020).
+	//
+	// A rename is a display layer, in the same two scopes a claim uses.
+	// It never touches series.normalized_name, which stays what a scan
+	// observed and stays the only thing a pass resolves against: a
+	// rename that moved the fold key would be undone by the next pass.
+	// -----------------------------------------------------------------
+
+	// SetSeriesName renames one series in one layer. It returns
+	// ErrConflict when the name already belongs to another series in
+	// that layer's view — which is a request to merge two shelves, and
+	// merging is not a thing this store can do.
+	SetSeriesName(ctx context.Context, userID, seriesID string, scope SeriesSource, name string, at time.Time) error
+	// ClearSeriesName drops one layer's rename, so the series falls back
+	// to the layer beneath and ultimately to what the scan said.
+	// Clearing a name that is not there is not an error.
+	ClearSeriesName(ctx context.Context, userID, seriesID string, scope SeriesSource) error
 
 	// -----------------------------------------------------------------
 	// The bridge to per-user reading state.

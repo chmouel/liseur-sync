@@ -175,12 +175,12 @@ func (s *Store) CatalogBookRelationsForBooks(
 	// the catalog is shared and is not.
 	rows, err = s.db.QueryContext(ctx, q(
 		effectiveSeriesCTE+
-			`SELECT e.book_id, s.id, s.name, s.normalized_name, e.position,
-			        e.source
+			`SELECT e.book_id, n.series_id, n.name, n.normalized_name,
+			        e.position, e.source
 			 FROM eff_series e
-			 JOIN series s ON s.id = e.series_id
+			 JOIN series_names n ON n.series_id = e.series_id
 			 WHERE e.book_id IN (`+placeholders+`)
-			 ORDER BY e.book_id, s.normalized_name, s.id`),
+			 ORDER BY e.book_id, n.normalized_name, n.series_id`),
 		seriesReadArgs(userID, args...)...)
 	if err != nil {
 		return out, err

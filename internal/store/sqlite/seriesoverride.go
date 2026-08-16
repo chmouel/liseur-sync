@@ -21,15 +21,54 @@ import (
 // memberships is in no series, which is how a stray volume gets detached
 // from the series its directory implied.
 
+// seriesNamesCTE resolves each series' display name for one reader:
+// their own rename, then the shared one, then what a scan observed
+// (ADR-0020). It carries the scanned name and the layer beside the
+// resolved one, because a client that offers a revert has to be able to
+// tell whether reverting would change anything.
+//
+// The scanned normalized_name is never resolved away in the other
+// direction: it stays what a reconcile pass matches an observed name
+// against, so a rename cannot move the fold key out from under itself.
+const seriesNamesCTE = `series_names AS (
+    SELECT s.id AS series_id,
+           COALESCE(p.name, sh.name, s.name) AS name,
+           COALESCE(p.normalized_name, sh.normalized_name, s.normalized_name)
+               AS normalized_name,
+           s.name AS scanned_name,
+           CASE WHEN p.series_id IS NOT NULL THEN 'personal'
+                WHEN sh.series_id IS NOT NULL THEN 'shared'
+                ELSE 'folder' END AS name_source
+      FROM series s
+      LEFT JOIN series_name_overrides p
+             ON p.series_id = s.id AND p.scope_user = ?
+      LEFT JOIN series_name_overrides sh
+             ON sh.series_id = s.id AND sh.scope_user = '')`
+
+// seriesNamesOnlyCTE is for reads that display a series without
+// resolving membership — the layer views, which read one claim's rows
+// directly.
+const seriesNamesOnlyCTE = "\nWITH " + seriesNamesCTE + "\n"
+
+// seriesNamesArgs is the name CTE's single bind parameter.
+func seriesNamesArgs(userID string) []any {
+	if userID == "" {
+		userID = store.NoReaderScope
+	}
+	return []any{userID}
+}
+
 // effectiveSeriesCTE is the WITH prefix every series read is built on.
 // It stands in for `book_series` and carries one extra column, `source`,
-// naming the layer each row came from.
+// naming the layer each row came from, and it brings the resolved names
+// along so that a read which shows a series never has to ask twice.
 //
 // It is a prefix rather than an inline subquery so that its bind
 // parameters always come first: a caller appends its own arguments after
 // effectiveSeriesArgs and never has to count placeholders.
 const effectiveSeriesCTE = `
-WITH eff_series AS (
+WITH ` + seriesNamesCTE + `,
+eff_series AS (
     -- What the pass observed, for books no layer has claimed.
     SELECT bs.folder_id, bs.book_id, bs.series_id, bs.position,
            'folder' AS source
@@ -52,15 +91,17 @@ WITH eff_series AS (
                 THEN ? ELSE '' END))
 `
 
-// effectiveSeriesArgs are the CTE's bind parameters, in order. A user id
-// that is empty would collide with the shared layer's sentinel, so an
-// anonymous reader is given a value no account can have; it matches no
-// personal claim, which is the correct answer for nobody in particular.
+// effectiveSeriesArgs are the CTE's bind parameters, in order: the name
+// layer's reader first, then the claim layer's. A user id that would be
+// empty collides with the shared layer's sentinel, so an anonymous
+// reader is given a value no account can have; it matches no personal
+// claim and no personal rename, which is the correct answer for nobody
+// in particular.
 func effectiveSeriesArgs(userID string) []any {
 	if userID == "" {
 		userID = store.NoReaderScope
 	}
-	return []any{userID, userID, userID}
+	return []any{userID, userID, userID, userID}
 }
 
 // seriesReadArgs prefixes a query's own arguments with the CTE's.
@@ -273,11 +314,13 @@ func (s *Store) BookSeriesLayers(
 	}
 
 	if out.Folder, err = seriesRows(ctx, s.db,
-		`SELECT s.id, s.name, s.normalized_name, bs.position
-		   FROM book_series bs JOIN series s ON s.id = bs.series_id
+		seriesNamesOnlyCTE+`
+		SELECT n.series_id, n.name, n.normalized_name, bs.position
+		   FROM book_series bs JOIN series_names n ON n.series_id = bs.series_id
 		  WHERE bs.book_id = ?
-		  ORDER BY s.normalized_name, s.id`,
-		store.SeriesSourceFolder, bookID); err != nil {
+		  ORDER BY n.normalized_name, n.series_id`,
+		store.SeriesSourceFolder,
+		append(seriesNamesArgs(userID), bookID)...); err != nil {
 		return out, err
 	}
 
@@ -338,15 +381,16 @@ func claimedLayers(
 		return out, err
 	}
 
-	const claimQuery = `
-		SELECT s.id, s.name, s.normalized_name, i.position
+	const claimQuery = seriesNamesOnlyCTE + `
+		SELECT n.series_id, n.name, n.normalized_name, i.position
 		  FROM book_series_override_items i
-		  JOIN series s ON s.id = i.series_id
+		  JOIN series_names n ON n.series_id = i.series_id
 		 WHERE i.book_id = ? AND i.scope_user = ?
-		 ORDER BY s.normalized_name, s.id`
+		 ORDER BY n.normalized_name, n.series_id`
 	if out.hasShared {
 		out.shared, err = seriesRows(ctx, db, claimQuery,
-			store.SeriesSourceShared, bookID, store.SharedSeriesScope)
+			store.SeriesSourceShared,
+			append(seriesNamesArgs(userID), bookID, store.SharedSeriesScope)...)
 		if err != nil {
 			return out, err
 		}
@@ -356,7 +400,8 @@ func claimedLayers(
 	}
 	if out.hasPersonal {
 		out.personal, err = seriesRows(ctx, db, claimQuery,
-			store.SeriesSourcePersonal, bookID, userID)
+			store.SeriesSourcePersonal,
+			append(seriesNamesArgs(userID), bookID, userID)...)
 		if err != nil {
 			return out, err
 		}
@@ -374,10 +419,10 @@ func effectiveSeriesForBookTx(
 ) ([]store.BookSeries, error) {
 	rows, err := tx.QueryContext(ctx,
 		effectiveSeriesCTE+`
-		SELECT s.id, s.name, s.normalized_name, e.position
-		  FROM eff_series e JOIN series s ON s.id = e.series_id
+		SELECT n.series_id, n.name, n.normalized_name, e.position
+		  FROM eff_series e JOIN series_names n ON n.series_id = e.series_id
 		 WHERE e.book_id = ?
-		 ORDER BY s.normalized_name, s.id`,
+		 ORDER BY n.normalized_name, n.series_id`,
 		seriesReadArgs(userID, bookID)...)
 	if err != nil {
 		return nil, err

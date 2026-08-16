@@ -413,7 +413,9 @@ is `series`, `contributors` or `tags`. `book_count` counts active books
 only, so a name whose books are missing reads as empty rather than
 leading to a blank page. Paging resumes after `next_after` rather than
 at an offset, because an offset would skip or repeat entries as books
-are added underneath it.
+are added underneath it. A series may carry a reader's own name for it
+(ADR-0020), so an entity also reports `scanned_name` and `name_source`;
+listings page on the name the caller sees.
 
 `GET /v1/entities/{kind}/{entity}/books` lists one
 entity's books, from every folder. A series comes back in reading order, with books that
@@ -503,6 +505,37 @@ is idempotent and preserves each book's other series memberships, so
 renumbering a trilogy does not drop a volume from an omnibus. Only
 `kind=series` is accepted; trying to reorder contributors or tags is
 `404`.
+
+### Renaming a series
+
+A claim says which series a book is in; it cannot say what that series
+is called. Renaming is a layer of its own, in the same two scopes
+(ADR-0020):
+
+```json
+PUT /v1/entities/series/{series}/name
+{"name": "Метро", "scope": "personal"}
+```
+
+It answers with the entity as it now reads: `name` is what this reader
+sees, `scanned_name` is what the last scan called it, and `name_source`
+is the layer `name` came from — `folder`, `shared` or `personal`. Those
+last two are what a client needs to show a rename as a rename and to
+offer a revert:
+
+```
+DELETE /v1/entities/series/{series}/name?scope=personal
+```
+
+The rename never touches the name a scan observed, and that name stays
+the one a folder pass matches against. A renamed series therefore keeps
+absorbing a folder that goes on calling it by its old name, and a
+rescan does not undo the rename. Only `kind=series` can be renamed; a
+tag or a contributor is what the scan said it was.
+
+A name that already belongs to another series in the caller's view is a
+`409`. Giving two shelves one name would be a merge, and this API does
+not merge shelves.
 
 ### Syncing a book you downloaded from the catalog
 

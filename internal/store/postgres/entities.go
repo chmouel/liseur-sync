@@ -47,6 +47,19 @@ func (t entityTables) membershipFor(
 	return effectiveSeriesCTE, "eff_series", effectiveSeriesArgs(userID)
 }
 
+// nameColumns says where a kind's display name comes from. See the
+// SQLite copy: a series resolves through the reader's rename layers
+// (ADR-0020), every other kind has the one name a scan observed.
+func (t entityTables) nameColumns(
+	kind store.EntityKind,
+) (join, name, normalized, scanned, source string) {
+	if kind != store.EntitySeries {
+		return "", "e.name", "e.normalized_name", "e.name", "'folder'"
+	}
+	return " JOIN series_names n ON n.series_id = e.id",
+		"n.name", "n.normalized_name", "n.scanned_name", "n.name_source"
+}
+
 // Entity counts are over active books only, so an entity whose books are
 // all currently missing reads as empty rather than as a populated entity
 // whose page turns out to be blank.
@@ -66,14 +79,17 @@ func (s *Store) ListCatalogEntities(
 		return nil, err
 	}
 	prefix, membership, args := tables.membershipFor(kind, userID)
+	nameJoin, name, normalized, scanned, source := tables.nameColumns(kind)
 	args = append(args, after, limit)
+	// Paging is by the name the reader sees, not the one the scan wrote.
 	rows, err := s.db.QueryContext(ctx, q(
 		prefix+
-			`SELECT e.id, e.name, e.normalized_name, e.created_at,
+			`SELECT e.id, `+name+`, `+normalized+`, `+scanned+`, `+source+`,
+			        e.created_at,
 			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
-			 FROM `+tables.entity+` e
-			 WHERE e.normalized_name > ?
-			 ORDER BY e.normalized_name LIMIT ?`),
+			 FROM `+tables.entity+` e`+nameJoin+`
+			 WHERE `+normalized+` > ?
+			 ORDER BY `+normalized+` LIMIT ?`),
 		args...)
 	if err != nil {
 		return nil, err
@@ -83,6 +99,7 @@ func (s *Store) ListCatalogEntities(
 	for rows.Next() {
 		entity := store.CatalogEntity{Kind: kind}
 		if err := rows.Scan(&entity.ID, &entity.Name, &entity.NormalizedName,
+			&entity.ScannedName, &entity.NameSource,
 			&entity.CreatedAt, &entity.BookCount); err != nil {
 			return nil, err
 		}
@@ -100,16 +117,19 @@ func (s *Store) CatalogEntityByID(
 		return store.CatalogEntity{}, err
 	}
 	prefix, membership, args := tables.membershipFor(kind, userID)
+	nameJoin, name, normalized, scanned, source := tables.nameColumns(kind)
 	args = append(args, entityID)
 	entity := store.CatalogEntity{Kind: kind}
 	err = s.db.QueryRowContext(ctx, q(
 		prefix+
-			`SELECT e.id, e.name, e.normalized_name, e.created_at,
+			`SELECT e.id, `+name+`, `+normalized+`, `+scanned+`, `+source+`,
+			        e.created_at,
 			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
-			 FROM `+tables.entity+` e
+			 FROM `+tables.entity+` e`+nameJoin+`
 			 WHERE e.id = ?`),
 		args...).
 		Scan(&entity.ID, &entity.Name, &entity.NormalizedName,
+			&entity.ScannedName, &entity.NameSource,
 			&entity.CreatedAt, &entity.BookCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.CatalogEntity{}, store.ErrNotFound

@@ -177,9 +177,11 @@ var registeredRouteGates = map[string]routeGate{
 	"HEAD /v1/books/{id}/cover":              gateLibraryRead,
 	"GET /v1/books/{id}/series":              gateLibraryRead,
 
-	"PUT /v1/books/{id}/series":              gateLibraryManage,
-	"DELETE /v1/books/{id}/series":           gateLibraryManage,
-	"PUT /v1/entities/{kind}/{entity}/order": gateLibraryManage,
+	"PUT /v1/books/{id}/series":                gateLibraryManage,
+	"DELETE /v1/books/{id}/series":             gateLibraryManage,
+	"PUT /v1/entities/{kind}/{entity}/order":   gateLibraryManage,
+	"PUT /v1/entities/{kind}/{entity}/name":    gateLibraryManage,
+	"DELETE /v1/entities/{kind}/{entity}/name": gateLibraryManage,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
 

@@ -115,6 +115,12 @@ of them.
   a book, folder or entity exists. A personal claim must never be
   readable by another user, and only an admin writes the shared layer.
   Every store read that yields a series therefore takes a `userID`.
+  **A series rename (ADR-0020) is a second layer of the same shape**, in
+  `series_name_overrides`, and it carries one hard rule: a rename never
+  touches `series.normalized_name`. That column is the fold key a pass
+  resolves an observed name against, so moving it would make the next
+  scan undo the rename and split the shelf. Renaming onto a name already
+  visible in that scope is `ErrConflict`, never a merge.
 - **`root_path` never reaches a non-admin.** It is a filesystem oracle;
   a `library-read` response names books, not paths.
 - **The server never writes under a watched folder.** Rooted, read-only
