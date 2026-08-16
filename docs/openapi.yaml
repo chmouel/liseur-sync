@@ -707,7 +707,7 @@ paths:
         here — it is a fact about the server's filesystem, and naming it
         would make this route an oracle for one.
       parameters:
-        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: after, in: query, schema: { type: string }, description: "Opaque cursor from a previous page's `next_after`" }
       responses:
         "200":
