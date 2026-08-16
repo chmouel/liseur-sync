@@ -96,9 +96,10 @@ func testFolders(t *testing.T, open OpenFunc) {
 }
 
 // testCatalogListingsPageAndIsolate covers cursor determinism in both
-// directions and that one folder's listing never leaks another's books,
-// including missing ones: a book whose file is temporarily away is
-// still a book somebody may be reading, so it stays on the shelf.
+// directions and that one folder's listing never leaks another's books.
+// A missing book leaks in neither direction: it is hidden from the
+// listing, because the server would refuse to serve it, but its row
+// survives so a reader's work mapping still has something to point at.
 func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
@@ -106,22 +107,32 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	other := MkFolder(t, s, "catalog-page-other", store.FolderPlain)
 	base := time.Date(2026, time.August, 13, 9, 0, 0, 0, time.UTC)
 
+	// Each pass observes everything catalogued so far, so the books get
+	// distinct creation times without any of them going missing on the
+	// way: a complete pass that does not observe a book marks it missing.
 	titles := []string{"c", "a", "b", "later", "last"}
+	var present []store.ObservedBook
 	for i, title := range titles {
-		obs := store.ObservedBook{
+		present = append(present, store.ObservedBook{
 			RelativePath: title + ".epub", SizeBytes: 1, MTime: base,
 			ContentSHA256: "sha-" + title, Title: title,
-		}
-		doReconcile(t, s, folder.ID, []store.ObservedBook{obs}, true,
+		})
+		doReconcile(t, s, folder.ID, present, true,
 			base.Add(time.Duration(i)*time.Second))
 	}
-	// One book that gets marked missing, and must still be listed.
+	// One book that gets marked missing. It must drop out of the listing
+	// without dropping out of the catalog.
 	missingObs := store.ObservedBook{
 		RelativePath: "temporarily-away.epub", SizeBytes: 1, MTime: base,
 		ContentSHA256: "sha-away", Title: "Away",
 	}
-	doReconcile(t, s, folder.ID, []store.ObservedBook{missingObs}, true, base.Add(10*time.Second))
-	doReconcile(t, s, folder.ID, nil, true, base.Add(11*time.Second))
+	withAway := append(append([]store.ObservedBook{}, present...), missingObs)
+	doReconcile(t, s, folder.ID, withAway, true, base.Add(10*time.Second))
+	awayID := knownByPath(t, s, folder.ID)["temporarily-away.epub"].ID
+	if awayID == "" {
+		t.Fatal("the book that is about to go missing was never catalogued")
+	}
+	doReconcile(t, s, folder.ID, present, true, base.Add(11*time.Second))
 
 	// A book in the other folder must never appear in this folder's
 	// listing, however it pages.
@@ -131,7 +142,6 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	}}, true, base)
 
 	var got []string
-	sawMissing := false
 	var cursor *store.CatalogBookCursor
 	for {
 		page, err := s.ListCatalogBooks(ctx, folder.ID, cursor, 2)
@@ -149,7 +159,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 				t.Fatalf("listing leaked a book from another folder: %+v", book)
 			}
 			if book.Status == store.BookMissing {
-				sawMissing = true
+				t.Fatalf("listing offered a book the server will not serve: %+v", book)
 			}
 			got = append(got, book.Title)
 		}
@@ -159,12 +169,19 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 			break
 		}
 	}
-	want := []string{"c", "a", "b", "later", "last", "Away"}
+	want := []string{"c", "a", "b", "later", "last"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("paged books: got %v want %v", got, want)
 	}
-	if !sawMissing {
-		t.Fatal("a missing book was hidden from the listing")
+
+	// Hidden, not deleted: the row is still there to be read by id, so a
+	// reader's work mapping still has something to point at.
+	away, err := s.CatalogBookByID(ctx, awayID)
+	if err != nil {
+		t.Fatalf("a missing book was deleted rather than hidden: %v", err)
+	}
+	if away.Status != store.BookMissing {
+		t.Fatalf("away book status: got %q want %q", away.Status, store.BookMissing)
 	}
 
 	// Newest first must be the same set in the opposite order.

@@ -1694,6 +1694,13 @@ components:
             reading history with it, because a disconnected disk is not
             a deleted book. A pass that failed part way, or that
             observed nothing at all, never marks anything missing.
+
+            A missing book is left out of the listing and search
+            responses, because downloading it or fetching its cover
+            answers `410`. It is still readable by id, so a client
+            holding one can tell a book that went away from a book that
+            never existed. It comes back to the listings when a complete
+            pass sees the file again.
         sha256:
           type: string
           description: |

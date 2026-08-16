@@ -249,16 +249,34 @@ const folderPickerLimit = 200
 // at once — which shelf row is which work, and which works have no book
 // on this server at all — so the mismatch is paid for here rather than
 // hidden in a shape the store does not have.
+// workBookIDs answers "which book on this server is this work", and
+// answers it only with a book this server can actually serve. A work
+// whose only book is missing is treated as having no book here, so it
+// renders as a text tile through orphanRows rather than as a cover that
+// resolves to a 410. The mapping itself is untouched: the file coming
+// back restores the tile.
 func (s *Server) workBookIDs(
 	ctx context.Context, userID string, works []store.WorkSummary,
 ) map[string]string {
-	out := make(map[string]string, len(works))
+	candidates := make(map[string][]string, len(works))
+	var all []string
 	for _, ws := range works {
 		ids, err := s.St.WorkBookIDs(ctx, userID, ws.Work.ID)
 		if err != nil || len(ids) == 0 {
 			continue
 		}
-		out[ws.Work.ID] = ids[0]
+		candidates[ws.Work.ID] = ids
+		all = append(all, ids...)
+	}
+	books := s.booksByID(ctx, all)
+	out := make(map[string]string, len(candidates))
+	for workID, ids := range candidates {
+		for _, id := range ids {
+			if book, ok := books[id]; ok && book.Status == store.BookActive {
+				out[workID] = id
+				break
+			}
+		}
 	}
 	return out
 }

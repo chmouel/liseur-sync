@@ -86,11 +86,12 @@ func (s *Store) ListRecentCatalogBooks(
 	return s.listCatalogBooks(ctx, folderID, before, limit, false)
 }
 
-// listCatalogBooks pages a folder's books in either direction. Missing
-// books are listed alongside present ones rather than hidden: a book
-// whose file is temporarily away — an unplugged drive, a paused sync —
-// is still a book somebody is reading, and making it vanish from the
-// shelf is a worse answer than showing it as unavailable.
+// listCatalogBooks pages a folder's books in either direction. Only
+// active books are listed. A missing book is one this server will refuse
+// to serve — its download is a 410 and so is its cover — so listing it
+// would be advertising something unopenable. It keeps its row and its
+// readers' work mappings, and it returns to the listing whole the moment
+// a complete pass sees its file again.
 func (s *Store) listCatalogBooks(
 	ctx context.Context, folderID string, cursor *store.CatalogBookCursor,
 	limit int, ascending bool,
@@ -98,7 +99,8 @@ func (s *Store) listCatalogBooks(
 	if limit <= 0 {
 		limit = 50
 	}
-	query := `SELECT ` + bookColumns + ` FROM books b WHERE b.folder_id = ?`
+	query := `SELECT ` + bookColumns + ` FROM books b
+		 WHERE b.folder_id = ? AND b.status = 'active'`
 	args := []any{folderID}
 	if cursor != nil {
 		if ascending {
