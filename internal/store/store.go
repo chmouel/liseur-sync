@@ -1087,7 +1087,26 @@ type TrashPurgeResult struct {
 	BlobsOrphaned int
 }
 
-// QuotaUsage is the logical per-principal usage after an operation.
+// LibraryDeletion reports what removing a library did. It answers the
+// two questions the caller has to relay: is the library gone, and what
+// happened to the books that were in it.
+type LibraryDeletion struct {
+	// Removed says the library row is gone. When it is false the library
+	// is still there and its books are in the trash, waiting for either a
+	// restore or a second attempt.
+	Removed bool
+	// Trashed counts books moved to the trash instead of being purged.
+	// It is non-zero only on the first attempt at a library holding the
+	// server's own copies.
+	Trashed int
+	// TrashExpiresAt is when those books stop being recoverable. Zero
+	// when nothing was trashed.
+	TrashExpiresAt time.Time
+	// Purged counts books permanently removed, along with what their
+	// files were holding.
+	Purged TrashPurgeResult
+}
+
 type QuotaUsage struct {
 	UsedBytes       int64
 	AdditionalBytes int64
@@ -1961,6 +1980,32 @@ type Store interface {
 	// AdminSetLibraryConfig replaces a library's configuration document
 	// without requiring the acting admin to hold manage on it.
 	AdminSetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
+	// AdminDeleteLibrary removes a library, or takes the first step
+	// towards it. It is the one admin library call that does read book
+	// rows, because a library is not a thing apart from its books and
+	// removing it has to settle what they were holding.
+	//
+	// What it does depends on where the bytes are, which is the only
+	// honest answer:
+	//
+	//   - A library the server reads in place is removed outright. Its
+	//     catalog rows are purged and the row goes; the directory it was
+	//     reading is somebody else's and is never touched, so nothing is
+	//     lost that re-adding the library would not find again.
+	//   - A library holding the server's own copies loses its books to
+	//     the trash first, on the ordinary retention window, and keeps
+	//     its row. Deleting the last copy of somebody's uploads on one
+	//     click is not a thing worth being able to do by accident.
+	//   - Once such a library has no books left outside the trash, the
+	//     same call purges what remains and removes the row. That second
+	//     press is the confirmation.
+	//
+	// Purging here is the trash purge's own routine: quota reservations
+	// are released and blobs that lose their last reference are
+	// orphan-marked for the existing grace-period sweep, which is what
+	// reclaims the bytes. Reading history is never touched — a reader's
+	// works and progress live on the account, not on the library.
+	AdminDeleteLibrary(ctx context.Context, actorUserID, libraryID string, at, trashExpiresAt time.Time) (LibraryDeletion, error)
 	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
 	// CatalogBookByID reads one book the caller may see. Trashed books are
 	// not visible through it at any role: a deleted book is deleted as far

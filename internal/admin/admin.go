@@ -20,7 +20,16 @@ import (
 // Run dispatches an admin subcommand. args excludes "admin" itself.
 // contentRoot is the configured content directory, needed by the
 // commands that inspect stored bytes rather than database rows.
-func Run(st store.Store, contentRoot string, args []string) error {
+// trashRetention is the configured window a deleted book can be brought
+// back in, so that removing a library costs the same here as it does in
+// the panel — an operator who reaches for the command line should not
+// get a different retention policy than the one they configured.
+func Run(
+	st store.Store,
+	contentRoot string,
+	trashRetention time.Duration,
+	args []string,
+) error {
 	if len(args) == 0 {
 		return UsageError{ExitCode: 1}
 	}
@@ -72,6 +81,8 @@ func Run(st store.Store, contentRoot string, args []string) error {
 		return revokeLibrary(ctx, st, args[1:])
 	case "backfill-works":
 		return backfillWorks(ctx, st, args[1:])
+	case "delete-library":
+		return deleteLibrary(ctx, st, trashRetention, args[1:])
 	case "verify-backup":
 		return verifyBackup(ctx, st, contentRoot, args[1:])
 	default:
@@ -151,6 +162,12 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   clear-review <actor> <library-id> <book-id>
                                 accept the copy being served and take one
                                 book back out of review
+  delete-library <actor> <library-id>
+                                remove a library. One kept in place is
+                                removed at once and its folder is left
+                                alone; one holding the server's own
+                                copies sends its books to the trash and
+                                needs the command repeated
 
   backfill-works <user>         map every catalog book the user can
                                 read to a sync work, so statistics do
@@ -645,5 +662,49 @@ func setDisabledCmd(ctx context.Context, st store.Store, args []string, disabled
 	}
 	fmt.Printf("%q (id %s) is enabled again. Tokens and devices work; "+
 		"web sessions do not, so they sign in again.\n", u.Name, u.ID)
+	return nil
+}
+
+// deleteLibrary removes a library from the command line. It is the same
+// call the panel makes and reports the same two outcomes, because a
+// library holding the server's own copies is not removed on one word:
+// its books go to the trash and the command has to be repeated.
+func deleteLibrary(
+	ctx context.Context,
+	st store.Store,
+	trashRetention time.Duration,
+	args []string,
+) error {
+	if len(args) != 2 {
+		return errors.New("usage: delete-library <actor> <library-id>")
+	}
+	actor, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return fmt.Errorf("actor %q: %w", args[0], err)
+	}
+	library, err := st.AdminLibraryByID(ctx, args[1])
+	if err != nil {
+		return fmt.Errorf("library %q: %w", args[1], err)
+	}
+	now := time.Now().UTC()
+	result, err := st.AdminDeleteLibrary(
+		ctx, actor.ID, library.ID, now, now.Add(trashRetention))
+	if err != nil {
+		return err
+	}
+	if !result.Removed {
+		fmt.Printf(
+			"moved %d books from %s to the trash, restorable until %s\n"+
+				"run delete-library again to remove the library and them\n",
+			result.Trashed, library.Name,
+			result.TrashExpiresAt.Format(time.RFC3339))
+		return nil
+	}
+	fmt.Printf("removed library %s (%s); %d books purged\n",
+		library.Name, library.ID, len(result.Purged.BookIDs))
+	if library.Storage == store.LibraryStorageInPlace &&
+		library.RootPath != nil {
+		fmt.Printf("nothing in %s was touched\n", *library.RootPath)
+	}
 	return nil
 }

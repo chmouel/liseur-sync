@@ -51,7 +51,7 @@ func capture(t *testing.T, st store.Store, args ...string) (string, error) {
 	}
 	saved := os.Stdout
 	os.Stdout = w
-	runErr := Run(st, t.TempDir(), args)
+	runErr := Run(st, t.TempDir(), 720*time.Hour, args)
 	os.Stdout = saved
 	w.Close()
 	var sb strings.Builder
@@ -474,5 +474,47 @@ func TestRefreshLibraryQueuesRatherThanSweeps(t *testing.T) {
 	}
 	if _, err := capture(t, st, "refresh-library", "ada"); err == nil {
 		t.Fatal("accepted refresh-library without a library id")
+	}
+}
+
+// The command line removes a library the same way the panel does, which
+// matters because an operator reaching for it is usually the one whose
+// panel is not answering.
+func TestDeleteLibraryFromTheCommandLine(t *testing.T) {
+	st := newAdminStore(t)
+	addUser(t, st, "ada")
+
+	out, err := capture(t, st, "create-library", "ada", "Ada's books")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := libraryIDFrom(t, out)
+
+	out, err = capture(t, st, "delete-library", "ada", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "removed library Ada's books") {
+		t.Fatalf("delete-library said %q", out)
+	}
+	if _, err := st.AdminLibraryByID(t.Context(), id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("library survived: %v", err)
+	}
+
+	// The three ways to get it wrong each name what was wrong, because
+	// the operator cannot see the library they are talking about.
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"no library id", []string{"delete-library", "ada"}},
+		{"no such actor", []string{"delete-library", "nobody", id}},
+		{"no such library", []string{"delete-library", "ada", "lib-missing"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := capture(t, st, tc.args...); err == nil {
+				t.Fatal("accepted")
+			}
+		})
 	}
 }
