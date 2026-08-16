@@ -12,6 +12,12 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 		a folder here forgets this server's record of it while leaving
 		every file where it is.
 	</p>
+	<p class="muted">
+		A folder is read when it changes and again on a slow timer, so
+		this page is not usually where books come from. Scan now is for
+		when it is: a network share, where the kernel tells this server
+		nothing at all about what changed.
+	</p>
 	@adminFlash(flash)
 	<section class="card">
 		<h2>Watched</h2>
@@ -30,6 +36,10 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 						<td><code>{ f.Folder.RootPath }</code></td>
 						<td>{ f.Folder.CreatedAt.Format("2006-01-02") }</td>
 						<td>
+							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit">Scan now</button>
+							</form>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/delete" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<button type="submit">Stop watching</button>

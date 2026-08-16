@@ -170,6 +170,7 @@ func TestAdminFolderMutationsNeedTheSessionsToken(t *testing.T) {
 	cookie := loginCookie(t, ts)
 	for _, path := range []string{
 		"/ui/admin/folders",
+		"/ui/admin/folders/" + folder.ID + "/scan",
 		"/ui/admin/folders/" + folder.ID + "/delete",
 	} {
 		code, _ := postForm(t, ts, cookie, path, url.Values{

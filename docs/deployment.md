@@ -216,6 +216,13 @@ not support events, the server logs a warning and keeps reconciling on
 the periodic pass. The catalog may lag; the server does not fail to
 start and the folder does not become unusable.
 
+A network mount is the case where this matters. NFS and SMB report
+nothing to inotify, so such a folder is only ever read by the periodic
+pass, which is up to half an hour behind. **Admin → Folders** has a
+*Scan now* for each folder that runs a pass immediately. It is safe to
+press at any time and safe to press twice: a pass is idempotent, so
+asking again is asking once.
+
 `scan_max_files` and `scan_max_depth` bound one pass. They are guards
 against pointing at too much, not tuning knobs. A pass that hits either
 bound is incomplete: it may add or update what it saw, but it is not

@@ -15,6 +15,13 @@ type recordingWatcher struct {
 	mu      sync.Mutex
 	added   []store.Folder
 	removed []string
+	scanned []string
+}
+
+func (w *recordingWatcher) Scan(folderID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.scanned = append(w.scanned, folderID)
 }
 
 func (w *recordingWatcher) Add(_ context.Context, folder store.Folder) {
@@ -110,5 +117,88 @@ func TestAFolderCanBeAddedWithoutAWatcher(t *testing.T) {
 	})
 	if !strings.Contains(body, "Watching Books") {
 		t.Fatalf("a server with no watcher refused a folder: %s", body)
+	}
+}
+
+// TestScanNowAsksTheWatcher: the button exists because inotify sees
+// nothing on NFS or SMB and drops events under pressure, so an operator
+// whose catalog is wrong has no other recourse but to wait half an hour.
+// If the press does not reach the watcher, the page tells a comfortable
+// lie and the wait happens anyway.
+func TestScanNowAsksTheWatcher(t *testing.T) {
+	watcher := &recordingWatcher{}
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.Watching = watcher
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	csrf := extractCSRF(t, body)
+	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+		"csrf": {csrf}, "name": {"Books"}, "root": {t.TempDir()},
+	})
+	if !strings.Contains(body, "Watching Books") {
+		t.Fatalf("the folder was not added: %s", body)
+	}
+	folders, err := st.ListFolders(t.Context(), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, body = postForm(t, ts, cookie,
+		"/ui/admin/folders/"+folders[0].ID+"/scan", url.Values{"csrf": {csrf}})
+	if !strings.Contains(body, "Reading Books again") {
+		t.Fatalf("the scan was not acknowledged: %s", body)
+	}
+	watcher.mu.Lock()
+	scanned := append([]string(nil), watcher.scanned...)
+	watcher.mu.Unlock()
+	if len(scanned) != 1 || scanned[0] != folders[0].ID {
+		t.Fatalf("watcher was asked to scan %v, want [%s]", scanned, folders[0].ID)
+	}
+
+	// A folder that is not there cannot be scanned, and saying so beats
+	// a notice about a pass that will never run.
+	_, body = postForm(t, ts, cookie,
+		"/ui/admin/folders/nope/scan", url.Values{"csrf": {csrf}})
+	if !strings.Contains(body, "no such folder") {
+		t.Fatalf("an unknown folder was accepted: %s", body)
+	}
+	watcher.mu.Lock()
+	count := len(watcher.scanned)
+	watcher.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("an unknown folder reached the watcher: %d calls", count)
+	}
+}
+
+// TestScanNowWithoutAWatcherSaysSo: a server started without a watcher
+// has nothing to ask, and a notice claiming a pass would be a lie the
+// operator acts on.
+func TestScanNowWithoutAWatcherSaysSo(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	csrf := extractCSRF(t, body)
+	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+		"csrf": {csrf}, "name": {"Books"}, "root": {t.TempDir()},
+	})
+	if !strings.Contains(body, "Watching Books") {
+		t.Fatal("the folder was not added")
+	}
+	folders, err := st.ListFolders(t.Context(), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body = postForm(t, ts, cookie,
+		"/ui/admin/folders/"+folders[0].ID+"/scan", url.Values{"csrf": {csrf}})
+	if !strings.Contains(body, "without a folder watcher") {
+		t.Fatalf("a server with no watcher claimed a pass: %s", body)
 	}
 }
