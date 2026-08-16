@@ -297,70 +297,90 @@ CREATE UNIQUE INDEX books_folder_path ON books(folder_id, relative_path);
 CREATE UNIQUE INDEX books_folder_calibre
     ON books(folder_id, calibre_id) WHERE calibre_id IS NOT NULL;
 
+-- Series, tags and contributors belong to the library rather than to a
+-- folder (ADR-0019); see the SQLite copy for why.
 CREATE TABLE series (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
 CREATE TABLE tags (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
 CREATE TABLE contributors (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
+-- Membership keeps its folder_id for the composite key to books; only
+-- the entity side is library-wide (ADR-0019).
 CREATE TABLE book_series (
     folder_id TEXT NOT NULL,
     book_id   TEXT NOT NULL,
-    series_id TEXT NOT NULL,
+    series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
     position  DOUBLE PRECISION,
     PRIMARY KEY (book_id, series_id),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, series_id)
-        REFERENCES series(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE book_tags (
     folder_id TEXT NOT NULL,
     book_id   TEXT NOT NULL,
-    tag_id    TEXT NOT NULL,
+    tag_id    TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (book_id, tag_id),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, tag_id)
-        REFERENCES tags(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
+
+-- A series claim (ADR-0018); see the SQLite copy for why the claim is a
+-- row of its own and why scope_user carries no foreign key.
+CREATE TABLE book_series_overrides (
+    folder_id  TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    scope_user TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    updated_by TEXT NOT NULL,
+    PRIMARY KEY (book_id, scope_user),
+    FOREIGN KEY (folder_id, book_id)
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
+);
+CREATE INDEX book_series_overrides_scope
+    ON book_series_overrides(scope_user, folder_id);
+
+CREATE TABLE book_series_override_items (
+    folder_id  TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    scope_user TEXT NOT NULL,
+    series_id  TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    position   DOUBLE PRECISION,
+    PRIMARY KEY (book_id, scope_user, series_id),
+    FOREIGN KEY (book_id, scope_user)
+        REFERENCES book_series_overrides(book_id, scope_user) ON DELETE CASCADE
+);
+CREATE INDEX book_series_override_items_series
+    ON book_series_override_items(series_id, scope_user);
 
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,
-    contributor_id TEXT NOT NULL,
+    contributor_id TEXT NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
     role           TEXT NOT NULL,
     position       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (book_id, contributor_id, role),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, contributor_id)
-        REFERENCES contributors(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE book_identifiers (

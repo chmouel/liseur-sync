@@ -373,7 +373,7 @@ func TestBooksUIRequiresASession(t *testing.T) {
 		"/ui/books/" + bookID + "/download",
 		"/ui/books/" + bookID + "/cover",
 		"/ui/folders/" + f.folder + "/search",
-		"/ui/folders/" + f.folder + "/series",
+		"/ui/entities/series",
 	} {
 		resp, _ := f.get(t, path, nil)
 		if resp.StatusCode != http.StatusSeeOther {

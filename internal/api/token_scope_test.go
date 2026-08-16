@@ -130,14 +130,15 @@ func TestTokenScopeSetCompatibilityAndUpdate(t *testing.T) {
 type routeGate int
 
 const (
-	gatePublic      routeGate = iota // no credential at all
-	gateSync                         // bearer, scope sync
-	gateInsights                     // bearer, scope read-insights
-	gateLibraryRead                  // bearer, scope library-read
-	gateResolveBoth                  // bearer, library-read AND sync
-	gateOPDS                         // HTTP Basic, scope library-read
-	gateTokenSelf                    // bearer, no scope beyond authenticating
-	gateLoginCred                    // the short-lived login credential, not a device token
+	gatePublic        routeGate = iota // no credential at all
+	gateSync                           // bearer, scope sync
+	gateInsights                       // bearer, scope read-insights
+	gateLibraryRead                    // bearer, scope library-read
+	gateLibraryManage                  // bearer, scope library-manage
+	gateResolveBoth                    // bearer, library-read AND sync
+	gateOPDS                           // HTTP Basic, scope library-read
+	gateTokenSelf                      // bearer, no scope beyond authenticating
+	gateLoginCred                      // the short-lived login credential, not a device token
 )
 
 // registeredRouteGates is the hand-kept half of the matrix: what each
@@ -164,31 +165,36 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /v1/insights/works/{id}": gateInsights,
 	"GET /v1/insights/calendar":   gateInsights,
 
-	"GET /v1/folders":                                         gateLibraryRead,
-	"GET /v1/folders/{folder}/books":                          gateLibraryRead,
-	"GET /v1/folders/{folder}/search":                         gateLibraryRead,
-	"GET /v1/books/{id}":                                      gateLibraryRead,
-	"GET /v1/folders/{folder}/entities/{kind}":                gateLibraryRead,
-	"GET /v1/folders/{folder}/entities/{kind}/{entity}/books": gateLibraryRead,
-	"GET /v1/books/{id}/download":                             gateLibraryRead,
-	"HEAD /v1/books/{id}/download":                            gateLibraryRead,
-	"GET /v1/books/{id}/cover":                                gateLibraryRead,
-	"HEAD /v1/books/{id}/cover":                               gateLibraryRead,
+	"GET /v1/folders":                        gateLibraryRead,
+	"GET /v1/folders/{folder}/books":         gateLibraryRead,
+	"GET /v1/folders/{folder}/search":        gateLibraryRead,
+	"GET /v1/books/{id}":                     gateLibraryRead,
+	"GET /v1/entities/{kind}":                gateLibraryRead,
+	"GET /v1/entities/{kind}/{entity}/books": gateLibraryRead,
+	"GET /v1/books/{id}/download":            gateLibraryRead,
+	"HEAD /v1/books/{id}/download":           gateLibraryRead,
+	"GET /v1/books/{id}/cover":               gateLibraryRead,
+	"HEAD /v1/books/{id}/cover":              gateLibraryRead,
+	"GET /v1/books/{id}/series":              gateLibraryRead,
+
+	"PUT /v1/books/{id}/series":              gateLibraryManage,
+	"DELETE /v1/books/{id}/series":           gateLibraryManage,
+	"PUT /v1/entities/{kind}/{entity}/order": gateLibraryManage,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
 
-	"GET /opds/v1.2":                                  gateOPDS,
-	"GET /opds/v1.2/{$}":                              gateOPDS,
-	"GET /opds/v1.2/folders/{folder}":                 gateOPDS,
-	"GET /opds/v1.2/folders/{folder}/search.xml":      gateOPDS,
-	"GET /opds/v1.2/folders/{folder}/search":          gateOPDS,
-	"GET /opds/v1.2/folders/{folder}/recent":          gateOPDS,
-	"GET /opds/v1.2/folders/{folder}/{kind}":          gateOPDS,
-	"GET /opds/v1.2/folders/{folder}/{kind}/{entity}": gateOPDS,
-	"GET /opds/v1.2/books/{id}/download":              gateOPDS,
-	"HEAD /opds/v1.2/books/{id}/download":             gateOPDS,
-	"GET /opds/v1.2/books/{id}/cover":                 gateOPDS,
-	"HEAD /opds/v1.2/books/{id}/cover":                gateOPDS,
+	"GET /opds/v1.2":                             gateOPDS,
+	"GET /opds/v1.2/{$}":                         gateOPDS,
+	"GET /opds/v1.2/folders/{folder}":            gateOPDS,
+	"GET /opds/v1.2/folders/{folder}/search.xml": gateOPDS,
+	"GET /opds/v1.2/folders/{folder}/search":     gateOPDS,
+	"GET /opds/v1.2/folders/{folder}/recent":     gateOPDS,
+	"GET /opds/v1.2/entities/{kind}":             gateOPDS,
+	"GET /opds/v1.2/entities/{kind}/{entity}":    gateOPDS,
+	"GET /opds/v1.2/books/{id}/download":         gateOPDS,
+	"HEAD /opds/v1.2/books/{id}/download":        gateOPDS,
+	"GET /opds/v1.2/books/{id}/cover":            gateOPDS,
+	"HEAD /opds/v1.2/books/{id}/cover":           gateOPDS,
 
 	"GET /v1/token": gateTokenSelf,
 
@@ -286,6 +292,7 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 	insightsOnly := mint(store.ScopeReadInsights)
 	libraryReadOnly := mint(store.ScopeLibraryRead)
 	both := mint(store.ScopeLibraryRead, store.ScopeSync)
+	libraryManageOnly := mint(store.ScopeLibraryManage)
 
 	// A real login credential, minted the same way HandleLogin mints one
 	// — through Login itself, in-process, since this matrix is about
@@ -372,6 +379,17 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				}
 				if got := bearer(method, path, libraryReadOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
 					t.Errorf("library-read token on a library-read route: %d, should have passed the gate", got)
+				}
+			case gateLibraryManage:
+				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
+					t.Errorf("no token: %d, want 401", got)
+				}
+				// Reading the catalog is not permission to restate it.
+				if got := bearer(method, path, libraryReadOnly); got != http.StatusForbidden {
+					t.Errorf("library-read token on a library-manage route: %d, want 403", got)
+				}
+				if got := bearer(method, path, libraryManageOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
+					t.Errorf("library-manage token on a library-manage route: %d, should have passed the gate", got)
 				}
 			case gateResolveBoth:
 				if got := bearer(method, path, ""); got != http.StatusUnauthorized {

@@ -130,7 +130,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	}
 	v.CanRead = bookReadable(book)
 	if rel, err := s.St.CatalogBookRelationsForBooks(
-		r.Context(), []string{book.ID},
+		r.Context(), readerID(u), []string{book.ID},
 	); err == nil {
 		v.Authors, v.Byline = contributorChips(book.FolderID, rel.Contributors[book.ID])
 		for _, ser := range rel.Series[book.ID] {

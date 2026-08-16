@@ -139,14 +139,16 @@ var opdsKindTitles = map[string]string{
 	"tags":         "Tags",
 }
 
-// HandleOPDSEntities serves one folder's series, contributors or tags
+// HandleOPDSEntities serves the library's series, contributors or tags
 // as a navigation feed: each entry leads to the books claiming it.
+// Entities are library-wide (ADR-0019), so the feed hangs off the root
+// rather than off a folder.
 func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID, kind, ok := entityRequest(w, r)
+	kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -158,21 +160,20 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := defaultCatalogPageSize
 	entities, err := s.St.ListCatalogEntities(
-		r.Context(), folderID, kind, after, limit)
+		r.Context(), readerID(r), kind, after, limit)
 	if err != nil {
-		writeCatalogError(w, err, "folder not found")
+		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	folderHref := opdsPrefix + "/folders/" + url.PathEscape(folderID)
-	self := folderHref + "/" + segment
+	self := opdsPrefix + "/entities/" + segment
 	feed := opdsFeed{
-		ID:      "urn:liseur:folder:" + folderID + ":" + segment,
+		ID:      "urn:liseur:entities:" + segment,
 		Title:   opdsKindTitles[segment],
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsNavigationType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: folderHref, Type: opdsAcquisitionType},
+			{Rel: "up", Href: opdsPrefix, Type: opdsNavigationType},
 		},
 	}
 	for _, e := range entities {
@@ -206,7 +207,7 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID, kind, ok := entityRequest(w, r)
+	kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -217,19 +218,19 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entity, err := s.St.CatalogEntityByID(
-		r.Context(), folderID, r.PathValue("entity"), kind)
+		r.Context(), readerID(r), r.PathValue("entity"), kind)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	limit := defaultCatalogPageSize
 	books, next, err := s.St.ListBooksByEntity(
-		r.Context(), folderID, entity.ID, kind, after, limit)
+		r.Context(), readerID(r), entity.ID, kind, after, limit)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	kindHref := opdsPrefix + "/folders/" + url.PathEscape(folderID) + "/" + segment
+	kindHref := opdsPrefix + "/entities/" + segment
 	self := kindHref + "/" + url.PathEscape(entity.ID)
 	feed := opdsFeed{
 		ID:      "urn:liseur:entity:" + entity.ID,

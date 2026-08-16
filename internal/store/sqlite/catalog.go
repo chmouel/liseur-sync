@@ -142,7 +142,7 @@ func (s *Store) listCatalogBooks(
 // series in two queries rather than two per book (ADR-0015): a shelf of
 // fifty books used to cost a hundred round trips.
 func (s *Store) CatalogBookRelationsForBooks(
-	ctx context.Context, bookIDs []string,
+	ctx context.Context, userID string, bookIDs []string,
 ) (store.CatalogBookRelations, error) {
 	out := store.CatalogBookRelations{
 		Contributors: map[string][]store.BookContributor{},
@@ -176,13 +176,18 @@ func (s *Store) CatalogBookRelationsForBooks(
 		return out, err
 	}
 
+	// Series resolve through the reader's override layers (ADR-0018),
+	// so this one relation is asked on behalf of somebody. The rest of
+	// the catalog is shared and is not.
 	rows, err = s.db.QueryContext(ctx,
-		`SELECT bs.book_id, s.id, s.name, s.normalized_name, bs.position
-		 FROM book_series bs
-		 JOIN series s ON s.id = bs.series_id
-		 WHERE bs.book_id IN (`+placeholders+`)
-		 ORDER BY bs.book_id, s.normalized_name, s.id`,
-		args...)
+		effectiveSeriesCTE+
+			`SELECT e.book_id, s.id, s.name, s.normalized_name, e.position,
+			        e.source
+			 FROM eff_series e
+			 JOIN series s ON s.id = e.series_id
+			 WHERE e.book_id IN (`+placeholders+`)
+			 ORDER BY e.book_id, s.normalized_name, s.id`,
+		seriesReadArgs(userID, args...)...)
 	if err != nil {
 		return out, err
 	}
@@ -191,7 +196,7 @@ func (s *Store) CatalogBookRelationsForBooks(
 		var sr store.BookSeries
 		var position sql.NullFloat64
 		if err := scan(&bookID, &sr.SeriesID, &sr.Name, &sr.NormalizedName,
-			&position); err != nil {
+			&position, &sr.Source); err != nil {
 			return err
 		}
 		if position.Valid {

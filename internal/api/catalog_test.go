@@ -210,7 +210,7 @@ func TestRootPathNeverReachesANonAdminResponse(t *testing.T) {
 	_, raw = f.get(t, "/v1/books/"+bookID, read)
 	assertClean("book detail", raw)
 
-	code, entities := getJSON(t, f.ts.URL+"/v1/folders/"+f.folder.ID+"/entities/contributors", read)
+	code, entities := getJSON(t, f.ts.URL+"/v1/entities/contributors", read)
 	if code != http.StatusOK {
 		t.Fatalf("entities: %d %v", code, entities)
 	}
@@ -219,7 +219,7 @@ func TestRootPathNeverReachesANonAdminResponse(t *testing.T) {
 		t.Fatalf("contributors = %v", list)
 	}
 	entityID := list[0].(map[string]any)["id"].(string)
-	_, raw = f.get(t, "/v1/folders/"+f.folder.ID+"/entities/contributors/"+entityID+"/books", read)
+	_, raw = f.get(t, "/v1/entities/contributors/"+entityID+"/books", read)
 	assertClean("entity books", raw)
 
 	_, raw = f.opds(t, "/opds/v1.2", "token", read)

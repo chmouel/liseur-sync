@@ -41,11 +41,14 @@ Use `PATCH /v1/tokens/{id}` with the same `scope`/`scopes` shape to
 change capabilities without changing the token secret, device id, or
 retry identity.
 
-The scopes are `sync`, `read-insights`, `library-read`, and `admin`.
-`admin` implies every scope and is not self-grantable: requesting it
-returns `403` unless the account is already an administrator. Clients
-normally need only `sync`; add `library-read` to browse and download
-books, and `read-insights` to show statistics.
+The scopes are `sync`, `read-insights`, `library-read`,
+`library-manage`, and `admin`. `admin` implies every scope and is not
+self-grantable: requesting it returns `403` unless the account is
+already an administrator. Clients normally need only `sync`; add
+`library-read` to browse and download books, `read-insights` to show
+statistics, and `library-manage` only when the client lets readers state
+series claims. `library-manage` does not grant catalog reads, so a
+series editor usually asks for both `library-read` and `library-manage`.
 
 All API calls then use `Authorization: Bearer <secret>`.
 
@@ -69,10 +72,11 @@ GET /v1/token
 ```
 
 Call this once at startup and draw the interface from the answer: show
-the catalog browser when `library-read` is present, the reading
-statistics when `read-insights` is. Probing routes and reading `403`s
-works, but it means the first thing the user sees is an error the client
-could have avoided.
+the catalog browser when `library-read` is present, the series editor
+when `library-manage` is present, and the reading statistics when
+`read-insights` is. Probing routes and reading `403`s works, but it
+means the first thing the user sees is an error the client could have
+avoided.
 
 The route needs no particular scope — the narrowest token can ask about
 itself — but it is still authenticated: an absent, revoked or expired
@@ -319,7 +323,7 @@ one. Parse it once.
   "created_at": "…",
   "updated_at": "…",
   "contributors": [{"id": "…", "name": "William Gibson", "role": "author"}],
-  "series": [{"id": "…", "name": "Sprawl", "position": 1}]
+  "series": [{"id": "…", "name": "Sprawl", "position": 1, "source": "folder"}]
 }
 ```
 
@@ -334,7 +338,10 @@ disconnected disk is not a deleted book.
 `contributors` carries every credit in every role rather than only the
 authors. Pick authors with `role == "author"`. `series` carries every
 series the book is in; a `position` that nobody recorded is left out
-rather than sent as `0`, which would read as "first".
+rather than sent as `0`, which would read as "first". `source` is
+`folder`, `shared` or `personal`: it tells you whether the membership
+came from the last folder pass, an administrator's claim, or the
+calling reader's own claim.
 
 `sha256` is the digest of the file's content. It is what a client
 holding local files matches against the catalog, and it is never the
@@ -397,17 +404,105 @@ for this route to have no vocabulary for it.
 
 ### Browsing by series, contributor or tag
 
-`GET /v1/folders/{folder}/entities/{kind}` lists entities, where `kind`
+Entities are library-wide, not folder-scoped: one series held across two
+folders is one entity with one id, and its shelf lists every folder's
+volumes (ADR-0019).
+
+`GET /v1/entities/{kind}` lists entities, where `kind`
 is `series`, `contributors` or `tags`. `book_count` counts active books
 only, so a name whose books are missing reads as empty rather than
 leading to a blank page. Paging resumes after `next_after` rather than
 at an offset, because an offset would skip or repeat entries as books
 are added underneath it.
 
-`GET /v1/folders/{folder}/entities/{kind}/{entity}/books` lists one
-entity's books. A series comes back in reading order, with books that
+`GET /v1/entities/{kind}/{entity}/books` lists one
+entity's books, from every folder. A series comes back in reading order, with books that
 have no position last: an unplaced book is an unanswered question, not
 book zero.
+
+### Correcting series
+
+Series metadata comes from the folder first, but a reader can state a
+claim over it. There are two writable layers:
+
+- `personal`: the default, visible only to the caller.
+- `shared`: visible to everyone without a personal claim, and allowed
+  only to tokens that also have `admin`.
+
+The write routes need `library-manage`. Reading the catalog, including
+the layers below, still needs `library-read`; the two scopes are
+separate.
+
+To show an editor what it is changing, read all layers:
+
+```json
+GET /v1/books/{id}/series
+```
+
+```json
+{
+  "book_id": "…",
+  "source": "personal",
+  "series": [{"id": "…", "name": "Foundation", "position": 2, "source": "personal"}],
+  "folder": [{"id": "…", "name": "Sci-Fi", "source": "folder"}],
+  "shared": null,
+  "personal": [{"id": "…", "name": "Foundation", "position": 2, "source": "personal"}]
+}
+```
+
+`series` is the effective answer, the same list every book payload
+returns. `folder` is what the last reconcile pass saw. `shared` and
+`personal` are `null` when that layer has no claim, and arrays when it
+does. An empty array is meaningful: it claims "this book is in no
+series". That is different from `null`, and it is how a client knows
+whether a reset button has anything to clear.
+
+Set a claim by replacing the whole layer:
+
+```json
+PUT /v1/books/{id}/series
+{
+  "series": [
+    {"name": "Foundation", "position": 2}
+  ]
+}
+```
+
+Each item names exactly one of `series_id` or `name`. A `series_id`
+must already exist. A new `name` creates or reuses a series by the same
+normalized-name folding the scanner uses. `position` is optional, but
+if sent it must be a finite number.
+
+Leaving `series` out, or sending `"series": []`, is a claim that the
+book is in no series. It is not a reset. To drop the claim and fall
+back to the layer beneath, delete it:
+
+```json
+DELETE /v1/books/{id}/series
+```
+
+Add `?scope=shared`, or send `"scope": "shared"` on `PUT`, only for the
+shared layer. A non-admin token gets `403` even if it has
+`library-manage`.
+
+Drag-reordering a series is a bulk renumbering:
+
+```json
+PUT /v1/entities/series/{series}/order
+{
+  "order": [
+    {"book_id": "…", "position": 1},
+    {"book_id": "…", "position": 2}
+  ]
+}
+```
+
+It returns `204 No Content`. The order must be non-empty, may contain
+at most 1000 books, and may not name the same book twice. The operation
+is idempotent and preserves each book's other series memberships, so
+renumbering a trilogy does not drop a volume from an omnibus. Only
+`kind=series` is accepted; trying to reorder contributors or tags is
+`404`.
 
 ### Syncing a book you downloaded from the catalog
 

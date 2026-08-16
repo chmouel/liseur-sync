@@ -1,0 +1,266 @@
+package webui
+
+// The series shelf and the assign dialog (ADR-0018).
+//
+// A series is read through rather than browsed, so the shelf leads with
+// what to open next and then shows the run in order with each volume's
+// own progress. The gaps line is deliberately prominent: a shelf that
+// silently renumbers around a missing volume is a shelf that lies.
+
+templ seriesShelfPage(prefix string, u userCtx, csrf string, v SeriesShelfView) {
+	@layout(orPlaceholder(v.Name), prefix, u, csrf, seriesShelfBody(prefix, csrf, v))
+}
+
+templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
+	<div class="toolbar">
+		<h1>{ orPlaceholder(v.Name) }</h1>
+		<span class="spacer"></span>
+		if v.Source == "personal" {
+			<span class="chip" title="You arranged this series.">Yours</span>
+		} else if v.Source == "shared" {
+			<span class="chip" title="An administrator arranged this series.">Curated</span>
+		}
+	</div>
+	if v.Problem != "" {
+		<p class="error" role="alert">{ v.Problem }</p>
+	}
+	if v.Notice != "" {
+		<p class="notice" role="status">{ v.Notice }</p>
+	}
+	if v.NextUp != nil {
+		<section class="hero">
+			<div class="art">
+				<a href={ prefix + "books/" + v.NextUp.BookID }>
+					<img
+						src={ prefix + "books/" + v.NextUp.BookID + "/cover?size=full" }
+						alt=""
+						width="333"
+						height="500"
+					/>
+				</a>
+			</div>
+			<div class="herotext">
+				if v.NextUp.Started() {
+					<span class="eyebrow">Continue the series</span>
+				} else {
+					<span class="eyebrow">Next up</span>
+				}
+				<a class="title" href={ prefix + "books/" + v.NextUp.BookID }>
+					{ orPlaceholder(v.NextUp.Title) }
+				</a>
+				if v.NextUp.Position != "" {
+					<span class="by">{ "Book " + v.NextUp.Position }</span>
+				}
+				if v.NextUp.Progression != nil {
+					<div class="bar"><span class={ pctClass(*v.NextUp.Progression) }></span></div>
+					<span class="muted">{ pct(*v.NextUp.Progression) }</span>
+				}
+				<p class="rowlinks">
+					if v.NextUp.CanRead {
+						<a class="btn primary" href={ prefix + "books/" + v.NextUp.BookID + "/read" }>
+							if v.NextUp.Started() {
+								Resume
+							} else {
+								Start reading
+							}
+						</a>
+					}
+					if v.NextUp.CanGet {
+						<a class="btn" href={ prefix + "books/" + v.NextUp.BookID + "/download" }>Download</a>
+					}
+				</p>
+			</div>
+		</section>
+	}
+	if len(v.Gaps) > 0 {
+		<p class="notice" role="status">
+			{ gapsSentence(v.Gaps) }
+		</p>
+	}
+	<section class="card">
+		<h2>Reading order</h2>
+		if len(v.Volumes) == 0 {
+			@emptyState("Nothing on this shelf",
+				"No book in this folder claims this series any more.", "", "")
+		} else {
+			<ol class="serieslist">
+				for _, vol := range v.Volumes {
+					@seriesVolumeRow(prefix, vol)
+				}
+			</ol>
+		}
+		if v.NextURL != "" {
+			<div class="more">
+				<a href={ v.NextURL }>Next page</a>
+			</div>
+		}
+	</section>
+	<p>
+		<a href={ prefix + "entities/series" }>All series</a>
+		{ " · " }
+		<a href={ prefix + "library" }>Back to the library</a>
+	</p>
+}
+
+templ seriesVolumeRow(prefix string, vol SeriesVolume) {
+	<li class="seriesvol">
+		<a class="art" href={ prefix + "books/" + vol.BookID }>
+			<img
+				src={ prefix + "books/" + vol.BookID + "/cover?size=small" }
+				alt=""
+				width="80"
+				height="120"
+				loading="lazy"
+			/>
+		</a>
+		<div class="voltext">
+			<span class="volnum">
+				if vol.Position != "" {
+					{ "#" + vol.Position }
+				} else {
+					{ "—" }
+				}
+			</span>
+			<a class="title" href={ prefix + "books/" + vol.BookID }>
+				{ orPlaceholder(vol.Title) }
+			</a>
+			if vol.Author != "" {
+				<span class="by">{ vol.Author }</span>
+			}
+			if vol.Progression != nil {
+				<div class="bar"><span class={ pctClass(*vol.Progression) }></span></div>
+				<span class="muted">
+					if vol.Finished() {
+						{ "Finished" }
+					} else {
+						{ pct(*vol.Progression) }
+					}
+				</span>
+			}
+		</div>
+		<div class="volactions">
+			if vol.CanRead {
+				<a class="btn" href={ prefix + "books/" + vol.BookID + "/read" }>Read</a>
+			}
+		</div>
+	</li>
+}
+
+// -------------------------------------------------------------------
+// The assign dialog
+// -------------------------------------------------------------------
+
+// seriesAssignForm is an htmx fragment that replaces itself, so saving
+// leaves the reader on the book page with the dialog showing what was
+// saved. Everything in it works without scripting too: the form posts
+// normally and the server answers with the same fragment.
+templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
+	<div id="series-assign" class="card">
+		<h2>Series</h2>
+		if v.Problem != "" {
+			<p class="error" role="alert">{ v.Problem }</p>
+		}
+		<p class="muted">
+			if v.Source == "folder" {
+				This is what the folder says.
+			} else if v.Source == "shared" {
+				An administrator arranged this. It is what everybody sees.
+			} else {
+				You arranged this. Only you see it.
+			}
+		</p>
+		<form
+			method="post"
+			action={ prefix + "books/" + v.BookID + "/series" }
+			hx-post={ prefix + "books/" + v.BookID + "/series" }
+			hx-target="#series-assign"
+			hx-swap="outerHTML"
+		>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<datalist id="series-names"></datalist>
+			<div class="assignrows">
+				for _, row := range v.Current {
+					@seriesAssignRowFields(prefix, row)
+				}
+				// Always one blank row, so adding a series takes no
+				// clicking about first.
+				@seriesAssignRowFields(prefix, SeriesAssignRow{})
+			</div>
+			<p class="muted">
+				Clear a name to take the book out of that series. Clear them
+				all to say it is in none.
+			</p>
+			if v.CanShare {
+				<label class="check">
+					<input type="checkbox" name="scope" value="shared" checked?={ v.Shared }/>
+					Everybody sees this
+				</label>
+			}
+			<div class="cta">
+				<button class="btn primary" type="submit">Save</button>
+			</div>
+		</form>
+		if v.CanReset {
+			<form
+				method="post"
+				action={ prefix + "books/" + v.BookID + "/series/reset" }
+				hx-post={ prefix + "books/" + v.BookID + "/series/reset" }
+				hx-target="#series-assign"
+				hx-swap="outerHTML"
+			>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				if v.Shared && v.CanShare {
+					<input type="hidden" name="scope" value="shared"/>
+				}
+				<button class="btn" type="submit">
+					if v.Shared {
+						Undo the shared arrangement
+					} else {
+						Back to what the folder says
+					}
+				</button>
+			</form>
+			if len(v.Folder) > 0 {
+				<p class="muted">
+					{ "The folder says: " + folderSeriesSentence(v.Folder) }
+				</p>
+			} else {
+				<p class="muted">The folder puts this book in no series.</p>
+			}
+		}
+	</div>
+}
+
+templ seriesAssignRowFields(prefix string, row SeriesAssignRow) {
+	<p class="assignrow">
+		<input
+			type="text"
+			name="name"
+			value={ row.Name }
+			placeholder="Series"
+			list="series-names"
+			autocomplete="off"
+			hx-get={ prefix + "entities/series/suggest" }
+			hx-trigger="input changed delay:300ms"
+			hx-target="#series-names"
+			hx-swap="innerHTML"
+		/>
+		<input
+			type="text"
+			name="position"
+			value={ row.Position }
+			placeholder="#"
+			inputmode="decimal"
+			size="4"
+		/>
+	</p>
+}
+
+// seriesSuggestions fills the shared datalist. One list for every field
+// is deliberate: a datalist is only ever consulted by the field being
+// typed into, and one element is cheaper than one per row.
+templ seriesSuggestions(names []string) {
+	for _, name := range names {
+		<option value={ name }></option>
+	}
+}

@@ -17,30 +17,25 @@ var entityKinds = map[string]store.EntityKind{
 	"tags":         store.EntityTag,
 }
 
-// entityRequest pulls the folder and kind every entity route needs,
-// answering the request itself when either of them is wrong.
-func entityRequest(w http.ResponseWriter, r *http.Request) (string, store.EntityKind, bool) {
-	folderID := r.PathValue("folder")
-	if folderID == "" || len(folderID) > maxFolderIDBytes {
-		writeError(w, http.StatusNotFound, "folder not found")
-		return "", "", false
-	}
+// entityRequest pulls the kind every entity route needs, answering the
+// request itself when it is wrong. Entities are library-wide
+// (ADR-0019), so there is no folder to read.
+func entityRequest(w http.ResponseWriter, r *http.Request) (store.EntityKind, bool) {
 	kind, ok := entityKinds[r.PathValue("kind")]
 	if !ok {
 		writeError(w, http.StatusNotFound, "no such kind of entity")
-		return "", "", false
+		return "", false
 	}
-	return folderID, kind, true
+	return kind, true
 }
 
-// HandleFolderEntities implements
-// GET /v1/folders/{folder}/entities/{kind}.
-func (s *Server) HandleFolderEntities(w http.ResponseWriter, r *http.Request) {
+// HandleEntities implements GET /v1/entities/{kind}.
+func (s *Server) HandleEntities(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID, kind, ok := entityRequest(w, r)
+	kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -56,9 +51,10 @@ func (s *Server) HandleFolderEntities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cursor is too long")
 		return
 	}
-	entities, err := s.St.ListCatalogEntities(r.Context(), folderID, kind, after, limit)
+	entities, err := s.St.ListCatalogEntities(
+		r.Context(), readerID(r), kind, after, limit)
 	if err != nil {
-		writeCatalogError(w, err, "folder not found")
+		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	out := make([]map[string]any, 0, len(entities))
@@ -76,13 +72,13 @@ func (s *Server) HandleFolderEntities(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleEntityBooks implements
-// GET /v1/folders/{folder}/entities/{kind}/{entity}/books.
+// GET /v1/entities/{kind}/{entity}/books.
 func (s *Server) HandleEntityBooks(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID, kind, ok := entityRequest(w, r)
+	kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -97,18 +93,18 @@ func (s *Server) HandleEntityBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entity, err := s.St.CatalogEntityByID(
-		r.Context(), folderID, r.PathValue("entity"), kind)
+		r.Context(), readerID(r), r.PathValue("entity"), kind)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	books, next, err := s.St.ListBooksByEntity(
-		r.Context(), folderID, entity.ID, kind, after, limit)
+		r.Context(), readerID(r), entity.ID, kind, after, limit)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	out, err := s.catalogBooksJSON(r.Context(), books)
+	out, err := s.catalogBooksJSON(r.Context(), readerID(r), books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return

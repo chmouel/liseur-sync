@@ -343,11 +343,11 @@ func (s *Server) Routes() *http.ServeMux {
 	// folder's books — the catalog is deliberately shared (ADR-0017) —
 	// while reading state stays strictly per user.
 	//
-	// There is no library-manage scope. With uploads and metadata
-	// editing gone, nothing writes to the catalog but a reconcile pass,
-	// and a pass answers to the disk rather than to a token. Managing
-	// folders is an admin capability because it names paths on this
-	// machine.
+	// There is no metadata-editing scope beyond series claims: with
+	// uploads gone, nothing else writes to the catalog but a reconcile
+	// pass, and a pass answers to the disk rather than to a token.
+	// Managing folders is an admin capability because it names paths on
+	// this machine.
 	readH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryRead, h))
@@ -362,9 +362,10 @@ func (s *Server) Routes() *http.ServeMux {
 	// for nothing beyond the scope that lists it.
 	mux.Handle("GET /v1/folders/{folder}/search", readH(s.HandleFolderSearch))
 	mux.Handle("GET /v1/books/{id}", readH(s.HandleBook))
-	mux.Handle("GET /v1/folders/{folder}/entities/{kind}",
-		readH(s.HandleFolderEntities))
-	mux.Handle("GET /v1/folders/{folder}/entities/{kind}/{entity}/books",
+	// Entities are library-wide (ADR-0019), so they hang off the root
+	// rather than off the folder a book happened to be found in.
+	mux.Handle("GET /v1/entities/{kind}", readH(s.HandleEntities))
+	mux.Handle("GET /v1/entities/{kind}/{entity}/books",
 		readH(s.HandleEntityBooks))
 	// Download serves HEAD too: ServeContent handles it, and catalog
 	// clients probe with HEAD before fetching.
@@ -374,6 +375,24 @@ func (s *Server) Routes() *http.ServeMux {
 	// as the book record it illustrates, and no more.
 	mux.Handle("GET /v1/books/{id}/cover", readH(s.HandleBookCover))
 	mux.Handle("HEAD /v1/books/{id}/cover", readH(s.HandleBookCover))
+	// Reading the layers under a book's series is a catalog read; it
+	// shows what the folder said beneath any claim, which is what an
+	// editor needs to know whether a reset would change anything.
+	mux.Handle("GET /v1/books/{id}/series", readH(s.HandleBookSeriesLayers))
+
+	// library-manage scope: stating what the folder got wrong
+	// (ADR-0018). These write to a layer beside the catalog, never into
+	// it and never under a watched folder. The shared layer additionally
+	// takes admin, checked in the handler, because it speaks for
+	// everybody; the personal layer speaks only for its writer.
+	manageH := func(h http.HandlerFunc) http.Handler {
+		return auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryManage, h))
+	}
+	mux.Handle("PUT /v1/books/{id}/series", manageH(s.HandleSetBookSeries))
+	mux.Handle("DELETE /v1/books/{id}/series", manageH(s.HandleClearBookSeries))
+	mux.Handle("PUT /v1/entities/{kind}/{entity}/order",
+		manageH(s.HandleReorderSeries))
 
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog
@@ -407,8 +426,8 @@ func (s *Server) Routes() *http.ServeMux {
 		opdsH(s.HandleOPDSSearchDescription))
 	mux.Handle("GET /opds/v1.2/folders/{folder}/search", opdsH(s.HandleOPDSSearch))
 	mux.Handle("GET /opds/v1.2/folders/{folder}/recent", opdsH(s.HandleOPDSRecent))
-	mux.Handle("GET /opds/v1.2/folders/{folder}/{kind}", opdsH(s.HandleOPDSEntities))
-	mux.Handle("GET /opds/v1.2/folders/{folder}/{kind}/{entity}",
+	mux.Handle("GET /opds/v1.2/entities/{kind}", opdsH(s.HandleOPDSEntities))
+	mux.Handle("GET /opds/v1.2/entities/{kind}/{entity}",
 		opdsH(s.HandleOPDSEntityBooks))
 	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
 	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))

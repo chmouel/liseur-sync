@@ -133,7 +133,7 @@ func (s *Server) HandleFolderBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
 	}
-	out, err := s.catalogBooksJSON(r.Context(), books)
+	out, err := s.catalogBooksJSON(r.Context(), readerID(r), books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
@@ -164,7 +164,7 @@ func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	body, err := s.catalogBookBodyJSON(r.Context(), book)
+	body, err := s.catalogBookBodyJSON(r.Context(), readerID(r), book)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "book lookup failed")
 		return
@@ -303,6 +303,16 @@ func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
 	writeError(w, http.StatusInternalServerError, "catalog lookup failed")
 }
 
+// readerID is who a catalog read is answered for. Series memberships
+// resolve through that reader's override layers (ADR-0018); every other
+// part of the catalog is shared and does not depend on who is asking.
+// It is empty only for a request that reached here unauthenticated,
+// which the handlers refuse before getting this far.
+func readerID(r *http.Request) string {
+	tok, _ := auth.TokenFrom(r)
+	return tok.UserID
+}
+
 // catalogBookJSON renders the one shape every book-bearing route
 // returns (ADR-0015). There is a single representation of a catalog
 // book: list, search, entity listings, duplicates and detail all render
@@ -366,29 +376,42 @@ func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[st
 	// and a payload reporting one of them silently picks a winner.
 	series := make([]map[string]any, 0, len(rel.Series[b.ID]))
 	for _, s := range rel.Series[b.ID] {
-		row := map[string]any{"id": s.SeriesID, "name": s.Name}
-		// A position nobody recorded is left out rather than sent as
-		// zero, which would read as "first in the series".
-		if s.Position != nil {
-			row["position"] = *s.Position
-		}
-		series = append(series, row)
+		series = append(series, bookSeriesJSON(s))
 	}
 	out["series"] = series
 	return out
 }
 
+// bookSeriesJSON is the one representation of a series membership.
+// `source` names the layer it came from (ADR-0018), so a client can show
+// whether it is looking at the folder, an administrator's claim or its
+// own, and therefore whether a reset is on offer.
+func bookSeriesJSON(s store.BookSeries) map[string]any {
+	row := map[string]any{
+		"id": s.SeriesID, "name": s.Name, "source": string(s.Source),
+	}
+	// A position nobody recorded is left out rather than sent as
+	// zero, which would read as "first in the series".
+	if s.Position != nil {
+		row["position"] = *s.Position
+	}
+	return row
+}
+
 // catalogBooksJSON renders a page of books, reading their relations in
 // one batch rather than one lookup per row: a page of books is a bounded
 // number of rows, and must be a bounded number of queries too.
+//
+// userID is who is asking, because series memberships resolve through
+// that reader's override layers (ADR-0018).
 func (s *Server) catalogBooksJSON(
-	ctx context.Context, books []store.CatalogBook,
+	ctx context.Context, userID string, books []store.CatalogBook,
 ) ([]map[string]any, error) {
 	ids := make([]string, 0, len(books))
 	for _, b := range books {
 		ids = append(ids, b.ID)
 	}
-	rel, err := s.St.CatalogBookRelationsForBooks(ctx, ids)
+	rel, err := s.St.CatalogBookRelationsForBooks(ctx, userID, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -402,9 +425,9 @@ func (s *Server) catalogBooksJSON(
 // catalogBookBodyJSON is the same shape for a single book. Detail is not
 // a richer shape than a listing row; it is the same one.
 func (s *Server) catalogBookBodyJSON(
-	ctx context.Context, book store.CatalogBook,
+	ctx context.Context, userID string, book store.CatalogBook,
 ) (map[string]any, error) {
-	out, err := s.catalogBooksJSON(ctx, []store.CatalogBook{book})
+	out, err := s.catalogBooksJSON(ctx, userID, []store.CatalogBook{book})
 	if err != nil {
 		return nil, err
 	}

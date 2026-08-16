@@ -313,34 +313,33 @@ CREATE UNIQUE INDEX books_folder_path ON books(folder_id, relative_path);
 CREATE UNIQUE INDEX books_folder_calibre
     ON books(folder_id, calibre_id) WHERE calibre_id IS NOT NULL;
 
+-- Series, tags and contributors belong to the library rather than to a
+-- folder (ADR-0019). A folder is where a *book* was found; "Imperial
+-- Radch" is not a fact about a disk. Two folders observing the same
+-- normalized name resolve to one row, which is what lets a series split
+-- across a Calibre library and a folder of loose EPUBs be one shelf.
 CREATE TABLE series (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TEXT NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
 CREATE TABLE tags (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TEXT NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
 CREATE TABLE contributors (
     id              TEXT PRIMARY KEY,
-    folder_id       TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
     created_at      TEXT NOT NULL,
-    UNIQUE (folder_id, id),
-    UNIQUE (folder_id, normalized_name)
+    UNIQUE (normalized_name)
 );
 
 -- The relation tables carry no source and no lock. Both existed to rank
@@ -348,40 +347,73 @@ CREATE TABLE contributors (
 -- against an external provider against a human edit. With editing and
 -- providers gone there is one source per folder kind and nothing to
 -- rank, so a pass simply states what the folder says.
+-- Membership keeps its folder_id: it carries the composite key to
+-- books(folder_id, id) and that cascade. Only the entity side of the key
+-- is library-wide (ADR-0019).
 CREATE TABLE book_series (
     folder_id TEXT NOT NULL,
     book_id   TEXT NOT NULL,
-    series_id TEXT NOT NULL,
+    series_id TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
     position  REAL,
     PRIMARY KEY (book_id, series_id),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, series_id)
-        REFERENCES series(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE book_tags (
     folder_id TEXT NOT NULL,
     book_id   TEXT NOT NULL,
-    tag_id    TEXT NOT NULL,
+    tag_id    TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (book_id, tag_id),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, tag_id)
-        REFERENCES tags(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
+
+-- A series claim (ADR-0018): one layer's whole answer to "which series
+-- is this book in", overriding what the last pass observed. scope_user
+-- is '' for the shared layer an admin writes and a user id for a
+-- personal one; it carries no foreign key because accounts are disabled
+-- rather than deleted, so there is nothing to cascade from.
+--
+-- The claim is a row of its own rather than being implied by its
+-- memberships, because a claim with no memberships is the meaningful
+-- statement "this book is in no series" — which is how a stray volume
+-- gets detached from the series its directory implied.
+CREATE TABLE book_series_overrides (
+    folder_id  TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    scope_user TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    PRIMARY KEY (book_id, scope_user),
+    FOREIGN KEY (folder_id, book_id)
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
+);
+CREATE INDEX book_series_overrides_scope
+    ON book_series_overrides(scope_user, folder_id);
+
+CREATE TABLE book_series_override_items (
+    folder_id  TEXT NOT NULL,
+    book_id    TEXT NOT NULL,
+    scope_user TEXT NOT NULL,
+    series_id  TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    position   REAL,
+    PRIMARY KEY (book_id, scope_user, series_id),
+    FOREIGN KEY (book_id, scope_user)
+        REFERENCES book_series_overrides(book_id, scope_user) ON DELETE CASCADE
+);
+CREATE INDEX book_series_override_items_series
+    ON book_series_override_items(series_id, scope_user);
 
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,
-    contributor_id TEXT NOT NULL,
+    contributor_id TEXT NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
     role           TEXT NOT NULL,
     position       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (book_id, contributor_id, role),
     FOREIGN KEY (folder_id, book_id)
-        REFERENCES books(folder_id, id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id, contributor_id)
-        REFERENCES contributors(folder_id, id) ON DELETE CASCADE
+        REFERENCES books(folder_id, id) ON DELETE CASCADE
 );
 
 CREATE TABLE book_identifiers (

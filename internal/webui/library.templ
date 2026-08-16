@@ -54,12 +54,15 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			</form>
 			if v.Selected != "" {
 				@searchForm(prefix, SearchView{FolderID: v.Selected})
-				<div class="chips">
-					<a class="chip" href={ prefix + "folders/" + v.Selected + "/series" }>Series</a>
-					<a class="chip" href={ prefix + "folders/" + v.Selected + "/contributors" }>Contributors</a>
-					<a class="chip" href={ prefix + "folders/" + v.Selected + "/tags" }>Tags</a>
-				</div>
 			}
+			// Browsing by series, author or tag reaches the whole
+			// library (ADR-0019), so these do not wait for a folder to
+			// be picked the way search does.
+			<div class="chips">
+				<a class="chip" href={ prefix + "entities/series" }>Series</a>
+				<a class="chip" href={ prefix + "entities/contributors" }>Contributors</a>
+				<a class="chip" href={ prefix + "entities/tags" }>Tags</a>
+			</div>
 			<span class="spacer"></span>
 			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>

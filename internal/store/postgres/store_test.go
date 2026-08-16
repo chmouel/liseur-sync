@@ -38,7 +38,9 @@ func reset(t *testing.T, s *Store) {
 	t.Helper()
 	tables := []string{
 		"book_languages", "book_tags", "tags",
-		"book_contributors", "contributors", "book_series", "series",
+		"book_contributors", "contributors",
+		"book_series_override_items", "book_series_overrides",
+		"book_series", "series",
 		"book_identifiers", "user_book_works",
 		"books", "folders",
 		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "aliases", "editions",

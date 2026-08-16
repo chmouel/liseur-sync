@@ -125,7 +125,7 @@ templ viewToggle(prefix string, csrf string, back string, current string) {
 // the tile says the name and how much of it there is.
 templ entityCard(prefix string, v EntitiesView, e EntityRow) {
 	<article class="bookcard entitycard">
-		<a class="art" href={ prefix + "folders/" + v.FolderID + "/" + v.Kind + "/" + e.ID }>
+		<a class="art" href={ prefix + "entities/" + v.Kind + "/" + e.ID }>
 			<span class="name">{ e.Name }</span>
 			<span class="count">{ plural(e.BookCount, "book") }</span>
 		</a>

@@ -34,9 +34,19 @@ func entityKindFrom(r *http.Request) (store.EntityKind, bool) {
 	return kind, ok
 }
 
-// handleEntities lists one folder's entities of one kind. There is
-// nothing to gate: the catalog is shared, and browsing by author or tag
-// is reading it (ADR-0017).
+// handleEntities lists the library's entities of one kind (ADR-0019).
+// There is nothing to gate: the catalog is shared, and browsing by
+// author or tag is reading it (ADR-0017).
+// readerID is who a catalog read is answered for. Series memberships
+// resolve through that reader's override layers (ADR-0018); every other
+// part of the catalog is shared and does not depend on who is asking.
+func readerID(u *store.User) string {
+	if u == nil {
+		return ""
+	}
+	return u.ID
+}
+
 func (s *Server) handleEntities(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
@@ -45,16 +55,15 @@ func (s *Server) handleEntities(
 		http.NotFound(w, r)
 		return
 	}
-	folderID := r.PathValue("folder")
 	rows, err := s.St.ListCatalogEntities(
-		r.Context(), folderID, kind, r.URL.Query().Get("after"), entityPageSize)
+		r.Context(), readerID(u), kind,
+		r.URL.Query().Get("after"), entityPageSize)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	labels := entityKindLabels[kind]
 	v := EntitiesView{
-		FolderID: folderID,
 		Kind:     r.PathValue("kind"),
 		Heading:  labels.Many,
 		Singular: labels.One,
@@ -66,13 +75,22 @@ func (s *Server) handleEntities(
 	// browser against this URL, so the kind segment alone is this page.
 	v.Back = url.PathEscape(v.Kind)
 	for _, row := range rows {
+		// A series nothing claims any more is a name and not a shelf.
+		// This became reachable rather than theoretical with ADR-0018:
+		// a claim can move every book out of a series, and nothing
+		// collects the series row that is left behind. Contributors and
+		// tags keep their empty rows, which say "the folder knows this
+		// name and has nothing to show for it" — a series says the same
+		// thing by not being there.
+		if kind == store.EntitySeries && row.BookCount == 0 {
+			continue
+		}
 		v.Entities = append(v.Entities, EntityRow{
 			ID: row.ID, Name: row.Name, BookCount: row.BookCount,
 		})
 	}
 	if len(rows) == entityPageSize {
-		v.NextURL = "folders/" + url.PathEscape(folderID) + "/" +
-			url.PathEscape(v.Kind) + "?after=" +
+		v.NextURL = url.PathEscape(v.Kind) + "?after=" +
 			url.QueryEscape(rows[len(rows)-1].NormalizedName)
 	}
 	entitiesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
@@ -88,8 +106,9 @@ func (s *Server) handleEntityBooks(
 		http.NotFound(w, r)
 		return
 	}
-	folderID, entityID := r.PathValue("folder"), r.PathValue("entity")
-	entity, err := s.St.CatalogEntityByID(r.Context(), folderID, entityID, kind)
+	entityID := r.PathValue("entity")
+	entity, err := s.St.CatalogEntityByID(
+		r.Context(), readerID(u), entityID, kind)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -100,7 +119,7 @@ func (s *Server) handleEntityBooks(
 		return
 	}
 	books, next, err := s.St.ListBooksByEntity(
-		r.Context(), folderID, entity.ID, kind, cursor, entityPageSize)
+		r.Context(), readerID(u), entity.ID, kind, cursor, entityPageSize)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -112,7 +131,6 @@ func (s *Server) handleEntityBooks(
 	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
 	loc := userLoc(u)
 	v := EntityBooksView{
-		FolderID: folderID,
 		Kind:     r.PathValue("kind"),
 		Heading:  entity.Name,
 		Singular: entityKindLabels[kind].One,
@@ -131,8 +149,7 @@ func (s *Server) handleEntityBooks(
 	// The store hands back the cursor for the next page, because the
 	// sort key depends on the kind and only the store knows it.
 	if next != nil {
-		v.NextURL = "folders/" + url.PathEscape(folderID) + "/" +
-			url.PathEscape(v.Kind) + "/" + url.PathEscape(entityID) +
+		v.NextURL = url.PathEscape(v.Kind) + "/" + url.PathEscape(entityID) +
 			"?cursor=" + url.QueryEscape(encodeBooksCursor(*next))
 	}
 	entityBooksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).

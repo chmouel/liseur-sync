@@ -100,10 +100,21 @@ of them.
   not.** Ops, sessions, insights, devices and `user_book_works` are
   per-user and must never be readable across users. Books, folders and
   catalog entities are shared: every logged-in user sees every folder's
-  books, and only an admin sees or manages folders. The few global
+  books, and only an admin sees or manages folders. **Series,
+  contributors and tags are library-wide, not folder-scoped**
+  (ADR-0019): they are keyed by normalized name alone, one series held
+  in two folders is one row, and an entity nothing names any more is
+  garbage-collected — unless a reader's claim still names it. The few global
   lookups outside the catalog — token/auth hashes, `UserIDs`,
   `ListUsers` — exist for auth and background jobs and are documented as
-  such.
+  such. The one bounded exception is **series claims** (ADR-0018):
+  `book_series_overrides` and `book_series_override_items` are keyed by
+  `scope_user`, so a series membership resolves per reader — personal,
+  else shared, else what the folder said. It is bounded on purpose:
+  claims change only which series a book is in and where, never whether
+  a book, folder or entity exists. A personal claim must never be
+  readable by another user, and only an admin writes the shared layer.
+  Every store read that yields a series therefore takes a `userID`.
 - **`root_path` never reaches a non-admin.** It is a filesystem oracle;
   a `library-read` response names books, not paths.
 - **The server never writes under a watched folder.** Rooted, read-only

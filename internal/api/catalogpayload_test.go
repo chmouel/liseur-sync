@@ -122,7 +122,7 @@ func TestCatalogBookShapeIsIdenticalOnEveryRoute(t *testing.T) {
 
 	// The entity route is keyed by the store-minted entity id, not its
 	// name, so the series id has to come from the entities list first.
-	_, entitiesRaw := f.get(t, "/v1/folders/"+f.folder.ID+"/entities/series", tok)
+	_, entitiesRaw := f.get(t, "/v1/entities/series", tok)
 	var entitiesBody struct {
 		Entities []struct {
 			ID   string `json:"id"`
@@ -142,7 +142,7 @@ func TestCatalogBookShapeIsIdenticalOnEveryRoute(t *testing.T) {
 		t.Fatalf("Payload Cycle series not found: %+v", entitiesBody.Entities)
 	}
 	_, seriesRaw := f.get(t,
-		"/v1/folders/"+f.folder.ID+"/entities/series/"+seriesID+"/books", tok)
+		"/v1/entities/series/"+seriesID+"/books", tok)
 	fromSeries := normalizeBookRow(t, bookRow(t, seriesRaw, bookID))
 
 	respDetail, detailRaw := f.get(t, "/v1/books/"+bookID, tok)
@@ -216,10 +216,10 @@ type countingStore struct {
 }
 
 func (c *countingStore) CatalogBookRelationsForBooks(
-	ctx context.Context, bookIDs []string,
+	ctx context.Context, userID string, bookIDs []string,
 ) (store.CatalogBookRelations, error) {
 	c.relationCalls++
-	return c.Store.CatalogBookRelationsForBooks(ctx, bookIDs)
+	return c.Store.CatalogBookRelationsForBooks(ctx, userID, bookIDs)
 }
 
 // TestCatalogListingReadsRelationsOnceRegardlessOfPageSize is the load-

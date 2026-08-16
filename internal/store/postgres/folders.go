@@ -95,17 +95,21 @@ func (s *Store) ListFolders(ctx context.Context, after string, limit int) ([]sto
 // it by cascade; nothing under root_path is touched, because those files
 // were never this server's to delete.
 func (s *Store) DeleteFolder(ctx context.Context, folderID string) error {
-	res, err := s.db.ExecContext(ctx,
-		q(`DELETE FROM folders WHERE id = ?`), folderID)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			q(`DELETE FROM folders WHERE id = ?`), folderID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return store.ErrNotFound
+		}
+		// The books went with the folder, so a series only this folder
+		// held now belongs to nobody (ADR-0019).
+		return collectOrphanEntitiesTx(ctx, tx)
+	})
 }
