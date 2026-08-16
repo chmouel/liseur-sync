@@ -226,7 +226,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		<p class="muted">
 			A single-use code, shown once. In KOReader's kosync settings:
 			username = a device name, password = the code, custom server =
-			<code>https://&lt;host&gt;/adapter/kosync</code>. The code is a
+			<code>{ v.Base + "/adapter/kosync" }</code>. The code is a
 			pairing credential bound to one device slot, never the account
 			password.
 		</p>
@@ -240,7 +240,8 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		<h2>Add a statistics plugin device</h2>
 		<p class="muted">
 			A capability URL for KOReader's statistics plugin, shown once. The
-			plugin's server is <code>https://&lt;host&gt;/adapter/koplugin/&lt;capability&gt;</code>.
+			plugin's server is
+			<code>{ v.Base + "/adapter/koplugin/<capability>" }</code>.
 		</p>
 		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
