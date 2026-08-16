@@ -77,6 +77,10 @@ type Server struct {
 type FolderWatcher interface {
 	Add(ctx context.Context, folder store.Folder)
 	Remove(folderID string)
+	// Scan asks for a pass over one folder now. It returns before the
+	// pass finishes: reading a large folder takes longer than a request
+	// should.
+	Scan(folderID string)
 }
 
 const cookieName = "liseur_session"
@@ -280,6 +284,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/users/{id}/backfill",
 		sec(s.requireAdmin(s.handleAdminBackfillWorks)))
 	mux.Handle("POST /ui/admin/folders", sec(s.requireAdmin(s.handleAdminCreateFolder)))
+	mux.Handle("POST /ui/admin/folders/{id}/scan",
+		sec(s.requireAdmin(s.handleAdminScanFolder)))
 	mux.Handle("POST /ui/admin/folders/{id}/delete",
 		sec(s.requireAdmin(s.handleAdminDeleteFolder)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))

@@ -224,6 +224,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
+		"/ui/admin/folders/f1/scan",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
 	} {
@@ -511,6 +512,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
+		"/ui/admin/folders/f1/scan",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
 		"/ui/reader/token",

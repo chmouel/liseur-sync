@@ -7,10 +7,12 @@ package webui
 templ adminMaintenanceBody(prefix string, v maintenanceView, flash Flash) {
 	<h1>Maintenance</h1>
 	<p class="muted">
-		What this server is reflecting, as the database sees it. There is no
-		"run now" for any of it: a pass over a folder is safe to repeat and
-		runs on its own, so a button would only start a second pass over the
-		same rows.
+		What this server is reflecting, as the database sees it. Nothing
+		here is a job to start or a queue to drain: a folder is read when
+		it changes and again on a slow timer. If a count looks wrong,
+		<a href={ prefix + "admin/folders" }>Folders</a> has a Scan now for
+		each one — which is what a network share needs, because the kernel
+		does not report changes on those.
 	</p>
 	@adminFlash(flash)
 	<section class="card">

@@ -160,6 +160,28 @@ func (w *Watcher) Add(ctx context.Context, folder store.Folder) {
 	}
 }
 
+// Scan asks for a pass over one folder now, without waiting for an
+// event or for the safety timer.
+//
+// This exists because inotify is not the whole truth: it sees nothing on
+// NFS or SMB, and it drops events under pressure. In both cases the
+// catalog is wrong and the only other recourse is to wait up to half an
+// hour. A pass is idempotent, so the button is free to press — asking
+// twice is asking once.
+//
+// It returns without waiting for the pass to finish. Reading a large
+// folder takes longer than a request should, and the answer a person
+// wants is "yes, I heard you", which is what the page then says.
+func (w *Watcher) Scan(folderID string) {
+	select {
+	case w.events <- folderID:
+	default:
+		// The channel is a signal, not a queue. A full one means a pass
+		// is already pending for something, and a pass reads the whole
+		// folder anyway.
+	}
+}
+
 // Remove unregisters a folder. Its catalog rows go with the folder row;
 // nothing under its root is touched.
 func (w *Watcher) Remove(folderID string) {

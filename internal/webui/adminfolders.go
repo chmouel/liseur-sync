@@ -106,6 +106,43 @@ func (s *Server) handleAdminCreateFolder(
 	})
 }
 
+// handleAdminScanFolder asks for a pass over one folder now.
+//
+// The watcher already reconciles on filesystem events and on a slow
+// timer, so this is not how a folder normally stays current. It is here
+// because inotify sees nothing on NFS or SMB and drops events under
+// pressure: in both cases the catalog is wrong and the alternative is
+// waiting half an hour for the safety pass. A pass is idempotent, so
+// pressing this twice is pressing it once.
+func (s *Server) handleAdminScanFolder(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	folderID := r.PathValue("id")
+	folder, err := s.St.FolderByID(r.Context(), folderID)
+	logAdminAction(r, u, "scan-folder", folderID, err)
+	if err != nil {
+		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})
+		return
+	}
+	if s.Watching == nil {
+		// A server started without a watcher has nothing to ask. Saying
+		// so is better than a notice claiming a pass that will not run.
+		s.renderAdminFolders(w, r, a, u, Flash{
+			Error: "this server is running without a folder watcher",
+		})
+		return
+	}
+	s.Watching.Scan(folderID)
+	s.renderAdminFolders(w, r, a, u, Flash{
+		Notice: "Reading " + folder.Name +
+			" again. Any change appears as the pass finishes.",
+	})
+}
+
 // handleAdminDeleteFolder forgets a folder and everything catalogued
 // from it. Nothing under its root is touched: those files were never
 // this server's to delete.
