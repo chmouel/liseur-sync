@@ -47,6 +47,10 @@ type adminUserView struct {
 	// yourself is not offered, since the last-admin guard would be the
 	// only thing standing between an operator and a locked instance.
 	Self bool
+	// Base is this server's absolute origin as the browser reached it,
+	// for the addresses an operator has to read out to whoever owns the
+	// device being paired.
+	Base string
 }
 
 // reauth is the shared gate in front of every high-impact mutation: the
@@ -167,7 +171,7 @@ func (s *Server) renderAdminUser(
 		http.Error(w, "no such user", http.StatusNotFound)
 		return
 	}
-	view := adminUserView{User: target, Self: target.ID == u.ID}
+	view := adminUserView{User: target, Self: target.ID == u.ID, Base: s.serverBaseURL(r)}
 	view.Tokens, view.MoreTokens = capSlice(listOrNil(s.St.ListTokens(r.Context(), target.ID)))
 	view.Kosync, view.MoreKosync = capSlice(listOrNil(s.St.ListKosyncDevices(r.Context(), target.ID)))
 	view.Koplugin, view.MoreKoplugin = capSlice(listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)))

@@ -289,7 +289,9 @@ func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.A
 	sortTokens(toks)
 	sortKosyncDevices(kosyncDevs)
 	sortKopluginDevices(kopluginDevs)
-	devicesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), toks, kosyncDevs, kopluginDevs, flash).Render(r.Context(), w)
+	devicesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
+		toks, kosyncDevs, kopluginDevs, s.serverBaseURL(r), flash).
+		Render(r.Context(), w)
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {

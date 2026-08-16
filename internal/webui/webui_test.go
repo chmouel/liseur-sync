@@ -712,3 +712,29 @@ func TestCreditStopsAtThree(t *testing.T) {
 		}
 	}
 }
+
+// TestDevicesShowsTheOPDSAddress checks the catalog address is a URL a
+// person can retype into a reading app, not a documentation placeholder.
+// It is built from the request, so the page has to show the host the
+// browser actually reached — a LAN address, a Tailscale name and a
+// public hostname are all correct, and only the one in front of them is
+// useful.
+func TestDevicesShowsTheOPDSAddress(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/devices")
+
+	want := ts.URL + "/opds/v1.2"
+	if !strings.Contains(body, want) {
+		t.Fatalf("devices page does not show the OPDS address %q", want)
+	}
+	if strings.Contains(body, "&lt;host&gt;") {
+		t.Fatal("devices page still shows a <host> placeholder")
+	}
+	// The koplugin address is built the same way and keeps only the
+	// capability as a placeholder, since that one is per-device.
+	if !strings.Contains(body, ts.URL+"/adapter/koplugin/") {
+		t.Fatal("devices page does not show the koplugin server address")
+	}
+}
+
