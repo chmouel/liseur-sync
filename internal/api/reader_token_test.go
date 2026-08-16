@@ -19,7 +19,7 @@ import (
 // the web UI uses, so a change to the reader's scopes shows up as a
 // failure of this test rather than as a quietly wider credential.
 func TestReaderTokenReadsAndSyncsButCannotManage(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "readable", []byte("a readable book"))
 
 	reader, _, err := auth.NewService(f.st).MintReaderToken(t.Context(), f.user.ID)
@@ -39,16 +39,10 @@ func TestReaderTokenReadsAndSyncsButCannotManage(t *testing.T) {
 		t.Fatalf("reader cannot pull changes: %d %s", resp.StatusCode, raw)
 	}
 
-	// What it must never be: a way to alter the library.
-	if resp, _ := f.req(t, http.MethodDelete, "/v1/books/"+bookID, reader); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("reader token deleted a book: want 403, got %d", resp.StatusCode)
-	}
-	if resp, _ := f.req(
-		t, http.MethodPost, "/v1/libraries/"+f.library+"/upload", reader,
-	); resp.StatusCode != http.StatusForbidden {
-		t.Errorf("reader token reached upload: want 403, got %d", resp.StatusCode)
-	}
-	// Nor a way to read what other people's reading looked like.
+	// What it must never be: a way to read what other people's reading
+	// looked like. There is no book-deletion or upload route left to
+	// probe (ADR-0017 removed both), so insights is the one remaining
+	// boundary an over-wide reader credential could cross.
 	if resp, _ := f.get(t, "/v1/insights/summary", reader); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("reader token reached insights: want 403, got %d", resp.StatusCode)
 	}
@@ -63,7 +57,7 @@ func TestReaderTokenReadsAndSyncsButCannotManage(t *testing.T) {
 // worth testing — nothing in the store would notice if the reader began
 // writing a shape no other client understands.
 func TestReaderPositionRoundTripsAsALocator(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "syncable", []byte("a book to read"))
 
 	reader, _, err := auth.NewService(f.st).MintReaderToken(t.Context(), f.user.ID)

@@ -53,28 +53,38 @@ func Backfill(
 	now func() time.Time,
 ) (Report, error) {
 	var report Report
-	libs, err := st.ListLibraries(ctx, userID, store.LibraryRoleRead)
-	if err != nil {
-		return report, fmt.Errorf("list libraries: %w", err)
-	}
-	for _, lib := range libs {
-		var cursor *store.CatalogBookCursor
-		for {
-			books, err := st.ListCatalogBooks(ctx, userID, lib.Library.ID, cursor, backfillPage)
-			if err != nil {
-				return report, fmt.Errorf("list books in %s: %w", lib.Library.ID, err)
-			}
-			if len(books) == 0 {
-				break
-			}
-			for _, book := range books {
-				if err := backfillBook(ctx, st, userID, book.ID, newID, now, &report); err != nil {
-					return report, err
-				}
-			}
-			last := books[len(books)-1]
-			cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	var folderCursor string
+	for {
+		folders, err := st.ListFolders(ctx, folderCursor, backfillPage)
+		if err != nil {
+			return report, fmt.Errorf("list folders: %w", err)
 		}
+		if len(folders) == 0 {
+			break
+		}
+		for _, folder := range folders {
+			var cursor *store.CatalogBookCursor
+			for {
+				books, err := st.ListCatalogBooks(ctx, folder.ID, cursor, backfillPage)
+				if err != nil {
+					return report, fmt.Errorf("list books in %s: %w", folder.ID, err)
+				}
+				if len(books) == 0 {
+					break
+				}
+				for _, book := range books {
+					if err := backfillBook(ctx, st, userID, book, newID, now, &report); err != nil {
+						return report, err
+					}
+				}
+				last := books[len(books)-1]
+				cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+			}
+		}
+		if len(folders) < backfillPage {
+			break
+		}
+		folderCursor = store.FolderCursor(folders[len(folders)-1])
 	}
 	return report, nil
 }
@@ -82,32 +92,30 @@ func Backfill(
 func backfillBook(
 	ctx context.Context,
 	st store.Store,
-	userID, bookID string,
+	userID string,
+	book store.CatalogBook,
 	newID func() (string, error),
 	now func() time.Time,
 	report *Report,
 ) error {
 	report.Books++
-	meta, err := st.CatalogBookMetadata(ctx, userID, bookID, store.LibraryRoleRead)
+	ids, author, err := Evidence(ctx, st, book.ID)
 	if err != nil {
-		// Trashed or purged since the page was read. Nothing to map.
+		// Replaced or its folder removed since the page was read.
+		// Nothing to map.
 		if errors.Is(err, store.ErrNotFound) {
 			report.Skipped++
 			return nil
 		}
-		return fmt.Errorf("metadata for %s: %w", bookID, err)
-	}
-	files, err := st.ListBookFiles(ctx, userID, bookID, store.LibraryRoleRead)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("files for %s: %w", bookID, err)
+		return fmt.Errorf("evidence for %s: %w", book.ID, err)
 	}
 
 	workID, err := newID()
 	if err != nil {
 		return fmt.Errorf("id generation: %w", err)
 	}
-	proposed, editions, ids := Plan(userID, workID, meta, files)
-	if len(ids) == 0 {
+	proposed, editions, aliases := Plan(userID, workID, book, ids, author)
+	if len(aliases) == 0 {
 		// A book with no digest, no embedded id and no title has nothing
 		// a second device could recognise it by. The store would still
 		// mint a work for it via the source alias, but that work could
@@ -118,7 +126,7 @@ func backfillBook(
 	at := now()
 	proposed.CreatedAt = at
 
-	result, err := st.ResolveCatalogBookWork(ctx, userID, bookID, proposed, editions, ids, false, at)
+	result, err := st.ResolveCatalogBookWork(ctx, userID, book.ID, proposed, editions, aliases, false, at)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			report.Skipped++
@@ -128,7 +136,7 @@ func backfillBook(
 			report.Conflicted++
 			return nil
 		}
-		return fmt.Errorf("resolve %s: %w", bookID, err)
+		return fmt.Errorf("resolve %s: %w", book.ID, err)
 	}
 	switch {
 	case len(result.ConflictingWorkIDs) > 0:
@@ -143,4 +151,30 @@ func backfillBook(
 		report.Linked++
 	}
 	return nil
+}
+
+// Evidence gathers what the catalog knows about one book beyond the book
+// row itself: its publication identifiers and its primary author.
+//
+// It lives here so that the resolve route and the backfill collect the
+// same evidence. If they collected different evidence, a book resolved
+// by an operator in advance and the same book resolved by a client on
+// first read could land on two different works, and the reader's
+// position would silently stop following them between devices.
+func Evidence(
+	ctx context.Context, st store.Store, bookID string,
+) ([]store.BookIdentifier, string, error) {
+	ids, err := st.CatalogBookIdentifiers(ctx, bookID)
+	if err != nil {
+		return nil, "", err
+	}
+	authors, err := st.CatalogAuthorsForBooks(ctx, []string{bookID})
+	if err != nil {
+		return nil, "", err
+	}
+	var author string
+	if names := authors[bookID]; len(names) > 0 {
+		author = names[0]
+	}
+	return ids, author, nil
 }

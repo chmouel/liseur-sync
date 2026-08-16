@@ -38,15 +38,19 @@ func Order(ids []store.Identifier) []store.Identifier {
 }
 
 // ForCatalogBook is the evidence the catalog holds about one book,
-// strongest first. Only available files contribute: a file whose blob is
-// missing cannot vouch for a digest, and registering an alias from it
+// strongest first.
+//
+// Only a book whose file the last pass could find contributes a digest:
+// a missing file cannot vouch for one, and registering an alias from it
 // would attach the reader's work graph to bytes nobody can produce.
 //
 // The stable "source:liseur-sync:<book_id>" alias is not added here. The
 // store appends it inside the resolution transaction, so it is present
-// even for a book with no files at all.
-func ForCatalogBook(meta store.BookMetadata, files []store.BookFile) []store.Identifier {
-	var ids []store.Identifier
+// even for a book with nothing else to go on.
+func ForCatalogBook(
+	book store.CatalogBook, ids []store.BookIdentifier, author string,
+) []store.Identifier {
+	var out []store.Identifier
 	// Duplicates are not filtered here: Order, which every return path
 	// goes through, already collapses them. Empty values are, because
 	// nothing downstream does and "sha256:" would alias every book whose
@@ -55,51 +59,29 @@ func ForCatalogBook(meta store.BookMetadata, files []store.BookFile) []store.Ide
 		if value == "" {
 			return
 		}
-		ids = append(ids, store.Identifier{Kind: kind, Value: value})
+		out = append(out, store.Identifier{Kind: kind, Value: value})
 	}
-	for _, f := range files {
-		if f.Availability != store.BookFileAvailable {
-			continue
-		}
-		add("sha256", f.BlobSHA256)
-		if f.PartialMD5 != nil {
-			add("partial-md5", *f.PartialMD5)
-		}
-		if f.DCIdentifier != nil {
-			add("dc", *f.DCIdentifier)
-		}
+	if book.Status == store.BookActive {
+		add("sha256", book.ContentSHA256)
 	}
-	// Catalogued identifiers are richer than the one the ingest recorded
-	// on the file: a librarian may have corrected the ISBN.
-	for _, id := range meta.Identifiers {
+	for _, id := range ids {
 		add("dc", id.Value)
 	}
-	if fingerprint := TitleAuthorFingerprint(meta); fingerprint != "" {
+	if fingerprint := TitleAuthorFingerprint(book.Title, author); fingerprint != "" {
 		add("ta", fingerprint)
 	}
-	return Order(ids)
+	return Order(out)
 }
 
 // TitleAuthorFingerprint is the fuzzy fallback alias. It must fold exactly
 // the way a client's does or the two never meet, so it reuses the same
 // normalization the catalog uses to match contributor names.
-func TitleAuthorFingerprint(meta store.BookMetadata) string {
-	title := metadata.NormalizeName(meta.Book.Title)
-	if title == "" {
+func TitleAuthorFingerprint(title, author string) string {
+	folded := metadata.NormalizeName(title)
+	if folded == "" {
 		return ""
 	}
-	return title + "|" + metadata.NormalizeName(FirstAuthor(meta))
-}
-
-// FirstAuthor is the book's primary author: contributors come back
-// ordered, so the first author role is the one a reader would name.
-func FirstAuthor(meta store.BookMetadata) string {
-	for _, c := range meta.Contributors {
-		if c.Role == "author" {
-			return c.Name
-		}
-	}
-	return ""
+	return folded + "|" + metadata.NormalizeName(author)
 }
 
 // Plan is everything ResolveCatalogBookWork needs for one catalog book,
@@ -110,19 +92,24 @@ func FirstAuthor(meta store.BookMetadata) string {
 //
 // workID is the id to propose. It is used only if no identifier matches an
 // existing work, so callers mint one per book and let the store discard it.
-func Plan(userID, workID string, meta store.BookMetadata, files []store.BookFile) (store.Work, []store.Edition, []store.Identifier) {
-	ids := ForCatalogBook(meta, files)
+func Plan(
+	userID, workID string,
+	book store.CatalogBook,
+	ids []store.BookIdentifier,
+	author string,
+) (store.Work, []store.Edition, []store.Identifier) {
+	aliases := ForCatalogBook(book, ids, author)
 	proposed := store.Work{
 		ID: workID, UserID: userID,
-		Title: meta.Book.Title, Author: FirstAuthor(meta),
+		Title: book.Title, Author: author,
 	}
 	var editions []store.Edition
-	for _, id := range ids {
+	for _, id := range aliases {
 		if id.Kind == "sha256" {
 			editions = append(editions, store.Edition{
 				UserID: userID, SHA256: id.Value, WorkID: workID,
 			})
 		}
 	}
-	return proposed, editions, ids
+	return proposed, editions, aliases
 }

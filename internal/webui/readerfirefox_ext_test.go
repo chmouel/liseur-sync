@@ -43,9 +43,7 @@ func TestReaderOpensInFirefox(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
 
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")

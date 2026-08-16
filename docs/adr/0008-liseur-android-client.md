@@ -35,7 +35,7 @@ contracts, not as conditionals in screens or workers.
 - Add a catalog-account `PositionSync` entry to `RemoteRouter.positions`.
   Its cursor, credentials, and work mappings are tied to the catalog account,
   not the singleton optional `SyncAccount`.
-- Extend `ServerCapabilities` with upload/manage capability without changing
+- Extend `ServerCapabilities` with the download capability without changing
   calibre or Komga behavior.
 - Expand the existing device token in place to the required scope set where
   the server supports it, preserving token/device identity and deterministic
@@ -68,14 +68,13 @@ deduplicates the peer instead of pushing and pulling twice.
 OPDS is a compatibility fallback and diagnostic path, not the primary Android
 integration; the native API exposes richer metadata and identity.
 
-### Phase C: upload
+### Phase C: upload — superseded by [ADR-0017](0017-folders-not-pipelines.md)
 
-- Add an explicit upload action for local EPUBs when the token and library
-  ACL permit `library-manage`.
-- Use WorkManager for streaming upload and job-status follow-up.
-- Surface server validation and quota errors without removing the local copy.
-- Deduplicate the returned catalog book into the existing local row through
-  SHA-256 and work identifiers.
+Withdrawn. ADR-0017 removed the upload and ingest-job routes and the
+`library-manage` scope: books reach the server by being placed in a watched
+folder, never by a client push. The consequence on the client side is that the
+upload action, its WorkManager job and the `can_upload` capability were deleted
+rather than implemented.
 
 ### Phase D: migration and UX
 
@@ -97,7 +96,7 @@ When implemented in `../liseur`:
 - update user-facing server documentation and strings;
 - add Room migrations and JVM tests for stored enum/prefix compatibility;
 - test provider contracts, token scope compatibility, pagination, resumable
-  downloads, upload jobs, and migration matching;
+  downloads, and migration matching;
 - run `./gradlew testDebugUnitTest`, `lintDebug`, and `assembleDebug`.
 
 ## Acceptance criteria

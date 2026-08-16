@@ -15,7 +15,6 @@ var entityKindSegments = map[store.EntityKind]string{
 	store.EntitySeries:      "series",
 	store.EntityContributor: "contributors",
 	store.EntityTag:         "tags",
-	store.EntityGenre:       "genres",
 }
 
 // searchPageSize is deliberately below the store's ceiling. A page a
@@ -23,13 +22,13 @@ var entityKindSegments = map[store.EntityKind]string{
 // answer makes the facets the way to narrow rather than scrolling.
 const searchPageSize = 50
 
-// handleSearch answers a search over one library. Read access is enough:
-// finding a book is reading.
+// handleSearch answers a search over one folder. Being signed in is
+// enough: the catalog is shared, and finding a book is reading it.
 func (s *Server) handleSearch(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
-	libraryID := r.PathValue("library")
-	lib, err := s.St.LibraryByID(r.Context(), u.ID, libraryID, store.LibraryRoleRead)
+	folderID := r.PathValue("folder")
+	folder, err := s.St.FolderByID(r.Context(), folderID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -44,11 +43,11 @@ func (s *Server) handleSearch(
 		filters = filters[:maxSearchFilters]
 	}
 	v := SearchView{
-		LibraryID:   libraryID,
-		LibraryName: lib.Library.Name,
-		Query:       text,
-		Filters:     filters,
-		View:        readPrefs(r).View,
+		FolderID:   folderID,
+		FolderName: folder.Name,
+		Query:      text,
+		Filters:    filters,
+		View:       readPrefs(r).View,
 	}
 	// An empty page is what somebody who has only just arrived should
 	// see: asking the store for every book would answer a question they
@@ -60,11 +59,11 @@ func (s *Server) handleSearch(
 		return
 	}
 
-	result, err := s.St.SearchCatalogBooks(r.Context(), u.ID, store.SearchQuery{
-		LibraryID: libraryID,
-		Text:      text,
-		Entities:  filters,
-		Limit:     searchPageSize,
+	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
+		FolderID: folderID,
+		Text:     text,
+		Entities: filters,
+		Limit:    searchPageSize,
 	})
 	if err != nil {
 		http.NotFound(w, r)
@@ -75,13 +74,15 @@ func (s *Server) handleSearch(
 	for _, b := range result.Books {
 		bookIDs = append(bookIDs, b.ID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
 
 	loc := userLoc(u)
 	for _, b := range result.Books {
 		v.Books = append(v.Books, BookRow{
 			ID: b.ID, Title: b.Title, Author: credit(authors[b.ID]),
-			Added: b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			Added:   b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			CanGet:  b.Status == store.BookActive,
+			CanRead: bookReadable(b),
 		})
 	}
 	for _, f := range result.Facets {
@@ -144,26 +145,25 @@ func (v SearchView) searchURL(filters []string) string {
 	for _, id := range filters {
 		values.Add("entity", id)
 	}
-	return "libraries/" + url.PathEscape(v.LibraryID) + "/search?" + values.Encode()
+	return "folders/" + url.PathEscape(v.FolderID) + "/search?" + values.Encode()
 }
 
 // handleTopSearch is what the search box in the top bar submits to.
-// Search is a library-scoped route, but the shell is not: rather than
-// give the top bar a library picker before anybody has asked for one,
-// this resolves the user's first readable library and forwards the
-// query there. It reads nothing the library-scoped page could not
-// already read.
+// Search is a folder-scoped route, but the shell is not: rather than
+// give the top bar a folder picker before anybody has asked for one,
+// this forwards the query to the first folder this server watches. It
+// reads nothing the folder-scoped page could not already read.
 func (s *Server) handleTopSearch(
 	w http.ResponseWriter, r *http.Request, _ store.AuthSession, u *store.User,
 ) {
-	libs, err := s.St.ListLibraries(r.Context(), u.ID, store.LibraryRoleRead)
+	folders, err := s.St.ListFolders(r.Context(), "", 1)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	if len(libs) == 0 {
-		// Nothing to search yet. The books page explains how to get
-		// something into the catalog, which is the real answer.
+	if len(folders) == 0 {
+		// Nothing to search yet. The library page explains how books get
+		// here, which is the real answer.
 		redirectRel(w, "library", http.StatusSeeOther)
 		return
 	}
@@ -171,7 +171,7 @@ func (s *Server) handleTopSearch(
 	if len(text) > maxSearchTextBytes {
 		text = text[:maxSearchTextBytes]
 	}
-	target := "libraries/" + url.PathEscape(libs[0].Library.ID) + "/search"
+	target := "folders/" + url.PathEscape(folders[0].ID) + "/search"
 	if text != "" {
 		target += "?q=" + url.QueryEscape(text)
 	}

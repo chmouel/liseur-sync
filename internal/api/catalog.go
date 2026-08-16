@@ -26,59 +26,76 @@ const (
 	maxCatalogPageSize     = 200
 )
 
-// BlobStore is the read side of content: what a download needs and
-// nothing more. It takes the whole file rather than a digest because a
-// file's bytes may live in content-addressed storage or in the library
-// directory they were found in, and which one it is belongs to the
-// storage layer, not to the handler (ADR-0014).
-type BlobStore interface {
-	OpenBookFile(ctx context.Context, file store.BookFile) (*os.File, int64, error)
-	// OpenBookFileCover opens the cover a library's curator chose for
-	// this file, where there is one. It is separate from OpenBookFile
-	// because the cover is not the publication: it lives beside it under
-	// the library root and has its own digest.
-	OpenBookFileCover(ctx context.Context, file store.BookFile) (*os.File, int64, error)
+// maxFolderIDBytes bounds a folder id taken from a path. An id is a
+// UUID; anything longer is not one, and refusing it here keeps an
+// oversized string out of every query below.
+const maxFolderIDBytes = 128
+
+// BookFiles is the read side of content: what a download and a cover
+// need and nothing more. A book names a path relative to its folder's
+// root, and resolving that root and opening under it read-only is the
+// content package's job, not a handler's (ADR-0017).
+type BookFiles interface {
+	OpenBook(ctx context.Context, book store.CatalogBook) (*os.File, int64, error)
+	// OpenBookCover opens the cover a folder's curator chose for this
+	// book, where there is one. It is separate from OpenBook because the
+	// cover is not the publication: it lives beside it under the folder
+	// root and has its own digest.
+	OpenBookCover(ctx context.Context, book store.CatalogBook) (*os.File, int64, error)
 }
 
-// HandleLibraries implements GET /v1/libraries — every library the caller
-// can read, with the role they hold in each. This is where a client starts,
-// because every other catalog route needs a library id.
-func (s *Server) HandleLibraries(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+// HandleFolders implements GET /v1/folders — every folder this server
+// watches. This is where a client starts, because every other catalog
+// route needs a folder id.
+//
+// root_path is deliberately absent: it is a filesystem oracle and no
+// part of reading a catalog. Only the admin UI shows it.
+func (s *Server) HandleFolders(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libs, err := s.St.ListLibraries(r.Context(), tok.UserID, store.LibraryRoleRead)
+	limit, err := catalogPageSize(r.URL.Query().Get("limit"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "library lookup failed")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out := make([]map[string]any, 0, len(libs))
-	for _, l := range libs {
+	after := r.URL.Query().Get("after")
+	if len(after) > 512 {
+		writeError(w, http.StatusBadRequest, "cursor is too long")
+		return
+	}
+	folders, err := s.St.ListFolders(r.Context(), after, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "folder lookup failed")
+		return
+	}
+	out := make([]map[string]any, 0, len(folders))
+	for _, f := range folders {
 		out = append(out, map[string]any{
-			"library_id": l.Library.ID,
-			"name":       l.Library.Name,
-			"source":     string(l.Library.Source),
-			"storage":    string(l.Library.Storage),
-			"refresh":    string(l.Library.Refresh),
-			"role":       string(l.Role),
-			"created_at": l.Library.CreatedAt.UTC().Format(time.RFC3339Nano),
+			"folder_id":  f.ID,
+			"name":       f.Name,
+			"kind":       string(f.Kind),
+			"created_at": f.CreatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"libraries": out})
+	body := map[string]any{"folders": out}
+	if len(folders) == limit {
+		last := folders[len(folders)-1]
+		body["next_after"] = store.FolderCursor(last)
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
-// HandleLibraryBooks implements GET /v1/libraries/{library}/books.
-func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+// HandleFolderBooks implements GET /v1/folders/{folder}/books.
+func (s *Server) HandleFolderBooks(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
 	limit, err := catalogPageSize(r.URL.Query().Get("limit"))
@@ -107,16 +124,16 @@ func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	books, err := list(r.Context(), tok.UserID, libraryID, after, limit)
+	books, err := list(r.Context(), folderID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "library not found")
+			writeError(w, http.StatusNotFound, "folder not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
 	}
-	out, err := s.catalogBooksJSON(r.Context(), tok.UserID, books)
+	out, err := s.catalogBooksJSON(r.Context(), books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
@@ -138,18 +155,16 @@ func (s *Server) HandleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 // the same shape as a listing row — files included — so a client parses
 // one representation of a book and not two.
 func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), tok.UserID, bookID, store.LibraryRoleRead)
+	book, err := s.St.CatalogBookByID(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
+	body, err := s.catalogBookBodyJSON(r.Context(), book)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "book lookup failed")
 		return
@@ -162,106 +177,78 @@ func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
 // http.ServeContent, which is what gives us range requests, conditional
 // requests and HEAD without writing any of that by hand.
 func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	s.ServeBookDownload(w, r, tok.UserID, r.PathValue("id"))
+	s.ServeBookDownload(w, r, r.PathValue("id"))
 }
 
 // ServeBookDownload is the download itself, without the token. The web
 // UI authenticates with a cookie session but must serve bytes under the
 // same rules — the media-type allowlist and the filename sanitizing
-// below are what keep a hostile upload from becoming a hostile
-// download, and there must not be a second copy of them.
+// below are what keep a hostile file from becoming a hostile download,
+// and there must not be a second copy of them.
 func (s *Server) ServeBookDownload(
-	w http.ResponseWriter, r *http.Request, userID, bookID string,
+	w http.ResponseWriter, r *http.Request, bookID string,
 ) {
-	if s.Blobs == nil {
+	if s.Files == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
 		return
 	}
-	// The book is looked up before its files because a trashed book keeps
-	// its files — that is what makes restore a relink — while the catalog
-	// is what decides whether anything may be served. Asking the files
-	// alone would happily hand back a deleted book's bytes.
-	if _, err := s.St.CatalogBookByID(
-		r.Context(), userID, bookID, store.LibraryRoleRead,
-	); err != nil {
-		writeCatalogError(w, err, "book not found")
-		return
-	}
-	files, err := s.St.ListBookFiles(r.Context(), userID, bookID, store.LibraryRoleRead)
+	book, err := s.St.CatalogBookByID(r.Context(), bookID)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return
 	}
-	var file *store.BookFile
-	for i := range files {
-		if files[i].Availability == store.BookFileAvailable {
-			file = &files[i]
-			break
-		}
-	}
-	if file == nil {
-		// The book exists but its bytes do not — a file marked missing by
-		// reconciliation, or superseded by a newer one that has gone. That
-		// is not a 404 on the book; it is the content being gone.
+	if book.Status != store.BookActive {
+		// The book is catalogued but the last pass could not find its
+		// file. That is not a 404 on the book; it is the content being
+		// gone.
 		writeError(w, http.StatusGone, "no downloadable file for this book")
 		return
 	}
 
-	// ServeContent finds the length by seeking, so the size the CAS
-	// reports is redundant here.
-	blob, _, err := s.Blobs.OpenBookFile(r.Context(), *file)
+	// ServeContent finds the length by seeking, so the size reported
+	// here is redundant.
+	file, _, err := s.Files.OpenBook(r.Context(), book)
 	if err != nil {
-		if errors.Is(err, content.ErrStageMissing) ||
-			errors.Is(err, content.ErrRootMissing) {
-			writeError(w, http.StatusGone, "content is no longer stored")
-			return
-		}
-		if errors.Is(err, content.ErrSourceChanged) {
-			// The bytes at that path are not the ones catalogued, so they
-			// are not this book's until the sweep says otherwise.
-			s.flagChangedSource(r.Context(), *file)
-			writeError(w, http.StatusConflict,
-				"the file behind this book changed on disk")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "download failed")
+		writeDownloadError(w, err)
 		return
 	}
-	defer blob.Close()
+	defer file.Close()
 
-	w.Header().Set("Content-Type", downloadMediaType(file.MediaType))
+	w.Header().Set("Content-Type", downloadMediaType(book.MediaType))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", contentDisposition(downloadFilename(*file)))
-	if file.Storage == store.LibraryStorageInPlace {
-		// Nobody here owns those bytes: their owner may replace them
-		// between two requests, so the validator is weak and the answer
-		// is revalidated rather than cached as immutable.
-		w.Header().Set("ETag", `W/"`+file.ContentSHA256+`"`)
-		w.Header().Set("Cache-Control", "private, no-cache")
-	} else {
-		// The digest names the content, so it is a strong validator and
-		// the content behind it can never change.
-		w.Header().Set("ETag", `"`+file.ContentSHA256+`"`)
-		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	}
+	w.Header().Set("Content-Disposition", contentDisposition(downloadFilename(book)))
+	// Nobody here owns those bytes: their owner may replace them between
+	// two requests, so the validator is weak and the answer is
+	// revalidated rather than cached as immutable.
+	w.Header().Set("ETag", `W/"`+book.ContentSHA256+`"`)
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "",
-		file.UpdatedAt.UTC(), blob)
+		book.UpdatedAt.UTC(), file)
 }
 
-// flagChangedSource records that a file under a library root no longer
-// matches what was catalogued, so an administrator sees it without
-// waiting for the next sweep. It is best effort: the request has already
-// been refused, and failing to write the flag must not turn a precise
-// 409 into a 500.
-func (s *Server) flagChangedSource(ctx context.Context, file store.BookFile) {
-	_, _ = s.St.SetCatalogBookReview(ctx, file.LibraryID, file.BookID,
-		"source file changed on disk since it was catalogued", time.Now().UTC())
+// writeDownloadError maps an open failure onto the status that says what
+// actually happened. A file the catalog knows about but the disk no
+// longer holds is gone, not missing; one whose bytes changed under it is
+// a conflict the next pass resolves.
+func writeDownloadError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, content.ErrStageMissing),
+		errors.Is(err, content.ErrRootMissing),
+		errors.Is(err, content.ErrUnsafePath):
+		writeError(w, http.StatusGone, "content is no longer stored")
+	case errors.Is(err, content.ErrSourceChanged):
+		// The bytes at that path are not the ones catalogued, so they
+		// are not this book's until the next pass says otherwise.
+		writeError(w, http.StatusConflict,
+			"the file behind this book changed on disk")
+	default:
+		writeError(w, http.StatusInternalServerError, "download failed")
+	}
 }
 
 // catalogErrorWriter keeps http.ServeContent inside this package's error
@@ -328,16 +315,25 @@ func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
 // a client, and only one of them is true here.
 func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[string]any {
 	out := map[string]any{
-		"book_id":    b.ID,
-		"library_id": b.LibraryID,
-		"title":      b.Title,
-		"status":     string(b.Status),
+		"book_id":   b.ID,
+		"folder_id": b.FolderID,
+		"title":     b.Title,
+		"status":    string(b.Status),
+		// The content digest — what the bytes are — so a client can match
+		// its own copy of a book against the server's.
+		"sha256": b.ContentSHA256,
+		// The length those bytes had when the server last read them. It
+		// is a fact about the last look, not a promise about now; the
+		// download is still the truth.
+		"size_bytes": b.SizeBytes,
+		"media_type": b.MediaType,
+		"filename":   b.OriginalFilename,
 		"created_at": b.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": b.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		// Offered for every book rather than only for books known to have
-		// one. Knowing in advance would mean recording it at ingest for
-		// every book ever uploaded; a client that asks and gets 404 has
-		// learned the same thing at the same cost.
+		// one. Knowing in advance would mean opening every publication on
+		// the way past; a client that asks and gets 404 has learned the
+		// same thing at the same cost.
 		"cover_url": "/v1/books/" + url.PathEscape(b.ID) + "/cover",
 	}
 	// Omit empty optional metadata rather than sending empty strings: a
@@ -379,25 +375,6 @@ func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[st
 		series = append(series, row)
 	}
 	out["series"] = series
-
-	files := make([]map[string]any, 0, len(rel.Files[b.ID]))
-	for _, f := range rel.Files[b.ID] {
-		files = append(files, map[string]any{
-			"file_id":    f.ID,
-			"media_type": f.MediaType,
-			"filename":   f.Filename,
-			// The content digest — what the bytes are — and never the
-			// blob address, which is the server's own copy and is empty
-			// for the in-place libraries of ADR-0014, exactly the books a
-			// migrating client is trying to match by digest.
-			"sha256": f.ContentSHA256,
-			// The length those bytes had when the server last read them.
-			// For an in-place file that is a fact about the last look,
-			// not a promise about now; the download is still the truth.
-			"size_bytes": f.SizeBytes,
-		})
-	}
-	out["files"] = files
 	return out
 }
 
@@ -405,13 +382,13 @@ func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[st
 // one batch rather than one lookup per row: a page of books is a bounded
 // number of rows, and must be a bounded number of queries too.
 func (s *Server) catalogBooksJSON(
-	ctx context.Context, userID string, books []store.CatalogBook,
+	ctx context.Context, books []store.CatalogBook,
 ) ([]map[string]any, error) {
 	ids := make([]string, 0, len(books))
 	for _, b := range books {
 		ids = append(ids, b.ID)
 	}
-	rel, err := s.St.CatalogBookRelationsForBooks(ctx, userID, ids)
+	rel, err := s.St.CatalogBookRelationsForBooks(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -425,9 +402,9 @@ func (s *Server) catalogBooksJSON(
 // catalogBookBodyJSON is the same shape for a single book. Detail is not
 // a richer shape than a listing row; it is the same one.
 func (s *Server) catalogBookBodyJSON(
-	ctx context.Context, userID string, book store.CatalogBook,
+	ctx context.Context, book store.CatalogBook,
 ) (map[string]any, error) {
-	out, err := s.catalogBooksJSON(ctx, userID, []store.CatalogBook{book})
+	out, err := s.catalogBooksJSON(ctx, []store.CatalogBook{book})
 	if err != nil {
 		return nil, err
 	}
@@ -452,14 +429,16 @@ func catalogPageSize(raw string) (int, error) {
 // clients must round-trip it rather than construct it, so the sort key can
 // change without breaking them.
 type catalogCursor struct {
-	CreatedAt string `json:"t"`
-	ID        string `json:"i"`
+	CreatedAt string   `json:"t"`
+	ID        string   `json:"i"`
+	Position  *float64 `json:"p,omitempty"`
 }
 
 func encodeCatalogCursor(c store.CatalogBookCursor) string {
 	raw, _ := json.Marshal(catalogCursor{
 		CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339Nano),
 		ID:        c.ID,
+		Position:  c.SeriesPosition,
 	})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
@@ -480,7 +459,9 @@ func decodeCatalogCursor(raw string) (*store.CatalogBookCursor, error) {
 	if err != nil || c.ID == "" {
 		return nil, errors.New("malformed cursor")
 	}
-	return &store.CatalogBookCursor{CreatedAt: at, ID: c.ID}, nil
+	return &store.CatalogBookCursor{
+		CreatedAt: at, ID: c.ID, SeriesPosition: c.Position,
+	}, nil
 }
 
 // downloadMediaType refuses to echo a stored media type that could make a
@@ -499,11 +480,11 @@ func downloadMediaType(stored string) string {
 }
 
 // downloadFilename derives a name for the saved file. The stored original
-// filename is attacker-influenced — it comes from a multipart header — so
+// filename is somebody else's, taken off their disk, so
 // it is never used as a path, only as a label, and only after being
 // stripped of anything that could act as one.
-func downloadFilename(f store.BookFile) string {
-	name := sanitizeFilename(f.OriginalFilename)
+func downloadFilename(b store.CatalogBook) string {
+	name := sanitizeFilename(b.OriginalFilename)
 	if name == "" {
 		name = "book.epub"
 	}
@@ -552,161 +533,4 @@ func contentDisposition(name string) string {
 	}
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`,
 		string(ascii), url.PathEscape(name))
-}
-
-// HandleTrashBook implements DELETE /v1/books/{id}. Deletion is a two
-// step operation: this moves the book out of the catalog and starts its
-// retention window, and the bytes go only when that window closes. A
-// caller who deleted the wrong book has until then to say so.
-func (s *Server) HandleTrashBook(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	now := time.Now().UTC()
-	retention := time.Duration(s.Cfg.Content.TrashRetentionHours) * time.Hour
-	book, err := s.St.TrashCatalogBook(
-		r.Context(), tok.UserID, r.PathValue("id"), now, now.Add(retention))
-	if err != nil {
-		if errors.Is(err, store.ErrInvalidTransition) {
-			writeError(w, http.StatusConflict, "book is already deleted")
-			return
-		}
-		writeCatalogError(w, err, "book not found")
-		return
-	}
-	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "book lookup failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, body)
-}
-
-// HandleRestoreBook implements POST /v1/books/{id}/restore, the undo for
-// HandleTrashBook. It works only inside the retention window: past it the
-// book is waiting to be purged and its bytes may already be gone.
-func (s *Server) HandleRestoreBook(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	book, err := s.St.RestoreCatalogBook(
-		r.Context(), tok.UserID, r.PathValue("id"), time.Now().UTC())
-	if err != nil {
-		if errors.Is(err, store.ErrInvalidTransition) {
-			writeError(w, http.StatusConflict,
-				"book is not in the trash, or its retention window has closed")
-			return
-		}
-		writeCatalogError(w, err, "book not found")
-		return
-	}
-	body, err := s.catalogBookBodyJSON(r.Context(), tok.UserID, book)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "book lookup failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, body)
-}
-
-// HandleLibraryDuplicates reports books in one library that hold
-// identical bytes.
-//
-// It is a read, not a repair: a second catalog entry for deduplicated
-// content is something a user may have meant, so the server says what it
-// knows and leaves the decision alone. Resolving a group is an ordinary
-// delete of whichever entry the client chooses.
-func (s *Server) HandleLibraryDuplicates(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
-		return
-	}
-	limit, err := catalogPageSize(r.URL.Query().Get("limit"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	books, err := s.St.ListDuplicateContentBooks(
-		r.Context(), tok.UserID, libraryID, limit)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "library not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
-		return
-	}
-	// The weaker report rides along rather than living at its own route:
-	// it answers the same question a librarian came here with, and two
-	// routes would mean a page that shows one and not the other.
-	similar, err := s.St.ListSimilarBooks(r.Context(), tok.UserID, libraryID, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
-		return
-	}
-	// Both reports are enriched from one batch: two groupings of the same
-	// library's books are still one page, and paying for two round trips
-	// per kind would be the N+1 this route just moved off the client.
-	ids := make([]string, 0, len(books))
-	for _, duplicate := range books {
-		ids = append(ids, duplicate.Book.ID)
-	}
-	for _, group := range similar {
-		for _, b := range group.Books {
-			ids = append(ids, b.ID)
-		}
-	}
-	rel, err := s.St.CatalogBookRelationsForBooks(r.Context(), tok.UserID, ids)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "duplicate listing failed")
-		return
-	}
-
-	// Grouped by digest rather than returned flat, because a client that
-	// had to group them itself would have to know the ordering rule to do
-	// it, and one that guessed would show a book duplicating itself.
-	groups := make([]map[string]any, 0)
-	digest := ""
-	for i, duplicate := range books {
-		if i == 0 || duplicate.SHA256 != digest {
-			digest = duplicate.SHA256
-			groups = append(groups, map[string]any{
-				"sha256": digest,
-				"books":  make([]map[string]any, 0, 2),
-			})
-		}
-		last := groups[len(groups)-1]
-		last["books"] = append(
-			last["books"].([]map[string]any), catalogBookJSON(duplicate.Book, rel))
-	}
-	// A group cut in half by the limit is dropped: one book on its own is
-	// not a duplicate of anything, and saying so would be wrong rather
-	// than merely incomplete.
-	if n := len(groups); n > 0 {
-		if last, _ := groups[n-1]["books"].([]map[string]any); len(last) < 2 {
-			groups = groups[:n-1]
-		}
-	}
-	similarOut := make([]map[string]any, 0, len(similar))
-	for _, group := range similar {
-		books := make([]map[string]any, 0, len(group.Books))
-		for _, b := range group.Books {
-			books = append(books, catalogBookJSON(b, rel))
-		}
-		similarOut = append(similarOut, map[string]any{
-			"normalized_title": group.Title, "books": books,
-		})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"duplicates": groups, "similar": similarOut,
-	})
 }

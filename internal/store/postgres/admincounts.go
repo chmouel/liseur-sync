@@ -3,30 +3,18 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// terminalJobStates are the ingest states a job never leaves. The
-// overview reports the age of the oldest job in every *other* state,
-// because a promoted job from last year is history while a staged one
-// from last year is a stuck worker.
-var terminalJobStates = map[string]bool{
-	"promoted":    true,
-	"failed":      true,
-	"quarantined": true,
-}
-
 // AdminCounts collects the panel's aggregate numbers. Every query here
-// is a COUNT, a SUM or a MIN over a whole table: nothing it returns can
-// identify a user, a book or a path, which is the property that lets an
-// instance administrator see it (ADR-0013).
+// is a COUNT over a whole table: nothing it returns can identify a user,
+// a book or a path, which is the property that lets an instance
+// administrator see it (ADR-0013).
 func (s *Store) AdminCounts(ctx context.Context) (store.AdminCounts, error) {
 	var c store.AdminCounts
 	c.BooksByStatus = map[string]int{}
-	c.JobsByState = map[string]int{}
-	c.OldestJobByState = map[string]time.Time{}
+	c.FoldersByKind = map[string]int{}
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*),
@@ -37,62 +25,24 @@ func (s *Store) AdminCounts(ctx context.Context) (store.AdminCounts, error) {
 		return c, err
 	}
 
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*),
-		       COUNT(*) FILTER (WHERE source = 'managed'),
-		       COUNT(*) FILTER (WHERE source <> 'managed')
-		FROM libraries`).Scan(&c.Libraries, &c.ManagedLibraries, &c.WatchedLibraries)
-	if err != nil {
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM folders`).Scan(&c.Folders); err != nil {
 		return c, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM books GROUP BY status`)
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, COUNT(*) FROM folders GROUP BY kind`)
 	if err != nil {
 		return c, err
 	}
-	if err := scanCountsByKey(rows, c.BooksByStatus); err != nil {
+	if err := scanCountsByKey(rows, c.FoldersByKind); err != nil {
 		return c, err
 	}
 
-	err = s.db.QueryRowContext(ctx, `
-		SELECT MIN(trash_expires_at) FROM books
-		WHERE status = 'trashed' AND trash_expires_at IS NOT NULL`).Scan(&c.TrashNextExpiry)
+	rows, err = s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM books GROUP BY status`)
 	if err != nil {
 		return c, err
 	}
-
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0),
-		       COUNT(*) FILTER (WHERE orphaned_at IS NOT NULL)
-		FROM blobs`).Scan(&c.Blobs, &c.BlobBytes, &c.OrphanBlobs)
-	if err != nil {
-		return c, err
-	}
-	err = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM blob_reservations`).Scan(&c.BlobsPending)
-	if err != nil {
-		return c, err
-	}
-
-	rows, err = s.db.QueryContext(ctx,
-		`SELECT state, COUNT(*), MIN(created_at) FROM ingest_jobs GROUP BY state`)
-	if err != nil {
-		return c, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var state string
-		var n int
-		var oldest time.Time
-		if err := rows.Scan(&state, &n, &oldest); err != nil {
-			return c, err
-		}
-		c.JobsByState[state] = n
-		if !terminalJobStates[state] {
-			c.OldestJobByState[state] = oldest.UTC()
-		}
-	}
-	return c, rows.Err()
+	return c, scanCountsByKey(rows, c.BooksByStatus)
 }
 
 func scanCountsByKey(rows *sql.Rows, into map[string]int) error {

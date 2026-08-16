@@ -11,7 +11,7 @@ info:
       `/v1/register` requires `Authorization: Bearer <token>`. Login
       returns a short-lived *auth token* usable only for token
       management; device tokens carry one or more scopes (`sync`,
-      `read-insights`, `library-read`, `library-manage`, `admin`).
+      `read-insights`, `library-read`, `admin`).
     - **Identity**: books are *works*. Clients never need a work to
       exist before pushing: call `/v1/works/resolve` with every
       identifier you have and use the returned `work_id`.
@@ -38,7 +38,7 @@ tags:
   - name: sync
   - name: sessions
   - name: insights
-  - name: library
+  - name: folder
   - name: opds
 
 paths:
@@ -695,111 +695,66 @@ paths:
                         minutes: { type: number }
                         pages: { type: number }
 
-  /v1/libraries/{library}/upload:
-    post:
-      tags: [library]
-      summary: Upload an EPUB into a library
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Streams one file into the library and returns an *ingest job*.
-        The response is `202`, not `201`: the bytes are stored, but the
-        book does not exist yet. Validation, metadata extraction and
-        promotion happen in background passes; poll
-        `/v1/ingest/jobs/{id}` until the state is `promoted` (the job
-        then carries `book_id`) or `failed`/`quarantined`.
-
-        The token scope is necessary but not sufficient — the caller
-        must also hold manage access to this specific library. A
-        library that does not exist and a library the caller cannot
-        write to are both `404`, so the endpoint never reveals which.
-
-        Send `Idempotency-Key` and a retry after a lost response
-        returns the original job instead of storing the file twice. The
-        key is scoped to the caller and library, so two users sharing a
-        library never collide. A replayed key returns the first job
-        without reading the body: the upload is bound to the job, so
-        sending different bytes under a used key does not replace them.
-      parameters:
-        - name: library
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
-        - name: Idempotency-Key
-          in: header
-          required: false
-          schema: { type: string, maxLength: 200 }
-          description: Client-chosen; makes the upload safe to retry.
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
-                  description: The EPUB. Other parts are ignored.
-              required: [file]
-      responses:
-        "202":
-          description: |
-            Stored and queued. Also returned for a replayed
-            `Idempotency-Key`, in whatever state that job has reached.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/IngestJob" }
-        "400": { $ref: "#/components/responses/Error", description: "No file part, or a malformed multipart body" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no manage access to it" }
-        "409": { $ref: "#/components/responses/Error", description: "Idempotency key already used for a different request" }
-        "413": { $ref: "#/components/responses/Error", description: "Larger than max_upload_bytes, or over the user's quota" }
-        "415": { $ref: "#/components/responses/Error", description: "Not multipart/form-data" }
-        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
-
-  /v1/libraries:
+  /v1/folders:
     get:
       tags: [library]
-      summary: Libraries the caller can read
+      summary: The folders this server watches
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Where a catalog client starts: every other route needs a library
-        id. `role` is the caller's effective role, so a client knows
-        whether to offer uploading.
+        Where a catalog client starts: every other route needs a folder
+        id. Every logged-in user sees every folder, because a folder is a
+        shelf rather than an account. `root_path` is deliberately not
+        here — it is a fact about the server's filesystem, and naming it
+        would make this route an oracle for one.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: after, in: query, schema: { type: string }, description: "Opaque cursor from a previous page's `next_after`" }
       responses:
         "200":
-          description: Accessible libraries
+          description: The folders
           content:
             application/json:
               schema:
                 type: object
+                required: [folders]
                 properties:
-                  libraries:
+                  next_after:
+                    type: string
+                    description: Present only when a further page exists.
+                  folders:
                     type: array
                     items:
                       type: object
+                      required: [folder_id, name, kind, created_at]
                       properties:
-                        library_id: { type: string, format: uuid }
+                        folder_id: { type: string, format: uuid }
                         name: { type: string }
-                        source: { type: string, enum: [managed, directory, calibre] }
-                        storage: { type: string, enum: [cas, in_place] }
-                        refresh: { type: string, enum: [manual, interval] }
-                        role: { type: string, enum: [read, manage] }
+                        kind:
+                          type: string
+                          enum: [plain, calibre]
+                          description: |
+                            `calibre` when the directory holds a
+                            `metadata.db`, which the server reads
+                            read-only for series, tags, descriptions and
+                            covers. `plain` otherwise, where the
+                            directory tree is the organisation: a
+                            subdirectory of EPUBs is a series.
                         created_at: { type: string, format: date-time }
 
-  /v1/libraries/{library}/books:
+  /v1/folders/{folder}/books:
     get:
       tags: [library]
-      summary: Books in a library
+      summary: Books in a folder
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Cursor-paginated, oldest first unless `order=recent`. Trashed
-        books are excluded. `next_cursor` appears only when a further
+        Cursor-paginated, oldest first unless `order=recent`. Books
+        whose file is missing are excluded. `next_cursor` appears only when a further
         page exists, so a client pages until it is absent. Treat the
         cursor as opaque — it means "where the last page ended", which
         is a different place in each order, so cursors do not carry
         across a change of `order`.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - name: order
           in: query
           description: |
@@ -830,87 +785,17 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /v1/libraries/{library}/duplicates:
+  /v1/folders/{folder}/search:
     get:
       tags: [library]
-      summary: Books in a library that are the same file
-      security: [{ deviceToken: [] }]  # requires library-read scope
-      description: |
-        Two reports on one route, because a caller asking about
-        duplicates wants both.
-
-        `duplicates` groups the library's active books by content digest,
-        returning only the digests more than one book holds. Uploading a
-        file twice is allowed and costs no extra storage, so this reports
-        the coincidence and never resolves it: a client resolves a group
-        by deleting whichever entry it chooses. A group split by `limit`
-        is omitted rather than returned with a single book in it.
-
-        `similar` is a guess, not a finding: books whose normalized
-        titles match and which name a contributor in common, minus any
-        pair already reported above, minus books placed at different
-        positions in one series. Present it as a question. Nothing on
-        this route ever changes anything.
-      parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
-        - name: limit
-          in: query
-          description: Maximum books surveyed, not groups returned.
-          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-      responses:
-        "200":
-          description: The duplicate groups
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [duplicates, similar]
-                properties:
-                  similar:
-                    type: array
-                    description: Possible duplicates. A guess; nothing was changed.
-                    items:
-                      type: object
-                      required: [normalized_title, books]
-                      properties:
-                        normalized_title:
-                          type: string
-                          description: |
-                            The folded title the group was built on, which
-                            is what its members have in common rather than
-                            any one member's spelling.
-                        books:
-                          type: array
-                          minItems: 2
-                          items: { $ref: "#/components/schemas/CatalogBook" }
-                  duplicates:
-                    type: array
-                    items:
-                      type: object
-                      required: [sha256, books]
-                      properties:
-                        sha256:
-                          type: string
-                          description: The digest every book in the group holds.
-                          pattern: "^[0-9a-f]{64}$"
-                        books:
-                          type: array
-                          minItems: 2
-                          items: { $ref: "#/components/schemas/CatalogBook" }
-        "400": { $ref: "#/components/responses/Error", description: "Bad limit" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
-
-  /v1/libraries/{library}/search:
-    get:
-      tags: [library]
-      summary: Find a book in a library
+      summary: Find a book in a folder
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
         Matches `q` against everything a book says about itself — title,
         subtitle, description, publisher, and the names of the series,
-        contributors, tags and genres it claims — and returns the best
+        contributors and tags it claims — and returns the best
         matches first. A book *called* Dune outranks one that merely
         mentions it.
 
@@ -923,11 +808,11 @@ paths:
         this route answers "where is that book" rather than "show me
         everything"; `truncated` says the answer was cut at `limit` so a
         client can ask the person to narrow it rather than implying it
-        found all there was. Browsing a whole library is what
-        `/v1/libraries/{library}/books` is for.
+        found all there was. Browsing a whole folder is what
+        `/v1/folders/{folder}/books` is for.
 
         `facets` describe the books actually returned, counted over that
-        set rather than over the library, and each `id` can be passed back
+        set rather than over the folder, and each `id` can be passed back
         as `entity` to narrow the query. A filter needs no `kind`: an id
         already knows what it is. Repeating `entity` ANDs the filters.
 
@@ -937,7 +822,7 @@ paths:
         by the `sync` and `read-insights` surfaces, which ask for their
         own scopes.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - name: q
           in: query
           description: The words to match. Absent or empty matches every book, which is useful with `entity`.
@@ -957,7 +842,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SearchResult" }
         "400": { $ref: "#/components/responses/Error", description: "Bad limit, over-long query, or malformed entity filter" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
   /v1/books/{id}:
     get:
@@ -973,65 +858,22 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CatalogBook" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
-    delete:
-      tags: [library]
-      summary: Delete a book
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Moves the book to the trash. It leaves the catalog at once and its
-        files stop being servable, but the bytes are kept until the
-        server's trash retention passes, so the deletion can be undone
-        with `POST /v1/books/{id}/restore` until then. Only after that
-        does a maintenance pass release the quota and hand the blob to
-        the orphan sweep.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: The book, now trashed
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CatalogBook" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
-        "409": { $ref: "#/components/responses/Error", description: "The book is already deleted" }
-
-  /v1/books/{id}/restore:
-    post:
-      tags: [library]
-      summary: Undo a deletion
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Returns a trashed book to the catalog, relinking the files it kept.
-        It works only inside the retention window. The book comes back as
-        `missing` rather than `active` when it has no servable file, so a
-        restore never advertises a download that is not there.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: The restored book
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CatalogBook" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
-        "409": { $ref: "#/components/responses/Error", description: "Not in the trash, or its retention window has closed" }
-
-  /v1/libraries/{library}/entities/{kind}:
+  /v1/folders/{folder}/entities/{kind}:
     get:
       tags: [library]
-      summary: The series, contributors, tags or genres in a library
+      summary: The series, contributors or tags in a folder
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Entities are library-wide and shared by every book that claims
-        them. `book_count` counts only active books, so an entity whose
-        books are all in the trash reads as empty rather than leading to a
-        blank page.
+        Entities are folder-wide and shared by every book that claims
+        them. `book_count` counts only books whose file is present, so an
+        entity whose books have all gone missing reads as empty rather
+        than leading to a blank page.
 
         Paging resumes after a name rather than at an offset, because an
         offset would skip or repeat entities as books are added
         underneath it.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - { $ref: "#/components/parameters/EntityKind" }
         - name: after
           in: query
@@ -1056,93 +898,9 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library or kind, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder or kind" }
 
-  /v1/libraries/{library}/entities/{kind}/merge:
-    post:
-      tags: [library]
-      summary: Fold two entities into one
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Moves every book claiming `from` onto `into` and deletes `from`.
-        Matching folds case and spacing only, so two spellings of one
-        author stay two entities until somebody says otherwise — which is
-        what this route is for, and why it is not a side effect of
-        renaming.
-
-        A book that claimed both keeps the row it already had for `into`,
-        because a merge decides which entities are the same and not what
-        any book asserts. Two things carry over from the losing row, since
-        dropping them would discard something a person said: a manual
-        lock, and, for a series, a position the surviving row does not
-        have.
-
-        This is not reversible.
-      parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
-        - { $ref: "#/components/parameters/EntityKind" }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [from, into]
-              properties:
-                from: { type: string, format: uuid, description: The entity that disappears. }
-                into: { type: string, format: uuid, description: The entity that survives. }
-      responses:
-        "200":
-          description: The merge was applied
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [moved]
-                properties:
-                  moved:
-                    type: integer
-                    description: |
-                      Memberships moved. A book that claimed both entities
-                      is not counted, because its membership was folded
-                      rather than moved.
-        "400": { $ref: "#/components/responses/Error", description: "The same entity twice, or a missing id" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no manage access" }
-
-  /v1/libraries/{library}/entities/{kind}/{entity}:
-    patch:
-      tags: [library]
-      summary: Respell an entity
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Changes the display spelling every book sharing this entity shows.
-        A name already held by another entity of the same kind is refused
-        with `409` rather than silently merging the two, because that is a
-        decision about identity and it has its own route.
-      parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
-        - { $ref: "#/components/parameters/EntityKind" }
-        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [name]
-              properties:
-                name: { type: string, minLength: 1 }
-      responses:
-        "200":
-          description: The renamed entity
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/CatalogEntity" }
-        "400": { $ref: "#/components/responses/Error", description: "A blank name" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no manage access" }
-        "409": { $ref: "#/components/responses/Error", description: "Another entity already has that name; merge them instead" }
-
-  /v1/libraries/{library}/entities/{kind}/{entity}/books:
+  /v1/folders/{folder}/entities/{kind}/{entity}/books:
     get:
       tags: [library]
       summary: The books claiming one entity
@@ -1153,7 +911,7 @@ paths:
         an unanswered question rather than book zero. Every other kind
         returns them oldest first.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - { $ref: "#/components/parameters/EntityKind" }
         - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: cursor, in: query, schema: { type: string } }
@@ -1177,209 +935,7 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no access" }
-
-  /v1/books/{id}/metadata:
-    get:
-      tags: [library]
-      summary: One book's metadata with its provenance
-      security: [{ deviceToken: [] }]  # requires library-read scope
-      description: |
-        Everything an edit form needs: each field's value, which
-        precedence stage supplied it, and whether a person has locked it.
-
-        This is separate from `GET /v1/books/{id}` because provenance is
-        editor data — a catalog client wants the title, not where the
-        title came from.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: The metadata
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BookMetadata" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
-    put:
-      tags: [library]
-      summary: Correct a book's metadata
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Every accepted change is recorded as `manual` and locks its field
-        or set, so the next rescan cannot undo it. That is the point of
-        the operation, not a side effect.
-
-        Each field is optional, and an absent field is silence rather than
-        a request to clear: a form may submit one field without asserting
-        anything about the rest. A field sent with a blank `value` *is* an
-        assertion — the user deleted a wrong title — and is honoured,
-        unlike a blank from an extractor, which is only ignorance. Sending
-        `unlock` instead hands the field back to the extractors without
-        asserting a value.
-
-        Sets are replaced whole, because that is what a form does: an
-        entry the request omits is one the user removed. An empty set is
-        therefore how a set is emptied, and the set lock is what keeps it
-        empty, since no row survives to carry a row lock.
-
-        `revision` is required and must be the one the client read.
-        Two people editing one book is ordinary in a shared library, and
-        last-write-wins would discard the first person's work silently.
-
-        Identifiers are read-only here. They feed work identity, so
-        editing one moves a reader's reading history between books; that
-        is a different operation with different consequences.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [revision]
-              properties:
-                revision: { type: integer, minimum: 1 }
-                title: { $ref: "#/components/schemas/ScalarEdit" }
-                subtitle: { $ref: "#/components/schemas/ScalarEdit" }
-                description: { $ref: "#/components/schemas/ScalarEdit" }
-                publisher: { $ref: "#/components/schemas/ScalarEdit" }
-                published_date: { $ref: "#/components/schemas/ScalarEdit" }
-                tags: { $ref: "#/components/schemas/SetEdit" }
-                genres: { $ref: "#/components/schemas/SetEdit" }
-                languages: { $ref: "#/components/schemas/SetEdit" }
-                series: { $ref: "#/components/schemas/SetEdit" }
-                contributors: { $ref: "#/components/schemas/SetEdit" }
-      responses:
-        "200":
-          description: |
-            The metadata after the edit. An edit that changed nothing is
-            answered with the current state and does not advance the
-            revision, so a resubmitted form does not invalidate the editor
-            that sent it.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BookMetadata" }
-        "400": { $ref: "#/components/responses/Error", description: "Malformed body, missing revision, or invalid metadata" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
-        "409": { $ref: "#/components/responses/Error", description: "The book changed while it was being edited" }
-
-  /v1/books/{id}/metadata/lookup:
-    post:
-      tags: [library]
-      summary: Ask external services about a book
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Asks the metadata services this server was configured to use what
-        they know about a book, and reports what they said. Nothing is
-        written: there is no code path from a lookup to the catalog, and
-        accepting a candidate is a separate request.
-
-        It needs `library-manage` rather than `library-read` for two
-        reasons that point the same way. The result is only useful to
-        somebody who could apply it, and a lookup makes this server send
-        a request to a third party about one of the operator's books,
-        which is not something a read-only credential should cause.
-
-        There is no request body. The query is built from the book — its
-        title, its first author, its identifiers — so nothing a client
-        sends reaches a provider.
-
-        External lookup is off unless the operator turned it on, and a
-        server that was told to contact nobody answers `501`. That is a
-        different problem from an empty result and is fixed somewhere
-        else entirely.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      responses:
-        "200":
-          description: |
-            What the services said, best match first. An empty list is a
-            normal answer: nobody had heard of the book.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [providers, candidates]
-                properties:
-                  providers:
-                    type: array
-                    description: The services that were asked.
-                    items: { type: string }
-                  candidates:
-                    type: array
-                    items: { $ref: "#/components/schemas/MetadataCandidate" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
-        "429": { $ref: "#/components/responses/Error", description: "Too many lookups; see Retry-After" }
-        "501": { $ref: "#/components/responses/Error", description: "No metadata provider is configured" }
-        "502": { $ref: "#/components/responses/Error", description: "No metadata service could be reached" }
-
-  /v1/books/{id}/metadata/apply:
-    post:
-      tags: [library]
-      summary: Accept one external candidate
-      security: [{ deviceToken: [] }]  # requires library-manage scope
-      description: |
-        Merges one candidate into a book. This is an ordinary metadata
-        write: the values are recorded with `external` provenance, which
-        ranks above a filename and below a person, so a field somebody
-        edited or locked keeps its value and the rest are filled in.
-
-        The candidate is sent back by the client rather than looked up
-        again here, because a second lookup can return something else — a
-        person would then accept what they read and get what they did
-        not. This costs nothing: every value is written with external
-        provenance, and the caller already holds the capability that lets
-        them type the same thing into the edit form.
-
-        `revision` is required and must be the one the client read, for
-        the same reason it is on an edit.
-
-        Identifiers cannot be applied. They decide work identity
-        (ADR-0003), so accepting one would move a reader's history
-        between books as a side effect of tidying a title. They are
-        reported by the lookup only so a person can check they are being
-        offered the right edition.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [revision]
-              properties:
-                revision: { type: integer, minimum: 1 }
-                provider:
-                  type: string
-                  description: |
-                    Recorded for the person reading the page later, so a
-                    value can be traced back to the service that gave it.
-                by_identifier: { type: boolean }
-                title: { type: string }
-                subtitle: { type: string }
-                description: { type: string }
-                publisher: { type: string }
-                published_date: { type: string }
-                languages: { type: array, items: { type: string } }
-                tags: { type: array, items: { type: string } }
-                authors: { type: array, items: { type: string } }
-      responses:
-        "200":
-          description: The metadata after the merge.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/BookMetadata" }
-        "400": { $ref: "#/components/responses/Error", description: "Malformed body, or missing revision" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no manage access" }
-        "409":
-          $ref: "#/components/responses/Error"
-          description: |
-            The book changed while it was being looked at, or the
-            candidate would change nothing because every field it offers
-            is blank, already right, or locked.
-        "501": { $ref: "#/components/responses/Error", description: "No metadata provider is configured" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder, kind or entity" }
 
   /v1/books/{id}/resolve:
     post:
@@ -1452,7 +1008,7 @@ paths:
 
         For a book whose bytes this server keeps a copy of, the `ETag` is
         the content digest and never changes, and the answer may be
-        cached indefinitely. For a book served in place out of a library
+        cached indefinitely. For a book read out of a watched
         directory, the bytes belong to whoever owns that directory: the
         `ETag` is weak and the answer is `private, no-cache`. If such a
         file no longer matches what was catalogued — a different size or
@@ -1491,7 +1047,7 @@ paths:
         for the decode and later ones do not. The `ETag` combines the
         content digest with the size, both of which are fixed for a given
         book, so a client that has one may reuse it indefinitely — except
-        for a book served in place out of a library directory, whose
+        for a book read out of a watched folder, whose
         bytes are not this server's to promise: there the validator is
         weak and the answer is `private, no-cache`.
 
@@ -1528,7 +1084,7 @@ paths:
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
         The catalog root for e-reader clients, and the only entry point
-        they need: it lists the caller's libraries, each linking to its
+        they need: it lists the server's folders, each linking to its
         acquisition feed. `/opds/v1.2/` is accepted too, because readers
         differ on the trailing slash.
 
@@ -1543,17 +1099,17 @@ paths:
         "401": { description: "Missing or invalid credentials; carries WWW-Authenticate" }
         "403": { $ref: "#/components/responses/Error", description: "Valid credential without library-read" }
 
-  /opds/v1.2/libraries/{library}:
+  /opds/v1.2/folders/{folder}:
     get:
       tags: [opds]
-      summary: OPDS 1.2 acquisition feed for one library
+      summary: OPDS 1.2 acquisition feed for one folder
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
         One page of books, each with an EPUB acquisition link. A `next`
         link appears while more pages remain; readers follow it rather
         than constructing cursors.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - name: cursor
           in: query
           schema: { type: string }
@@ -1565,41 +1121,41 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /opds/v1.2/libraries/{library}/search.xml:
+  /opds/v1.2/folders/{folder}/search.xml:
     get:
       tags: [opds]
-      summary: OpenSearch description for one library
+      summary: OpenSearch description for one folder
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
-        Readers find this through the `search` link on the library's
+        Readers find this through the `search` link on the folder's
         acquisition feed rather than being configured with it, and read
         the query template out of it. `searchTerms` is the only term
         offered: a reader that could substitute anything else would be
         asking a question this surface deliberately cannot answer.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200":
           description: An OpenSearch description document
           content:
             application/opensearchdescription+xml:
               schema: { type: string }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /opds/v1.2/libraries/{library}/search:
+  /opds/v1.2/folders/{folder}/search:
     get:
       tags: [opds]
-      summary: OPDS search results for one library
+      summary: OPDS search results for one folder
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
-        The same search as `GET /v1/libraries/{library}/search`, rendered
+        The same search as `GET /v1/folders/{folder}/search`, rendered
         as an acquisition feed so every result can be downloaded from
         where it was found. It carries no `next` link: the feed is
         unpaged, and the answer to wanting more is a better query.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: q, in: query, schema: { type: string, maxLength: 512 } }
       responses:
         "200":
@@ -1608,20 +1164,20 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Over-long query" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /opds/v1.2/libraries/{library}/recent:
+  /opds/v1.2/folders/{folder}/recent:
     get:
       tags: [opds]
-      summary: OPDS acquisition feed of a library's newest books
+      summary: OPDS acquisition feed of a folder's newest books
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
         The feed a reader opens to see what has arrived since last time,
         reached from the `http://opds-spec.org/sort/new` link on the
-        library's own feed. It is `order=recent` on the native listing,
+        folder's own feed. It is `order=recent` on the native listing,
         rendered as a feed.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - name: cursor
           in: query
           schema: { type: string }
@@ -1633,19 +1189,19 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /opds/v1.2/libraries/{library}/{kind}:
+  /opds/v1.2/folders/{folder}/{kind}:
     get:
       tags: [opds]
-      summary: OPDS navigation feed of a library's series, contributors, tags or genres
+      summary: OPDS navigation feed of a folder's series, contributors or tags
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
         Reached from the `http://opds-spec.org/facet` links on the
-        library's acquisition feed. Each entry leads to the books
+        folder's acquisition feed. Each entry leads to the books
         claiming it.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/EntityKind"
         - name: after
           in: query
@@ -1658,9 +1214,9 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=navigation:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Over-long cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library or kind, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder or kind" }
 
-  /opds/v1.2/libraries/{library}/{kind}/{entity}:
+  /opds/v1.2/folders/{folder}/{kind}/{entity}:
     get:
       tags: [opds]
       summary: OPDS acquisition feed of the books claiming one entity
@@ -1670,7 +1226,7 @@ paths:
         which is the whole reason a reader would rather browse a series
         than search for it.
       parameters:
-        - { name: library, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/EntityKind"
         - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
         - name: cursor
@@ -1684,7 +1240,7 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such library, kind or entity, or no access" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder, kind or entity" }
 
   /opds/v1.2/books/{id}/download:
     get:
@@ -1707,28 +1263,6 @@ paths:
         "304": { description: The client's copy is current }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
-
-  /v1/ingest/jobs/{id}:
-    get:
-      tags: [library]
-      summary: Progress of one ingest job
-      security: [{ deviceToken: [] }]  # requires library-read scope
-      description: |
-        Poll after an upload. Visibility follows manage access to the
-        job's library, so a library's managers can see everything being
-        ingested into it, not only their own uploads.
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
-      responses:
-        "200":
-          description: The job
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/IngestJob" }
-        "404": { $ref: "#/components/responses/Error", description: "Unknown job, or no access to its library" }
 
 components:
   securitySchemes:
@@ -1755,11 +1289,11 @@ components:
       in: path
       required: true
       description: |
-        Which kind of library-wide entity. The set is closed, and a kind
+        Which kind of folder-wide entity. The set is closed, and a kind
         outside it is a 404 rather than a 400: it names no resource.
       schema:
         type: string
-        enum: [series, contributors, tags, genres]
+        enum: [series, contributors, tags]
 
   responses:
     Error:
@@ -1810,36 +1344,64 @@ components:
     CatalogBook:
       type: object
       description: |
-        One book in a library, and the only shape a book is ever returned
-        in: the library listing, search, entity listings, duplicate groups
-        and `GET /v1/books/{id}` all return exactly this. Detail is not a
-        richer shape.
+        One book, and the only shape a book is ever returned in: the
+        folder listing, search, entity listings and `GET /v1/books/{id}`
+        all return exactly this. Detail is not a richer shape.
 
-        Optional metadata fields are omitted when unknown rather than sent
-        empty, so a client can tell "no publisher recorded" from
-        "publisher is blank". The relationship fields are the opposite:
-        `contributors`, `series` and `files` are always present, and empty
-        when the book has none.
+        A book is one file in one watched folder, so its file fields are
+        flat rather than a list. Optional metadata fields are omitted
+        when unknown rather than sent empty, so a client can tell "no
+        publisher recorded" from "publisher is blank". The relationship
+        fields are the opposite: `contributors` and `series` are always
+        present, and empty when the book has none.
       required:
         - book_id
-        - library_id
+        - folder_id
         - title
         - status
+        - sha256
+        - size_bytes
+        - media_type
+        - filename
         - created_at
         - updated_at
         - cover_url
         - contributors
         - series
-        - files
       properties:
         book_id: { type: string, format: uuid }
-        library_id: { type: string, format: uuid }
+        folder_id: { type: string, format: uuid }
         title: { type: string }
         subtitle: { type: string }
         description: { type: string }
         publisher: { type: string }
         published_date: { type: string }
-        status: { type: string, enum: [active, missing, trashed, review] }
+        status:
+          type: string
+          enum: [active, missing]
+          description: |
+            `missing` means the last complete pass over the folder did
+            not see the file. The book stays in the catalog, and its
+            reading history with it, because a disconnected disk is not
+            a deleted book. A pass that failed part way, or that
+            observed nothing at all, never marks anything missing.
+        sha256:
+          type: string
+          description: |
+            The digest of the file's **content** — what the bytes are.
+            It is what a client matches its own copies against, and it
+            is never the address of anything inside the server.
+        size_bytes:
+          type: integer
+          format: int64
+          description: |
+            The length those bytes had when the server last read them.
+            That is a fact about the last look, not a promise about now;
+            the download is the truth.
+        media_type: { type: string, example: application/epub+zip }
+        filename:
+          type: string
+          description: The file's own name on disk, without its directory.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         cover_url:
@@ -1866,6 +1428,8 @@ components:
           description: |
             Every series the book belongs to. A book may be in more than
             one, and reporting a single series would silently pick one.
+            For a plain folder a series is the subdirectory the file sits
+            in; for a Calibre folder it is what `metadata.db` says.
           items:
             type: object
             required: [id, name]
@@ -1877,40 +1441,10 @@ components:
                 description: |
                   Omitted when the book's place in the series is unknown.
                   It is never invented: 0 would mean "first".
-        files:
-          type: array
-          description: |
-            The available files only, and empty for a book that has
-            nothing to download — including a trashed one, whose files
-            come back only if it is restored. A superseded or missing
-            file is not something a client can download.
-          items:
-            type: object
-            required: [file_id, media_type, filename, sha256, size_bytes]
-            properties:
-              file_id: { type: string, format: uuid }
-              media_type: { type: string }
-              filename: { type: string }
-              sha256:
-                type: string
-                description: |
-                  The digest of the file's **content** — what the bytes
-                  are. It is present whoever owns the bytes, including
-                  libraries the server reads in place and keeps no copy
-                  of, and it is what a client matches its own copies
-                  against. It is never the address of the server's
-                  internal copy, which is not in this API at all.
-              size_bytes:
-                type: integer
-                format: int64
-                description: |
-                  The length those bytes had when the server last read
-                  them. For a file the server reads in place that is a
-                  fact about the last look, not a promise about now.
     CatalogEntity:
       type: object
       description: |
-        One library-wide series, contributor, tag or genre. Matching folds
+        One folder-wide series, contributor or tag. Matching folds
         case and spacing while the display spelling is preserved, so
         "Frank  Herbert" and "frank herbert" are one entity spelled one
         way.
@@ -1920,12 +1454,12 @@ components:
         name: { type: string, description: The display spelling. }
         book_count:
           type: integer
-          description: Active books claiming it. Trashed books do not count.
+          description: Books claiming it whose file is present.
 
     SearchResult:
       type: object
       description: |
-        One library's answer to a search: the matching books, best first,
+        One folder's answer to a search: the matching books, best first,
         and what those books have in common.
       required: [books, facets, truncated]
       properties:
@@ -1937,7 +1471,7 @@ components:
           description: |
             What the returned books share, at most 20 of each kind, most
             claimed first. Counted over the answer rather than over the
-            library, so a facet can never describe a different set than
+            folder, so a facet can never describe a different set than
             the one returned.
           items: { $ref: "#/components/schemas/SearchFacet" }
         truncated:
@@ -1953,237 +1487,13 @@ components:
         the `entity` filter.
       required: [kind, id, name, book_count]
       properties:
-        kind: { type: string, enum: [series, contributor, tag, genre] }
+        kind: { type: string, enum: [series, contributor, tag] }
         id: { type: string, format: uuid }
         name: { type: string, description: The display spelling. }
         book_count:
           type: integer
-          description: Returned books claiming it, not library-wide books.
+          description: Returned books claiming it, not folder-wide books.
 
-    MetadataField:
-      type: object
-      description: |
-        One scalar value with its provenance. `source` is the precedence
-        stage that supplied it; `locked` means a person asserted it and no
-        rescan may overwrite it.
-      required: [value, source, locked]
-      properties:
-        value: { type: string }
-        source: { type: string, enum: ["", embedded, filename, external, calibre, manual] }
-        locked: { type: boolean }
-
-    MetadataCandidate:
-      type: object
-      description: |
-        One suggestion from one external service. Everything needed to
-        judge it is here: which service said it, whether it matched on
-        this book's identifier or only on a similar title, and a link to
-        the record, because a suggestion nobody can check is one somebody
-        accepts on faith.
-      required: [provider, score, by_identifier]
-      properties:
-        provider: { type: string }
-        url:
-          type: string
-          description: The service's own page for this record.
-        score:
-          type: number
-          description: |
-            How well it matched, between 0 and 1. An identifier match
-            scores highest; a title guess is the caller's judgement to
-            make.
-        by_identifier:
-          type: boolean
-          description: |
-            True when the service was answering about this book's ISBN
-            rather than about a book with a similar title.
-        title: { type: string }
-        subtitle: { type: string }
-        description: { type: string }
-        publisher: { type: string }
-        published_date: { type: string }
-        languages: { type: array, items: { type: string } }
-        tags: { type: array, items: { type: string } }
-        authors: { type: array, items: { type: string } }
-        cover_url: { type: string }
-        identifiers:
-          type: array
-          description: |
-            Reported so a person can check they are being offered the
-            right edition. They cannot be applied: identifiers decide
-            work identity (ADR-0003).
-          items:
-            type: object
-            required: [scheme, value]
-            properties:
-              scheme: { type: string }
-              value: { type: string }
-
-    BookMetadata:
-      type: object
-      required: [book_id, library_id, revision, title]
-      properties:
-        book_id: { type: string, format: uuid }
-        library_id: { type: string, format: uuid }
-        revision:
-          type: integer
-          description: |
-            Send this back to write. Without it an editor cannot tell a
-            conflict from a success.
-        title: { $ref: "#/components/schemas/MetadataField" }
-        subtitle: { $ref: "#/components/schemas/MetadataField" }
-        description: { $ref: "#/components/schemas/MetadataField" }
-        publisher: { $ref: "#/components/schemas/MetadataField" }
-        published_date: { $ref: "#/components/schemas/MetadataField" }
-        tags:
-          type: array
-          items: { $ref: "#/components/schemas/MetadataEntityRow" }
-        genres:
-          type: array
-          items: { $ref: "#/components/schemas/MetadataEntityRow" }
-        series:
-          type: array
-          items:
-            allOf:
-              - $ref: "#/components/schemas/MetadataEntityRow"
-              - type: object
-                properties:
-                  position:
-                    type: number
-                    description: |
-                      Omitted when the book has no place in the series. It
-                      is never invented, so absent means unknown rather
-                      than first.
-        contributors:
-          type: array
-          items:
-            allOf:
-              - $ref: "#/components/schemas/MetadataEntityRow"
-              - type: object
-                required: [role]
-                properties:
-                  role:
-                    type: string
-                    description: |
-                      One person credited twice in different roles is two
-                      rows over one entity.
-        languages:
-          type: array
-          items:
-            type: object
-            required: [language, source, locked]
-            properties:
-              language: { type: string }
-              source: { type: string }
-              locked: { type: boolean }
-        identifiers:
-          type: array
-          description: |
-            Read-only. Identifiers feed work identity, so changing one
-            moves a reader's reading history between books.
-          items:
-            type: object
-            required: [scheme, value, source, locked]
-            properties:
-              scheme: { type: string }
-              value: { type: string }
-              source: { type: string }
-              locked: { type: boolean }
-        set_locks:
-          type: object
-          description: |
-            Per-set manual locks. A row lock cannot express a
-            deliberately emptied set, because removing the last row
-            leaves nothing to carry the lock.
-          properties:
-            tags: { type: boolean }
-            genres: { type: boolean }
-            languages: { type: boolean }
-            series: { type: boolean }
-            contributors: { type: boolean }
-            identifiers: { type: boolean }
-
-    MetadataEntityRow:
-      type: object
-      required: [id, name, source, locked]
-      properties:
-        id: { type: string, format: uuid }
-        name: { type: string }
-        source: { type: string, enum: [embedded, filename, external, calibre, manual] }
-        locked: { type: boolean }
-
-    ScalarEdit:
-      type: object
-      description: |
-        A change to one scalar field. A blank `value` clears the field and
-        locks it, which is how a user suppresses a wrong embedded value.
-        `unlock` is exclusive with editing: it clears the lock and leaves
-        the value alone.
-      properties:
-        value: { type: string }
-        unlock: { type: boolean, default: false }
-
-    SetEdit:
-      type: object
-      description: |
-        A replacement for one whole set. `entries` is the complete new
-        membership; an entry that is absent is one the user removed. As
-        with a scalar, `unlock` is exclusive with editing.
-      properties:
-        unlock: { type: boolean, default: false }
-        entries:
-          type: array
-          items:
-            type: object
-            required: [name]
-            properties:
-              name:
-                type: string
-                description: |
-                  The display spelling. An entry whose name matches one
-                  the library already has rejoins that entity rather than
-                  creating a second one under the same name.
-              position:
-                type: number
-                description: Series only. Omit it rather than sending 0.
-              role:
-                type: string
-                description: Contributors only. Defaults to `author`.
-
-    IngestJob:
-      type: object
-      description: |
-        The progress of one uploaded file on its way to becoming a
-        book. `sha256`, `size_bytes` and `book_id` appear as the job
-        advances; `error_code` only on `failed` or `quarantined`.
-      required: [job_id, library_id, state, source, created_at, updated_at]
-      properties:
-        job_id: { type: string, format: uuid }
-        library_id: { type: string, format: uuid }
-        state:
-          type: string
-          enum: [received, staged, validated, extracted, promoted, quarantined, failed]
-          description: |
-            `received` means the row exists but bytes may not be
-            stored yet; `staged` onwards means they are. `promoted` is
-            the only terminal success and is the only state that
-            carries `book_id`.
-        source:
-          type: string
-          description: How the file arrived (an upload, or a watched folder).
-        sha256:
-          type: string
-          description: Content digest, present once the bytes are staged.
-        size_bytes: { type: integer, format: int64 }
-        book_id:
-          type: string
-          format: uuid
-          description: The resulting book. Present only when `promoted`.
-        error_code:
-          type: string
-          description: Why the job stopped. Present only when `failed` or `quarantined`.
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
     Scope:
       type: string
       enum: [sync, read-insights, library-read, library-manage, admin]

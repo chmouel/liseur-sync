@@ -6,6 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // facetLink pulls the href of the facet named in the results page, which
@@ -25,20 +28,15 @@ func facetLink(t *testing.T, html, name string) string {
 
 func TestSearchPageFindsABookAndNarrowsByItsFacets(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := bookWithMetadata(t, f, "searchable")
-	_, html := f.get(t, "/ui/books/"+bookID, f.cookie)
-	resp := saveMetadata(t, f, f.cookie, bookID, url.Values{
-		"csrf":      {csrfFrom(t, html)},
-		"title":     {"The Left Hand of Darkness"},
-		"title_was": {""},
-		"tags":      {"Fantasy"},
-		"tags_was":  {""},
+	f.observe(t, store.ObservedBook{
+		RelativePath: "left-hand.epub", SizeBytes: 4096, MTime: time.Now().UTC(),
+		ContentSHA256:    strings.Repeat("1", 64),
+		OriginalFilename: "left-hand.epub", MediaType: "application/epub+zip",
+		Title: "The Left Hand of Darkness",
+		Tags:  []string{"Fantasy"},
 	})
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("save: %d", resp.StatusCode)
-	}
 
-	base := "/ui/libraries/" + f.library + "/search"
+	base := "/ui/folders/" + f.folder + "/search"
 	_, page := f.get(t, base+"?q=darkness", f.cookie)
 	if !strings.Contains(page, "The Left Hand of Darkness") {
 		t.Fatalf("search missed the book:\n%s", page)
@@ -73,7 +71,7 @@ func TestSearchPageSaysNothingUntilItIsAsked(t *testing.T) {
 	f := newBooksFixture(t)
 	bookWithMetadata(t, f, "quiet")
 
-	_, page := f.get(t, "/ui/libraries/"+f.library+"/search", f.cookie)
+	_, page := f.get(t, "/ui/folders/"+f.folder+"/search", f.cookie)
 	// An empty box must not read as an empty library.
 	if strings.Contains(page, "Nothing matched") {
 		t.Fatalf("an unasked search reported a failure:\n%s", page)
@@ -82,7 +80,7 @@ func TestSearchPageSaysNothingUntilItIsAsked(t *testing.T) {
 		t.Fatalf("no search box on the search page:\n%s", page)
 	}
 
-	_, none := f.get(t, "/ui/libraries/"+f.library+"/search?q=zzzzznothing", f.cookie)
+	_, none := f.get(t, "/ui/folders/"+f.folder+"/search?q=zzzzznothing", f.cookie)
 	if !strings.Contains(none, "Nothing matched") {
 		t.Fatalf("a failed search said nothing about it:\n%s", none)
 	}
@@ -92,54 +90,19 @@ func TestSearchIsOfferedOnTheLibraryPageAndScopedToTheLibrary(t *testing.T) {
 	f := newBooksFixture(t)
 	bookWithMetadata(t, f, "offered")
 
-	_, books := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, books := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	if !strings.Contains(books, "/search") {
 		t.Fatalf("the library page offered no way to search it:\n%s", books)
 	}
 
-	// A reader may search; a library nobody granted them is not there.
-	resp, _ := f.get(t, "/ui/libraries/"+f.library+"/search?q=offered", f.readerCookie(t))
+	// Every signed-in account may search every folder (ADR-0017); a
+	// folder that does not exist is a 404 rather than an empty page.
+	resp, _ := f.get(t, "/ui/folders/"+f.folder+"/search?q=offered", f.readerCookie(t))
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("a reader could not search: %d", resp.StatusCode)
+		t.Fatalf("a second account could not search: %d", resp.StatusCode)
 	}
-	resp, _ = f.get(t, "/ui/libraries/00000000-0000-0000-0000-000000000000/search?q=x", f.cookie)
+	resp, _ = f.get(t, "/ui/folders/00000000-0000-0000-0000-000000000000/search?q=x", f.cookie)
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("an unreadable library answered %d, want 404", resp.StatusCode)
-	}
-}
-
-func TestBooksPageAsksAboutBooksThatLookAlike(t *testing.T) {
-	f := newBooksFixture(t)
-	first := bookWithMetadata(t, f, "buildone")
-	second := bookWithMetadata(t, f, "buildtwo")
-	for _, id := range []string{first, second} {
-		_, html := f.get(t, "/ui/books/"+id, f.cookie)
-		resp := saveMetadata(t, f, f.cookie, id, url.Values{
-			"csrf":             {csrfFrom(t, html)},
-			"title":            {"Dune"},
-			"title_was":        {""},
-			"contributors":     {"Frank Herbert (author)"},
-			"contributors_was": {""},
-		})
-		if resp.StatusCode != http.StatusSeeOther {
-			t.Fatalf("save %s: %d", id, resp.StatusCode)
-		}
-	}
-
-	_, page := f.get(t, "/ui/library/manage?library="+f.library, f.cookie)
-	if !strings.Contains(page, "Possibly the same book") {
-		t.Fatalf("the librarian was not told:\n%s", page)
-	}
-	// It is a guess, so it must link rather than assert: deciding needs
-	// looking at the books.
-	if !strings.Contains(page, "books/"+first) || !strings.Contains(page, "books/"+second) {
-		t.Fatalf("the group did not link to both books:\n%s", page)
-	}
-
-	// A reader is shown neither report, for the same reason they are
-	// shown no trash: it is a list of things only a librarian can act on.
-	_, readerPage := f.get(t, "/ui/library?library="+f.library, f.readerCookie(t))
-	if strings.Contains(readerPage, "Possibly the same book") {
-		t.Fatalf("a reader was shown the duplicate report:\n%s", readerPage)
+		t.Fatalf("a folder that is not there answered %d, want 404", resp.StatusCode)
 	}
 }

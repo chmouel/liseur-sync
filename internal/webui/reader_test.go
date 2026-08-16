@@ -78,8 +78,8 @@ func TestReaderTokenIsNarrowAndShortLived(t *testing.T) {
 	if reader.ExpiresAt == nil {
 		t.Fatal("stored reader token has no expiry")
 	}
-	if reader.Scopes.Allows(store.ScopeLibraryManage) || reader.Scopes.Allows(store.ScopeAdmin) {
-		t.Error("a reader token must not be able to manage or administer a library")
+	if reader.Scopes.Allows(store.ScopeAdmin) {
+		t.Error("a reader token must not be able to administer the server")
 	}
 	if reader.Scopes.Allows(store.ScopeReadInsights) {
 		t.Error("the reader needs positions, not other people's statistics")

@@ -41,7 +41,7 @@ type parsedFeed struct {
 	} `xml:"entry"`
 }
 
-func (f *uploadFixture) opds(t *testing.T, path, user, pass string) (*http.Response, []byte) {
+func (f *folderFixture) opds(t *testing.T, path, user, pass string) (*http.Response, []byte) {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, f.ts.URL+path, nil)
 	if pass != "" || user != "" {
@@ -87,9 +87,9 @@ func linkHref(t *testing.T, links []struct {
 // the root with nothing but a password, follow links, download the book.
 // A reader that cannot do this walk cannot use the server at all.
 func TestOPDSWalksFromRootToBytes(t *testing.T) {
-	f := newUploadFixture(t)
-	body := bytes.Repeat([]byte("opds-epub"), 64)
-	_, digest := f.publish(t, "opds", body)
+	f := newFolderFixture(t)
+	epubBody := makeEPUB(t, "Feed Walked Book", "", bytes.Repeat([]byte("opds-epub"), 64))
+	_, digest := f.writeBook(t, "opds.epub", epubBody)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	resp, raw := f.opds(t, "/opds/v1.2", "token", read)
@@ -103,28 +103,25 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 	if len(root.Entries) != 1 {
 		t.Fatalf("root entries = %+v", root.Entries)
 	}
-	libHref := linkHref(t, root.Entries[0].Links, "subsection")
-	if libHref == "" {
+	folderHref := linkHref(t, root.Entries[0].Links, "subsection")
+	if folderHref == "" {
 		t.Fatalf("no subsection link: %+v", root.Entries[0])
 	}
 
-	resp, raw = f.opds(t, libHref, "token", read)
+	resp, raw = f.opds(t, folderHref, "token", read)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("library feed: %d %s", resp.StatusCode, raw)
+		t.Fatalf("folder feed: %d %s", resp.StatusCode, raw)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "kind=acquisition") {
-		t.Fatalf("library content-type = %q", ct)
+		t.Fatalf("folder content-type = %q", ct)
 	}
-	lib := parseFeed(t, raw)
-	if len(lib.Entries) != 1 {
-		t.Fatalf("library entries = %+v", lib.Entries)
+	folder := parseFeed(t, raw)
+	if len(folder.Entries) != 1 {
+		t.Fatalf("folder entries = %+v", folder.Entries)
 	}
-	entry := lib.Entries[0]
-	if entry.Title != "Title of opds" {
+	entry := folder.Entries[0]
+	if entry.Title != "Feed Walked Book" {
 		t.Fatalf("entry title = %q", entry.Title)
-	}
-	if entry.Publisher != "A Publisher" {
-		t.Fatalf("entry publisher = %q", entry.Publisher)
 	}
 	acq := linkHref(t, entry.Links, opdsAcquisitionRel)
 	if acq == "" {
@@ -135,10 +132,10 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("acquisition: %d %s", resp.StatusCode, got)
 	}
-	if !bytes.Equal(got, body) {
-		t.Fatalf("downloaded %d bytes, want %d", len(got), len(body))
+	if !bytes.Equal(got, epubBody) {
+		t.Fatalf("downloaded %d bytes, want %d", len(got), len(epubBody))
 	}
-	if want := `"` + digest + `"`; resp.Header.Get("ETag") != want {
+	if want := `W/"` + digest + `"`; resp.Header.Get("ETag") != want {
 		t.Fatalf("etag = %q want %q", resp.Header.Get("ETag"), want)
 	}
 }
@@ -148,7 +145,7 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 // credential in plain text on the device; handing it the account password
 // would put the whole account on an e-reader's filesystem.
 func TestOPDSRejectsAccountPasswords(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	const password = "correct horse battery staple"
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -180,7 +177,7 @@ func TestOPDSRejectsAccountPasswords(t *testing.T) {
 // by every proxy in between, and a bearer header, which no OPDS client
 // sends and which would quietly widen the surface if it worked.
 func TestOPDSRefusesCredentialsOutsideBasicAuth(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	for _, tc := range []struct {
@@ -218,16 +215,15 @@ func TestOPDSRefusesCredentialsOutsideBasicAuth(t *testing.T) {
 // reader configured against the wrong account should fail visibly rather
 // than browse a catalog it did not expect.
 func TestOPDSAcceptsTheTokenNameAsUsername(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	name := "device-" + string(store.ScopeLibraryRead) + "-" + f.user.ID
 
 	for _, tc := range []struct {
 		user string
 		want int
 	}{
 		{"token", http.StatusOK},
-		{name, http.StatusOK},
+		{"test-device", http.StatusOK}, // the name f.mintToken gives the token.
 		{"", http.StatusOK},
 		{"someone-else", http.StatusUnauthorized},
 	} {
@@ -242,7 +238,7 @@ func TestOPDSAcceptsTheTokenNameAsUsername(t *testing.T) {
 // credential, so it must fail with 403 and no challenge — re-prompting
 // the user for a password they already got right helps nobody.
 func TestOPDSRequiresLibraryReadScope(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	sync := f.mintToken(t, f.user.ID, store.ScopeSync)
 
 	resp, raw := f.opds(t, "/opds/v1.2", "token", sync)
@@ -254,33 +250,11 @@ func TestOPDSRequiresLibraryReadScope(t *testing.T) {
 	}
 }
 
-// TestOPDSIsScopedToTheCallersLibraries: a stranger with a perfectly good
-// catalog token sees an empty catalog, and cannot reach a library by
-// guessing its id.
-func TestOPDSIsScopedToTheCallersLibraries(t *testing.T) {
-	f := newUploadFixture(t)
-	f.publish(t, "private", []byte("secret"))
-	stranger := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
-
-	resp, raw := f.opds(t, "/opds/v1.2", "token", stranger)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("root: %d %s", resp.StatusCode, raw)
-	}
-	if entries := parseFeed(t, raw).Entries; len(entries) != 0 {
-		t.Fatalf("stranger sees %d libraries", len(entries))
-	}
-
-	resp, raw = f.opds(t, "/opds/v1.2/libraries/"+f.library, "token", stranger)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("guessed library: %d %s", resp.StatusCode, raw)
-	}
-}
-
 // TestOPDSPagesWithoutLosingBooks walks the `next` links exactly as a
 // reader does and checks every book appears once. A feed that silently
 // drops books is worse than one that fails.
 func TestOPDSPagesWithoutLosingBooks(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	const total = defaultCatalogPageSize + 3
 	want := map[string]bool{}
 	for i := range total {
@@ -289,7 +263,7 @@ func TestOPDSPagesWithoutLosingBooks(t *testing.T) {
 	}
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	path := "/opds/v1.2/libraries/" + f.library
+	path := "/opds/v1.2/folders/" + f.folder.ID
 	pages := 0
 	for path != "" {
 		pages++
@@ -323,16 +297,17 @@ func TestOPDSPagesWithoutLosingBooks(t *testing.T) {
 	}
 }
 
-// TestOPDSEscapesHostileMetadata: titles come out of uploaded EPUBs, so
-// they are attacker-controlled. Many readers render feed text as HTML.
-// The encoder must escape it, and the feed must still parse.
+// TestOPDSEscapesHostileMetadata: titles come from the folder's own
+// files, so they are attacker-controlled the moment somebody can write
+// into a watched directory. Many readers render feed text as HTML. The
+// encoder must escape it, and the feed must still parse.
 func TestOPDSEscapesHostileMetadata(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	const evil = `</title><script>alert("xss")</script>& "quoted" 'single'`
 	f.publishAs(t, "hostile", evil, []byte("body"))
 
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	resp, raw := f.opds(t, "/opds/v1.2/libraries/"+f.library, "token", read)
+	resp, raw := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("feed: %d %s", resp.StatusCode, raw)
 	}
@@ -348,10 +323,10 @@ func TestOPDSEscapesHostileMetadata(t *testing.T) {
 // TestOPDSKeepsUnknownPathsOut: the root feed is registered on an exact
 // pattern, so a typo is a 404 and not a confusingly empty catalog.
 func TestOPDSKeepsUnknownPathsOut(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	for _, path := range []string{"/opds/v1.2/nonsense", "/opds/v1.2/libraries"} {
+	for _, path := range []string{"/opds/v1.2/nonsense", "/opds/v1.2/folders"} {
 		resp, _ := f.opds(t, path, "token", read)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s = %d, want 404", path, resp.StatusCode)
@@ -370,12 +345,12 @@ func TestOPDSKeepsUnknownPathsOut(t *testing.T) {
 // TestOPDSRejectsAMalformedCursor: a reader that mangles a `next` link
 // must get a 4xx, never a 5xx.
 func TestOPDSRejectsAMalformedCursor(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	for _, cursor := range []string{"!!!", "eyJ0Ijoibm90LWEtdGltZSJ9", "e30"} {
 		resp, _ := f.opds(t,
-			"/opds/v1.2/libraries/"+f.library+"?cursor="+cursor, "token", read)
+			"/opds/v1.2/folders/"+f.folder.ID+"?cursor="+cursor, "token", read)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("cursor %q = %d, want 400", cursor, resp.StatusCode)
 		}
@@ -387,10 +362,10 @@ func TestOPDSRejectsAMalformedCursor(t *testing.T) {
 // accepts that credential, every image in an acquisition feed is a broken
 // one.
 func TestOPDSEntriesCarryCoverLinks(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "opds-cover", coverEPUB(t, 300, 400, "cover.png"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
-	resp, raw := f.opds(t, "/opds/v1.2/libraries/"+f.library, "token", read)
+	resp, raw := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("acquisition feed: %d %s", resp.StatusCode, raw)
 	}

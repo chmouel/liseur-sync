@@ -7,13 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/chmouel/liseur-sync/internal/epub"
-	"github.com/chmouel/liseur-sync/internal/metadata/provider"
 )
-
-const maxDurationHours = int64((1<<63 - 1) / time.Hour)
 
 // Config is the server configuration, loaded from one TOML file with
 // env overrides (LISEUR_*).
@@ -26,26 +22,30 @@ type Config struct {
 	} `toml:"database"`
 
 	Content struct {
-		Root                  string `toml:"root"`                    // default ./content
-		FailureRetentionHours int    `toml:"failure_retention_hours"` // default 24
-		OrphanGraceHours      int    `toml:"orphan_grace_hours"`      // default 168
-		TrashRetentionHours   int    `toml:"trash_retention_hours"`   // default 720
-		RecoveryBatchSize     int    `toml:"recovery_batch_size"`     // ingest and blob housekeeping, default 100
-		IngestWorkerInterval  int    `toml:"ingest_worker_interval_seconds"`
-		// MaxUploadBytes bounds one uploaded file. It is the request-size
-		// bound ADR-0005 requires: the EPUB validator's limits only apply
-		// once bytes are staged, so without this a single upload could
-		// fill the disk before anything inspected it.
-		MaxUploadBytes int64 `toml:"max_upload_bytes"`
-		// MaxStagingBytes bounds every in-flight upload together, or 0
-		// for unlimited. max_upload_bytes and quota_bytes both pass
-		// uploads that are individually fine and collectively fill the
-		// disk, and staged bytes are charged to nobody until they are
-		// promoted.
-		MaxStagingBytes int64 `toml:"max_staging_bytes"`
-		// QuotaBytes is the per-principal logical storage limit, or 0 for
-		// unlimited. Charged to a library's quota_user_id (ADR-0002).
-		QuotaBytes            int64 `toml:"quota_bytes"`
+		// CacheDir is the only directory this server writes to. It holds
+		// rendered covers and nothing else: everything in it can be
+		// produced again from the books it was made from, so it is safe
+		// to delete while the server is running (ADR-0017).
+		CacheDir string `toml:"cache_dir"`
+		// FolderRoots bounds where the admin panel may point a folder.
+		// Adding one names a path on this machine, which is a privilege
+		// beyond "can administer this application" (ADR-0013): an
+		// operator who lists the directories their books live under
+		// turns the panel's form from a filesystem-wide oracle into a
+		// choice among trees they already meant to serve.
+		//
+		// Empty means "anywhere the server can read", which is what the
+		// add-folder subcommand allows. A root must be absolute; a
+		// folder root is accepted when it is one of these or below one.
+		FolderRoots []string `toml:"folder_roots"`
+		// ScanMaxFiles and ScanMaxDepth bound one traversal. A pass that
+		// meets either is incomplete, and an incomplete pass never marks
+		// anything missing — so raising them is how an operator with a
+		// very large folder keeps absence detection working, rather than
+		// a tuning knob.
+		ScanMaxFiles int `toml:"scan_max_files"`
+		ScanMaxDepth int `toml:"scan_max_depth"`
+
 		EPUBMaxEntries        int   `toml:"epub_max_entries"`
 		EPUBMaxDirectoryBytes int64 `toml:"epub_max_directory_bytes"`
 		EPUBMaxExpandedBytes  int64 `toml:"epub_max_expanded_bytes"`
@@ -53,39 +53,6 @@ type Config struct {
 		EPUBMaxRatio          int64 `toml:"epub_max_compression_ratio"`
 		EPUBMaxMetadataBytes  int64 `toml:"epub_max_metadata_bytes"`
 		EPUBMaxXMLDepth       int   `toml:"epub_max_xml_depth"`
-		// RefreshTick is how often, in seconds, the server looks for a
-		// library whose refresh has come due, or 0 to run no refreshes at
-		// all. It is not how often a root is swept: each library carries
-		// its own interval, and this is the granularity at which those
-		// are noticed. Setting it to a minute costs one query a minute
-		// and makes an hourly library an hourly library rather than an
-		// hourly-give-or-take-five-minutes one.
-		//
-		// Notifications are not used: a sweep is the only thing allowed
-		// to conclude that a book is gone (ADR-0002), so the interval is
-		// the real latency budget rather than a fallback for a missed
-		// event.
-		RefreshTick int `toml:"refresh_tick_seconds"`
-		// WatchedMaxFiles and WatchedMaxDepth bound one traversal. A
-		// sweep that meets either is incomplete, and an incomplete sweep
-		// never marks anything missing, so raising them is how an
-		// operator with a very large library keeps absence detection
-		// working rather than a tuning knob.
-		WatchedMaxFiles int `toml:"watched_max_files"`
-		WatchedMaxDepth int `toml:"watched_max_depth"`
-		// LibraryRoots bounds where the admin panel may point a
-		// directory or Calibre library. Creating one names a path on
-		// this machine, which is a privilege beyond "can administer
-		// this application" (ADR-0013): an operator who lists the
-		// directories their libraries live under turns the panel's form
-		// from a filesystem-wide oracle into a choice among trees they
-		// already meant to serve.
-		//
-		// Empty is the default and means "anywhere the server can
-		// read", which is what the `add-library` subcommand has always
-		// allowed. A root must be an absolute path; a library root is
-		// accepted when it is one of these or below one.
-		LibraryRoots []string `toml:"library_roots"`
 	} `toml:"content"`
 
 	// InsecureHTTP allows credential-bearing traffic over plain HTTP
@@ -133,31 +100,6 @@ type Config struct {
 		InferenceLateHours int   `toml:"inference_late_hours"` // default 24
 	} `toml:"ops"`
 
-	// Metadata configures optional lookups against external services.
-	// Everything here is off by default: a self-hosted server that talks
-	// to nobody is the posture an operator gets without asking, and
-	// ADR-0004 keeps it that way. Nothing in the ingest path uses these
-	// — a scan that phoned home would make a library's contents visible
-	// to a third party as a side effect of having files on disk.
-	Metadata struct {
-		// Providers names the services that may be queried. Empty
-		// disables external lookup entirely. Known values are
-		// "openlibrary" and "googlebooks"; an unknown one is refused at
-		// startup rather than ignored, because silence looks exactly
-		// like a service being down.
-		Providers []string `toml:"providers"`
-		// LookupTimeoutSeconds bounds one whole lookup, redirects
-		// included.
-		LookupTimeoutSeconds int `toml:"lookup_timeout_seconds"`
-		// LookupMaxBytes bounds one provider response. A response over
-		// it is refused rather than truncated: half a JSON document is
-		// a book with fields silently missing.
-		LookupMaxBytes int64 `toml:"lookup_max_bytes"`
-		// LookupMaxRedirects bounds the redirect chain. The allowlist is
-		// re-checked on every hop regardless.
-		LookupMaxRedirects int `toml:"lookup_max_redirects"`
-	} `toml:"metadata"`
-
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
 }
 
@@ -167,21 +109,7 @@ func Default() Config {
 	c.ListenAddr = "127.0.0.1:8585"
 	c.Database.Driver = "sqlite"
 	c.Database.URL = "liseur-sync.db"
-	c.Content.Root = "content"
-	c.Content.FailureRetentionHours = 24
-	c.Content.OrphanGraceHours = 168
-	// A month is long enough that someone notices a mistaken deletion
-	// before the bytes are gone, and short enough that the trash is not
-	// a second copy of the library.
-	c.Content.TrashRetentionHours = 720
-	c.Content.RecoveryBatchSize = 100
-	c.Content.IngestWorkerInterval = 5
-	c.Content.MaxUploadBytes = 512 << 20
-	// Sixteen uploads of the default maximum size. Enough that a small
-	// instance never meets it, low enough that a runaway client cannot
-	// spend a disk before anything notices.
-	c.Content.MaxStagingBytes = 8 << 30
-	c.Content.QuotaBytes = 0
+	c.Content.CacheDir = "cache"
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
 	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
@@ -190,12 +118,8 @@ func Default() Config {
 	c.Content.EPUBMaxRatio = int64(epubLimits.MaxCompressionRatio)
 	c.Content.EPUBMaxMetadataBytes = epubLimits.MaxMetadataBytes
 	c.Content.EPUBMaxXMLDepth = epubLimits.MaxXMLDepth
-	// Five minutes is short enough that a book dropped into a folder is
-	// there before anybody goes looking for it, and long enough that a
-	// spinning disk is not read continuously.
-	c.Content.RefreshTick = 60
-	c.Content.WatchedMaxFiles = 200_000
-	c.Content.WatchedMaxDepth = 32
+	c.Content.ScanMaxFiles = 200_000
+	c.Content.ScanMaxDepth = 32
 	c.Adapters.Kosync = true
 	c.Adapters.Koplugin = true
 	c.Ops.MaxBatch = 500
@@ -205,22 +129,16 @@ func Default() Config {
 	c.Ops.CompactionEnabled = true
 	c.Ops.InferenceGapMin = 15
 	c.Ops.InferenceLateHours = 24
-	// Metadata.Providers stays empty: external lookup is opt-in. The
-	// bounds have defaults anyway, so turning it on is one line rather
-	// than four.
-	c.Metadata.LookupTimeoutSeconds = int(provider.DefaultTimeout / time.Second)
-	c.Metadata.LookupMaxBytes = provider.DefaultMaxBytes
-	c.Metadata.LookupMaxRedirects = provider.DefaultMaxRedirects
 	c.PairingCodeTTLMin = 15
 	return c
 }
 
 // applyEnv applies LISEUR_* environment overrides. Supported:
 // LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER, LISEUR_DATABASE_URL,
-// LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
+// LISEUR_CACHE_DIR, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
-// (comma-separated), LISEUR_METADATA_PROVIDERS (comma-separated),
-// LISEUR_READER_ORIGIN, LISEUR_LIBRARY_ROOTS (comma-separated).
+// (comma-separated), LISEUR_READER_ORIGIN,
+// LISEUR_FOLDER_ROOTS (comma-separated).
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -248,14 +166,13 @@ func (c *Config) applyEnv() {
 	setStr(&c.ListenAddr, "LISEUR_LISTEN_ADDR")
 	setStr(&c.Database.Driver, "LISEUR_DATABASE_DRIVER")
 	setStr(&c.Database.URL, "LISEUR_DATABASE_URL")
-	setStr(&c.Content.Root, "LISEUR_CONTENT_ROOT")
+	setStr(&c.Content.CacheDir, "LISEUR_CACHE_DIR")
 	setStr(&c.ReaderOrigin, "LISEUR_READER_ORIGIN")
 	setBool(&c.InsecureHTTP, "LISEUR_INSECURE_HTTP")
 	setBool(&c.OpenRegistration, "LISEUR_OPEN_REGISTRATION")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
-	setList(&c.Metadata.Providers, "LISEUR_METADATA_PROVIDERS")
-	setList(&c.Content.LibraryRoots, "LISEUR_LIBRARY_ROOTS")
+	setList(&c.Content.FolderRoots, "LISEUR_FOLDER_ROOTS")
 }
 
 // Validate checks the config is coherent.
@@ -271,68 +188,22 @@ func (c *Config) Validate() error {
 	if c.Database.URL == "" {
 		return fmt.Errorf("database.url is required")
 	}
-	if strings.TrimSpace(c.Content.Root) == "" {
-		return fmt.Errorf("content.root is required")
+	if strings.TrimSpace(c.Content.CacheDir) == "" {
+		return fmt.Errorf("content.cache_dir is required")
 	}
-	if c.Content.FailureRetentionHours < 1 ||
-		int64(c.Content.FailureRetentionHours) > maxDurationHours {
-		return fmt.Errorf(
-			"content.failure_retention_hours must be between 1 and %d",
-			maxDurationHours)
+	if c.Content.ScanMaxFiles < 1 {
+		return fmt.Errorf("content.scan_max_files must be >= 1")
 	}
-	if c.Content.OrphanGraceHours < 1 ||
-		int64(c.Content.OrphanGraceHours) > maxDurationHours {
-		return fmt.Errorf(
-			"content.orphan_grace_hours must be between 1 and %d",
-			maxDurationHours)
+	if c.Content.ScanMaxDepth < 1 || c.Content.ScanMaxDepth > 256 {
+		return fmt.Errorf("content.scan_max_depth must be between 1 and 256")
 	}
-	if c.Content.TrashRetentionHours < 1 ||
-		int64(c.Content.TrashRetentionHours) > maxDurationHours {
-		return fmt.Errorf(
-			"content.trash_retention_hours must be between 1 and %d",
-			maxDurationHours)
-	}
-	if c.Content.RecoveryBatchSize < 1 || c.Content.RecoveryBatchSize > 500 {
-		return fmt.Errorf("content.recovery_batch_size must be between 1 and 500")
-	}
-	if c.Content.IngestWorkerInterval < 1 ||
-		c.Content.IngestWorkerInterval > 3600 {
-		return fmt.Errorf(
-			"content.ingest_worker_interval_seconds must be between 1 and 3600")
-	}
-	if c.Content.MaxUploadBytes < 1 {
-		return fmt.Errorf("content.max_upload_bytes must be >= 1")
-	}
-	if c.Content.MaxStagingBytes < 0 {
-		return fmt.Errorf("content.max_staging_bytes must be >= 0 (0 disables the cap)")
-	}
-	// A cap below one upload refuses every upload, including the first,
-	// and would look like a broken server rather than a misconfigured one.
-	if c.Content.MaxStagingBytes > 0 && c.Content.MaxStagingBytes < c.Content.MaxUploadBytes {
-		return fmt.Errorf(
-			"content.max_staging_bytes (%d) must be >= content.max_upload_bytes (%d), or no upload can ever be accepted",
-			c.Content.MaxStagingBytes, c.Content.MaxUploadBytes)
-	}
-	if c.Content.QuotaBytes < 0 {
-		return fmt.Errorf("content.quota_bytes must be >= 0 (0 disables the quota)")
-	}
-	if c.Content.RefreshTick < 0 || c.Content.RefreshTick > 86400 {
-		return fmt.Errorf(
-			"content.refresh_tick_seconds must be between 0 and 86400 (0 disables refreshing)")
-	}
-	if c.Content.WatchedMaxFiles < 1 {
-		return fmt.Errorf("content.watched_max_files must be >= 1")
-	}
-	if c.Content.WatchedMaxDepth < 1 || c.Content.WatchedMaxDepth > 256 {
-		return fmt.Errorf("content.watched_max_depth must be between 1 and 256")
-	}
-	for i, root := range c.Content.LibraryRoots {
+	for i, root := range c.Content.FolderRoots {
 		trimmed := strings.TrimSpace(root)
 		if !filepath.IsAbs(trimmed) {
 			return fmt.Errorf(
-				"content.library_roots[%d] (%q) must be an absolute path", i, root)
+				"content.folder_roots[%d] (%q) must be an absolute path", i, root)
 		}
-		c.Content.LibraryRoots[i] = filepath.Clean(trimmed)
+		c.Content.FolderRoots[i] = filepath.Clean(trimmed)
 	}
 	if c.Content.EPUBMaxRatio < 1 {
 		return fmt.Errorf("content.epub_max_compression_ratio must be >= 1")
@@ -360,34 +231,7 @@ func (c *Config) Validate() error {
 	if c.Ops.InferenceLateHours < minLateHours {
 		return fmt.Errorf("ops.inference_late_hours must cover ops.inference_gap_min")
 	}
-	// A provider this build does not have is refused here rather than
-	// dropped, because an operator who wrote "openlibary" and got
-	// nothing back would conclude the service was down and go looking
-	// in the wrong place.
-	if _, err := provider.New(c.Metadata.Providers, c.MetadataLimits()); err != nil {
-		return fmt.Errorf("metadata.providers: %w", err)
-	}
-	if c.Metadata.LookupTimeoutSeconds < 0 {
-		return fmt.Errorf("metadata.lookup_timeout_seconds must be >= 0")
-	}
-	if c.Metadata.LookupMaxBytes < 0 {
-		return fmt.Errorf("metadata.lookup_max_bytes must be >= 0")
-	}
-	if c.Metadata.LookupMaxRedirects < 0 {
-		return fmt.Errorf("metadata.lookup_max_redirects must be >= 0")
-	}
 	return nil
-}
-
-// MetadataLimits is the bound on one external lookup. A zero in any
-// field takes the package default rather than meaning "no limit", since
-// an unbounded external call is the one thing this must never be.
-func (c *Config) MetadataLimits() provider.Limits {
-	return provider.Limits{
-		Timeout:      time.Duration(c.Metadata.LookupTimeoutSeconds) * time.Second,
-		MaxBytes:     c.Metadata.LookupMaxBytes,
-		MaxRedirects: c.Metadata.LookupMaxRedirects,
-	}
 }
 
 // EPUBLimits returns the configured bounded validator limits.

@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-// Code is a stable asynchronous ingestion error code.
+// Code is a stable EPUB validation error code.
 type Code string
 
 const (
