@@ -386,6 +386,22 @@ CREATE TABLE series_name_overrides (
 CREATE INDEX series_name_overrides_scope
     ON series_name_overrides(scope_user, normalized_name);
 
+-- Where an observed series name is bound (ADR-0021); see the SQLite copy
+-- for why a merge is a binding rather than a delete, and why a binding
+-- outlives the name that produced it.
+CREATE TABLE series_bindings (
+    id              TEXT PRIMARY KEY,
+    folder_id       TEXT REFERENCES folders(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    series_id       TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    created_at      TIMESTAMPTZ NOT NULL,
+    created_by      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX series_bindings_key
+    ON series_bindings(COALESCE(folder_id, ''), normalized_name);
+CREATE INDEX series_bindings_series ON series_bindings(series_id);
+
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,

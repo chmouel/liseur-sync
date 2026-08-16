@@ -399,6 +399,18 @@ func (s *Server) Routes() *http.ServeMux {
 		manageH(s.HandleSetSeriesName))
 	mux.Handle("DELETE /v1/entities/{kind}/{entity}/name",
 		manageH(s.HandleClearSeriesName))
+	// Merging and splitting a series (ADR-0021). Admin is checked in the
+	// handler: unlike a rename, neither has a personal layer to fall
+	// back to, because both change what a shelf is rather than what one
+	// reader calls it.
+	mux.Handle("POST /v1/entities/{kind}/{entity}/merge",
+		manageH(s.HandleMergeSeries))
+	mux.Handle("POST /v1/entities/{kind}/{entity}/split",
+		manageH(s.HandleSplitSeries))
+	mux.Handle("GET /v1/entities/{kind}/{entity}/bindings",
+		manageH(s.HandleSeriesBindings))
+	mux.Handle("DELETE /v1/entities/{kind}/{entity}/bindings/{binding}",
+		manageH(s.HandleDeleteSeriesBinding))
 
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog

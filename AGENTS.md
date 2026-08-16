@@ -121,6 +121,18 @@ of them.
   resolves an observed name against, so moving it would make the next
   scan undo the rename and split the shelf. Renaming onto a name already
   visible in that scope is `ErrConflict`, never a merge.
+- **An observed name resolves through `series_bindings` first**
+  (ADR-0021): this folder's binding, then the global one, then
+  `series.normalized_name`. That table is what a merge and a split
+  write, and it is why neither is a plain edit — a shelf rearranged only
+  in the database is rearranged back by the next pass that observes the
+  old name. **A merge is never a plain delete**: it repoints
+  memberships, claims and any bindings that named the absorbed series,
+  binds the absorbed name to the survivor, and only then drops the row.
+  It never renumbers positions and never touches reading state. Merge
+  and split are admin-written and shared, always: only a shared decision
+  could ever be written back to a library, and a per-reader version
+  would put a redirect in every series-bearing read.
 - **`root_path` never reaches a non-admin.** It is a filesystem oracle;
   a `library-read` response names books, not paths.
 - **The server never writes under a watched folder.** Rooted, read-only

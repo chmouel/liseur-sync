@@ -792,3 +792,13 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .assignrow input[type="text"] { min-width: 0; }
 .assignrow input[name="name"] { flex: 1; }
 .assignrow input[name="position"] { flex: 0 0 5rem; }
+
+/* The names a merge or a split made lead to a shelf (ADR-0021). Each is
+   a statement and the button that takes it back, so they sit on one
+   line with the undo pushed to the end. */
+.bindings { list-style: none; padding: 0; margin: .4rem 0 .8rem; }
+.bindings li {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .3rem 0; border-bottom: 1px solid var(--line);
+}
+.bindings li form { margin: 0 0 0 auto; }

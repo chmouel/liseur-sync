@@ -539,6 +539,33 @@ type CatalogEntity struct {
 // kind of thing.
 const MaxSeriesNameBytes = 512
 
+// SeriesBinding is one answer to "what does this observed name mean"
+// (ADR-0021). A merge writes one with no folder, so the absorbed name
+// resolves to the survivor everywhere; a folder-wise split writes one
+// scoped to the folder whose books left.
+//
+// FolderID is empty when the binding applies everywhere. FolderName is
+// filled in for display and is empty for a global binding; it is a
+// folder's name, never its path, which never reaches a listing.
+type SeriesBinding struct {
+	ID             string
+	FolderID       string
+	FolderName     string
+	Name           string
+	NormalizedName string
+	SeriesID       string
+	CreatedAt      time.Time
+	CreatedBy      string
+}
+
+// SeriesFolderCount is one folder's contribution to a shelf: the unit a
+// folder-wise split moves.
+type SeriesFolderCount struct {
+	FolderID  string
+	Name      string
+	BookCount int
+}
+
 // MaxEntityListLimit bounds one entity listing. Entity lists are browsed
 // by a person, and a folder with more distinct tags than this has a
 // problem no page size can fix.
@@ -1150,6 +1177,52 @@ type Store interface {
 	// to the layer beneath and ultimately to what the scan said.
 	// Clearing a name that is not there is not an error.
 	ClearSeriesName(ctx context.Context, userID, seriesID string, scope SeriesSource) error
+
+	// -----------------------------------------------------------------
+	// Merging and splitting a series (ADR-0021).
+	//
+	// A merge is not a delete and a split is not an insert. The fold key
+	// belongs to the disk: resolveEntityTx turns an observed name into a
+	// series, so a shelf rearranged only in the database is rearranged
+	// back by the next pass that observes the old name. Both operations
+	// therefore write a binding — what an observed name means, here or
+	// everywhere — and the resolver reads it first.
+	//
+	// Both are shared and admin-written. A merge states the library's
+	// shape, not one reader's view of it, and it is the only version of
+	// the operation a future Calibre write-back could ever act on.
+	// -----------------------------------------------------------------
+
+	// MergeSeries folds one series into another, in one transaction:
+	// memberships and claims are repointed, a global binding keeps the
+	// absorbed name resolving to the survivor, and the absorbed row is
+	// deleted. Positions are left alone — inventing an order across two
+	// shelves is a guess, and ReorderSeries already exists.
+	//
+	// Merging a series into itself is ErrInvalidInput; either series
+	// missing is ErrNotFound, which is also how merging into a series
+	// that has itself been absorbed is refused.
+	MergeSeries(ctx context.Context, userID, seriesID, intoID string, at time.Time) (string, error)
+	// SplitSeriesFolder takes one folder's books off a shelf onto a new
+	// series of its own and binds that folder's observed names to it, so
+	// the next pass over the folder agrees. It returns the new series id.
+	//
+	// Splitting a shelf every one of whose books came from that folder
+	// is ErrInvalidInput: that is a rename. Splitting off a folder with
+	// no books on the shelf is ErrNotFound. A name another series
+	// already holds is ErrConflict.
+	SplitSeriesFolder(ctx context.Context, userID, seriesID, folderID, name string, at time.Time) (string, error)
+	// SeriesBindings lists the names that fold into one series, so a
+	// shelf can show what it absorbed and offer to undo it.
+	SeriesBindings(ctx context.Context, seriesID string) ([]SeriesBinding, error)
+	// DeleteSeriesBinding removes one binding. The next pass observing
+	// that name resolves it afresh, which is how a merge is undone and
+	// how a split is put back.
+	DeleteSeriesBinding(ctx context.Context, bindingID string) error
+	// SeriesFolders names the folders whose books are on one shelf, most
+	// books first, so a page can offer a split only where there is
+	// something to split and can say how much would move.
+	SeriesFolders(ctx context.Context, seriesID string) ([]SeriesFolderCount, error)
 
 	// -----------------------------------------------------------------
 	// The bridge to per-user reading state.

@@ -1115,6 +1115,139 @@ paths:
         "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
         "404": { $ref: "#/components/responses/Error", description: "No such series, or a kind that cannot be renamed" }
 
+  /v1/entities/{kind}/{entity}/merge:
+    post:
+      tags: [library]
+      summary: Merge this series into another
+      security: [{ deviceToken: [] }]  # requires library-manage AND admin
+      description: |
+        Folds the addressed series into the one named by `into`
+        (ADR-0021). The addressed series is the one absorbed; the answer
+        describes the survivor, which is where its books now are.
+
+        A merge is a statement about the library's shape, so it is
+        shared and takes `admin` on top of `library-manage`. There is no
+        personal form: a reader who wants their own arrangement has the
+        personal claim layer.
+
+        Memberships and claims naming the absorbed series are repointed
+        at the survivor, and a book already on both shelves keeps the
+        survivor's position. **Nothing is renumbered**: two shelves that
+        each had a volume 1 still do.
+
+        The absorbed row is deleted, but its name is not forgotten: a
+        binding records that the name now means the survivor, and a
+        folder pass that observes it folds it in again. That is what
+        makes a merge survive a rescan.
+
+        Reading state is untouched. Series do not appear in the op log,
+        in sessions or in a position.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SeriesMerge" }
+      responses:
+        "200":
+          description: The surviving series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogEntity" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body, missing `into`, or a series merged into itself" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the caller is not an admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, either addressed or named by `into`" }
+
+  /v1/entities/{kind}/{entity}/split:
+    post:
+      tags: [library]
+      summary: Split one folder's books onto a new series
+      security: [{ deviceToken: [] }]  # requires library-manage AND admin
+      description: |
+        Moves the books one folder contributed to this shelf onto a new
+        series called `name` (ADR-0021), undoing the automatic fold that
+        put two folders' identically named series together.
+
+        Every name that folds into the old shelf — its own and any it
+        absorbed in an earlier merge — is bound to the new series *in
+        that folder only*, so the next pass over it agrees.
+
+        Splitting a shelf whose books all came from one folder is a
+        rename, and is refused as one. Splitting a *single* folder's
+        shelf into two — an omnibus directory holding two series — is a
+        per-book decision: use the shared claim layer
+        (`PUT /v1/books/{id}/series`).
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SeriesSplit" }
+      responses:
+        "200":
+          description: The new series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogEntity" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed body, missing `folder_id`, empty or over-long name, or every book on the shelf came from that folder" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the caller is not an admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, or that folder has no books on this shelf" }
+        "409": { $ref: "#/components/responses/Error", description: "That name already belongs to another series" }
+
+  /v1/entities/{kind}/{entity}/bindings:
+    get:
+      tags: [library]
+      summary: List the names that fold into this series
+      security: [{ deviceToken: [] }]  # requires library-manage AND admin
+      description: |
+        Returns the observed names a merge or a split made resolve to
+        this series (ADR-0021), which is what a client shows to offer an
+        undo. A binding with no `folder_id` applies to every folder; one
+        with a `folder_id` applies only there.
+
+        This is not what a folder pass observed today. A binding is a
+        resolver rule and outlives the folder's own spelling on purpose:
+        it is what keeps a merge from coming undone when somebody edits
+        the name back in their library.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The bindings pointing at this series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeriesBindingList" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the caller is not an admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, or a kind that has no bindings" }
+
+  /v1/entities/{kind}/{entity}/bindings/{binding}:
+    delete:
+      tags: [library]
+      summary: Undo a merge or a split
+      security: [{ deviceToken: [] }]  # requires library-manage AND admin
+      description: |
+        Deletes one binding. No book moves: the next pass over a folder
+        that observes the freed name resolves it to nothing, mints the
+        series again and refills it from what the folder says.
+
+        So an unmerge restores what the disk holds, not what readers
+        claimed. A claim that named the absorbed series was repointed by
+        the merge and stays repointed, and a series that only ever
+        existed as a claim has no folder to come back from.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: binding, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: The binding is gone }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the caller is not an admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series or binding" }
+
   /v1/books/{id}/resolve:
     post:
       tags: [library, sync]
@@ -1740,6 +1873,68 @@ components:
       properties:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
         name: { type: string, minLength: 1, maxLength: 512 }
+
+    SeriesMerge:
+      type: object
+      description: |
+        The series that survives a merge. The absorbed one is the one in
+        the path.
+      required: [into]
+      properties:
+        into:
+          type: string
+          format: uuid
+          description: |
+            The surviving series. It must still exist: merging into a
+            series that was itself absorbed is a `404` rather than a
+            chain the resolver would have to follow.
+
+    SeriesSplit:
+      type: object
+      description: |
+        Which folder's books leave the shelf, and what to call them.
+      required: [folder_id, name]
+      properties:
+        folder_id:
+          type: string
+          format: uuid
+          description: The folder whose contribution moves to a new series.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: |
+            The new series' name. It must be free: a name another series
+            already holds is a `409`, not a merge.
+
+    SeriesBindingList:
+      type: object
+      required: [bindings]
+      properties:
+        bindings:
+          type: array
+          items: { $ref: "#/components/schemas/SeriesBinding" }
+
+    SeriesBinding:
+      type: object
+      description: |
+        One observed name that resolves to this series because somebody
+        merged or split it there (ADR-0021).
+      required: [binding_id, name, created_at]
+      properties:
+        binding_id: { type: string, format: uuid }
+        name:
+          type: string
+          description: The absorbed name, in the spelling it was written in.
+        folder_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            The folder this binding applies to, or `null` when it
+            applies to every folder. A merge binds everywhere; a split
+            binds in the folder that left.
+        folder_name: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
 
     CatalogEntity:
       type: object

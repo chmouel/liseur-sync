@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -55,7 +56,43 @@ type SeriesShelfView struct {
 	// CanShare is an admin: only they rename for everybody.
 	CanShare bool
 	NextURL  string
+	// Bindings are the observed names that fold into this shelf because
+	// somebody merged or split it (ADR-0021), each one undoable. Filled
+	// in for an admin only, since only an admin can act on them.
+	Bindings []SeriesBindingRow
+	// SplitFolders are the folders whose books are on this shelf. A
+	// split is offered only when there is more than one, because moving
+	// the only folder's books is a rename.
+	SplitFolders []SeriesFolderRow
+	// MergeTargetID and MergeTargetName are set when a rename was
+	// refused because another shelf holds the name: that refusal is a
+	// merge request, so the page offers the merge rather than a dead
+	// end.
+	MergeTargetID   string
+	MergeTargetName string
 }
+
+// SeriesBindingRow is one absorbed name as the shelf shows it.
+type SeriesBindingRow struct {
+	ID string
+	// Name is the absorbed name in the spelling it was written in.
+	Name string
+	// Folder is empty when the binding holds everywhere, which is what
+	// a merge writes; a split writes one folder's.
+	Folder string
+}
+
+// SeriesFolderRow is one folder's contribution, and the unit a split
+// moves.
+type SeriesFolderRow struct {
+	ID    string
+	Name  string
+	Books int
+}
+
+// CanSplit reports whether this shelf holds more than one folder's
+// books, which is the only case a folder-wise split addresses.
+func (v SeriesShelfView) CanSplit() bool { return len(v.SplitFolders) > 1 }
 
 // CanRevert reports whether this reader can undo the rename in force. A
 // reader can always undo their own; the shared one only an admin can,
@@ -177,6 +214,12 @@ func (s *Server) handleSeriesShelf(
 		for src := range sources {
 			v.Source = src
 		}
+	}
+	if v.CanShare {
+		v.Bindings = s.shelfBindings(r, entity.ID)
+		v.SplitFolders = s.shelfFolders(r, entity.ID)
+		v.MergeTargetID = r.URL.Query().Get("merge")
+		v.MergeTargetName = r.URL.Query().Get("mergename")
 	}
 	v.NextUp = nextUpVolume(v.Volumes)
 	v.Gaps = seriesGaps(v.Volumes)
@@ -330,8 +373,19 @@ func (s *Server) handleSeriesRename(
 			r.FormValue("name"), time.Now().UTC())
 	}
 	if err != nil {
-		redirectRel(w, back+"?problem="+url.QueryEscape(renameProblem(err)),
-			http.StatusSeeOther)
+		problem := back + "?problem=" + url.QueryEscape(renameProblem(err))
+		// A name already taken is not a failure so much as a different
+		// request: the reader is asking for one shelf where there are
+		// two. An admin can have that, so the page is sent back holding
+		// the merge rather than a dead end (ADR-0021).
+		if errors.Is(err, store.ErrConflict) && u != nil && u.IsAdmin {
+			if target, ok := s.seriesByName(r, u, r.FormValue("name")); ok &&
+				target.ID != entityID {
+				problem += "&merge=" + url.QueryEscape(target.ID) +
+					"&mergename=" + url.QueryEscape(target.Name)
+			}
+		}
+		redirectRel(w, problem, http.StatusSeeOther)
 		return
 	}
 	redirectRel(w, back+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
@@ -344,12 +398,190 @@ func (s *Server) handleSeriesRename(
 func renameProblem(err error) string {
 	switch {
 	case errors.Is(err, store.ErrConflict):
-		return "Another series already has that name. " +
-			"Two shelves cannot be merged by giving them one name."
+		return "Another series already has that name."
 	case errors.Is(err, store.ErrInvalidInput):
 		return "A series needs a name."
 	default:
 		return "That could not be saved."
+	}
+}
+
+// -------------------------------------------------------------------
+// Merging and splitting (ADR-0021)
+// -------------------------------------------------------------------
+
+// shelfBindings lists what this shelf absorbed. A failure is not worth a
+// page: the card simply has nothing to offer.
+func (s *Server) shelfBindings(r *http.Request, seriesID string) []SeriesBindingRow {
+	bindings, err := s.St.SeriesBindings(r.Context(), seriesID)
+	if err != nil {
+		return nil
+	}
+	out := make([]SeriesBindingRow, 0, len(bindings))
+	for _, b := range bindings {
+		out = append(out, SeriesBindingRow{
+			ID: b.ID, Name: b.Name, Folder: b.FolderName,
+		})
+	}
+	return out
+}
+
+func (s *Server) shelfFolders(r *http.Request, seriesID string) []SeriesFolderRow {
+	folders, err := s.St.SeriesFolders(r.Context(), seriesID)
+	if err != nil {
+		return nil
+	}
+	out := make([]SeriesFolderRow, 0, len(folders))
+	for _, f := range folders {
+		out = append(out, SeriesFolderRow{
+			ID: f.FolderID, Name: f.Name, Books: f.BookCount,
+		})
+	}
+	return out
+}
+
+// seriesByName finds the shelf a typed name belongs to, folding case and
+// spacing the way the catalog does. It matches the name a reader sees
+// and the name the last pass observed, because either is what they might
+// have typed.
+func (s *Server) seriesByName(
+	r *http.Request, u *store.User, name string,
+) (store.CatalogEntity, bool) {
+	needle := metadata.NormalizeName(name)
+	if needle == "" {
+		return store.CatalogEntity{}, false
+	}
+	rows, err := s.St.ListCatalogEntities(
+		r.Context(), readerID(u), store.EntitySeries, "", store.MaxEntityListLimit)
+	if err != nil {
+		return store.CatalogEntity{}, false
+	}
+	for _, row := range rows {
+		if metadata.NormalizeName(row.Name) == needle ||
+			metadata.NormalizeName(row.ScannedName) == needle {
+			return row, true
+		}
+	}
+	return store.CatalogEntity{}, false
+}
+
+// requireCurator answers the request itself unless an admin sent it.
+// Merging and splitting speak for the whole library, so unlike a rename
+// they have no personal layer to fall back to.
+func (s *Server) requireCurator(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, back string,
+) bool {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	if u == nil || !u.IsAdmin {
+		redirectRel(w, back+"?problem="+url.QueryEscape(
+			"Only an administrator reshapes the library's shelves."),
+			http.StatusSeeOther)
+		return false
+	}
+	return true
+}
+
+// handleSeriesMerge folds this shelf into another. The absorbed shelf's
+// page stops existing, so the redirect goes to the survivor.
+func (s *Server) handleSeriesMerge(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	entityID := r.PathValue("entity")
+	back := "../" + url.PathEscape(entityID)
+	if !s.requireCurator(w, r, a, u, back) {
+		return
+	}
+	intoID := strings.TrimSpace(r.FormValue("into"))
+	if intoID == "" {
+		target, ok := s.seriesByName(r, u, r.FormValue("into_name"))
+		if !ok {
+			redirectRel(w, back+"?problem="+url.QueryEscape(
+				"No shelf in the library goes by that name."), http.StatusSeeOther)
+			return
+		}
+		intoID = target.ID
+	}
+	survivor, err := s.St.MergeSeries(
+		r.Context(), readerID(u), entityID, intoID, time.Now().UTC())
+	if err != nil {
+		redirectRel(w, back+"?problem="+url.QueryEscape(mergeProblem(err)),
+			http.StatusSeeOther)
+		return
+	}
+	redirectRel(w, "../"+url.PathEscape(survivor)+"?notice="+url.QueryEscape(
+		"Merged. The old name now leads here, so a scan will not undo it."),
+		http.StatusSeeOther)
+}
+
+// handleSeriesSplit takes one folder's books off the shelf. The redirect
+// goes to the new shelf, because that is what the curator just made.
+func (s *Server) handleSeriesSplit(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	entityID := r.PathValue("entity")
+	back := "../" + url.PathEscape(entityID)
+	if !s.requireCurator(w, r, a, u, back) {
+		return
+	}
+	newID, err := s.St.SplitSeriesFolder(
+		r.Context(), readerID(u), entityID,
+		r.FormValue("folder_id"), r.FormValue("name"), time.Now().UTC())
+	if err != nil {
+		redirectRel(w, back+"?problem="+url.QueryEscape(splitProblem(err)),
+			http.StatusSeeOther)
+		return
+	}
+	redirectRel(w, "../"+url.PathEscape(newID)+"?notice="+url.QueryEscape(
+		"Split. That folder keeps this shelf to itself from now on."),
+		http.StatusSeeOther)
+}
+
+// handleSeriesUnbind undoes a merge or a split. No book moves here: the
+// next pass over a folder that observes the freed name mints the shelf
+// again and refills it from what the folder says.
+func (s *Server) handleSeriesUnbind(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	back := "../" + url.PathEscape(r.PathValue("entity"))
+	if !s.requireCurator(w, r, a, u, back) {
+		return
+	}
+	if err := s.St.DeleteSeriesBinding(
+		r.Context(), r.FormValue("binding"),
+	); err != nil {
+		redirectRel(w, back+"?problem="+url.QueryEscape("That could not be undone."),
+			http.StatusSeeOther)
+		return
+	}
+	redirectRel(w, back+"?notice="+url.QueryEscape(
+		"Undone. The next scan puts those books back where the folder says."),
+		http.StatusSeeOther)
+}
+
+func mergeProblem(err error) string {
+	switch {
+	case errors.Is(err, store.ErrInvalidInput):
+		return "A shelf cannot be merged into itself."
+	case errors.Is(err, store.ErrNotFound):
+		return "That shelf is not in the library any more."
+	default:
+		return "That could not be merged."
+	}
+}
+
+func splitProblem(err error) string {
+	switch {
+	case errors.Is(err, store.ErrConflict):
+		return "Another shelf already has that name."
+	case errors.Is(err, store.ErrNotFound):
+		return "That folder has no books on this shelf."
+	case errors.Is(err, store.ErrInvalidInput):
+		return "Every book here came from that folder, so that is a rename."
+	default:
+		return "That could not be split."
 	}
 }
 
@@ -619,4 +851,23 @@ func joinWithAnd(items []string) string {
 		return items[0] + " and " + items[1]
 	}
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+}
+
+// folderBooksLabel names a folder and how much of the shelf came from
+// it, so a split says what would move before it moves.
+func folderBooksLabel(f SeriesFolderRow) string {
+	if f.Books == 1 {
+		return f.Name + " (1 book)"
+	}
+	return f.Name + " (" + strconv.Itoa(f.Books) + " books)"
+}
+
+// bindingLabel says what a binding covers. A merge binds everywhere and
+// a split binds in one folder, and which it is decides what undoing it
+// would do.
+func bindingLabel(b SeriesBindingRow) string {
+	if b.Folder == "" {
+		return b.Name + " — everywhere"
+	}
+	return b.Name + " — in " + b.Folder
 }
