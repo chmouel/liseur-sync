@@ -229,6 +229,28 @@ templ adminLibraryCard(prefix string, csrf string, v adminLibraryView, owners []
 			}
 			<button type="submit" class="primary">Save layout</button>
 		</form>
+		<h3>Remove this library</h3>
+		if v.ReadsInPlace() {
+			<p class="muted">
+				This library is served straight out of <code>{ v.Root() }</code>,
+				so removing it drops what the server knows about those books and
+				nothing else. Not one file in that folder is touched, and adding
+				the library back finds all of them again.
+			</p>
+		} else {
+			<p class="muted">
+				The server holds the only copy of the books in this library.
+				Removing it moves them to the trash first, where they can be
+				restored for { v.Retention }; the library stays until you say
+				again that you meant it. Reading history is kept either way —
+				it belongs to the reader, not to the library.
+			</p>
+		}
+		<form method="post" action={ prefix + "admin/libraries/" + v.Library.ID + "/delete" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			@adminPasswordField(csrf)
+			<button type="submit" class="danger">Remove { v.Library.Name }</button>
+		</form>
 	</section>
 }
 

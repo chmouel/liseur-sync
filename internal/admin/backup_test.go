@@ -27,7 +27,7 @@ func captureIn(
 	}
 	saved := os.Stdout
 	os.Stdout = w
-	runErr := Run(st, root, args)
+	runErr := Run(st, root, 720*time.Hour, args)
 	os.Stdout = saved
 	w.Close()
 	var sb strings.Builder

@@ -225,6 +225,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/users/u1/koplugin/k1/revoke", "/ui/admin/libraries",
 		"/ui/admin/libraries/l1/access", "/ui/admin/libraries/l1/layout",
 		"/ui/admin/libraries/l1/backfill",
+		"/ui/admin/libraries/l1/delete",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
 		"/ui/admin/libraries/l1/review/b1/clear",

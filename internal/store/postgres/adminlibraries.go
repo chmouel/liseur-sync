@@ -187,3 +187,103 @@ func (s *Store) AdminLibraryByID(ctx context.Context, libraryID string) (store.L
 	}
 	return l, err
 }
+
+// AdminDeleteLibrary removes a library, or trashes its books as the
+// first step towards it. See the SQLite twin and the interface.
+func (s *Store) AdminDeleteLibrary(
+	ctx context.Context,
+	actorUserID, libraryID string,
+	at, trashExpiresAt time.Time,
+) (store.LibraryDeletion, error) {
+	_ = actorUserID
+	var result store.LibraryDeletion
+	if at.IsZero() || trashExpiresAt.IsZero() || !trashExpiresAt.After(at) {
+		return result, store.ErrInvalidTransition
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+
+	var storage string
+	if err := tx.QueryRowContext(ctx, q(
+		`SELECT storage FROM libraries WHERE id = ?`),
+		libraryID).Scan(&storage); errors.Is(err, sql.ErrNoRows) {
+		return result, store.ErrNotFound
+	} else if err != nil {
+		return result, err
+	}
+
+	live, err := libraryBookIDsTx(ctx, tx, libraryID, false)
+	if err != nil {
+		return result, err
+	}
+	if store.LibraryStorage(storage) != store.LibraryStorageInPlace &&
+		len(live) > 0 {
+		if _, err := tx.ExecContext(ctx, q(
+			`UPDATE books
+			 SET status = 'trashed', trashed_at = ?, trash_expires_at = ?,
+			     updated_at = ?
+			 WHERE library_id = ? AND status <> 'trashed'`),
+			at.UTC(), trashExpiresAt.UTC(), at.UTC(),
+			libraryID); err != nil {
+			return result, err
+		}
+		if err := tx.Commit(); err != nil {
+			return result, err
+		}
+		return store.LibraryDeletion{
+			Trashed:        len(live),
+			TrashExpiresAt: trashExpiresAt.UTC(),
+		}, nil
+	}
+
+	all, err := libraryBookIDsTx(ctx, tx, libraryID, true)
+	if err != nil {
+		return result, err
+	}
+	if len(all) > 0 {
+		purged, err := purgeBooksTx(ctx, tx, all, at.UTC())
+		if err != nil {
+			return result, err
+		}
+		purged.BookIDs = all
+		result.Purged = purged
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`DELETE FROM libraries WHERE id = ?`), libraryID); err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return store.LibraryDeletion{}, err
+	}
+	result.Removed = true
+	return result, nil
+}
+
+// libraryBookIDsTx lists a library's book ids, either every one of them
+// or only those outside the trash.
+func libraryBookIDsTx(
+	ctx context.Context, tx *sql.Tx, libraryID string, includeTrashed bool,
+) ([]string, error) {
+	query := `SELECT id FROM books WHERE library_id = ? AND status <> 'trashed'
+	          ORDER BY id`
+	if includeTrashed {
+		query = `SELECT id FROM books WHERE library_id = ? ORDER BY id`
+	}
+	rows, err := tx.QueryContext(ctx, q(query), libraryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

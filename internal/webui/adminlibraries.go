@@ -45,6 +45,10 @@ type adminLibraryView struct {
 	// described the way its owner expects, so it belongs on the page
 	// rather than in a log nobody is reading.
 	LayoutError string
+	// Retention is how long a trashed book can be brought back, in
+	// words. Removal is the one control here that depends on it, and a
+	// warning that does not say how long is not a warning.
+	Retention string
 }
 
 // libraryAxes says what a library is in one line: where its books come
@@ -156,6 +160,13 @@ func (v adminLibraryView) Root() string {
 	return *v.Library.RootPath
 }
 
+// ReadsInPlace says the server serves this library's books out of the
+// folder it found them in. It is what makes removing the library cheap:
+// there is no copy of anything to lose.
+func (v adminLibraryView) ReadsInPlace() bool {
+	return v.Library.Storage == store.LibraryStorageInPlace
+}
+
 func (s *Server) handleAdminLibraries(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
@@ -212,7 +223,10 @@ func (s *Server) ownerNames(r *http.Request) []string {
 // commonly owns several libraries, and the alternative is a join that
 // would have to be written twice, once per backend.
 func (s *Server) libraryView(r *http.Request, l store.Library, names map[string]string) adminLibraryView {
-	v := adminLibraryView{Library: l}
+	v := adminLibraryView{
+		Library:   l,
+		Retention: hours(s.Cfg.Content.TrashRetentionHours),
+	}
 	name, ok := names[l.OwnerUserID]
 	if !ok {
 		if owner, err := s.St.UserByID(r.Context(), l.OwnerUserID); err == nil {
@@ -367,9 +381,59 @@ func (s *Server) handleAdminRefreshLibrary(
 	})
 }
 
-// handleAdminJoinLibraryShelf maps the library owner's catalog books to
-// their sync works. The sweep does this on its own for books it has just
-// ingested, so this button is the escape hatch rather than the path: it
+// handleAdminDeleteLibrary removes a library. What that costs depends on
+// where its books live, and the notice says which happened rather than
+// making the administrator infer it: a library the server reads in place
+// goes at once, because the folder it was reading is untouched and
+// re-adding it finds everything again; a library holding the server's
+// own copies loses its books to the trash first and needs a second press
+// once they are there.
+//
+// It is behind the same re-verification as naming a directory, for the
+// same reason: this is the one control on the page that can lose
+// somebody's books, and a session left open should not be enough.
+func (s *Server) handleAdminDeleteLibrary(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.runLibraryMutationReauth(w, r, a, u, "delete-library", func() (string, error) {
+		lib, err := s.St.AdminLibraryByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			return "", err
+		}
+		now := time.Now().UTC()
+		retention := time.Duration(s.Cfg.Content.TrashRetentionHours) * time.Hour
+		result, err := s.St.AdminDeleteLibrary(
+			r.Context(), u.ID, lib.ID, now, now.Add(retention))
+		if err != nil {
+			return "", err
+		}
+		if !result.Removed {
+			return plural(result.Trashed, "book") + " from " + lib.Name +
+				" moved to the trash, where they can be restored for " +
+				hours(s.Cfg.Content.TrashRetentionHours) +
+				". The library is still here: delete it again to remove it " +
+				"and the books with it.", nil
+		}
+		notice := lib.Name + " is gone."
+		if n := len(result.Purged.BookIDs); n > 0 {
+			notice += " " + plural(n, "book") + " went with it."
+		}
+		if lib.Storage == store.LibraryStorageInPlace {
+			notice += " Nothing in " + rootOrFolder(lib) + " was touched."
+		}
+		return notice, nil
+	})
+}
+
+// rootOrFolder names the directory a library was reading, for a notice
+// that has to reassure somebody it was left alone.
+func rootOrFolder(lib store.Library) string {
+	if lib.RootPath != nil && *lib.RootPath != "" {
+		return *lib.RootPath
+	}
+	return "the folder it was reading"
+}
+
 // re-runs after a reader has confirmed the near-matches a sweep is not
 // allowed to guess at, and it covers a library filled before this server
 // mapped anything automatically.

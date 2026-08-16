@@ -36,6 +36,15 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("ListUsersPage", func(t *testing.T) { testListUsersPage(t, open) })
 	t.Run("AdminLibraries", func(t *testing.T) { testAdminLibraries(t, open) })
+	t.Run("DeleteInPlaceLibrary", func(t *testing.T) {
+		testDeleteInPlaceLibrary(t, open)
+	})
+	t.Run("DeleteUploadsLibraryTrashesFirst", func(t *testing.T) {
+		testDeleteUploadsLibraryTrashesFirst(t, open)
+	})
+	t.Run("DeleteEmptyLibrary", func(t *testing.T) {
+		testDeleteEmptyLibrary(t, open)
+	})
 	t.Run("LibraryAxes", func(t *testing.T) { testLibraryAxes(t, open) })
 	t.Run("InPlaceBooks", func(t *testing.T) { testInPlaceBooks(t, open) })
 	t.Run("LibraryRefreshSchedule", func(t *testing.T) { testLibraryRefreshSchedule(t, open) })

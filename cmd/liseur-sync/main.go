@@ -751,7 +751,8 @@ func cmdAdmin(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	if err := admin.Run(st, contentRootFor(cfg), rest); err != nil {
+	trashRetention := time.Duration(cfg.Content.TrashRetentionHours) * time.Hour
+	if err := admin.Run(st, contentRootFor(cfg), trashRetention, rest); err != nil {
 		var usage admin.UsageError
 		if errors.As(err, &usage) {
 			return usageExit{text: usage.Error(), code: usage.ExitCode}

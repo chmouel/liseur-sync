@@ -142,8 +142,9 @@ shell. It holds four things:
 - **Libraries** — every library on the instance with its owner, who else
   may read or write it, and its filing layout. Create a managed library
   and hand it to somebody in one step, attach a directory or Calibre
-  library that already exists on the server, queue a refresh, and work
-  through a library's review queue.
+  library that already exists on the server, queue a refresh, work
+  through a library's review queue, and remove a library you no longer
+  want.
 - **Maintenance** — what the background jobs are doing: ingest queue by
   state with the age of the oldest item, books waiting for review, trash
   and when it next expires, blob count and orphans, and the backup
@@ -403,6 +404,41 @@ liseur-sync admin -config liseur-sync.toml backfill-works alice
 
 It is safe to re-run and reports what it did: books already mapped are
 skipped.
+
+## Removing a library
+
+**Admin → Libraries → Remove this library**, or from a shell:
+
+```
+liseur-sync admin -config liseur-sync.toml delete-library alice <library-id>
+```
+
+Either way it asks for your own password, because it is the one control
+on that page that can lose somebody's books.
+
+What it costs depends on where the books actually live:
+
+- **A library read in place** — a folder or Calibre library the server
+  serves straight from disk — is removed at once. Only what the server
+  knew about those books goes; not one file under the library's root is
+  touched, and adding the library back finds all of them again. Removing
+  it is a way to make the server forget a folder, not a way to delete
+  books.
+- **A library holding the server's own copies** (uploads, or a watched
+  folder set to copy) loses its books to the trash first and keeps its
+  row. They are restorable for the ordinary trash retention, and the
+  quota stays charged while they are. Repeat the removal once they are
+  in the trash and the library goes, taking them with it — that second
+  press is the confirmation.
+
+Reading history survives either way. A reader's works, progress and
+statistics belong to the account, not to the library, so removing a
+library costs them the file, not what they read.
+
+Permanently removing books releases the quota they held and hands their
+bytes to the orphan sweep, which reclaims the disk after the grace
+period — the same path as an expired trash purge, because it is that
+path.
 
 ## Sizing the content disk
 
