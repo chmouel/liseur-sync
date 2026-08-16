@@ -22,9 +22,10 @@ import (
 // an attacker-controlled file in memory.
 const maxCoverSourceBytes = 16 << 20
 
-// CoverCache is the rendered-cover side of the CAS. It is a cache, so
-// every method may fail without failing the request: a miss is re-rendered
-// and a failed write is re-attempted next time.
+// CoverCache holds rendered covers. It is a cache and nothing else, so
+// every method may fail without failing the request: a miss is
+// re-rendered and a failed write is re-attempted next time. Deleting the
+// whole of it while the server runs costs re-renders and nothing more.
 type CoverCache interface {
 	OpenCover(ctx context.Context, sha256, variant string) (*os.File, int64, error)
 	StoreCover(ctx context.Context, sha256, variant string, data []byte) error
@@ -33,26 +34,26 @@ type CoverCache interface {
 
 // HandleBookCover implements GET /v1/books/{id}/cover.
 func (s *Server) HandleBookCover(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	s.ServeBookCover(w, r, tok.UserID, r.PathValue("id"))
+	s.ServeBookCover(w, r, r.PathValue("id"))
 }
 
-// ServeBookCover is the cover itself, without the token, so the web UI can
-// serve it under a cookie session without a second copy of the rules.
+// ServeBookCover is the cover itself, without the token, so the web UI
+// can serve it under a cookie session without a second copy of the
+// rules.
 //
-// A cover is derived from the blob rather than recorded when the book was
-// ingested. The blob is immutable, so the derivation is deterministic and
-// can be repeated at any time; recording it instead would mean a schema
-// change, a promotion path change, and a backfill for every book already
-// in the catalog, to store something that can simply be recomputed.
+// A cover is derived on demand rather than extracted when the book was
+// found. A pass records where the image is and what it hashes to and
+// nothing else: writing rendered images during a scan would mean the
+// server doing work for books nobody looks at, and a cache that has to
+// be kept in step with a folder somebody else edits.
 func (s *Server) ServeBookCover(
-	w http.ResponseWriter, r *http.Request, userID, bookID string,
+	w http.ResponseWriter, r *http.Request, bookID string,
 ) {
-	if s.Blobs == nil {
+	if s.Files == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
 		return
 	}
@@ -61,18 +62,23 @@ func (s *Server) ServeBookCover(
 		writeError(w, http.StatusBadRequest, "unknown cover size")
 		return
 	}
-	file, ok := s.coverBookFile(w, r, userID, bookID)
-	if !ok {
+	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	if err != nil {
+		writeCatalogError(w, err, "book not found")
 		return
 	}
-	key := coverCacheKey(file)
+	if book.Status != store.BookActive {
+		writeError(w, http.StatusGone, "no downloadable file for this book")
+		return
+	}
+	key := coverCacheKey(book)
 
 	if s.Covers != nil {
 		cached, _, err := s.Covers.OpenCover(r.Context(), key, string(size))
 		switch {
 		case err == nil:
 			defer cached.Close()
-			s.writeCover(w, r, file, size, key, cached, file.UpdatedAt)
+			s.writeCover(w, r, size, key, cached, book.UpdatedAt)
 			return
 		case errors.Is(err, content.ErrNoCover):
 			// Already established: this publication has no cover this
@@ -87,11 +93,8 @@ func (s *Server) ServeBookCover(
 	// to the publication's. Caching that under the chosen cover's key
 	// would answer for the cover once it returned, and marking it absent
 	// there would do so permanently.
-	rendered, renderedKey, err := s.renderCover(r.Context(), file, size)
+	rendered, renderedKey, err := s.renderCover(r.Context(), book, size)
 	if err != nil {
-		if errors.Is(err, content.ErrSourceChanged) {
-			s.flagChangedSource(r.Context(), file)
-		}
 		s.writeCoverError(r.Context(), w, renderedKey, err)
 		return
 	}
@@ -101,104 +104,79 @@ func (s *Server) ServeBookCover(
 		// rather than cost this one its answer.
 		_ = s.Covers.StoreCover(r.Context(), renderedKey, string(size), rendered)
 	}
-	s.writeCover(w, r, file, size, renderedKey,
-		bytes.NewReader(rendered), file.UpdatedAt)
-}
-
-// coverBookFile resolves a book to the file its cover comes from, using
-// the same order as a download: the catalog decides whether anything may
-// be served, and only then are the files consulted.
-func (s *Server) coverBookFile(
-	w http.ResponseWriter, r *http.Request, userID, bookID string,
-) (store.BookFile, bool) {
-	if _, err := s.St.CatalogBookByID(
-		r.Context(), userID, bookID, store.LibraryRoleRead,
-	); err != nil {
-		writeCatalogError(w, err, "book not found")
-		return store.BookFile{}, false
-	}
-	files, err := s.St.ListBookFiles(r.Context(), userID, bookID, store.LibraryRoleRead)
-	if err != nil {
-		writeCatalogError(w, err, "book not found")
-		return store.BookFile{}, false
-	}
-	for i := range files {
-		if files[i].Availability == store.BookFileAvailable {
-			return files[i], true
-		}
-	}
-	writeError(w, http.StatusGone, "no downloadable file for this book")
-	return store.BookFile{}, false
+	s.writeCover(w, r, size, renderedKey,
+		bytes.NewReader(rendered), book.UpdatedAt)
 }
 
 // coverCacheKey names the rendered image exactly.
 //
 // It is the publication's digest for a book whose cover comes out of the
-// EPUB, and the cover's own digest for one whose library holds a chosen
+// EPUB, and the cover's own digest for one whose folder holds a chosen
 // cover beside it. The distinction is load-bearing: two Calibre books can
 // share one EPUB and have different covers, so a publication-keyed cache
 // would serve one book's cover for the other, and would cache "this book
-// has no cover" for both (ADR-0014).
-func coverCacheKey(file store.BookFile) string {
-	if file.CoverSHA256 != "" {
-		return file.CoverSHA256
+// has no cover" for both.
+func coverCacheKey(book store.CatalogBook) string {
+	if book.CoverSHA256 != "" {
+		return book.CoverSHA256
 	}
-	return file.ContentSHA256
+	return book.ContentSHA256
 }
 
 // renderCover produces one variant from whichever image this book's
-// cover is: the one its library holds beside it, or the one the
+// cover is: the one its folder holds beside it, or the one the
 // publication declares.
 func (s *Server) renderCover(
-	ctx context.Context, file store.BookFile, size cover.Size,
+	ctx context.Context, book store.CatalogBook, size cover.Size,
 ) ([]byte, string, error) {
-	if file.CoverSHA256 != "" && file.CoverRelativePath != nil {
-		return s.renderStoredCover(ctx, file, size)
+	if book.CoverSHA256 != "" && book.CoverRelativePath != nil {
+		return s.renderStoredCover(ctx, book, size)
 	}
-	blob, blobSize, err := s.Blobs.OpenBookFile(ctx, file)
+	file, fileSize, err := s.Files.OpenBook(ctx, book)
 	if err != nil {
-		return nil, file.ContentSHA256, err
+		return nil, book.ContentSHA256, err
 	}
-	defer blob.Close()
+	defer file.Close()
 
-	image, err := epub.ReadCover(ctx, blob, blobSize,
+	image, err := epub.ReadCover(ctx, file, fileSize,
 		epub.DefaultLimits(), maxCoverSourceBytes)
 	if err != nil {
-		return nil, file.ContentSHA256, err
+		return nil, book.ContentSHA256, err
 	}
 	rendered, err := cover.Render(image.Data, size, cover.DefaultLimits())
 	if err != nil {
-		return nil, file.ContentSHA256, err
+		return nil, book.ContentSHA256, err
 	}
-	return rendered, file.ContentSHA256, nil
+	return rendered, book.ContentSHA256, nil
 }
 
-// renderStoredCover renders the image the library itself holds. A cover
-// that has gone away falls back to the publication's own, because the
-// book is still there and a missing side file is not a reason to stop
-// showing it.
+// renderStoredCover renders the image the folder itself holds — the
+// cover.jpg beside a Calibre book. A cover that has gone away, or whose
+// bytes no longer match the digest recorded for it, falls back to the
+// publication's own: the book is still there, and a side file its owner
+// changed is not a reason to stop showing it.
 func (s *Server) renderStoredCover(
-	ctx context.Context, file store.BookFile, size cover.Size,
+	ctx context.Context, book store.CatalogBook, size cover.Size,
 ) ([]byte, string, error) {
-	image, imageSize, err := s.Blobs.OpenBookFileCover(ctx, file)
+	image, imageSize, err := s.Files.OpenBookCover(ctx, book)
 	if err != nil {
-		stripped := file
+		stripped := book
 		stripped.CoverSHA256, stripped.CoverRelativePath = "", nil
 		return s.renderCover(ctx, stripped, size)
 	}
 	defer image.Close()
 	if imageSize > maxCoverSourceBytes {
-		return nil, file.CoverSHA256, cover.ErrUnsupported
+		return nil, book.CoverSHA256, cover.ErrUnsupported
 	}
 	data, err := io.ReadAll(io.LimitReader(image, maxCoverSourceBytes))
 	if err != nil {
-		return nil, file.CoverSHA256, err
+		return nil, book.CoverSHA256, err
 	}
 	rendered, err := cover.Render(data, size, cover.DefaultLimits())
 	if err != nil {
-		return nil, file.CoverSHA256, err
+		return nil, book.CoverSHA256, err
 	}
-	return rendered, file.CoverSHA256, nil
+	return rendered, book.CoverSHA256, nil
 }
 
 // writeCoverError maps a failed render onto a status, and remembers the
@@ -210,10 +188,18 @@ func (s *Server) writeCoverError(
 	ctx context.Context, w http.ResponseWriter, digest string, err error,
 ) {
 	switch {
-	case errors.Is(err, content.ErrStageMissing):
-		// Not permanent in the same sense: the blob may come back from a
-		// backup, so this is not remembered.
+	case errors.Is(err, content.ErrStageMissing),
+		errors.Is(err, content.ErrRootMissing),
+		errors.Is(err, content.ErrUnsafePath):
+		// Not permanent in the same sense: an unmounted folder comes
+		// back, so this is not remembered.
 		writeError(w, http.StatusGone, "content is no longer stored")
+	case errors.Is(err, content.ErrSourceChanged):
+		// The bytes at that path are not the ones catalogued, so no
+		// image derived from them is this book's cover. The next pass
+		// re-reads the file.
+		writeError(w, http.StatusConflict,
+			"the file behind this book changed on disk")
 	case errors.Is(err, epub.ErrNoCover), errors.Is(err, cover.ErrUnsupported),
 		isValidationFailure(err):
 		if s.Covers != nil {
@@ -239,7 +225,7 @@ func isValidationFailure(err error) bool {
 // is what was rendered — so a fallback never borrows the ETag of a cover
 // it did not use.
 func (s *Server) writeCover(
-	w http.ResponseWriter, r *http.Request, file store.BookFile,
+	w http.ResponseWriter, r *http.Request,
 	size cover.Size, digest string, body io.ReadSeeker, modified time.Time,
 ) {
 	// The type is what this server chose to produce, never what the
@@ -249,15 +235,10 @@ func (s *Server) writeCover(
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// A cover is derived from immutable bytes by a fixed pipeline, so the
 	// digest and the variant together name the result exactly.
-	if file.Storage == store.LibraryStorageInPlace {
-		// The bytes belong to somebody else, who may replace them, so the
-		// derived image is revalidated rather than pinned for a year.
-		w.Header().Set("ETag", `W/"`+digest+`-`+string(size)+`"`)
-		w.Header().Set("Cache-Control", "private, no-cache")
-	} else {
-		w.Header().Set("ETag", `"`+digest+`-`+string(size)+`"`)
-		w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
-	}
+	// The bytes belong to somebody else, who may replace them, so the
+	// derived image is revalidated rather than pinned for a year.
+	w.Header().Set("ETag", `W/"`+digest+`-`+string(size)+`"`)
+	w.Header().Set("Cache-Control", "private, no-cache")
 	// An image is displayed, not saved, so there is no filename here and
 	// nothing to sanitize.
 	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "", modified, body)

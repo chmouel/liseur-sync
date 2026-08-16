@@ -61,6 +61,16 @@ full-fidelity surface; legacy protocols are edge adapters
 native records only. The web UI (`internal/webui`) is templ + vendored
 htmx, no CDN, no build pipeline beyond `go tool templ generate`.
 
+Books come from **watched folders**, never from an upload
+([ADR-0017](docs/adr/0017-folders-not-pipelines.md)). A folder is a row
+(`id, name, root_path, kind`); `internal/content` walks it, reads
+metadata and calls one store method, `ReconcileFolder`, which is the
+single write path into the catalog. One watcher goroutine
+(`internal/content/watch_linux.go`) triggers a pass at startup, on a
+debounced fsnotify event, and on a slow safety timer. There is no ingest
+job, no content-addressed store, no quota, no trash and no review queue;
+the only directory the server writes to is the cover cache.
+
 The API contract is [docs/openapi.yaml](docs/openapi.yaml) — update it
 in the same commit as any route/shape change, and keep
 [docs/integrating.md](docs/integrating.md) consistent with it.
@@ -86,10 +96,26 @@ of them.
 - **Every route is authenticated** except `/healthz`, `/v1/login`,
   `/v1/register` (invite), and the adapter pairing endpoints. Add new
   routes to the scope table in `internal/api/routes.go`.
-- **All queries are scoped by `user_id`.** Never write a store method
-  that can read across users (the few global lookups — token/auth
-  hashes, `UserIDs`, `ListUsers` — exist for auth and background jobs
-  and are documented as such).
+- **Reading state is scoped by `user_id`; the catalog is deliberately
+  not.** Ops, sessions, insights, devices and `user_book_works` are
+  per-user and must never be readable across users. Books, folders and
+  catalog entities are shared: every logged-in user sees every folder's
+  books, and only an admin sees or manages folders. The few global
+  lookups outside the catalog — token/auth hashes, `UserIDs`,
+  `ListUsers` — exist for auth and background jobs and are documented as
+  such.
+- **`root_path` never reaches a non-admin.** It is a filesystem oracle;
+  a `library-read` response names books, not paths.
+- **The server never writes under a watched folder.** Rooted, read-only
+  opens; symlinks refused; no temp files, no cover extracted beside the
+  book, no `metadata.db` writes.
+- **A pass that did not fully succeed, or that observed nothing, never
+  marks anything missing.** Both rules are enforced by
+  `ReconcileFolder`'s signature rather than by care.
+- **A plain folder is keyed by relative path; a Calibre folder is keyed
+  by `calibre_id`, never by path.** Calibre rewrites a book's directory
+  on every title or author edit, and path-keying would lose the reading
+  position each time. Calibre metadata is re-read on every pass.
 - **The op log and sessions are append-only within their retention
   windows.** Same id with a different payload is a conflict, never an
   overwrite. Aged immutable sessions become daily rollup totals plus
@@ -102,6 +128,10 @@ of them.
 - **Never fabricate page numbers.** Statistics come from progression
   fractions; pages derive from edition page counts when known.
 - **No redirects on API routes.** `301`s exist only under `/ui`.
+- **Content change is not identity transfer.** A file whose bytes
+  changed at a path is a new catalog book: delete the old row and its
+  cascade, insert the new one, one transaction, enforced by
+  `UNIQUE (folder_id, relative_path)`.
 - **Secrets are stored hashed** (SHA-256) and shown to the user exactly
   once. Passwords are argon2id. kosync's MD5-derived key is a pairing
   credential bound to one device slot, never the account password.
@@ -115,7 +145,10 @@ of them.
   foreign_keys=ON`; both backends: deferrable FKs for split/merge).
 - Timestamps are UTC; SQLite encodes them as RFC3339Nano text.
 - New migrations are appended to the `migrations` slice in each
-  backend's `schema.go` — never edit a shipped migration.
+  backend's `schema.go` — never edit a shipped migration. The slice
+  currently holds a single baseline: ADR-0017 squashed the previous 22,
+  because this project has never shipped. That was a one-off, not a
+  precedent.
 - Web UI mutations require the per-session CSRF token.
 - Error responses are JSON `{"error": "..."}` with a precise 4xx;
   malformed input never produces a 5xx.
@@ -126,6 +159,10 @@ of them.
   (gap-free per-user seq under concurrent pushes).
 - Named regression tests for legacy bugs: falsy-zero percentage,
   xpointer round-tripping, open-route access.
+- The reconcile suite in `internal/store/storetest` covers idempotency,
+  incomplete and zero-observation passes, replacement without inherited
+  work mappings, and a Calibre book whose directory moved. Extend it
+  rather than testing a pass through the API.
 - Tenant isolation and scope matrix tests live in `internal/api` and
   `internal/webui`; extend them when adding routes.
 - Adapter changes must not break the conformance tests in

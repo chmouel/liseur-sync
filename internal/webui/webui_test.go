@@ -181,7 +181,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 
-	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/library/manage", "/ui/devices", "/ui/settings"} {
+	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/devices", "/ui/settings"} {
 		code, body = page(t, ts, cookie, path)
 		if code != 200 || !strings.Contains(body, "liseur-sync") {
 			t.Fatalf("%s: %d", path, code)
@@ -206,8 +206,8 @@ func TestAuthFlowAndPages(t *testing.T) {
 		t.Fatal("rail offers Admin to a non-admin")
 	}
 	for _, p := range []string{
-		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
-		"/ui/admin/libraries/l1/review", "/ui/admin/maintenance",
+		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/folders",
+		"/ui/admin/maintenance",
 	} {
 		code, body = page(t, ts, cookie, p)
 		if code != 403 {
@@ -222,14 +222,10 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/users/u1/admin", "/ui/admin/users/u1/disabled",
 		"/ui/admin/users/u1/credentials/revoke",
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
-		"/ui/admin/users/u1/koplugin/k1/revoke", "/ui/admin/libraries",
-		"/ui/admin/libraries/l1/access", "/ui/admin/libraries/l1/layout",
-		"/ui/admin/libraries/l1/backfill",
-		"/ui/admin/libraries/l1/delete",
+		"/ui/admin/users/u1/koplugin/k1/revoke",
+		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
-		"/ui/admin/libraries/l1/review/b1/clear",
-		"/ui/admin/maintenance/verify",
 	} {
 		if code, _ := postForm(t, ts, cookie, p, url.Values{}); code != 403 {
 			t.Fatalf("POST %s as a non-admin: want 403, got %d", p, code)
@@ -267,14 +263,14 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 
 	// Updating scopes preserves the token and device identities.
 	code, body = postForm(t, ts, cookie, "/ui/tokens/"+toks[0].ID+"/scopes", url.Values{
-		"scopes": {"read-insights", "library-manage"}, "csrf": {csrf},
+		"scopes": {"read-insights", "library-read"}, "csrf": {csrf},
 	})
 	if code != 200 || !strings.Contains(body, "Token scopes updated") {
 		t.Fatalf("token scope update: %d", code)
 	}
 	toks, _ = st.ListTokens(t.Context(), "u1")
 	if len(toks) != 1 || toks[0].DeviceID != deviceID ||
-		toks[0].Scopes.String() != "read-insights,library-manage" {
+		toks[0].Scopes.String() != "read-insights,library-read" {
 		t.Fatalf("updated token: %+v", toks)
 	}
 
@@ -374,7 +370,7 @@ func TestAdminOverview(t *testing.T) {
 		t.Fatalf("admin overview: %d", code)
 	}
 	for _, want := range []string{
-		"Overview", "This build", "Accounts", "Libraries", "Configuration",
+		"Overview", "This build", "Accounts", "Folders", "Configuration",
 		"Database driver", "postgres",
 	} {
 		if !strings.Contains(body, want) {
@@ -382,7 +378,7 @@ func TestAdminOverview(t *testing.T) {
 		}
 	}
 	// Sub-navigation reaches every page of the section.
-	for _, want := range []string{`"admin/users"`, `"admin/libraries"`, `"admin/maintenance"`} {
+	for _, want := range []string{`"admin/users"`, `"admin/folders"`, `"admin/maintenance"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("subnav is missing %s", want)
 		}
@@ -497,9 +493,9 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/devices", "/ui/settings",
-		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/libraries",
-		"/ui/admin/libraries/l1/review", "/ui/admin/maintenance",
-		"/ui/library", "/ui/library/manage", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
+		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/folders",
+		"/ui/admin/maintenance",
+		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
@@ -514,13 +510,10 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/admin/users/u1/credentials/revoke",
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
-		"/ui/admin/libraries", "/ui/admin/libraries/l1/access",
-		"/ui/admin/libraries/l1/layout",
-		"/ui/admin/libraries/l1/review/b1/clear",
+		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
-		"/ui/admin/maintenance/verify",
-		"/ui/books/upload", "/ui/reader/token",
+		"/ui/reader/token",
 		"/ui/preferences",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
@@ -642,28 +635,12 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 	ctx := t.Context()
 
 	now := time.Now().UTC()
-	lib := store.Library{
-		ID: "lib1", OwnerUserID: "u1", QuotaUserID: "u1",
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Test Lib", CreatedAt: now,
-	}
-	if err := st.CreateLibrary(ctx, lib); err != nil {
-		t.Fatal(err)
-	}
-
-	book := store.CatalogBook{
-		ID: "b1", LibraryID: lib.ID, Status: store.BookActive, Title: "Dune",
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if err := st.CreateCatalogBook(ctx, "u1", book); err != nil {
-		t.Fatal(err)
-	}
+	bookID := seedFolderBook(t, st, "lib1", "dune.epub", "Dune")
 
 	work := store.Work{
 		ID: "w1", UserID: "u1", Title: "Dune", CreatedAt: now,
 	}
-	if _, err := st.ResolveCatalogBookWork(ctx, "u1", book.ID, work, nil, nil, true, now); err != nil {
+	if _, err := st.ResolveCatalogBookWork(ctx, "u1", bookID, work, nil, nil, true, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -671,9 +648,47 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("works page: %d", code)
 	}
-	if !strings.Contains(body, "books/b1/cover?size=thumbnail") {
+	if !strings.Contains(body, "books/"+bookID+"/cover?size=thumbnail") {
 		t.Fatalf("reading page does not render cover for mapped work:\n%s", body)
 	}
+}
+
+// seedFolderBook puts one book in the catalog the only way books get
+// there: a folder, and a pass over it that reports what it saw. The
+// store mints the id, so the caller is told what it was.
+func seedFolderBook(
+	t *testing.T, st store.Store, folderID, relative, title string,
+) string {
+	t.Helper()
+	ctx := t.Context()
+	now := time.Now().UTC()
+	if _, err := st.FolderByID(ctx, folderID); err != nil {
+		if err := st.CreateFolder(ctx, store.Folder{
+			ID: folderID, Name: "Test Folder", RootPath: t.TempDir(),
+			Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.ReconcileFolder(ctx, folderID, []store.ObservedBook{{
+		RelativePath: relative, SizeBytes: 1024, MTime: now,
+		ContentSHA256:    strings.Repeat("a", 64),
+		OriginalFilename: relative, MediaType: "application/epub+zip",
+		Title: title,
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	books, err := st.ListCatalogBooks(ctx, folderID, nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range books {
+		if b.RelativePath == relative {
+			return b.ID
+		}
+	}
+	t.Fatalf("no catalogued book at %q", relative)
+	return ""
 }
 
 // TestCreditStopsAtThree pins the one-line rule on a card: three names,

@@ -287,3 +287,22 @@ func scanOp(row interface{ Scan(...any) error }) (store.Op, error) {
 	o.ReceivedAt, err = parseTime(receivedAt)
 	return o, err
 }
+
+// withTx runs fn in a transaction, rolling back on any error. It exists
+// because every multi-statement write in this backend wants the same
+// three lines and getting one of them wrong leaks a connection.
+func (s *Store) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// The compiler, not a reviewer, is what keeps the two backends in step
+// with the interface.
+var _ store.Store = (*Store)(nil)

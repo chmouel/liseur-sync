@@ -6,113 +6,96 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// TestCatalogBookIdentifiersIgnoresUnavailableFiles: an unavailable file's
-// digest is a claim about bytes the server cannot produce. Registering it
-// as an alias would point the reader's work graph at nothing.
-func TestCatalogBookIdentifiersIgnoresUnavailableFiles(t *testing.T) {
-	partial, dc := "aabbcc", "urn:isbn:9780000000001"
-	meta := store.BookMetadata{
-		Book:         store.CatalogBook{ID: "b1", Title: "  The   Title "},
-		Contributors: []store.BookContributor{{Name: "Ada Author", Role: "author"}},
+// TestForCatalogBookOrdersAndDeduplicates: a book contributes its
+// identifiers in the order they were recorded, which is not the order
+// resolution walks them in. The list has to come back strongest first,
+// and a repeated Dublin Core identifier must not be registered twice.
+func TestForCatalogBookOrdersAndDeduplicates(t *testing.T) {
+	book := store.CatalogBook{
+		ID: "b1", Title: "  The   Title ", Status: store.BookActive,
+		ContentSHA256: "here",
 	}
-	files := []store.BookFile{
-		{BlobSHA256: "gone", Availability: store.BookFileMissing},
-		{
-			BlobSHA256: "here", PartialMD5: &partial, DCIdentifier: &dc,
-			Availability: store.BookFileAvailable,
-		},
+	ids := []store.BookIdentifier{
+		{Scheme: "isbn", Value: "urn:isbn:9780000000001"},
+		{Scheme: "isbn", Value: "urn:isbn:9780000000001"},
+		{Scheme: "uuid", Value: "urn:uuid:abc"},
 	}
-	got := ForCatalogBook(meta, files)
+	got := ForCatalogBook(book, ids, "Ada Author")
 	want := []store.Identifier{
 		{Kind: "sha256", Value: "here"},
-		{Kind: "partial-md5", Value: partial},
-		{Kind: "dc", Value: dc},
+		{Kind: "dc", Value: "urn:isbn:9780000000001"},
+		{Kind: "dc", Value: "urn:uuid:abc"},
 		{Kind: "ta", Value: "the title|ada author"},
 	}
-	if len(got) != len(want) {
-		t.Fatalf("identifiers = %+v, want %+v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("identifier %d = %+v, want %+v", i, got[i], want[i])
-		}
-	}
+	assertIdentifiers(t, got, want)
 }
 
-// TestCatalogBookIdentifiersOrdersAndDeduplicates: the files loop emits
-// each file's identifiers together, so two files leave the list interleaved
-// by file rather than ordered by strength. Resolution is strongest-first,
-// and a duplicated book contributes the same digest twice.
-func TestCatalogBookIdentifiersOrdersAndDeduplicates(t *testing.T) {
-	md5a, md5b := "aaa111", "bbb222"
-	dcA, dcB := "urn:isbn:1", "urn:isbn:2"
-	meta := store.BookMetadata{Book: store.CatalogBook{ID: "b1", Title: "T"}}
-	files := []store.BookFile{
-		{
-			BlobSHA256: "sha-a", PartialMD5: &md5a, DCIdentifier: &dcA,
-			Availability: store.BookFileAvailable,
-		},
-		{
-			BlobSHA256: "sha-b", PartialMD5: &md5b, DCIdentifier: &dcB,
-			Availability: store.BookFileAvailable,
-		},
-		// The same file catalogued twice must not say so twice.
-		{
-			BlobSHA256: "sha-a", PartialMD5: &md5a, DCIdentifier: &dcA,
-			Availability: store.BookFileAvailable,
-		},
-		// A file the catalog holds no digest for contributes nothing.
-		// "sha256:" would otherwise alias every such book to one work.
-		{BlobSHA256: "", Availability: store.BookFileAvailable},
+// TestForCatalogBookIgnoresAMissingFile: a missing file's digest is a
+// claim about bytes the server cannot produce. Registering it as an
+// alias would point the reader's work graph at nothing.
+func TestForCatalogBookIgnoresAMissingFile(t *testing.T) {
+	book := store.CatalogBook{
+		ID: "b1", Title: "Title", Status: store.BookMissing,
+		ContentSHA256: "gone",
 	}
-	got := ForCatalogBook(meta, files)
-	want := []store.Identifier{
-		{Kind: "sha256", Value: "sha-a"},
-		{Kind: "sha256", Value: "sha-b"},
-		{Kind: "partial-md5", Value: md5a},
-		{Kind: "partial-md5", Value: md5b},
-		{Kind: "dc", Value: dcA},
-		{Kind: "dc", Value: dcB},
-		{Kind: "ta", Value: "t|"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("identifiers = %+v, want %+v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("identifier %d = %+v, want %+v", i, got[i], want[i])
-		}
-	}
+	got := ForCatalogBook(book, nil, "Ada")
+	assertIdentifiers(t, got, []store.Identifier{
+		{Kind: "ta", Value: "title|ada"},
+	})
+}
+
+// TestForCatalogBookDropsEmptyValues: a book the catalog holds no digest
+// for must not contribute "sha256:", which would otherwise alias every
+// such book to a single work.
+func TestForCatalogBookDropsEmptyValues(t *testing.T) {
+	book := store.CatalogBook{ID: "b1", Title: "T", Status: store.BookActive}
+	got := ForCatalogBook(book, []store.BookIdentifier{{Scheme: "isbn"}}, "")
+	assertIdentifiers(t, got, []store.Identifier{{Kind: "ta", Value: "t|"}})
 }
 
 // TestTitleAuthorFingerprintNeedsATitle: an untitled book would otherwise
 // fingerprint as "|author" and collide with every other untitled book by
 // that author.
 func TestTitleAuthorFingerprintNeedsATitle(t *testing.T) {
-	meta := store.BookMetadata{
-		Contributors: []store.BookContributor{{Name: "Ada", Role: "author"}},
-	}
-	if got := TitleAuthorFingerprint(meta); got != "" {
+	if got := TitleAuthorFingerprint("", "Ada"); got != "" {
 		t.Fatalf("fingerprint without a title = %q, want empty", got)
 	}
-	meta.Book.Title = "Title"
-	if got := TitleAuthorFingerprint(meta); got != "title|ada" {
+	if got := TitleAuthorFingerprint("Title", "Ada"); got != "title|ada" {
 		t.Fatalf("fingerprint = %q", got)
 	}
 }
 
-// TestFirstAuthorSkipsOtherRoles: a translator is not the author, and
-// folding one into the fingerprint would split a work across editions.
-func TestFirstAuthorSkipsOtherRoles(t *testing.T) {
-	meta := store.BookMetadata{Contributors: []store.BookContributor{
-		{Name: "Tara Translator", Role: "translator"},
-		{Name: "Ada Author", Role: "author"},
-		{Name: "Bea Author", Role: "author"},
-	}}
-	if got := FirstAuthor(meta); got != "Ada Author" {
-		t.Fatalf("firstAuthor = %q, want %q", got, "Ada Author")
+// TestPlanProposesAnEditionPerDigest: the work is only half of what the
+// store needs; without an edition row the digest identifies nothing on
+// the next device to present the same file.
+func TestPlanProposesAnEditionPerDigest(t *testing.T) {
+	book := store.CatalogBook{
+		ID: "b1", Title: "Dune", Status: store.BookActive,
+		ContentSHA256: "digest",
 	}
-	if got := FirstAuthor(store.BookMetadata{}); got != "" {
-		t.Fatalf("firstAuthor with no contributors = %q", got)
+	work, editions, aliases := Plan("u1", "w1", book, nil, "Frank Herbert")
+	if work.ID != "w1" || work.UserID != "u1" || work.Title != "Dune" ||
+		work.Author != "Frank Herbert" {
+		t.Fatalf("work = %+v", work)
+	}
+	if len(editions) != 1 || editions[0].SHA256 != "digest" ||
+		editions[0].WorkID != "w1" || editions[0].UserID != "u1" {
+		t.Fatalf("editions = %+v", editions)
+	}
+	assertIdentifiers(t, aliases, []store.Identifier{
+		{Kind: "sha256", Value: "digest"},
+		{Kind: "ta", Value: "dune|frank herbert"},
+	})
+}
+
+func assertIdentifiers(t *testing.T, got, want []store.Identifier) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("identifiers = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("identifier %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

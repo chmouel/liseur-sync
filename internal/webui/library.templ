@@ -15,33 +15,32 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	if v.Notice != "" {
 		<p class="notice" role="status">{ v.Notice }</p>
 	}
-	if len(v.Libraries) == 0 {
+	if len(v.Folders) == 0 {
 		<h1>Library</h1>
 		<section class="card">
 			if admin {
 				<p class="muted">
-					You have no libraries yet. Create one and grant yourself
-					access from <a href={ prefix + "admin/libraries" }>Libraries</a>
-					in the admin panel, or with
-					<code>liseur-sync admin create-library</code>.
+					This server watches no folders yet. Point it at one from
+					<a href={ prefix + "admin/folders" }>Folders</a> in the admin
+					panel, or with <code>liseur-sync admin add-folder</code>.
 				</p>
 			} else {
 				<p class="muted">
-					You have no libraries yet. An administrator creates one with
-					<code>liseur-sync admin create-library</code> and grants you access.
+					This server watches no folders yet. An administrator points
+					it at one with <code>liseur-sync admin add-folder</code>.
 				</p>
 			}
 		</section>
 	} else {
 		<div class="toolbar">
 			<form method="get" action={ prefix + "library" }>
-				<label class="visually-hidden" for="library-pick">Library</label>
-				<select id="library-pick" name="library">
-					for _, l := range v.Libraries {
-						if l.Selected {
-							<option value={ l.ID } selected>{ l.Name }</option>
+				<label class="visually-hidden" for="folder-pick">Folder</label>
+				<select id="folder-pick" name="folder">
+					for _, f := range v.Folders {
+						if f.Selected {
+							<option value={ f.ID } selected>{ f.Name }</option>
 						} else {
-							<option value={ l.ID }>{ l.Name }</option>
+							<option value={ f.ID }>{ f.Name }</option>
 						}
 					}
 				</select>
@@ -54,12 +53,11 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
 			if v.Selected != "" {
-				@searchForm(prefix, SearchView{LibraryID: v.Selected})
+				@searchForm(prefix, SearchView{FolderID: v.Selected})
 				<div class="chips">
-					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/series" }>Series</a>
-					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/contributors" }>Contributors</a>
-					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/tags" }>Tags</a>
-					<a class="chip" href={ prefix + "libraries/" + v.Selected + "/genres" }>Genres</a>
+					<a class="chip" href={ prefix + "folders/" + v.Selected + "/series" }>Series</a>
+					<a class="chip" href={ prefix + "folders/" + v.Selected + "/contributors" }>Contributors</a>
+					<a class="chip" href={ prefix + "folders/" + v.Selected + "/tags" }>Tags</a>
 				</div>
 			}
 			<span class="spacer"></span>
@@ -84,25 +82,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				<span aria-hidden="true">⇅</span>
 			</a>
 		</div>
-		if v.CanWrite {
-			<details class="card">
-				<summary>Upload an EPUB</summary>
-				<p class="muted">
-					The file is stored straight away; the book appears once a
-					background pass has read its metadata, usually within a
-					minute. Reload to see it — an upload that cannot be read is
-					listed in <a href={ prefix + "library/manage?library=" + v.Selected }>Library management</a>
-					with the reason.
-				</p>
-				<form method="post" action={ prefix + "books/upload" } enctype="multipart/form-data">
-					<input type="hidden" name="csrf" value={ csrf }/>
-					<input type="hidden" name="library" value={ v.Selected }/>
-					<input type="file" name="file" accept=".epub,application/epub+zip" required/>
-					<button type="submit">Upload</button>
-				</form>
-			</details>
-			<a class="btn" href={ prefix + "library/manage?library=" + v.Selected }>Manage library</a>
-		}
 		<section class="card">
 			if len(v.Rows) == 0 {
 				@libraryEmpty(v)
@@ -129,9 +108,9 @@ templ libraryEmpty(v LibraryView) {
 		case filterUnread:
 			@emptyState("Nothing unread", "Every book here has been opened at least once.", "", "")
 		case filterHere:
-			@emptyState("No files on this server", "Upload an EPUB or configure a watched folder to keep the files here.", "", "")
+			@emptyState("No files on this server", "Books appear here as this server reads the folders it watches.", "", "")
 		default:
-			@emptyState("Nothing here yet", "Upload an EPUB, configure a watched folder, or sync reading progress from Liseur or KOReader.", "", "")
+			@emptyState("Nothing here yet", "Add books to a watched folder, or sync reading progress from Liseur or KOReader.", "", "")
 	}
 }
 
@@ -338,134 +317,5 @@ templ libraryTable(prefix string, v LibraryView) {
 	</table>
 	if v.NextURL != "" {
 		<p><a href={ v.NextURL }>Next page</a></p>
-	}
-}
-
-// librarianQueues is everything in library management that is a job rather
-// than a book: uploads that have not landed, deletions that can still be
-// undone, and the two kinds of "these might be the same book" the server
-// will not decide by itself. Only somebody who can manage the library sees
-// any of it, because only they could act on it.
-templ librarianQueues(prefix, csrf string, v LibraryView) {
-	if len(v.Uploads) > 0 {
-		<section class="card">
-			<h2>Uploads in progress</h2>
-			<table>
-				<tr><th>File</th><th>Uploaded</th><th>Status</th></tr>
-				for _, up := range v.Uploads {
-					<tr>
-						<td>
-							if up.Filename != "" {
-								<code>{ up.Filename }</code>
-							} else {
-								<span class="muted">Filename unavailable</span>
-							}
-						</td>
-						<td>{ up.When }</td>
-						if up.Pending {
-							<td class="muted">{ up.State }</td>
-						} else {
-							<td class="error">{ up.Reason }</td>
-						}
-					</tr>
-				}
-			</table>
-		</section>
-	}
-	if len(v.Trash) > 0 {
-		<section class="card">
-			<h2>Recently deleted</h2>
-			<p class="muted">
-				These are kept for a while before their files are removed for
-				good. Until then they can be put back.
-			</p>
-			<table>
-				<tr><th>Title</th><th>Kept until</th><th></th></tr>
-				for _, b := range v.Trash {
-					<tr>
-						<td>{ orPlaceholder(b.Title) }</td>
-						<td>{ orPlaceholder(b.Until) }</td>
-						<td>
-							<form method="post" action={ prefix + "books/" + b.ID + "/restore" }>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<input type="hidden" name="library" value={ v.Selected }/>
-								<input type="hidden" name="back" value={ backManage }/>
-								<button type="submit">Put back</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		</section>
-	}
-	if len(v.Review) > 0 {
-		<section class="card">
-			<h2>Changed under us</h2>
-			<p class="muted">
-				The file behind each of these was replaced with something
-				different. The copy already stored is still what downloads,
-				because a new file at the same path is not proof that it is
-				the same book. Accept it to put the book back in the catalog,
-				or delete the book if the file is now something else.
-			</p>
-			<table>
-				<tr><th>Title</th><th>Why</th><th></th></tr>
-				for _, b := range v.Review {
-					<tr>
-						<td>{ orPlaceholder(b.Title) }</td>
-						<td class="muted">{ b.Reason }</td>
-						<td>
-							<form method="post" action={ prefix + "books/" + b.ID + "/accept" }>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<input type="hidden" name="library" value={ v.Selected }/>
-								<input type="hidden" name="back" value={ backManage }/>
-								<button type="submit">Accept this copy</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		</section>
-	}
-	if len(v.Duplicates) > 0 {
-		<section class="card">
-			<h2>The same file, more than once</h2>
-			<p class="muted">
-				These entries hold identical bytes. The file itself is only
-				stored once, so this costs no space — but if you did not mean
-				to add it twice, deleting the spare tidies the list.
-			</p>
-			for _, group := range v.Duplicates {
-				<ul>
-					for _, title := range group.Titles {
-						<li>{ orPlaceholder(title) }</li>
-					}
-				</ul>
-			}
-		</section>
-	}
-	if len(v.Similar) > 0 {
-		<section class="card">
-			<h2>Possibly the same book</h2>
-			<p class="muted">
-				These have the same title and an author in common, but they
-				are different files — two builds of one book, most likely.
-				This is a guess, so nothing has been changed: open them and
-				decide.
-			</p>
-			for _, group := range v.Similar {
-				<ul>
-					for _, b := range group.Books {
-						<li>
-							<a href={ prefix + "books/" + b.ID }>
-								{ orPlaceholder(b.Title) }
-							</a>
-							{ " · added " }
-							{ b.Added }
-						</li>
-					}
-				</ul>
-			}
-		</section>
 	}
 }

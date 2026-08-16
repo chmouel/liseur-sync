@@ -2,413 +2,139 @@ package storetest
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-func testAtomicCatalogWorkResolution(t *testing.T, open OpenFunc) {
+// testFolders covers folder CRUD: the unique root path, cursor paging
+// by name then id, and DeleteFolder's cascade over every catalog row
+// that hung off it.
+func testFolders(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
-	user := MkUser(t, s, "catalog-concurrent")
-	now := time.Now().UTC()
-	library := store.Library{
-		ID: "lib-concurrent", OwnerUserID: user.ID, QuotaUserID: user.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Concurrent", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	book := store.CatalogBook{
-		ID: "book-concurrent", LibraryID: library.ID, Status: store.BookActive,
-		Title: "Concurrent", TitleSource: store.MetadataEmbedded, CreatedAt: now,
-	}
-	if err := s.CreateCatalogBook(ctx, user.ID, book); err != nil {
-		t.Fatal(err)
-	}
-
-	const workers = 12
-	start := make(chan struct{})
-	results := make(chan store.WorkResolution, workers)
-	errs := make(chan error, workers)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			workID := fmt.Sprintf("catalog-candidate-%02d", i)
-			result, err := s.ResolveCatalogBookWork(ctx, user.ID, book.ID,
-				store.Work{ID: workID, UserID: user.ID, Title: book.Title, CreatedAt: now},
-				[]store.Edition{{
-					UserID: user.ID, SHA256: "catalog-concurrent-sha", WorkID: workID,
-				}},
-				[]store.Identifier{{Kind: "sha256", Value: "catalog-concurrent-sha"}},
-				false, now)
-			if err != nil {
-				errs <- err
-				return
-			}
-			results <- result
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent catalog resolve: %v", err)
-	}
-
-	var resolved string
-	created := 0
-	for result := range results {
-		if len(result.ConflictingWorkIDs) != 0 || result.Confidence != "high" {
-			t.Fatalf("unexpected catalog resolution: %+v", result)
-		}
-		if resolved == "" {
-			resolved = result.WorkID
-		} else if result.WorkID != resolved {
-			t.Fatalf("split catalog resolution: %q != %q", result.WorkID, resolved)
-		}
-		if result.Created {
-			created++
-		}
-	}
-	if created != 1 {
-		t.Fatalf("want exactly one catalog work creation, got %d", created)
-	}
-	mapping, err := s.UserBookWork(ctx, user.ID, book.ID)
-	if err != nil || mapping.WorkID != resolved {
-		t.Fatalf("catalog mapping: %+v %v", mapping, err)
-	}
-	wbMap, err := s.WorkBookIDs(ctx, user.ID)
-	if err != nil || wbMap[resolved] != book.ID {
-		t.Fatalf("WorkBookIDs: map=%v, err=%v, want %s for %s", wbMap, err, book.ID, resolved)
-	}
-	works, err := s.ListWorks(ctx, user.ID)
-	if err != nil || len(works) != 1 || works[0].Work.ID != resolved {
-		t.Fatalf("catalog works: %+v %v", works, err)
-	}
-}
-
-func testCatalogACLAndMapping(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "catalog-owner")
-	reader := MkUser(t, s, "catalog-reader")
-	manager := MkUser(t, s, "catalog-manager")
-	outsider := MkUser(t, s, "catalog-outsider")
 	now := time.Now().UTC()
 
-	library := store.Library{
-		ID: "lib-shared", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Shared EPUBs",
-		ConfigJSON: []byte(`{"parser":"conservative"}`),
-		CreatedAt:  now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateLibrary(ctx, library); err != store.ErrConflict {
-		t.Fatalf("duplicate library: want conflict, got %v", err)
-	}
-	if err := s.CreateLibrary(ctx, store.Library{
-		ID: "bad-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryDirectory,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshInterval, Name: "Missing root", CreatedAt: now,
-	}); err == nil {
-		t.Fatal("watched library without a root was accepted")
-	}
-	root := "/srv/books"
-	if err := s.CreateLibrary(ctx, store.Library{
-		ID: "lib-watched", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryDirectory,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshInterval, Name: "Watched EPUBs", RootPath: &root, CreatedAt: now,
+	if err := s.CreateFolder(ctx, store.Folder{
+		ID: "folders-a", Name: "Same Root", RootPath: "/srv/dup",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateLibrary(ctx, store.Library{
-		ID: "lib-watched-duplicate", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryDirectory,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshInterval, Name: "Same root", RootPath: &root, CreatedAt: now,
-	}); err != store.ErrConflict {
-		t.Fatalf("duplicate watched root: want conflict, got %v", err)
+	if err := s.CreateFolder(ctx, store.Folder{
+		ID: "folders-b", Name: "Also Same Root", RootPath: "/srv/dup",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate root path: want ErrConflict, got %v", err)
 	}
-	gotLibrary, err := s.LibraryByID(ctx, owner.ID, library.ID, store.LibraryRoleManage)
-	if err != nil || gotLibrary.Role != store.LibraryRoleManage ||
-		gotLibrary.Library.Name != library.Name {
-		t.Fatalf("owner library: %+v %v", gotLibrary, err)
-	}
-	if _, err := s.LibraryByID(ctx, outsider.ID, library.ID, store.LibraryRoleRead); err != store.ErrNotFound {
-		t.Fatalf("private library visible to outsider: %v", err)
-	}
-	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, owner.ID, store.LibraryRoleRead, now); err != store.ErrNotFound {
-		t.Fatalf("owner received redundant ACL row: %v", err)
+	if err := s.CreateFolder(ctx, store.Folder{
+		ID: "folders-bad-kind", Name: "Bad Kind", RootPath: "/srv/bad",
+		Kind: store.FolderKind("nonsense"), CreatedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("invalid folder kind: want ErrInvalidInput, got %v", err)
 	}
 
-	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
+	got, err := s.FolderByID(ctx, "folders-a")
+	if err != nil || got.RootPath != "/srv/dup" {
+		t.Fatalf("FolderByID: %+v %v", got, err)
 	}
-	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, manager.ID, store.LibraryRoleManage, now); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.LibraryByID(ctx, reader.ID, library.ID, store.LibraryRoleRead); err != nil ||
-		got.Role != store.LibraryRoleRead {
-		t.Fatalf("reader access: %+v %v", got, err)
-	}
-	if _, err := s.LibraryByID(ctx, reader.ID, library.ID, store.LibraryRoleManage); err != store.ErrNotFound {
-		t.Fatalf("reader received manage access: %v", err)
-	}
-	if libraries, err := s.ListLibraries(ctx, reader.ID, store.LibraryRoleRead); err != nil ||
-		len(libraries) != 1 || libraries[0].Library.ID != library.ID {
-		t.Fatalf("reader libraries: %+v %v", libraries, err)
-	}
-	if libraries, err := s.ListLibraries(ctx, outsider.ID, store.LibraryRoleRead); err != nil ||
-		len(libraries) != 0 {
-		t.Fatalf("outsider libraries: %+v %v", libraries, err)
+	if _, err := s.FolderByID(ctx, "no-such-folder"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing folder: want ErrNotFound, got %v", err)
 	}
 
-	book := store.CatalogBook{
-		ID: "book-shared", LibraryID: library.ID, Status: store.BookActive,
-		Title: "The Left Hand of Darkness", TitleSource: store.MetadataEmbedded,
-		Subtitle: "A Novel", SubtitleSource: store.MetadataManual, SubtitleLocked: true,
-		Publisher: "Ace", PublisherSource: store.MetadataEmbedded,
-		PublishedDate: "1969", PublishedDateSource: store.MetadataEmbedded,
-		RawMetadataJSON: []byte(`{"dc:identifier":"urn:isbn:9780441478125"}`),
-		SetLocks:        store.MetadataSetLocks{Tags: true},
-		CreatedAt:       now,
-	}
-	if err := s.CreateCatalogBook(ctx, reader.ID, book); err != store.ErrNotFound {
-		t.Fatalf("reader created book: %v", err)
-	}
-	if err := s.CreateCatalogBook(ctx, manager.ID, book); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateCatalogBook(ctx, manager.ID, book); err != store.ErrConflict {
-		t.Fatalf("duplicate book: want conflict, got %v", err)
-	}
-	gotBook, err := s.CatalogBookByID(ctx, reader.ID, book.ID, store.LibraryRoleRead)
-	if err != nil || gotBook.Title != book.Title || !gotBook.SubtitleLocked ||
-		string(gotBook.RawMetadataJSON) != string(book.RawMetadataJSON) {
-		t.Fatalf("reader book: %+v %v", gotBook, err)
-	}
-	if gotBook.Revision != 1 {
-		t.Fatalf("new book revision: want 1, got %d", gotBook.Revision)
-	}
-	if gotBook.SetLocks != (store.MetadataSetLocks{Tags: true}) {
-		t.Fatalf("new book set locks: %+v", gotBook.SetLocks)
-	}
-	if _, err := s.CatalogBookByID(ctx, reader.ID, book.ID, store.LibraryRoleManage); err != store.ErrNotFound {
-		t.Fatalf("reader received book management: %v", err)
-	}
-	if _, err := s.CatalogBookByID(ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
-		t.Fatalf("book visible to outsider: %v", err)
-	}
-	if books, err := s.ListCatalogBooks(ctx, reader.ID, library.ID, nil, 50); err != nil ||
-		len(books) != 1 || books[0].ID != book.ID {
-		t.Fatalf("reader books: %+v %v", books, err)
-	}
-
-	ownerWork := store.Work{
-		ID: "catalog-owner-work", UserID: owner.ID, Title: book.Title, CreatedAt: now,
-	}
-	ownerResult, err := s.ResolveCatalogBookWork(ctx, owner.ID, book.ID, ownerWork,
-		[]store.Edition{{
-			UserID: owner.ID, SHA256: "catalog-owner-sha", WorkID: ownerWork.ID,
-		}},
-		[]store.Identifier{{Kind: "sha256", Value: "catalog-owner-sha"}},
-		false, now)
-	if err != nil || !ownerResult.Created || ownerResult.WorkID != ownerWork.ID {
-		t.Fatalf("owner catalog resolution: %+v %v", ownerResult, err)
-	}
-	readerWork := store.Work{
-		ID: "catalog-reader-work", UserID: reader.ID, Title: book.Title, CreatedAt: now,
-	}
-	readerResult, err := s.ResolveCatalogBookWork(ctx, reader.ID, book.ID, readerWork,
-		[]store.Edition{{
-			UserID: reader.ID, SHA256: "catalog-reader-sha", WorkID: readerWork.ID,
-		}},
-		[]store.Identifier{{Kind: "sha256", Value: "catalog-reader-sha"}},
-		false, now)
-	if err != nil || !readerResult.Created || readerResult.WorkID != readerWork.ID {
-		t.Fatalf("reader catalog resolution: %+v %v", readerResult, err)
-	}
-	otherReaderWork := MkWork(t, s, reader, "catalog-reader-work-2", "catalog-reader-sha-2")
-	repeated, err := s.ResolveCatalogBookWork(ctx, reader.ID, book.ID,
-		store.Work{ID: "unused-reader-work", UserID: reader.ID, CreatedAt: now},
-		nil,
-		[]store.Identifier{{Kind: "sha256", Value: "catalog-reader-sha"}},
-		false, now)
-	if err != nil || repeated.Created || repeated.WorkID != readerWork.ID {
-		t.Fatalf("idempotent catalog resolution: %+v %v", repeated, err)
-	}
-	conflict, err := s.ResolveCatalogBookWork(ctx, reader.ID, book.ID,
-		store.Work{ID: "unused-conflict-work", UserID: reader.ID, CreatedAt: now},
-		nil,
-		[]store.Identifier{{Kind: "sha256", Value: "catalog-reader-sha-2"}},
-		false, now)
-	if err != nil || len(conflict.ConflictingWorkIDs) != 2 {
-		t.Fatalf("conflicting remap: %+v %v", conflict, err)
-	}
-	if _, err := s.ResolveCatalogBookWork(ctx, outsider.ID, book.ID,
-		store.Work{ID: "outsider-work", UserID: outsider.ID, CreatedAt: now},
-		nil, nil, false, now); err != store.ErrNotFound {
-		t.Fatalf("outsider resolved private catalog book: %v", err)
-	}
-	ownerMapping, err := s.UserBookWork(ctx, owner.ID, book.ID)
-	if err != nil || ownerMapping.WorkID != ownerWork.ID {
-		t.Fatalf("owner mapping: %+v %v", ownerMapping, err)
-	}
-	readerMapping, err := s.UserBookWork(ctx, reader.ID, book.ID)
-	if err != nil || readerMapping.WorkID != readerWork.ID ||
-		readerMapping.WorkID == ownerMapping.WorkID {
-		t.Fatalf("reader mapping: %+v %v", readerMapping, err)
-	}
-	stable, err := s.ResolveAliases(ctx, reader.ID,
-		[]store.Identifier{{Kind: "source", Value: "liseur-sync:" + book.ID}})
-	if err != nil || stable["source:liseur-sync:"+book.ID] != readerWork.ID {
-		t.Fatalf("stable catalog alias: %v %v", stable, err)
-	}
-
-	fuzzyBook := book
-	fuzzyBook.ID = "book-fuzzy"
-	fuzzyBook.Title = "A Fuzzy Match"
-	if err := s.CreateCatalogBook(ctx, manager.ID, fuzzyBook); err != nil {
-		t.Fatal(err)
-	}
-	fuzzyWork := store.Work{
-		ID: "catalog-fuzzy-work", UserID: reader.ID, Title: fuzzyBook.Title, CreatedAt: now,
-	}
-	if err := s.CreateWork(ctx, fuzzyWork, nil,
-		[]store.Identifier{{Kind: "ta", Value: "a fuzzy match|author"}}); err != nil {
-		t.Fatal(err)
-	}
-	fuzzyResult, err := s.ResolveCatalogBookWork(ctx, reader.ID, fuzzyBook.ID,
-		store.Work{ID: "unused-fuzzy-work", UserID: reader.ID, CreatedAt: now},
-		[]store.Edition{{
-			UserID: reader.ID, SHA256: "catalog-fuzzy-sha", WorkID: "unused-fuzzy-work",
-		}},
-		[]store.Identifier{
-			{Kind: "sha256", Value: "catalog-fuzzy-sha"},
-			{Kind: "ta", Value: "a fuzzy match|author"},
-		},
-		false, now)
-	if err != nil || fuzzyResult.WorkID != fuzzyWork.ID || fuzzyResult.Confidence != "low" {
-		t.Fatalf("unconfirmed fuzzy catalog resolution: %+v %v", fuzzyResult, err)
-	}
-	if _, err := s.UserBookWork(ctx, reader.ID, fuzzyBook.ID); err != store.ErrNotFound {
-		t.Fatalf("fuzzy match created mapping before confirmation: %v", err)
-	}
-	fuzzyAliases, err := s.ResolveAliases(ctx, reader.ID, []store.Identifier{
-		{Kind: "sha256", Value: "catalog-fuzzy-sha"},
-		{Kind: "source", Value: "liseur-sync:" + fuzzyBook.ID},
-	})
-	if err != nil || len(fuzzyAliases) != 0 {
-		t.Fatalf("fuzzy match promoted strong aliases: %v %v", fuzzyAliases, err)
-	}
-	fuzzyResult, err = s.ResolveCatalogBookWork(ctx, reader.ID, fuzzyBook.ID,
-		store.Work{ID: "unused-confirmed-work", UserID: reader.ID, CreatedAt: now},
-		[]store.Edition{{
-			UserID: reader.ID, SHA256: "catalog-fuzzy-sha", WorkID: "unused-confirmed-work",
-		}},
-		[]store.Identifier{
-			{Kind: "sha256", Value: "catalog-fuzzy-sha"},
-			{Kind: "ta", Value: "a fuzzy match|author"},
-		},
-		true, now)
-	if err != nil || fuzzyResult.WorkID != fuzzyWork.ID || fuzzyResult.Confidence != "high" {
-		t.Fatalf("confirmed fuzzy catalog resolution: %+v %v", fuzzyResult, err)
-	}
-
-	if err := s.RevokeLibraryAccess(ctx, manager.ID, library.ID, reader.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RevokeLibraryAccess(ctx, owner.ID, library.ID, manager.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(ctx, manager.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != store.ErrNotFound {
-		t.Fatalf("revoked manager changed ACL: %v", err)
-	}
-	if _, err := s.CatalogBookByID(ctx, reader.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
-		t.Fatalf("revoked reader still sees book: %v", err)
-	}
-	if _, err := s.UserBookWork(ctx, reader.ID, book.ID); err != store.ErrNotFound {
-		t.Fatalf("revoked reader still sees mapping: %v", err)
-	}
-	if _, err := s.ListCatalogBooks(ctx, reader.ID, library.ID, nil, 50); err != store.ErrNotFound {
-		t.Fatalf("revoked reader still lists books: %v", err)
-	}
-	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.MergeWorks(ctx, reader.ID, readerWork.ID, otherReaderWork.ID); err != nil {
-		t.Fatal(err)
-	}
-	readerMapping, err = s.UserBookWork(ctx, reader.ID, book.ID)
-	if err != nil || readerMapping.WorkID != otherReaderWork.ID {
-		t.Fatalf("merge left stale catalog mapping: %+v %v", readerMapping, err)
-	}
-}
-
-type bookFileTestInserter interface {
-	InsertBookFileForTest(ctx context.Context, file store.BookFile, sizeBytes int64) error
-}
-
-func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "catalog-page-owner")
-	outsider := MkUser(t, s, "catalog-page-outsider")
-	now := time.Date(2026, time.August, 13, 9, 0, 0, 123456000, time.UTC)
-	library := store.Library{
-		ID: "lib-catalog-page", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Paged", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	books := []store.CatalogBook{
-		{ID: "book-page-c", LibraryID: library.ID, Status: store.BookActive, Title: "C", CreatedAt: now},
-		{ID: "book-page-a", LibraryID: library.ID, Status: store.BookActive, Title: "A", CreatedAt: now},
-		{ID: "book-page-b", LibraryID: library.ID, Status: store.BookActive, Title: "B", CreatedAt: now},
-		{ID: "book-page-later", LibraryID: library.ID, Status: store.BookActive, Title: "Later", CreatedAt: now.Add(time.Second)},
-		{ID: "book-page-trashed", LibraryID: library.ID, Status: store.BookTrashed, Title: "Trash", CreatedAt: now.Add(2 * time.Second)},
-		{ID: "book-page-last", LibraryID: library.ID, Status: store.BookActive, Title: "Last", CreatedAt: now.Add(3 * time.Second)},
-	}
-	for _, book := range books {
-		if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
+	for i, name := range []string{"zzz", "mmm", "aaa"} {
+		id := fmt.Sprintf("folders-page-%d", i)
+		if err := s.CreateFolder(ctx, store.Folder{
+			ID: id, Name: name, RootPath: "/srv/page/" + id,
+			Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	for _, limit := range []int{0, -1, 501} {
-		if _, err := s.ListCatalogBooks(ctx, owner.ID, library.ID, nil, limit); err != store.ErrInvalidTransition {
-			t.Fatalf("catalog listing limit %d: %v", limit, err)
+	var names []string
+	cursor := ""
+	for {
+		page, err := s.ListFolders(ctx, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, f := range page {
+			names = append(names, f.Name)
+		}
+		cursor = store.FolderCursor(page[len(page)-1])
+		if len(page) < 2 {
+			break
 		}
 	}
-	if _, err := s.ListCatalogBooks(ctx, outsider.ID, library.ID, nil, 50); err != store.ErrNotFound {
-		t.Fatalf("outsider listed private catalog: %v", err)
+	want := []string{"Same Root", "aaa", "mmm", "zzz"}
+	if fmt.Sprint(names) != fmt.Sprint(want) {
+		t.Fatalf("folder paging: got %v want %v", names, want)
 	}
 
+	obs := store.ObservedBook{
+		RelativePath: "book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-delete-cascade", Title: "Cascade Me",
+	}
+	doReconcile(t, s, "folders-a", []store.ObservedBook{obs}, true, now)
+	bookID := knownByPath(t, s, "folders-a")["book.epub"].ID
+
+	if err := s.DeleteFolder(ctx, "folders-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteFolder(ctx, "folders-a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("double delete: want ErrNotFound, got %v", err)
+	}
+	if _, err := s.CatalogBookByID(ctx, bookID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("book survived its folder's deletion: %v", err)
+	}
+}
+
+// testCatalogListingsPageAndIsolate covers cursor determinism in both
+// directions and that one folder's listing never leaks another's books,
+// including missing ones: a book whose file is temporarily away is
+// still a book somebody may be reading, so it stays on the shelf.
+func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "catalog-page", store.FolderPlain)
+	other := MkFolder(t, s, "catalog-page-other", store.FolderPlain)
+	base := time.Date(2026, time.August, 13, 9, 0, 0, 0, time.UTC)
+
+	titles := []string{"c", "a", "b", "later", "last"}
+	for i, title := range titles {
+		obs := store.ObservedBook{
+			RelativePath: title + ".epub", SizeBytes: 1, MTime: base,
+			ContentSHA256: "sha-" + title, Title: title,
+		}
+		doReconcile(t, s, folder.ID, []store.ObservedBook{obs}, true,
+			base.Add(time.Duration(i)*time.Second))
+	}
+	// One book that gets marked missing, and must still be listed.
+	missingObs := store.ObservedBook{
+		RelativePath: "temporarily-away.epub", SizeBytes: 1, MTime: base,
+		ContentSHA256: "sha-away", Title: "Away",
+	}
+	doReconcile(t, s, folder.ID, []store.ObservedBook{missingObs}, true, base.Add(10*time.Second))
+	doReconcile(t, s, folder.ID, nil, true, base.Add(11*time.Second))
+
+	// A book in the other folder must never appear in this folder's
+	// listing, however it pages.
+	doReconcile(t, s, other.ID, []store.ObservedBook{{
+		RelativePath: "elsewhere.epub", SizeBytes: 1, MTime: base,
+		ContentSHA256: "sha-elsewhere", Title: "Elsewhere",
+	}}, true, base)
+
 	var got []string
-	seen := map[string]bool{}
+	sawMissing := false
 	var cursor *store.CatalogBookCursor
 	for {
-		page, err := s.ListCatalogBooks(ctx, owner.ID, library.ID, cursor, 2)
+		page, err := s.ListCatalogBooks(ctx, folder.ID, cursor, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -419,14 +145,13 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 			t.Fatalf("page exceeded limit: %+v", page)
 		}
 		for _, book := range page {
-			if seen[book.ID] {
-				t.Fatalf("duplicate book across pages: %s", book.ID)
+			if book.FolderID != folder.ID {
+				t.Fatalf("listing leaked a book from another folder: %+v", book)
 			}
-			if book.Status == store.BookTrashed {
-				t.Fatalf("trashed book listed: %+v", book)
+			if book.Status == store.BookMissing {
+				sawMissing = true
 			}
-			seen[book.ID] = true
-			got = append(got, book.ID)
+			got = append(got, book.Title)
 		}
 		last := page[len(page)-1]
 		cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
@@ -434,19 +159,19 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 			break
 		}
 	}
-	want := []string{"book-page-a", "book-page-b", "book-page-c", "book-page-later", "book-page-last"}
+	want := []string{"c", "a", "b", "later", "last", "Away"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("paged books: got %v want %v", got, want)
 	}
+	if !sawMissing {
+		t.Fatal("a missing book was hidden from the listing")
+	}
 
-	// Newest first must be the same set in the opposite order, and page
-	// the same way. A cursor that skipped a row here would drop books
-	// out of a "recently added" feed, which is the one listing where a
-	// missing book is the whole point of looking.
+	// Newest first must be the same set in the opposite order.
 	var recent []string
 	cursor = nil
 	for {
-		page, err := s.ListRecentCatalogBooks(ctx, owner.ID, library.ID, cursor, 2)
+		page, err := s.ListRecentCatalogBooks(ctx, folder.ID, cursor, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -454,10 +179,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 			break
 		}
 		for _, book := range page {
-			if book.Status == store.BookTrashed {
-				t.Fatalf("trashed book listed: %+v", book)
-			}
-			recent = append(recent, book.ID)
+			recent = append(recent, book.Title)
 		}
 		last := page[len(page)-1]
 		cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
@@ -465,920 +187,254 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 			break
 		}
 	}
-	reversed := make([]string, 0, len(want))
-	for i := len(want) - 1; i >= 0; i-- {
-		reversed = append(reversed, want[i])
+	reversed := make([]string, len(want))
+	for i, v := range want {
+		reversed[len(want)-1-i] = v
 	}
 	if fmt.Sprint(recent) != fmt.Sprint(reversed) {
 		t.Fatalf("recent books: got %v want %v", recent, reversed)
 	}
-	if _, err := s.ListRecentCatalogBooks(
-		ctx, outsider.ID, library.ID, nil, 50); err != store.ErrNotFound {
-		t.Fatalf("outsider listed private catalog by recency: %v", err)
+
+	if _, err := s.CatalogBookByID(ctx, "no-such-book"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing book id: want ErrNotFound, got %v", err)
 	}
 }
 
-func testCatalogFilesOrderAndIsolate(t *testing.T, open OpenFunc) {
-	s := open(t)
-	inserter, ok := s.(bookFileTestInserter)
-	if !ok {
-		t.Fatalf("%T cannot insert book files for shared tests", s)
-	}
-	ctx := context.Background()
-	owner := MkUser(t, s, "catalog-files-owner")
-	reader := MkUser(t, s, "catalog-files-reader")
-	outsider := MkUser(t, s, "catalog-files-outsider")
-	now := time.Date(2026, time.August, 13, 10, 0, 0, 0, time.UTC)
-	library := store.Library{
-		ID: "lib-catalog-files", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Files", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-	book := store.CatalogBook{
-		ID: "book-files", LibraryID: library.ID, Status: store.BookActive,
-		Title: "Files", CreatedAt: now,
-	}
-	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
-		t.Fatal(err)
-	}
-	// The sub-second offsets are chosen to catch a text-encoded backend
-	// that compares timestamps byte by byte. RFC3339Nano trims trailing
-	// zeros, so ".5" and ".55" and a whole second have different widths,
-	// and byte order puts them in the wrong sequence: a naive encoding
-	// reports file-half as the newest.
-	files := []store.BookFile{
-		{ID: "file-old", CreatedAt: now},
-		{ID: "file-half", CreatedAt: now.Add(500 * time.Millisecond)},
-		{ID: "file-later", CreatedAt: now.Add(550 * time.Millisecond)},
-		{ID: "file-new-a", CreatedAt: now.Add(time.Second)},
-		{ID: "file-new-z", CreatedAt: now.Add(time.Second)},
-	}
-	for i, file := range files {
-		file.LibraryID = library.ID
-		file.BookID = book.ID
-		file.BlobSHA256 = ingestBlob(file.ID, int64(i+1)).SHA256
-		file.Source = store.IngestUpload
-		file.OriginalFilename = file.ID + ".epub"
-		file.MediaType = "application/epub+zip"
-		file.Availability = store.BookFileAvailable
-		file.UpdatedAt = file.CreatedAt
-		if err := inserter.InsertBookFileForTest(ctx, file, int64(i+1)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	gotFiles, err := s.ListBookFiles(ctx, reader.ID, book.ID, store.LibraryRoleRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make([]string, len(gotFiles))
-	for i, file := range gotFiles {
-		got[i] = file.ID
-	}
-	want := []string{"file-new-z", "file-new-a", "file-later", "file-half", "file-old"}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("book files: got %v want %v", got, want)
-	}
-	if _, err := s.ListBookFiles(ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
-		t.Fatalf("outsider listed private book files: %v", err)
-	}
-}
-
-// testAvailableBookMediaTypes pins the batch lookup a page of covers
-// uses to decide which of them it may offer to open: it reports only
-// files that are actually there, only to somebody who may read the
-// library, and it says nothing at all about a book belonging to
-// somebody else — a caller must not be able to learn that an id exists.
+// testAvailableBookMediaTypes covers the batch read a feed uses to
+// advertise what it actually holds: distinct types, active books only,
+// scoped to the one folder asked about.
 func testAvailableBookMediaTypes(t *testing.T, open OpenFunc) {
 	s := open(t)
-	inserter, ok := s.(bookFileTestInserter)
-	if !ok {
-		t.Fatalf("%T cannot insert book files for shared tests", s)
-	}
 	ctx := context.Background()
-	owner := MkUser(t, s, "media-types-owner")
-	reader := MkUser(t, s, "media-types-reader")
-	outsider := MkUser(t, s, "media-types-outsider")
+	folder := MkFolder(t, s, "media-types", store.FolderPlain)
+	other := MkFolder(t, s, "media-types-other", store.FolderPlain)
 	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
-	library := store.Library{
-		ID: "lib-media-types", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Media types", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(
-		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-	books := []string{"book-epub", "book-gone", "book-pdf"}
-	for _, id := range books {
-		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
-			ID: id, LibraryID: library.ID, Status: store.BookActive,
-			Title: id, CreatedAt: now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files := []struct {
-		id, book, mediaType string
-		availability        store.BookFileAvailability
-	}{
-		{"mt-epub", "book-epub", "application/epub+zip", store.BookFileAvailable},
-		{"mt-gone", "book-gone", "application/epub+zip", store.BookFileMissing},
-		{"mt-pdf", "book-pdf", "application/pdf", store.BookFileAvailable},
-	}
-	for i, spec := range files {
-		if err := inserter.InsertBookFileForTest(ctx, store.BookFile{
-			ID: spec.id, LibraryID: library.ID, BookID: spec.book,
-			BlobSHA256:       ingestBlob(spec.id, int64(i+1)).SHA256,
-			Source:           store.IngestUpload,
-			OriginalFilename: spec.id,
-			MediaType:        spec.mediaType,
-			Availability:     spec.availability,
-			CreatedAt:        now, UpdatedAt: now,
-		}, int64(i+1)); err != nil {
-			t.Fatal(err)
-		}
-	}
 
-	got, err := s.AvailableBookMediaTypes(ctx, reader.ID, books)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{RelativePath: "a.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-a",
+			Title: "A", MediaType: "application/epub+zip"},
+		{RelativePath: "b.pdf", SizeBytes: 1, MTime: now, ContentSHA256: "sha-b",
+			Title: "B", MediaType: "application/pdf"},
+		{RelativePath: "gone.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-gone",
+			Title: "Gone", MediaType: "application/epub+zip"},
+	}, true, now)
+	// Only "gone.epub" disappears, so only its type would be missed if
+	// the other epub in the folder were not there too.
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{RelativePath: "a.epub", SizeBytes: 1, MTime: now, Unchanged: true},
+		{RelativePath: "b.pdf", SizeBytes: 1, MTime: now, Unchanged: true},
+	}, true, now.Add(time.Hour))
+
+	doReconcile(t, s, other.ID, []store.ObservedBook{
+		{RelativePath: "c.cbz", SizeBytes: 1, MTime: now, ContentSHA256: "sha-c",
+			Title: "C", MediaType: "application/vnd.comicbook+zip"},
+	}, true, now)
+
+	got, err := s.AvailableBookMediaTypes(ctx, folder.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"application/epub+zip"}; fmt.Sprint(got["book-epub"]) != fmt.Sprint(want) {
-		t.Fatalf("epub book: got %v want %v", got["book-epub"], want)
-	}
-	if len(got["book-gone"]) != 0 {
-		t.Fatalf("a missing file was offered: %v", got["book-gone"])
-	}
-	if want := []string{"application/pdf"}; fmt.Sprint(got["book-pdf"]) != fmt.Sprint(want) {
-		t.Fatalf("pdf book: got %v want %v", got["book-pdf"], want)
-	}
-
-	// A stranger learns nothing, not even that the ids resolve.
-	blind, err := s.AvailableBookMediaTypes(ctx, outsider.ID, books)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(blind) != 0 {
-		t.Fatalf("outsider saw another user's files: %v", blind)
-	}
-
-	empty, err := s.AvailableBookMediaTypes(ctx, reader.ID, nil)
-	if err != nil || len(empty) != 0 {
-		t.Fatalf("empty request: %v %v", empty, err)
+	want := []string{"application/epub+zip", "application/pdf"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("media types: got %v want %v", got, want)
 	}
 }
 
-func testCatalogBookMetadata(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "metadata-owner")
-	reader := MkUser(t, s, "metadata-reader")
-	outsider := MkUser(t, s, "metadata-outsider")
-	now := time.Now().UTC()
-	library := store.Library{
-		ID: "lib-metadata", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Metadata", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(
-		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-	book := store.CatalogBook{
-		ID: "book-metadata", LibraryID: library.ID, Status: store.BookActive,
-		Title: "Dune", TitleSource: store.MetadataEmbedded, CreatedAt: now,
-	}
-	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
-		t.Fatal(err)
-	}
-
-	empty, err := s.CatalogBookMetadata(ctx, reader.ID, book.ID, store.LibraryRoleRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if empty.Book.Revision != 1 || len(empty.Tags) != 0 || len(empty.Series) != 0 ||
-		len(empty.Contributors) != 0 || len(empty.Identifiers) != 0 ||
-		len(empty.Languages) != 0 || len(empty.Genres) != 0 {
-		t.Fatalf("new book metadata: %+v", empty)
-	}
-	if _, err := s.CatalogBookMetadata(
-		ctx, outsider.ID, book.ID, store.LibraryRoleRead); err != store.ErrNotFound {
-		t.Fatalf("outsider read metadata: %v", err)
-	}
-
-	position := 1.0
-	resolved := empty
-	resolved.Book.Title = "Dune"
-	resolved.Book.Publisher = "Chilton"
-	resolved.Book.PublisherSource = store.MetadataEmbedded
-	resolved.Book.SetLocks.Genres = true
-	resolved.Identifiers = []store.BookIdentifier{
-		{Scheme: "isbn", Value: "9780441013593", Source: store.MetadataEmbedded},
-	}
-	resolved.Languages = []store.BookLanguage{
-		{Language: "en", Source: store.MetadataEmbedded},
-	}
-	resolved.Tags = []store.BookTaxon{
-		{ID: "tag-sf", Name: "Science Fiction",
-			NormalizedName: "science fiction", Source: store.MetadataEmbedded},
-		{ID: "tag-desert", Name: "Desert",
-			NormalizedName: "desert", Source: store.MetadataEmbedded},
-	}
-	resolved.Series = []store.BookSeries{
-		{SeriesID: "series-dune", Name: "Dune", NormalizedName: "dune",
-			Position: &position, Source: store.MetadataFilename},
-	}
-	resolved.Contributors = []store.BookContributor{
-		{ContributorID: "contrib-herbert", Name: "Frank Herbert",
-			NormalizedName: "frank herbert", Role: "author",
-			Source: store.MetadataEmbedded},
-	}
-	request := store.ApplyBookMetadataRequest{
-		Metadata: resolved, ExpectedRevision: 1, UpdatedAt: now,
-	}
-	if err := store.ValidateApplyBookMetadata(request); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.ApplyCatalogBookMetadata(
-		ctx, reader.ID, request); err != store.ErrNotFound {
-		t.Fatalf("reader applied metadata: %v", err)
-	}
-	if _, err := s.ApplyCatalogBookMetadata(
-		ctx, outsider.ID, request); err != store.ErrNotFound {
-		t.Fatalf("outsider applied metadata: %v", err)
-	}
-	applied, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if applied.Book.Revision != 2 || applied.Book.Publisher != "Chilton" ||
-		!applied.Book.SetLocks.Genres {
-		t.Fatalf("applied book: %+v", applied.Book)
-	}
-	// Rows come back in a deterministic order, not in assertion order.
-	if len(applied.Tags) != 2 || applied.Tags[0].NormalizedName != "desert" ||
-		applied.Tags[1].NormalizedName != "science fiction" {
-		t.Fatalf("applied tags: %+v", applied.Tags)
-	}
-	if len(applied.Series) != 1 || applied.Series[0].Position == nil ||
-		*applied.Series[0].Position != 1 ||
-		applied.Series[0].Source != store.MetadataFilename {
-		t.Fatalf("applied series: %+v", applied.Series)
-	}
-	if len(applied.Contributors) != 1 ||
-		applied.Contributors[0].Name != "Frank Herbert" ||
-		applied.Contributors[0].Role != "author" {
-		t.Fatalf("applied contributors: %+v", applied.Contributors)
-	}
-	if len(applied.Identifiers) != 1 || applied.Identifiers[0].Value != "9780441013593" ||
-		len(applied.Languages) != 1 || applied.Languages[0].Language != "en" {
-		t.Fatalf("applied identifiers and languages: %+v", applied)
-	}
-	reread, err := s.CatalogBookMetadata(ctx, reader.ID, book.ID, store.LibraryRoleRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reread.Tags) != len(applied.Tags) || reread.Book.Revision != 2 {
-		t.Fatalf("reader reread: %+v", reread)
-	}
-
-	// The same expected revision cannot be applied twice.
-	if _, err := s.ApplyCatalogBookMetadata(
-		ctx, owner.ID, request); err != store.ErrStaleRevision {
-		t.Fatalf("stale apply: %v", err)
-	}
-
-	// A later apply asserting fewer rows removes what it omits, and reuses
-	// the entity rows created by the first apply rather than duplicating
-	// them under a new id.
-	second := applied
-	second.Tags = []store.BookTaxon{
-		{ID: "tag-other", Name: "science fiction",
-			NormalizedName: "science fiction", Source: store.MetadataManual,
-			Locked: true},
-	}
-	second.Series = nil
-	shrunk, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, store.ApplyBookMetadataRequest{
-		Metadata: second, ExpectedRevision: 2, UpdatedAt: now.Add(time.Second),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if shrunk.Book.Revision != 3 || len(shrunk.Series) != 0 ||
-		len(shrunk.Tags) != 1 || shrunk.Tags[0].ID != "tag-sf" ||
-		shrunk.Tags[0].Name != "Science Fiction" || !shrunk.Tags[0].Locked ||
-		shrunk.Tags[0].Source != store.MetadataManual {
-		t.Fatalf("shrunk metadata: %+v", shrunk)
-	}
-
-	// A rejected apply leaves nothing behind.
-	poisoned := shrunk
-	poisoned.Tags = []store.BookTaxon{
-		{ID: "tag-late", Name: "Late", NormalizedName: "late",
-			Source: store.MetadataEmbedded},
-	}
-	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID, store.ApplyBookMetadataRequest{
-		Metadata: poisoned, ExpectedRevision: 1, UpdatedAt: now,
-	}); err != store.ErrStaleRevision {
-		t.Fatalf("second stale apply: %v", err)
-	}
-	after, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Book.Revision != 3 || len(after.Tags) != 1 ||
-		after.Tags[0].NormalizedName != "science fiction" {
-		t.Fatalf("rolled back apply leaked: %+v", after)
-	}
-}
-
-func testConcurrentCatalogMetadataApply(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "metadata-concurrent")
-	now := time.Now().UTC()
-	library := store.Library{
-		ID: "lib-metadata-concurrent", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Concurrent metadata", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	book := store.CatalogBook{
-		ID: "book-metadata-concurrent", LibraryID: library.ID,
-		Status: store.BookActive, Title: "Race", CreatedAt: now,
-	}
-	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
-		t.Fatal(err)
-	}
-	current, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	const workers = 8
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	applied := make(chan store.BookMetadata, workers)
-	stale := make(chan struct{}, workers)
-	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			resolved := current
-			resolved.Book.Title = fmt.Sprintf("Race %02d", i)
-			resolved.Tags = []store.BookTaxon{{
-				ID:             fmt.Sprintf("tag-race-%02d", i),
-				Name:           "Race",
-				NormalizedName: "race",
-				Source:         store.MetadataEmbedded,
-			}}
-			<-start
-			result, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-				store.ApplyBookMetadataRequest{
-					Metadata: resolved, ExpectedRevision: 1, UpdatedAt: now,
-				})
-			switch {
-			case err == store.ErrStaleRevision:
-				stale <- struct{}{}
-			case err != nil:
-				errs <- err
-			default:
-				applied <- result
-			}
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	close(applied)
-	close(stale)
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent apply: %v", err)
-	}
-	if len(applied) != 1 || len(stale) != workers-1 {
-		t.Fatalf("concurrent apply: %d applied, %d stale", len(applied), len(stale))
-	}
-	winner := <-applied
-	if winner.Book.Revision != 2 || len(winner.Tags) != 1 {
-		t.Fatalf("winning apply: %+v", winner)
-	}
-	final, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.Book.Revision != 2 || final.Book.Title != winner.Book.Title ||
-		len(final.Tags) != 1 || final.Tags[0].ID != winner.Tags[0].ID {
-		t.Fatalf("lost update: %+v want %+v", final, winner)
-	}
-}
-
-// A candidate entity id is unique table-wide, so two rows offering the same
-// id for different names must be rejected at the edge rather than reaching
-// the backend as a driver-level constraint violation.
-func testCatalogMetadataRejectsDuplicateEntityIDs(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "metadata-duplicate")
-	now := time.Now().UTC()
-	library := store.Library{
-		ID: "lib-metadata-duplicate", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Duplicate", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	book := store.CatalogBook{
-		ID: "book-metadata-duplicate", LibraryID: library.ID,
-		Status: store.BookActive, Title: "Duplicate", CreatedAt: now,
-	}
-	if err := s.CreateCatalogBook(ctx, owner.ID, book); err != nil {
-		t.Fatal(err)
-	}
-	current, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current.Tags = []store.BookTaxon{
-		{ID: "tag-collide", Name: "First", NormalizedName: "first",
-			Source: store.MetadataEmbedded},
-		{ID: "tag-collide", Name: "Second", NormalizedName: "second",
-			Source: store.MetadataEmbedded},
-	}
-	request := store.ApplyBookMetadataRequest{
-		Metadata: current, ExpectedRevision: 1, UpdatedAt: now,
-	}
-	if err := store.ValidateApplyBookMetadata(request); err != store.ErrInvalidTransition {
-		t.Fatalf("duplicate candidate id accepted: %v", err)
-	}
-
-	// An id already taken by another name is a conflict, never a raw
-	// constraint error the handler edge cannot map.
-	current.Tags = current.Tags[:1]
-	applied, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-		store.ApplyBookMetadataRequest{
-			Metadata: current, ExpectedRevision: 1, UpdatedAt: now,
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied.Tags = []store.BookTaxon{
-		{ID: applied.Tags[0].ID, Name: "Second", NormalizedName: "second",
-			Source: store.MetadataEmbedded},
-	}
-	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-		store.ApplyBookMetadataRequest{
-			Metadata: applied, ExpectedRevision: 2, UpdatedAt: now,
-		}); err != store.ErrConflict {
-		t.Fatalf("reused entity id: want conflict, got %v", err)
-	}
-	after, err := s.CatalogBookMetadata(ctx, owner.ID, book.ID, store.LibraryRoleManage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Book.Revision != 2 || len(after.Tags) != 1 ||
-		after.Tags[0].NormalizedName != "first" {
-		t.Fatalf("rejected apply leaked: %+v", after)
-	}
-}
-
-// Two books in one library creating the same new entity names must resolve
-// them in the same order: opposite orders deadlock PostgreSQL on the
-// speculative index insertions it takes for ON CONFLICT. The window is
-// narrow enough that this test does not reliably reproduce the deadlock
-// without the canonical ordering, so it stands as a smoke test that
-// concurrent entity creation converges on one row per name rather than as
-// proof of the ordering itself.
-func testConcurrentCatalogMetadataEntityCreation(t *testing.T, open OpenFunc) {
-	s := open(t)
-	ctx := context.Background()
-	owner := MkUser(t, s, "metadata-entity-race")
-	now := time.Now().UTC()
-	library := store.Library{
-		ID: "lib-entity-race", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Entity race", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	names := []string{"alpha", "beta", "gamma", "delta"}
-	const books = 6
-	current := make([]store.BookMetadata, books)
-	for i := 0; i < books; i++ {
-		id := fmt.Sprintf("book-entity-race-%02d", i)
-		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
-			ID: id, LibraryID: library.ID, Status: store.BookActive,
-			Title: id, CreatedAt: now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		metadata, err := s.CatalogBookMetadata(ctx, owner.ID, id, store.LibraryRoleManage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Every book asserts the same names in a different rotation.
-		for j := range names {
-			name := names[(i+j)%len(names)]
-			// Distinct candidate ids per book: only the store deciding
-			// which one wins can make the books agree, so a per-name
-			// duplicate row would be observable rather than impossible.
-			metadata.Tags = append(metadata.Tags, store.BookTaxon{
-				ID:             fmt.Sprintf("tag-%s-%d", name, i),
-				Name:           name,
-				NormalizedName: name,
-				Source:         store.MetadataEmbedded,
-			})
-		}
-		current[i] = metadata
-	}
-
-	start := make(chan struct{})
-	errs := make(chan error, books)
-	var wg sync.WaitGroup
-	for i := 0; i < books; i++ {
-		wg.Add(1)
-		go func(metadata store.BookMetadata) {
-			defer wg.Done()
-			<-start
-			if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-				store.ApplyBookMetadataRequest{
-					Metadata: metadata, ExpectedRevision: 1, UpdatedAt: now,
-				}); err != nil {
-				errs <- err
-			}
-		}(current[i])
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatalf("concurrent entity creation: %v", err)
-	}
-	winners := make(map[string]string, len(names))
-	for i := 0; i < books; i++ {
-		final, err := s.CatalogBookMetadata(
-			ctx, owner.ID, current[i].Book.ID, store.LibraryRoleManage)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(final.Tags) != len(names) {
-			t.Fatalf("book %d tags: %+v", i, final.Tags)
-		}
-		// Every book converges on one entity row per name, whichever
-		// book's candidate id happened to create it.
-		for _, tag := range final.Tags {
-			winner, seen := winners[tag.NormalizedName]
-			if !seen {
-				winners[tag.NormalizedName] = tag.ID
-				continue
-			}
-			if winner != tag.ID {
-				t.Fatalf("duplicate entity rows for %q: %q and %q",
-					tag.NormalizedName, winner, tag.ID)
-			}
-		}
-	}
-}
-
-// testCatalogAuthorsForBooks pins the batch lookup a page of cards uses
-// to say who wrote what. Three things are load bearing: it answers only
-// for libraries the reader may read, it credits only authors, and it
-// keeps the order the book credits its people in — a card that reorders
-// co-authors alphabetically has invented a billing that nobody agreed
-// to.
+// testCatalogAuthorsForBooks covers the identity-backfill read: order
+// comes from the book, a role other than author is not credited as one,
+// and an outsider's book id resolves to nothing rather than an error.
 func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
-	owner := MkUser(t, s, "authors-owner")
-	reader := MkUser(t, s, "authors-reader")
-	outsider := MkUser(t, s, "authors-outsider")
+	folder := MkFolder(t, s, "authors", store.FolderPlain)
 	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
-	library := store.Library{
-		ID: "lib-authors", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Authors", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(
-		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-	credits := map[string][]store.BookContributor{
-		// Billed second first, to prove the order comes from the book.
-		"book-pair": {
-			{ContributorID: "c-gibson", Name: "William Gibson",
-				NormalizedName: "william gibson", Role: store.ContributorRoleAuthor,
-				Position: 1, Source: store.MetadataEmbedded},
-			{ContributorID: "c-sterling", Name: "Bruce Sterling",
-				NormalizedName: "bruce sterling", Role: store.ContributorRoleAuthor,
-				Position: 2, Source: store.MetadataEmbedded},
-		},
-		// Somebody worked on this book, but nobody wrote it here.
-		"book-translated": {
-			{ContributorID: "c-bell", Name: "Anthea Bell",
-				NormalizedName: "anthea bell", Role: "translator",
-				Position: 1, Source: store.MetadataEmbedded},
-		},
-		"book-anonymous": nil,
-	}
-	books := []string{"book-anonymous", "book-pair", "book-translated"}
-	for _, id := range books {
-		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
-			ID: id, LibraryID: library.ID, Status: store.BookActive,
-			Title: id, CreatedAt: now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		people := credits[id]
-		if len(people) == 0 {
-			continue
-		}
-		metadata, err := s.CatalogBookMetadata(ctx, owner.ID, id, store.LibraryRoleRead)
-		if err != nil {
-			t.Fatal(err)
-		}
-		metadata.Contributors = people
-		if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-			store.ApplyBookMetadataRequest{
-				Metadata:         metadata,
-				ExpectedRevision: metadata.Book.Revision,
-				UpdatedAt:        now,
-			}); err != nil {
-			t.Fatal(err)
-		}
-	}
 
-	got, err := s.CatalogAuthorsForBooks(ctx, reader.ID, books)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{
+			RelativePath: "pair.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-pair",
+			Title: "Pair",
+			// Billed second first, to prove the order comes from the book.
+			Contributors: []store.ObservedContributor{
+				{Name: "William Gibson", Role: store.ContributorRoleAuthor, Position: 1},
+				{Name: "Bruce Sterling", Role: store.ContributorRoleAuthor, Position: 2},
+			},
+		},
+		{
+			RelativePath: "translated.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-translated",
+			Title: "Translated",
+			Contributors: []store.ObservedContributor{
+				{Name: "Anthea Bell", Role: "translator", Position: 1},
+			},
+		},
+		{
+			RelativePath: "anonymous.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-anon",
+			Title: "Anonymous",
+		},
+	}, true, now)
+
+	known := knownByPath(t, s, folder.ID)
+	ids := []string{
+		known["pair.epub"].ID, known["translated.epub"].ID,
+		known["anonymous.epub"].ID, "no-such-book",
+	}
+	got, err := s.CatalogAuthorsForBooks(ctx, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"William Gibson", "Bruce Sterling"}; fmt.Sprint(got["book-pair"]) != fmt.Sprint(want) {
-		t.Fatalf("co-authors: got %v want %v", got["book-pair"], want)
+	if want := []string{"William Gibson", "Bruce Sterling"}; fmt.Sprint(got[known["pair.epub"].ID]) != fmt.Sprint(want) {
+		t.Fatalf("co-authors: got %v want %v", got[known["pair.epub"].ID], want)
 	}
-	if len(got["book-translated"]) != 0 {
-		t.Fatalf("a translator was credited as an author: %v", got["book-translated"])
+	if len(got[known["translated.epub"].ID]) != 0 {
+		t.Fatalf("a translator was credited as an author: %v", got[known["translated.epub"].ID])
 	}
-	if len(got["book-anonymous"]) != 0 {
-		t.Fatalf("a book nobody is credited with got a name: %v", got["book-anonymous"])
+	if len(got[known["anonymous.epub"].ID]) != 0 {
+		t.Fatalf("a book nobody is credited with got a name: %v", got[known["anonymous.epub"].ID])
 	}
-
-	// A stranger learns nothing, not even that the ids resolve.
-	blind, err := s.CatalogAuthorsForBooks(ctx, outsider.ID, books)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(blind) != 0 {
-		t.Fatalf("outsider read another user's credits: %v", blind)
+	if _, ok := got["no-such-book"]; ok {
+		t.Fatalf("an unknown book id resolved to something: %v", got["no-such-book"])
 	}
 
-	empty, err := s.CatalogAuthorsForBooks(ctx, reader.ID, nil)
+	empty, err := s.CatalogAuthorsForBooks(ctx, nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty request: %v %v", empty, err)
 	}
 }
 
-// testCatalogBookRelationsForBooks covers the batched read every catalog
-// payload is drawn from (ADR-0015): complete contributor and series sets,
-// available files only, and a content digest that is present for an
-// in-place file, which has no copy in content-addressed storage at all.
+// testCatalogBookRelationsForBooks covers the batched read every
+// catalog payload is drawn from (ADR-0015): a whole page's contributors
+// and series in one round trip each, keyed by book id.
 func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 	s := open(t)
-	inserter, ok := s.(bookFileTestInserter)
-	if !ok {
-		t.Fatalf("%T cannot insert book files for shared tests", s)
-	}
 	ctx := context.Background()
-	owner := MkUser(t, s, "relations-owner")
-	reader := MkUser(t, s, "relations-reader")
-	outsider := MkUser(t, s, "relations-outsider")
-	now := time.Date(2026, time.August, 15, 10, 0, 0, 0, time.UTC)
-	library := store.Library{
-		ID: "lib-relations", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryManaged,
-		Storage: store.LibraryStorageCAS,
-		Refresh: store.LibraryRefreshManual, Name: "Relations", CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, library); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.GrantLibraryAccess(
-		ctx, owner.ID, library.ID, reader.ID, store.LibraryRoleRead, now); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"book-full", "book-bare"} {
-		if err := s.CreateCatalogBook(ctx, owner.ID, store.CatalogBook{
-			ID: id, LibraryID: library.ID, Status: store.BookActive,
-			Title: id, CreatedAt: now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	metadata, err := s.CatalogBookMetadata(
-		ctx, owner.ID, "book-full", store.LibraryRoleRead)
+	folder := MkFolder(t, s, "relations", store.FolderPlain)
+	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{
+			RelativePath: "book-one.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-one",
+			Title: "Book One",
+			Contributors: []store.ObservedContributor{
+				{Name: "Ann Leckie", Role: store.ContributorRoleAuthor, Position: 1},
+			},
+			Series: []store.ObservedSeries{{Name: "Imperial Radch", Position: Ptr(1.0)}},
+		},
+		{
+			RelativePath: "book-two.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-two",
+			Title:  "Book Two",
+			Series: []store.ObservedSeries{{Name: "Imperial Radch", Position: Ptr(2.0)}},
+		},
+		{
+			RelativePath: "standalone.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-standalone",
+			Title: "Standalone",
+		},
+	}, true, now)
+
+	known := knownByPath(t, s, folder.ID)
+	oneID, twoID := known["book-one.epub"].ID, known["book-two.epub"].ID
+	standaloneID := known["standalone.epub"].ID
+
+	relations, err := s.CatalogBookRelationsForBooks(ctx, []string{oneID, twoID, standaloneID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := 3.0
-	metadata.Contributors = []store.BookContributor{
-		{ContributorID: "rc-gibson", Name: "William Gibson",
-			NormalizedName: "william gibson", Role: store.ContributorRoleAuthor,
-			Position: 1, Source: store.MetadataEmbedded},
-		{ContributorID: "rc-bell", Name: "Anthea Bell",
-			NormalizedName: "anthea bell", Role: "translator",
-			Position: 2, Source: store.MetadataEmbedded},
+	if len(relations.Contributors[oneID]) != 1 || relations.Contributors[oneID][0].Name != "Ann Leckie" {
+		t.Fatalf("book one contributors: %+v", relations.Contributors[oneID])
 	}
-	metadata.Series = []store.BookSeries{
-		// A book in two series, one of which never said where.
-		{SeriesID: "rs-sprawl", Name: "Sprawl", NormalizedName: "sprawl",
-			Position: &first, Source: store.MetadataEmbedded},
-		{SeriesID: "rs-omnibus", Name: "Omnibus", NormalizedName: "omnibus",
-			Source: store.MetadataEmbedded},
+	if len(relations.Contributors[standaloneID]) != 0 {
+		t.Fatalf("standalone book has contributors: %+v", relations.Contributors[standaloneID])
 	}
-	if _, err := s.ApplyCatalogBookMetadata(ctx, owner.ID,
-		store.ApplyBookMetadataRequest{
-			Metadata:         metadata,
-			ExpectedRevision: metadata.Book.Revision,
-			UpdatedAt:        now,
-		}); err != nil {
-		t.Fatal(err)
+	if len(relations.Series[oneID]) != 1 || relations.Series[oneID][0].Name != "Imperial Radch" {
+		t.Fatalf("book one series: %+v", relations.Series[oneID])
 	}
-	blob := ingestBlob("relations-file", 4096)
-	for _, spec := range []struct {
-		id           string
-		availability store.BookFileAvailability
-		digest       store.BlobInfo
-	}{
-		{"rf-available", store.BookFileAvailable, blob},
-		{"rf-gone", store.BookFileMissing, ingestBlob("relations-gone", 17)},
-	} {
-		if err := inserter.InsertBookFileForTest(ctx, store.BookFile{
-			ID: spec.id, LibraryID: library.ID, BookID: "book-full",
-			BlobSHA256:       spec.digest.SHA256,
-			Source:           store.IngestUpload,
-			OriginalFilename: spec.id + ".epub",
-			MediaType:        "application/epub+zip",
-			Availability:     spec.availability,
-			CreatedAt:        now, UpdatedAt: now,
-		}, spec.digest.SizeBytes); err != nil {
-			t.Fatal(err)
-		}
+	if relations.Series[oneID][0].SeriesID != relations.Series[twoID][0].SeriesID {
+		t.Fatalf("same series name resolved to two entities: %+v vs %+v",
+			relations.Series[oneID][0], relations.Series[twoID][0])
+	}
+	if *relations.Series[twoID][0].Position != 2.0 {
+		t.Fatalf("book two series position: %+v", relations.Series[twoID][0])
 	}
 
-	got, err := s.CatalogBookRelationsForBooks(
-		ctx, reader.ID, []string{"book-full", "book-bare"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	people := got.Contributors["book-full"]
-	if len(people) != 2 || people[0].Name != "William Gibson" ||
-		people[1].Role != "translator" {
-		t.Fatalf("contributors: %+v", people)
-	}
-	series := got.Series["book-full"]
-	if len(series) != 2 {
-		t.Fatalf("series: %+v", series)
-	}
-	byName := map[string]store.BookSeries{}
-	for _, row := range series {
-		byName[row.Name] = row
-	}
-	if row := byName["Sprawl"]; row.Position == nil || *row.Position != first {
-		t.Fatalf("series position: %+v", row)
-	}
-	// A series nobody placed the book in stays unplaced: inventing a
-	// position would put the book first in a series it may end.
-	if row := byName["Omnibus"]; row.Position != nil {
-		t.Fatalf("a missing series position was invented: %+v", row)
-	}
-	files := got.Files["book-full"]
-	if len(files) != 1 || files[0].ID != "rf-available" {
-		t.Fatalf("files: %+v", files)
-	}
-	if files[0].ContentSHA256 != blob.SHA256 ||
-		files[0].SizeBytes != blob.SizeBytes {
-		t.Fatalf("file digest and size: %+v", files[0])
-	}
-	// A book with nothing attached is absent rather than wrong: the
-	// payload builder turns a missing key into an empty list.
-	if len(got.Contributors["book-bare"]) != 0 ||
-		len(got.Series["book-bare"]) != 0 || len(got.Files["book-bare"]) != 0 {
-		t.Fatalf("a bare book grew relations: %+v", got)
-	}
-
-	// An in-place file has no copy in content-addressed storage, and its
-	// content digest is what a client matching local books goes by.
-	shelfRoot := "/srv/relations"
-	shelf := store.Library{
-		ID: "lib-relations-shelf", OwnerUserID: owner.ID, QuotaUserID: owner.ID,
-		Source:  store.LibraryDirectory,
-		Storage: store.LibraryStorageInPlace,
-		Refresh: store.LibraryRefreshManual, Name: "Shelf",
-		RootPath: &shelfRoot, CreatedAt: now,
-	}
-	if err := s.CreateLibrary(ctx, shelf); err != nil {
-		t.Fatal(err)
-	}
-	scanned := inPlaceJob(t, s, owner.ID, shelf.ID, "relations-scan",
-		"Gibson/Neuromancer.epub", now)
-	inPlaceBlob := ingestBlob("relations-in-place", 8192)
-	if _, err := s.CommitInPlaceBook(ctx, owner.ID, scanned.ID,
-		inPlaceRequest(scanned, inPlaceBlob, "shelf-book", "shelf-file", now),
-	); err != nil {
-		t.Fatal(err)
-	}
-	shelved, err := s.CatalogBookRelationsForBooks(
-		ctx, owner.ID, []string{"shelf-book"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	shelfFiles := shelved.Files["shelf-book"]
-	if len(shelfFiles) != 1 {
-		t.Fatalf("in-place files: %+v", shelfFiles)
-	}
-	if shelfFiles[0].ContentSHA256 != inPlaceBlob.SHA256 ||
-		shelfFiles[0].SizeBytes != inPlaceBlob.SizeBytes {
-		t.Fatalf("in-place digest and size: %+v", shelfFiles[0])
-	}
-	// The file this describes genuinely has no copy in content-addressed
-	// storage, so the digest above could only be the content digest.
-	stored, err := s.ListBookFiles(
-		ctx, owner.ID, "shelf-book", store.LibraryRoleRead)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored[0].BlobSHA256 != "" {
-		t.Fatalf("an in-place file claimed a blob: %+v", stored[0])
-	}
-
-	// A trashed book is deleted as far as every reader is concerned, so
-	// its relations are not the way back into it: a reader who guessed
-	// the id of a book somebody deleted learns nothing about it.
-	if _, err := s.TrashCatalogBook(ctx, owner.ID, "book-full",
-		now.Add(time.Hour), now.Add(24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	deleted, err := s.CatalogBookRelationsForBooks(
-		ctx, reader.ID, []string{"book-full"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deleted.Contributors) != 0 || len(deleted.Series) != 0 ||
-		len(deleted.Files) != 0 {
-		t.Fatalf("a trashed book still reported its relations: %+v", deleted)
-	}
-	if _, err := s.RestoreCatalogBook(
-		ctx, owner.ID, "book-full", now.Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := s.CatalogBookRelationsForBooks(
-		ctx, reader.ID, []string{"book-full"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(restored.Contributors["book-full"]) != 2 {
-		t.Fatalf("a restored book lost its relations: %+v", restored)
-	}
-
-	// A stranger learns nothing, not even that the ids resolve.
-	blind, err := s.CatalogBookRelationsForBooks(
-		ctx, outsider.ID, []string{"book-full", "shelf-book"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(blind.Contributors) != 0 || len(blind.Series) != 0 ||
-		len(blind.Files) != 0 {
-		t.Fatalf("outsider read another user's books: %+v", blind)
-	}
-
-	empty, err := s.CatalogBookRelationsForBooks(ctx, reader.ID, nil)
-	if err != nil || len(empty.Contributors) != 0 || len(empty.Series) != 0 ||
-		len(empty.Files) != 0 {
+	empty, err := s.CatalogBookRelationsForBooks(ctx, nil)
+	if err != nil || len(empty.Contributors) != 0 || len(empty.Series) != 0 {
 		t.Fatalf("empty request: %+v %v", empty, err)
+	}
+}
+
+// testUserBookWorkIsPerUser covers ADR-0017's privacy boundary: the
+// catalog book is shared by every account, but the link to a reader's
+// own work is never visible to another account, and resolving is an
+// idempotent first-write-wins upsert rather than a reassignment.
+func testUserBookWorkIsPerUser(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "shared-book", store.FolderPlain)
+	now := time.Date(2026, time.August, 15, 10, 0, 0, 0, time.UTC)
+	alice := MkUser(t, s, "shared-book-alice")
+	bob := MkUser(t, s, "shared-book-bob")
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "shared.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-shared", Title: "Shared",
+	}}, true, now)
+	bookID := knownByPath(t, s, folder.ID)["shared.epub"].ID
+
+	// Both accounts can read the one shared catalog row.
+	if _, err := s.CatalogBookByID(ctx, bookID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.UserBookWork(ctx, alice.ID, bookID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("mapping exists before it is resolved: %v", err)
+	}
+
+	aliceWork := store.Work{ID: "shared-book-alice-work", UserID: alice.ID, Title: "Shared", CreatedAt: now}
+	result, err := s.ResolveCatalogBookWork(ctx, alice.ID, bookID, aliceWork,
+		[]store.Edition{{UserID: alice.ID, SHA256: "shared-book-alice-sha", WorkID: aliceWork.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "shared-book-alice-sha"}},
+		false, now)
+	if err != nil || !result.Created || result.WorkID != aliceWork.ID || result.Confidence != "high" {
+		t.Fatalf("resolve: %+v %v", result, err)
+	}
+	mapping, err := s.UserBookWork(ctx, alice.ID, bookID)
+	if err != nil || mapping.WorkID != aliceWork.ID {
+		t.Fatalf("mapping not recorded: %+v %v", mapping, err)
+	}
+	// A second, unrelated proposed work must not steal the mapping once
+	// the same identifier resolves again: the first resolution wins.
+	again, err := s.ResolveCatalogBookWork(ctx, alice.ID, bookID,
+		store.Work{ID: "shared-book-alice-unused", UserID: alice.ID, CreatedAt: now}, nil,
+		[]store.Identifier{{Kind: "sha256", Value: "shared-book-alice-sha"}},
+		false, now)
+	if err != nil || again.Created || again.WorkID != aliceWork.ID {
+		t.Fatalf("resolve is not idempotent: %+v %v", again, err)
+	}
+
+	bobWork := store.Work{ID: "shared-book-bob-work", UserID: bob.ID, Title: "Shared", CreatedAt: now}
+	bobResult, err := s.ResolveCatalogBookWork(ctx, bob.ID, bookID, bobWork,
+		[]store.Edition{{UserID: bob.ID, SHA256: "shared-book-bob-sha", WorkID: bobWork.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "shared-book-bob-sha"}},
+		false, now)
+	if err != nil || !bobResult.Created || bobResult.WorkID != bobWork.ID {
+		t.Fatalf("bob resolve: %+v %v", bobResult, err)
+	}
+	if bobResult.WorkID == result.WorkID {
+		t.Fatalf("two users' mappings for the same book collapsed to one work")
+	}
+
+	if _, err := s.UserBookWork(ctx, bob.ID, bookID); err != nil {
+		t.Fatalf("bob cannot read his own mapping: %v", err)
+	}
+	aliceIDs, err := s.WorkBookIDs(ctx, alice.ID, aliceWork.ID)
+	if err != nil || fmt.Sprint(aliceIDs) != fmt.Sprint([]string{bookID}) {
+		t.Fatalf("WorkBookIDs: %v %v", aliceIDs, err)
+	}
+	bobIDs, err := s.WorkBookIDs(ctx, bob.ID, aliceWork.ID)
+	if err != nil || len(bobIDs) != 0 {
+		t.Fatalf("bob sees books mapped to alice's work: %v %v", bobIDs, err)
+	}
+
+	if _, err := s.ResolveCatalogBookWork(ctx, alice.ID, "no-such-book", aliceWork,
+		nil, nil, false, now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("resolving a nonexistent book: want ErrNotFound, got %v", err)
 	}
 }

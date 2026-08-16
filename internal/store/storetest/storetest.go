@@ -35,32 +35,11 @@ func Run(t *testing.T, open OpenFunc) {
 		testUserCredentialOperations(t, open)
 	})
 	t.Run("ListUsersPage", func(t *testing.T) { testListUsersPage(t, open) })
-	t.Run("AdminLibraries", func(t *testing.T) { testAdminLibraries(t, open) })
-	t.Run("DeleteInPlaceLibrary", func(t *testing.T) {
-		testDeleteInPlaceLibrary(t, open)
-	})
-	t.Run("DeleteUploadsLibraryTrashesFirst", func(t *testing.T) {
-		testDeleteUploadsLibraryTrashesFirst(t, open)
-	})
-	t.Run("DeleteEmptyLibrary", func(t *testing.T) {
-		testDeleteEmptyLibrary(t, open)
-	})
-	t.Run("LibraryAxes", func(t *testing.T) { testLibraryAxes(t, open) })
-	t.Run("InPlaceBooks", func(t *testing.T) { testInPlaceBooks(t, open) })
-	t.Run("LibraryRefreshSchedule", func(t *testing.T) { testLibraryRefreshSchedule(t, open) })
-	t.Run("LibraryRefreshLeaseExpires", func(t *testing.T) { testLibraryRefreshLeaseExpires(t, open) })
-	t.Run("CalibreLibraryIdentity", func(t *testing.T) {
-		testCalibreLibraryIdentity(t, open)
-	})
 	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
-	t.Run("CatalogACLAndMapping", func(t *testing.T) { testCatalogACLAndMapping(t, open) })
-	t.Run("LibraryConfig", func(t *testing.T) { testLibraryConfig(t, open) })
+	t.Run("Folders", func(t *testing.T) { testFolders(t, open) })
 	t.Run("CatalogListingsPageAndIsolate", func(t *testing.T) {
 		testCatalogListingsPageAndIsolate(t, open)
-	})
-	t.Run("CatalogFilesOrderAndIsolate", func(t *testing.T) {
-		testCatalogFilesOrderAndIsolate(t, open)
 	})
 	t.Run("AvailableBookMediaTypes", func(t *testing.T) {
 		testAvailableBookMediaTypes(t, open)
@@ -71,48 +50,14 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogBookRelationsForBooks", func(t *testing.T) {
 		testCatalogBookRelationsForBooks(t, open)
 	})
-	t.Run("AtomicCatalogWorkResolution", func(t *testing.T) {
-		testAtomicCatalogWorkResolution(t, open)
-	})
-	t.Run("CatalogBookMetadata", func(t *testing.T) {
-		testCatalogBookMetadata(t, open)
-	})
-	t.Run("ConcurrentCatalogMetadataApply", func(t *testing.T) {
-		testConcurrentCatalogMetadataApply(t, open)
-	})
-	t.Run("CatalogMetadataRejectsDuplicateEntityIDs", func(t *testing.T) {
-		testCatalogMetadataRejectsDuplicateEntityIDs(t, open)
-	})
-	t.Run("ConcurrentCatalogMetadataEntityCreation", func(t *testing.T) {
-		testConcurrentCatalogMetadataEntityCreation(t, open)
-	})
-	t.Run("IngestJobs", func(t *testing.T) { testIngestJobs(t, open) })
-	t.Run("ConcurrentIngestJobCreate", func(t *testing.T) {
-		testConcurrentIngestJobCreate(t, open)
-	})
-	t.Run("AbandonedIngestList", func(t *testing.T) {
-		testAbandonedIngestList(t, open)
-	})
-	t.Run("IngestRecoveryList", func(t *testing.T) {
-		testIngestRecoveryList(t, open)
-	})
-	t.Run("BlobReconciliation", func(t *testing.T) {
-		testBlobReconciliation(t, open)
+	t.Run("UserBookWorkIsPerUser", func(t *testing.T) {
+		testUserBookWorkIsPerUser(t, open)
 	})
 	t.Run("CatalogEntityListing", func(t *testing.T) {
 		testCatalogEntityListing(t, open)
 	})
-	t.Run("CatalogEntityMerge", func(t *testing.T) {
-		testCatalogEntityMerge(t, open)
-	})
-	t.Run("CatalogEntityMergeKeepsDistinctRoles", func(t *testing.T) {
-		testCatalogEntityMergeKeepsDistinctRoles(t, open)
-	})
-	t.Run("CatalogEntityRename", func(t *testing.T) {
-		testCatalogEntityRename(t, open)
-	})
-	t.Run("CatalogEntityRejectsBadInput", func(t *testing.T) {
-		testCatalogEntityRejectsBadInput(t, open)
+	t.Run("ListBooksByEntitySeriesOrder", func(t *testing.T) {
+		testListBooksByEntitySeriesOrder(t, open)
 	})
 	t.Run("SearchFindsBooksByEverythingTheySay", func(t *testing.T) {
 		testSearchFindsBooksByEverythingTheySay(t, open)
@@ -126,53 +71,29 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("SearchIsScopedAndBounded", func(t *testing.T) {
 		testSearchIsScopedAndBounded(t, open)
 	})
-	t.Run("SearchFollowsAMerge", func(t *testing.T) {
-		testSearchFollowsAMerge(t, open)
+	t.Run("ReconcileIdempotency", func(t *testing.T) {
+		testReconcileIdempotency(t, open)
 	})
-	t.Run("CalibreFileReconciliation", func(t *testing.T) {
-		testCalibreFileReconciliation(t, open)
+	t.Run("ReconcileMissingAndReturning", func(t *testing.T) {
+		testReconcileMissingAndReturning(t, open)
 	})
-	t.Run("WatchedSourceReconciliation", func(t *testing.T) {
-		testWatchedSourceReconciliation(t, open)
+	t.Run("ReconcileIncompletePassMarksNothingMissing", func(t *testing.T) {
+		testReconcileIncompletePassMarksNothingMissing(t, open)
 	})
-	t.Run("WatchedStoreRejectsBadInput", func(t *testing.T) {
-		testWatchedStoreRejectsBadInput(t, open)
+	t.Run("ReconcileZeroObservationPassMarksNothingMissing", func(t *testing.T) {
+		testReconcileZeroObservationPassMarksNothingMissing(t, open)
 	})
-	t.Run("CatalogAvailabilityReconciliation", func(t *testing.T) {
-		testCatalogAvailabilityReconciliation(t, open)
+	t.Run("ReconcileReplacementDropsReadingMapping", func(t *testing.T) {
+		testReconcileReplacementDropsReadingMapping(t, open)
 	})
-	t.Run("CatalogAvailabilityRespectsItsLimit", func(t *testing.T) {
-		testCatalogAvailabilityRespectsItsLimit(t, open)
+	t.Run("ReconcileUnchangedKeepsMetadata", func(t *testing.T) {
+		testReconcileUnchangedKeepsMetadata(t, open)
 	})
-	t.Run("IngestActivityShowsWhatNeverBecameABook", func(t *testing.T) {
-		testIngestActivityShowsWhatNeverBecameABook(t, open)
+	t.Run("ReconcileCalibrePathMoveKeepsIdentity", func(t *testing.T) {
+		testReconcileCalibrePathMoveKeepsIdentity(t, open)
 	})
-	t.Run("ReferencedBlobsAreWhatABackupMustHold", func(t *testing.T) {
-		testReferencedBlobsAreWhatABackupMustHold(t, open)
-	})
-	t.Run("TrashRestoreAndPurge", func(t *testing.T) {
-		testTrashRestoreAndPurge(t, open)
-	})
-	t.Run("SimilarBooksAreAskedAboutNotAsserted", func(t *testing.T) {
-		testSimilarBooksAreAskedAboutNotAsserted(t, open)
-	})
-	t.Run("DuplicateContentIsReportedNotResolved", func(t *testing.T) {
-		testDuplicateContentIsReportedNotResolved(t, open)
-	})
-	t.Run("TrashedBooksLeaveTheCatalogAndAppearInTheTrash", func(t *testing.T) {
-		testTrashedBooksLeaveTheCatalogAndAppearInTheTrash(t, open)
-	})
-	t.Run("PurgeKeepsQuotaForRemainingReferences", func(t *testing.T) {
-		testPurgeKeepsQuotaForRemainingReferences(t, open)
-	})
-	t.Run("RestoreReflectsWhatTheBytesSupport", func(t *testing.T) {
-		testRestoreReflectsWhatTheBytesSupport(t, open)
-	})
-	t.Run("PurgeSparesBlobsHeldByIngest", func(t *testing.T) {
-		testPurgeSparesBlobsHeldByIngest(t, open)
-	})
-	t.Run("PurgeRespectsItsLimit", func(t *testing.T) {
-		testPurgeRespectsItsLimit(t, open)
+	t.Run("ReconcileCalibrePathSwap", func(t *testing.T) {
+		testReconcileCalibrePathSwap(t, open)
 	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
@@ -280,16 +201,16 @@ func testTokens(t *testing.T, open OpenFunc) {
 		t.Fatalf("cross-user token update: want ErrNotFound, got %v", err)
 	}
 	if err := s.UpdateTokenScopes(ctx, u.ID, "t1",
-		store.ScopeSet{store.ScopeLibraryManage, store.ScopeReadInsights}); err != nil {
+		store.ScopeSet{store.ScopeLibraryRead, store.ScopeReadInsights}); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.TokenByHash(ctx, u.ID, "deadbeef")
 	if err != nil || got.DeviceID != "d-boox" ||
-		got.Scopes.String() != "read-insights,library-manage" {
+		got.Scopes.String() != "read-insights,library-read" {
 		t.Fatalf("scope update changed identity or scopes: %+v %v", got, err)
 	}
 	listed, err := s.ListTokens(ctx, u.ID)
-	if err != nil || len(listed) != 1 || listed[0].Scopes.String() != "read-insights,library-manage" {
+	if err != nil || len(listed) != 1 || listed[0].Scopes.String() != "read-insights,library-read" {
 		t.Fatalf("listed tokens: %+v %v", listed, err)
 	}
 	if err := s.RevokeToken(ctx, u.ID, "t1"); err != nil {

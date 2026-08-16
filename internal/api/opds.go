@@ -29,7 +29,7 @@ const (
 
 // opdsFeed is the Atom document. Every feed the server emits is built as
 // a struct and handed to encoding/xml: metadata is attacker-supplied
-// (it comes out of uploaded EPUBs), and an escaping mistake in a
+// (it comes out of EPUBs on somebody's disk), and an escaping mistake in a
 // hand-built string is a cross-site scripting bug in every reader that
 // renders the feed as HTML.
 type opdsFeed struct {
@@ -76,17 +76,17 @@ type opdsText struct {
 }
 
 // HandleOPDSRoot serves the navigation feed at /opds/v1.2. It lists the
-// libraries the credential can read, which is all a reader needs to
-// reach every book: there is no other entry point.
+// folders this server watches, which is all a reader needs to reach
+// every book: there is no other entry point.
 func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
+	_, ok := auth.TokenFrom(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libs, err := s.St.ListLibraries(r.Context(), tok.UserID, store.LibraryRoleRead)
+	folders, err := s.St.ListFolders(r.Context(), "", maxCatalogPageSize)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "library lookup failed")
+		writeError(w, http.StatusInternalServerError, "folder lookup failed")
 		return
 	}
 	feed := opdsFeed{
@@ -98,13 +98,13 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
 		},
 	}
-	for _, l := range libs {
-		href := opdsPrefix + "/libraries/" + url.PathEscape(l.Library.ID)
+	for _, f := range folders {
+		href := opdsPrefix + "/folders/" + url.PathEscape(f.ID)
 		feed.Entries = append(feed.Entries, opdsEntry{
-			Title:   opdsTitle(l.Library.Name, "Library"),
-			ID:      "urn:liseur:library:" + l.Library.ID,
-			Updated: opdsTime(l.Library.UpdatedAt),
-			Content: &opdsText{Type: "text", Body: "Books in this library"},
+			Title:   opdsTitle(f.Name, "Folder"),
+			ID:      "urn:liseur:folder:" + f.ID,
+			Updated: opdsTime(f.UpdatedAt),
+			Content: &opdsText{Type: "text", Body: "Books in this folder"},
 			Links: []opdsLink{
 				{Rel: "subsection", Href: href, Type: opdsAcquisitionType},
 			},
@@ -113,18 +113,17 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 	writeOPDS(w, r, opdsNavigationType, feed)
 }
 
-// HandleOPDSLibrary serves the acquisition feed for one library. It is
+// HandleOPDSFolder serves the acquisition feed for one folder. It is
 // paginated with the same cursor as the native catalog, exposed to the
 // reader only as an opaque `next` link.
-func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
 	after, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
@@ -133,20 +132,20 @@ func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := defaultCatalogPageSize
-	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, libraryID, after, limit)
+	books, err := s.St.ListCatalogBooks(r.Context(), folderID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "library not found")
+			writeError(w, http.StatusNotFound, "folder not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
 	}
 
-	self := opdsPrefix + "/libraries/" + url.PathEscape(libraryID)
+	self := opdsPrefix + "/folders/" + url.PathEscape(folderID)
 	feed := opdsFeed{
-		ID:      "urn:liseur:library:" + libraryID,
-		Title:   "Library",
+		ID:      "urn:liseur:folder:" + folderID,
+		Title:   "Folder",
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
@@ -156,7 +155,7 @@ func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
 			// and how to browse from the feed it already has, so neither
 			// URL has to be configured anywhere.
 			{Rel: "search", Href: self + "/search.xml", Type: opdsSearchType,
-				Title: "Search this library"},
+				Title: "Search this folder"},
 		},
 	}
 	feed.Links = append(feed.Links, opdsLink{
@@ -165,7 +164,7 @@ func (s *Server) HandleOPDSLibrary(w http.ResponseWriter, r *http.Request) {
 		Rel: "http://opds-spec.org/sort/new", Href: self + "/recent",
 		Type: opdsAcquisitionType, Title: "Recently added",
 	})
-	for _, segment := range []string{"series", "contributors", "tags", "genres"} {
+	for _, segment := range []string{"series", "contributors", "tags"} {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel: "http://opds-spec.org/facet", Href: self + "/" + segment,
 			Type: opdsNavigationType, Title: opdsKindTitles[segment],

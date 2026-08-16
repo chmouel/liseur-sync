@@ -53,11 +53,11 @@ func TestScopeAllowed(t *testing.T) {
 	if !scopeAllowed(store.ScopeSet{store.ScopeReadInsights}, []store.Scope{store.ScopeReadInsights}) {
 		t.Fatal("exact scope should pass")
 	}
-	if !scopeAllowed(store.ScopeSet{store.ScopeLibraryManage}, []store.Scope{store.ScopeLibraryRead}) {
-		t.Fatal("library-manage should imply library-read")
+	if !scopeAllowed(store.ScopeSet{store.ScopeAdmin}, []store.Scope{store.ScopeLibraryRead}) {
+		t.Fatal("admin should imply library-read")
 	}
-	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, []store.Scope{store.ScopeLibraryManage}) {
-		t.Fatal("library-read must not imply library-manage")
+	if scopeAllowed(store.ScopeSet{store.ScopeLibraryRead}, []store.Scope{store.ScopeAdmin}) {
+		t.Fatal("library-read must not imply admin")
 	}
 	multi := store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}
 	if !scopeAllowed(multi, []store.Scope{store.ScopeSync}) ||

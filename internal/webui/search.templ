@@ -2,7 +2,7 @@ package webui
 
 // SearchFacetRow is one thing the found books have in common, with the
 // link that narrows to it. The count is over the answer rather than the
-// library: a facet's job is to describe what was found.
+// folder: a facet's job is to describe what was found.
 type SearchFacetRow struct {
 	// Kind is the URL segment (`tags`, `series`, …), used only as a
 	// label so a person can tell a series named Dune from a tag.
@@ -13,9 +13,9 @@ type SearchFacetRow struct {
 }
 
 type SearchView struct {
-	LibraryID   string
-	LibraryName string
-	Query       string
+	FolderID   string
+	FolderName string
+	Query      string
 	// Filters are the entity ids in force, kept so each facet link can
 	// carry the others along.
 	Filters []string
@@ -37,7 +37,7 @@ templ searchPage(prefix string, u userCtx, csrf string, v SearchView) {
 }
 
 templ searchBody(prefix, csrf string, v SearchView) {
-	<h1>Search { v.LibraryName }</h1>
+	<h1>Search { v.FolderName }</h1>
 	<section class="card">
 		@searchForm(prefix, v)
 	</section>
@@ -60,7 +60,7 @@ templ searchBody(prefix, csrf string, v SearchView) {
 			} else if v.View == viewGrid {
 				<div class="grid">
 					for _, b := range v.Books {
-						@bookCard(prefix, csrf, v.LibraryID, false, b)
+						@bookCard(prefix, b)
 					}
 				</div>
 				if v.Truncated {
@@ -102,15 +102,15 @@ templ searchBody(prefix, csrf string, v SearchView) {
 			</div>
 		</section>
 	}
-	<p><a href={ prefix + "library?library=" + v.LibraryID }>Back to the library</a></p>
+	<p><a href={ prefix + "library?folder=" + v.FolderID }>Back to the library</a></p>
 }
 
-// searchForm is its own template because the books page shows it too:
-// somebody looking at a library is the person most likely to be looking
+// searchForm is its own template because the library page shows it too:
+// somebody looking at a folder is the person most likely to be looking
 // for something in it.
 templ searchForm(prefix string, v SearchView) {
-	<form method="get" action={ prefix + "libraries/" + v.LibraryID + "/search" }>
-		<label class="visually-hidden" for="search-q">Find a book in this library</label>
+	<form method="get" action={ prefix + "folders/" + v.FolderID + "/search" }>
+		<label class="visually-hidden" for="search-q">Find a book in this folder</label>
 		<input
 			id="search-q"
 			type="search"

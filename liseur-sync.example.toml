@@ -1,6 +1,7 @@
 # liseur-sync configuration. All values shown are defaults.
 # Env overrides: LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER,
-# LISEUR_DATABASE_URL, LISEUR_CONTENT_ROOT, LISEUR_INSECURE_HTTP,
+# LISEUR_DATABASE_URL, LISEUR_CACHE_DIR, LISEUR_FOLDER_ROOTS,
+# LISEUR_INSECURE_HTTP,
 # LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES,
 # LISEUR_READER_ORIGIN.
 
@@ -39,18 +40,12 @@ driver = "sqlite"                  # sqlite | postgres
 url = "liseur-sync.db"             # sqlite path, or postgres DSN
 
 [content]
-root = "content"
-failure_retention_hours = 24
-orphan_grace_hours = 168          # seven days
+# The only directory this server writes to. It holds rendered covers and
+# nothing else, so it is safe to delete while the server is running: the
+# cost is a re-render. Books are never copied here — the server reads
+# them from the folders you point it at and never writes below one.
+cache_dir = "cache"
 
-# How long a deleted book is kept before its files are removed for good.
-# Deleting is reversible until this passes, from the books page or with
-# POST /v1/books/{id}/restore. The bytes still count against the owner's
-# quota while they wait, so that upload-and-delete cycles cannot grow the
-# disk without bound.
-trash_retention_hours = 720       # thirty days
-recovery_batch_size = 100          # ingest jobs and blob housekeeping
-ingest_worker_interval_seconds = 5
 epub_max_entries = 10000
 epub_max_directory_bytes = 67108864       # 64 MiB
 epub_max_expanded_bytes = 2147483648      # 2 GiB total
@@ -59,68 +54,26 @@ epub_max_compression_ratio = 1000
 epub_max_metadata_bytes = 4194304         # 4 MiB per control document
 epub_max_xml_depth = 128
 
-# Largest single upload accepted by POST /v1/libraries/{id}/upload. The
-# request is rejected as soon as the body passes this, without waiting
-# for the client to finish sending.
-max_upload_bytes = 536870912              # 512 MiB
+# How much of a folder one pass will look at. These are a guard against a
+# root that is larger or deeper than you meant to point at, not a tuning
+# knob: a pass that meets either stops early and, because it cannot claim
+# to have seen the whole tree, is not allowed to conclude that anything
+# is missing. Raise them if you legitimately have a folder this big.
+scan_max_files = 200000
+scan_max_depth = 32
 
-# Total bytes uploads may occupy at once while being received and
-# verified, before they are committed to permanent storage. Per-upload
-# and per-user limits cannot bound this: every upload can be within both
-# and still, together, fill the disk. Uploads over the cap are answered
-# 503 with Retry-After. Must be at least max_upload_bytes; 0 disables it.
-max_staging_bytes = 8589934592            # 8 GiB
-
-# Total stored bytes allowed per user, counted over deduplicated blobs.
-# 0 means unlimited.
-quota_bytes = 0
-
-# How often the server looks for a library whose refresh has come due,
-# and how much of a root one sweep will look at. Each library carries its
-# own refresh interval; this is only the granularity at which they are
-# noticed, so there is little point setting it higher than the shortest
-# interval you use. 0 disables refreshing entirely.
+# Where the admin panel may point a folder.
 #
-# The limits are a guard against a root that is larger or deeper than you
-# meant to point at: a sweep that hits either stops early and, because it
-# cannot claim to have seen the whole root, is not allowed to conclude
-# that anything is missing.
-refresh_tick_seconds = 60
-watched_max_files = 200000
-watched_max_depth = 32
-
-# Where the admin panel may point a directory or Calibre library.
-#
-# Attaching one names a path on this machine, which is a privilege
-# beyond "can administer this application": the form is a filesystem
-# oracle and a way to make the scanner read any tree the server can. It
-# is behind the administrator's own password, rate-limited and audited,
-# and listing the trees you meant to serve here narrows it further. A
-# root is accepted when it is one of these or below one.
+# Adding one names a path on this machine, which is a privilege beyond
+# "can administer this application": the form is a filesystem oracle and
+# a way to make the scanner read any tree the server can. It is behind
+# the administrator's own password, rate-limited and audited, and listing
+# the trees you meant to serve here narrows it further. A root is
+# accepted when it is one of these or below one.
 #
 # Empty (the default) means anywhere the server can read, which is what
-# `liseur-sync admin add-library` has always allowed.
-# library_roots = ["/srv/books", "/srv/calibre"]
-
-# Optional lookups against external metadata services. Off unless you
-# list a provider here: nothing else in the server makes an outbound
-# request, and no scan or ingest ever does — lookup happens only when a
-# person asks about one book they can already read.
-#
-# Results are shown as attributed candidates for somebody to accept or
-# ignore; nothing is written to the catalog on their own. Accepting one
-# records it as an "external" value, which loses to a field you locked
-# and beats one read out of a filename.
-#
-# Hostnames are fixed in the code (openlibrary.org, www.googleapis.com),
-# the allowlist is re-checked on every redirect hop, and only public
-# addresses are dialled — a provider cannot be redirected at your LAN or
-# your cloud metadata service. HTTP_PROXY is deliberately not honoured.
-[metadata]
-# providers = ["openlibrary", "googlebooks"]
-lookup_timeout_seconds = 8
-lookup_max_bytes = 4194304        # 4 MiB, refused rather than truncated
-lookup_max_redirects = 3
+# `liseur-sync admin add-folder` allows.
+# folder_roots = ["/srv/books", "/srv/calibre"]
 
 [adapters]
 kosync = true

@@ -1,67 +1,26 @@
 package webui
 
-// Books: the browser side of the content server — pick a library,
-// upload an EPUB, see what came of it, download it back.
+// Books: the browser side of the catalog — pick a folder, look at what
+// is in it, read it or take a copy.
 
-type LibraryOption struct {
+// FolderOption is one watched folder as the picker shows it. It carries
+// a name and an id and nothing else: a folder's root path is a
+// filesystem oracle and appears only on the admin page (ADR-0017).
+type FolderOption struct {
 	ID       string
 	Name     string
-	CanWrite bool
 	Selected bool
 }
 
 type BookRow struct {
-	ID       string
-	Title    string
-	Author   string
-	Added    string
-	CanGet   bool
-	// CanRead is set when there is an EPUB to open in the browser
-	// reader. A book stored as something else is still downloadable.
-	CanRead  bool
-	FileSize string
-}
-
-// UploadRow is one upload that has not become a book: still working, or
-// stopped for a reason the person who uploaded it deserves to see.
-type UploadRow struct {
-	Filename string
-	When     string
-	State    string
-	Pending  bool
-	Reason   string
-}
-
-// TrashRow is one deleted book that can still be brought back.
-type TrashRow struct {
-	ID    string
-	Title string
-	Until string
-}
-
-// ReviewRow is one watched book whose source file changed under it. The
-// server will not decide what that means — a replaced file may be a
-// better scan of the same book or a different book entirely — so it says
-// so here and keeps serving the copy it validated.
-type ReviewRow struct {
 	ID     string
 	Title  string
-	Reason string
-}
-
-// DuplicateGroup is a set of books in one library that are the same
-// bytes. The page reports them and leaves the deciding to the user: two
-// entries for one file may be exactly what somebody meant.
-type DuplicateGroup struct {
-	Titles []string
-}
-
-// SimilarGroup is the weaker report: books that look like one book
-// without being one file. Each entry links, unlike a digest group, because
-// deciding this one needs looking at the books rather than trusting the
-// server.
-type SimilarGroup struct {
-	Books []BookRow
+	Author string
+	Added  string
+	CanGet bool
+	// CanRead is set when there is an EPUB to open in the browser
+	// reader. A book stored as something else is still downloadable.
+	CanRead bool
 }
 
 // ChipLink is one entity a book claims, with the page listing everything
@@ -69,12 +28,6 @@ type SimilarGroup struct {
 type ChipLink struct {
 	Name string
 	URL  string
-}
-
-type BookFileRow struct {
-	Name      string
-	MediaType string
-	SHA256    string
 }
 
 type BookView struct {
@@ -85,183 +38,30 @@ type BookView struct {
 	Publisher   string
 	Published   string
 	Added       string
-	LibraryID   string
-	Files       []BookFileRow
-	CanRead     bool
-	Notice      string
-	Problem     string
+	FolderID    string
+	// The file, which is one file: a book is a row over a publication
+	// somebody's folder holds, so there is no list here any more.
+	Filename  string
+	MediaType string
+	SHA256    string
+	// Present is false for a book the last completed pass could not
+	// find. The row stays — it is the record of what the folder held,
+	// and of anybody's reading position against it — but there is
+	// nothing to download until the file comes back.
+	Present bool
+	CanRead bool
+	Notice  string
+	Problem string
 	// Chips are the book's entities as links: the fastest way from one
-	// book to the rest of its author, its series or its subject.
+	// book to the rest of its author or its series.
 	Authors []ChipLink
 	Series  []ChipLink
-	Tags    []ChipLink
-	Genres  []ChipLink
 	// Byline is the authors as one line, for the hero and the title tag.
 	Byline string
-	// CanWrite gates the edit form. A reader sees the book exactly as
-	// before; nothing about how it was catalogued is theirs to change.
-	CanWrite bool
-	Edit     MetadataEditView
-	Lookup   LookupView
-}
-
-// MetadataFieldView is one editable field: its current text, where that
-// text came from, and whether a person has pinned it. The source is
-// shown because it is the answer to the question a librarian actually
-// has — "why does it say that?" — and the lock is shown because it is
-// the answer to "why does it keep saying that?".
-type MetadataFieldView struct {
-	Value  string
-	Source string
-	Locked bool
-}
-
-type MetadataEditView struct {
-	Title        MetadataFieldView
-	Subtitle     MetadataFieldView
-	Description  MetadataFieldView
-	Publisher    MetadataFieldView
-	Published    MetadataFieldView
-	Tags         MetadataFieldView
-	Genres       MetadataFieldView
-	Languages    MetadataFieldView
-	Series       MetadataFieldView
-	Contributors MetadataFieldView
 }
 
 templ bookPage(prefix string, u userCtx, csrf string, b BookView) {
 	@layout(orPlaceholder(b.Title), prefix, u, csrf, bookBody(prefix, csrf, b))
-}
-
-// metadataRow renders one field of the edit form. The hidden `_was`
-// input carries what was rendered, so the handler can tell an edit from
-// an untouched field; without it, opening a book and pressing Save would
-// lock every field on it.
-templ metadataRow(name, label, hint string, f MetadataFieldView, area bool) {
-	<p>
-		<label for={ "md-" + name }>{ label }</label>
-		if area {
-			<textarea id={ "md-" + name } name={ name } rows="3">{ f.Value }</textarea>
-		} else {
-			<input id={ "md-" + name } name={ name } value={ f.Value } type="text"/>
-		}
-		<input type="hidden" name={ name + "_was" } value={ f.Value }/>
-		if hint != "" {
-			<span class="muted">{ hint }</span>
-		}
-		if f.Locked {
-			<label>
-				<input type="checkbox" name={ name + "_unlock" } value="1"/>
-				Edited by hand — untick to let the file decide again
-			</label>
-		} else if f.Source != "" {
-			<span class="muted">{ f.Source }</span>
-		}
-	</p>
-}
-
-templ bookEditForm(prefix, csrf string, b BookView) {
-	<details class="card">
-		<summary>Correct this book</summary>
-		<p class="muted">
-			Anything you change here is kept as yours: re-reading the file
-			will not undo it. Fields you do not touch stay as they are.
-		</p>
-		<form method="post" action={ prefix + "books/" + b.ID + "/metadata" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			@metadataRow("title", "Title", "", b.Edit.Title, false)
-			@metadataRow("subtitle", "Subtitle", "", b.Edit.Subtitle, false)
-			@metadataRow("publisher", "Publisher", "", b.Edit.Publisher, false)
-			@metadataRow("published", "Published", "", b.Edit.Published, false)
-			@metadataRow("description", "Description", "", b.Edit.Description, true)
-			@metadataRow("contributors", "Contributors",
-				"One per line, with an optional role in brackets: Frank Herbert (author)",
-				b.Edit.Contributors, true)
-			@metadataRow("series", "Series",
-				"One per line, with an optional place in it: Discworld #3",
-				b.Edit.Series, true)
-			@metadataRow("tags", "Tags", "Separated by commas", b.Edit.Tags, false)
-			@metadataRow("genres", "Genres", "Separated by commas", b.Edit.Genres, false)
-			@metadataRow("languages", "Languages", "Separated by commas", b.Edit.Languages, false)
-			<button class="primary" type="submit">Save</button>
-		</form>
-	</details>
-}
-
-// bookLookupPanel offers to ask elsewhere, and shows what came back.
-// Each suggestion is a form of its own carrying the answer it displays,
-// so accepting one applies what was read rather than whatever a second
-// lookup would return.
-templ bookLookupPanel(prefix, csrf string, b BookView) {
-	<details class="card">
-		<summary>Ask elsewhere</summary>
-		<p class="muted">
-			This sends the book's title and ISBN to the metadata services
-			this server is set up to use. Nothing is changed until you
-			accept an answer, and nothing you have edited by hand is
-			overwritten when you do.
-		</p>
-		if b.Lookup.Problem != "" {
-			<p class="error" role="alert">{ b.Lookup.Problem }</p>
-		}
-		<form method="post" action={ prefix + "books/" + b.ID + "/metadata/lookup" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<button type="submit">Look this book up</button>
-		</form>
-		if b.Lookup.Ran {
-			for _, c := range b.Lookup.Candidates {
-				@lookupCandidate(prefix, csrf, b, c)
-			}
-		}
-	</details>
-}
-
-templ lookupCandidate(prefix, csrf string, b BookView, c CandidateView) {
-	<article class="card">
-		<h3>{ orPlaceholder(c.Title) }</h3>
-		if c.Subtitle != "" {
-			<p class="muted">{ c.Subtitle }</p>
-		}
-		<p class="muted">
-			{ c.Provider }
-			if c.ByIdentifier {
-				— matched on this book's ISBN
-			} else {
-				— matched on a similar title, so check it
-			}
-			if c.URL != "" {
-				<a href={ templ.SafeURL(c.URL) } rel="noreferrer noopener" target="_blank">see the record</a>
-			}
-		</p>
-		<table>
-			if c.Authors != "" {
-				<tr><th>Contributors</th><td>{ c.Authors }</td></tr>
-			}
-			if c.Publisher != "" {
-				<tr><th>Publisher</th><td>{ c.Publisher }</td></tr>
-			}
-			if c.Published != "" {
-				<tr><th>Published</th><td>{ c.Published }</td></tr>
-			}
-			if c.Languages != "" {
-				<tr><th>Languages</th><td>{ c.Languages }</td></tr>
-			}
-			if c.Tags != "" {
-				<tr><th>Tags</th><td>{ c.Tags }</td></tr>
-			}
-		</table>
-		if c.Description != "" {
-			<div class="description">
-				@descriptionHTML(c.Description)
-			</div>
-		}
-		<form method="post" action={ prefix + "books/" + b.ID + "/metadata/apply" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<input type="hidden" name="candidate" value={ c.Payload }/>
-			<input type="hidden" name="revision" value={ b.Lookup.Revision }/>
-			<button type="submit">Use this</button>
-		</form>
-	</article>
 }
 
 templ bookBody(prefix, csrf string, b BookView) {
@@ -292,22 +92,16 @@ templ bookBody(prefix, csrf string, b BookView) {
 				if b.CanRead {
 					<a class="btn primary" href={ prefix + "books/" + b.ID + "/read" }>Read</a>
 				}
-				if len(b.Files) > 0 {
+				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 				}
 			</div>
-			if len(b.Series) > 0 || len(b.Authors) > 0 || len(b.Tags) > 0 || len(b.Genres) > 0 {
+			if len(b.Series) > 0 || len(b.Authors) > 0 {
 				<div class="chips">
 					for _, c := range b.Series {
 						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
 					}
 					for _, c := range b.Authors {
-						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
-					}
-					for _, c := range b.Genres {
-						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
-					}
-					for _, c := range b.Tags {
 						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
 					}
 				</div>
@@ -335,29 +129,23 @@ templ bookBody(prefix, csrf string, b BookView) {
 		</section>
 	}
 	<section class="card">
-		<h2>Files</h2>
-		if len(b.Files) == 0 {
+		<h2>File</h2>
+		if !b.Present {
 			<p class="muted">
-				This book is catalogued but its content is no longer stored.
+				The last look through this folder could not find this book's
+				file. Nothing has been deleted — it comes back on its own if
+				the file does.
 			</p>
 		} else {
 			<table>
 				<tr><th>Name</th><th>Type</th><th></th></tr>
-				for _, f := range b.Files {
-					<tr>
-						<td>{ f.Name }</td>
-						<td>{ f.MediaType }</td>
-						<td><a href={ prefix + "books/" + b.ID + "/download" }>Download</a></td>
-					</tr>
-				}
+				<tr>
+					<td>{ orPlaceholder(b.Filename) }</td>
+					<td>{ b.MediaType }</td>
+					<td><a href={ prefix + "books/" + b.ID + "/download" }>Download</a></td>
+				</tr>
 			</table>
 		}
 	</section>
-	if b.CanWrite {
-		@bookEditForm(prefix, csrf, b)
-		if b.Lookup.Offered {
-			@bookLookupPanel(prefix, csrf, b)
-		}
-	}
-	<p><a href={ prefix + "library?library=" + b.LibraryID }>Back to the library</a></p>
+	<p><a href={ prefix + "library?folder=" + b.FolderID }>Back to the library</a></p>
 }

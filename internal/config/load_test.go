@@ -106,11 +106,11 @@ func TestUnknownKeyIsAStartupError(t *testing.T) {
 
 func TestKnownKeysAreNotReportedAsUnknown(t *testing.T) {
 	cfg, err := Load(writeConfig(t,
-		"insecure_http = true\n[content]\nroot = \"c\"\n"))
+		"insecure_http = true\n[content]\ncache_dir = \"c\"\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.InsecureHTTP || cfg.Content.Root != "c" {
+	if !cfg.InsecureHTTP || cfg.Content.CacheDir != "c" {
 		t.Fatalf("valid config not applied: %+v", cfg)
 	}
 }
