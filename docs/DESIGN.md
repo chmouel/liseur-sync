@@ -553,6 +553,8 @@ book_series_override_items  folder_id, book_id, scope_user, series_id,
                             position?
 series_name_overrides       series_id, scope_user, name, normalized_name,
                             updated_at, updated_by
+series_bindings             id, folder_id?, name, normalized_name,
+                            series_id, created_at, created_by
 user_book_works    user_id, folder_id, book_id, work_id
 ```
 
@@ -590,8 +592,24 @@ resolves an observed name against. That separation is the whole design:
 a rename that moved the fold key would be undone by the next pass, and
 a folder still calling the series by its old name would start a shelf
 of its own. Renaming onto a name already visible in the caller's scope
-is refused, because giving two shelves one name is a merge, and merging
-is not decided.
+is refused, because giving two shelves one name is a merge, which is a
+different operation.
+
+Merging and splitting are that operation (ADR-0021), and they are the
+one thing a name layer cannot express: they change which shelf a book is
+on. Because the fold key belongs to the disk, neither can be a plain
+edit — a shelf rearranged only here is rearranged back by the next pass
+that observes the old name. Both therefore write a `series_bindings`
+row, saying what an observed name means, and an observed name now
+resolves through that table first: this folder's binding, else the
+global one, else `series.normalized_name` as before. A merge binds
+everywhere and deletes the absorbed row, so nothing has to filter dead
+entities out of listings; a folder-wise split binds in the folder that
+left. Deleting a binding is the undo, and what it restores is what the
+disk says rather than what readers claimed. Both are admin-written and
+shared: they are statements about the library's shape, and a per-reader
+version would put a redirect in every series-bearing read to express
+what a personal claim already expresses.
 
 Nothing here writes under a watched folder or into Calibre's
 `metadata.db`; write-back is a later milestone with its own ADR.

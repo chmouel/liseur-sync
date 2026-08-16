@@ -275,6 +275,16 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	// shelf is called.
 	mux.Handle("POST /ui/entities/series/{entity}/name",
 		sec(s.requireAuth(s.handleSeriesRename)))
+	// Merging and splitting a shelf (ADR-0021). They are admin work and
+	// everybody sees the result, so unlike a rename they have no
+	// personal form; the handler says so rather than the router, which
+	// is how the shelf can explain the refusal in the reader's terms.
+	mux.Handle("POST /ui/entities/series/{entity}/merge",
+		sec(s.requireAuth(s.handleSeriesMerge)))
+	mux.Handle("POST /ui/entities/series/{entity}/split",
+		sec(s.requireAuth(s.handleSeriesSplit)))
+	mux.Handle("POST /ui/entities/series/{entity}/unbind",
+		sec(s.requireAuth(s.handleSeriesUnbind)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))

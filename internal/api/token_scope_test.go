@@ -182,6 +182,12 @@ var registeredRouteGates = map[string]routeGate{
 	"PUT /v1/entities/{kind}/{entity}/order":   gateLibraryManage,
 	"PUT /v1/entities/{kind}/{entity}/name":    gateLibraryManage,
 	"DELETE /v1/entities/{kind}/{entity}/name": gateLibraryManage,
+	// ADR-0021. The gate is library-manage; admin is checked inside the
+	// handler, the same way the shared claim layer checks it.
+	"POST /v1/entities/{kind}/{entity}/merge":                gateLibraryManage,
+	"POST /v1/entities/{kind}/{entity}/split":                gateLibraryManage,
+	"GET /v1/entities/{kind}/{entity}/bindings":              gateLibraryManage,
+	"DELETE /v1/entities/{kind}/{entity}/bindings/{binding}": gateLibraryManage,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
 

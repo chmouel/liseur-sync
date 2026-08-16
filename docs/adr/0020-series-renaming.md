@@ -108,8 +108,10 @@ so a rename made offline is dropped.
 ### What this defers: merge and split
 
 Two shelves that should be one is the next request, and this ADR
-deliberately stops short of it. Recorded so the next design starts from
-the right place:
+deliberately stops short of it. It is decided in
+[ADR-0021](0021-series-merge-split.md), which starts from the notes
+below; they are kept as written because they are what that design was
+reasoned from.
 
 - **The refusal above is the hook.** A merge is a rename onto an
   occupied name, plus consent. The API shape probably already exists.

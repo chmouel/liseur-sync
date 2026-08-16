@@ -427,6 +427,35 @@ CREATE TABLE series_name_overrides (
 CREATE INDEX series_name_overrides_scope
     ON series_name_overrides(scope_user, normalized_name);
 
+-- What an observed series name means, when it must not mean what the
+-- fold would make it mean (ADR-0021). A merge is a global binding from
+-- the absorbed name to the surviving series; a folder-wise split is a
+-- binding scoped to the folder whose books left. resolveEntityTx reads
+-- the folder's binding, then the global one, then series.normalized_name,
+-- so a merge and a split both survive the pass that re-observes the old
+-- name -- which is the whole reason this table exists rather than an
+-- UPDATE and a DELETE.
+--
+-- A NULL folder_id means everywhere. The unique index folds that NULL to
+-- '' because SQL considers two NULLs distinct, which would otherwise
+-- allow a second global binding for the same name.
+--
+-- Never garbage-collected: this records a decision rather than caching
+-- one, and it is what makes a merge stick when a curator renames the
+-- series back in the library it came from.
+CREATE TABLE series_bindings (
+    id              TEXT PRIMARY KEY,
+    folder_id       TEXT REFERENCES folders(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    series_id       TEXT NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    created_at      TEXT NOT NULL,
+    created_by      TEXT NOT NULL
+);
+CREATE UNIQUE INDEX series_bindings_key
+    ON series_bindings(COALESCE(folder_id, ''), normalized_name);
+CREATE INDEX series_bindings_series ON series_bindings(series_id);
+
 CREATE TABLE book_contributors (
     folder_id      TEXT NOT NULL,
     book_id        TEXT NOT NULL,

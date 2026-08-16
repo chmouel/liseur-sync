@@ -85,6 +85,30 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("SeriesRenamePagesOnTheNameShown", func(t *testing.T) {
 		testSeriesRenamePagesOnTheNameShown(t, open)
 	})
+	t.Run("SeriesMergeSurvivesAScan", func(t *testing.T) {
+		testSeriesMergeSurvivesAScan(t, open)
+	})
+	t.Run("SeriesMergeCarriesClaims", func(t *testing.T) {
+		testSeriesMergeCarriesClaims(t, open)
+	})
+	t.Run("SeriesUnbindRestoresFromDisk", func(t *testing.T) {
+		testSeriesUnbindRestoresFromDisk(t, open)
+	})
+	t.Run("SeriesSplitSurvivesAScan", func(t *testing.T) {
+		testSeriesSplitSurvivesAScan(t, open)
+	})
+	t.Run("SeriesSplitTakesAbsorbedNames", func(t *testing.T) {
+		testSeriesSplitTakesAbsorbedNames(t, open)
+	})
+	t.Run("SeriesMergeRefusals", func(t *testing.T) {
+		testSeriesMergeRefusals(t, open)
+	})
+	t.Run("SeriesSplitOfOneFolderIsARename", func(t *testing.T) {
+		testSeriesSplitOfOneFolderIsARename(t, open)
+	})
+	t.Run("SeriesBindingsDieWithTheirFolder", func(t *testing.T) {
+		testSeriesBindingsDieWithTheirFolder(t, open)
+	})
 	t.Run("SeriesRenameDiesWithItsSeries", func(t *testing.T) {
 		testSeriesRenameDiesWithItsSeries(t, open)
 	})

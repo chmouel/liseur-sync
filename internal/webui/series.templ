@@ -28,6 +28,9 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 		<p class="notice" role="status">{ v.Notice }</p>
 	}
 	@seriesRenameForm(prefix, csrf, v)
+	if v.CanShare {
+		@seriesReshapeCard(prefix, csrf, v)
+	}
 	if v.NextUp != nil {
 		<section class="hero">
 			<div class="art">
@@ -148,6 +151,111 @@ templ seriesRenameForm(prefix, csrf string, v SeriesShelfView) {
 			Only the name changes. The books stay where they are, and a scan
 			that still sees the old name finds this same shelf.
 		</p>
+	</details>
+}
+
+// seriesReshapeCard is the curator's half of the shelf (ADR-0021):
+// merging it into another, splitting a folder off it, and undoing
+// either. It is shown to an admin only, because there is no personal
+// version of a decision about what a shelf is.
+templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
+	<details class="card" open?={ v.MergeTargetID != "" }>
+		<summary>Merge or split this shelf</summary>
+		if v.MergeTargetID != "" {
+			<p class="notice" role="status">
+				{ "\"" + v.MergeTargetName + "\" already has that name. Merge this shelf into it?" }
+			</p>
+			<form
+				method="post"
+				action={ prefix + "entities/series/" + v.SeriesID + "/merge" }
+			>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input type="hidden" name="into" value={ v.MergeTargetID }/>
+				<button class="btn primary" type="submit">
+					{ "Merge into " + v.MergeTargetName }
+				</button>
+			</form>
+		}
+		<form
+			method="post"
+			action={ prefix + "entities/series/" + v.SeriesID + "/merge" }
+		>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label>
+				Merge this shelf into
+				<input
+					type="text"
+					name="into_name"
+					placeholder="Another shelf"
+					list="series-names"
+					autocomplete="off"
+					required
+					hx-get={ prefix + "entities/series/suggest" }
+					hx-trigger="input changed delay:300ms"
+					hx-target="#series-names"
+					hx-swap="innerHTML"
+				/>
+			</label>
+			<datalist id="series-names"></datalist>
+			<div class="cta">
+				<button class="btn" type="submit">Merge</button>
+			</div>
+		</form>
+		<p class="muted">
+			The books move to the other shelf, keeping the numbers they
+			have, and this shelf's name goes on leading there — so a scan
+			does not undo it. Nobody's reading position changes.
+		</p>
+		if v.CanSplit() {
+			<form
+				method="post"
+				action={ prefix + "entities/series/" + v.SeriesID + "/split" }
+			>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<label>
+					Give one folder a shelf of its own
+					<select name="folder_id">
+						for _, f := range v.SplitFolders {
+							<option value={ f.ID }>{ folderBooksLabel(f) }</option>
+						}
+					</select>
+				</label>
+				<label>
+					Call it
+					<input type="text" name="name" maxlength="512" required/>
+				</label>
+				<div class="cta">
+					<button class="btn" type="submit">Split</button>
+				</div>
+			</form>
+			<p class="muted">
+				Two folders that name a series the same way share one shelf.
+				Splitting one off holds only in that folder.
+			</p>
+		}
+		if len(v.Bindings) > 0 {
+			<h3>Names that lead here</h3>
+			<ul class="bindings">
+				for _, b := range v.Bindings {
+					<li>
+						<span>{ bindingLabel(b) }</span>
+						<form
+							method="post"
+							action={ prefix + "entities/series/" + v.SeriesID + "/unbind" }
+						>
+							<input type="hidden" name="csrf" value={ csrf }/>
+							<input type="hidden" name="binding" value={ b.ID }/>
+							<button class="btn" type="submit">Undo</button>
+						</form>
+					</li>
+				}
+			</ul>
+			<p class="muted">
+				Undoing one moves no book. The next scan of a folder that
+				still uses the name puts that shelf back as the folder has
+				it.
+			</p>
+		}
 	</details>
 }
 

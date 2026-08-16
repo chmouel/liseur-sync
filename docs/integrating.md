@@ -534,8 +534,63 @@ rescan does not undo the rename. Only `kind=series` can be renamed; a
 tag or a contributor is what the scan said it was.
 
 A name that already belongs to another series in the caller's view is a
-`409`. Giving two shelves one name would be a merge, and this API does
-not merge shelves.
+`409`. Giving two shelves one name would be a merge, which is a
+different request — see below.
+
+### Merging and splitting a series
+
+A rename changes what a shelf is called. Merging and splitting change
+which shelf a book is on, so they are admin work and everybody sees the
+result (ADR-0021). Both need `library-manage` **and** `admin`; there is
+no personal form, because a reader who wants their own arrangement
+already has the personal claim layer.
+
+Fold the shelf in the path into the one in the body:
+
+```json
+POST /v1/entities/series/{absorbed}/merge
+{"into": "{survivor}"}
+```
+
+It answers with the survivor. Memberships and claims naming the
+absorbed series follow it, a book that was on both shelves keeps the
+survivor's position, and **nothing is renumbered** — two shelves that
+each held a volume 1 still do. Reading state is untouched: a series
+never appears in the op log, in a session or in a position.
+
+Send one folder's books to a shelf of their own:
+
+```json
+POST /v1/entities/series/{series}/split
+{"folder_id": "…", "name": "Essays (Montaigne)"}
+```
+
+This undoes the automatic fold that put two folders' identically named
+series together (ADR-0019). Splitting a shelf whose books all came from
+one folder is a rename, and is refused as one; splitting a single
+folder's shelf in two — an omnibus directory holding two series — is a
+per-book decision, so use a shared claim.
+
+Neither is a plain database edit, because the name on disk is what a
+folder pass resolves against: a shelf rearranged only in the database is
+rearranged back by the next scan. Both therefore leave a **binding**
+behind, recording that an observed name now means a given series, and
+the resolver reads it first. A merge binds everywhere; a split binds
+only in the folder that left.
+
+```
+GET    /v1/entities/series/{series}/bindings
+DELETE /v1/entities/series/{series}/bindings/{binding}
+```
+
+The listing is what a client shows to offer an undo: each entry carries
+the absorbed `name`, a `folder_id` that is `null` when the binding
+applies to every folder, and when it was made. Deleting a binding moves
+no book. The next pass over a folder that observes the freed name
+resolves it to nothing, mints the series again and refills it from what
+the folder says — so an unmerge restores what the disk holds, not what
+readers claimed. A claim that named the absorbed series was repointed
+by the merge and stays repointed.
 
 ### Syncing a book you downloaded from the catalog
 

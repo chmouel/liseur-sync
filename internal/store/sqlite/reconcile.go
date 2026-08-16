@@ -400,7 +400,7 @@ func replaceRelationsTx(
 		}
 	}
 	for _, sr := range obs.Series {
-		seriesID, err := resolveEntityTx(ctx, tx, "series", sr.Name, at)
+		seriesID, err := resolveSeriesTx(ctx, tx, folderID, sr.Name, at)
 		if err != nil || seriesID == "" {
 			if err != nil {
 				return err
@@ -442,6 +442,42 @@ func replaceRelationsTx(
 		}
 	}
 	return nil
+}
+
+// resolveSeriesTx resolves an observed series name to the series it
+// belongs on, consulting the bindings a merge or a split wrote before
+// falling back to the fold (ADR-0021).
+//
+// The most specific binding wins: this folder's, then the one that
+// applies everywhere, then the ordinary match on the observed name. That
+// order is what lets a folder-wise split disagree with the rest of the
+// library about what `Essays` means, while a merge speaks for every
+// folder at once.
+//
+// A binding whose series has been deleted cannot exist -- the foreign
+// key cascades -- so a hit here always names a live shelf.
+func resolveSeriesTx(
+	ctx context.Context, tx *sql.Tx, folderID, name string, at time.Time,
+) (string, error) {
+	normalized := metadata.NormalizeName(name)
+	if normalized == "" {
+		return "", nil
+	}
+	var bound string
+	err := tx.QueryRowContext(ctx,
+		`SELECT series_id FROM series_bindings
+		  WHERE normalized_name = ?
+		    AND (folder_id = ? OR folder_id IS NULL)
+		  ORDER BY folder_id IS NULL
+		  LIMIT 1`,
+		normalized, folderID).Scan(&bound)
+	if err == nil {
+		return bound, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	return resolveEntityTx(ctx, tx, "series", name, at)
 }
 
 // resolveEntityTx finds or creates one library-wide entity by its
