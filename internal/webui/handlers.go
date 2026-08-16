@@ -82,17 +82,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 				EndProg:   ses.EndProg,
 			})
 		}
-		workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
+		workBookIDs := s.workBookIDs(r.Context(), u.ID, works)
 		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 			sum, heat, recent,
-			s.markReadable(r, u.ID, continueReading(works, workBookIDs, loc))).
+			s.markReadable(r, continueReading(works, workBookIDs, loc))).
 			Render(r.Context(), w)
 		return
 	}
-	workBookIDs, _ := s.St.WorkBookIDs(r.Context(), u.ID)
+	workBookIDs := s.workBookIDs(r.Context(), u.ID, works)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum, nil, nil,
-		s.markReadable(r, u.ID, continueReading(works, workBookIDs, loc))).
+		s.markReadable(r, continueReading(works, workBookIDs, loc))).
 		Render(r.Context(), w)
 }
 
@@ -164,38 +164,21 @@ func streakFrom(dayMin map[string]float64, u *store.User, now time.Time) int {
 
 // --- works ---
 
-// readableBooks reports which of the given works' books hold an EPUB
-// this browser could open. It asks once for the whole page rather than
-// once per row, because a shelf of a hundred books would otherwise be a
-// hundred file queries to draw one wall of covers.
-func (s *Server) markReadable(r *http.Request, userID string, rows []WorkRow) []WorkRow {
+// markReadable says which of these works' books the browser reader can
+// open. The shelf it answers for is bounded (continueReadingLimit), so
+// it is a handful of book lookups rather than the wall of them a whole
+// catalog page would be.
+func (s *Server) markReadable(r *http.Request, rows []WorkRow) []WorkRow {
 	ids := make([]string, 0, len(rows))
-	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		if row.BookID == "" || seen[row.BookID] {
-			continue
-		}
-		seen[row.BookID] = true
-		ids = append(ids, row.BookID)
-	}
-	if len(ids) == 0 {
-		return rows
-	}
-	types, err := s.St.AvailableBookMediaTypes(r.Context(), userID, ids)
-	if err != nil {
-		return rows
-	}
-	readable := make(map[string]bool, len(types))
-	for bookID, mediaTypes := range types {
-		for _, mt := range mediaTypes {
-			if isEPUB(mt) {
-				readable[bookID] = true
-				break
-			}
+		if row.BookID != "" {
+			ids = append(ids, row.BookID)
 		}
 	}
+	books := s.booksByID(r.Context(), ids)
 	for i := range rows {
-		rows[i].CanRead = readable[rows[i].BookID]
+		book, ok := books[rows[i].BookID]
+		rows[i].CanRead = ok && bookReadable(book)
 	}
 	return rows
 }
@@ -245,18 +228,12 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	loc := userLoc(u)
 	// The work's own book, when it has one: it makes this page a way
 	// back into the reading rather than only a report about it.
-	if mapping, err := s.St.WorkBookIDs(r.Context(), u.ID); err == nil {
-		d.BookID = mapping[workID]
+	if ids, err := s.St.WorkBookIDs(r.Context(), u.ID, workID); err == nil && len(ids) > 0 {
+		d.BookID = ids[0]
 	}
 	if d.BookID != "" {
-		if types, err := s.St.AvailableBookMediaTypes(
-			r.Context(), u.ID, []string{d.BookID}); err == nil {
-			for _, mt := range types[d.BookID] {
-				if isEPUB(mt) {
-					d.CanRead = true
-					break
-				}
-			}
+		if book, err := s.St.CatalogBookByID(r.Context(), d.BookID); err == nil {
+			d.CanRead = bookReadable(book)
 		}
 	}
 	// Newest first, and only the sessions still held one by one — the

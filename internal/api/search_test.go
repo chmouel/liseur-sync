@@ -3,6 +3,9 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
+	"io"
 	"net/http"
 	"net/url"
 	"testing"
@@ -12,12 +15,50 @@ import (
 
 // searchPath builds a search URL from a query the way a client would,
 // so a test never has to think about escaping.
-func (f *uploadFixture) searchPath(values url.Values) string {
-	return "/v1/libraries/" + f.library + "/search?" + values.Encode()
+func (f *folderFixture) searchPath(values url.Values) string {
+	return "/v1/folders/" + f.folder.ID + "/search?" + values.Encode()
+}
+
+// makeEPUBWithSubject is makeEPUB plus a dc:subject, which the reconciler
+// reads straight into a book's tags (pass_linux.go: obs.Tags =
+// m.Subjects). It exists because the metadata-edit route that used to
+// attach a tag after the fact is gone; a tag now only ever comes from the
+// publication itself.
+func makeEPUBWithSubject(t *testing.T, title, subject string, extra []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	add := func(name, body string, method uint16) {
+		t.Helper()
+		f, err := w.CreateHeader(&zip.FileHeader{Name: name, Method: method})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(f, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("mimetype", "application/epub+zip", zip.Store)
+	add("META-INF/container.xml", `<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OPS/book.opf"
+ media-type="application/oebps-package+xml"/></rootfiles></container>`, zip.Deflate)
+	add("OPS/book.opf", `<package xmlns="http://www.idpf.org/2007/opf">`+
+		`<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">`+
+		`<dc:title>`+title+`</dc:title><dc:subject>`+subject+`</dc:subject>`+
+		`</metadata><manifest><item href="nav.xhtml"`+
+		` media-type="application/xhtml+xml" properties="nav"/></manifest></package>`,
+		zip.Deflate)
+	add("OPS/nav.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml">`+
+		`<body><nav/><!-- `+string(extra)+` --></body></html>`, zip.Deflate)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestSearchFindsABookByWordsFromItsTitle(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	wanted, _ := f.publishAs(t, "one", "The Left Hand of Darkness",
 		[]byte("left hand bytes"))
 	f.publishAs(t, "two", "A Wizard of Earthsea", []byte("earthsea bytes"))
@@ -42,26 +83,18 @@ func TestSearchFindsABookByWordsFromItsTitle(t *testing.T) {
 	}
 }
 
+// TestSearchFacetsNarrowToTheBooksTheyDescribe pins the facet contract
+// end to end: a tag the search reports back must itself be a working
+// filter, without the client having to know it was a tag rather than a
+// series or a contributor.
 func TestSearchFacetsNarrowToTheBooksTheyDescribe(t *testing.T) {
-	f := newUploadFixture(t)
-	bookID, _ := f.publishAs(t, "tagged", "Tehanu", []byte("tehanu bytes"))
-	manage := f.mintScopes(t, f.user.ID, "editor",
-		store.ScopeLibraryRead, store.ScopeLibraryManage)
-	before := f.metadata(t, bookID, manage)
-	resp, out := f.send(t, http.MethodPut, "/v1/books/"+bookID+"/metadata", manage,
-		map[string]any{
-			"revision": before["revision"],
-			"tags": map[string]any{
-				"entries": []map[string]any{{"name": "Fantasy"}},
-			},
-		})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("edit: %d %v", resp.StatusCode, out)
-	}
+	f := newFolderFixture(t)
+	f.writeBook(t, "tagged.epub", makeEPUBWithSubject(t, "Tehanu", "Fantasy", []byte("tehanu bytes")))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	code, page := getJSON(t, f.ts.URL+f.searchPath(url.Values{
 		"q": {"tehanu"},
-	}), manage)
+	}), read)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d: %v", code, page)
 	}
@@ -81,7 +114,7 @@ func TestSearchFacetsNarrowToTheBooksTheyDescribe(t *testing.T) {
 	// client having to say what kind of thing it is.
 	code, filtered := getJSON(t, f.ts.URL+f.searchPath(url.Values{
 		"entity": {tagID},
-	}), manage)
+	}), read)
 	if code != http.StatusOK {
 		t.Fatalf("filtered: %d %v", code, filtered)
 	}
@@ -92,7 +125,7 @@ func TestSearchFacetsNarrowToTheBooksTheyDescribe(t *testing.T) {
 }
 
 func TestSearchRefusesNonsenseWithoutFailing(t *testing.T) {
-	f := newUploadFixture(t)
+	f := newFolderFixture(t)
 	f.publishAs(t, "one", "Dune", []byte("dune bytes"))
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
@@ -115,67 +148,5 @@ func TestSearchRefusesNonsenseWithoutFailing(t *testing.T) {
 		if code != http.StatusBadRequest {
 			t.Fatalf("limit %q: code = %d, want 400: %v", limit, code, out)
 		}
-	}
-}
-
-func TestSearchIsScopedToWhatTheCallerMayRead(t *testing.T) {
-	f := newUploadFixture(t)
-	f.publishAs(t, "one", "Dune", []byte("dune bytes"))
-	stranger := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
-
-	// A library the caller cannot read is a library that does not exist,
-	// so search must not confirm its contents by any other status.
-	code, out := getJSON(t, f.ts.URL+f.searchPath(url.Values{"q": {"dune"}}), stranger)
-	if code != http.StatusNotFound {
-		t.Fatalf("code = %d, want 404: %v", code, out)
-	}
-
-	if code, _ := getJSON(t, f.ts.URL+f.searchPath(url.Values{"q": {"dune"}}), ""); code != http.StatusUnauthorized {
-		t.Fatalf("code = %d, want 401", code)
-	}
-}
-
-// TestDuplicatesReportsTheWeakerKindToo covers ADR-0010 phase 2 over the
-// wire: the guess rides along with the certainty, on one route, because
-// a librarian arrived with one question.
-func TestDuplicatesReportsTheWeakerKindToo(t *testing.T) {
-	f := newUploadFixture(t)
-	firstID, _ := f.publishAs(t, "build-one", "Dune", []byte("one build of dune"))
-	secondID, _ := f.publishAs(t, "build-two", "DUNE!", []byte("another build entirely"))
-	manage := f.mintScopes(t, f.user.ID, "editor",
-		store.ScopeLibraryRead, store.ScopeLibraryManage)
-	for _, id := range []string{firstID, secondID} {
-		before := f.metadata(t, id, manage)
-		resp, out := f.send(t, http.MethodPut, "/v1/books/"+id+"/metadata", manage,
-			map[string]any{
-				"revision": before["revision"],
-				"contributors": map[string]any{
-					"entries": []map[string]any{{"name": "Frank Herbert", "role": "author"}},
-				},
-			})
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("edit %s: %d %v", id, resp.StatusCode, out)
-		}
-	}
-
-	code, page := getJSON(t, f.ts.URL+"/v1/libraries/"+f.library+"/duplicates", manage)
-	if code != http.StatusOK {
-		t.Fatalf("code = %d: %v", code, page)
-	}
-	// Different bytes, so the certain report must stay silent about them.
-	if groups, _ := page["duplicates"].([]any); len(groups) != 0 {
-		t.Fatalf("exact duplicates = %v, want none", page["duplicates"])
-	}
-	similar, _ := page["similar"].([]any)
-	if len(similar) != 1 {
-		t.Fatalf("similar = %v, want one group", page["similar"])
-	}
-	group, _ := similar[0].(map[string]any)
-	if group["normalized_title"] != "dune" {
-		t.Fatalf("normalized_title = %v", group["normalized_title"])
-	}
-	books, _ := group["books"].([]any)
-	if len(books) != 2 {
-		t.Fatalf("group books = %v", group["books"])
 	}
 }

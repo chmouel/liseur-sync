@@ -277,9 +277,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
 
 	// The API is mounted beside the UI, as it is in the binary, so the
 	// reader's sync calls are real and their failures are visible.
@@ -337,9 +335,7 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub", browserTestEPUB(t))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
 	ts, readerHost := splitOriginServer(t, f)
 	cookie := f.loginTo(t, ts, "alice")
 
@@ -394,13 +390,9 @@ func TestUIScreenshots(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	csrf := csrfFrom(t, html)
 	var books []string
 	for _, name := range []string{"dune", "neuromancer", "solaris", "ubik"} {
-		f.uploadForm(t, f.cookie, csrf, f.library, name+".epub",
-			[]byte(strings.Repeat(name, 60)))
-		books = append(books, f.promote(t, name))
+		books = append(books, f.addBook(t, name, []byte(strings.Repeat(name, 60))))
 	}
 	// A shelf with nothing read on it hides the half of the page that
 	// this walk exists to look at.
@@ -429,7 +421,7 @@ func TestUIScreenshots(t *testing.T) {
 		"SHOT_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SHOT_DIR="+outDir,
 		"SHOT_PATHS=/ui/,/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
-			"/ui/libraries/"+f.library+"/contributors,/ui/devices,/ui/settings",
+			"/ui/folders/"+f.folder+"/contributors,/ui/devices,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
 		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),
 	)

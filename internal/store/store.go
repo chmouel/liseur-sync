@@ -1,26 +1,30 @@
 // Package store defines the storage interface for liseur-sync, with
-// SQLite and PostgreSQL backends. All queries are scoped by user_id;
-// no caller constructs cross-user queries.
+// SQLite and PostgreSQL backends.
+//
+// Per-user reading state — ops, sessions, works, editions, aliases and
+// the user_book_works bridge — is scoped by user_id in every query, and
+// no caller constructs a cross-user one. The catalog is deliberately
+// not: ADR-0017 makes every folder's books visible to every signed-in
+// account, so catalog reads take a folder id and no principal. What
+// stays private is what somebody read, never what the server holds.
 package store
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/chmouel/liseur-sync/internal/contentpath"
 )
 
 // Common sentinel errors.
 var (
 	ErrNotFound            = errors.New("store: not found")
+	ErrInvalidInput        = errors.New("store: invalid input")
 	ErrConflict            = errors.New("store: conflict") // uniqueness or state conflict
 	ErrIDMismatch          = errors.New("store: idempotent id reused with different payload")
 	ErrIdempotencyConflict = errors.New("store: idempotency key reused with different request")
@@ -54,19 +58,17 @@ const TokenPurgeGrace = 30 * 24 * time.Hour
 type Scope string
 
 const (
-	ScopeSync          Scope = "sync"
-	ScopeReadInsights  Scope = "read-insights"
-	ScopeLibraryRead   Scope = "library-read"
-	ScopeLibraryManage Scope = "library-manage"
-	ScopeAdmin         Scope = "admin"
+	ScopeSync         Scope = "sync"
+	ScopeReadInsights Scope = "read-insights"
+	ScopeLibraryRead  Scope = "library-read"
+	ScopeAdmin        Scope = "admin"
 )
 
 var scopeOrder = map[Scope]int{
-	ScopeSync:          0,
-	ScopeReadInsights:  1,
-	ScopeLibraryRead:   2,
-	ScopeLibraryManage: 3,
-	ScopeAdmin:         4,
+	ScopeSync:         0,
+	ScopeReadInsights: 1,
+	ScopeLibraryRead:  2,
+	ScopeAdmin:        3,
 }
 
 // ScopeSet is the canonical, duplicate-free set of capabilities on a token.
@@ -104,12 +106,11 @@ func (s ScopeSet) Contains(scope Scope) bool {
 	return false
 }
 
-// Allows reports whether the set grants a requested capability.
+// Allows reports whether the set grants a requested capability. Admin
+// implies everything; nothing else implies anything, since the catalog
+// is read-only to every credential (ADR-0017).
 func (s ScopeSet) Allows(scope Scope) bool {
-	if s.Contains(ScopeAdmin) || s.Contains(scope) {
-		return true
-	}
-	return scope == ScopeLibraryRead && s.Contains(ScopeLibraryManage)
+	return s.Contains(ScopeAdmin) || s.Contains(scope)
 }
 
 // Legacy returns the deprecated scalar representation for singleton sets.
@@ -168,28 +169,17 @@ type AdminCounts struct {
 	AdminUsers    int
 	DisabledUsers int
 
-	Libraries        int
-	ManagedLibraries int
-	WatchedLibraries int
+	// Folders and FoldersByKind describe what the server is reflecting.
+	// There is nothing to report about *how* books got there, because
+	// there is no longer a pipeline they came through.
+	Folders       int
+	FoldersByKind map[string]int
 
-	// BooksByStatus is keyed by the status values books.status allows:
-	// active, missing, trashed, review.
+	// BooksByStatus is keyed by the two values books.status allows:
+	// active and missing. A run of missing books is the one catalog
+	// number worth an administrator's attention, because it usually
+	// means a disk is not where it was.
 	BooksByStatus map[string]int
-	// TrashNextExpiry is the earliest trash_expires_at still pending,
-	// which is when the trash worker next has something to do.
-	TrashNextExpiry *time.Time
-
-	Blobs        int
-	BlobBytes    int64
-	OrphanBlobs  int
-	BlobsPending int // reserved but not yet promoted
-
-	// JobsByState is keyed by ingest_jobs.state. OldestJobByState
-	// carries the created_at of the oldest job in each *non-terminal*
-	// state, which is the number that answers "is ingest stuck?"
-	// without naming a file.
-	JobsByState      map[string]int
-	OldestJobByState map[string]time.Time
 }
 
 // Token is a per-device API token. Hash is SHA-256 of the secret.
@@ -206,422 +196,155 @@ type Token struct {
 	RevokedAt *time.Time
 }
 
-// LibrarySource says where a library's books come from. It is one of the
-// three axes ADR-0014 split the old `kind` column into: a source, a
-// storage mode and a refresh policy. `kind` conflated the first and the
-// third, which is why "a directory indexed once" had no way to exist.
-type LibrarySource string
+// ---------------------------------------------------------------------
+// The catalog
+// ---------------------------------------------------------------------
 
-const (
-	// LibraryManaged holds books users uploaded. The server owns the
-	// bytes and there is no root path.
-	LibraryManaged LibrarySource = "managed"
-	// LibraryDirectory is an administrator's directory of EPUBs. The
-	// server reads it and never writes, renames or deletes below it.
-	LibraryDirectory LibrarySource = "directory"
-	// LibraryCalibre is a Calibre library directory, described by the
-	// metadata.db at its root. Reserved by ADR-0014; the schema does not
-	// admit it until the Calibre source is implemented.
-	LibraryCalibre LibrarySource = "calibre"
-)
-
-func (s LibrarySource) Valid() bool {
-	return s == LibraryManaged || s == LibraryDirectory || s == LibraryCalibre
-}
-
-// RootBacked reports whether this source reads from a directory, and so
-// requires a root path.
-func (s LibrarySource) RootBacked() bool {
-	return s == LibraryDirectory || s == LibraryCalibre
-}
-
-// LibraryStorage says where the bytes this server serves actually live.
-type LibraryStorage string
-
-const (
-	// LibraryStorageCAS copies content into content-addressed storage,
-	// which is the only mode a managed library can have.
-	LibraryStorageCAS LibraryStorage = "cas"
-	// LibraryStorageInPlace serves bytes where they lie, with no copy
-	// and no quota charge. Reserved by ADR-0014; the schema does not
-	// admit it until in-place reading is implemented.
-	LibraryStorageInPlace LibraryStorage = "in_place"
-)
-
-func (s LibraryStorage) Valid() bool {
-	return s == LibraryStorageCAS || s == LibraryStorageInPlace
-}
-
-// LibraryRefresh says how often the server looks at a root again. A
-// watch folder is this, not a kind of library.
-type LibraryRefresh string
-
-const (
-	LibraryRefreshManual   LibraryRefresh = "manual"
-	LibraryRefreshInterval LibraryRefresh = "interval"
-)
-
-func (r LibraryRefresh) Valid() bool {
-	return r == LibraryRefreshManual || r == LibraryRefreshInterval
-}
-
-// DefaultRefreshInterval is how often a library set to refresh on an
-// interval is swept when nobody chose a number.
-const DefaultRefreshInterval = 15 * time.Minute
-
-// RefreshSeconds encodes an interval for storage. Both backends hold
-// whole seconds under a positive CHECK, so a zero or negative duration
-// — which is what a caller that never set one has — becomes the
-// default rather than a constraint violation.
-func RefreshSeconds(d time.Duration) int64 {
-	if d < time.Second {
-		d = DefaultRefreshInterval
-	}
-	return int64(d / time.Second)
-}
-
-// RefreshIntervalFrom decodes what RefreshSeconds wrote.
-func RefreshIntervalFrom(seconds int64) time.Duration {
-	if seconds <= 0 {
-		return DefaultRefreshInterval
-	}
-	return time.Duration(seconds) * time.Second
-}
-
-// RefreshCode is why a library's last refresh did not work, from a
-// closed set.
+// FolderKind decides how a folder's books are discovered and where their
+// metadata comes from.
 //
-// It is a code rather than an error string because the admin panel
-// renders it, and a refresh failure's message is somebody's filesystem
-// talking: a path, a mount point, a database URL. ADR-0013 keeps those
-// out of the browser, so the underlying error goes to the log and this
-// is what the catalog remembers (ADR-0014).
-type RefreshCode string
+// The two kinds are not two configurations of one scanner; they key
+// books differently, and that difference is load-bearing (ADR-0017). A
+// plain folder is a tree of files and a book is identified by where it
+// sits. A Calibre folder is a database that happens to have files next
+// to it, and a book is identified by its Calibre id — because Calibre
+// rewrites a book's directory name whenever its title or author changes,
+// and a server that keyed on the path would read every such edit as one
+// book vanishing and another appearing, losing the reading position each
+// time.
+type FolderKind string
 
 const (
-	// RefreshCodeNone is a library whose last refresh worked.
-	RefreshCodeNone RefreshCode = ""
-	// RefreshCodeRootUnavailable is a root that could not be opened at
-	// all: unmounted, renamed, or no longer readable by this server.
-	RefreshCodeRootUnavailable RefreshCode = "root_unavailable"
-	// RefreshCodeNoRootPath is a library with nothing to refresh, which
-	// only a hand-edited database produces.
-	RefreshCodeNoRootPath RefreshCode = "no_root_path"
-	// RefreshCodeUnreadableDatabase is a metadata.db that is missing,
-	// truncated, locked or not a Calibre database at all.
-	RefreshCodeUnreadableDatabase RefreshCode = "unreadable_database"
-	// RefreshCodeUnsupportedSchema is a Calibre database whose shape
-	// this server does not understand well enough to read it.
-	RefreshCodeUnsupportedSchema RefreshCode = "unsupported_schema"
-	// RefreshCodeIncompleteScan is a traversal that ended early — a
-	// limit, an unreadable subdirectory — so absence could not be
-	// concluded and the library is only partly accounted for.
-	RefreshCodeIncompleteScan RefreshCode = "incomplete_scan"
-	// RefreshCodeLeaseLost is a refresh another worker took over while
-	// this one was running. Nothing is wrong with the library; the next
-	// refresh finishes what this one started.
-	RefreshCodeLeaseLost RefreshCode = "lease_lost"
-	// RefreshCodeFailed is everything else, and exists so that an
-	// unexpected error is still recorded as *something* an operator can
-	// see next to the log line that has the detail.
-	RefreshCodeFailed RefreshCode = "failed"
+	// FolderPlain is a directory tree that is walked for EPUBs.
+	FolderPlain FolderKind = "plain"
+	// FolderCalibre is a directory with a metadata.db at its root, read
+	// as the curator's own catalog.
+	FolderCalibre FolderKind = "calibre"
 )
 
-// Valid reports whether a code is one this server writes. The store
-// enforces it, because an unknown code would reach a page that has no
-// wording for it.
-func (c RefreshCode) Valid() bool {
-	switch c {
-	case RefreshCodeNone, RefreshCodeRootUnavailable, RefreshCodeNoRootPath,
-		RefreshCodeUnreadableDatabase, RefreshCodeUnsupportedSchema,
-		RefreshCodeIncompleteScan, RefreshCodeLeaseLost, RefreshCodeFailed:
-		return true
-	}
-	return false
+func (k FolderKind) Valid() bool {
+	return k == FolderPlain || k == FolderCalibre
 }
 
-// DefaultRefreshLease is how long a claimed library stays claimed
-// without being renewed. It is short, because its only job is to
-// outlive the gap between two renewals: a worker that dies must not
-// lock a library out for longer than an operator would wait.
-const DefaultRefreshLease = 2 * time.Minute
-
-// RefreshLeaseRenewAfter is when a holder should renew. Half the lease
-// leaves a whole one for a slow statement to finish in before another
-// worker may take over.
-const RefreshLeaseRenewAfter = DefaultRefreshLease / 2
-
-// RefreshLease is one worker's claim on one library: a random token
-// nobody else can guess, and the moment the claim lapses if it is not
-// renewed.
+// Folder is a directory this server reflects.
 //
-// The token is what makes expiry safe. Expiry alone does not stop the
-// worker that held the lease — a slow refresh can still be running when
-// a second one takes over — so every write that concludes a refresh
-// names its owner, and a dispossessed worker's writes are refused
-// rather than racing the new holder's.
-type RefreshLease struct {
-	Owner string
-	Until time.Time
-}
-
-// Valid reports a usable lease.
-func (l RefreshLease) Valid() bool {
-	return l.Owner != "" && len(l.Owner) <= 128 && !l.Until.IsZero()
-}
-
-// LibraryRole is an ACL capability. Manage implies read.
-type LibraryRole string
-
-const (
-	LibraryRoleRead   LibraryRole = "read"
-	LibraryRoleManage LibraryRole = "manage"
-)
-
-func (r LibraryRole) Valid() bool {
-	return r == LibraryRoleRead || r == LibraryRoleManage
-}
-
-func (r LibraryRole) Allows(required LibraryRole) bool {
-	return r == LibraryRoleManage || r == required
-}
-
-// Library is one shared catalog namespace.
-type Library struct {
-	ID          string
-	OwnerUserID string
-	QuotaUserID string
-	Source      LibrarySource
-	Storage     LibraryStorage
-	Refresh     LibraryRefresh
-	// RefreshInterval is how long to wait between sweeps of a root. It
-	// is meaningless, but still set, when Refresh is manual.
-	RefreshInterval time.Duration
-	Name            string
-	RootPath        *string
-	ConfigJSON      []byte
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	// LastRefreshAt is when a refresh of this library last finished
-	// without an error, and LastRefreshAttemptAt when one was last
-	// started. The schedule is computed from the attempt, so a root that
-	// fails every time backs off on its interval instead of being retried
-	// in a loop.
-	LastRefreshAt        *time.Time
-	LastRefreshAttemptAt *time.Time
-	// LastRefreshCode is why the last refresh did not work, as a bounded
-	// code the admin panel has wording for. It is cleared by the next
-	// refresh that succeeds, and the error behind it is in the log.
-	LastRefreshCode RefreshCode
-	// RefreshLeaseOwner and RefreshLeaseUntil are the claim a worker
-	// currently holds on this library, if any. A lease that has lapsed
-	// is left behind rather than cleared: the next claim overwrites it,
-	// and reading it afterwards says who was last in here.
-	RefreshLeaseOwner string
-	RefreshLeaseUntil *time.Time
-	// RefreshRequestedAt is an administrator asking for a refresh now. It
-	// is cleared by the claim that honours it, which is what lets a
-	// library with no schedule at all be refreshed on demand.
-	RefreshRequestedAt *time.Time
-	// LastInventoryDigest is the change gate of a Calibre library: the
-	// whole of metadata.db's book inventory, and the size and mtime of
-	// every file it names, hashed to one value. A refresh that computes
-	// the same value stops without touching a catalog row. It is empty
-	// for every other source, which have no such gate.
-	LastInventoryDigest string
-}
-
-// RefreshDueAt is when this library's next scheduled refresh falls due.
-// It is meaningless for a library that is not on an interval, and the
-// caller is expected to have checked. The attempt comes first because a
-// refresh that failed still counts as having looked.
-func (l Library) RefreshDueAt() time.Time {
-	switch {
-	case l.LastRefreshAttemptAt != nil:
-		return l.LastRefreshAttemptAt.Add(l.RefreshInterval)
-	case l.LastRefreshAt != nil:
-		return l.LastRefreshAt.Add(l.RefreshInterval)
-	default:
-		return l.CreatedAt.Add(l.RefreshInterval)
-	}
-}
-
-// RefreshDue says whether this library wants looking at. A request made
-// by hand is due whatever the policy says, including for a library that
-// has no schedule.
-func (l Library) RefreshDue(now time.Time) bool {
-	if l.RootPath == nil || *l.RootPath == "" {
-		return false
-	}
-	if l.RefreshRequestedAt != nil {
-		return true
-	}
-	if l.Refresh != LibraryRefreshInterval {
-		return false
-	}
-	return !l.RefreshDueAt().After(now)
-}
-
-// AccessibleLibrary includes the caller's effective ACL role.
-type AccessibleLibrary struct {
-	Library Library
-	Role    LibraryRole
-}
-
-// LibraryGrant is one row of a library's access list, with the grantee's
-// name resolved so that the admin panel does not have to look up each
-// id separately. It is only ever produced by AdminLibraryGrants.
-type LibraryGrant struct {
-	LibraryID string
-	UserID    string
-	UserName  string
-	Role      LibraryRole
+// It has no owner, no quota principal and no access list. Every
+// signed-in account sees every folder's books; only an administrator
+// sees RootPath, which is a filesystem oracle and not a reader's
+// business. Nothing beneath RootPath is ever written.
+type Folder struct {
+	ID        string
+	Name      string
+	RootPath  string
+	Kind      FolderKind
 	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
-// LibraryCursor is the opaque pagination cursor of the admin library
-// list. The list is ordered by name and then id, because a name alone
-// is not unique across owners and a cursor that can repeat is a cursor
-// that can skip a row.
-// The id comes first because it cannot contain a space, whereas a
-// library name can contain anything: cutting at the first space is then
-// unambiguous whatever somebody called their library. It also has to
-// survive a round trip through a PostgreSQL text parameter, which rules
-// out the NUL byte an in-band separator would otherwise reach for.
-func LibraryCursor(l Library) string { return l.ID + " " + l.Name }
+// FolderCursor is the opaque pagination cursor of the folder list,
+// ordered by name then id. The id comes first because it cannot contain
+// a space and a folder name can contain anything, so cutting at the
+// first space is unambiguous.
+func FolderCursor(f Folder) string { return f.ID + " " + f.Name }
 
-// SplitLibraryCursor undoes LibraryCursor. An unparseable cursor reads
-// as "start from the beginning" rather than as an error: it can only
-// come from a URL somebody edited, and a first page is a better answer
-// than a 400.
-func SplitLibraryCursor(c string) (name, id string) {
+// SplitFolderCursor undoes FolderCursor. An unparseable cursor reads as
+// "start from the beginning": it can only come from a URL somebody
+// edited, and a first page is a better answer than a 400.
+func SplitFolderCursor(c string) (name, id string) {
 	id, name, _ = strings.Cut(c, " ")
 	return name, id
 }
 
-// BookStatus is the catalog lifecycle state.
+// BookStatus is the catalog lifecycle state, and it has exactly two
+// values. A book is either something a scan can see or something it
+// could not find. There is no trash, because the server does not own
+// the file and deleting one is not its business; there is no review
+// queue, because nothing here asks a person a question.
 type BookStatus string
 
 const (
 	BookActive  BookStatus = "active"
 	BookMissing BookStatus = "missing"
-	BookTrashed BookStatus = "trashed"
-	BookReview  BookStatus = "review"
 )
 
-// MetadataSource records which precedence stage supplied a field.
-type MetadataSource string
-
-const (
-	MetadataEmbedded MetadataSource = "embedded"
-	MetadataFilename MetadataSource = "filename"
-	MetadataExternal MetadataSource = "external"
-	// MetadataCalibre is a Calibre library's own metadata.db. It is not
-	// folded into MetadataExternal because the precedence engine lets a
-	// source refresh its own earlier value: a network lookup and a
-	// Calibre read sharing one source would overwrite each other
-	// forever, whichever ran last (ADR-0014).
-	MetadataCalibre MetadataSource = "calibre"
-	MetadataManual  MetadataSource = "manual"
-)
-
-// Valid reports whether the source is one of the precedence stages.
-func (s MetadataSource) Valid() bool {
-	return s == MetadataEmbedded || s == MetadataFilename ||
-		s == MetadataExternal || s == MetadataCalibre ||
-		s == MetadataManual
+func (s BookStatus) Valid() bool {
+	return s == BookActive || s == BookMissing
 }
 
-// MetadataSetLocks records the set-level manual locks of one book. A row
-// lock cannot express a deliberately emptied set, because removing the last
-// row leaves nothing behind to carry the lock, so the set-level flag is what
-// keeps an emptied set empty across rescans.
-type MetadataSetLocks struct {
-	Identifiers  bool `json:"-"`
-	Languages    bool `json:"-"`
-	Tags         bool `json:"-"`
-	Genres       bool `json:"-"`
-	Series       bool `json:"-"`
-	Contributors bool `json:"-"`
-}
-
-// CatalogBook is shared through a library ACL. Its sync Work remains
-// user-scoped and is joined through UserBookWork.
+// CatalogBook is one publication in one folder: one row, one file.
 //
-// Revision and SetLocks are server-managed state rather than request
-// payload, so they are excluded from the JSON encoding that
-// NewBookPromotionFingerprint hashes; including them would change the
-// fingerprint of every in-flight promotion across an upgrade.
+// The metadata carries no per-field source and no lock. Both existed to
+// rank competing claims — a filename guess against an EPUB against a
+// network lookup against a human edit — and with editing and external
+// providers gone there is one source per folder kind and nothing to
+// rank. A pass states what the folder says.
 type CatalogBook struct {
-	ID        string
-	LibraryID string
-	Status    BookStatus
-	Revision  int64            `json:"-"`
-	SetLocks  MetadataSetLocks `json:"-"`
-	// ReviewReason says why the book needs an administrator's attention.
-	// It is set only alongside the review status and is empty otherwise,
-	// so a book in review always explains itself: a review item nobody can
-	// interpret is the same as no review item.
-	ReviewReason        string
-	Title               string
-	TitleSource         MetadataSource
-	TitleLocked         bool
-	Subtitle            string
-	SubtitleSource      MetadataSource
-	SubtitleLocked      bool
-	Description         string
-	DescriptionSource   MetadataSource
-	DescriptionLocked   bool
-	Publisher           string
-	PublisherSource     MetadataSource
-	PublisherLocked     bool
-	PublishedDate       string
-	PublishedDateSource MetadataSource
-	PublishedDateLocked bool
-	RawMetadataJSON     []byte
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	TrashedAt           *time.Time
-	TrashExpiresAt      *time.Time
+	ID       string
+	FolderID string
+	Status   BookStatus
+
+	// RelativePath is slash-separated and relative to the folder root,
+	// so it is the same string on every platform and is what an open is
+	// rooted at. It never escapes to a non-admin caller: joined to the
+	// root it would name a path on the server's disk.
+	RelativePath string
+	SizeBytes    int64
+	// MTime is the modification time the last scan saw. With SizeBytes
+	// it is the change gate of a plain folder.
+	MTime time.Time
+	// ContentSHA256 is the publication's digest: what a client matches
+	// its own copy against, and what the cover cache is keyed by.
+	ContentSHA256    string
+	OriginalFilename string
+	MediaType        string
+	// CalibreID identifies this book in its folder's metadata.db, and is
+	// nil in a plain folder.
+	CalibreID *int64
+	// CoverRelativePath is a cover the curator chose, sitting beside the
+	// publication rather than inside it — Calibre's cover.jpg.
+	// CoverSHA256 proves it has not been replaced under a cache key that
+	// names the old image.
+	CoverRelativePath *string
+	CoverSHA256       string
+
+	Title         string
+	Subtitle      string
+	Description   string
+	Publisher     string
+	PublishedDate string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	// SeenAt is when a scan last found this file, and AbsentAt when one
+	// last proved it gone. Only a completed scan may set AbsentAt.
+	SeenAt   *time.Time
+	AbsentAt *time.Time
 }
 
-// BookIdentifier is one publication identifier row. Values are compared
+// BookIdentifier is one publication identifier. Values are compared
 // verbatim; only the scheme is folded, because identifier values are
 // case-sensitive in general.
 type BookIdentifier struct {
 	Scheme string
 	Value  string
-	Source MetadataSource
-	Locked bool
 }
 
-// BookLanguage is one language row of a book.
-type BookLanguage struct {
-	Language string
-	Source   MetadataSource
-	Locked   bool
-}
-
-// BookTaxon is one tag or genre membership. ID and NormalizedName identify
-// the shared library-wide entity; Name is its display spelling.
+// BookTaxon is one tag membership. ID and NormalizedName identify the
+// shared folder-wide entity; Name is its display spelling.
 type BookTaxon struct {
 	ID             string
 	Name           string
 	NormalizedName string
-	Source         MetadataSource
-	Locked         bool
 }
 
-// BookSeries is one series membership. Position is absent when the source
-// named a series without a place in it; a missing position is never
-// invented.
+// BookSeries is one series membership. Position is absent when the
+// source named a series without a place in it; a missing position is
+// never invented.
 type BookSeries struct {
 	SeriesID       string
 	Name           string
 	NormalizedName string
 	Position       *float64
-	Source         MetadataSource
-	Locked         bool
 }
 
 // ContributorRoleAuthor is the role a person holds when they wrote the
@@ -630,630 +353,56 @@ type BookSeries struct {
 // against this rather than against whatever the file said.
 const ContributorRoleAuthor = "author"
 
-// BookContributor is one contributor in one role. A person credited twice
-// in different roles is two rows over one contributor entity.
+// BookContributor is one contributor in one role. A person credited
+// twice in different roles is two rows over one contributor entity.
 type BookContributor struct {
 	ContributorID  string
 	Name           string
 	NormalizedName string
 	Role           string
 	Position       int
-	Source         MetadataSource
-	Locked         bool
-}
-
-// CatalogBookFile is one downloadable file as a catalog payload
-// describes it: what the bytes are, how many of them there were, and
-// what to call them. It is deliberately not BookFile. The blob address,
-// the source path and the storage mode belong to the quota,
-// garbage-collection, reconciliation and download paths that own them
-// (ADR-0015), and a read that exists only to render JSON must not put
-// them within reach of a handler that could serialize one by accident.
-type CatalogBookFile struct {
-	ID     string
-	BookID string
-	// ContentSHA256 is the digest of the bytes — the thing a client
-	// matches its own copy against. It is present whoever owns the
-	// bytes, including a library the server keeps no copy of.
-	ContentSHA256 string
-	// SizeBytes is the length those bytes had when the server last read
-	// them, which for an in-place file describes the last look rather
-	// than the file now.
-	SizeBytes int64
-	MediaType string
-	Filename  string
 }
 
 // CatalogBookRelations holds the relationship rows a catalog payload is
-// drawn from, for a whole page of books at once, keyed by book id. It is
-// deliberately narrower than BookMetadata: this answers "what does a
-// shelf need to show these books", not "what is this book's complete
-// metadata".
-//
-// Files are the available ones only, because a superseded or missing
-// file is not something a client can download and listing it invites a
-// client to try.
+// drawn from, for a whole page of books at once, keyed by book id. It
+// answers "what does a shelf need to show these books".
 type CatalogBookRelations struct {
 	Contributors map[string][]BookContributor
 	Series       map[string][]BookSeries
-	Files        map[string][]CatalogBookFile
-}
-
-// BookMetadata is one book's scalar fields together with every metadata
-// entity set attached to it, read in one transaction so the precedence
-// engine merges against a consistent snapshot. Rows come back in a
-// deterministic order so repeated merges of the same proposal are
-// reproducible.
-type BookMetadata struct {
-	Book         CatalogBook
-	Identifiers  []BookIdentifier
-	Languages    []BookLanguage
-	Tags         []BookTaxon
-	Genres       []BookTaxon
-	Series       []BookSeries
-	Contributors []BookContributor
-}
-
-// ApplyBookMetadataRequest replaces one book's scalar metadata fields and
-// every metadata entity set attached to it. The caller resolves the new
-// state first — the precedence engine lives outside the store — and the
-// store writes it atomically under ExpectedRevision, so a concurrent writer
-// loses with ErrStaleRevision rather than silently overwriting.
-//
-// Metadata carries the complete resolved sets, not a delta: rows the caller
-// omits are removed. Entity rows are matched by normalized name within the
-// library; the supplied ID is used only when no such entity exists yet, so
-// ID generation stays at the edge like every other identifier in the store.
-type ApplyBookMetadataRequest struct {
-	Metadata         BookMetadata
-	ExpectedRevision int64
-	UpdatedAt        time.Time
-}
-
-// ValidateApplyBookMetadata checks the invariants a backend trusts. Handlers
-// and workers call it at the edge; the store does not revalidate.
-func ValidateApplyBookMetadata(request ApplyBookMetadataRequest) error {
-	book := request.Metadata.Book
-	if book.ID == "" || book.LibraryID == "" || request.ExpectedRevision < 1 ||
-		request.UpdatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	for _, source := range []MetadataSource{
-		book.TitleSource, book.SubtitleSource, book.DescriptionSource,
-		book.PublisherSource, book.PublishedDateSource,
-	} {
-		if source != "" && !source.Valid() {
-			return ErrInvalidTransition
-		}
-	}
-	identifiers := make(map[IdentifierKey]struct{}, len(request.Metadata.Identifiers))
-	for _, row := range request.Metadata.Identifiers {
-		if row.Scheme == "" || row.Value == "" || !row.Source.Valid() {
-			return ErrInvalidTransition
-		}
-		key := IdentifierKey{Scheme: row.Scheme, Value: row.Value}
-		if _, duplicate := identifiers[key]; duplicate {
-			return ErrInvalidTransition
-		}
-		identifiers[key] = struct{}{}
-	}
-	languages := make(map[string]struct{}, len(request.Metadata.Languages))
-	for _, row := range request.Metadata.Languages {
-		if row.Language == "" || !row.Source.Valid() {
-			return ErrInvalidTransition
-		}
-		if _, duplicate := languages[row.Language]; duplicate {
-			return ErrInvalidTransition
-		}
-		languages[row.Language] = struct{}{}
-	}
-	for _, set := range [][]BookTaxon{request.Metadata.Tags, request.Metadata.Genres} {
-		seen := make(map[string]struct{}, len(set))
-		ids := make(map[string]struct{}, len(set))
-		for _, row := range set {
-			if row.ID == "" || row.Name == "" || row.NormalizedName == "" ||
-				!row.Source.Valid() {
-				return ErrInvalidTransition
-			}
-			if _, duplicate := seen[row.NormalizedName]; duplicate {
-				return ErrInvalidTransition
-			}
-			// Entity ids are unique table-wide, so two rows offering the
-			// same candidate id for different names would reach the store
-			// as a raw constraint violation instead of a clean rejection.
-			if _, duplicate := ids[row.ID]; duplicate {
-				return ErrInvalidTransition
-			}
-			seen[row.NormalizedName] = struct{}{}
-			ids[row.ID] = struct{}{}
-		}
-	}
-	series := make(map[string]struct{}, len(request.Metadata.Series))
-	seriesIDs := make(map[string]struct{}, len(request.Metadata.Series))
-	for _, row := range request.Metadata.Series {
-		if row.SeriesID == "" || row.Name == "" || row.NormalizedName == "" ||
-			!row.Source.Valid() {
-			return ErrInvalidTransition
-		}
-		if _, duplicate := series[row.NormalizedName]; duplicate {
-			return ErrInvalidTransition
-		}
-		if _, duplicate := seriesIDs[row.SeriesID]; duplicate {
-			return ErrInvalidTransition
-		}
-		series[row.NormalizedName] = struct{}{}
-		seriesIDs[row.SeriesID] = struct{}{}
-	}
-	contributors := make(map[ContributorRoleKey]struct{}, len(request.Metadata.Contributors))
-	contributorIDs := make(map[string]string, len(request.Metadata.Contributors))
-	for _, row := range request.Metadata.Contributors {
-		if row.ContributorID == "" || row.Name == "" || row.NormalizedName == "" ||
-			row.Role == "" || row.Position < 0 || !row.Source.Valid() {
-			return ErrInvalidTransition
-		}
-		key := ContributorRoleKey{NormalizedName: row.NormalizedName, Role: row.Role}
-		if _, duplicate := contributors[key]; duplicate {
-			return ErrInvalidTransition
-		}
-		// One contributor credited in several roles is several rows over one
-		// entity, so an id may repeat only for its own normalized name.
-		if name, seen := contributorIDs[row.ContributorID]; seen &&
-			name != row.NormalizedName {
-			return ErrInvalidTransition
-		}
-		contributors[key] = struct{}{}
-		contributorIDs[row.ContributorID] = row.NormalizedName
-	}
-	return nil
-}
-
-// IdentifierKey and ContributorRoleKey are the composite primary keys of the
-// identifier and contributor set rows, used to reject duplicates before the
-// store has to.
-type IdentifierKey struct {
-	Scheme string
-	Value  string
-}
-
-type ContributorRoleKey struct {
-	NormalizedName string
-	Role           string
 }
 
 // UserBookWork is the privacy boundary between a shared catalog book and
-// one user's sync graph.
+// a reader's own history. The catalog is deliberately shared; a reading
+// position never is.
 type UserBookWork struct {
 	UserID    string
-	LibraryID string
+	FolderID  string
 	BookID    string
 	WorkID    string
 	CreatedAt time.Time
 }
 
-// IngestSource identifies how content entered the durable ingestion queue.
-type IngestSource string
-
-const (
-	IngestUpload IngestSource = "upload"
-	// IngestScanned is a file the server found on disk. How often it
-	// looks is the library's refresh policy and no business of the file's
-	// (ADR-0014).
-	IngestScanned IngestSource = "scanned"
-)
-
-func (s IngestSource) Valid() bool {
-	return s == IngestUpload || s == IngestScanned
-}
-
-// IngestState is one durable stage of content ingestion.
-type IngestState string
-
-const (
-	IngestReceived    IngestState = "received"
-	IngestStaged      IngestState = "staged"
-	IngestValidated   IngestState = "validated"
-	IngestExtracted   IngestState = "extracted"
-	IngestPromoted    IngestState = "promoted"
-	IngestQuarantined IngestState = "quarantined"
-	IngestFailed      IngestState = "failed"
-)
-
-func (s IngestState) Valid() bool {
-	switch s {
-	case IngestReceived, IngestStaged, IngestValidated, IngestExtracted,
-		IngestPromoted, IngestQuarantined, IngestFailed:
-		return true
-	default:
-		return false
-	}
-}
-
-// CanTransitionIngest reports whether a generic job transition is legal.
-// Promotion is deliberately excluded: it must commit the durable blob,
-// catalog reference, quota reservation, and promoted state together.
-func CanTransitionIngest(from, to IngestState) bool {
-	switch from {
-	case IngestReceived:
-		// Quarantine is reachable from here only because an in-place
-		// scan validates from its own descriptor and never stages
-		// anything: it learns that a file is not a publication while the
-		// job is still `received`, and that verdict is as permanent as
-		// the one a staged upload gets (ADR-0014).
-		return to == IngestFailed || to == IngestQuarantined
-	case IngestStaged:
-		return to == IngestValidated || to == IngestQuarantined || to == IngestFailed
-	case IngestValidated:
-		return to == IngestExtracted || to == IngestQuarantined || to == IngestFailed
-	case IngestExtracted:
-		return to == IngestQuarantined || to == IngestFailed
-	case IngestQuarantined:
-		return to == IngestStaged
-	case IngestFailed:
-		return to == IngestReceived || to == IngestStaged
-	default:
-		return false
-	}
-}
-
-// IngestJob is the persisted ingestion state. RequestFingerprint describes
-// immutable request metadata, not the uploaded content digest.
-type IngestJob struct {
-	ID          string
-	UserID      string
-	LibraryID   string
-	QuotaUserID string
-	Source      IngestSource
-	// OriginalFilename is the client-provided name for an upload. It is a
-	// label only; it is never used as a filesystem path.
-	OriginalFilename string
-	// Storage is the library's own storage mode, copied onto the job so
-	// that a worker knows without a second read whether there is a
-	// staged artifact to find. An in-place job has none by construction,
-	// which is what distinguishes a job that has not started from an
-	// upload that lost its bytes (ADR-0014).
-	Storage                       LibraryStorage
-	ClientKey                     *string
-	RequestFingerprint            string
-	PromotionFingerprint          *string
-	ArtifactsExpired              bool
-	ArtifactCleanupPending        bool
-	State                         IngestState
-	BytesReceived                 int64
-	ContentSHA256                 *string
-	StagingPath                   *string
-	SourceRelativePath            *string
-	ExtractedEmbeddedMetadataJSON []byte
-	BookID                        *string
-	ErrorCode                     *string
-	ErrorDetail                   *string
-	RetryCount                    int64
-	Revision                      int64
-	CreatedAt                     time.Time
-	UpdatedAt                     time.Time
-	ExpiresAt                     *time.Time
-}
-
-// IngestJobRequest contains the immutable fields used to create or replay a
-// durable job. User and quota principals are derived by the store.
-type IngestJobRequest struct {
-	ID                 string
-	LibraryID          string
-	Source             IngestSource
-	OriginalFilename   string
-	ClientKey          *string
-	RequestFingerprint string
-	SourceRelativePath *string
-	CreatedAt          time.Time
-}
-
-// IngestJobCursor is the exclusive cursor for stable job pagination.
-type IngestJobCursor struct {
-	CreatedAt time.Time
-	ID        string
-}
-
-// IngestRecoveryCursor is the exclusive cursor for global recovery scans.
-// Recovery is an internal housekeeping operation, not an authorization
-// surface.
-type IngestRecoveryCursor struct {
-	UpdatedAt time.Time
-	ID        string
-}
-
-// IngestJobTransition applies one revision-checked state change.
-// ExtractedEmbeddedMetadataJSON is required as a valid JSON object and may only
-// be assigned by a validated-to-extracted transition; every other transition
-// preserves the existing snapshot and must leave this field empty. Error
-// fields are required for failed/quarantined targets.
-type IngestJobTransition struct {
-	ExpectedState                 IngestState
-	ExpectedRevision              int64
-	NextState                     IngestState
-	ExtractedEmbeddedMetadataJSON []byte
-	ErrorCode                     string
-	ErrorDetail                   string
-	ExpiresAt                     *time.Time
-	IncrementRetry                bool
-	UpdatedAt                     time.Time
-}
-
-// BlobInfo identifies one verified durable CAS object.
-type BlobInfo struct {
-	SHA256    string
-	SizeBytes int64
-}
-
-// BlobRecord is the database reconciliation state for one CAS object.
-type BlobRecord struct {
-	BlobInfo
-	OrphanedAt *time.Time
-	MissingAt  *time.Time
-}
-
-// BlobReconcileResult describes state changes from one filesystem
-// observation. Reconciliation only marks; physical deletion is a later
-// grace-period sweep.
-type BlobReconcileResult struct {
-	Record         BlobRecord
-	Inserted       bool
-	OrphanMarked   bool
-	OrphanCleared  bool
-	MissingMarked  bool
-	MissingCleared bool
-}
-
-// CatalogAvailabilityResult counts one bounded catalog availability pass.
-// Files follow their blob: a file whose bytes are gone is not downloadable,
-// and a book with no downloadable file is not a book a reader can open.
-type CatalogAvailabilityResult struct {
-	FilesMarkedMissing   int
-	FilesMarkedAvailable int
-	BooksMarkedMissing   int
-	BooksMarkedActive    int
-}
-
-// Changed reports whether the pass mutated anything, so that a caller can
-// stop looping.
-func (r CatalogAvailabilityResult) Changed() bool {
-	return r.FilesMarkedMissing != 0 || r.FilesMarkedAvailable != 0 ||
-		r.BooksMarkedMissing != 0 || r.BooksMarkedActive != 0
-}
-
-// WatchedFile is what a sweep already knows about one watched source path:
-// the book it belongs to, the snapshot taken from it, and what the last
-// sweep observed. It is not a BookFile because a sweep needs the blob's
-// recorded size to decide whether a path is worth rehashing, and that lives
-// on the blob rather than the file.
-type WatchedFile struct {
-	FileID             string
-	LibraryID          string
-	BookID             string
-	BookStatus         BookStatus
-	SourceRelativePath string
-	// ContentSHA256 is the digest of the bytes the catalog holds for
-	// this path, whether or not the server keeps a copy of them.
-	ContentSHA256 string
-	// SizeBytes is the snapshot's size, which is also the size the source
-	// had when it was taken.
-	SizeBytes int64
-	// SourceModifiedAt is the modification time the source carried when it
-	// was last reconciled, or nil for a file no sweep has stat'ed yet.
-	SourceModifiedAt *time.Time
-	Availability     BookFileAvailability
-	SourceAbsent     bool
-}
-
-// WatchedObservation is one path a completed traversal found, as the
-// filesystem described it.
-type WatchedObservation struct {
-	SourceRelativePath string
-	SizeBytes          int64
-	ModifiedAt         time.Time
-}
-
-// MaxWatchedObservationBatch bounds one MarkWatchedSourcesSeen call. A
-// sweep of any size is expressed as several batches, so one enormous
-// library cannot build a single statement without bound.
-const MaxWatchedObservationBatch = 500
-
-// ValidateWatchedObservations checks a seen-batch before any backend
-// builds a statement from it.
-func ValidateWatchedObservations(paths []WatchedObservation) error {
-	if len(paths) == 0 || len(paths) > MaxWatchedObservationBatch {
-		return ErrInvalidTransition
-	}
-	for _, p := range paths {
-		if p.SourceRelativePath == "" ||
-			len(p.SourceRelativePath) > 4096 ||
-			p.SizeBytes < 0 || p.ModifiedAt.IsZero() {
-			return ErrInvalidTransition
-		}
-	}
-	return nil
-}
-
-// TrashPurgeResult counts one bounded permanent-deletion pass.
-type TrashPurgeResult struct {
-	BookIDs []string
-	// FilesPurged counts catalog references removed, not blobs: several
-	// references can share one deduplicated blob.
-	FilesPurged int
-	// ReservationsReleased counts quota charges returned to a principal,
-	// which happens only when that principal's last reference to a blob
-	// goes away.
-	ReservationsReleased int
-	// BlobsOrphaned counts blobs that lost their last reference and so
-	// became eligible for the separate orphan grace period.
-	BlobsOrphaned int
-}
-
-// LibraryDeletion reports what removing a library did. It answers the
-// two questions the caller has to relay: is the library gone, and what
-// happened to the books that were in it.
-type LibraryDeletion struct {
-	// Removed says the library row is gone. When it is false the library
-	// is still there and its books are in the trash, waiting for either a
-	// restore or a second attempt.
-	Removed bool
-	// Trashed counts books moved to the trash instead of being purged.
-	// It is non-zero only on the first attempt at a library holding the
-	// server's own copies.
-	Trashed int
-	// TrashExpiresAt is when those books stop being recoverable. Zero
-	// when nothing was trashed.
-	TrashExpiresAt time.Time
-	// Purged counts books permanently removed, along with what their
-	// files were holding.
-	Purged TrashPurgeResult
-}
-
-type QuotaUsage struct {
-	UsedBytes       int64
-	AdditionalBytes int64
-}
-
-// QuotaExceededError reports an atomic quota rejection.
-type QuotaExceededError struct {
-	LimitBytes      int64
-	UsedBytes       int64
-	AdditionalBytes int64
-}
-
-func (e *QuotaExceededError) Error() string {
-	return fmt.Sprintf(
-		"%v: limit=%d used=%d additional=%d",
-		ErrQuotaExceeded, e.LimitBytes, e.UsedBytes, e.AdditionalBytes)
-}
-
-func (e *QuotaExceededError) Unwrap() error {
-	return ErrQuotaExceeded
-}
-
-// CommitIngestStageRequest records a durable filesystem stage and its
-// transient logical quota hold in one transaction.
-type CommitIngestStageRequest struct {
-	ExpectedRevision int64
-	Artifact         BlobInfo
-	StagingPath      string
-	QuotaLimitBytes  *int64
-	UpdatedAt        time.Time
-}
-
-type CommitIngestStageResult struct {
-	Job   IngestJob
-	Quota QuotaUsage
-}
-
-// BookFileAvailability is the current catalog visibility of one file.
-type BookFileAvailability string
-
-const (
-	BookFileAvailable  BookFileAvailability = "available"
-	BookFileMissing    BookFileAvailability = "missing"
-	BookFileSuperseded BookFileAvailability = "superseded"
-)
-
-func (a BookFileAvailability) Valid() bool {
-	return a == BookFileAvailable || a == BookFileMissing ||
-		a == BookFileSuperseded
-}
-
-// BookFile is one immutable blob reference in a catalog book.
-type BookFile struct {
-	ID        string
-	LibraryID string
-	BookID    string
-	// Storage says whether the server keeps a copy of these bytes or
-	// reads them where their owner put them (ADR-0014).
-	Storage LibraryStorage
-	// ContentSHA256 is what this file *is*: the digest duplicate
-	// detection, edition matching and the cover cache are about. It is
-	// always known, whoever owns the bytes.
-	ContentSHA256 string
-	// ContentSizeBytes is the length those bytes had when they were
-	// last read. For an in-place file it is half of the cheap check
-	// that the file on disk is still the one that was catalogued.
-	ContentSizeBytes int64
-	// BlobSHA256 addresses the server's own copy in content-addressed
-	// storage, and is empty for an in-place file, which has none. Only
-	// the quota, garbage collection, backup and reconciliation paths
-	// should look at it: everything about identity is ContentSHA256.
-	BlobSHA256         string
-	Source             IngestSource
-	SourceRelativePath *string
-	OriginalFilename   string
-	MediaType          string
-	PartialMD5         *string
-	DCIdentifier       *string
-	Availability       BookFileAvailability
-	// SourceModifiedAt is the modification time the file at the source
-	// path carried when its bytes were last read. Together with
-	// ContentSizeBytes it is the cheap proof that an in-place file is
-	// still the one that was catalogued.
-	SourceModifiedAt *time.Time
-	// CoverRelativePath is the cover somebody chose for this book,
-	// relative to the library root — Calibre's cover.jpg. It is empty
-	// for a file whose cover is whatever the publication itself
-	// declares, which is extracted rather than stored.
-	CoverRelativePath *string
-	// CoverSHA256 is the digest of those cover bytes, and is what the
-	// rendered-cover cache is keyed by. The publication digest will not
-	// do: two Calibre books can share one EPUB and have different
-	// covers, and a digest-keyed cache would serve one book's cover for
-	// the other (ADR-0014).
-	CoverSHA256 string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	// LibraryRoot is the directory an in-place file's bytes live under.
-	// It is not a column: it comes from the library row, and it is
-	// filled in by the ACL-scoped reads that resolve both, so that
-	// serving a file never needs a second lookup that no user scopes.
-	LibraryRoot string
-}
-
-// Normalized fills in what a caller left implicit, so that every write
-// path agrees on what an under-specified file means rather than each
-// backend deciding for itself: a file with no storage mode is one the
-// server keeps a copy of, and such a file's identity is the digest of
-// that copy.
-func (f BookFile) Normalized() BookFile {
-	if f.Storage == "" {
-		f.Storage = LibraryStorageCAS
-	}
-	if f.ContentSHA256 == "" {
-		f.ContentSHA256 = f.BlobSHA256
-	}
-	return f
-}
-
-// BlobRef renders the CAS digest for a nullable column: an in-place file
-// has no copy in content-addressed storage, and the column says so with
-// NULL rather than with an empty string that would sort and join.
-func (f BookFile) BlobRef() any {
-	if f.BlobSHA256 == "" {
-		return nil
-	}
-	return f.BlobSHA256
-}
-
-// CatalogBookCursor is the exclusive cursor for catalog listings. It pairs
-// the sort key with the id so that books created in the same instant still
-// page deterministically.
+// CatalogBookCursor is the exclusive cursor for catalog listings. It
+// pairs the sort key with the id so that books created in the same
+// instant still page deterministically.
 type CatalogBookCursor struct {
 	CreatedAt time.Time
 	ID        string
+	// SeriesPosition is the leading sort key for a series listing, whose
+	// order is the series' own rather than the order books were
+	// scanned. It is nil for every other listing, and for a book with no
+	// place in the series — which sorts last, because an unplaced book
+	// is an unanswered question rather than book zero.
+	//
+	// It is in the cursor because it is in the ORDER BY: one
+	// reconciliation pass stamps a whole folder with the same
+	// created_at, so a cursor that named only (created_at, id) would
+	// filter on a key the rows are not ordered by and silently skip
+	// volumes on the second page.
+	SeriesPosition *float64
 }
 
-// DuplicateContentBook is one catalog book that shares its bytes with
-// another book in the same library. SHA256 is what they have in common
-// and is what groups them: books carrying the same digest are the same
-// file, whatever their titles say.
-type DuplicateContentBook struct {
-	Book   CatalogBook
-	SHA256 string
-}
-
-// EntityKind names one of the four library-wide metadata entity tables.
+// EntityKind names one of the three folder-wide metadata entity tables.
 // It is a closed set because it selects a table: a caller cannot ask for
 // a kind the schema does not have, and the store never interpolates a
 // caller's string into SQL.
@@ -1263,21 +412,15 @@ const (
 	EntitySeries      EntityKind = "series"
 	EntityContributor EntityKind = "contributor"
 	EntityTag         EntityKind = "tag"
-	EntityGenre       EntityKind = "genre"
 )
 
 // Valid reports whether the kind names a table the store knows.
 func (k EntityKind) Valid() bool {
-	return k == EntitySeries || k == EntityContributor ||
-		k == EntityTag || k == EntityGenre
+	return k == EntitySeries || k == EntityContributor || k == EntityTag
 }
 
-// CatalogEntity is one library-wide series, contributor, tag or genre,
-// together with how many of the library's active books claim it.
-//
-// The count is what makes the list usable: an entity with one book is
-// usually a typo of one with forty, and that is exactly the pair somebody
-// is looking for when they open a merge tool.
+// CatalogEntity is one folder-wide series, contributor or tag, together
+// with how many of the folder's active books claim it.
 type CatalogEntity struct {
 	ID             string
 	Kind           EntityKind
@@ -1288,18 +431,18 @@ type CatalogEntity struct {
 }
 
 // MaxEntityListLimit bounds one entity listing. Entity lists are browsed
-// by a person, and a library with more distinct tags than this has a
+// by a person, and a folder with more distinct tags than this has a
 // problem no page size can fix.
 const MaxEntityListLimit = 500
 
-// SearchQuery asks one library for the books matching some words.
+// SearchQuery asks one folder for the books matching some words.
 //
 // It carries no reading-state filter, and that is a rule rather than an
 // omission (ADR-0004): a catalog-only credential must not be able to
 // observe reading state, and the surest way to keep that true is for the
 // catalog's search to have no vocabulary for it.
 type SearchQuery struct {
-	LibraryID string
+	FolderID string
 	// Text is what the person typed. It is treated as words to match,
 	// never as index syntax, so no character in it can change how the
 	// query is read.
@@ -1311,16 +454,16 @@ type SearchQuery struct {
 }
 
 // MaxSearchLimit bounds one search. Search answers "where is that book",
-// which is a question with a short answer; browsing a whole library is
+// which is a question with a short answer; browsing a whole folder is
 // what the paged listings are for.
 const MaxSearchLimit = 100
 
-// MaxSearchFacets bounds how many values of each kind a result describes.
-// A facet list is a set of suggestions, and a suggestion nobody will read
-// is only a bigger response.
+// MaxSearchFacets bounds how many values of each kind a result
+// describes. A facet list is a set of suggestions, and a suggestion
+// nobody will read is only a bigger response.
 const MaxSearchFacets = 20
 
-// SearchResult is one library's answer: the matching books, best first,
+// SearchResult is one folder's answer: the matching books, best first,
 // and what those books have in common.
 type SearchResult struct {
 	Books  []CatalogBook
@@ -1331,7 +474,7 @@ type SearchResult struct {
 }
 
 // SearchFacet is one entity the matching books share, with how many of
-// them claim it. Counts are over the matched set rather than the library,
+// them claim it. Counts are over the matched set rather than the folder,
 // because a facet's job is to describe the answer.
 type SearchFacet struct {
 	Kind      EntityKind
@@ -1340,306 +483,108 @@ type SearchFacet struct {
 	BookCount int
 }
 
-// CommitNewBookPromotionRequest atomically creates one new catalog book and
-// file from an extracted job after its CAS blob is durable.
-type CommitNewBookPromotionRequest struct {
-	ExpectedRevision int64
-	Blob             BlobInfo
-	Book             CatalogBook
-	File             BookFile
-	UpdatedAt        time.Time
+// ---------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------
+
+// ObservedBook is one publication a scan saw, described completely
+// enough to write a catalog row from it. A pass builds these and hands
+// the whole set to ReconcileFolder; there is no intermediate job, no
+// staging state and nothing persisted between the two.
+type ObservedBook struct {
+	// RelativePath and CalibreID are the two identity keys. Exactly one
+	// of them is used, decided by the folder's kind — path for a plain
+	// folder, Calibre id for a Calibre one.
+	RelativePath string
+	CalibreID    *int64
+
+	SizeBytes         int64
+	MTime             time.Time
+	ContentSHA256     string
+	OriginalFilename  string
+	MediaType         string
+	CoverRelativePath *string
+	CoverSHA256       string
+
+	Title         string
+	Subtitle      string
+	Description   string
+	Publisher     string
+	PublishedDate string
+
+	Identifiers  []BookIdentifier
+	Languages    []string
+	Tags         []string
+	Series       []ObservedSeries
+	Contributors []ObservedContributor
+
+	// Replaces says the bytes at this identity changed, so the existing
+	// row is not this book. Rule 4 of ADR-0017: content change is not
+	// identity transfer. The old row is deleted — taking its
+	// identifiers, its relations and its user_book_works mapping with it
+	// — and a new one inserted, in the same transaction, so no two rows
+	// ever claim the same path.
+	//
+	// It is never set for a Calibre folder: there the curator's database
+	// is the identity, not the bytes, so a changed file is an update.
+	Replaces bool
+
+	// Unchanged says the pass recognised this file by its stat and did
+	// not re-read it, so the metadata fields above are empty rather than
+	// blank. The store refreshes only the stat and the status; it must
+	// not overwrite a book's title with the nothing that is here.
+	//
+	// This is why an unchanged file still produces an observation: being
+	// seen is what keeps a book out of the missing list, and a pass that
+	// skipped its unchanged files entirely would mark the whole folder
+	// gone on its second run.
+	Unchanged bool
 }
 
-// CommitInPlaceBookRequest atomically creates one catalog book and file
-// for bytes that stay where they were found. It carries no BlobInfo
-// because there is no blob: identity, size and the modification time
-// snapshot all come from the file that was read.
-type CommitInPlaceBookRequest struct {
-	ExpectedRevision int64
-	// ExtractedEmbeddedMetadataJSON is the publication's own metadata,
-	// read from the same descriptor as the digest. An in-place job has
-	// no `extracted` state to record it in, so it is recorded here.
-	ExtractedEmbeddedMetadataJSON []byte
-	Book                          CatalogBook
-	File                          BookFile
-	UpdatedAt                     time.Time
+// ObservedSeries is a series a scan attributed to a book, by display
+// name. The store resolves it to a folder-wide entity.
+type ObservedSeries struct {
+	Name     string
+	Position *float64
 }
 
-// InPlaceBookFingerprint identifies the immutable payload that produced a
-// promoted in-place job, so a commit whose response was lost replays onto
-// the same rows instead of being read as a second, conflicting claim.
-func InPlaceBookFingerprint(request CommitInPlaceBookRequest) (string, error) {
-	return NewBookPromotionFingerprint(CommitNewBookPromotionRequest{
-		ExpectedRevision: request.ExpectedRevision,
-		Book:             request.Book,
-		File:             request.File,
-		UpdatedAt:        request.UpdatedAt,
-	})
+// ObservedContributor is a person a scan attributed to a book, by
+// display name and normalized role.
+type ObservedContributor struct {
+	Name     string
+	Role     string
+	Position int
 }
 
-// ValidateInPlaceBook checks what every backend must refuse. The rules
-// are promotion's, minus the blob and plus the two facts that replace it:
-// a path under the library root, and the size and modification time that
-// prove the file is still the one that was read.
-func ValidateInPlaceBook(request CommitInPlaceBookRequest) error {
-	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if request.Book.ID == "" || request.Book.LibraryID == "" ||
-		request.Book.Status != BookActive || request.Book.CreatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	file := request.File
-	if file.ID == "" || file.LibraryID == "" || file.BookID == "" ||
-		file.Storage != LibraryStorageInPlace || file.Source != IngestScanned ||
-		file.BlobSHA256 != "" || file.ContentSizeBytes < 0 ||
-		file.Availability != BookFileAvailable ||
-		file.CreatedAt.IsZero() || file.UpdatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if file.SourceRelativePath == nil || *file.SourceRelativePath == "" {
-		return ErrInvalidTransition
-	}
-	if file.SourceModifiedAt == nil || file.SourceModifiedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if err := ValidateBlobInfo(BlobInfo{
-		SHA256: file.ContentSHA256, SizeBytes: file.ContentSizeBytes,
-	}); err != nil {
-		return err
-	}
-	return nil
+// ReconcileResult counts what one pass changed, for the log. It is not
+// persisted: a pass holds no state, and running it twice is running it
+// once.
+type ReconcileResult struct {
+	Added    int
+	Updated  int
+	Replaced int
+	Missing  int
+	Returned int
 }
 
-type IngestPromotionResult struct {
-	Job      IngestJob
-	Book     CatalogBook
-	File     BookFile
-	Blob     BlobInfo
-	Replayed bool
+// Changed reports whether the pass wrote anything, so a caller can log a
+// no-op quietly.
+func (r ReconcileResult) Changed() bool {
+	return r.Added+r.Updated+r.Replaced+r.Missing+r.Returned > 0
 }
 
-// NewBookPromotionFingerprint identifies the immutable request payload that
-// produced a promoted job. ExpectedRevision is intentionally excluded so a
-// caller can replay after losing the successful response.
-func NewBookPromotionFingerprint(request CommitNewBookPromotionRequest) (string, error) {
-	normalizeTime := func(value time.Time) time.Time {
-		return value.UTC().Truncate(time.Microsecond)
-	}
-	normalizeTimePtr := func(value *time.Time) *time.Time {
-		if value == nil {
-			return nil
-		}
-		normalized := normalizeTime(*value)
-		return &normalized
-	}
-	request.UpdatedAt = normalizeTime(request.UpdatedAt)
-	request.Book.CreatedAt = normalizeTime(request.Book.CreatedAt)
-	if request.Book.UpdatedAt.IsZero() {
-		request.Book.UpdatedAt = request.Book.CreatedAt
-	} else {
-		request.Book.UpdatedAt = normalizeTime(request.Book.UpdatedAt)
-	}
-	request.Book.TrashedAt = normalizeTimePtr(request.Book.TrashedAt)
-	request.Book.TrashExpiresAt = normalizeTimePtr(request.Book.TrashExpiresAt)
-	request.File.CreatedAt = normalizeTime(request.File.CreatedAt)
-	request.File.UpdatedAt = normalizeTime(request.File.UpdatedAt)
-	if request.File.MediaType == "" {
-		request.File.MediaType = "application/epub+zip"
-	}
-	payload, err := json.Marshal(struct {
-		Blob      BlobInfo    `json:"blob"`
-		Book      CatalogBook `json:"book"`
-		File      BookFile    `json:"file"`
-		UpdatedAt time.Time   `json:"updated_at"`
-	}{
-		Blob: request.Blob, Book: request.Book, File: request.File,
-		UpdatedAt: request.UpdatedAt,
-	})
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:]), nil
-}
-
-func ValidateBlobInfo(blob BlobInfo) error {
-	if blob.SizeBytes < 0 || len(blob.SHA256) != sha256.Size*2 {
-		return ErrContentMismatch
-	}
-	decoded, err := hex.DecodeString(blob.SHA256)
-	if err != nil || hex.EncodeToString(decoded) != blob.SHA256 {
-		return ErrContentMismatch
-	}
-	return nil
-}
-
-func ValidateCommitIngestStage(jobID string, request CommitIngestStageRequest) error {
-	if jobID == "" || request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() ||
-		request.StagingPath == "" || len(request.StagingPath) > 4096 {
-		return ErrInvalidTransition
-	}
-	if request.StagingPath != contentpath.StagingPath(jobID) {
-		return ErrInvalidTransition
-	}
-	if err := ValidateBlobInfo(request.Artifact); err != nil {
-		return err
-	}
-	if request.QuotaLimitBytes != nil && *request.QuotaLimitBytes < 0 {
-		return ErrInvalidTransition
-	}
-	return nil
-}
-
-func ValidateNewBookPromotion(request CommitNewBookPromotionRequest) error {
-	if request.ExpectedRevision < 1 || request.UpdatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if err := ValidateBlobInfo(request.Blob); err != nil {
-		return err
-	}
-	if request.Book.ID == "" || request.Book.LibraryID == "" ||
-		request.Book.Status != BookActive || request.Book.CreatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if request.Book.UpdatedAt.IsZero() {
-		request.Book.UpdatedAt = request.Book.CreatedAt
-	}
-	file := request.File
-	if file.ID == "" || file.LibraryID == "" || file.BookID == "" ||
-		file.BlobSHA256 == "" || !file.Source.Valid() ||
-		!file.Availability.Valid() || file.Availability != BookFileAvailable ||
-		file.CreatedAt.IsZero() || file.UpdatedAt.IsZero() {
-		return ErrInvalidTransition
-	}
-	if file.Source == IngestUpload && file.SourceRelativePath != nil {
-		return ErrInvalidTransition
-	}
-	if file.Source == IngestScanned &&
-		(file.SourceRelativePath == nil || *file.SourceRelativePath == "") {
-		return ErrInvalidTransition
-	}
-	return nil
-}
-
-// ValidateIngestJobRequest checks invariants shared by every backend.
-func ValidateIngestJobRequest(request IngestJobRequest) error {
-	if request.ID == "" || request.LibraryID == "" {
-		return errors.New("ingest job id and library id are required")
-	}
-	if !request.Source.Valid() {
-		return fmt.Errorf("invalid ingest source %q", request.Source)
-	}
-	if request.CreatedAt.IsZero() {
-		return errors.New("ingest job creation time is required")
-	}
-	if request.RequestFingerprint == "" || len(request.RequestFingerprint) > 512 {
-		return errors.New("invalid ingest request fingerprint")
-	}
-	if request.ClientKey != nil &&
-		(*request.ClientKey == "" || len(*request.ClientKey) > 256) {
-		return errors.New("invalid ingest client key")
-	}
-	switch request.Source {
-	case IngestUpload:
-		if len(request.OriginalFilename) > 200 {
-			return errors.New("ingest filename is too long")
-		}
-		if request.SourceRelativePath != nil {
-			return errors.New("upload job cannot have a source path")
-		}
-	case IngestScanned:
-		if request.OriginalFilename != "" {
-			return errors.New("scanned job cannot have an upload filename")
-		}
-		if request.SourceRelativePath == nil || *request.SourceRelativePath == "" ||
-			len(*request.SourceRelativePath) > 4096 {
-			return errors.New("watched job requires a source path")
-		}
-	}
-	return nil
-}
-
-// ApplyIngestTransition validates and applies a transition without mutating
-// immutable job fields.
-func ApplyIngestTransition(current IngestJob, change IngestJobTransition) (IngestJob, error) {
-	if current.ArtifactsExpired {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if current.State != change.ExpectedState ||
-		current.Revision != change.ExpectedRevision {
-		return IngestJob{}, ErrStaleRevision
-	}
-	if change.ExpectedRevision < 1 || change.UpdatedAt.IsZero() ||
-		change.UpdatedAt.Before(current.UpdatedAt) ||
-		!change.ExpectedState.Valid() || !change.NextState.Valid() ||
-		!CanTransitionIngest(change.ExpectedState, change.NextState) {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	extracting := change.ExpectedState == IngestValidated &&
-		change.NextState == IngestExtracted
-	if extracting {
-		metadataJSON := bytes.TrimSpace(
-			change.ExtractedEmbeddedMetadataJSON)
-		if len(metadataJSON) < 2 || metadataJSON[0] != '{' ||
-			metadataJSON[len(metadataJSON)-1] != '}' ||
-			!json.Valid(metadataJSON) {
-			return IngestJob{}, ErrInvalidTransition
-		}
-	} else if len(change.ExtractedEmbeddedMetadataJSON) != 0 {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	retrying := change.ExpectedState == IngestFailed ||
-		change.ExpectedState == IngestQuarantined
-	if change.IncrementRetry != retrying {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	failing := change.NextState == IngestFailed ||
-		change.NextState == IngestQuarantined
-	if failing {
-		if change.ErrorCode == "" || len(change.ErrorCode) > 128 ||
-			len(change.ErrorDetail) > 4096 || change.ExpiresAt == nil ||
-			!change.ExpiresAt.After(change.UpdatedAt) {
-			return IngestJob{}, ErrInvalidTransition
-		}
-	} else if change.ErrorCode != "" || change.ErrorDetail != "" ||
-		change.ExpiresAt != nil {
-		return IngestJob{}, ErrInvalidTransition
-	}
-
-	next := current
-	if change.NextState == IngestStaged &&
-		(next.ContentSHA256 == nil || next.StagingPath == nil) {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	if change.NextState == IngestReceived &&
-		(next.ContentSHA256 != nil || next.StagingPath != nil) {
-		return IngestJob{}, ErrInvalidTransition
-	}
-	next.State = change.NextState
-	next.UpdatedAt = change.UpdatedAt
-	next.Revision++
-	if extracting {
-		next.ExtractedEmbeddedMetadataJSON =
-			append([]byte(nil), change.ExtractedEmbeddedMetadataJSON...)
-	}
-	if change.IncrementRetry {
-		next.RetryCount++
-	}
-	if failing {
-		next.ErrorCode = &change.ErrorCode
-		if change.ErrorDetail != "" {
-			next.ErrorDetail = &change.ErrorDetail
-		} else {
-			next.ErrorDetail = nil
-		}
-		next.ExpiresAt = change.ExpiresAt
-	} else {
-		next.ErrorCode = nil
-		next.ErrorDetail = nil
-		next.ExpiresAt = nil
-	}
-	return next, nil
+// KnownBook is what ReconcileFolder's caller already has on record for
+// one book, which is all a diff needs: enough to decide unchanged,
+// changed or gone without reading a file.
+type KnownBook struct {
+	ID            string
+	Status        BookStatus
+	RelativePath  string
+	SizeBytes     int64
+	MTime         time.Time
+	ContentSHA256 string
+	CalibreID     *int64
+	CoverSHA256   string
 }
 
 // Work is the abstract book positions and statistics attach to.
@@ -1935,435 +880,110 @@ type Store interface {
 	RevokeToken(ctx context.Context, userID, tokenID string) error
 	TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error
 
-	// Catalog and ACLs.
-	CreateLibrary(ctx context.Context, library Library) error
-	LibraryByID(ctx context.Context, userID, libraryID string, required LibraryRole) (AccessibleLibrary, error)
-	ListLibraries(ctx context.Context, userID string, required LibraryRole) ([]AccessibleLibrary, error)
-	// SetLibraryConfig replaces one library's configuration document under
-	// the manage role. The store does not interpret the document: it is
-	// opaque here and parsed by whichever package owns each key, so a
-	// setting added later needs no schema change and no store change.
-	SetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
-	GrantLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role LibraryRole, at time.Time) error
-	RevokeLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string) error
+	// -----------------------------------------------------------------
+	// Folders.
+	//
+	// A folder has no owner and no access list, so none of these take a
+	// user id: every signed-in account sees every folder's books. Only
+	// an administrator is shown RootPath, and that is enforced at the
+	// handler edge, not here.
+	// -----------------------------------------------------------------
 
-	// Admin library administration (ADR-0013). These five deliberately
-	// skip the ACL check that every method above enforces, because an
-	// administrator who has to grant themselves manage on a library
-	// before they can fix its grants has silently become a reader of
-	// that library — the bypass is safer named than improvised. They
-	// take the acting admin's id for the record, and none of them reads
-	// a book row: the panel administers accounts and the shape of their
-	// libraries, never their contents.
+	CreateFolder(ctx context.Context, folder Folder) error
+	FolderByID(ctx context.Context, folderID string) (Folder, error)
+	// ListFolders pages folders ordered by name then id. after is a
+	// FolderCursor, empty for the first page.
+	ListFolders(ctx context.Context, after string, limit int) ([]Folder, error)
+	// DeleteFolder removes a folder and, by cascade, every catalog row
+	// that hung off it. Nothing beneath its root path is touched: the
+	// files were never this server's to delete.
+	DeleteFolder(ctx context.Context, folderID string) error
 
-	// AdminListLibraries pages through every library on the instance,
-	// ordered by name then id. after is a LibraryCursor, empty for the
-	// first page; ask for one row more than you display and the extra
-	// row is the answer to "is there another page".
-	AdminListLibraries(ctx context.Context, after string, limit int) ([]Library, error)
-	// AdminLibraryByID reads one library without an ACL, for the two
-	// admin writes that rewrite a record they must first read whole —
-	// a configuration document is edited by key, so the keys this
-	// server does not know about have to survive the edit.
-	AdminLibraryByID(ctx context.Context, libraryID string) (Library, error)
-	// AdminUserLibraries pages through the libraries one account owns or
-	// was granted, with the role that account holds. Ownership reads as
-	// manage, exactly as it does for the owner's own requests.
-	AdminUserLibraries(ctx context.Context, userID, after string, limit int) ([]AccessibleLibrary, error)
-	// AdminLibraryGrants lists who was granted access to one library,
-	// newest grant first. The owner is not a grant and is not listed.
-	AdminLibraryGrants(ctx context.Context, libraryID string, limit int) ([]LibraryGrant, error)
-	// AdminSetLibraryAccess grants a role, or revokes when role is nil.
-	// It refuses to write a grant for the owner, who already has
-	// everything and whose row would then outlive a change of owner.
-	AdminSetLibraryAccess(ctx context.Context, actorUserID, libraryID, userID string, role *LibraryRole, at time.Time) error
-	// AdminSetLibraryConfig replaces a library's configuration document
-	// without requiring the acting admin to hold manage on it.
-	AdminSetLibraryConfig(ctx context.Context, actorUserID, libraryID string, configJSON []byte, at time.Time) error
-	// AdminDeleteLibrary removes a library, or takes the first step
-	// towards it. It is the one admin library call that does read book
-	// rows, because a library is not a thing apart from its books and
-	// removing it has to settle what they were holding.
+	// -----------------------------------------------------------------
+	// Reconciliation.
+	// -----------------------------------------------------------------
+
+	// BooksInFolder returns what the catalog already records for one
+	// folder — enough to decide unchanged, changed or gone without
+	// reading a file. It includes missing books, because a missing book
+	// that reappears must be recognised rather than added again.
+	BooksInFolder(ctx context.Context, folderID string) ([]KnownBook, error)
+	// ReconcileFolder writes one pass's findings in a single
+	// transaction: observed books are inserted or updated with their
+	// relations, and books the pass did not observe are marked missing.
 	//
-	// What it does depends on where the bytes are, which is the only
-	// honest answer:
+	// complete is the caller's honest answer to "did I see the whole
+	// folder". It is a parameter rather than a comment because two of
+	// ADR-0017's four rules live here and a caller must not be able to
+	// forget them:
 	//
-	//   - A library the server reads in place is removed outright. Its
-	//     catalog rows are purged and the row goes; the directory it was
-	//     reading is somebody else's and is never touched, so nothing is
-	//     lost that re-adding the library would not find again.
-	//   - A library holding the server's own copies loses its books to
-	//     the trash first, on the ordinary retention window, and keeps
-	//     its row. Deleting the last copy of somebody's uploads on one
-	//     click is not a thing worth being able to do by accident.
-	//   - Once such a library has no books left outside the trash, the
-	//     same call purges what remains and removes the row. That second
-	//     press is the confirmation.
+	//   - An incomplete pass never marks anything missing. Any per-file
+	//     read or parse failure, and any hit against a scan bound, makes
+	//     a pass incomplete. It may still record what it saw.
+	//   - A pass that observed nothing at all never marks anything
+	//     missing either, whatever it claims about completeness. An
+	//     unmounted mount point is usually still readable and empty,
+	//     which is indistinguishable from a folder somebody emptied —
+	//     and hiding a whole catalog is the worse of the two errors.
 	//
-	// Purging here is the trash purge's own routine: quota reservations
-	// are released and blobs that lose their last reference are
-	// orphan-marked for the existing grace-period sweep, which is what
-	// reclaims the bytes. Reading history is never touched — a reader's
-	// works and progress live on the account, not on the library.
-	AdminDeleteLibrary(ctx context.Context, actorUserID, libraryID string, at, trashExpiresAt time.Time) (LibraryDeletion, error)
-	CreateCatalogBook(ctx context.Context, actorUserID string, book CatalogBook) error
-	// CatalogBookByID reads one book the caller may see. Trashed books are
-	// not visible through it at any role: a deleted book is deleted as far
-	// as every reader is concerned, and the way back is ListTrashedBooks
-	// plus RestoreCatalogBook, not an ordinary catalog read.
-	CatalogBookByID(ctx context.Context, userID, bookID string, required LibraryRole) (CatalogBook, error)
-	// ListTrashedBooks lists one library's trashed books, most recently
-	// trashed first, under the manage role. It is what makes deletion
-	// reversible in practice: without a way to see the trash, the
-	// retention window is only a delay.
-	ListTrashedBooks(ctx context.Context, userID, libraryID string, limit int) ([]CatalogBook, error)
-	// ListDuplicateContentBooks lists the library's active books whose
-	// bytes another active book in the same library also has, ordered so
-	// that the ones sharing a digest arrive together.
+	// An observation whose Replaces is set deletes the existing row and
+	// its cascade before inserting, so identity is never transferred to
+	// bytes that merely arrived at the same path.
+	ReconcileFolder(ctx context.Context, folderID string, observed []ObservedBook, complete bool, at time.Time) (ReconcileResult, error)
+
+	// -----------------------------------------------------------------
+	// Catalog reads.
+	// -----------------------------------------------------------------
+
+	CatalogBookByID(ctx context.Context, bookID string) (CatalogBook, error)
+	// ListCatalogBooks pages one folder's books, oldest first.
+	ListCatalogBooks(ctx context.Context, folderID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// ListRecentCatalogBooks pages the same books newest first, for the
+	// "recently added" shelf and the OPDS feed of the same name.
+	ListRecentCatalogBooks(ctx context.Context, folderID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// CatalogBookRelationsForBooks reads the contributors and series of a
+	// whole page of books at once, so that rendering a shelf costs one
+	// query rather than one per book (ADR-0015).
+	CatalogBookRelationsForBooks(ctx context.Context, bookIDs []string) (CatalogBookRelations, error)
+	// ListCatalogEntities pages one folder's entities of one kind by
+	// normalized name, with the number of books claiming each.
+	ListCatalogEntities(ctx context.Context, folderID string, kind EntityKind, after string, limit int) ([]CatalogEntity, error)
+	// CatalogEntityByID reads one entity, so a page can name what it is
+	// listing without scanning for it.
+	CatalogEntityByID(ctx context.Context, folderID, entityID string, kind EntityKind) (CatalogEntity, error)
+	// ListBooksByEntity pages the folder's books claiming one entity,
+	// oldest first.
 	//
-	// It reports and never merges. Two catalog entries for one blob are a
-	// thing a user may have meant — the same file filed twice on purpose
-	// — so the server's job is to make the coincidence visible, not to
-	// pick which entry survives. Read access is enough to see it;
-	// resolving it is an ordinary deletion, which is not.
-	ListDuplicateContentBooks(ctx context.Context, userID, libraryID string, limit int) ([]DuplicateContentBook, error)
-	// ListSimilarBooks reports the weaker kind of duplicate: books that
-	// look like one book without being one file. It is a question put to
-	// a librarian rather than a finding, and the rule it applies is
-	// GroupSimilarBooks, shared so both backends answer alike.
-	ListSimilarBooks(ctx context.Context, userID, libraryID string, limit int) ([]SimilarBookGroup, error)
-	// ListCatalogBooks pages one library's readable books, oldest first.
-	// Trashed books are excluded: they are not part of the catalog a
-	// reader browses. A nil cursor starts at the beginning.
-	ListCatalogBooks(ctx context.Context, userID, libraryID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
-	// ListRecentCatalogBooks pages the same books newest first. It is a
-	// separate method rather than a direction flag because the cursor
-	// means the opposite thing: `before` is where the last page ended
-	// going down, and a caller that mixed the two would silently page
-	// through a different order than it asked for.
-	ListRecentCatalogBooks(ctx context.Context, userID, libraryID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
-	// ListBookFiles returns one book's files, newest first, so that a
-	// download can pick the current one. It requires read access to the
-	// book's library. Trashed books keep their files, because that is
-	// what makes restore a relink; deciding whether they may be served is
-	// the catalog's job, not this one's.
-	ListBookFiles(ctx context.Context, userID, bookID string, required LibraryRole) ([]BookFile, error)
-	// CatalogBookRelationsForBooks reads the contributors, series and
-	// available files of a page of books in one query per kind, so that
-	// rendering a shelf is a bounded number of round trips regardless of
-	// how many books are on it (ADR-0015). Books the caller cannot read
-	// are absent from every map rather than reported as empty, so the
-	// method cannot be used to probe for book ids.
-	//
-	// Trashed books contribute nothing, for the same reason
-	// CatalogBookByID cannot see them: a deleted book is deleted as far as
-	// every reader is concerned, and a relation read must not be the one
-	// way back into it.
-	CatalogBookRelationsForBooks(ctx context.Context, userID string, bookIDs []string) (CatalogBookRelations, error)
-	// CatalogBookMetadata reads one book's scalar fields and every metadata
-	// entity set attached to it in a single transaction, so a caller can run
-	// the precedence engine against a consistent snapshot.
-	CatalogBookMetadata(ctx context.Context, userID, bookID string, required LibraryRole) (BookMetadata, error)
-	// ApplyCatalogBookMetadata atomically replaces one book's resolved
-	// metadata under an expected revision. It requires the manage role and
-	// returns ErrStaleRevision when another writer got there first.
-	ApplyCatalogBookMetadata(ctx context.Context, userID string, request ApplyBookMetadataRequest) (BookMetadata, error)
-	// ListCatalogEntities pages one library's entities of one kind by
-	// name, with the number of active books claiming each. Read access is
-	// enough: an entity list is how a reader browses a library.
-	//
-	// after is the normalized name to resume from, exclusive, so paging
-	// is stable while books are added — an offset would skip or repeat
-	// entities as counts change underneath it.
-	ListCatalogEntities(ctx context.Context, userID, libraryID string, kind EntityKind, after string, limit int) ([]CatalogEntity, error)
-	// CatalogEntityByID reads one entity under read access, so a page can
-	// name what it is showing without listing the whole library.
-	CatalogEntityByID(ctx context.Context, userID, libraryID, entityID string, kind EntityKind) (CatalogEntity, error)
-	// ListBooksByEntity pages the library's active books claiming one
-	// entity, oldest first, under read access. Trashed books are
-	// excluded for the same reason ListCatalogBooks excludes them.
-	ListBooksByEntity(ctx context.Context, userID, libraryID, entityID string, kind EntityKind, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
-	// RenameCatalogEntity changes one entity's display spelling under the
-	// manage role. It returns ErrConflict when another entity of the same
-	// kind already holds the new normalized name, because that is a merge
-	// — folding two entities into one is a decision about identity, and
-	// silently doing it under the name of a rename would hide it.
-	RenameCatalogEntity(ctx context.Context, userID, libraryID, entityID string, kind EntityKind, name string) (CatalogEntity, error)
-	// MergeCatalogEntities folds one entity into another of the same kind
-	// in the same library, under the manage role, and reports how many
-	// book memberships moved.
-	//
-	// Merges are explicit by design (ADR-0004): normalization matches
-	// case and spacing only, so "Le Guin, Ursula K." and "Ursula K. Le
-	// Guin" are two entities until somebody says otherwise, and only a
-	// person can say it.
-	MergeCatalogEntities(ctx context.Context, userID, libraryID, fromID, intoID string, kind EntityKind, at time.Time) (int, error)
-	// SearchCatalogBooks finds one library's active books by words, under
-	// read access, and describes what the matches have in common.
-	//
-	// The index is maintained inside the same transaction as every write
-	// that changes what a book says, so a book is findable by its new
-	// title the moment the edit that gave it one commits — a search that
-	// lags behind the catalog is a search that lies about it.
-	SearchCatalogBooks(ctx context.Context, userID string, query SearchQuery) (SearchResult, error)
-	// ResolveCatalogBookWork resolves the user's work graph and inserts the
-	// catalog mapping in the same transaction. Low-confidence and conflicting
-	// resolutions do not mutate the graph or create a mapping.
+	// It returns the cursor for the next page itself, because the sort
+	// key depends on the kind and only the store knows it. The cursor is
+	// nil when the page is the last one.
+	ListBooksByEntity(ctx context.Context, folderID, entityID string, kind EntityKind, after *CatalogBookCursor, limit int) ([]CatalogBook, *CatalogBookCursor, error)
+	// SearchCatalogBooks answers one folder's search, best first, with
+	// facets describing the answer.
+	SearchCatalogBooks(ctx context.Context, query SearchQuery) (SearchResult, error)
+	// AvailableBookMediaTypes reports the distinct media types a folder's
+	// books carry, so a feed can advertise what it actually holds.
+	AvailableBookMediaTypes(ctx context.Context, folderID string) ([]string, error)
+	// CatalogBookIdentifiers reads one book's publication identifiers,
+	// which are the evidence a work resolution runs on.
+	CatalogBookIdentifiers(ctx context.Context, bookID string) ([]BookIdentifier, error)
+	// CatalogAuthorsForBooks maps book id to author display names, for
+	// the identity backfill that links a catalog book to a sync work.
+	CatalogAuthorsForBooks(ctx context.Context, bookIDs []string) (map[string][]string, error)
+
+	// -----------------------------------------------------------------
+	// The bridge to per-user reading state.
+	// -----------------------------------------------------------------
+
+	// ResolveCatalogBookWork joins one catalog book to one of the
+	// caller's own works and records the mapping, in one transaction.
+	// The catalog is shared; this mapping never is. A low-confidence or
+	// conflicting resolution links nothing.
 	ResolveCatalogBookWork(ctx context.Context, userID, bookID string, proposed Work, editions []Edition, ids []Identifier, confirmed bool, at time.Time) (WorkResolution, error)
+	// UserBookWork reads the caller's own link for one book.
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
-	WorkBookIDs(ctx context.Context, userID string) (map[string]string, error)
-	// CatalogAuthorsForBooks names, per book, the people credited as its
-	// authors, so a page of books can say who wrote them without a query
-	// per row. Only libraries the user may read are answered, and only
-	// the author role: a translator printed where a card says "author"
-	// is a false credit, not a partial one. Names come back in the order
-	// the book credits them, and a book with no author is absent rather
-	// than present and empty.
-	CatalogAuthorsForBooks(ctx context.Context, userID string, bookIDs []string) (map[string][]string, error)
-	// AvailableBookMediaTypes reports, per book, the media types the user
-	// can actually be served right now — files that are present, in a
-	// library they may read. It exists so a list of books can be told
-	// which of them the browser could open without a query per row.
-	AvailableBookMediaTypes(ctx context.Context, userID string, bookIDs []string) (map[string][]string, error)
-
-	// Ingestion jobs.
-	CreateIngestJob(ctx context.Context, actorUserID string, request IngestJobRequest) (IngestJob, bool, error)
-	IngestJobByID(ctx context.Context, actorUserID, jobID string) (IngestJob, error)
-	ListIngestJobs(ctx context.Context, actorUserID, libraryID string, after *IngestJobCursor, limit int) ([]IngestJob, error)
-	// ListIngestActivity returns the jobs in one library that have not
-	// reached the catalog — still in flight, quarantined or failed —
-	// newest first. ListIngestJobs is the paginated audit view and runs
-	// oldest-first, which is the wrong end for answering "what happened
-	// to the file I just uploaded": promoted jobs are the bulk, and a
-	// failure would sit pages deep. Manage role, like ListIngestJobs.
-	ListIngestActivity(ctx context.Context, actorUserID, libraryID string, limit int) ([]IngestJob, error)
-	// ListIngestRecoveryJobs is a global housekeeping query for stale jobs
-	// whose durable artifacts must be verified before workers resume them.
-	ListIngestRecoveryJobs(ctx context.Context, before time.Time, after *IngestRecoveryCursor, limit int) ([]IngestJob, error)
-	// ListAbandonedIngestJobs pages the jobs still in `received`, oldest
-	// first, after the id given. A job leaves that state as soon as its
-	// bytes are committed, so one that is still in it either has an
-	// upload in flight or was interrupted by a crash between writing the
-	// bytes and recording them. Only the caller can tell those apart —
-	// at startup nothing is in flight, so all of them are the second.
-	//
-	// In-place jobs are excluded: they have no staged artifact to lose,
-	// so one left in `received` is work not yet done rather than bytes
-	// stranded on disk, and the next sweep picks it up (ADR-0014).
-	ListAbandonedIngestJobs(ctx context.Context, afterID string, limit int) ([]IngestJob, error)
-	// ListIngestWorkerJobs snapshots one bounded internal worker batch.
-	// Revision-checked transitions resolve concurrent workers.
-	ListIngestWorkerJobs(ctx context.Context, state IngestState, limit int) ([]IngestJob, error)
-	CommitIngestStage(ctx context.Context, userID, jobID string, request CommitIngestStageRequest) (CommitIngestStageResult, error)
-	CommitNewBookPromotion(ctx context.Context, userID, jobID string, request CommitNewBookPromotionRequest) (IngestPromotionResult, error)
-	// CommitInPlaceBook is promotion for a library whose bytes this
-	// server never copied: it creates the book and its file, and takes
-	// the job from `received` straight to `promoted`, with no blob, no
-	// reservation and no quota charge, because there is nothing the
-	// server stores and nothing it could later collect (ADR-0014).
-	CommitInPlaceBook(ctx context.Context, userID, jobID string, request CommitInPlaceBookRequest) (IngestPromotionResult, error)
-	// ListBlobRecords and ReconcileBlob are global housekeeping operations.
-	ListBlobRecords(ctx context.Context, afterSHA256 string, limit int) ([]BlobRecord, error)
-	// ListReferencedBlobs pages the blobs the database says must exist,
-	// ordered by digest. It is what makes a backup checkable: a backup is
-	// only valid if every referenced blob is in it. Trashed books count,
-	// because their files are what a restore relinks; unreferenced blobs
-	// do not, because they are the orphan sweep's business.
-	ListReferencedBlobs(ctx context.Context, afterSHA256 string, limit int) ([]BlobInfo, error)
-	ReconcileBlob(ctx context.Context, blob BlobInfo, present bool, at time.Time) (BlobReconcileResult, error)
-	// ReconcileCatalogAvailability is a global housekeeping operation that
-	// propagates blob presence into the catalog: a file whose blob is
-	// recorded missing becomes unavailable, and one whose blob has returned
-	// becomes available again. Superseded files are left alone, because
-	// supersession is a different axis from presence. Books follow their
-	// files between active and missing; trashed and review books are never
-	// touched, since neither state is a statement about bytes. The limit
-	// bounds each of the four updates, so a caller loops while Changed
-	// reports work was done.
-	ReconcileCatalogAvailability(ctx context.Context, at time.Time, limit int) (CatalogAvailabilityResult, error)
-	// ListScannableLibraries is a global housekeeping query. The scanner
-	// runs on the server's behalf rather than any user's, so it is one of
-	// the documented cross-user lookups: it exists for a background job,
-	// and nothing user-facing may call it. Managed libraries are excluded
-	// because they have no root to sweep.
-	ListScannableLibraries(ctx context.Context) ([]Library, error)
-	// ClaimLibraryRefresh takes the next library whose refresh is due and
-	// stamps the attempt, atomically, so that two servers — or two ticks
-	// of one — cannot sweep the same root at the same time. It reports
-	// false when nothing is due. It is a global housekeeping query for the
-	// same reason ListScannableLibraries is one.
-	//
-	// Claiming clears any standing request: an administrator who asks for
-	// a refresh while one is running is asking for the next one, and gets
-	// it, because the request they made lands after this claim took the
-	// one it cleared.
-	// A claim is also a lease. The caller names a random owner token and
-	// an expiry, both of which are written on the row it takes: a
-	// library somebody else still holds is not claimed, a lease left
-	// behind by a killed process expires and is taken over, and every
-	// write that concludes the refresh has to prove it still owns it.
-	ClaimLibraryRefresh(ctx context.Context, now time.Time, lease RefreshLease) (Library, bool, error)
-	// RenewLibraryRefreshLease extends a claim this worker still holds,
-	// and returns ErrRefreshLeaseLost when it does not. A refresh of a
-	// large library outlives any sane lease, so the holder renews while
-	// it works, and the renewal is also how it finds out it was taken
-	// over.
-	RenewLibraryRefreshLease(ctx context.Context, libraryID string, lease RefreshLease, now time.Time) error
-	// CheckLibraryRefreshLease is the same question without the write,
-	// for the per-book check a refresh makes before each unit of work.
-	CheckLibraryRefreshLease(ctx context.Context, libraryID, owner string, now time.Time) error
-	// FinishLibraryRefresh records the outcome of a claimed refresh and
-	// releases the lease, both under a lock on the lease row: a worker
-	// that was dispossessed records nothing and gets ErrRefreshLeaseLost.
-	//
-	// An empty code means it worked, which stamps last_refresh_at and
-	// clears the previous code; any other code leaves last_refresh_at
-	// where it was, because a refresh that failed did not refresh
-	// anything.
-	//
-	// An empty owner is a caller running without a lease — a one-off
-	// index of a library nothing schedules — and matches only a library
-	// nobody holds, so it can no more write over a running refresh than
-	// a stale worker can.
-	FinishLibraryRefresh(ctx context.Context, libraryID, owner string, at time.Time, code RefreshCode) error
-	// AdminRequestLibraryRefresh asks for a refresh of one library now. It
-	// is an administrator's operation (ADR-0013): the ACL-scoped reads in
-	// this interface do not have a counterpart, because deciding when the
-	// server walks a disk is not a library member's business.
-	//
-	// It is idempotent — a second request before the first is honoured
-	// changes nothing but the timestamp — and it queues rather than
-	// sweeps, so it returns as fast as an UPDATE whatever the size of the
-	// library behind it.
-	AdminRequestLibraryRefresh(ctx context.Context, actorUserID, libraryID string, at time.Time) error
-	// CalibreBookMappings reads a Calibre library's book identity map:
-	// Calibre's own book id to this catalog's book id. It is what makes a
-	// book that moved, or was renamed, or had its file replaced, the same
-	// book here (ADR-0014); matching by content digest would merge two
-	// books ADR-0002 deliberately keeps apart. Global housekeeping, like
-	// the rest of the refresh path, and scoped to one library.
-	CalibreBookMappings(ctx context.Context, libraryID string) (map[int64]string, error)
-	// MapCalibreBook records that one Calibre book is one catalog book.
-	// It is idempotent, and re-pointing a Calibre id at a different book
-	// replaces the mapping rather than adding a second one.
-	MapCalibreBook(ctx context.Context, libraryID string, calibreID int64, bookID string, at time.Time) error
-	// DeleteCalibreBooks permanently removes the catalog books behind the
-	// named Calibre ids, because they are gone from metadata.db and
-	// Calibre is what that library means by true. It settles quota and
-	// blob references exactly as a trash purge does, and never touches a
-	// byte under the library root. Trash is deliberately not involved:
-	// it holds bytes through a grace period, and here there are none of
-	// ours to hold.
-	//
-	// Reading history survives, because it hangs off user-scoped works
-	// rather than off catalog books.
-	DeleteCalibreBooks(ctx context.Context, libraryID string, calibreIDs []int64, at time.Time) (TrashPurgeResult, error)
-	// SetLibraryInventoryDigest records the change gate a Calibre refresh
-	// computed, so the next one can stop without reading a catalog row.
-	// It is written only by a refresh that completed, and only by the
-	// worker that still owns the lease: a dispossessed one leaves the
-	// digest where it was, so the next refresh does the work again
-	// rather than skipping it on the strength of a pass that stopped.
-	SetLibraryInventoryDigest(ctx context.Context, libraryID, owner, digest string, at time.Time) error
-	// RelocateWatchedFile moves one catalogued file to the path its
-	// source now has, without changing anything else about it. It is a
-	// book Calibre renamed: the same bytes at a new path, which must
-	// keep its catalog row rather than be catalogued a second time and
-	// have the first marked absent.
-	RelocateWatchedFile(ctx context.Context, libraryID, fileID, sourceRelativePath string, modifiedAt, at time.Time) error
-	// SupersedeInPlaceBookFile replaces the file a book is served from,
-	// keeping the book. Calibre converted or replaced the format: the
-	// publication is different, the book is the same, and the old row
-	// becomes `superseded` rather than being deleted, so the earlier
-	// edition's identity stays where it was (ADR-0014).
-	//
-	// It is idempotent on the replacement's id, and refuses a
-	// replacement naming a different book than the row it supersedes.
-	SupersedeInPlaceBookFile(ctx context.Context, libraryID, supersededFileID string, replacement BookFile, at time.Time) (BookFile, error)
-	// SetBookFileCover records the cover a library's curator chose for
-	// one file — Calibre's cover.jpg — or, with an empty path and
-	// digest, that there is none. The digest keys the rendered-cover
-	// cache, because two books sharing one EPUB can have two covers and
-	// a publication-keyed cache would serve one for the other. It
-	// reports whether it changed anything.
-	SetBookFileCover(ctx context.Context, libraryID, fileID, relativePath, coverSHA256 string, at time.Time) (bool, error)
-	// WatchedFilesByPath reads what the catalog already holds for one
-	// watched source path. It is a global housekeeping query like the
-	// other reconciliation methods — a sweep runs on the server's behalf,
-	// not a user's — but it is still scoped to one library, so it can
-	// never report a path from a library the sweep was not asked about.
-	//
-	// It returns every match rather than one. Nothing stops two books
-	// referencing the same path, and a sweep that saw only the first would
-	// silently pick a winner; the ADR's rule is that ambiguity is
-	// reported, not resolved.
-	WatchedFilesByPath(ctx context.Context, libraryID, sourceRelativePath string) ([]WatchedFile, error)
-	// MarkWatchedSourcesSeen records that a traversal found these paths,
-	// with the size and modification time the filesystem reported. Seeing
-	// a path clears any absence recorded for it, which is what makes a
-	// returning file available again.
-	//
-	// Only the observation is written. Whether the bytes still match the
-	// snapshot is the caller's judgement, because answering it can cost a
-	// full read.
-	MarkWatchedSourcesSeen(ctx context.Context, libraryID string, paths []WatchedObservation, at time.Time) (int, error)
-	// MarkWatchedSourcesAbsent records that a **completed** full sweep of
-	// one library did not find these files' paths. It selects by absence
-	// of evidence — every watched file in the library not seen since the
-	// sweep began — so the caller must never call it after a traversal
-	// that ended early, and the store cannot check that for it.
-	//
-	// Files created after the sweep began are exempt. Such a row was
-	// promoted from content this sweep or a later one discovered, so the
-	// sweep never proved anything about it.
-	MarkWatchedSourcesAbsent(ctx context.Context, libraryID string, sweepStartedAt, at time.Time, limit int) (int, error)
-	// SetCatalogBookReview moves one book into review with the reason
-	// given, or, with an empty reason, out of review and back to missing —
-	// from where ReconcileCatalogAvailability restores it to active if it
-	// still has a servable file. It reports whether it changed anything.
-	//
-	// Review is deliberately not reversible into `active` here. Deciding a
-	// book is servable is that one pass's job, and a second writer with
-	// its own opinion is how the two end up disagreeing.
-	SetCatalogBookReview(ctx context.Context, libraryID, bookID, reason string, at time.Time) (bool, error)
-	// ListBooksInReview pages one library's books awaiting an
-	// administrator's decision, oldest first, under the manage role.
-	// Without it the review status is a dead end rather than a queue.
-	ListBooksInReview(ctx context.Context, userID, libraryID string, limit int) ([]CatalogBook, error)
-	// TrashCatalogBook moves one book out of the catalog under the manage
-	// role. Its files are retained, so the blobs stay referenced, stay GC
-	// roots, and keep counting against quota: that is what stops an
-	// upload/delete cycle from growing the disk without bound, and what
-	// makes restore a relink rather than a re-upload.
-	TrashCatalogBook(ctx context.Context, userID, bookID string, at, expiresAt time.Time) (CatalogBook, error)
-	// RestoreCatalogBook returns a trashed book to the catalog. It restores
-	// to missing rather than active when the book has no servable file, so
-	// restore cannot advertise a download that is not there.
-	RestoreCatalogBook(ctx context.Context, userID, bookID string, at time.Time) (CatalogBook, error)
-	// PurgeExpiredTrash is a global housekeeping operation. It permanently
-	// removes books whose trash retention has passed, releases the quota
-	// reservations that lose their last reference, and orphan-marks blobs
-	// that lose their last reference so the existing grace-period sweep
-	// reclaims the bytes. It never deletes content itself.
-	PurgeExpiredTrash(ctx context.Context, before time.Time, limit int) (TrashPurgeResult, error)
-	// PurgeOrphanedBlobRecords atomically removes database rows that have
-	// remained orphaned through the supplied cutoff and still have no retained
-	// book-file references or active ingest holds. The caller must keep content
-	// writers paused until it removes the returned physical blobs idempotently;
-	// a cleanup failure is rediscovered and re-marked by the next filesystem
-	// reconciliation pass.
-	PurgeOrphanedBlobRecords(ctx context.Context, before time.Time, limit int) ([]BlobRecord, error)
-	// PurgeExpiredIngestArtifacts is a global housekeeping operation. It
-	// releases quota and returns staging paths for filesystem cleanup, while
-	// retaining permanent job tombstones so deterministic paths cannot be
-	// reused by a later job with the same ID.
-	PurgeExpiredIngestArtifacts(ctx context.Context, before time.Time, limit int) ([]IngestJob, error)
-	// CompleteIngestArtifactCleanup acknowledges idempotent filesystem removal
-	// and clears the retained artifact identity from its terminal tombstone.
-	CompleteIngestArtifactCleanup(ctx context.Context, jobID, stagingPath string) error
-	// TransitionIngestJob is an internal worker/upload operation scoped by the
-	// initiating user, not by their current library ACL.
-	TransitionIngestJob(ctx context.Context, userID, jobID string, transition IngestJobTransition) (IngestJob, error)
+	// WorkBookIDs lists the caller's books mapped to one work.
+	WorkBookIDs(ctx context.Context, userID, workID string) ([]string, error)
 
 	// Works / editions / aliases.
 	// ResolveWork atomically resolves identifiers ordered strongest-first,
@@ -2565,4 +1185,18 @@ type Invite struct {
 	ExpiresAt  time.Time
 	UsedBy     *string
 	UsedAt     *time.Time
+}
+
+// NewID mints an opaque row identifier. Reconciliation is the one place
+// the store invents ids rather than being handed them: a pass discovers
+// books, so nothing upstream of it knows which are new.
+func NewID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail on any platform this runs on, and a
+		// catalog id that is not unique is a corrupted catalog. There is
+		// no sensible partial answer.
+		panic("store: crypto/rand unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }

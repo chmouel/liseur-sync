@@ -17,8 +17,12 @@ import (
 // cookie rather than a token. As with downloads, the rules about what may
 // be served live on the other side of this interface and are not repeated
 // here.
+//
+// There is no user id: the catalog is shared, so every signed-in account
+// may see every folder's covers (ADR-0017). Who is asking decides
+// whether the request happens at all, not what it may see.
 type CoverServer interface {
-	ServeBookCover(w http.ResponseWriter, r *http.Request, userID, bookID string)
+	ServeBookCover(w http.ResponseWriter, r *http.Request, bookID string)
 }
 
 // handleBookCover shows a cover, or a placeholder when there is none.
@@ -37,7 +41,7 @@ func (s *Server) handleBookCover(
 		return
 	}
 	intercept := &coverFallbackWriter{ResponseWriter: w, request: r}
-	s.Covers.ServeBookCover(intercept, r, u.ID, r.PathValue("id"))
+	s.Covers.ServeBookCover(intercept, r, r.PathValue("id"))
 	intercept.finish()
 }
 

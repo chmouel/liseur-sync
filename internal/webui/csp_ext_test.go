@@ -73,10 +73,7 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 // (TestReaderPageIsolatesThePublication does that).
 func TestReaderKeepsItsOwnPolicy(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
 	resp, _ := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
 	csp := resp.Header.Get("Content-Security-Policy")

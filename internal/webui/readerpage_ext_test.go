@@ -18,10 +18,7 @@ import (
 // is exactly why they are asserted here.
 func TestReaderPageIsolatesThePublication(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
 	resp, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
 	if resp.StatusCode != http.StatusOK {
@@ -97,12 +94,9 @@ func TestReaderPageIsolatesThePublication(t *testing.T) {
 // nothing.
 func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
-	_, list := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, list := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	if !strings.Contains(list, "/read") {
 		t.Error("an EPUB in the library is not offered to the reader")
 	}
@@ -115,16 +109,17 @@ func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 // TestReaderPageRefusesOtherPeoplesBooks: the reader is a page about
 // one book, so it answers the same way the book page does when the
 // caller has no business with it.
-func TestReaderPageRefusesOtherPeoplesBooks(t *testing.T) {
+// TestReaderPageNeedsASessionAndARealBook: the reader is open to every
+// signed-in account, because the catalog is (ADR-0017). What it still
+// refuses is a request with no session behind it and an id that is not a
+// book.
+func TestReaderPageNeedsASessionAndARealBook(t *testing.T) {
 	f := newBooksFixture(t)
-	_, html := f.get(t, "/ui/library", f.cookie)
-	f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, "novel.epub",
-		[]byte(strings.Repeat("web-epub", 50)))
-	bookID := f.promote(t, "novel")
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
 	bob := f.login(t, "bob")
-	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", bob); resp.StatusCode != http.StatusNotFound {
-		t.Errorf("another user's book: want 404, got %d", resp.StatusCode)
+	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", bob); resp.StatusCode != http.StatusOK {
+		t.Errorf("a second account was refused the shared catalog: %d", resp.StatusCode)
 	}
 	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", nil); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("signed out: want a redirect to login, got %d", resp.StatusCode)

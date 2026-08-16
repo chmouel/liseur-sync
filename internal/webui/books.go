@@ -1,38 +1,33 @@
 package webui
 
-// Books handlers: the browser surface of the content server. All of the
-// storage work is delegated — this file decides what a page shows, not
-// how bytes are stored or served.
+// Books handlers: the browser surface of the catalog. All of the byte
+// handling is delegated — this file decides what a page shows, not how
+// a file is opened or served.
+//
+// Nothing here writes. A folder's contents belong to whoever curates it
+// on disk (ADR-0017), so there is no upload, no delete, no trash and no
+// metadata form: the catalog says what the folder says, and the way to
+// change it is to change the folder.
 
 import (
 	"context"
-	"crypto/subtle"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
-	"github.com/google/uuid"
 )
-
-// Uploader stages a web-form upload through the same path the API uses.
-// The UI must not grow its own ingest: the ordering rules around staged
-// bytes and their cleanup are subtle, and two implementations would
-// diverge.
-type Uploader interface {
-	StageUpload(ctx context.Context, userID, libraryID, key, filename string, body io.Reader) (store.IngestJob, bool, error)
-}
 
 // Downloader serves a book's bytes for a caller identified some other
 // way than by a token — here, by a session cookie. Reusing it keeps the
 // media-type allowlist and filename sanitizing in one place.
+//
+// There is no user id, because the catalog is shared: every signed-in
+// account may download every folder's books (ADR-0017).
 type Downloader interface {
-	ServeBookDownload(w http.ResponseWriter, r *http.Request, userID, bookID string)
+	ServeBookDownload(w http.ResponseWriter, r *http.Request, bookID string)
 }
 
 // booksPageSize keeps the page short enough to read. The UI paginates
@@ -47,68 +42,10 @@ func isHTMXRequest(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "true"
 }
 
-// uploadActivityLimit keeps the section a status list rather than a log.
-const uploadActivityLimit = 10
-
-// uploadActivity reports uploads that have not reached the catalog. A
-// failure here is not the page's failure: the books still render.
-func (s *Server) uploadActivity(
-	r *http.Request, userID, libraryID string, loc *time.Location,
-) []UploadRow {
-	jobs, err := s.St.ListIngestActivity(
-		r.Context(), userID, libraryID, uploadActivityLimit)
-	if err != nil {
-		// Swallowing this silently is what made the original problem so
-		// hard to see, so it is at least recorded.
-		slog.Error("upload activity unavailable",
-			"library", libraryID, "err", err)
-		return nil
-	}
-	rows := make([]UploadRow, 0, len(jobs))
-	for _, job := range jobs {
-		row := UploadRow{
-			Filename: job.OriginalFilename,
-			When:     job.CreatedAt.In(loc).Format("Jan 2, 2006 15:04"),
-			State:    "still being read",
-		}
-		switch job.State {
-		case store.IngestQuarantined, store.IngestFailed:
-			row.Reason = uploadFailureReason(job)
-		default:
-			row.Pending = true
-		}
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-// uploadFailureReason turns an ingest error code into an explanation with
-// something to do about it. The codes come from EPUB validation, so they
-// describe the file, not the server.
-func uploadFailureReason(job store.IngestJob) string {
-	code := ""
-	if job.ErrorCode != nil {
-		code = *job.ErrorCode
-	}
-	switch code {
-	case "invalid_epub":
-		return "Not a readable EPUB. Re-export it, or convert it first."
-	case "unsupported_drm":
-		return "This EPUB is DRM-protected and cannot be stored."
-	case "unsafe_archive":
-		return "The archive is malformed and was refused."
-	case "archive_limits":
-		return "The EPUB is too large or too complex for this server."
-	case "":
-		return "The upload could not be processed."
-	}
-	return "The upload could not be processed (" + code + ")."
-}
-
-// listBooksPage returns one page and the cursor for the next, or "" when
-// this is the last one.
+// listBooksPage returns one page of a folder's books and the cursor for
+// the next, or "" when this is the last one.
 func (s *Server) listBooksPage(
-	r *http.Request, userID, libraryID string,
+	r *http.Request, folderID string,
 ) ([]store.CatalogBook, string, error) {
 	after, err := decodeBooksCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
@@ -117,7 +54,7 @@ func (s *Server) listBooksPage(
 		// than the first page.
 		after = nil
 	}
-	books, err := s.St.ListCatalogBooks(r.Context(), userID, libraryID, after, booksPageSize)
+	books, err := s.St.ListCatalogBooks(r.Context(), folderID, after, booksPageSize)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, "", nil
@@ -133,6 +70,30 @@ func (s *Server) listBooksPage(
 	}), nil
 }
 
+// booksByID reads a bounded set of catalog books by id. A book is one
+// row and one file now, so everything a shelf asks about it — its media
+// type, whether the last pass could still find it — is on the row, and
+// there is nothing left to batch. The callers are the reading shelves,
+// which are bounded by construction; a catalog page already holds the
+// rows it needs.
+func (s *Server) booksByID(ctx context.Context, ids []string) map[string]store.CatalogBook {
+	out := make(map[string]store.CatalogBook, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, done := out[id]; done {
+			continue
+		}
+		book, err := s.St.CatalogBookByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		out[id] = book
+	}
+	return out
+}
+
 func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	v, ok := s.bookView(r, u, r.PathValue("id"))
 	if !ok {
@@ -145,79 +106,46 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 		Render(r.Context(), w)
 }
 
-// bookView assembles the book page. It is separate from the handler
-// because the lookup panel renders the same page with an extra section
-// on it, and a second assembly would drift from this one.
+// bookView assembles the book page from one catalog row and its
+// relations. Every signed-in account sees the same page: the catalog is
+// shared, and nothing on it is anybody's to edit (ADR-0017).
 func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookView, bool) {
-	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID, store.LibraryRoleRead)
+	book, err := s.St.CatalogBookByID(r.Context(), bookID)
 	if err != nil {
 		return BookView{}, false
 	}
 	v := BookView{
 		ID: book.ID, Title: book.Title, Subtitle: book.Subtitle,
 		Description: book.Description, Publisher: book.Publisher,
-		Published: book.PublishedDate, LibraryID: book.LibraryID,
-		Added: book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
+		Published: book.PublishedDate, FolderID: book.FolderID,
+		Added:    book.CreatedAt.In(userLoc(u)).Format("Jan 2, 2006"),
+		Filename: book.OriginalFilename,
+		// A book whose file the last pass could not find stays in the
+		// catalog and stops being downloadable: the row is a record of
+		// what the folder held, and offering a button that answers 410
+		// would be worse than saying so.
+		Present:   book.Status == store.BookActive,
+		MediaType: book.MediaType,
+		SHA256:    book.ContentSHA256,
 	}
-	// Chips are a reader's fact about the book, so they are read with
-	// read access. The same rows serve the edit form below, but only for
-	// somebody who could submit it.
-	if meta, err := s.St.CatalogBookMetadata(
-		r.Context(), u.ID, bookID, store.LibraryRoleRead,
+	v.CanRead = bookReadable(book)
+	if rel, err := s.St.CatalogBookRelationsForBooks(
+		r.Context(), []string{book.ID},
 	); err == nil {
-		v.Authors, v.Byline = contributorChips(book.LibraryID, meta.Contributors)
-		for _, ser := range meta.Series {
+		v.Authors, v.Byline = contributorChips(book.FolderID, rel.Contributors[book.ID])
+		for _, ser := range rel.Series[book.ID] {
 			v.Series = append(v.Series, ChipLink{
 				Name: ser.Name,
-				URL:  entityURL(book.LibraryID, "series", ser.SeriesID),
+				URL:  entityURL(book.FolderID, "series", ser.SeriesID),
 			})
-		}
-		for _, t := range meta.Tags {
-			v.Tags = append(v.Tags, ChipLink{
-				Name: t.Name, URL: entityURL(book.LibraryID, "tags", t.ID),
-			})
-		}
-		for _, g := range meta.Genres {
-			v.Genres = append(v.Genres, ChipLink{
-				Name: g.Name, URL: entityURL(book.LibraryID, "genres", g.ID),
-			})
-		}
-	}
-	// The edit form is only built for somebody who could submit it. A
-	// reader asking for this page must not be told a value's provenance,
-	// which is librarian's information rather than a fact about the book.
-	if full, err := s.St.CatalogBookMetadata(
-		r.Context(), u.ID, bookID, store.LibraryRoleManage,
-	); err == nil {
-		v.CanWrite = true
-		v.Edit = metadataEditView(full)
-		v.Lookup = LookupView{
-			Offered:  s.Lookup != nil,
-			Revision: strconv.FormatInt(full.Book.Revision, 10),
-		}
-	}
-	files, err := s.St.ListBookFiles(r.Context(), u.ID, bookID, store.LibraryRoleRead)
-	if err == nil {
-		for _, f := range files {
-			if f.Availability != store.BookFileAvailable {
-				continue
-			}
-			v.Files = append(v.Files, BookFileRow{
-				// The content digest, never the blob address: the address
-				// is the server's own copy and is empty for an in-place
-				// library, which would show a book with no digest at all.
-				Name: f.OriginalFilename, MediaType: f.MediaType,
-				SHA256: f.ContentSHA256,
-			})
-			v.CanRead = v.CanRead || isEPUB(f.MediaType)
 		}
 	}
 	return v, true
 }
 
 // entityURL is the page listing everything else that claims an entity.
-func entityURL(libraryID, kind, entityID string) string {
-	return "libraries/" + url.PathEscape(libraryID) + "/" + kind + "/" +
+func entityURL(folderID, kind, entityID string) string {
+	return "folders/" + url.PathEscape(folderID) + "/" + kind + "/" +
 		url.PathEscape(entityID)
 }
 
@@ -225,17 +153,17 @@ func entityURL(libraryID, kind, entityID string) string {
 // authors only when the file said who they are, and falls back to every
 // contributor when it did not: a book credited solely to a translator
 // should still say so rather than say nothing.
-func contributorChips(libraryID string, rows []store.BookContributor) ([]ChipLink, string) {
+func contributorChips(folderID string, rows []store.BookContributor) ([]ChipLink, string) {
 	chips := make([]ChipLink, 0, len(rows))
 	var authors []string
 	var everyone []string
 	for _, c := range rows {
 		chips = append(chips, ChipLink{
 			Name: c.Name,
-			URL:  entityURL(libraryID, "contributors", c.ContributorID),
+			URL:  entityURL(folderID, "contributors", c.ContributorID),
 		})
 		everyone = append(everyone, c.Name)
-		if c.Role == "" || strings.EqualFold(c.Role, "author") ||
+		if c.Role == "" || strings.EqualFold(c.Role, store.ContributorRoleAuthor) ||
 			strings.EqualFold(c.Role, "aut") {
 			authors = append(authors, c.Name)
 		}
@@ -253,136 +181,7 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request, a st
 		http.Error(w, "content storage is unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	s.Downloads.ServeBookDownload(w, r, u.ID, r.PathValue("id"))
-}
-
-// handleUploadBook takes the file from the form and stages it. It is a
-// mutation, so it checks CSRF, and it answers with a redirect rather
-// than a page so that a reload does not re-upload.
-func (s *Server) handleUploadBook(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	if s.Uploads == nil {
-		s.uploadResult(w, r, "", "", "content storage is unavailable")
-		return
-	}
-	reader, err := r.MultipartReader()
-	if err != nil {
-		s.uploadResult(w, r, "", "", "that was not a file upload")
-		return
-	}
-	// The CSRF token travels in the multipart body, so it is only
-	// readable after the parts before the file have been consumed. The
-	// form puts it first for exactly that reason: the file must not be
-	// streamed anywhere until the request is known to be genuine.
-	fields := map[string]string{}
-	var part *multipartPart
-	for {
-		p, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			s.uploadResult(w, r, fields["library"], "", "the upload was malformed")
-			return
-		}
-		if p.FileName() != "" && p.FormName() == "file" {
-			part = &multipartPart{ReadCloser: p, filename: p.FileName()}
-			break
-		}
-		value, err := io.ReadAll(io.LimitReader(p, 4<<10))
-		p.Close()
-		if err != nil {
-			s.uploadResult(w, r, fields["library"], "", "the upload was malformed")
-			return
-		}
-		fields[p.FormName()] = string(value)
-	}
-	if subtle.ConstantTimeCompare([]byte(fields["csrf"]), []byte(csrfFor(a))) != 1 {
-		http.Error(w, "bad csrf", http.StatusForbidden)
-		return
-	}
-	library := strings.TrimSpace(fields["library"])
-	if library == "" {
-		s.uploadResult(w, r, "", "", "choose a library first")
-		return
-	}
-	if part == nil {
-		s.uploadResult(w, r, library, "", "choose a file first")
-		return
-	}
-
-	// The key makes a double submit idempotent. A browser has none to
-	// offer, so one is generated per request: a user who clicks twice
-	// gets two jobs, but the content-addressed store gives them one
-	// blob, and the second job is a no-op once ingest deduplicates it.
-	key := "web-" + uuid.New().String()
-	_, _, err = s.Uploads.StageUpload(r.Context(), u.ID, library, key, part.filename, part)
-	if err != nil {
-		part.Close()
-		s.uploadResult(w, r, library, "", uploadProblem(err))
-		return
-	}
-	part.Close()
-	s.uploadResult(w, r, library, "Upload stored. The book appears once it has been read.", "")
-}
-
-// multipartPart exists so the reader handed to StageUpload cannot be
-// closed by it: closing a multipart part drains the rest of it, which
-// after a refused upload is the data we declined to read.
-type multipartPart struct {
-	io.ReadCloser
-	filename string
-}
-
-func (s *Server) uploadResult(w http.ResponseWriter, r *http.Request, library, notice, problem string) {
-	q := url.Values{}
-	if library != "" {
-		q.Set("library", library)
-	}
-	if notice != "" {
-		q.Set("notice", notice)
-	}
-	if problem != "" {
-		q.Set("problem", problem)
-	}
-	target := resultPage(r)
-	if len(q) > 0 {
-		target += "?" + q.Encode()
-	}
-	redirectRel(w, relPrefix(r.URL.Path)+target, http.StatusSeeOther)
-}
-
-// resultPage decides which page hears about what just happened. The
-// queues live on library management, so an action started there has to
-// end there — otherwise working through a queue means walking back to it
-// after every item. The choice is a bounded one rather than a path the
-// form supplies, because a free path here would be an open redirect
-// wearing a hidden input.
-func resultPage(r *http.Request) string {
-	if r.FormValue("back") == backManage {
-		return "library/manage"
-	}
-	return "library"
-}
-
-// backManage is the value the management page puts in its forms.
-const backManage = "manage"
-
-// uploadProblem turns a staging failure into something a person can act
-// on. The API's status codes are the authority on what went wrong; this
-// only translates them.
-func uploadProblem(err error) string {
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return "that library does not exist, or you cannot write to it"
-	case errors.Is(err, store.ErrConflict),
-		errors.Is(err, store.ErrIdempotencyConflict):
-		return "that upload is already in progress"
-	}
-	var quota *store.QuotaExceededError
-	if errors.As(err, &quota) {
-		return "the file does not fit in your storage quota"
-	}
-	return "the upload failed; the file may be too large"
+	s.Downloads.ServeBookDownload(w, r, r.PathValue("id"))
 }
 
 func encodeBooksCursor(c store.CatalogBookCursor) string {
@@ -404,233 +203,14 @@ func decodeBooksCursor(raw string) (*store.CatalogBookCursor, error) {
 	return &store.CatalogBookCursor{CreatedAt: parsed, ID: id}, nil
 }
 
-// handleDeleteBook moves a book to the trash. It is deliberately not a
-// permanent deletion: the bytes stay until retention runs out, so a
-// misclick is recoverable from the same page it happened on.
-func (s *Server) handleDeleteBook(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	if !s.checkCSRF(r, a) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	library := strings.TrimSpace(r.FormValue("library"))
-	now := time.Now().UTC()
-	retention := time.Duration(s.Cfg.Content.TrashRetentionHours) * time.Hour
-	book, err := s.St.TrashCatalogBook(
-		r.Context(), u.ID, r.PathValue("id"), now, now.Add(retention))
-	if err != nil {
-		s.uploadResult(w, r, library, "", trashProblem(err))
-		return
-	}
-	if library == "" {
-		library = book.LibraryID
-	}
-	s.uploadResult(w, r, library,
-		"Deleted. You can put it back until it is purged.", "")
-}
-
-// handleRestoreBook is the undo for handleDeleteBook.
-func (s *Server) handleRestoreBook(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	if !s.checkCSRF(r, a) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	library := strings.TrimSpace(r.FormValue("library"))
-	book, err := s.St.RestoreCatalogBook(
-		r.Context(), u.ID, r.PathValue("id"), time.Now().UTC())
-	if err != nil {
-		s.uploadResult(w, r, library, "", trashProblem(err))
-		return
-	}
-	if library == "" {
-		library = book.LibraryID
-	}
-	notice := "Restored."
-	if book.Status == store.BookMissing {
-		// Saying "restored" alone would be a lie: the catalog entry is
-		// back but there is nothing to download.
-		notice = "Restored, but its file is gone — upload it again to read it."
-	}
-	s.uploadResult(w, r, library, notice, "")
-}
-
-// trashProblem translates a refused deletion into a sentence. Readers and
-// strangers get the same answer, so neither learns the book exists.
-func trashProblem(err error) string {
-	switch {
-	case errors.Is(err, store.ErrInvalidTransition):
-		return "that book is not in a state where this makes sense"
-	case errors.Is(err, store.ErrNotFound):
-		return "that book does not exist, or you cannot manage it"
-	default:
-		return "that did not work; try again"
-	}
-}
-
-// duplicateLimit bounds the survey. It counts books rather than groups,
-// so a library that is duplicated wholesale reports the first of them and
-// no more: the point is to tell the user it is happening, and the tenth
-// example does not make the point better.
-const duplicateLimit = 50
-
-// duplicateGroups collects books sharing bytes into one entry per file.
-// The store returns them ordered by digest, so a group is a run.
-func (s *Server) duplicateGroups(
-	r *http.Request, userID, libraryID string,
-) []DuplicateGroup {
-	books, err := s.St.ListDuplicateContentBooks(
-		r.Context(), userID, libraryID, duplicateLimit)
-	if err != nil {
-		slog.Error("duplicate listing unavailable",
-			"library", libraryID, "err", err)
-		return nil
-	}
-	return groupDuplicates(books)
-}
-
-// similarGroups reports books that look like one book without being one
-// file. Like the digest report it is offered only to a librarian, and
-// like the digest report it changes nothing: this one is a guess, and a
-// guess acted on automatically is how a library loses an edition
-// somebody chose deliberately.
-func (s *Server) similarGroups(
-	r *http.Request, userID, libraryID string, loc *time.Location,
-) []SimilarGroup {
-	groups, err := s.St.ListSimilarBooks(
-		r.Context(), userID, libraryID, duplicateLimit)
-	if err != nil {
-		slog.Error("similarity listing unavailable",
-			"library", libraryID, "err", err)
-		return nil
-	}
-	out := make([]SimilarGroup, 0, len(groups))
-	for _, group := range groups {
-		row := SimilarGroup{}
-		for _, b := range group.Books {
-			row.Books = append(row.Books, BookRow{
-				ID: b.ID, Title: b.Title,
-				Added: b.CreatedAt.In(loc).Format("Jan 2, 2006"),
-			})
-		}
-		out = append(out, row)
-	}
-	return out
-}
-
-// groupDuplicates turns the store's digest-ordered list into one entry
-// per file. A group is a run of books carrying the same digest, so this
-// depends on that ordering and on nothing else, which is why it is a
-// function of its argument and testable as one.
-func groupDuplicates(books []store.DuplicateContentBook) []DuplicateGroup {
-	var groups []DuplicateGroup
-	digest := ""
-	for i, duplicate := range books {
-		if i == 0 || duplicate.SHA256 != digest {
-			digest = duplicate.SHA256
-			groups = append(groups, DuplicateGroup{})
-		}
-		last := len(groups) - 1
-		groups[last].Titles = append(groups[last].Titles, duplicate.Book.Title)
-	}
-	// The limit can cut a group in half, leaving a lone title that reads
-	// as "this book duplicates itself". Dropping it is better than
-	// explaining it.
-	if len(groups) > 0 && len(groups[len(groups)-1].Titles) < 2 {
-		groups = groups[:len(groups)-1]
-	}
-	return groups
-}
-
-// reviewLimit keeps the section a list of decisions rather than a
-// second catalog. A queue longer than this means something happened to
-// the root, not to the books, and the page cannot help with that.
-const reviewLimit = 25
-
-// reviewRows lists the watched books whose source changed under them.
-// Like the other sections, a failure here must not take the page down.
-func (s *Server) reviewRows(
-	r *http.Request, userID, libraryID string,
-) []ReviewRow {
-	books, err := s.St.ListBooksInReview(r.Context(), userID, libraryID, reviewLimit)
-	if err != nil {
-		slog.Error("review listing unavailable", "library", libraryID, "err", err)
-		return nil
-	}
-	rows := make([]ReviewRow, 0, len(books))
-	for _, b := range books {
-		rows = append(rows, ReviewRow{
-			ID: b.ID, Title: b.Title, Reason: b.ReviewReason,
-		})
-	}
-	return rows
-}
-
-// handleAcceptBook records that a librarian looked at a changed watched
-// file and is content with the copy being served.
-//
-// It clears the flag and stops. The book returns to `missing`, and the
-// availability pass — the only thing allowed to decide a book is
-// servable — puts it back in the catalog on its next run if it still has
-// a file. Reingesting the new bytes here would be the server answering
-// the question it raised.
-func (s *Server) handleAcceptBook(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	if !s.checkCSRF(r, a) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	library := strings.TrimSpace(r.FormValue("library"))
-	// The manage role is checked by reading the book under it, so a
-	// reader cannot clear a librarian's queue.
-	book, err := s.St.CatalogBookByID(
-		r.Context(), u.ID, r.PathValue("id"), store.LibraryRoleManage)
-	if err != nil {
-		s.uploadResult(w, r, library, "", trashProblem(err))
-		return
-	}
-	if library == "" {
-		library = book.LibraryID
-	}
-	if _, err := s.St.SetCatalogBookReview(
-		r.Context(), book.LibraryID, book.ID, "", time.Now().UTC()); err != nil {
-		s.uploadResult(w, r, library, "", "that did not work; try again")
-		return
-	}
-	s.uploadResult(w, r, library,
-		"Accepted. It returns to the catalog shortly.", "")
-}
-
-// trashLimit keeps the trash section a short list of recent regrets
-// rather than a second catalog.
-const trashLimit = 10
-
-// trashActivity lists what can still be restored. Like uploadActivity, a
-// failure here must not take the page down with it.
-func (s *Server) trashActivity(
-	r *http.Request, userID, libraryID string, loc *time.Location,
-) []TrashRow {
-	books, err := s.St.ListTrashedBooks(r.Context(), userID, libraryID, trashLimit)
-	if err != nil {
-		slog.Error("trash listing unavailable", "library", libraryID, "err", err)
-		return nil
-	}
-	rows := make([]TrashRow, 0, len(books))
-	for _, b := range books {
-		row := TrashRow{ID: b.ID, Title: b.Title}
-		if b.TrashExpiresAt != nil {
-			row.Until = b.TrashExpiresAt.In(loc).Format("Jan 2, 2006 15:04")
-		}
-		rows = append(rows, row)
-	}
-	return rows
+// bookReadable reports whether a catalog row is something the browser
+// reader can open: an EPUB the last pass could still find.
+func bookReadable(b store.CatalogBook) bool {
+	return b.Status == store.BookActive && isEPUB(b.MediaType)
 }
 
 // isEPUB reports whether a stored file is something the browser reader
-// can open. Everything else in a library stays downloadable; only EPUB
+// can open. Everything else in a folder stays downloadable; only EPUB
 // is offered for reading, because that is the only format the reader
 // knows how to unpack.
 func isEPUB(mediaType string) bool {

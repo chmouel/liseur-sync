@@ -1,9 +1,7 @@
 package webui
 
 import (
-	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -37,15 +35,9 @@ func describeConfig(c config.Config) configFacts {
 	}
 	add("Listen address", c.ListenAddr)
 	add("Database driver", c.Database.Driver)
-	add("Content root", c.Content.Root)
-	add("Maximum upload", humanBytes(c.Content.MaxUploadBytes))
-	add("Staging limit", humanBytesOr(c.Content.MaxStagingBytes, "unlimited"))
-	add("Per-account quota", humanBytesOr(c.Content.QuotaBytes, "unlimited"))
-	add("Trash retention", hours(c.Content.TrashRetentionHours))
-	add("Failed upload retention", hours(c.Content.FailureRetentionHours))
-	add("Orphan blob grace", hours(c.Content.OrphanGraceHours))
-	add("Ingest worker interval", seconds(c.Content.IngestWorkerInterval))
-	add("Library refresh tick", secondsOr(c.Content.RefreshTick, "never"))
+	add("Cache directory", c.Content.CacheDir)
+	add("Scan file ceiling", i2s(c.Content.ScanMaxFiles))
+	add("Scan depth ceiling", i2s(c.Content.ScanMaxDepth))
 	add("Op log retention", plural(c.Ops.RetentionDays, "day"))
 	add("Op log compaction", onOff(c.Ops.CompactionEnabled))
 	add("kosync adapter", onOff(c.Adapters.Kosync))
@@ -55,9 +47,8 @@ func describeConfig(c config.Config) configFacts {
 	add("Trusted proxies", listOr(c.TrustedProxies, "none"))
 	add("CORS origins", listOr(c.CORSAllowedOrigins, "none"))
 	add("Reader origin", orValue(c.ReaderOrigin, "same origin"))
-	add("Library roots for the panel", listOr(c.Content.LibraryRoots,
+	add("Folder roots for the panel", listOr(c.Content.FolderRoots,
 		"anywhere the server can read"))
-	add("Metadata providers", listOr(c.Metadata.Providers, "none (external lookup off)"))
 	return f
 }
 
@@ -66,26 +57,6 @@ func onOff(b bool) string {
 		return "on"
 	}
 	return "off"
-}
-
-func hours(h int) string {
-	switch {
-	case h <= 0:
-		return "off"
-	case h%24 == 0:
-		return plural(h/24, "day")
-	default:
-		return plural(h, "hour")
-	}
-}
-
-func seconds(s int) string { return plural(s, "second") }
-
-func secondsOr(s int, zero string) string {
-	if s <= 0 {
-		return zero
-	}
-	return seconds(s)
 }
 
 func listOr(v []string, empty string) string {
@@ -100,28 +71,6 @@ func orValue(s, empty string) string {
 		return empty
 	}
 	return s
-}
-
-func humanBytesOr(n int64, zero string) string {
-	if n <= 0 {
-		return zero
-	}
-	return humanBytes(n)
-}
-
-// humanBytes renders a byte count the way an operator reads one. Binary
-// units, because that is what the limits are written in.
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return strconv.FormatInt(n, 10) + " B"
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit && exp < 4; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTP"[exp])
 }
 
 func (s *Server) handleAdminOverview(

@@ -18,18 +18,7 @@ import (
 )
 
 // Run dispatches an admin subcommand. args excludes "admin" itself.
-// contentRoot is the configured content directory, needed by the
-// commands that inspect stored bytes rather than database rows.
-// trashRetention is the configured window a deleted book can be brought
-// back in, so that removing a library costs the same here as it does in
-// the panel — an operator who reaches for the command line should not
-// get a different retention policy than the one they configured.
-func Run(
-	st store.Store,
-	contentRoot string,
-	trashRetention time.Duration,
-	args []string,
-) error {
+func Run(st store.Store, args []string) error {
 	if len(args) == 0 {
 		return UsageError{ExitCode: 1}
 	}
@@ -61,30 +50,14 @@ func Run(
 		return pairingCode(ctx, st, args[1:])
 	case "koplugin-device":
 		return kopluginDevice(ctx, st, args[1:])
-	case "create-library":
-		return createLibrary(ctx, st, args[1:])
-	case "add-library":
-		return addLibrary(ctx, st, args[1:])
-	case "refresh-library":
-		return refreshLibrary(ctx, st, args[1:])
-	case "list-review":
-		return listReview(ctx, st, args[1:])
-	case "clear-review":
-		return clearReview(ctx, st, args[1:])
-	case "list-libraries":
-		return listLibraries(ctx, st, args[1:])
-	case "grant-library":
-		return grantLibrary(ctx, st, args[1:])
-	case "library-layout":
-		return libraryLayout(ctx, st, args[1:])
-	case "revoke-library":
-		return revokeLibrary(ctx, st, args[1:])
+	case "add-folder":
+		return addFolder(ctx, st, args[1:])
+	case "list-folders":
+		return listFolders(ctx, st, args[1:])
+	case "remove-folder":
+		return removeFolder(ctx, st, args[1:])
 	case "backfill-works":
 		return backfillWorks(ctx, st, args[1:])
-	case "delete-library":
-		return deleteLibrary(ctx, st, trashRetention, args[1:])
-	case "verify-backup":
-		return verifyBackup(ctx, st, contentRoot, args[1:])
 	default:
 		return UsageError{
 			Message:  fmt.Sprintf("unknown admin subcommand %q", args[0]),
@@ -134,48 +107,19 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   pairing-code <user>           generate a kosync pairing code (15 min TTL)
   koplugin-device <user> <name> create a statistics-plugin capability URL
 
-  create-library <owner> <name> create a managed library
-  add-library <owner> <name> <root>
-                                create a library over an existing
-                                read-only directory; the server never
-                                writes below <root>
-                                flags: -source directory|calibre
-                                       -storage cas|in-place
-                                       -refresh manual|interval
-                                       -interval <duration>
-  refresh-library <actor> <library-id>
-                                queue a refresh of a root-backed
-                                library; the running server performs it
-  list-libraries <user>         list libraries the user can read
-  grant-library <actor> <library-id> <user> read|manage
-                                grant access; actor must own or manage it
-  revoke-library <actor> <library-id> <user>
-                                remove a grant
-  library-layout <actor> <library-id> [<layouts>]
-                                show or set how a library's filenames are
-                                read; <layouts> is a comma-separated list,
-                                "default", or "none"
-  list-review <actor> <library-id>
-                                list watched books whose source file
-                                changed, which the server will not
-                                reinterpret on its own
-  clear-review <actor> <library-id> <book-id>
-                                accept the copy being served and take one
-                                book back out of review
-  delete-library <actor> <library-id>
-                                remove a library. One kept in place is
-                                removed at once and its folder is left
-                                alone; one holding the server's own
-                                copies sends its books to the trash and
-                                needs the command repeated
+  add-folder <name> <root>      watch an existing directory; the server
+                                reads it and never writes, renames or
+                                deletes anything below it. A tree holding
+                                a metadata.db is read as a Calibre
+                                library, anything else as plain files
+  list-folders                  list the folders this server watches
+  remove-folder <folder-id>     stop watching a folder and forget what
+                                was catalogued from it; nothing under the
+                                directory is touched
 
-  backfill-works <user>         map every catalog book the user can
-                                read to a sync work, so statistics do
-                                not wait for each book to be opened
-
-  verify-backup                 check that the database and content
-                                directory named by -config are a
-                                restorable pair; exits non-zero if not
+  backfill-works <user>         map every catalog book to a sync work
+                                for this user, so statistics do not wait
+                                for each book to be opened
 `
 
 func createUser(ctx context.Context, st store.Store, args []string) error {
@@ -475,50 +419,6 @@ func readPassword(prompt string) (string, error) {
 	return "", errors.New("no TTY and no piped stdin for password input")
 }
 
-// createLibrary makes a managed library, whose content the server owns.
-// A library over a directory the server must not write to is a different
-// command, because the two differ in what an administrator is promising
-// rather than in a flag.
-func createLibrary(ctx context.Context, st store.Store, args []string) error {
-	if len(args) != 2 {
-		return errors.New("usage: create-library <owner> <name>")
-	}
-	u, err := st.UserByName(ctx, args[0])
-	if err != nil {
-		return err
-	}
-	lib, err := NewManagedLibrary(ctx, st, u.ID, args[1])
-	if err != nil {
-		return err
-	}
-	fmt.Printf("created library %q (id %s) owned by %s\n", lib.Name, lib.ID, u.Name)
-	return nil
-}
-
-func listLibraries(ctx context.Context, st store.Store, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: list-libraries <user>")
-	}
-	u, err := st.UserByName(ctx, args[0])
-	if err != nil {
-		return err
-	}
-	libs, err := st.ListLibraries(ctx, u.ID, store.LibraryRoleRead)
-	if err != nil {
-		return err
-	}
-	for _, l := range libs {
-		owner := "shared"
-		if l.Library.OwnerUserID == u.ID {
-			owner = "owner"
-		}
-		fmt.Printf("%s  %-9s %-8s %-8s %-6s %-7s %s\n",
-			l.Library.ID, l.Library.Source, l.Library.Storage,
-			l.Library.Refresh, l.Role, owner, l.Library.Name)
-	}
-	return nil
-}
-
 // BackfillWorks maps every catalog book one account can read to a sync
 // work. Both the subcommand and the panel call it, so the identifiers
 // minted from a browser are the ones minted from a shell.
@@ -527,7 +427,7 @@ func BackfillWorks(ctx context.Context, st store.Store, userID string) (workiden
 }
 
 // backfillWorks exists because the book-to-work mapping is created
-// lazily, on first resolve. A reader who uploads a library and then looks
+// lazily, on first resolve. A reader who adds a folder and then looks
 // at their statistics sees an empty catalog until they have opened every
 // book one by one; this maps the lot in a single pass.
 func backfillWorks(ctx context.Context, st store.Store, args []string) error {
@@ -568,63 +468,6 @@ func newWorkID() (string, error) {
 	return id[:16], nil
 }
 
-// grantLibrary goes through the same ACL-checked store call the API
-// uses, which is why it asks for an actor rather than acting as root:
-// the operator gets one authorization path to reason about instead of
-// a second one that could drift from it.
-func grantLibrary(ctx context.Context, st store.Store, args []string) error {
-	if len(args) != 4 {
-		return errors.New(
-			"usage: grant-library <actor> <library-id> <user> read|manage")
-	}
-	actor, err := st.UserByName(ctx, args[0])
-	if err != nil {
-		return fmt.Errorf("actor %q: %w", args[0], err)
-	}
-	target, err := st.UserByName(ctx, args[2])
-	if err != nil {
-		return fmt.Errorf("user %q: %w", args[2], err)
-	}
-	role := store.LibraryRole(args[3])
-	if !role.Valid() {
-		return fmt.Errorf("role must be read or manage, got %q", args[3])
-	}
-	err = st.GrantLibraryAccess(ctx, actor.ID, args[1], target.ID, role, time.Now().UTC())
-	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf(
-			"no such library, or %s cannot manage it, or %s already owns it",
-			actor.Name, target.Name)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("granted %s %s on library %s\n", target.Name, role, args[1])
-	return nil
-}
-
-func revokeLibrary(ctx context.Context, st store.Store, args []string) error {
-	if len(args) != 3 {
-		return errors.New("usage: revoke-library <actor> <library-id> <user>")
-	}
-	actor, err := st.UserByName(ctx, args[0])
-	if err != nil {
-		return fmt.Errorf("actor %q: %w", args[0], err)
-	}
-	target, err := st.UserByName(ctx, args[2])
-	if err != nil {
-		return fmt.Errorf("user %q: %w", args[2], err)
-	}
-	err = st.RevokeLibraryAccess(ctx, actor.ID, args[1], target.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("no such grant, or %s cannot manage that library", actor.Name)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("revoked %s's access to library %s\n", target.Name, args[1])
-	return nil
-}
-
 // SetDisabled stops or restarts an account. Like SetAdmin it exists so
 // that the CLI and the panel are one implementation, and so that the
 // last-enabled-administrator refusal reads the same on both.
@@ -662,49 +505,5 @@ func setDisabledCmd(ctx context.Context, st store.Store, args []string, disabled
 	}
 	fmt.Printf("%q (id %s) is enabled again. Tokens and devices work; "+
 		"web sessions do not, so they sign in again.\n", u.Name, u.ID)
-	return nil
-}
-
-// deleteLibrary removes a library from the command line. It is the same
-// call the panel makes and reports the same two outcomes, because a
-// library holding the server's own copies is not removed on one word:
-// its books go to the trash and the command has to be repeated.
-func deleteLibrary(
-	ctx context.Context,
-	st store.Store,
-	trashRetention time.Duration,
-	args []string,
-) error {
-	if len(args) != 2 {
-		return errors.New("usage: delete-library <actor> <library-id>")
-	}
-	actor, err := st.UserByName(ctx, args[0])
-	if err != nil {
-		return fmt.Errorf("actor %q: %w", args[0], err)
-	}
-	library, err := st.AdminLibraryByID(ctx, args[1])
-	if err != nil {
-		return fmt.Errorf("library %q: %w", args[1], err)
-	}
-	now := time.Now().UTC()
-	result, err := st.AdminDeleteLibrary(
-		ctx, actor.ID, library.ID, now, now.Add(trashRetention))
-	if err != nil {
-		return err
-	}
-	if !result.Removed {
-		fmt.Printf(
-			"moved %d books from %s to the trash, restorable until %s\n"+
-				"run delete-library again to remove the library and them\n",
-			result.Trashed, library.Name,
-			result.TrashExpiresAt.Format(time.RFC3339))
-		return nil
-	}
-	fmt.Printf("removed library %s (%s); %d books purged\n",
-		library.Name, library.ID, len(result.Purged.BookIDs))
-	if library.Storage == store.LibraryStorageInPlace &&
-		library.RootPath != nil {
-		fmt.Printf("nothing in %s was touched\n", *library.RootPath)
-	}
 	return nil
 }

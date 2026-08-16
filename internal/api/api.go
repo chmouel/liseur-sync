@@ -9,7 +9,6 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
-	"github.com/chmouel/liseur-sync/internal/metadata/provider"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -20,19 +19,10 @@ type Server struct {
 	Cfg  config.Config
 	// LoginLimiter rate-limits login and token-management endpoints.
 	LoginLimiter *auth.RateLimiter
-	// Providers is the external metadata lookup registry. A nil or empty
-	// registry is the default posture: the server contacts nobody.
-	Providers *provider.Registry
-	// LookupLimiter bounds how often one user can send this server to an
-	// external service. It protects the service, not us: OpenLibrary is
-	// free and a self-hoster who hammers it gets everybody blocked.
-	LookupLimiter *auth.RateLimiter
-	// Content stages uploaded bytes. Nil disables the upload endpoint,
-	// which then reports 503 rather than panicking.
-	Content ContentStore
-	// Blobs serves promoted content for downloads. Nil disables the
-	// download route the same way.
-	Blobs BlobStore
+	// Files opens the bytes behind a catalog book. Nil disables the
+	// download and cover routes, which then report 503 rather than
+	// panicking.
+	Files BookFiles
 	// Covers caches rendered covers. Nil is not an error: covers are then
 	// rendered on every request, which is slow but correct.
 	Covers CoverCache

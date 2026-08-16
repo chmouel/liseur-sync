@@ -403,11 +403,10 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		   AND value IN (
 		       SELECT 'liseur-sync:' || m.book_id
 		       FROM user_book_works m
-		       JOIN book_files f
-		         ON f.library_id = m.library_id AND f.book_id = m.book_id
+		       JOIN books b
+		         ON b.folder_id = m.folder_id AND b.id = m.book_id
 		       WHERE m.user_id = ? AND m.work_id = ?
-		         AND f.content_sha256 = ?
-		         AND f.availability IN ('available', 'missing')
+		         AND b.content_sha256 = ?
 		   )`),
 		newWork.ID, userID, workID, userID, workID, editionSHA); err != nil {
 		return err
@@ -417,9 +416,7 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		 SET work_id = ?
 		 WHERE user_id = ? AND work_id = ?
 		   AND book_id IN (
-		       SELECT book_id FROM book_files
-		       WHERE content_sha256 = ?
-		         AND availability IN ('available', 'missing')
+		       SELECT id FROM books WHERE content_sha256 = ?
 		   )`),
 		newWork.ID, userID, workID, editionSHA); err != nil {
 		return err

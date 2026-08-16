@@ -15,17 +15,6 @@ import (
 	"testing"
 )
 
-// uploadAndPromote is the shortest path to a book with known bytes.
-func (f *booksFixture) uploadAndPromote(t *testing.T, name string, body []byte) string {
-	t.Helper()
-	_, html := f.get(t, "/ui/library", f.cookie)
-	up := f.uploadForm(t, f.cookie, csrfFrom(t, html), f.library, name+".epub", body)
-	if up.StatusCode != http.StatusSeeOther {
-		t.Fatalf("upload: %d", up.StatusCode)
-	}
-	return f.promote(t, name)
-}
-
 func (f *booksFixture) fetchCover(
 	t *testing.T, path string, cookie *http.Cookie,
 ) (*http.Response, []byte) {
@@ -105,9 +94,9 @@ func coverEPUB(t *testing.T, width, height int) []byte {
 
 func TestBooksUIShowsCovers(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "illustrated", coverEPUB(t, 300, 400))
+	bookID := f.addBook(t, "illustrated", coverEPUB(t, 300, 400))
 
-	_, html := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	if !strings.Contains(html, "books/"+bookID+"/cover") {
 		t.Fatalf("the list shows no cover:\n%s", html)
 	}
@@ -133,7 +122,7 @@ func TestBooksUIShowsCovers(t *testing.T) {
 // them, so the page gets something to draw instead.
 func TestBooksUIDrawsAPlaceholderForBooksWithoutACover(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "plain", []byte("not an epub at all"))
+	bookID := f.addBook(t, "plain", []byte("not an epub at all"))
 
 	resp, body := f.fetchCover(t, "/ui/books/"+bookID+"/cover", f.cookie)
 	if resp.StatusCode != http.StatusOK {
@@ -159,30 +148,9 @@ func TestBooksUIDrawsAPlaceholderForBooksWithoutACover(t *testing.T) {
 	}
 }
 
-// Someone else's book must never produce someone else's cover. It
-// produces the same placeholder a coverless book does, which is the
-// stronger answer: a stranger cannot tell a book that is not theirs from
-// one that simply has no picture.
-func TestBooksUICoverOfAnotherUsersBookIsNotDrawn(t *testing.T) {
-	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "private", coverEPUB(t, 300, 400))
-	plain := f.uploadAndPromote(t, "plain-for-comparison", []byte("not an epub"))
-	bob := f.login(t, "bob")
-
-	_, mine := f.fetchCover(t, "/ui/books/"+bookID+"/cover", f.cookie)
-	resp, theirs := f.fetchCover(t, "/ui/books/"+bookID+"/cover", bob)
-	if bytes.Equal(theirs, mine) {
-		t.Fatalf("another user's cover was served: %d", resp.StatusCode)
-	}
-	_, placeholder := f.fetchCover(t, "/ui/books/"+plain+"/cover", f.cookie)
-	if !bytes.Equal(theirs, placeholder) {
-		t.Fatal("a stranger can tell someone else's book from a coverless one")
-	}
-}
-
 func TestBooksUICoverRequiresASession(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "guarded", coverEPUB(t, 300, 400))
+	bookID := f.addBook(t, "guarded", coverEPUB(t, 300, 400))
 
 	resp, _ := f.fetchCover(t, "/ui/books/"+bookID+"/cover", nil)
 	if resp.StatusCode == http.StatusOK {
@@ -196,7 +164,7 @@ func TestBooksUICoverRequiresASession(t *testing.T) {
 // cover would never be fetched.
 func TestBooksUIPlaceholderDoesNotInheritTheCoversCachingHeaders(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "ranged", coverEPUB(t, 300, 400))
+	bookID := f.addBook(t, "ranged", coverEPUB(t, 300, 400))
 
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		f.ts.URL+"/ui/books/"+bookID+"/cover", nil)
@@ -235,7 +203,7 @@ func TestBooksUIPlaceholderDoesNotInheritTheCoversCachingHeaders(t *testing.T) {
 // that a plain page rather than a crash.
 func TestBooksUICoverWithoutContentStorage(t *testing.T) {
 	f := newBooksFixture(t)
-	bookID := f.uploadAndPromote(t, "storageless", coverEPUB(t, 300, 400))
+	bookID := f.addBook(t, "storageless", coverEPUB(t, 300, 400))
 
 	mux := http.NewServeMux()
 	ui := f.uiWithoutCovers()
@@ -315,9 +283,9 @@ func (f *booksFixture) coverBytes(t *testing.T, bookID string, extra *http.Cooki
 // a prefix of "thumbnail".
 func TestBooksGridAsksForACoverSizeTheServerRenders(t *testing.T) {
 	f := newBooksFixture(t)
-	f.uploadAndPromote(t, "illustrated", coverEPUB(t, 300, 400))
+	f.addBook(t, "illustrated", coverEPUB(t, 300, 400))
 
-	_, html := f.get(t, "/ui/library?library="+f.library, f.cookie)
+	_, html := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
 	sources := coverSources(t, html)
 	if len(sources) == 0 {
 		t.Fatalf("the grid shows no cover images:\n%s", html)

@@ -43,10 +43,6 @@ type adminUserView struct {
 	MoreTokens   int
 	MoreKosync   int
 	MoreKoplugin int
-	// Libraries is what this account owns or was granted, one page of
-	// it; the whole instance's list lives on the libraries page.
-	Libraries     []adminUserLibrary
-	MoreLibraries bool
 	// Self marks the acting admin's own account: demoting or disabling
 	// yourself is not offered, since the last-admin guard would be the
 	// only thing standing between an operator and a locked instance.
@@ -175,7 +171,6 @@ func (s *Server) renderAdminUser(
 	view.Tokens, view.MoreTokens = capSlice(listOrNil(s.St.ListTokens(r.Context(), target.ID)))
 	view.Kosync, view.MoreKosync = capSlice(listOrNil(s.St.ListKosyncDevices(r.Context(), target.ID)))
 	view.Koplugin, view.MoreKoplugin = capSlice(listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)))
-	view.Libraries, view.MoreLibraries = s.userLibraries(r, target.ID)
 
 	prefix := relPrefix(r.URL.Path)
 	adminPage(target.Name, prefix, uiCtx(r, u), csrfFor(a), "users",

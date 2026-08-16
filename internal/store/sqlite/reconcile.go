@@ -3,303 +3,478 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"fmt"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-func scanBlobRecord(row interface{ Scan(...any) error }) (store.BlobRecord, error) {
-	var record store.BlobRecord
-	var orphaned, missing sql.NullString
-	if err := row.Scan(
-		&record.SHA256, &record.SizeBytes, &orphaned, &missing); err != nil {
-		return record, err
-	}
-	if orphaned.Valid {
-		value, err := parseTime(orphaned.String)
-		if err != nil {
-			return record, err
-		}
-		record.OrphanedAt = &value
-	}
-	if missing.Valid {
-		value, err := parseTime(missing.String)
-		if err != nil {
-			return record, err
-		}
-		record.MissingAt = &value
-	}
-	return record, nil
-}
-
-func (s *Store) ListBlobRecords(
-	ctx context.Context,
-	afterSHA256 string,
-	limit int,
-) ([]store.BlobRecord, error) {
-	if limit < 1 || limit > 500 {
-		return nil, store.ErrInvalidTransition
-	}
-	if afterSHA256 != "" {
-		if err := store.ValidateBlobInfo(store.BlobInfo{
-			SHA256: afterSHA256,
-		}); err != nil {
-			return nil, err
-		}
-	}
+func (s *Store) BooksInFolder(ctx context.Context, folderID string) ([]store.KnownBook, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT sha256, size_bytes, orphaned_at, missing_at
-		 FROM blobs
-		 WHERE sha256 > ?
-		 ORDER BY sha256
-		 LIMIT ?`,
-		afterSHA256, limit)
+		`SELECT id, status, relative_path, size_bytes, mtime,
+		        content_sha256, calibre_id, cover_sha256
+		 FROM books WHERE folder_id = ? ORDER BY relative_path`, folderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var records []store.BlobRecord
+	known := []store.KnownBook{}
 	for rows.Next() {
-		record, err := scanBlobRecord(rows)
-		if err != nil {
+		var (
+			b         store.KnownBook
+			status    string
+			mtime     string
+			calibreID sql.NullInt64
+			coverSHA  sql.NullString
+		)
+		if err := rows.Scan(&b.ID, &status, &b.RelativePath, &b.SizeBytes,
+			&mtime, &b.ContentSHA256, &calibreID, &coverSHA); err != nil {
 			return nil, err
 		}
-		records = append(records, record)
+		b.Status = store.BookStatus(status)
+		if calibreID.Valid {
+			id := calibreID.Int64
+			b.CalibreID = &id
+		}
+		b.CoverSHA256 = coverSHA.String
+		var err error
+		if b.MTime, err = parseTime(mtime); err != nil {
+			return nil, err
+		}
+		known = append(known, b)
 	}
-	return records, rows.Err()
+	return known, rows.Err()
 }
 
-func (s *Store) ReconcileBlob(
-	ctx context.Context,
-	blob store.BlobInfo,
-	present bool,
-	at time.Time,
-) (store.BlobReconcileResult, error) {
-	var result store.BlobReconcileResult
-	if err := store.ValidateBlobInfo(blob); err != nil {
-		return result, err
-	}
-	if at.IsZero() {
-		return result, store.ErrInvalidTransition
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return result, err
-	}
-	defer tx.Rollback()
-	record, err := scanBlobRecord(tx.QueryRowContext(ctx,
-		`SELECT sha256, size_bytes, orphaned_at, missing_at
-		 FROM blobs WHERE sha256 = ?`,
-		blob.SHA256))
-	if errors.Is(err, sql.ErrNoRows) {
-		if !present {
-			return result, store.ErrNotFound
+// ReconcileFolder writes one pass's findings in one transaction.
+//
+// The two guards below are the reason `complete` is a parameter rather
+// than a comment: a caller that got them wrong would hide a whole
+// catalog, and this is the one place that can refuse.
+func (s *Store) ReconcileFolder(
+	ctx context.Context, folderID string, observed []store.ObservedBook,
+	complete bool, at time.Time,
+) (store.ReconcileResult, error) {
+	var result store.ReconcileResult
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var kind string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT kind FROM folders WHERE id = ?`, folderID).Scan(&kind); err != nil {
+			if err == sql.ErrNoRows {
+				return store.ErrNotFound
+			}
+			return err
 		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO blobs
-			 (sha256, size_bytes, created_at, orphaned_at, missing_at)
-			 VALUES (?, ?, ?, ?, NULL)`,
-			blob.SHA256, blob.SizeBytes, formatTime(at), formatTime(at)); err != nil {
-			return result, err
-		}
-		record = store.BlobRecord{
-			BlobInfo: blob, OrphanedAt: &at,
-		}
-		result = store.BlobReconcileResult{
-			Record: record, Inserted: true, OrphanMarked: true,
-		}
-		if err := tx.Commit(); err != nil {
-			return store.BlobReconcileResult{}, err
-		}
-		return result, nil
-	}
+		byCalibreID := store.FolderKind(kind) == store.FolderCalibre
 
-	if err != nil {
-		return result, err
-	}
-	if record.SizeBytes != blob.SizeBytes {
-		return result, store.ErrInvariantViolation
-	}
-	var references int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM book_files WHERE blob_sha256 = ?`,
-		blob.SHA256).Scan(&references); err != nil {
-		return result, err
-	}
-	orphanedAt := record.OrphanedAt
-	missingAt := record.MissingAt
-	if references == 0 && orphanedAt == nil {
-		orphanedAt = &at
-		result.OrphanMarked = true
-	} else if references > 0 && orphanedAt != nil {
-		orphanedAt = nil
-		result.OrphanCleared = true
-	}
-	if present && missingAt != nil {
-		missingAt = nil
-		result.MissingCleared = true
-	} else if !present && missingAt == nil {
-		missingAt = &at
-		result.MissingMarked = true
-	}
-	if result.OrphanMarked || result.OrphanCleared ||
-		result.MissingMarked || result.MissingCleared {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE blobs SET orphaned_at = ?, missing_at = ?
-			 WHERE sha256 = ?`,
-			formatTimePtr(orphanedAt), formatTimePtr(missingAt),
-			blob.SHA256); err != nil {
-			return result, err
+		existing, err := existingBooksTx(ctx, tx, folderID, byCalibreID)
+		if err != nil {
+			return err
 		}
-	}
-	record.OrphanedAt = orphanedAt
-	record.MissingAt = missingAt
-	result.Record = record
-	if err := tx.Commit(); err != nil {
-		return store.BlobReconcileResult{}, err
-	}
-	return result, nil
+
+		// A Calibre folder identifies books by calibre_id, so a pass can
+		// legitimately want to give book A the path book B currently
+		// holds — Calibre renames directories on a title edit, and two
+		// books can swap in one edit session. Parking every path on an
+		// unreachable value first means the unique index never sees the
+		// intermediate state. A relative path can never begin with a
+		// newline, so nothing real collides with the parked value.
+		if byCalibreID && len(observed) > 0 {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE books SET relative_path = char(10) || id
+				 WHERE folder_id = ?`, folderID); err != nil {
+				return err
+			}
+		}
+
+		seen := map[string]bool{}
+		for _, obs := range observed {
+			key, err := observationKey(obs, byCalibreID)
+			if err != nil {
+				return err
+			}
+			prior, had := existing[key]
+
+			// Rule 4: content change is not identity transfer. The old
+			// row goes, taking its identifiers, relations and the
+			// user_book_works mapping of everyone who was reading it,
+			// because whatever was copied over that path is not the
+			// book they were reading.
+			if had && obs.Replaces {
+				if err := deleteBookTx(ctx, tx, folderID, prior); err != nil {
+					return err
+				}
+				had = false
+				result.Replaced++
+			}
+
+			var bookID string
+			switch {
+			case had && obs.Unchanged:
+				// The pass recognised this file by its stat and did not
+				// re-read it, so it carries no metadata to write. Only
+				// the stat and the status are refreshed; overwriting the
+				// title with the nothing in hand would empty the catalog
+				// on the second pass.
+				bookID = prior
+				returned, err := touchBookTx(ctx, tx, folderID, prior, obs, at)
+				if err != nil {
+					return err
+				}
+				if returned {
+					result.Returned++
+				}
+				seen[key] = true
+				continue
+			case had:
+				bookID = prior
+				returned, err := updateBookTx(ctx, tx, folderID, prior, obs, at)
+				if err != nil {
+					return err
+				}
+				if returned {
+					result.Returned++
+				}
+				result.Updated++
+			default:
+				bookID = store.NewID()
+				if err := insertBookTx(ctx, tx, folderID, bookID, obs, at); err != nil {
+					return err
+				}
+				if !obs.Replaces {
+					result.Added++
+				}
+			}
+
+			if err := replaceRelationsTx(ctx, tx, folderID, bookID, obs, at); err != nil {
+				return err
+			}
+			if err := reindexBookTx(ctx, tx, bookID); err != nil {
+				return err
+			}
+			seen[key] = true
+		}
+
+		// Rules 1 and 2. A pass that hit a read error, a parse failure
+		// or a scan bound does not know what it did not see; a pass that
+		// observed nothing is indistinguishable from an unmounted mount
+		// point, which is still readable and still empty. In both cases
+		// the honest answer is to record what was seen and conclude
+		// nothing about what was not.
+		if !complete || len(observed) == 0 {
+			return nil
+		}
+		missing, err := markMissingTx(ctx, tx, folderID, seen, byCalibreID, at)
+		if err != nil {
+			return err
+		}
+		result.Missing = missing
+		return nil
+	})
+	return result, err
 }
 
-func (s *Store) PurgeOrphanedBlobRecords(
-	ctx context.Context,
-	before time.Time,
-	limit int,
-) ([]store.BlobRecord, error) {
-	if before.IsZero() || limit < 1 || limit > 500 {
-		return nil, store.ErrInvalidTransition
+// observationKey picks the identity key the folder's kind dictates.
+func observationKey(obs store.ObservedBook, byCalibreID bool) (string, error) {
+	if byCalibreID {
+		if obs.CalibreID == nil {
+			return "", fmt.Errorf("%w: calibre folder observation without calibre id",
+				store.ErrInvalidInput)
+		}
+		return fmt.Sprintf("c:%d", *obs.CalibreID), nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+	if obs.RelativePath == "" {
+		return "", fmt.Errorf("%w: observation without relative path", store.ErrInvalidInput)
 	}
-	defer tx.Rollback()
+	return "p:" + obs.RelativePath, nil
+}
+
+func existingBooksTx(
+	ctx context.Context, tx *sql.Tx, folderID string, byCalibreID bool,
+) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT b.sha256, b.size_bytes, b.orphaned_at, b.missing_at
-		 FROM blobs b
-		 WHERE b.orphaned_at IS NOT NULL
-		   AND (
-		       CAST(strftime('%s', b.orphaned_at) AS INTEGER) < ?
-		       OR (
-		           CAST(strftime('%s', b.orphaned_at) AS INTEGER) = ?
-		           AND CASE
-		               WHEN instr(b.orphaned_at, '.') = 0 THEN 0
-		               ELSE CAST(substr(
-		                   substr(
-		                       b.orphaned_at,
-		                       instr(b.orphaned_at, '.') + 1,
-		                       instr(b.orphaned_at, 'Z') -
-		                           instr(b.orphaned_at, '.') - 1
-		                   ) || '000000000',
-		                   1, 9
-		               ) AS INTEGER)
-		           END <= ?
-		       )
-		   )
-		   AND NOT EXISTS (
-		       SELECT 1 FROM book_files f WHERE f.blob_sha256 = b.sha256
-		   )
-		   AND NOT EXISTS (
-		       SELECT 1 FROM ingest_blob_holds h
-		       WHERE h.blob_sha256 = b.sha256
-		   )
-		 ORDER BY b.sha256
-		 LIMIT ?`,
-		before.UTC().Unix(), before.UTC().Unix(), before.UTC().Nanosecond(), limit)
-	if err != nil {
-		return nil, err
-	}
-	var candidates []store.BlobRecord
-	for rows.Next() {
-		record, err := scanBlobRecord(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		candidates = append(candidates, record)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	purged := make([]store.BlobRecord, 0, len(candidates))
-	for _, record := range candidates {
-		if record.OrphanedAt == nil {
-			return nil, store.ErrInvariantViolation
-		}
-		result, err := tx.ExecContext(ctx,
-			`DELETE FROM blobs
-			 WHERE sha256 = ?
-			   AND orphaned_at = ?
-			   AND NOT EXISTS (
-			       SELECT 1 FROM book_files f
-			       WHERE f.blob_sha256 = blobs.sha256
-			   )
-			   AND NOT EXISTS (
-			       SELECT 1 FROM ingest_blob_holds h
-			       WHERE h.blob_sha256 = blobs.sha256
-			   )`,
-			record.SHA256, formatTime(*record.OrphanedAt))
-		if err != nil {
-			return nil, err
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return nil, err
-		}
-		if affected == 1 {
-			purged = append(purged, record)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return purged, nil
-}
-
-// ListReferencedBlobs pages the blobs the database says must exist,
-// ordered by digest. A blob is referenced when a retained book file
-// points at it, whatever that book's status: a trashed book keeps its
-// files so it can be restored, so a backup missing its bytes is a backup
-// that cannot honour the restore it promises. Blobs nothing references
-// are excluded — they are the orphan sweep's business, not a backup's.
-func (s *Store) ListReferencedBlobs(
-	ctx context.Context,
-	afterSHA256 string,
-	limit int,
-) ([]store.BlobInfo, error) {
-	if limit < 1 || limit > 500 {
-		return nil, store.ErrInvalidTransition
-	}
-	if afterSHA256 != "" {
-		if err := store.ValidateBlobInfo(store.BlobInfo{
-			SHA256: afterSHA256,
-		}); err != nil {
-			return nil, err
-		}
-	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT b.sha256, b.size_bytes
-		 FROM blobs b
-		 WHERE b.sha256 > ?
-		   AND EXISTS (SELECT 1 FROM book_files f WHERE f.blob_sha256 = b.sha256)
-		 ORDER BY b.sha256
-		 LIMIT ?`,
-		afterSHA256, limit)
+		`SELECT id, relative_path, calibre_id FROM books WHERE folder_id = ?`, folderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []store.BlobInfo
+	out := map[string]string{}
 	for rows.Next() {
-		var info store.BlobInfo
-		if err := rows.Scan(&info.SHA256, &info.SizeBytes); err != nil {
+		var (
+			id, path  string
+			calibreID sql.NullInt64
+		)
+		if err := rows.Scan(&id, &path, &calibreID); err != nil {
 			return nil, err
 		}
-		out = append(out, info)
+		switch {
+		case byCalibreID && calibreID.Valid:
+			out[fmt.Sprintf("c:%d", calibreID.Int64)] = id
+		case !byCalibreID:
+			out["p:"+path] = id
+		}
 	}
 	return out, rows.Err()
+}
+
+func deleteBookTx(ctx context.Context, tx *sql.Tx, folderID, bookID string) error {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM book_search WHERE book_id = ? AND folder_id = ?`,
+		bookID, folderID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx,
+		`DELETE FROM books WHERE id = ? AND folder_id = ?`, bookID, folderID)
+	return err
+}
+
+func insertBookTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string,
+	obs store.ObservedBook, at time.Time,
+) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO books (
+			id, folder_id, status,
+			relative_path, size_bytes, mtime, content_sha256,
+			original_filename, media_type, calibre_id,
+			cover_relative_path, cover_sha256,
+			title, subtitle, description, publisher, published_date,
+			created_at, updated_at, seen_at, absent_at)
+		 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		bookID, folderID,
+		obs.RelativePath, obs.SizeBytes, formatTime(obs.MTime), obs.ContentSHA256,
+		obs.OriginalFilename, mediaTypeOf(obs), nullInt64(obs.CalibreID),
+		nullStr(obs.CoverRelativePath), obs.CoverSHA256,
+		obs.Title, obs.Subtitle, obs.Description, obs.Publisher, obs.PublishedDate,
+		formatTime(at), formatTime(at), formatTime(at))
+	return err
+}
+
+// updateBookTx refreshes a book that is still the same book. It reports
+// whether the book had been marked missing, because a file coming back
+// is worth a line in the log.
+func updateBookTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string,
+	obs store.ObservedBook, at time.Time,
+) (bool, error) {
+	var status string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM books WHERE id = ? AND folder_id = ?`,
+		bookID, folderID).Scan(&status); err != nil {
+		return false, err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE books SET
+			status = 'active',
+			relative_path = ?, size_bytes = ?, mtime = ?, content_sha256 = ?,
+			original_filename = ?, media_type = ?, calibre_id = ?,
+			cover_relative_path = ?, cover_sha256 = ?,
+			title = ?, subtitle = ?, description = ?, publisher = ?,
+			published_date = ?, updated_at = ?, seen_at = ?, absent_at = NULL
+		 WHERE id = ? AND folder_id = ?`,
+		obs.RelativePath, obs.SizeBytes, formatTime(obs.MTime), obs.ContentSHA256,
+		obs.OriginalFilename, mediaTypeOf(obs), nullInt64(obs.CalibreID),
+		nullStr(obs.CoverRelativePath), obs.CoverSHA256,
+		obs.Title, obs.Subtitle, obs.Description, obs.Publisher, obs.PublishedDate,
+		formatTime(at), formatTime(at),
+		bookID, folderID)
+	return store.BookStatus(status) == store.BookMissing, err
+}
+
+func markMissingTx(
+	ctx context.Context, tx *sql.Tx, folderID string,
+	seen map[string]bool, byCalibreID bool, at time.Time,
+) (int, error) {
+	existing, err := existingBooksTx(ctx, tx, folderID, byCalibreID)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for key, bookID := range existing {
+		if seen[key] {
+			continue
+		}
+		res, err := tx.ExecContext(ctx,
+			`UPDATE books SET status = 'missing', absent_at = ?, updated_at = ?
+			 WHERE id = ? AND folder_id = ? AND status = 'active'`,
+			formatTime(at), formatTime(at), bookID, folderID)
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		count += int(n)
+	}
+	return count, nil
+}
+
+// replaceRelationsTx rewrites a book's metadata sets wholesale. With no
+// manual editing and no external providers there is one source per
+// folder and nothing to merge, so "what the folder says now" simply
+// replaces "what it said last time".
+func replaceRelationsTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string,
+	obs store.ObservedBook, at time.Time,
+) error {
+	for _, table := range []string{
+		"book_identifiers", "book_languages", "book_tags",
+		"book_series", "book_contributors",
+	} {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE folder_id = ? AND book_id = ?`,
+			folderID, bookID); err != nil {
+			return err
+		}
+	}
+
+	for _, id := range obs.Identifiers {
+		if id.Scheme == "" || id.Value == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_identifiers (folder_id, book_id, scheme, value)
+			 VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+			folderID, bookID, id.Scheme, id.Value); err != nil {
+			return err
+		}
+	}
+	for _, lang := range obs.Languages {
+		if lang == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_languages (folder_id, book_id, language)
+			 VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+			folderID, bookID, lang); err != nil {
+			return err
+		}
+	}
+	for _, tag := range obs.Tags {
+		tagID, err := resolveEntityTx(ctx, tx, "tags", folderID, tag, at)
+		if err != nil || tagID == "" {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_tags (folder_id, book_id, tag_id)
+			 VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+			folderID, bookID, tagID); err != nil {
+			return err
+		}
+	}
+	for _, sr := range obs.Series {
+		seriesID, err := resolveEntityTx(ctx, tx, "series", folderID, sr.Name, at)
+		if err != nil || seriesID == "" {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		var position any
+		if sr.Position != nil {
+			position = *sr.Position
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_series (folder_id, book_id, series_id, position)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT (book_id, series_id) DO UPDATE SET position = excluded.position`,
+			folderID, bookID, seriesID, position); err != nil {
+			return err
+		}
+	}
+	for _, c := range obs.Contributors {
+		contributorID, err := resolveEntityTx(ctx, tx, "contributors", folderID, c.Name, at)
+		if err != nil || contributorID == "" {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		role := c.Role
+		if role == "" {
+			role = store.ContributorRoleAuthor
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_contributors
+			     (folder_id, book_id, contributor_id, role, position)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT (book_id, contributor_id, role)
+			 DO UPDATE SET position = excluded.position`,
+			folderID, bookID, contributorID, role, c.Position); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolveEntityTx finds or creates one folder-wide entity by its
+// normalized name, keeping the first spelling seen as the display value.
+// An empty or whitespace-only name resolves to nothing rather than to an
+// entity nobody can name.
+func resolveEntityTx(
+	ctx context.Context, tx *sql.Tx, table, folderID, name string, at time.Time,
+) (string, error) {
+	normalized := metadata.NormalizeName(name)
+	if normalized == "" {
+		return "", nil
+	}
+	var id string
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM `+table+` WHERE folder_id = ? AND normalized_name = ?`,
+		folderID, normalized).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+	id = store.NewID()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO `+table+` (id, folder_id, name, normalized_name, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		id, folderID, name, normalized, formatTime(at)); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func mediaTypeOf(obs store.ObservedBook) string {
+	if obs.MediaType == "" {
+		return "application/epub+zip"
+	}
+	return obs.MediaType
+}
+
+func nullInt64(p *int64) sql.NullInt64 {
+	if p == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *p, Valid: true}
+}
+
+// touchBookTx records that an unchanged file was seen. It writes the
+// stat and the status and nothing else, because the pass that produced
+// this observation deliberately did not read the file.
+func touchBookTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string,
+	obs store.ObservedBook, at time.Time,
+) (bool, error) {
+	var status string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM books WHERE id = ? AND folder_id = ?`,
+		bookID, folderID).Scan(&status); err != nil {
+		return false, err
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE books SET status = 'active', relative_path = ?, size_bytes = ?,
+		        mtime = ?, seen_at = ?, absent_at = NULL
+		 WHERE id = ? AND folder_id = ?`,
+		obs.RelativePath, obs.SizeBytes, formatTime(obs.MTime), formatTime(at),
+		bookID, folderID)
+	return store.BookStatus(status) == store.BookMissing, err
 }

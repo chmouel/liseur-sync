@@ -17,7 +17,7 @@ import (
 const opdsSearchType = "application/opensearchdescription+xml"
 
 // opdsSearchDescription is the OpenSearch document. It is a struct for
-// the same reason every feed is: the library name it carries came out of
+// the same reason every feed is: the folder name it carries came out of
 // a database a person types into.
 type opdsSearchDescription struct {
 	XMLName     xml.Name        `xml:"OpenSearchDescription"`
@@ -34,31 +34,30 @@ type opdsSearchURL struct {
 }
 
 // HandleOPDSSearchDescription serves the OpenSearch document for one
-// library at /opds/v1.2/libraries/{library}/search.xml.
+// folder at /opds/v1.2/folders/{folder}/search.xml.
 //
-// The library is checked before the document is written, so a document
-// never confirms a library the caller may not read.
+// The folder is checked before the document is written, so a document
+// never confirms a folder that does not exist.
 func (s *Server) HandleOPDSSearchDescription(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
-	lib, err := s.St.LibraryByID(r.Context(), tok.UserID, libraryID, store.LibraryRoleRead)
+	folder, err := s.St.FolderByID(r.Context(), folderID)
 	if err != nil {
-		writeCatalogError(w, err, "library not found")
+		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	base := opdsPrefix + "/libraries/" + url.PathEscape(libraryID) + "/search"
+	base := opdsPrefix + "/folders/" + url.PathEscape(folderID) + "/search"
 	doc := opdsSearchDescription{
 		Xmlns:       "http://a9.com/-/spec/opensearch/1.1/",
-		ShortName:   opdsTitle(lib.Library.Name, "Library"),
-		Description: "Search this library",
+		ShortName:   opdsTitle(folder.Name, "Folder"),
+		Description: "Search this folder",
 		InputEnc:    "UTF-8",
 		URLs: []opdsSearchURL{{
 			Type: opdsAcquisitionType,
@@ -90,14 +89,13 @@ func (s *Server) HandleOPDSSearchDescription(w http.ResponseWriter, r *http.Requ
 // link: a reader that reaches the end of this feed has seen the best
 // matches, and the answer to wanting more is a better query.
 func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
 	text := r.URL.Query().Get("q")
@@ -105,25 +103,25 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "search text is too long")
 		return
 	}
-	result, err := s.St.SearchCatalogBooks(r.Context(), tok.UserID, store.SearchQuery{
-		LibraryID: libraryID,
-		Text:      text,
-		Limit:     defaultCatalogPageSize,
+	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
+		FolderID: folderID,
+		Text:     text,
+		Limit:    defaultCatalogPageSize,
 	})
 	if err != nil {
-		writeCatalogError(w, err, "library not found")
+		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	self := opdsPrefix + "/libraries/" + url.PathEscape(libraryID) +
+	self := opdsPrefix + "/folders/" + url.PathEscape(folderID) +
 		"/search?q=" + url.QueryEscape(text)
 	feed := opdsFeed{
-		ID:      "urn:liseur:library:" + libraryID + ":search",
+		ID:      "urn:liseur:folder:" + folderID + ":search",
 		Title:   "Search results",
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: opdsPrefix + "/libraries/" + url.PathEscape(libraryID),
+			{Rel: "up", Href: opdsPrefix + "/folders/" + url.PathEscape(folderID),
 				Type: opdsAcquisitionType},
 		},
 	}
@@ -139,18 +137,16 @@ var opdsKindTitles = map[string]string{
 	"series":       "Series",
 	"contributors": "Contributors",
 	"tags":         "Tags",
-	"genres":       "Genres",
 }
 
-// HandleOPDSEntities serves one library's series, contributors, tags or
-// genres as a navigation feed: each entry leads to the books claiming it.
+// HandleOPDSEntities serves one folder's series, contributors or tags
+// as a navigation feed: each entry leads to the books claiming it.
 func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID, kind, ok := entityRequest(w, r)
+	folderID, kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -162,21 +158,21 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := defaultCatalogPageSize
 	entities, err := s.St.ListCatalogEntities(
-		r.Context(), tok.UserID, libraryID, kind, after, limit)
+		r.Context(), folderID, kind, after, limit)
 	if err != nil {
-		writeCatalogError(w, err, "library not found")
+		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	libraryHref := opdsPrefix + "/libraries/" + url.PathEscape(libraryID)
-	self := libraryHref + "/" + segment
+	folderHref := opdsPrefix + "/folders/" + url.PathEscape(folderID)
+	self := folderHref + "/" + segment
 	feed := opdsFeed{
-		ID:      "urn:liseur:library:" + libraryID + ":" + segment,
+		ID:      "urn:liseur:folder:" + folderID + ":" + segment,
 		Title:   opdsKindTitles[segment],
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsNavigationType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: libraryHref, Type: opdsAcquisitionType},
+			{Rel: "up", Href: folderHref, Type: opdsAcquisitionType},
 		},
 	}
 	for _, e := range entities {
@@ -206,12 +202,11 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 // comes back in reading order, which is the whole reason a reader would
 // rather browse a series than search for it.
 func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID, kind, ok := entityRequest(w, r)
+	folderID, kind, ok := entityRequest(w, r)
 	if !ok {
 		return
 	}
@@ -222,19 +217,19 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entity, err := s.St.CatalogEntityByID(
-		r.Context(), tok.UserID, libraryID, r.PathValue("entity"), kind)
+		r.Context(), folderID, r.PathValue("entity"), kind)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	limit := defaultCatalogPageSize
-	books, err := s.St.ListBooksByEntity(
-		r.Context(), tok.UserID, libraryID, entity.ID, kind, after, limit)
+	books, next, err := s.St.ListBooksByEntity(
+		r.Context(), folderID, entity.ID, kind, after, limit)
 	if err != nil {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	kindHref := opdsPrefix + "/libraries/" + url.PathEscape(libraryID) + "/" + segment
+	kindHref := opdsPrefix + "/folders/" + url.PathEscape(folderID) + "/" + segment
 	self := kindHref + "/" + url.PathEscape(entity.ID)
 	feed := opdsFeed{
 		ID:      "urn:liseur:entity:" + entity.ID,
@@ -249,12 +244,11 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 	for _, b := range books {
 		feed.Entries = append(feed.Entries, opdsBookEntry(b))
 	}
-	if len(books) == limit {
-		last := books[len(books)-1]
+	if next != nil {
 		feed.Links = append(feed.Links, opdsLink{
-			Rel: "next", Type: opdsAcquisitionType,
-			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
-				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
+			Rel:  "next",
+			Type: opdsAcquisitionType,
+			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(*next)),
 		})
 	}
 	writeOPDS(w, r, opdsAcquisitionType, feed)
@@ -269,19 +263,18 @@ func plainPlural(n int, noun string) string {
 	return strconv.Itoa(n) + " " + noun + "s"
 }
 
-// HandleOPDSRecent serves the library's newest books, which is the feed a
+// HandleOPDSRecent serves the folder's newest books, which is the feed a
 // reader opens to see what has arrived since last time. It is reached
-// from the library's own feed rather than the root, because "recent" only
-// means anything inside one library.
+// from the folder's own feed rather than the root, because "recent" only
+// means anything inside one folder.
 func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
+	if _, ok := auth.TokenFrom(r); !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	libraryID := r.PathValue("library")
-	if libraryID == "" || len(libraryID) > maxLibraryIDBytes {
-		writeError(w, http.StatusNotFound, "library not found")
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
 	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
@@ -290,21 +283,21 @@ func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := defaultCatalogPageSize
-	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, libraryID, before, limit)
+	books, err := s.St.ListRecentCatalogBooks(r.Context(), folderID, before, limit)
 	if err != nil {
-		writeCatalogError(w, err, "library not found")
+		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	libraryHref := opdsPrefix + "/libraries/" + url.PathEscape(libraryID)
-	self := libraryHref + "/recent"
+	folderHref := opdsPrefix + "/folders/" + url.PathEscape(folderID)
+	self := folderHref + "/recent"
 	feed := opdsFeed{
-		ID:      "urn:liseur:library:" + libraryID + ":recent",
+		ID:      "urn:liseur:folder:" + folderID + ":recent",
 		Title:   "Recently added",
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: libraryHref, Type: opdsAcquisitionType},
+			{Rel: "up", Href: folderHref, Type: opdsAcquisitionType},
 		},
 	}
 	for _, b := range books {
@@ -313,7 +306,8 @@ func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
 	if len(books) == limit {
 		last := books[len(books)-1]
 		feed.Links = append(feed.Links, opdsLink{
-			Rel: "next", Type: opdsAcquisitionType,
+			Rel:  "next",
+			Type: opdsAcquisitionType,
 			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
 				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
 		})
