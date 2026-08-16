@@ -3,9 +3,9 @@
 #
 # A README screenshot has one job: look like the thing you would get if
 # you ran this. So this script runs the thing. It builds the binary,
-# starts a server in a temporary directory, uploads eight real books
-# from Standard Ebooks, reads a bit of two of them, photographs four
-# pages in a headless browser and throws the server away.
+# points a server in a temporary directory at a folder of eight real
+# books from Standard Ebooks, reads a bit of two of them, photographs
+# four pages in a headless browser and throws the server away.
 #
 #   scripts/screenshots.sh            # writes docs/screenshots/*.png
 #   OUT=/tmp/shots scripts/screenshots.sh
@@ -96,7 +96,7 @@ driver = "sqlite"
 url = "$WORK/liseur-sync.db"
 
 [content]
-root = "$WORK/content"
+cache_dir = "$WORK/cache"
 EOF
 
 go tool templ generate ./internal/webui/ >/dev/null
@@ -134,9 +134,15 @@ SESSION=$(awk '/session/ {print $6 "=" $7}' "$WORK/cookies" | head -1)
 # The CLI wants the database to itself, so it gets it.
 stop_server
 admin() { "$WORK/liseur-sync" admin -config "$WORK/config.toml" "$@"; }
-LIBRARY=$(admin create-library alice "Alice's Books" | sed -n 's/.*(id \([^)]*\)).*/\1/p')
-[ -n "$LIBRARY" ] || die "no library id"
-TOKEN=$(admin mint-token -scope sync,library-read,library-manage alice "Screenshots" |
+# The shelf is a directory the server reads, so the books are put in
+# one and the folder is named. Nothing is uploaded and nothing is
+# copied: the screenshot has to show the thing you would get, and the
+# thing you would get is your own directory served back to you.
+SHELF="$WORK/books"
+mkdir -p "$SHELF"
+cp "$CACHE"/*.epub "$SHELF/"
+admin add-folder "Alice's Books" "$SHELF" >/dev/null || die "could not watch the shelf"
+TOKEN=$(admin mint-token -scope sync,library-read alice "Screenshots" |
 	sed -n 's/^secret (shown once): //p')
 [ -n "$TOKEN" ] || die "no token"
 start_server
@@ -144,28 +150,23 @@ start_server
 # ------------------------------------------------------------- the books
 api() { curl -fsS -H "Authorization: Bearer $TOKEN" "$@"; }
 
+# The first pass runs at startup, so the books are already on their way
+# in. Wait for the shelf to fill rather than assuming it has: a pass
+# reads eight EPUBs off a cold page cache and is not instant.
+FOLDER=$(api "$BASE/v1/folders" | jq -r '.folders[0].folder_id')
+[ -n "$FOLDER" ] && [ "$FOLDER" != null ] || die "the folder was not registered"
+WANT=$(ls "$SHELF"/*.epub | wc -l)
 BOOK_IDS=()
-for file in "$CACHE"/*.epub; do
-	name=$(basename "$file")
-	job=$(api -X POST -H "Idempotency-Key: shot-$name" \
-		-F "file=@$file" "$BASE/v1/libraries/$LIBRARY/upload" | jq -r .job_id)
-	[ -n "$job" ] || die "upload of $name returned no job"
-	book=""
-	for _ in $(seq 1 120); do
-		state=$(api "$BASE/v1/ingest/jobs/$job")
-		case $(jq -r .state <<<"$state") in
-		promoted)
-			book=$(jq -r .book_id <<<"$state")
-			break
-			;;
-		failed | quarantined) die "$name did not ingest: $(jq -r '.error_code // "?"' <<<"$state")" ;;
-		esac
-		sleep 1
-	done
-	[ -n "$book" ] || die "$name never finished ingesting"
-	BOOK_IDS+=("$book")
-	echo "ingested $name"
+for _ in $(seq 1 120); do
+	mapfile -t BOOK_IDS < <(
+		api "$BASE/v1/folders/$FOLDER/books?limit=50" | jq -r '.books[].book_id'
+	)
+	[ "${#BOOK_IDS[@]}" -ge "$WANT" ] && break
+	sleep 1
 done
+[ "${#BOOK_IDS[@]}" -ge "$WANT" ] ||
+	die "the shelf has ${#BOOK_IDS[@]} of $WANT books"
+echo "catalogued ${#BOOK_IDS[@]} books"
 
 # A shelf where nothing has been read is a file listing. Two books get a
 # position, pushed the way a real client pushes one.
