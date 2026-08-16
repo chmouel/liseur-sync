@@ -72,17 +72,36 @@ func (b Book) RelativePath(f Format) string {
 // there.
 func (b Book) CoverPath() string { return path.Join(b.Path, CoverName) }
 
-// EPUB returns the book's EPUB format, if it has one. A book with no
-// EPUB is still a book — it is in the catalog and unavailable — so the
-// caller decides what to do rather than being handed a zero value that
-// looks like a file.
-func (b Book) EPUB() (Format, bool) {
-	for _, f := range b.Formats {
-		if strings.EqualFold(f.Format, "EPUB") {
-			return f, true
+// readableFormats are the Calibre format names this server can serve,
+// in the order it prefers them. A KEPUB is an EPUB with Kobo's reading
+// spans injected into the XHTML: the same zip container, readable by
+// the same parser, which is why a book Calibre holds only as a KEPUB is
+// a book rather than a gap in the catalog.
+//
+// EPUB comes first because those injected spans shift the document
+// structure a reading position is expressed against, so when both files
+// are present the plain one is the stabler thing to point at.
+var readableFormats = []string{"EPUB", "KEPUB"}
+
+// ReadableFormats returns the book's servable formats, most preferred
+// first. A book with none is still a book — it is in the catalog and
+// unavailable — so the caller decides what to do rather than being
+// handed a zero value that looks like a file.
+//
+// It returns every candidate rather than the best one because Calibre's
+// database is a record of what it once wrote, not a stat: a format row
+// routinely outlives the file it names. Only the caller, which has the
+// library root open, can say which of these is actually on the disk.
+func (b Book) ReadableFormats() []Format {
+	var out []Format
+	for _, want := range readableFormats {
+		for _, f := range b.Formats {
+			if strings.EqualFold(f.Format, want) {
+				out = append(out, f)
+			}
 		}
 	}
-	return Format{}, false
+	return out
 }
 
 // Books reads the whole library.
