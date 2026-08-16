@@ -256,6 +256,34 @@ else under the folder.
 Two-way Calibre synchronization is future work. For now Calibre is where
 you edit a Calibre collection, and this server reflects it.
 
+#### Auditing a Calibre library
+
+The catalog can only be as truthful as `metadata.db`, and that database
+can disagree with the disk in either direction: a row whose file is gone
+produces a warning on every pass, and a book directory Calibre has
+forgotten is invisible here however plainly it sits on the disk.
+
+`scripts/calibre-audit.sh` reports both, plus stale format rows and
+books claiming a cover that is not there:
+
+```
+scripts/calibre-audit.sh /path/to/Calibre
+```
+
+It is read-only — the database is opened immutable, so it is safe to run
+against a library Calibre has open — and it exits non-zero when it finds
+something, so it can be run from cron. It prints the `calibredb` command
+that fixes each finding but never runs it: `metadata.db` belongs to
+Calibre, and Calibre should be the only thing that writes to it.
+
+Run it against the machine that owns the library, not necessarily the
+one running this server. If the library reaches the server over a file
+synchronizer, note that `metadata.db` is a single SQLite file replicated
+as an opaque blob: when two machines edit it, one edit is discarded
+silently, taking its books with it while their directories survive on
+the disk. That is precisely the disagreement this script finds, and the
+fix is to let exactly one machine write the library.
+
 ### Missing books
 
 A book whose file is not observed by a complete pass is marked
