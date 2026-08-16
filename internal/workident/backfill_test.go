@@ -61,12 +61,9 @@ func newBackfillFixture(t *testing.T) *backfillFixture {
 	}
 }
 
-// book records one book in the folder, the only way a book gets into the
-// catalog now: one reconcile pass per call, which is what a watcher does
-// when a file lands. Timestamps step forward so the paging cursor has a
-// strict order to walk.
-func (f *backfillFixture) book(t *testing.T, name, title, author string) string {
-	t.Helper()
+// observe describes one file without recording it, so that a caller can
+// choose between one pass per book and one pass for a whole shelf.
+func (f *backfillFixture) observe(name, title, author string) store.ObservedBook {
 	f.seqNo++
 	at := f.now.Add(time.Duration(f.seqNo) * time.Millisecond)
 	obs := store.ObservedBook{
@@ -91,17 +88,72 @@ func (f *backfillFixture) book(t *testing.T, name, title, author string) string 
 		}
 	}
 	f.observed = append(f.observed, obs)
+	return obs
+}
+
+// book records one book in the folder, the only way a book gets into the
+// catalog now: one reconcile pass per call, which is what a watcher does
+// when a file lands.
+func (f *backfillFixture) book(t *testing.T, name, title, author string) string {
+	t.Helper()
+	obs := f.observe(name, title, author)
+	f.reconcile(t)
+	return f.idOf(t, name, obs.RelativePath)
+}
+
+// shelf records a whole library in a single pass, which is what a first
+// scan of an existing folder is. Adding books one at a time would
+// re-observe the whole list on every call, and the cost of that is
+// quadratic — 200 books is 20,000 observations, which under the race
+// detector is minutes rather than seconds.
+//
+// It also seeds the harder case for a cursor: one pass stamps every book
+// it inserts with a single created_at, so a walk can only advance if it
+// breaks the tie on the book id.
+func (f *backfillFixture) shelf(t *testing.T, count int, author string) {
+	t.Helper()
+	names := make([]string, 0, count)
+	for i := range count {
+		name := fmt.Sprintf("b%03d", i)
+		f.observe(name, fmt.Sprintf("Title %03d", i), author)
+		names = append(names, name)
+	}
+	f.reconcile(t)
+	known, err := f.st.BooksInFolder(context.Background(), f.folder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := make(map[string]string, len(known))
+	for _, k := range known {
+		byPath[k.RelativePath] = k.ID
+	}
+	for _, name := range names {
+		id, ok := byPath[name+".epub"]
+		if !ok {
+			t.Fatalf("book %q was not recorded", name)
+		}
+		f.ids[name] = id
+	}
+}
+
+func (f *backfillFixture) reconcile(t *testing.T) {
+	t.Helper()
+	at := f.now.Add(time.Duration(f.seqNo) * time.Millisecond)
 	if _, err := f.st.ReconcileFolder(
 		context.Background(), f.folder.ID, f.observed, true, at,
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (f *backfillFixture) idOf(t *testing.T, name, relativePath string) string {
+	t.Helper()
 	known, err := f.st.BooksInFolder(context.Background(), f.folder.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range known {
-		if k.RelativePath == obs.RelativePath {
+		if k.RelativePath == relativePath {
 			f.ids[name] = k.ID
 			return k.ID
 		}
@@ -227,9 +279,7 @@ func TestBackfillSkipsBooksWithNoIdentifiers(t *testing.T) {
 func TestBackfillPagesPastOneQuery(t *testing.T) {
 	f := newBackfillFixture(t)
 	const total = backfillPage + 7
-	for i := 0; i < total; i++ {
-		f.book(t, fmt.Sprintf("b%03d", i), fmt.Sprintf("Title %03d", i), "Ada Author")
-	}
+	f.shelf(t, total, "Ada Author")
 
 	report := f.run(t)
 	if report.Books != total || report.Created != total {
