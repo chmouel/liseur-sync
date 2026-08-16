@@ -10,7 +10,6 @@ type EntityRow struct {
 }
 
 type EntitiesView struct {
-	FolderID string
 	// Kind is the URL segment (`tags`, `series`, …), kept so the page can
 	// link back to itself without re-deriving it.
 	Kind     string
@@ -26,7 +25,6 @@ type EntitiesView struct {
 }
 
 type EntityBooksView struct {
-	FolderID string
 	Kind     string
 	Heading  string
 	Singular string
@@ -72,7 +70,7 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 				for _, e := range v.Entities {
 					<tr>
 						<td>
-							<a href={ prefix + "folders/" + v.FolderID + "/" + v.Kind + "/" + e.ID }>
+							<a href={ prefix + "entities/" + v.Kind + "/" + e.ID }>
 								{ e.Name }
 							</a>
 						</td>
@@ -85,7 +83,7 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 			<p><a href={ prefix + v.NextURL }>Next page</a></p>
 		}
 	</section>
-	<p><a href={ prefix + "library?folder=" + v.FolderID }>Back to the library</a></p>
+	<p><a href={ prefix + "library" }>Back to the library</a></p>
 }
 
 templ entityBooksPage(prefix string, u userCtx, csrf string, v EntityBooksView) {
@@ -123,10 +121,10 @@ templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
 		}
 	</section>
 	<p>
-		<a href={ prefix + "folders/" + v.FolderID + "/" + v.Kind }>
+		<a href={ prefix + "entities/" + v.Kind }>
 			All { v.Kind }
 		</a>
 		{ " · " }
-		<a href={ prefix + "library?folder=" + v.FolderID }>Back to the library</a>
+		<a href={ prefix + "library" }>Back to the library</a>
 	</p>
 }

@@ -38,7 +38,7 @@ func testCatalogEntityListing(t *testing.T, open OpenFunc) {
 		{RelativePath: "mid.epub", SizeBytes: 1, MTime: now, Unchanged: true},
 	}, true, now.Add(time.Hour))
 
-	entities, err := s.ListCatalogEntities(ctx, folder.ID, store.EntityTag, "", 10)
+	entities, err := s.ListCatalogEntities(ctx, anyReader, store.EntityTag, "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func testCatalogEntityListing(t *testing.T, open OpenFunc) {
 	var paged []string
 	after := ""
 	for {
-		page, err := s.ListCatalogEntities(ctx, folder.ID, store.EntityTag, after, 1)
+		page, err := s.ListCatalogEntities(ctx, anyReader, store.EntityTag, after, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,21 +76,21 @@ func testCatalogEntityListing(t *testing.T, open OpenFunc) {
 		if e.Name != "Fantasy" {
 			continue
 		}
-		got, err := s.CatalogEntityByID(ctx, folder.ID, e.ID, store.EntityTag)
+		got, err := s.CatalogEntityByID(ctx, anyReader, e.ID, store.EntityTag)
 		if err != nil || got.Name != "Fantasy" || got.BookCount != 2 {
 			t.Fatalf("CatalogEntityByID: %+v %v", got, err)
 		}
 	}
-	if _, err := s.CatalogEntityByID(ctx, folder.ID, "no-such-tag", store.EntityTag); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogEntityByID(ctx, anyReader, "no-such-tag", store.EntityTag); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing entity: want ErrNotFound, got %v", err)
 	}
 
 	for _, limit := range []int{0, -1, store.MaxEntityListLimit + 1} {
-		if _, err := s.ListCatalogEntities(ctx, folder.ID, store.EntityTag, "", limit); !errors.Is(err, store.ErrInvalidInput) {
+		if _, err := s.ListCatalogEntities(ctx, anyReader, store.EntityTag, "", limit); !errors.Is(err, store.ErrInvalidInput) {
 			t.Fatalf("entity limit %d: want ErrInvalidInput, got %v", limit, err)
 		}
 	}
-	if _, err := s.ListCatalogEntities(ctx, folder.ID, store.EntityKind("nonsense"), "", 10); !errors.Is(err, store.ErrInvalidInput) {
+	if _, err := s.ListCatalogEntities(ctx, anyReader, store.EntityKind("nonsense"), "", 10); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("bad entity kind: want ErrInvalidInput, got %v", err)
 	}
 }
@@ -99,6 +99,10 @@ func testCatalogEntityListing(t *testing.T, open OpenFunc) {
 // order of its own: a series' books are shelved by position, with an
 // unplaced book last rather than first, because an unplaced book is an
 // unanswered question rather than book zero.
+//
+// The shelf is library-wide (ADR-0019), so a volume held in a second
+// folder is one of these books and takes its place by position, not
+// after the folder it was found in.
 func testListBooksByEntitySeriesOrder(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
@@ -118,16 +122,16 @@ func testListBooksByEntitySeriesOrder(t *testing.T, open OpenFunc) {
 	}, true, now)
 	doReconcile(t, s, other.ID, []store.ObservedBook{
 		{RelativePath: "other.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-other",
-			Title: "Other", Series: []store.ObservedSeries{{Name: "Trilogy", Position: Ptr(1.0)}}},
+			Title: "Other", Series: []store.ObservedSeries{{Name: "Trilogy", Position: Ptr(1.5)}}},
 	}, true, now)
 
-	entities, err := s.ListCatalogEntities(ctx, folder.ID, store.EntitySeries, "", 10)
+	entities, err := s.ListCatalogEntities(ctx, anyReader, store.EntitySeries, "", 10)
 	if err != nil || len(entities) != 1 {
 		t.Fatalf("series entities: %+v %v", entities, err)
 	}
 	seriesID := entities[0].ID
 
-	page, next, err := s.ListBooksByEntity(ctx, folder.ID, seriesID, store.EntitySeries, nil, 10)
+	page, next, err := s.ListBooksByEntity(ctx, anyReader, seriesID, store.EntitySeries, nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +139,7 @@ func testListBooksByEntitySeriesOrder(t *testing.T, open OpenFunc) {
 	for _, b := range page {
 		got = append(got, b.Title)
 	}
-	want := []string{"One", "Two", "Three", "Unplaced"}
+	want := []string{"One", "Other", "Two", "Three", "Unplaced"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("series book order: got %v want %v", got, want)
 	}
@@ -150,8 +154,7 @@ func testListBooksByEntitySeriesOrder(t *testing.T, open OpenFunc) {
 	got = nil
 	var cursor *store.CatalogBookCursor
 	for range want {
-		page, next, err := s.ListBooksByEntity(
-			ctx, folder.ID, seriesID, store.EntitySeries, cursor, 1)
+		page, next, err := s.ListBooksByEntity(ctx, anyReader, seriesID, store.EntitySeries, cursor, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,7 +172,7 @@ func testListBooksByEntitySeriesOrder(t *testing.T, open OpenFunc) {
 	}
 
 	for _, limit := range []int{0, -1, 501} {
-		if _, _, err := s.ListBooksByEntity(ctx, folder.ID, seriesID, store.EntitySeries, nil, limit); !errors.Is(err, store.ErrInvalidInput) {
+		if _, _, err := s.ListBooksByEntity(ctx, anyReader, seriesID, store.EntitySeries, nil, limit); !errors.Is(err, store.ErrInvalidInput) {
 			t.Fatalf("book-by-entity limit %d: want ErrInvalidInput, got %v", limit, err)
 		}
 	}

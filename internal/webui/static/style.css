@@ -754,3 +754,41 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 }
 .bookcard .art-text .tag { align-self: center; margin-top: .4rem; }
 
+
+/* --------------------------------------------------------- series shelf */
+
+/* The shelf is a numbered run, so it is an <ol> with its own markers
+   suppressed: the position shown is the series' number, which is not
+   always the row's ordinal — a novella at 1.5 is the second row and the
+   list must not call it book two. */
+.serieslist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.seriesvol {
+	display: flex; gap: 1rem; align-items: flex-start;
+	padding: .8rem 0; border-top: 1px solid var(--line);
+}
+.seriesvol:first-child { border-top: 0; }
+.seriesvol .art {
+	flex: 0 0 5rem; border-radius: var(--radius); overflow: hidden;
+	border: 1px solid var(--line); display: block;
+}
+.seriesvol .art img { width: 100%; height: auto; display: block; }
+.voltext { flex: 1; min-width: 10rem; display: flex; flex-direction: column; gap: .25rem; }
+.voltext .title { font-weight: 600; }
+.voltext .by { color: var(--muted); font-size: .9rem; }
+.volnum {
+	color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums;
+	letter-spacing: .04em;
+}
+.volactions { display: flex; gap: .5rem; align-items: center; }
+
+@media (max-width: 46em) {
+	.volactions { flex-basis: 100%; }
+}
+
+/* The assign dialog. Each row is a name and a position, and the position
+   stays narrow so the name gets the width it needs. */
+.assignrows { display: flex; flex-direction: column; gap: .4rem; margin: .8rem 0; }
+.assignrow { display: flex; gap: .5rem; margin: 0; }
+.assignrow input[type="text"] { min-width: 0; }
+.assignrow input[name="name"] { flex: 1; }
+.assignrow input[name="position"] { flex: 0 0 5rem; }

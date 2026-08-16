@@ -33,6 +33,20 @@ func tablesFor(kind store.EntityKind) (entityTables, error) {
 	}
 }
 
+// membership is what a query should read a kind's memberships from, for
+// one reader. Series go through the override resolution (ADR-0018),
+// which is a CTE rather than a table, so it comes with a prefix to put
+// in front of the query and the bind parameters that prefix consumes.
+// Every other kind is shared and reads its table directly.
+func (t entityTables) membershipFor(
+	kind store.EntityKind, userID string,
+) (prefix, table string, args []any) {
+	if kind != store.EntitySeries {
+		return "", t.membership, nil
+	}
+	return effectiveSeriesCTE, "eff_series", effectiveSeriesArgs(userID)
+}
+
 // Entity counts are over active books only, so an entity whose books are
 // all currently missing reads as empty rather than as a populated entity
 // whose page turns out to be blank.
@@ -41,7 +55,7 @@ const entityCountExpr = `(SELECT COUNT(*) FROM %s m
 	         WHERE m.%s = e.id AND b.status = 'active')`
 
 func (s *Store) ListCatalogEntities(
-	ctx context.Context, folderID string, kind store.EntityKind,
+	ctx context.Context, userID string, kind store.EntityKind,
 	after string, limit int,
 ) ([]store.CatalogEntity, error) {
 	if limit < 1 || limit > store.MaxEntityListLimit {
@@ -51,13 +65,16 @@ func (s *Store) ListCatalogEntities(
 	if err != nil {
 		return nil, err
 	}
+	prefix, membership, args := tables.membershipFor(kind, userID)
+	args = append(args, after, limit)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.id, e.name, e.normalized_name, e.created_at,
-		        `+fmt.Sprintf(entityCountExpr, tables.membership, tables.column)+`
-		 FROM `+tables.entity+` e
-		 WHERE e.folder_id = ? AND e.normalized_name > ?
-		 ORDER BY e.normalized_name LIMIT ?`,
-		folderID, after, limit)
+		prefix+
+			`SELECT e.id, e.name, e.normalized_name, e.created_at,
+			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
+			 FROM `+tables.entity+` e
+			 WHERE e.normalized_name > ?
+			 ORDER BY e.normalized_name LIMIT ?`,
+		args...)
 	if err != nil {
 		return nil, err
 	}
@@ -79,20 +96,23 @@ func (s *Store) ListCatalogEntities(
 }
 
 func (s *Store) CatalogEntityByID(
-	ctx context.Context, folderID, entityID string, kind store.EntityKind,
+	ctx context.Context, userID, entityID string, kind store.EntityKind,
 ) (store.CatalogEntity, error) {
 	tables, err := tablesFor(kind)
 	if err != nil {
 		return store.CatalogEntity{}, err
 	}
+	prefix, membership, args := tables.membershipFor(kind, userID)
+	args = append(args, entityID)
 	entity := store.CatalogEntity{Kind: kind}
 	var created string
 	err = s.db.QueryRowContext(ctx,
-		`SELECT e.id, e.name, e.normalized_name, e.created_at,
-		        `+fmt.Sprintf(entityCountExpr, tables.membership, tables.column)+`
-		 FROM `+tables.entity+` e
-		 WHERE e.folder_id = ? AND e.id = ?`,
-		folderID, entityID).
+		prefix+
+			`SELECT e.id, e.name, e.normalized_name, e.created_at,
+			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
+			 FROM `+tables.entity+` e
+			 WHERE e.id = ?`,
+		args...).
 		Scan(&entity.ID, &entity.Name, &entity.NormalizedName,
 			&created, &entity.BookCount)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -106,7 +126,7 @@ func (s *Store) CatalogEntityByID(
 }
 
 func (s *Store) ListBooksByEntity(
-	ctx context.Context, folderID, entityID string, kind store.EntityKind,
+	ctx context.Context, userID, entityID string, kind store.EntityKind,
 	after *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, *store.CatalogBookCursor, error) {
 	if limit < 1 || limit > 500 {
@@ -116,6 +136,7 @@ func (s *Store) ListBooksByEntity(
 	if err != nil {
 		return nil, nil, err
 	}
+	prefix, membership, args := tables.membershipFor(kind, userID)
 	// A series is the one kind with an order of its own, and it is the
 	// order a reader wants: book three of a trilogy is not interesting
 	// for having been scanned first. Books with no position sort last,
@@ -125,12 +146,22 @@ func (s *Store) ListBooksByEntity(
 	//
 	// The cursor compares against the same expression it is ordered by.
 	// Anything less would page incoherently, because one reconciliation
-	// pass stamps a whole folder with a single created_at.
+	// pass stamps a whole folder with a single created_at. That
+	// expression now reads a resolved position rather than a scanned
+	// one, so an overridden series pages in the order it is shown, and
+	// a shelf drawing on several folders (ADR-0019) breaks the resulting
+	// ties on the book id.
 	series := kind == store.EntitySeries
-	sortKey := "COALESCE(m.position, " + unplacedSeriesPosition + ")"
+	// Only a series membership carries a position; a tag has none at
+	// all, so the sort key for every other kind is the sentinel and the
+	// ordering falls back to the scan order below.
+	sortKey := unplacedSeriesPosition
+	if series {
+		sortKey = "COALESCE(m.position, " + unplacedSeriesPosition + ")"
+	}
 	order := "b.created_at, b.id"
 	cursor := ""
-	args := []any{folderID, entityID}
+	args = append(args, entityID)
 	if series {
 		order = sortKey + ", b.created_at, b.id"
 		if after != nil {
@@ -144,11 +175,12 @@ func (s *Store) ListBooksByEntity(
 	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+bookColumns+`, `+sortKey+`
-		 FROM books b
-		 JOIN `+tables.membership+` m ON m.book_id = b.id
-		 WHERE b.folder_id = ? AND m.`+tables.column+` = ?
-		   AND b.status = 'active'`+
+		prefix+
+			`SELECT `+bookColumns+`, `+sortKey+`
+			 FROM books b
+			 JOIN `+membership+` m ON m.book_id = b.id
+			 WHERE m.`+tables.column+` = ?
+			   AND b.status = 'active'`+
 			cursor+` ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, nil, err

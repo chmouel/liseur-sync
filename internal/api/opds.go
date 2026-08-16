@@ -165,8 +165,11 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		Type: opdsAcquisitionType, Title: "Recently added",
 	})
 	for _, segment := range []string{"series", "contributors", "tags"} {
+		// These browse the whole library rather than this folder
+		// (ADR-0019), which is why they hang off the root prefix.
 		feed.Links = append(feed.Links, opdsLink{
-			Rel: "http://opds-spec.org/facet", Href: self + "/" + segment,
+			Rel:  "http://opds-spec.org/facet",
+			Href: opdsPrefix + "/entities/" + segment,
 			Type: opdsNavigationType, Title: opdsKindTitles[segment],
 		})
 	}

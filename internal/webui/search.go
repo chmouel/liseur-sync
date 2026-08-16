@@ -61,6 +61,7 @@ func (s *Server) handleSearch(
 
 	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
 		FolderID: folderID,
+		UserID:   readerID(u),
 		Text:     text,
 		Entities: filters,
 		Limit:    searchPageSize,

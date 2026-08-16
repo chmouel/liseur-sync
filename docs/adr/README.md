@@ -42,6 +42,8 @@ loose ends that must come before any of it, are in
 | [0015](0015-catalog-payloads-for-clients.md) | Catalog payloads clients can walk | Client | Implemented | Nothing outstanding |
 | [0016](0016-token-self-introspection.md) | Token self-introspection | Client | Accepted; phases 1–2 implemented | Return a stable opaque `account_id` for safe reconnect detection |
 | [0017](0017-folders-not-pipelines.md) | Folders, watched — not an ingest pipeline | MVP | Implemented | Nothing outstanding |
+| [0018](0018-series-overrides.md) | Series a reader can shape | Later | Accepted | Phases 1–4; Calibre write-back deferred to its own ADR |
+| [0019](0019-library-wide-entities.md) | Catalog entities belong to the library | Later | Accepted | Series renaming and explicit merge remain undecided |
 
 ## Convention
 

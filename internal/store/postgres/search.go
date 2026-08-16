@@ -128,6 +128,12 @@ func (s *Store) SearchCatalogBooks(
 	                      to_tsquery('simple', ?))`
 	var sqlText strings.Builder
 	var args []any
+	// The series resolution is only pulled in when a filter can name a
+	// series, so an ordinary word search costs exactly what it did.
+	if len(query.Entities) > 0 {
+		sqlText.WriteString(effectiveSeriesCTE)
+		args = append(args, effectiveSeriesArgs(query.UserID)...)
+	}
 	sqlText.WriteString(`SELECT ` + bookColumns)
 	if scored {
 		sqlText.WriteString(`, ` + rank)
@@ -145,12 +151,16 @@ func (s *Store) SearchCatalogBooks(
 	// A filter narrows by entity id whatever kind it is, because a caller
 	// holding an id from a facet should not have to tell the server what
 	// kind of thing it named.
+	//
+	// The series arm reads the resolved memberships, so filtering by a
+	// series facet finds the books the reader was shown in it — a book
+	// they claimed into the series, and not one they claimed out of it.
 	for _, id := range query.Entities {
 		sqlText.WriteString(`
 		   AND EXISTS (
 		       SELECT 1 FROM book_tags m WHERE m.book_id = b.id AND m.tag_id = ?
 		       UNION ALL
-		       SELECT 1 FROM book_series m WHERE m.book_id = b.id AND m.series_id = ?
+		       SELECT 1 FROM eff_series m WHERE m.book_id = b.id AND m.series_id = ?
 		       UNION ALL
 		       SELECT 1 FROM book_contributors m
 		         WHERE m.book_id = b.id AND m.contributor_id = ?)`)
@@ -197,7 +207,7 @@ func (s *Store) SearchCatalogBooks(
 		ids = ids[:query.Limit]
 		result.Truncated = true
 	}
-	if result.Facets, err = s.searchFacets(ctx, ids); err != nil {
+	if result.Facets, err = s.searchFacets(ctx, query.UserID, ids); err != nil {
 		return store.SearchResult{}, err
 	}
 	return result, nil
@@ -227,7 +237,7 @@ func (t trailingScan) Scan(dest ...any) error {
 // matched ids rather than re-running the search, so the counts can never
 // describe a different set of books than the one that was returned.
 func (s *Store) searchFacets(
-	ctx context.Context, bookIDs []string,
+	ctx context.Context, userID string, bookIDs []string,
 ) ([]store.SearchFacet, error) {
 	if len(bookIDs) == 0 {
 		return nil, nil
@@ -240,20 +250,21 @@ func (s *Store) searchFacets(
 		if err != nil {
 			return nil, err
 		}
+		prefix, membership, args := tables.membershipFor(kind, userID)
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(bookIDs)), ",")
-		args := make([]any, 0, len(bookIDs)+1)
 		for _, id := range bookIDs {
 			args = append(args, id)
 		}
 		args = append(args, store.MaxSearchFacets)
 		rows, err := s.db.QueryContext(ctx, q(
-			`SELECT e.id, e.name, COUNT(*) AS n
-			 FROM `+tables.membership+` m
-			 JOIN `+tables.entity+` e ON e.id = m.`+tables.column+`
-			 WHERE m.book_id IN (`+placeholders+`)
-			 GROUP BY e.id, e.name, e.normalized_name
-			 ORDER BY n DESC, e.normalized_name
-			 LIMIT ?`), args...)
+			prefix+
+				`SELECT e.id, e.name, COUNT(*) AS n
+				 FROM `+membership+` m
+				 JOIN `+tables.entity+` e ON e.id = m.`+tables.column+`
+				 WHERE m.book_id IN (`+placeholders+`)
+				 GROUP BY e.id, e.name, e.normalized_name
+				 ORDER BY n DESC, e.normalized_name
+				 LIMIT ?`), args...)
 		if err != nil {
 			return nil, err
 		}

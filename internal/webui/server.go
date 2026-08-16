@@ -230,11 +230,21 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))
 	mux.Handle("GET /ui/books/{id}/cover", sec(s.requireAuth(s.handleBookCover)))
+	mux.Handle("GET /ui/books/{id}/series",
+		sec(s.requireAuth(s.handleSeriesAssignForm)))
 	// Registered ahead of the {kind} pattern only for the reader's sake;
 	// the router prefers the literal segment either way.
 	mux.Handle("GET /ui/folders/{folder}/search", sec(s.requireAuth(s.handleSearch)))
-	mux.Handle("GET /ui/folders/{folder}/{kind}", sec(s.requireAuth(s.handleEntities)))
-	mux.Handle("GET /ui/folders/{folder}/{kind}/{entity}",
+	// Entities are library-wide (ADR-0019), so they are browsed from the
+	// root rather than from inside a folder. A series is read through
+	// rather than browsed by, so it has a shelf of its own (ADR-0018)
+	// where contributors and tags have a listing.
+	mux.Handle("GET /ui/entities/series/suggest",
+		sec(s.requireAuth(s.handleSeriesSuggest)))
+	mux.Handle("GET /ui/entities/series/{entity}",
+		sec(s.requireAuth(s.handleSeriesShelf)))
+	mux.Handle("GET /ui/entities/{kind}", sec(s.requireAuth(s.handleEntities)))
+	mux.Handle("GET /ui/entities/{kind}/{entity}",
 		sec(s.requireAuth(s.handleEntityBooks)))
 	mux.Handle("GET /ui/search", sec(s.requireAuth(s.handleTopSearch)))
 	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
@@ -257,6 +267,9 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
+	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
+	mux.Handle("POST /ui/books/{id}/series/reset",
+		sec(s.requireAuth(s.handleSeriesReset)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))

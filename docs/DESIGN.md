@@ -118,7 +118,7 @@ already have.**
   deliberately lossy where the legacy protocol is, and the design never
   bends the native model to fit them.
 - **Catalog storage and sync state have separate ownership.** Books
-  and folder-wide entities are shared. Works, operations, sessions and
+  and library-wide entities are shared. Works, operations, sessions and
   the `user_book_works` bridge remain per-user.
 - **Reconciliation is stateless.** A pass enumerates a folder, compares
   it with the `books` rows, reads metadata for new or changed files, and
@@ -362,8 +362,10 @@ Designed as the direct negation of the KoInsight findings.
   per-device API tokens: random 256-bit, stored hashed (SHA-256), shown
   once, revocable individually, named by device.
 - Tokens carry scope
-  sets containing `sync`, `read-insights`, `library-read`, or `admin`.
-  `admin` implies all scopes. Existing singleton tokens remain
+  sets containing `sync`, `read-insights`, `library-read`,
+  `library-manage`, or `admin`. `admin` implies all scopes.
+  `library-manage` permits stating series claims (ADR-0018) and grants
+  no catalog reads of its own. Existing singleton tokens remain
   wire-compatible, and explicit in-place scope updates preserve a token's
   device identity and secret. `admin` is never self-grantable.
 - An
@@ -478,6 +480,10 @@ is a series named after that directory, and the files in it are volumes.
 A number read from the filename wins; otherwise sorted order is the
 fallback. Files at the root are not in a series.
 
+What the directory tree says is not the last word: a reader can restate
+a book's series over it, for themselves or — as an admin — for everyone
+(ADR-0018). The claim never reaches the disk; §9.2 rule 3 stands.
+
 ### 9.4 Calibre folders
 
 A Calibre folder is a root containing `metadata.db`. The server reads
@@ -534,14 +540,26 @@ books              id, folder_id, status, relative_path, calibre_id?,
                    content_sha256, size_bytes, mtime, filename, media_type,
                    title, subtitle, description, publisher, published_date
 book_identifiers   book_id, scheme, value
-series             id, folder_id, normalized_name, name
-contributors       id, folder_id, normalized_name, name
-tags               id, folder_id, normalized_name, name
+series             id, normalized_name, name
+contributors       id, normalized_name, name
+tags               id, normalized_name, name
 book_series        book_id, series_id, position?
 book_contributors  book_id, contributor_id, role, position
 book_tags          book_id, tag_id
+book_series_overrides       folder_id, book_id, scope_user, updated_at,
+                            updated_by
+book_series_override_items  folder_id, book_id, scope_user, series_id,
+                            position?
 user_book_works    user_id, folder_id, book_id, work_id
 ```
+
+`series`, `contributors` and `tags` are library-wide: they are keyed by
+normalized name alone, so the same series held in two folders is one row
+with one id, and its shelf spans both (ADR-0019). Only a *book* lives in
+a folder, so the membership tables keep `folder_id` for the composite
+foreign key that cascades a book's rows away with it. An entity nothing
+names any more — no membership and no reader's claim — is collected at
+the end of the pass that emptied it, and when a folder is removed.
 
 Works are per-user in v1. The catalog is shared, but the
 `user_book_works` bridge keeps the work graph private. Catalog metadata
@@ -549,6 +567,20 @@ requires `library-read`. Work mappings, positions and completion require
 `sync`; aggregate statistics require `read-insights`. OPDS feeds remain
 metadata-only regardless of extra token scopes and therefore cannot
 inspect private reading state.
+
+The two `book_series_override_*` tables are the one bounded exception to
+"the catalog is not user-scoped" (ADR-0018). `book_series` still means
+what the folder said on the last pass and is still rewritten wholesale by
+every reconcile; a *claim* over it lives beside it, in a shared layer
+(`scope_user = ''`, written by an admin) and a personal one
+(`scope_user = <user id>`, written by anyone with `library-manage`).
+Series are resolved at read time — personal, else shared, else folder —
+so every series-bearing read takes the reader's id, and every series a
+payload names carries the layer it came from. A claim speaks for the
+whole book: its empty form is the statement "this book is in no series",
+which is why the claim is a row of its own rather than a set of items.
+Nothing here writes under a watched folder or into Calibre's
+`metadata.db`; write-back is a later milestone with its own ADR.
 
 ### 10.3 Testing strategy
 

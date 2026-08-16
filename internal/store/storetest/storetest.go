@@ -16,6 +16,11 @@ import (
 // OpenFunc returns a migrated, empty store for one test.
 type OpenFunc func(t *testing.T) store.Store
 
+// anyReader stands for "nobody in particular" in the catalog reads that
+// resolve series claims for a user (ADR-0018). A test that is not about
+// claims passes it and sees exactly what the folder said.
+const anyReader = ""
+
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
@@ -58,6 +63,36 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("ListBooksByEntitySeriesOrder", func(t *testing.T) {
 		testListBooksByEntitySeriesOrder(t, open)
+	})
+	t.Run("EntitiesFoldAcrossFolders", func(t *testing.T) {
+		testEntitiesFoldAcrossFolders(t, open)
+	})
+	t.Run("EntityOrphansAreCollected", func(t *testing.T) {
+		testEntityOrphansAreCollected(t, open)
+	})
+	t.Run("EntityGCKeepsWhatAScanStillNames", func(t *testing.T) {
+		testEntityGCKeepsWhatAScanStillNames(t, open)
+	})
+	t.Run("SeriesClaimLayers", func(t *testing.T) {
+		testSeriesClaimLayers(t, open)
+	})
+	t.Run("SeriesClaimEmptyMeansNoSeries", func(t *testing.T) {
+		testSeriesClaimEmptyMeansNoSeries(t, open)
+	})
+	t.Run("SeriesClaimSurvivesReconcile", func(t *testing.T) {
+		testSeriesClaimSurvivesReconcile(t, open)
+	})
+	t.Run("SeriesClaimFollowsIdentity", func(t *testing.T) {
+		testSeriesClaimFollowsIdentity(t, open)
+	})
+	t.Run("SeriesClaimOrdersAndPages", func(t *testing.T) {
+		testSeriesClaimOrdersAndPages(t, open)
+	})
+	t.Run("SeriesReorderKeepsOtherMemberships", func(t *testing.T) {
+		testSeriesReorderKeepsOtherMemberships(t, open)
+	})
+	t.Run("SeriesClaimRefusals", func(t *testing.T) {
+		testSeriesClaimRefusals(t, open)
 	})
 	t.Run("SearchFindsBooksByEverythingTheySay", func(t *testing.T) {
 		testSearchFindsBooksByEverythingTheySay(t, open)

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -163,16 +164,47 @@ func (s *Store) ReconcileFolder(
 		// the honest answer is to record what was seen and conclude
 		// nothing about what was not.
 		if !complete || len(observed) == 0 {
-			return nil
+			return collectOrphanEntitiesTx(ctx, tx)
 		}
 		missing, err := markMissingTx(ctx, tx, folderID, seen, byCalibreID, at)
 		if err != nil {
 			return err
 		}
 		result.Missing = missing
-		return nil
+		return collectOrphanEntitiesTx(ctx, tx)
 	})
 	return result, err
+}
+
+// collectOrphanEntitiesTx deletes every entity no book claims any more.
+//
+// Entities are library-wide (ADR-0019), so a name does not go when the
+// folder that introduced it goes — it goes when its last membership
+// does. A claim counts as a membership: a series a reader filed a book
+// into is theirs whether or not a pass has ever observed it, and
+// collecting it would throw the claim away with it.
+func collectOrphanEntitiesTx(ctx context.Context, tx *sql.Tx) error {
+	kinds := []struct{ table, membership, column string }{
+		{"series", "book_series", "series_id"},
+		{"tags", "book_tags", "tag_id"},
+		{"contributors", "book_contributors", "contributor_id"},
+	}
+	for _, k := range kinds {
+		statement := `DELETE FROM ` + k.table + `
+			 WHERE NOT EXISTS (
+			     SELECT 1 FROM ` + k.membership + ` m
+			      WHERE m.` + k.column + ` = ` + k.table + `.id)`
+		if k.table == "series" {
+			statement += `
+			   AND NOT EXISTS (
+			     SELECT 1 FROM book_series_override_items i
+			      WHERE i.series_id = series.id)`
+		}
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // observationKey picks the identity key the folder's kind dictates.
@@ -353,7 +385,7 @@ func replaceRelationsTx(
 		}
 	}
 	for _, tag := range obs.Tags {
-		tagID, err := resolveEntityTx(ctx, tx, "tags", folderID, tag, at)
+		tagID, err := resolveEntityTx(ctx, tx, "tags", tag, at)
 		if err != nil || tagID == "" {
 			if err != nil {
 				return err
@@ -368,7 +400,7 @@ func replaceRelationsTx(
 		}
 	}
 	for _, sr := range obs.Series {
-		seriesID, err := resolveEntityTx(ctx, tx, "series", folderID, sr.Name, at)
+		seriesID, err := resolveEntityTx(ctx, tx, "series", sr.Name, at)
 		if err != nil || seriesID == "" {
 			if err != nil {
 				return err
@@ -388,7 +420,7 @@ func replaceRelationsTx(
 		}
 	}
 	for _, c := range obs.Contributors {
-		contributorID, err := resolveEntityTx(ctx, tx, "contributors", folderID, c.Name, at)
+		contributorID, err := resolveEntityTx(ctx, tx, "contributors", c.Name, at)
 		if err != nil || contributorID == "" {
 			if err != nil {
 				return err
@@ -412,12 +444,15 @@ func replaceRelationsTx(
 	return nil
 }
 
-// resolveEntityTx finds or creates one folder-wide entity by its
+// resolveEntityTx finds or creates one library-wide entity by its
 // normalized name, keeping the first spelling seen as the display value.
 // An empty or whitespace-only name resolves to nothing rather than to an
 // entity nobody can name.
+//
+// The name is the whole key (ADR-0019), so two folders holding the same
+// series meet here and leave with one id.
 func resolveEntityTx(
-	ctx context.Context, tx *sql.Tx, table, folderID, name string, at time.Time,
+	ctx context.Context, tx *sql.Tx, table, name string, at time.Time,
 ) (string, error) {
 	normalized := metadata.NormalizeName(name)
 	if normalized == "" {
@@ -425,22 +460,26 @@ func resolveEntityTx(
 	}
 	var id string
 	err := tx.QueryRowContext(ctx,
-		`SELECT id FROM `+table+` WHERE folder_id = ? AND normalized_name = ?`,
-		folderID, normalized).Scan(&id)
+		`SELECT id FROM `+table+` WHERE normalized_name = ?`,
+		normalized).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	id = store.NewID()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO `+table+` (id, folder_id, name, normalized_name, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		id, folderID, name, normalized, formatTime(at)); err != nil {
-		return "", err
-	}
-	return id, nil
+	// Passes over different folders can reach an unseen name at the same
+	// moment, so the insert settles that rather than assuming it away:
+	// whoever lost the race is handed the winner's id, and the display
+	// spelling stays the one already stored.
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO `+table+` (id, name, normalized_name, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT (normalized_name)
+		 DO UPDATE SET normalized_name = excluded.normalized_name
+		 RETURNING id`,
+		store.NewID(), name, normalized, formatTime(at)).Scan(&id)
+	return id, err
 }
 
 func mediaTypeOf(obs store.ObservedBook) string {

@@ -215,6 +215,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			@scopeChoice(store.ScopeSync, true)
 			@scopeChoice(store.ScopeReadInsights, false)
 			@scopeChoice(store.ScopeLibraryRead, false)
+			@scopeChoice(store.ScopeLibraryManage, false)
 			if v.User.IsAdmin {
 				@scopeChoice(store.ScopeAdmin, false)
 			}

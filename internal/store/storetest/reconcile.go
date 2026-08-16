@@ -328,7 +328,7 @@ func testReconcileUnchangedKeepsMetadata(t *testing.T, open OpenFunc) {
 	if got.Title != "Full Metadata" {
 		t.Fatalf("title blanked by an unchanged observation: %+v", got)
 	}
-	relations, err := s.CatalogBookRelationsForBooks(ctx, []string{bookID})
+	relations, err := s.CatalogBookRelationsForBooks(ctx, anyReader, []string{bookID})
 	if err != nil {
 		t.Fatal(err)
 	}

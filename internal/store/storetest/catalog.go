@@ -333,7 +333,7 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 	oneID, twoID := known["book-one.epub"].ID, known["book-two.epub"].ID
 	standaloneID := known["standalone.epub"].ID
 
-	relations, err := s.CatalogBookRelationsForBooks(ctx, []string{oneID, twoID, standaloneID})
+	relations, err := s.CatalogBookRelationsForBooks(ctx, anyReader, []string{oneID, twoID, standaloneID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 		t.Fatalf("book two series position: %+v", relations.Series[twoID][0])
 	}
 
-	empty, err := s.CatalogBookRelationsForBooks(ctx, nil)
+	empty, err := s.CatalogBookRelationsForBooks(ctx, anyReader, nil)
 	if err != nil || len(empty.Contributors) != 0 || len(empty.Series) != 0 {
 		t.Fatalf("empty request: %+v %v", empty, err)
 	}

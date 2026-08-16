@@ -11,7 +11,7 @@ info:
       `/v1/register` requires `Authorization: Bearer <token>`. Login
       returns a short-lived *auth token* usable only for token
       management; device tokens carry one or more scopes (`sync`,
-      `read-insights`, `library-read`, `admin`).
+      `read-insights`, `library-read`, `library-manage`, `admin`).
     - **Identity**: books are *works*. Clients never need a work to
       exist before pushing: call `/v1/works/resolve` with every
       identifier you have and use the returned `work_id`.
@@ -858,14 +858,100 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CatalogBook" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
-  /v1/folders/{folder}/entities/{kind}:
+
+  /v1/books/{id}/series:
     get:
       tags: [library]
-      summary: The series, contributors or tags in a folder
+      summary: Read a book's series layers
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Entities are folder-wide and shared by every book that claims
-        them. `book_count` counts only books whose file is present, so an
+        Returns the effective series memberships for one book and the
+        three layers they resolve from. This is the read an editor uses
+        to show what the folder said underneath a claim, and whether
+        clearing a claim would change anything.
+
+        `shared` and `personal` are `null` when that layer has no claim.
+        They are `[]` when the layer explicitly claims the book is in no
+        series. That difference is meaningful: `null` means there is
+        nothing to reset at that layer, while `[]` is a resettable claim.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The effective series and the layers beneath it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookSeriesLayers" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+    put:
+      tags: [library]
+      summary: Replace one layer's series claim for a book
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        States the whole of one writable layer's opinion about the
+        book's series memberships. It is a replacement, not a diff:
+        omitted memberships are removed from that layer's claim.
+
+        The default scope is `personal`, which affects only the caller.
+        `shared` affects every reader without a personal claim and also
+        requires the `admin` scope; a non-admin token with
+        `library-manage` receives `403`.
+
+        An absent or empty `series` array is a real claim that the book
+        is in no series. It is not the same as no claim; use `DELETE` to
+        clear a layer and fall back to the one beneath it.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BookSeriesClaim" }
+      responses:
+        "200":
+          description: The effective series and all layers after the claim
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookSeriesLayers" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed input, unwritable scope, invalid membership, unknown series id, non-finite position, or too many series" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+    delete:
+      tags: [library]
+      summary: Clear one layer's series claim for a book
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Drops one writable layer's claim so the book falls back to the
+        layer beneath. Clearing a claim that is not present is not an
+        error. The default scope is `personal`; `shared` also requires
+        the `admin` scope.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: scope
+          in: query
+          required: false
+          description: The claim layer to clear. Defaults to `personal`.
+          schema: { $ref: "#/components/schemas/SeriesClaimScope" }
+      responses:
+        "200":
+          description: The effective series and all layers after clearing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BookSeriesLayers" }
+        "400": { $ref: "#/components/responses/Error", description: "Unwritable scope" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+
+  /v1/entities/{kind}:
+    get:
+      tags: [library]
+      summary: The series, contributors and tags in the library
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Entities are library-wide and shared by every book that claims
+        them, whichever folder that book was found in: one series named
+        the same way in two folders is one entity here (ADR-0019).
+        `book_count` counts only books whose file is present, so an
         entity whose books have all gone missing reads as empty rather
         than leading to a blank page.
 
@@ -873,7 +959,6 @@ paths:
         offset would skip or repeat entities as books are added
         underneath it.
       parameters:
-        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - { $ref: "#/components/parameters/EntityKind" }
         - name: after
           in: query
@@ -898,20 +983,19 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder or kind" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind" }
 
-  /v1/folders/{folder}/entities/{kind}/{entity}/books:
+  /v1/entities/{kind}/{entity}/books:
     get:
       tags: [library]
       summary: The books claiming one entity
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
-        Active books only. A series returns its books in reading order,
-        with books that have no position last, because an unplaced book is
-        an unanswered question rather than book zero. Every other kind
-        returns them oldest first.
+        Active books only, from every folder. A series returns its books
+        in reading order, with books that have no position last, because
+        an unplaced book is an unanswered question rather than book zero.
+        Every other kind returns them oldest first.
       parameters:
-        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - { $ref: "#/components/parameters/EntityKind" }
         - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: cursor, in: query, schema: { type: string } }
@@ -935,7 +1019,38 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder, kind or entity" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind or entity" }
+
+  /v1/entities/{kind}/{entity}/order:
+    put:
+      tags: [library]
+      summary: Reorder the books in a series
+      security: [{ deviceToken: [] }]  # requires library-manage scope
+      description: |
+        Bulk-renumbers books within one series in a single transaction.
+        Only `kind=series` is accepted; other entity kinds are `404`.
+
+        The operation restates positions in one writable layer and
+        preserves each book's other series memberships. Replaying the
+        same order is idempotent. The default scope is `personal`;
+        `shared` also requires `admin`.
+
+        The series is library-wide, so an order covers every folder's
+        copy of it. Send the ids of the books actually on the shelf you
+        are renumbering.
+      parameters:
+        - { $ref: "#/components/parameters/EntityKind" }
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SeriesReorder" }
+      responses:
+        "204": { description: The order was applied }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed input, empty order, duplicate book, non-finite position, or too many books" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
+        "404": { $ref: "#/components/responses/Error", description: "No such series, book, or reorderable kind" }
 
   /v1/books/{id}/resolve:
     post:
@@ -1191,17 +1306,16 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
-  /opds/v1.2/folders/{folder}/{kind}:
+  /opds/v1.2/entities/{kind}:
     get:
       tags: [opds]
-      summary: OPDS navigation feed of a folder's series, contributors or tags
+      summary: OPDS navigation feed of the library's series, contributors or tags
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
-        Reached from the `http://opds-spec.org/facet` links on the
-        folder's acquisition feed. Each entry leads to the books
-        claiming it.
+        Reached from the `http://opds-spec.org/facet` links on a folder's
+        acquisition feed. Each entry leads to the books claiming it,
+        across every folder.
       parameters:
-        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/EntityKind"
         - name: after
           in: query
@@ -1214,9 +1328,9 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=navigation:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Over-long cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder or kind" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind" }
 
-  /opds/v1.2/folders/{folder}/{kind}/{entity}:
+  /opds/v1.2/entities/{kind}/{entity}:
     get:
       tags: [opds]
       summary: OPDS acquisition feed of the books claiming one entity
@@ -1226,7 +1340,6 @@ paths:
         which is the whole reason a reader would rather browse a series
         than search for it.
       parameters:
-        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/EntityKind"
         - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
         - name: cursor
@@ -1240,7 +1353,7 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder, kind or entity" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind or entity" }
 
   /opds/v1.2/books/{id}/download:
     get:
@@ -1269,7 +1382,7 @@ components:
     deviceToken:
       type: http
       scheme: bearer
-      description: Scoped device token (`sync`, `read-insights`, or `admin`)
+      description: Scoped device token (`sync`, `read-insights`, `library-read`, `library-manage`, or `admin`)
     loginAuth:
       type: http
       scheme: bearer
@@ -1289,7 +1402,7 @@ components:
       in: path
       required: true
       description: |
-        Which kind of folder-wide entity. The set is closed, and a kind
+        Which kind of library-wide entity. The set is closed, and a kind
         outside it is a 404 rather than a 400: it names no resource.
       schema:
         type: string
@@ -1429,25 +1542,139 @@ components:
             Every series the book belongs to. A book may be in more than
             one, and reporting a single series would silently pick one.
             For a plain folder a series is the subdirectory the file sits
-            in; for a Calibre folder it is what `metadata.db` says.
+            in; for a Calibre folder it is what `metadata.db` says. The
+            `source` field names the layer now in force for this
+            membership.
+          items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+
+    CatalogSeriesMembership:
+      type: object
+      description: |
+        One membership of a book in a series. `source` is the layer that
+        supplied this membership after override resolution: `folder` is
+        what the last pass observed, `shared` is an administrator's claim
+        for everyone without a personal claim, and `personal` is the
+        caller's own claim.
+      required: [id, name, source]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        source: { $ref: "#/components/schemas/SeriesSource" }
+        position:
+          type: number
+          description: |
+            Omitted when the book's place in the series is unknown. It
+            is never invented: 0 would mean "first".
+
+    SeriesSource:
+      type: string
+      enum: [folder, shared, personal]
+      description: The layer a resolved series membership came from.
+
+    SeriesClaimScope:
+      type: string
+      enum: [personal, shared]
+      default: personal
+      description: |
+        Writable series-claim layer. `personal` affects only the caller;
+        `shared` affects every reader without a personal claim and also
+        requires `admin`.
+
+    BookSeriesLayers:
+      type: object
+      description: |
+        All series layers for one book. `series` is the effective list
+        returned by every other catalog read. `folder` is what the last
+        reconcile pass observed. `shared` and `personal` are `null` when
+        that layer has no claim, and an array — possibly empty — when it
+        does.
+      required: [book_id, source, series, folder, shared, personal]
+      properties:
+        book_id: { type: string, format: uuid }
+        source: { $ref: "#/components/schemas/SeriesSource" }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+        folder:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+        shared:
+          type: [array, "null"]
+          items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+          description: |
+            `null` means no shared claim exists; `[]` means the shared
+            layer claims the book is in no series.
+        personal:
+          type: [array, "null"]
+          items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+          description: |
+            `null` means no personal claim exists; `[]` means the
+            personal layer claims the book is in no series.
+
+    BookSeriesClaim:
+      type: object
+      description: |
+        Replacement claim for one book at one writable layer. The
+        `series` array is the whole claim, not a diff. Omitted or empty
+        means "this book is in no series"; use `DELETE` to remove the
+        claim and fall back.
+      properties:
+        scope: { $ref: "#/components/schemas/SeriesClaimScope" }
+        series:
+          type: array
+          maxItems: 64
+          default: []
+          items: { $ref: "#/components/schemas/BookSeriesClaimItem" }
+
+    BookSeriesClaimItem:
+      type: object
+      description: |
+        One series membership in a claim. Exactly one of `series_id` and
+        `name` is accepted. A `series_id` must already exist. A `name`
+        creates or reuses the series by the same normalized-name folding
+        a reconcile pass uses; blank names are rejected. `position`,
+        when present, must be finite.
+      oneOf:
+        - required: [series_id]
+        - required: [name]
+      properties:
+        series_id: { type: string, format: uuid, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 512 }
+        position:
+          type: number
+          description: Omitted when the claimant does not place the book in the series; NaN and infinities are rejected.
+
+    SeriesReorder:
+      type: object
+      description: |
+        Bulk renumbering for one series. The order must be non-empty and
+        must not name the same book twice. It restates only positions in
+        the named series and preserves each book's other series
+        memberships.
+      required: [order]
+      properties:
+        scope: { $ref: "#/components/schemas/SeriesClaimScope" }
+        order:
+          type: array
+          minItems: 1
+          maxItems: 1000
           items:
             type: object
-            required: [id, name]
+            required: [book_id]
             properties:
-              id: { type: string, format: uuid }
-              name: { type: string }
+              book_id: { type: string, format: uuid }
               position:
                 type: number
-                description: |
-                  Omitted when the book's place in the series is unknown.
-                  It is never invented: 0 would mean "first".
+                description: Omitted when the book is unplaced; NaN and infinities are rejected.
+
     CatalogEntity:
       type: object
       description: |
-        One folder-wide series, contributor or tag. Matching folds
+        One library-wide series, contributor or tag. Matching folds
         case and spacing while the display spelling is preserved, so
         "Frank  Herbert" and "frank herbert" are one entity spelled one
-        way.
+        way — including when the two spellings were found in different
+        folders (ADR-0019).
       required: [id, name, book_count]
       properties:
         id: { type: string, format: uuid }
@@ -1492,16 +1719,20 @@ components:
         name: { type: string, description: The display spelling. }
         book_count:
           type: integer
-          description: Returned books claiming it, not folder-wide books.
+          description: Returned books claiming it, not the entity's whole shelf.
 
     Scope:
       type: string
       enum: [sync, read-insights, library-read, library-manage, admin]
       description: |
-        `library-manage` implies `library-read`; `admin` implies all
-        scopes. No other scope implies another. `admin` cannot be
-        self-granted: creating or updating a token to include it
-        requires an existing admin token or the admin CLI.
+        `sync` writes and reads positions, `read-insights` reads
+        statistics, `library-read` reads the catalog, and
+        `library-manage` states series claims. `library-manage` does
+        not grant catalog reads; request `library-read` too when a
+        client needs both. `admin` implies all scopes. No other scope
+        implies another. `admin` cannot be self-granted: creating or
+        updating a token to include it requires an existing admin token
+        or the admin CLI.
     ScopeSet:
       type: array
       minItems: 1

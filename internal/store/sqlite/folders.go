@@ -110,6 +110,8 @@ func (s *Store) DeleteFolder(ctx context.Context, folderID string) error {
 		if n == 0 {
 			return store.ErrNotFound
 		}
-		return nil
+		// The books went with the folder, so a series only this folder
+		// held now belongs to nobody (ADR-0019).
+		return collectOrphanEntitiesTx(ctx, tx)
 	})
 }

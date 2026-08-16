@@ -64,6 +64,7 @@ func (s *Server) HandleFolderSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
 		FolderID: folderID,
+		UserID:   readerID(r),
 		Text:     text,
 		Entities: entities,
 		Limit:    limit,
@@ -72,7 +73,7 @@ func (s *Server) HandleFolderSearch(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "folder not found")
 		return
 	}
-	books, err := s.catalogBooksJSON(r.Context(), result.Books)
+	books, err := s.catalogBooksJSON(r.Context(), readerID(r), result.Books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return

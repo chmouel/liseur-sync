@@ -61,14 +61,18 @@ const (
 	ScopeSync         Scope = "sync"
 	ScopeReadInsights Scope = "read-insights"
 	ScopeLibraryRead  Scope = "library-read"
-	ScopeAdmin        Scope = "admin"
+	// ScopeLibraryManage permits stating series claims (ADR-0018). It
+	// shapes how the catalog reads; it never writes to a watched folder.
+	ScopeLibraryManage Scope = "library-manage"
+	ScopeAdmin         Scope = "admin"
 )
 
 var scopeOrder = map[Scope]int{
-	ScopeSync:         0,
-	ScopeReadInsights: 1,
-	ScopeLibraryRead:  2,
-	ScopeAdmin:        3,
+	ScopeSync:          0,
+	ScopeReadInsights:  1,
+	ScopeLibraryRead:   2,
+	ScopeLibraryManage: 3,
+	ScopeAdmin:         4,
 }
 
 // ScopeSet is the canonical, duplicate-free set of capabilities on a token.
@@ -330,11 +334,70 @@ type BookIdentifier struct {
 }
 
 // BookTaxon is one tag membership. ID and NormalizedName identify the
-// shared folder-wide entity; Name is its display spelling.
+// shared library-wide entity; Name is its display spelling.
 type BookTaxon struct {
 	ID             string
 	Name           string
 	NormalizedName string
+}
+
+// SeriesSource says which layer a membership came from (ADR-0018). A
+// client shows it so a reader can tell what the folder said from what
+// somebody claimed, and knows whether a reset is on offer.
+type SeriesSource string
+
+const (
+	// SeriesSourceFolder is what the last reconcile pass observed.
+	SeriesSourceFolder SeriesSource = "folder"
+	// SeriesSourceShared is an administrator's claim, seen by everyone
+	// who has not made a personal one.
+	SeriesSourceShared SeriesSource = "shared"
+	// SeriesSourcePersonal is one reader's own claim, seen by nobody
+	// else.
+	SeriesSourcePersonal SeriesSource = "personal"
+)
+
+// SharedSeriesScope is the scope_user value of the shared override
+// layer. It is the empty string because no user id is empty, so the
+// shared claim and a personal one can share a primary key without a
+// nullable column, and the empty string sorts below every real id.
+const SharedSeriesScope = ""
+
+// NoReaderScope stands in for a caller with no user id when resolving
+// series layers. It cannot be the empty string, which is the shared
+// layer's own sentinel — using it would make every shared claim look
+// personal — and it must match no account, so it is a value NewID
+// cannot produce: ids are hex, and this is not.
+//
+// It is not a NUL byte, though that would also be unmintable: PostgreSQL
+// text rejects NUL outright, and SQLite's tolerance of it made the
+// difference invisible until the suite ran against both.
+const NoReaderScope = "-"
+
+// Writable reports whether a source names a layer somebody can claim.
+// The folder layer is not one: it is what the disk said, and the only
+// way to change it is to change the disk.
+func (s SeriesSource) Writable() bool {
+	return s == SeriesSourceShared || s == SeriesSourcePersonal
+}
+
+// ScopeUser maps a writable layer to the scope_user value that stores
+// it. It refuses the folder layer rather than defaulting, because
+// silently writing a claim to the wrong layer is the one mistake this
+// type exists to prevent.
+func (s SeriesSource) ScopeUser(userID string) (string, error) {
+	switch s {
+	case SeriesSourceShared:
+		return SharedSeriesScope, nil
+	case SeriesSourcePersonal:
+		if userID == "" {
+			return "", fmt.Errorf("%w: a personal series claim needs a user",
+				ErrInvalidInput)
+		}
+		return userID, nil
+	default:
+		return "", fmt.Errorf("%w: series claim scope %q", ErrInvalidInput, s)
+	}
 }
 
 // BookSeries is one series membership. Position is absent when the
@@ -345,6 +408,8 @@ type BookSeries struct {
 	Name           string
 	NormalizedName string
 	Position       *float64
+	// Source is the layer this membership was resolved from.
+	Source SeriesSource
 }
 
 // ContributorRoleAuthor is the role a person holds when they wrote the
@@ -369,6 +434,37 @@ type BookContributor struct {
 type CatalogBookRelations struct {
 	Contributors map[string][]BookContributor
 	Series       map[string][]BookSeries
+}
+
+// SeriesClaimItem is one membership in a claim. Exactly one of SeriesID
+// and Name identifies the series: an id points at one that exists, a
+// name creates it if it does not. Position is absent when the claimant
+// says a book belongs to a series without saying where in it.
+type SeriesClaimItem struct {
+	SeriesID string
+	Name     string
+	Position *float64
+}
+
+// SeriesPlacement is where one book sits in one series, for a bulk
+// renumbering.
+type SeriesPlacement struct {
+	BookID   string
+	Position *float64
+}
+
+// BookSeriesLayers is one book's series seen at every layer at once
+// (ADR-0018). Folder is what the last pass observed. Shared and Personal
+// are nil when that layer holds no claim, which is what distinguishes
+// "nobody said" from the empty claim "in no series". Effective is the
+// one in force, and is what every other read returns.
+type BookSeriesLayers struct {
+	Folder    []BookSeries
+	Shared    []BookSeries
+	Personal  []BookSeries
+	Effective []BookSeries
+	// Source names the layer Effective came from.
+	Source SeriesSource
 }
 
 // UserBookWork is the privacy boundary between a shared catalog book and
@@ -402,7 +498,7 @@ type CatalogBookCursor struct {
 	SeriesPosition *float64
 }
 
-// EntityKind names one of the three folder-wide metadata entity tables.
+// EntityKind names one of the three library-wide metadata entity tables.
 // It is a closed set because it selects a table: a caller cannot ask for
 // a kind the schema does not have, and the store never interpolates a
 // caller's string into SQL.
@@ -419,7 +515,7 @@ func (k EntityKind) Valid() bool {
 	return k == EntitySeries || k == EntityContributor || k == EntityTag
 }
 
-// CatalogEntity is one folder-wide series, contributor or tag, together
+// CatalogEntity is one library-wide series, contributor or tag, together
 // with how many of the folder's active books claim it.
 type CatalogEntity struct {
 	ID             string
@@ -443,6 +539,11 @@ const MaxEntityListLimit = 500
 // catalog's search to have no vocabulary for it.
 type SearchQuery struct {
 	FolderID string
+	// UserID is who is asking. Series filters and series facets resolve
+	// through that reader's override layers (ADR-0018); the full-text
+	// index is deliberately shared and keeps indexing what the folder
+	// observed.
+	UserID string
 	// Text is what the person typed. It is treated as words to match,
 	// never as index syntax, so no character in it can change how the
 	// query is read.
@@ -542,7 +643,8 @@ type ObservedBook struct {
 }
 
 // ObservedSeries is a series a scan attributed to a book, by display
-// name. The store resolves it to a folder-wide entity.
+// name. The store resolves it to a library-wide entity, so the same
+// series observed in two folders is one row (ADR-0019).
 type ObservedSeries struct {
 	Name     string
 	Position *float64
@@ -951,20 +1053,25 @@ type Store interface {
 	// CatalogBookRelationsForBooks reads the contributors and series of a
 	// whole page of books at once, so that rendering a shelf costs one
 	// query rather than one per book (ADR-0015).
-	CatalogBookRelationsForBooks(ctx context.Context, bookIDs []string) (CatalogBookRelations, error)
-	// ListCatalogEntities pages one folder's entities of one kind by
-	// normalized name, with the number of books claiming each.
-	ListCatalogEntities(ctx context.Context, folderID string, kind EntityKind, after string, limit int) ([]CatalogEntity, error)
+	//
+	// userID is who is asking, because series memberships resolve
+	// through that reader's override layers (ADR-0018). Contributors and
+	// every other relation stay shared.
+	CatalogBookRelationsForBooks(ctx context.Context, userID string, bookIDs []string) (CatalogBookRelations, error)
+	// ListCatalogEntities pages the library's entities of one kind by
+	// normalized name, with the number of books claiming each. Series
+	// counts are resolved for userID; the other kinds ignore it.
+	ListCatalogEntities(ctx context.Context, userID string, kind EntityKind, after string, limit int) ([]CatalogEntity, error)
 	// CatalogEntityByID reads one entity, so a page can name what it is
 	// listing without scanning for it.
-	CatalogEntityByID(ctx context.Context, folderID, entityID string, kind EntityKind) (CatalogEntity, error)
-	// ListBooksByEntity pages the folder's books claiming one entity,
-	// oldest first.
+	CatalogEntityByID(ctx context.Context, userID, entityID string, kind EntityKind) (CatalogEntity, error)
+	// ListBooksByEntity pages the books claiming one entity, oldest
+	// first, across every folder they were found in (ADR-0019).
 	//
 	// It returns the cursor for the next page itself, because the sort
 	// key depends on the kind and only the store knows it. The cursor is
 	// nil when the page is the last one.
-	ListBooksByEntity(ctx context.Context, folderID, entityID string, kind EntityKind, after *CatalogBookCursor, limit int) ([]CatalogBook, *CatalogBookCursor, error)
+	ListBooksByEntity(ctx context.Context, userID, entityID string, kind EntityKind, after *CatalogBookCursor, limit int) ([]CatalogBook, *CatalogBookCursor, error)
 	// SearchCatalogBooks answers one folder's search, best first, with
 	// facets describing the answer.
 	SearchCatalogBooks(ctx context.Context, query SearchQuery) (SearchResult, error)
@@ -977,6 +1084,40 @@ type Store interface {
 	// CatalogAuthorsForBooks maps book id to author display names, for
 	// the identity backfill that links a catalog book to a sync work.
 	CatalogAuthorsForBooks(ctx context.Context, bookIDs []string) (map[string][]string, error)
+
+	// -----------------------------------------------------------------
+	// Series claims (ADR-0018).
+	//
+	// A claim is one layer's whole answer to "which series is this book
+	// in", overriding what the last pass observed. The shared layer is
+	// written by administrators and seen by everyone without a personal
+	// claim; a personal claim is seen by its author alone. Nothing here
+	// touches book_series, which keeps meaning what the folder said.
+	// -----------------------------------------------------------------
+
+	// SetBookSeriesOverride replaces one layer's claim about one book.
+	// An empty items slice is the claim "this book is in no series",
+	// which is different from having no claim at all. Items naming a
+	// series that does not exist create it, folding by normalized name
+	// exactly as a pass would.
+	//
+	// userID is the writer; it is also the layer for a personal claim.
+	SetBookSeriesOverride(ctx context.Context, userID, bookID string, scope SeriesSource, items []SeriesClaimItem, at time.Time) error
+	// ClearBookSeriesOverride drops one layer's claim, so the book falls
+	// back to the layer beneath. Clearing a claim that is not there is
+	// not an error: the caller asked for an absence and got one.
+	ClearBookSeriesOverride(ctx context.Context, userID, bookID string, scope SeriesSource) error
+	// ReorderSeries restates the positions of books within one series in
+	// one layer, in one transaction.
+	//
+	// It writes a claim per book, preserving each book's other series
+	// memberships as they resolve for userID: renumbering a trilogy must
+	// not silently drop a volume's membership of an omnibus.
+	ReorderSeries(ctx context.Context, userID, seriesID string, scope SeriesSource, order []SeriesPlacement, at time.Time) error
+	// BookSeriesLayers reads all three layers for one book, so an editor
+	// can show what the folder said, what was claimed, and which of them
+	// is in force.
+	BookSeriesLayers(ctx context.Context, userID, bookID string) (BookSeriesLayers, error)
 
 	// -----------------------------------------------------------------
 	// The bridge to per-user reading state.
