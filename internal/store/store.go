@@ -878,6 +878,13 @@ type Store interface {
 	ListTokens(ctx context.Context, userID string) ([]Token, error)
 	UpdateTokenScopes(ctx context.Context, userID, tokenID string, scopes ScopeSet) error
 	RevokeToken(ctx context.Context, userID, tokenID string) error
+	// DeleteToken removes a token outright, for credentials the server
+	// issued to itself and nobody ever asked to see. A revoked row is a
+	// record that someone's device was cut off and is worth keeping; an
+	// expired browser-reader token is neither, and keeping it would let
+	// the tokens table grow by one row an hour for as long as a person
+	// reads. Returns ErrNotFound if the token is not this user's.
+	DeleteToken(ctx context.Context, userID, tokenID string) error
 	TouchToken(ctx context.Context, userID, tokenID string, at time.Time) error
 
 	// -----------------------------------------------------------------
