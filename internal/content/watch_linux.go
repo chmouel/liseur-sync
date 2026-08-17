@@ -326,7 +326,8 @@ func (w *Watcher) reconcile(ctx context.Context, folder store.Folder) {
 		"folder", folder.ID, "name", folder.Name,
 		"added", result.Added, "updated", result.Updated,
 		"replaced", result.Replaced, "missing", result.Missing,
-		"returned", result.Returned)
+		"returned", result.Returned,
+		"purged", result.Purged, "rekeyed", result.Rekeyed)
 }
 
 func (w *Watcher) allFolders(ctx context.Context) ([]store.Folder, error) {

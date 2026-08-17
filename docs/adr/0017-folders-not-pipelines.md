@@ -39,9 +39,11 @@ appears.
 
 **A reconcile pass** enumerates a folder's books, compares them against
 the `books` rows for that folder, reads metadata for anything new or
-changed, and upserts. Books it did not observe are marked `missing`.
-Nothing is copied, nothing is written under the folder, nothing is deleted
-anywhere, and the pass holds no state: running it twice is running it
+changed, and upserts. Books it did not observe are marked `missing` — in a
+Calibre folder they are deleted instead, because there the pass reads a
+curated catalog rather than a disk ([ADR-0022](0022-calibre-metadata-db-is-authoritative.md)).
+Nothing is copied, nothing is written under the folder, and the pass holds
+no state: running it twice is running it
 once. There is no job table, no queue and nothing to recover after a
 crash.
 
@@ -76,12 +78,14 @@ bearing.**
    absent.** Not just an unopenable root: any per-file read or parse
    failure, and any hit against the file or depth bound, makes the pass
    incomplete. An incomplete pass may upsert what it saw; it may not mark
-   anything missing.
+   anything missing, and it may not purge.
 2. **A zero-observation pass never marks anything missing.** An unmounted
    mount point is frequently still readable and empty, which otherwise
    reads as a complete scan that found nothing and hides the whole
    catalog. Failing to notice a genuine delete-everything is the better
-   error.
+   error. This guards the Calibre purge too, and more strongly: it is the
+   only thing standing between an unreadable `metadata.db` and an empty
+   library.
 3. **The server never writes under a watched folder.** No temporary files,
    no cover extracted beside the book, no `metadata.db` writes, no
    renames. Every open is rooted, read-only and refuses symlinks.
@@ -129,7 +133,8 @@ introduces one can introduce its own.
 
 - A folder added at runtime is watched and reconciled without a restart.
 - A file appearing under a watched root shows up without waiting for the
-  safety timer; a file removed marks its book missing.
+  safety timer; a file removed marks its book missing, and a book removed
+  from a Calibre library's `metadata.db` is deleted.
 - The same folder reconciled twice yields one book per file and no second
   write.
 - A root that vanishes mid-pass, and an emptied-but-readable root, mark

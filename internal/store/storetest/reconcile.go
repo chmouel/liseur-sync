@@ -430,3 +430,315 @@ func testReconcileCalibrePathSwap(t *testing.T, open OpenFunc) {
 		t.Fatalf("book 2 did not take book 1's old path: %+v", known[two])
 	}
 }
+
+// testReconcileCalibrePurgesDeletedBooks covers ADR-0022: a Calibre
+// library's metadata.db is a catalog somebody curates, so a book a
+// complete pass no longer finds in it was removed rather than
+// misplaced, and the row goes.
+//
+// What goes with it is the point of the second half. A work the
+// deletion left with no book and no reading at all is bookkeeping and
+// is collected; a work with an op behind it is somebody's reading and
+// survives its file.
+func testReconcileCalibrePurgesDeletedBooks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "calibre-purge", store.FolderCalibre)
+	now := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
+	user := MkUser(t, s, "calibre-purge-reader")
+
+	kept, dropped, read := int64(1), int64(2), int64(3)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &kept, RelativePath: "Kept (1)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-kept", Title: "Kept"},
+		{CalibreID: &dropped, RelativePath: "Dropped (2)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-dropped", Title: "Dropped"},
+		{CalibreID: &read, RelativePath: "Read (3)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-read", Title: "Read"},
+	}, true, now)
+
+	known := knownByCalibreID(t, s, folder.ID)
+	droppedID, readID := known[dropped].ID, known[read].ID
+
+	// One mapping with nothing behind it, one with an op behind it.
+	emptyWork := store.Work{ID: "purge-empty-work", UserID: user.ID, Title: "Dropped", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, droppedID, emptyWork,
+		[]store.Edition{{UserID: user.ID, SHA256: "sha-dropped", WorkID: emptyWork.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-dropped"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+	readWork := store.Work{ID: "purge-read-work", UserID: user.ID, Title: "Read", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, readID, readWork,
+		[]store.Edition{{UserID: user.ID, SHA256: "sha-read", WorkID: readWork.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-read"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendOps(ctx, user.ID, "d-purge", []store.Op{{
+		OpID: "018e6f1a-0000-7000-8000-0000000000aa", WorkID: readWork.ID,
+		EditionSHA: Ptr("sha-read"), ClientTS: now, Progression: 0.3,
+		Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &kept, RelativePath: "Kept (1)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-kept", Title: "Kept"},
+	}, true, now.Add(time.Hour))
+	if result.Purged != 2 {
+		t.Fatalf("want two books purged, got %+v", result)
+	}
+	if result.Missing != 0 {
+		t.Fatalf("a calibre pass marked a book missing instead of purging it: %+v", result)
+	}
+
+	after := knownByCalibreID(t, s, folder.ID)
+	if len(after) != 1 {
+		t.Fatalf("want one book left after the purge, got %d", len(after))
+	}
+	if _, err := s.CatalogBookByID(ctx, droppedID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a book gone from metadata.db survived the pass: %v", err)
+	}
+	if _, err := s.WorkByID(ctx, user.ID, emptyWork.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a work with no book and no reading survived the purge: %v", err)
+	}
+	surviving, err := s.WorkByID(ctx, user.ID, readWork.ID)
+	if err != nil {
+		t.Fatalf("a work with reading behind it was collected: %v", err)
+	}
+	if surviving.ID != readWork.ID {
+		t.Fatalf("wrong work survived: %+v", surviving)
+	}
+	ids, err := s.WorkBookIDs(ctx, user.ID, readWork.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("a purged book left its mapping behind: %v", ids)
+	}
+}
+
+// testReconcileCalibreUnservableBookIsKept is the other half of the
+// purge contract. A book Calibre still lists but whose only format this
+// server cannot serve — converted to KEPUB, or a file that is simply
+// not on the disk — is marked missing and kept, because deleting it
+// would throw away the reader's mapping for a book that is still in the
+// library and can come back.
+func testReconcileCalibreUnservableBookIsKept(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "calibre-unservable", store.FolderCalibre)
+	now := time.Date(2026, time.February, 2, 0, 0, 0, 0, time.UTC)
+	user := MkUser(t, s, "calibre-unservable-reader")
+
+	id := int64(11)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &id, RelativePath: "Converted (11)/book.epub", SizeBytes: 1, MTime: now,
+			ContentSHA256: "sha-convert", Title: "Converted"},
+	}, true, now)
+	bookID := knownByCalibreID(t, s, folder.ID)[id].ID
+
+	work := store.Work{ID: "unservable-work", UserID: user.ID, Title: "Converted", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, bookID, work,
+		[]store.Edition{{UserID: user.ID, SHA256: "sha-convert", WorkID: work.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-convert"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+
+	result := doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &id, Unservable: true},
+	}, true, now.Add(time.Hour))
+	if result.Purged != 0 {
+		t.Fatalf("an unservable book was purged: %+v", result)
+	}
+	if result.Missing != 1 {
+		t.Fatalf("an unservable book was not marked missing: %+v", result)
+	}
+	known := knownByCalibreID(t, s, folder.ID)[id]
+	if known.ID != bookID || known.Status != store.BookMissing {
+		t.Fatalf("unservable book not kept as missing: %+v", known)
+	}
+	if known.RelativePath != "Converted (11)/book.epub" {
+		t.Fatalf("an unservable observation overwrote what the catalog knew: %+v", known)
+	}
+	stored, err := s.CatalogBookByID(ctx, bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title != "Converted" {
+		t.Fatalf("an unservable observation blanked the title: %+v", stored)
+	}
+	if _, err := s.UserBookWork(ctx, user.ID, bookID); err != nil {
+		t.Fatalf("reading mapping lost to an unservable format: %v", err)
+	}
+
+	// The format comes back and so does the book.
+	back := doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &id, RelativePath: "Converted (11)/book.epub", SizeBytes: 1, MTime: now,
+			ContentSHA256: "sha-convert", Title: "Converted"},
+	}, true, now.Add(2*time.Hour))
+	if back.Returned != 1 {
+		t.Fatalf("a returning unservable book was not reported: %+v", back)
+	}
+	if knownByCalibreID(t, s, folder.ID)[id].Status != store.BookActive {
+		t.Fatalf("book did not come back active")
+	}
+}
+
+// testReconcileCalibreIncompletePassPurgesNothing keeps the two guards
+// in front of the purge exactly where they are in front of the missing
+// flag: a pass that did not see everything, or saw nothing at all, is
+// not evidence that anything was deleted.
+func testReconcileCalibreIncompletePassPurgesNothing(t *testing.T, open OpenFunc) {
+	s := open(t)
+	folder := MkFolder(t, s, "calibre-guards", store.FolderCalibre)
+	now := time.Date(2026, time.February, 3, 0, 0, 0, 0, time.UTC)
+
+	one, two := int64(21), int64(22)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &one, RelativePath: "One (21)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-21", Title: "One"},
+		{CalibreID: &two, RelativePath: "Two (22)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-22", Title: "Two"},
+	}, true, now)
+
+	incomplete := doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{CalibreID: &one, RelativePath: "One (21)/book.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-21", Title: "One"},
+	}, false, now.Add(time.Hour))
+	if incomplete.Purged != 0 {
+		t.Fatalf("an incomplete pass purged: %+v", incomplete)
+	}
+	empty := doReconcile(t, s, folder.ID, nil, true, now.Add(2*time.Hour))
+	if empty.Purged != 0 {
+		t.Fatalf("a pass that observed nothing purged: %+v", empty)
+	}
+	if len(knownByCalibreID(t, s, folder.ID)) != 2 {
+		t.Fatalf("books were lost to a pass that concluded nothing")
+	}
+}
+
+// testReconcilePlainFolderNeverPurges guards the other side of ADR-0022:
+// only a Calibre folder has a catalog to be absent from. Under a plain
+// folder absence is evidence about a disk — an unmounted share, a
+// half-finished copy — and the row is kept.
+func testReconcilePlainFolderNeverPurges(t *testing.T, open OpenFunc) {
+	s := open(t)
+	folder := MkFolder(t, s, "plain-no-purge", store.FolderPlain)
+	now := time.Date(2026, time.February, 4, 0, 0, 0, 0, time.UTC)
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{RelativePath: "a.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-a", Title: "A"},
+		{RelativePath: "b.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-b", Title: "B"},
+	}, true, now)
+
+	result := doReconcile(t, s, folder.ID, []store.ObservedBook{
+		{RelativePath: "a.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-a", Title: "A"},
+	}, true, now.Add(time.Hour))
+	if result.Purged != 0 || result.Missing != 1 {
+		t.Fatalf("a plain folder purged instead of marking missing: %+v", result)
+	}
+	if knownByPath(t, s, folder.ID)["b.epub"].Status != store.BookMissing {
+		t.Fatalf("a plain folder's absent book was not kept as missing")
+	}
+}
+
+// testReconcileCalibreDigestChangeFollowsReader is the fix for the
+// duplicate that a Calibre metadata edit used to produce. Calibre
+// rewrites the publication when it embeds edited metadata, so the digest
+// a device reports next is not the one the reader's work was resolved
+// from — and a work that cannot be reached from the new digest is a
+// second work for the same book.
+func testReconcileCalibreDigestChangeFollowsReader(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "calibre-rekey", store.FolderCalibre)
+	now := time.Date(2026, time.February, 5, 0, 0, 0, 0, time.UTC)
+	user := MkUser(t, s, "calibre-rekey-reader")
+
+	id := int64(31)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "Old (31)/book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-before", Title: "Old Title",
+		Contributors: []store.ObservedContributor{{Name: "A Writer", Role: store.ContributorRoleAuthor}},
+	}}, true, now)
+	bookID := knownByCalibreID(t, s, folder.ID)[id].ID
+
+	work := store.Work{ID: "rekey-work", UserID: user.ID, Title: "Old Title", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, bookID, work,
+		[]store.Edition{{UserID: user.ID, SHA256: "sha-before", WorkID: work.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-before"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+
+	result := doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "New (31)/book.epub", SizeBytes: 2, MTime: now.Add(time.Minute),
+		ContentSHA256: "sha-after", Title: "New Title",
+		Contributors: []store.ObservedContributor{{Name: "A Writer", Role: store.ContributorRoleAuthor}},
+	}}, true, now.Add(time.Hour))
+	if result.Rekeyed != 1 {
+		t.Fatalf("the reader's work did not follow the rewritten file: %+v", result)
+	}
+
+	got, err := s.WorkIDByAlias(ctx, user.ID, "sha256", "sha-after")
+	if err != nil || got != work.ID {
+		t.Fatalf("new digest does not reach the reader's work: %q %v", got, err)
+	}
+	// The old digest still works, so a device that has not re-synced is
+	// not stranded.
+	got, err = s.WorkIDByAlias(ctx, user.ID, "sha256", "sha-before")
+	if err != nil || got != work.ID {
+		t.Fatalf("old digest stopped reaching the work: %q %v", got, err)
+	}
+	got, err = s.WorkIDByAlias(ctx, user.ID, "ta", "new title|a writer")
+	if err != nil || got != work.ID {
+		t.Fatalf("new title/author fingerprint does not reach the work: %q %v", got, err)
+	}
+	// An edition for the new digest is what an op can hang itself on.
+	if _, err := s.AppendOps(ctx, user.ID, "d-rekey", []store.Op{{
+		OpID: "018e6f1a-0000-7000-8000-0000000000bb", WorkID: work.ID,
+		EditionSHA: Ptr("sha-after"), ClientTS: now, Progression: 0.5,
+		Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatalf("no edition for the rewritten file: %v", err)
+	}
+}
+
+// testReconcileDigestCollisionChangesNothing is the limit of the rule
+// above. When the new digest already names another work, the two works
+// meeting is a merge — a decision with reading history on both sides —
+// and a scan does not make it on the reader's behalf.
+func testReconcileDigestCollisionChangesNothing(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "calibre-collide", store.FolderCalibre)
+	now := time.Date(2026, time.February, 6, 0, 0, 0, 0, time.UTC)
+	user := MkUser(t, s, "calibre-collide-reader")
+
+	id := int64(41)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "Old (41)/book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "collide-before", Title: "Old Title",
+	}}, true, now)
+	bookID := knownByCalibreID(t, s, folder.ID)[id].ID
+
+	work := store.Work{ID: "collide-work", UserID: user.ID, Title: "Old Title", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, bookID, work,
+		[]store.Edition{{UserID: user.ID, SHA256: "collide-before", WorkID: work.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "collide-before"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+	// Somebody else's work already holds the digest the file is about to
+	// have.
+	other := MkWork(t, s, user, "collide-other-work", "collide-after")
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "New (41)/book.epub", SizeBytes: 2, MTime: now.Add(time.Minute),
+		ContentSHA256: "collide-after", Title: "New Title",
+	}}, true, now.Add(time.Hour))
+
+	got, err := s.WorkIDByAlias(ctx, user.ID, "sha256", "collide-after")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != other.ID {
+		t.Fatalf("a scan moved a digest off the work that already held it: %q", got)
+	}
+	mapping, err := s.UserBookWork(ctx, user.ID, bookID)
+	if err != nil || mapping.WorkID != work.ID {
+		t.Fatalf("the book's own mapping moved: %+v %v", mapping, err)
+	}
+}

@@ -82,11 +82,36 @@ func (r *Reconciler) reconcileCalibre(
 		if len(formats) == 0 {
 			// A book Calibre holds in some other format is a book this
 			// server cannot serve. Skipping it is not incompleteness:
-			// the pass saw it and knows exactly what it is.
+			// the pass saw it and knows exactly what it is. It is still
+			// reported, because metadata.db listing it is what tells the
+			// store this is an unservable book rather than a deleted one
+			// — a distinction that decides whether the row and everyone's
+			// reading of it are kept (ADR-0022).
+			calibreID := book.ID
+			observed = append(observed, store.ObservedBook{
+				CalibreID:  &calibreID,
+				Unservable: true,
+			})
 			continue
 		}
 		obs, err := r.readCalibreBookFormats(ctx, root, book, formats)
 		if err != nil {
+			// A file that is simply not there is a complete observation,
+			// not a failure to look: metadata.db lists the book, the
+			// disk does not hold it, and both facts are known. It is
+			// reported as unservable so the row and everyone's reading
+			// of it survive, and so one such book does not declare the
+			// whole pass blind and stop it concluding anything.
+			if errors.Is(err, fs.ErrNotExist) {
+				r.log.Info("calibre book has no file on disk",
+					"folder", folder.ID, "calibre_id", book.ID)
+				calibreID := book.ID
+				observed = append(observed, store.ObservedBook{
+					CalibreID:  &calibreID,
+					Unservable: true,
+				})
+				continue
+			}
 			r.log.Warn("skipping unreadable calibre book",
 				"folder", folder.ID, "calibre_id", book.ID, "error", err)
 			complete = false

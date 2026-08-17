@@ -178,6 +178,24 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ReconcileCalibrePathSwap", func(t *testing.T) {
 		testReconcileCalibrePathSwap(t, open)
 	})
+	t.Run("ReconcileCalibrePurgesDeletedBooks", func(t *testing.T) {
+		testReconcileCalibrePurgesDeletedBooks(t, open)
+	})
+	t.Run("ReconcileCalibreUnservableBookIsKept", func(t *testing.T) {
+		testReconcileCalibreUnservableBookIsKept(t, open)
+	})
+	t.Run("ReconcileCalibreIncompletePassPurgesNothing", func(t *testing.T) {
+		testReconcileCalibreIncompletePassPurgesNothing(t, open)
+	})
+	t.Run("ReconcilePlainFolderNeverPurges", func(t *testing.T) {
+		testReconcilePlainFolderNeverPurges(t, open)
+	})
+	t.Run("ReconcileCalibreDigestChangeFollowsReader", func(t *testing.T) {
+		testReconcileCalibreDigestChangeFollowsReader(t, open)
+	})
+	t.Run("ReconcileDigestCollisionChangesNothing", func(t *testing.T) {
+		testReconcileDigestCollisionChangesNothing(t, open)
+	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })

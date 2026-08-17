@@ -91,8 +91,10 @@ func TestThePreferredFormatWinsWhenBothAreOnDisk(t *testing.T) {
 
 // TestABookWithNoFileAtAllIsStillUnreadable. Falling through the
 // formats must not become a way of reporting success: a book whose
-// files are all gone is what makes a pass incomplete, and an incomplete
-// pass is what stops the store marking everything missing.
+// files are all gone has to come back as an error, so that the caller
+// gets to decide what it means. The Calibre pass turns that error into
+// an unservable observation (ADR-0022), which keeps the row without
+// blinding the pass; a plain pass still reads it as incomplete.
 func TestABookWithNoFileAtAllIsStillUnreadable(t *testing.T) {
 	root := t.TempDir()
 	opened, err := os.OpenRoot(root)

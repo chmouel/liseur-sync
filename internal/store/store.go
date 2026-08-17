@@ -749,6 +749,19 @@ type ObservedBook struct {
 	// skipped its unchanged files entirely would mark the whole folder
 	// gone on its second run.
 	Unchanged bool
+
+	// Unservable says the folder's own catalog still holds this book but
+	// this server has no file it can serve for it — a Calibre book whose
+	// only remaining format is one this server does not read.
+	//
+	// It exists to keep that case apart from deletion. A Calibre folder
+	// purges what its metadata.db no longer lists (ADR-0022), and a book
+	// converted to another format is still listed: it is marked missing,
+	// its row and every reader's mapping to it are kept, and the file
+	// coming back restores it. Only the identity key is read from such an
+	// observation; the metadata fields are empty and nothing is written
+	// from them.
+	Unservable bool
 }
 
 // ObservedSeries is a series a scan attributed to a book, by display
@@ -776,12 +789,24 @@ type ReconcileResult struct {
 	Replaced int
 	Missing  int
 	Returned int
+	// Purged counts books deleted because the folder's own catalog no
+	// longer lists them (ADR-0022). It is only ever non-zero for a
+	// Calibre folder: elsewhere absence is evidence about a disk, and a
+	// book that vanished is marked missing and kept.
+	Purged int
+	// Rekeyed counts readers whose work graph followed a book whose bytes
+	// changed. A Calibre metadata edit rewrites the publication, so the
+	// digest a reader's device will report next is not the one their work
+	// was resolved from; registering the new one keeps the position with
+	// the book instead of minting a second work for it.
+	Rekeyed int
 }
 
 // Changed reports whether the pass wrote anything, so a caller can log a
 // no-op quietly.
 func (r ReconcileResult) Changed() bool {
-	return r.Added+r.Updated+r.Replaced+r.Missing+r.Returned > 0
+	return r.Added+r.Updated+r.Replaced+r.Missing+
+		r.Returned+r.Purged+r.Rekeyed > 0
 }
 
 // KnownBook is what ReconcileFolder's caller already has on record for
@@ -1147,6 +1172,13 @@ type Store interface {
 	// An observation whose Replaces is set deletes the existing row and
 	// its cascade before inserting, so identity is never transferred to
 	// bytes that merely arrived at the same path.
+	//
+	// In a Calibre folder the two guards above gate a deletion rather
+	// than a flag (ADR-0022): metadata.db is a catalog somebody curates,
+	// so a book a complete pass no longer finds there was removed, and
+	// the row goes with the reader mappings that hung off it. A book
+	// metadata.db still lists but no longer offers a servable file is
+	// observed as Unservable and is marked missing, not purged.
 	ReconcileFolder(ctx context.Context, folderID string, observed []ObservedBook, complete bool, at time.Time) (ReconcileResult, error)
 
 	// -----------------------------------------------------------------

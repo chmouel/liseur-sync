@@ -86,6 +86,9 @@ func (s *Store) ReconcileFolder(
 		}
 
 		seen := map[string]bool{}
+		// A parked path is only put back by a write, so the pass has to
+		// remember which books it wrote rather than which it saw.
+		wrote := map[string]bool{}
 		for _, obs := range observed {
 			key, err := observationKey(obs, byCalibreID)
 			if err != nil {
@@ -93,13 +96,32 @@ func (s *Store) ReconcileFolder(
 			}
 			prior, had := existing[key]
 
+			// A book the folder's catalog still lists but has no
+			// servable file for is seen, not gone: it is marked missing
+			// and kept, and being in `seen` is what keeps the purge off
+			// it. Nothing else is written, because such an observation
+			// carries an identity and nothing more.
+			if obs.Unservable {
+				if had {
+					lost, err := markBookMissingTx(ctx, tx, folderID, prior.id, at)
+					if err != nil {
+						return err
+					}
+					if lost {
+						result.Missing++
+					}
+				}
+				seen[key] = true
+				continue
+			}
+
 			// Rule 4: content change is not identity transfer. The old
 			// row goes, taking its identifiers, relations and the
 			// user_book_works mapping of everyone who was reading it,
 			// because whatever was copied over that path is not the
 			// book they were reading.
 			if had && obs.Replaces {
-				if err := deleteBookTx(ctx, tx, folderID, prior); err != nil {
+				if err := deleteBookTx(ctx, tx, folderID, prior.id); err != nil {
 					return err
 				}
 				had = false
@@ -114,8 +136,7 @@ func (s *Store) ReconcileFolder(
 				// the stat and the status are refreshed; overwriting the
 				// title with the nothing in hand would empty the catalog
 				// on the second pass.
-				bookID = prior
-				returned, err := touchBookTx(ctx, tx, folderID, prior, obs, at)
+				returned, err := touchBookTx(ctx, tx, folderID, prior.id, obs, at)
 				if err != nil {
 					return err
 				}
@@ -123,16 +144,27 @@ func (s *Store) ReconcileFolder(
 					result.Returned++
 				}
 				seen[key] = true
+				wrote[key] = true
 				continue
 			case had:
-				bookID = prior
-				returned, err := updateBookTx(ctx, tx, folderID, prior, obs, at)
+				bookID = prior.id
+				returned, err := updateBookTx(ctx, tx, folderID, prior.id, obs, at)
 				if err != nil {
 					return err
 				}
 				if returned {
 					result.Returned++
 				}
+				// The same book with different bytes: a Calibre metadata
+				// edit rewrites the publication in place. Whoever was
+				// reading it keeps their work, and the work learns the
+				// digest their device will report next.
+				rekeyed, err := registerReaderDigestTx(
+					ctx, tx, prior.id, prior.sha256, obs)
+				if err != nil {
+					return err
+				}
+				result.Rekeyed += rekeyed
 				result.Updated++
 			default:
 				bookID = store.NewID()
@@ -151,6 +183,18 @@ func (s *Store) ReconcileFolder(
 				return err
 			}
 			seen[key] = true
+			wrote[key] = true
+		}
+
+		// Whatever the pass did not write is still parked under the
+		// placeholder path, which is a path no open can ever resolve.
+		// Putting the old one back is what keeps a book this pass could
+		// not read — unservable, or behind a permission error — openable
+		// again the moment it can.
+		if byCalibreID && len(observed) > 0 {
+			if err := restoreParkedPathsTx(ctx, tx, folderID, existing, wrote); err != nil {
+				return err
+			}
 		}
 
 		// Rules 1 and 2. A pass that hit a read error, a parse failure
@@ -162,11 +206,25 @@ func (s *Store) ReconcileFolder(
 		if !complete || len(observed) == 0 {
 			return collectOrphanEntitiesTx(ctx, tx)
 		}
+		// A Calibre folder's metadata.db is a catalog somebody curates,
+		// so a book a complete pass no longer finds in it was removed
+		// rather than misplaced, and keeping the row forever leaves the
+		// reader a tile for a book this server will never serve again
+		// (ADR-0022). Everywhere else absence is only ever evidence
+		// about a disk, and the row is kept.
+		if byCalibreID {
+			purged, err := purgeUnseenTx(ctx, tx, folderID, seen)
+			if err != nil {
+				return err
+			}
+			result.Purged = purged
+			return collectOrphanEntitiesTx(ctx, tx)
+		}
 		missing, err := markMissingTx(ctx, tx, folderID, seen, byCalibreID, at)
 		if err != nil {
 			return err
 		}
-		result.Missing = missing
+		result.Missing += missing
 		return collectOrphanEntitiesTx(ctx, tx)
 	})
 	return result, err
@@ -218,29 +276,42 @@ func observationKey(obs store.ObservedBook, byCalibreID bool) (string, error) {
 	return "p:" + obs.RelativePath, nil
 }
 
+// priorBook is what the catalog already holds for one identity key: the
+// row's id, and the digest it was last written with. The digest is
+// carried because a book whose bytes changed while keeping its identity
+// — the shape of every Calibre metadata edit — is the one case where a
+// reader's work graph has to be told something.
+type priorBook struct {
+	id     string
+	path   string
+	sha256 string
+}
+
 func existingBooksTx(
 	ctx context.Context, tx *sql.Tx, folderID string, byCalibreID bool,
-) (map[string]string, error) {
+) (map[string]priorBook, error) {
 	rows, err := tx.QueryContext(ctx, q(
-		`SELECT id, relative_path, calibre_id FROM books WHERE folder_id = ?`), folderID)
+		`SELECT id, relative_path, calibre_id, content_sha256
+		 FROM books WHERE folder_id = ?`), folderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	out := map[string]priorBook{}
 	for rows.Next() {
 		var (
-			id, path  string
-			calibreID sql.NullInt64
+			id, path, sha string
+			calibreID     sql.NullInt64
 		)
-		if err := rows.Scan(&id, &path, &calibreID); err != nil {
+		if err := rows.Scan(&id, &path, &calibreID, &sha); err != nil {
 			return nil, err
 		}
+		prior := priorBook{id: id, path: path, sha256: sha}
 		switch {
 		case byCalibreID && calibreID.Valid:
-			out[fmt.Sprintf("c:%d", calibreID.Int64)] = id
+			out[fmt.Sprintf("c:%d", calibreID.Int64)] = prior
 		case !byCalibreID:
-			out["p:"+path] = id
+			out["p:"+path] = prior
 		}
 	}
 	return out, rows.Err()
@@ -314,24 +385,254 @@ func markMissingTx(
 		return 0, err
 	}
 	count := 0
-	for key, bookID := range existing {
+	for key, prior := range existing {
 		if seen[key] {
 			continue
 		}
-		res, err := tx.ExecContext(ctx, q(
-			`UPDATE books SET status = 'missing', absent_at = ?, updated_at = ?
-			 WHERE id = ? AND folder_id = ? AND status = 'active'`),
-			at.UTC(), at.UTC(), bookID, folderID)
+		lost, err := markBookMissingTx(ctx, tx, folderID, prior.id, at)
 		if err != nil {
 			return 0, err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return 0, err
+		if lost {
+			count++
 		}
-		count += int(n)
 	}
 	return count, nil
+}
+
+// restoreParkedPathsTx puts back the paths of the books a Calibre pass
+// parked but never wrote.
+//
+// Every path in the folder is moved under an unreachable placeholder
+// before a pass writes its new ones, so that two books swapping
+// directories never make the unique index see both wanting the same
+// path. A book the pass then did not write — one Calibre still lists but
+// has no servable file for, one behind a read error — would be left
+// holding the placeholder, which is a path that resolves to nothing.
+//
+// A path another book has taken in the meantime is left parked rather
+// than forced: the row is unreachable either way, and the alternative is
+// a failed pass.
+func restoreParkedPathsTx(
+	ctx context.Context, tx *sql.Tx, folderID string,
+	existing map[string]priorBook, wrote map[string]bool,
+) error {
+	for key, prior := range existing {
+		if wrote[key] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, q(
+			`UPDATE books SET relative_path = ?
+			  WHERE id = ? AND folder_id = ?
+			    AND NOT EXISTS (
+			        SELECT 1 FROM books other
+			         WHERE other.folder_id = ? AND other.relative_path = ?
+			           AND other.id <> ?)`),
+			prior.path, prior.id, folderID, folderID, prior.path, prior.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// markBookMissingTx flags one book absent and reports whether that
+// changed anything, so a book already known to be gone is not counted
+// again on every pass.
+func markBookMissingTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string, at time.Time,
+) (bool, error) {
+	res, err := tx.ExecContext(ctx, q(
+		`UPDATE books SET status = 'missing', absent_at = ?, updated_at = ?
+		 WHERE id = ? AND folder_id = ? AND status = 'active'`),
+		at.UTC(), at.UTC(), bookID, folderID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// purgeUnseenTx deletes the books a complete Calibre pass did not find
+// in metadata.db, and then the reader works those deletions emptied.
+//
+// The work sweep is deliberately narrow. Only works this transaction
+// just unmapped are considered, and only those that hold no reading
+// history at all: a work with one op, one session or one rollup is
+// somebody's reading, and it survives its file as a work with no book
+// here. A pending kosync work that has simply not synced yet is never a
+// candidate, because nothing here ever unmapped it.
+func purgeUnseenTx(
+	ctx context.Context, tx *sql.Tx, folderID string, seen map[string]bool,
+) (int, error) {
+	existing, err := existingBooksTx(ctx, tx, folderID, true)
+	if err != nil {
+		return 0, err
+	}
+	type userWork struct{ userID, workID string }
+	var emptied []userWork
+	count := 0
+	for key, prior := range existing {
+		if seen[key] {
+			continue
+		}
+		rows, err := tx.QueryContext(ctx, q(
+			`SELECT user_id, work_id FROM user_book_works WHERE book_id = ?`), prior.id)
+		if err != nil {
+			return 0, err
+		}
+		for rows.Next() {
+			var uw userWork
+			if err := rows.Scan(&uw.userID, &uw.workID); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			emptied = append(emptied, uw)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		if err := deleteBookTx(ctx, tx, folderID, prior.id); err != nil {
+			return 0, err
+		}
+		count++
+	}
+	for _, uw := range emptied {
+		if _, err := tx.ExecContext(ctx, q(
+			`DELETE FROM works
+			  WHERE user_id = ? AND id = ?
+			    AND NOT EXISTS (SELECT 1 FROM user_book_works m
+			                     WHERE m.user_id = works.user_id AND m.work_id = works.id)
+			    AND NOT EXISTS (SELECT 1 FROM ops o
+			                     WHERE o.user_id = works.user_id AND o.work_id = works.id)
+			    AND NOT EXISTS (SELECT 1 FROM sessions s
+			                     WHERE s.user_id = works.user_id AND s.work_id = works.id)
+			    AND NOT EXISTS (SELECT 1 FROM session_rollups r
+			                     WHERE r.user_id = works.user_id AND r.work_id = works.id)`),
+			uw.userID, uw.workID); err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
+// registerReaderDigestTx teaches every reader of a book the digest its
+// bytes now have.
+//
+// Calibre rewrites a publication whenever it embeds edited metadata, so
+// the file a device will hash next is not the file the reader's work was
+// resolved from. Without this the next sync matches nothing and mints a
+// second work, which is a duplicate tile beside the book it belongs to.
+//
+// Registration is additive, never a rewrite: the old digest keeps
+// naming the same work, so a device still holding the old file is
+// unaffected and no op or session has to be re-pointed at a new edition.
+// The new title/author fingerprint is registered the same way, because a
+// title edit moves that alias too.
+//
+// A value another work already claims is left exactly as it is. Two
+// works meeting over one digest is a merge, and a merge is a decision
+// with reading history on both sides — not something a scan does behind
+// the reader's back.
+func registerReaderDigestTx(
+	ctx context.Context, tx *sql.Tx, bookID, priorSHA string, obs store.ObservedBook,
+) (int, error) {
+	if obs.ContentSHA256 == "" || obs.ContentSHA256 == priorSHA {
+		return 0, nil
+	}
+	rows, err := tx.QueryContext(ctx, q(
+		`SELECT user_id, work_id FROM user_book_works WHERE book_id = ?`), bookID)
+	if err != nil {
+		return 0, err
+	}
+	type userWork struct{ userID, workID string }
+	var readers []userWork
+	for rows.Next() {
+		var uw userWork
+		if err := rows.Scan(&uw.userID, &uw.workID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		readers = append(readers, uw)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	fingerprint := metadata.TitleAuthorFingerprint(obs.Title, primaryAuthorOf(obs))
+	count := 0
+	for _, uw := range readers {
+		moved := false
+		added, err := addAliasIfFreeTx(ctx, tx, uw.userID, "sha256", obs.ContentSHA256, uw.workID)
+		if err != nil {
+			return 0, err
+		}
+		moved = moved || added
+		if fingerprint != "" {
+			added, err := addAliasIfFreeTx(ctx, tx, uw.userID, "ta", fingerprint, uw.workID)
+			if err != nil {
+				return 0, err
+			}
+			moved = moved || added
+		}
+		// The edition row is what an op or a session hangs its digest
+		// on, so a device reporting the new bytes needs one to point at.
+		var owner string
+		err = tx.QueryRowContext(ctx, q(
+			`SELECT work_id FROM editions WHERE user_id = ? AND sha256 = ?`),
+			uw.userID, obs.ContentSHA256).Scan(&owner)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := tx.ExecContext(ctx, q(
+				`INSERT INTO editions (user_id, sha256, work_id) VALUES (?, ?, ?)`),
+				uw.userID, obs.ContentSHA256, uw.workID); err != nil {
+				return 0, err
+			}
+			moved = true
+		case err != nil:
+			return 0, err
+		}
+		if moved {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// addAliasIfFreeTx registers one alias, and says so, unless somebody
+// already holds that name.
+func addAliasIfFreeTx(
+	ctx context.Context, tx *sql.Tx, userID, kind, value, workID string,
+) (bool, error) {
+	var owner string
+	err := tx.QueryRowContext(ctx, q(
+		`SELECT work_id FROM aliases WHERE user_id = ? AND kind = ? AND value = ?`),
+		userID, kind, value).Scan(&owner)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, q(
+		`INSERT INTO aliases (user_id, kind, value, work_id) VALUES (?, ?, ?, ?)`),
+		userID, kind, value, workID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// primaryAuthorOf is the name a fingerprint is built from: the first
+// author the observation lists, which is the same one the catalog
+// credits a book to.
+func primaryAuthorOf(obs store.ObservedBook) string {
+	for _, c := range obs.Contributors {
+		if c.Role == "" || c.Role == store.ContributorRoleAuthor {
+			return c.Name
+		}
+	}
+	return ""
 }
 
 // replaceRelationsTx rewrites a book's metadata sets wholesale. With no
