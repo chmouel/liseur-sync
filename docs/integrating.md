@@ -462,11 +462,21 @@ does. An empty array is meaningful: it claims "this book is in no
 series". That is different from `null`, and it is how a client knows
 whether a reset button has anything to clear.
 
+Every catalog book also has `series_source`, the layer that supplied its
+effective series list. It is present even when `series` is `[]`, so an
+explicit empty personal or shared claim cannot look like the folder
+layer. `series_claim_updated_at` is present only when that winning layer
+is a claim; clients use it to order claim adoption without comparing
+their clocks to the server's. The layer endpoint similarly returns
+`shared_updated_at` and `personal_updated_at` for the most recent layer
+mutation, including a deletion represented by `null`.
+
 Set a claim by replacing the whole layer:
 
 ```json
 PUT /v1/books/{id}/series
 {
+  "client_ts": "2026-08-17T12:00:00Z",
   "series": [
     {"name": "Foundation", "position": 2}
   ]
@@ -478,6 +488,17 @@ must already exist. A new `name` creates or reuses a series by the same
 normalized-name folding the scanner uses. `position` is optional, but
 if sent it must be a finite number.
 
+`client_ts` is optional, but sync clients should generate it
+deterministically for a local edit and reuse it on every retry. It is an
+idempotency key, not a revision: a reused key with a different claim is
+`409`, while the identical retry returns `"outcome": "duplicate"`.
+`updated_at` is assigned by the server when it accepts a mutation and is
+the revision returned to clients. Send that value as `if_updated_at` on a
+later mutation; a different current revision returns `"outcome":
+"stale"` without changing the claim. Omit it only when no claim revision
+was observed. A successful write returns `"outcome": "applied"` plus
+the current layers.
+
 Leaving `series` out, or sending `"series": []`, is a claim that the
 book is in no series. It is not a reset. To drop the claim and fall
 back to the layer beneath, delete it:
@@ -485,6 +506,11 @@ back to the layer beneath, delete it:
 ```json
 DELETE /v1/books/{id}/series
 ```
+
+Pass the idempotency key as `?client_ts=2026-08-17T12:00:01Z` and the
+last observed server revision as `if_updated_at`. Reuse the key exactly
+when retrying. The server retains delete tombstones, so an old PUT cannot
+revive a deleted claim without matching the tombstone revision.
 
 Add `?scope=shared`, or send `"scope": "shared"` on `PUT`, only for the
 shared layer. A non-admin token gets `403` even if it has

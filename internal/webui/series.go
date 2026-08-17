@@ -716,8 +716,9 @@ func (s *Server) handleSeriesAssign(
 		items = append(items, item)
 	}
 
-	if err := s.St.SetBookSeriesOverride(
-		r.Context(), readerID(u), bookID, scope, items, time.Now().UTC(),
+	if _, err := s.St.SetBookSeriesOverride(
+		r.Context(), readerID(u), bookID, scope, items,
+		store.SeriesClaimMutation{At: time.Now().UTC()},
 	); err != nil {
 		s.assignProblem(w, r, u, a, bookID, "That could not be saved.")
 		return
@@ -744,8 +745,9 @@ func (s *Server) handleSeriesReset(
 		}
 		scope = store.SeriesSourceShared
 	}
-	if err := s.St.ClearBookSeriesOverride(
+	if _, err := s.St.ClearBookSeriesOverride(
 		r.Context(), readerID(u), bookID, scope,
+		store.SeriesClaimMutation{At: time.Now().UTC()},
 	); err != nil {
 		s.assignProblem(w, r, u, a, bookID, "That could not be undone.")
 		return

@@ -352,6 +352,9 @@ CREATE TABLE book_series_overrides (
     scope_user TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     updated_by TEXT NOT NULL,
+    deleted_at  TIMESTAMPTZ,
+    client_ts   TEXT,
+    request_hash TEXT,
     PRIMARY KEY (book_id, scope_user),
     FOREIGN KEY (folder_id, book_id)
         REFERENCES books(folder_id, id) ON DELETE CASCADE

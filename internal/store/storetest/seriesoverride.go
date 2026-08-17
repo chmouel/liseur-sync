@@ -94,10 +94,11 @@ func testSeriesClaimLayers(t *testing.T, open OpenFunc) {
 	}
 
 	// The shared layer corrects the library once, for everybody.
-	if err := s.SetBookSeriesOverride(ctx, admin.ID, bookID,
+	if _, err := s.SetBookSeriesOverride(ctx, admin.ID, bookID,
 		store.SeriesSourceShared,
 		[]store.SeriesClaimItem{{Name: "Corrected", Position: Ptr(1.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 	for _, who := range []store.User{admin, reader, stranger} {
@@ -108,10 +109,11 @@ func testSeriesClaimLayers(t *testing.T, open OpenFunc) {
 	}
 
 	// One reader disagrees, and only that reader sees the disagreement.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{Name: "Mine", Position: Ptr(2.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := seriesNamesFor(t, s, reader.ID, bookID); fmt.Sprint(got) !=
@@ -124,16 +126,20 @@ func testSeriesClaimLayers(t *testing.T, open OpenFunc) {
 	}
 
 	// Clearing falls back to the layer beneath rather than to the disk.
-	if err := s.ClearBookSeriesOverride(
-		ctx, reader.ID, bookID, store.SeriesSourcePersonal); err != nil {
+	if _, err := s.ClearBookSeriesOverride(
+		ctx, reader.ID, bookID, store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{At: now.Add(time.Second)},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := seriesNamesFor(t, s, reader.ID, bookID); fmt.Sprint(got) !=
 		"[Corrected@1/shared]" {
 		t.Fatalf("after clearing the personal claim: %v", got)
 	}
-	if err := s.ClearBookSeriesOverride(
-		ctx, admin.ID, bookID, store.SeriesSourceShared); err != nil {
+	if _, err := s.ClearBookSeriesOverride(
+		ctx, admin.ID, bookID, store.SeriesSourceShared,
+		store.SeriesClaimMutation{At: now.Add(2 * time.Second)},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if got := seriesNamesFor(t, s, reader.ID, bookID); fmt.Sprint(got) !=
@@ -141,8 +147,10 @@ func testSeriesClaimLayers(t *testing.T, open OpenFunc) {
 		t.Fatalf("after clearing the shared claim: %v", got)
 	}
 	// Clearing an absent claim asked for an absence and got one.
-	if err := s.ClearBookSeriesOverride(
-		ctx, reader.ID, bookID, store.SeriesSourcePersonal); err != nil {
+	if _, err := s.ClearBookSeriesOverride(
+		ctx, reader.ID, bookID, store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{At: now.Add(3 * time.Second)},
+	); err != nil {
 		t.Fatalf("clearing nothing: %v", err)
 	}
 }
@@ -163,8 +171,8 @@ func testSeriesClaimEmptyMeansNoSeries(t *testing.T, open OpenFunc) {
 	}, true, now)
 	bookID := bookIDByPath(t, s, folder.ID, "stray.epub")
 
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
-		store.SeriesSourcePersonal, nil, now); err != nil {
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal, nil, store.SeriesClaimMutation{At: now}); err != nil {
 		t.Fatal(err)
 	}
 	if got := seriesNamesFor(t, s, reader.ID, bookID); len(got) != 0 {
@@ -206,6 +214,69 @@ func testSeriesClaimEmptyMeansNoSeries(t *testing.T, open OpenFunc) {
 	}
 }
 
+func testSeriesClaimRevisionPrecondition(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	reader := MkUser(t, s, "timestamp-reader")
+	folder := MkFolder(t, s, "series-timestamps", store.FolderPlain)
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-timestamp", Title: "Book",
+	}}, true, now)
+	bookID := bookIDByPath(t, s, folder.ID, "book.epub")
+	if got, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal, []store.SeriesClaimItem{{Name: "First"}},
+		store.SeriesClaimMutation{ClientTS: "first", IfUpdatedAt: nil, At: now},
+	); err != nil || got != store.SeriesClaimApplied {
+		t.Fatalf("first claim: %q, %v", got, err)
+	}
+	layers, err := s.BookSeriesLayers(ctx, reader.ID, bookID)
+	if err != nil || layers.PersonalUpdatedAt == nil {
+		t.Fatalf("claim revision: %+v %v", layers, err)
+	}
+	revision := layers.PersonalUpdatedAt
+	staleRevision := time.Unix(0, 0).UTC()
+	if got, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal, []store.SeriesClaimItem{{Name: "First"}},
+		store.SeriesClaimMutation{ClientTS: "first", IfUpdatedAt: nil, At: now.Add(time.Second)},
+	); err != nil || got != store.SeriesClaimDuplicate {
+		t.Fatalf("duplicate claim: %q, %v", got, err)
+	}
+	if got, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal, []store.SeriesClaimItem{{Name: "Stale"}},
+		store.SeriesClaimMutation{
+			ClientTS:    "stale",
+			IfUpdatedAt: &staleRevision,
+			At:          now.Add(time.Second),
+		},
+	); err != nil || got != store.SeriesClaimStale {
+		t.Fatalf("stale claim: %q, %v", got, err)
+	}
+	if got, err := s.ClearBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{
+			ClientTS:    "delete",
+			IfUpdatedAt: &staleRevision,
+			At:          now.Add(time.Second),
+		},
+	); err != nil || got != store.SeriesClaimStale {
+		t.Fatalf("stale delete: %q, %v", got, err)
+	}
+	if got, err := s.ClearBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{ClientTS: "delete", IfUpdatedAt: revision, At: now.Add(time.Second)},
+	); err != nil || got != store.SeriesClaimApplied {
+		t.Fatalf("delete: %q, %v", got, err)
+	}
+	if got, err := s.ClearBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{ClientTS: "delete", IfUpdatedAt: nil, At: now.Add(2 * time.Second)},
+	); err != nil || got != store.SeriesClaimDuplicate {
+		t.Fatalf("duplicate delete: %q, %v", got, err)
+	}
+}
+
 // testSeriesClaimSurvivesReconcile is the rule that makes the layer
 // worth having: a pass rewrites what it observed and leaves every claim
 // alone, including a claim on a series no pass has ever seen.
@@ -224,10 +295,11 @@ func testSeriesClaimSurvivesReconcile(t *testing.T, open OpenFunc) {
 	bookID := bookIDByPath(t, s, folder.ID, "book.epub")
 
 	// A name nothing has scanned mints the series.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{Name: "Invented", Position: Ptr(1.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 	invented := seriesIDByName(t, s, "Invented")
@@ -272,10 +344,11 @@ func testSeriesClaimFollowsIdentity(t *testing.T, open OpenFunc) {
 			SizeBytes: 1, MTime: now, ContentSHA256: "sha-cal", Title: "Title"},
 	}, true, now)
 	calibreBook := bookIDByPath(t, s, calibre.ID, "Author/Title (7)/book.epub")
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, calibreBook,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, calibreBook,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{Name: "Kept", Position: Ptr(1.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 	// The curator renames the book, so Calibre rewrites its directory.
@@ -294,10 +367,11 @@ func testSeriesClaimFollowsIdentity(t *testing.T, open OpenFunc) {
 			ContentSHA256: "sha-before", Title: "Before"},
 	}, true, now)
 	plainBook := bookIDByPath(t, s, plain.ID, "book.epub")
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, plainBook,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, plainBook,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{Name: "Lost", Position: Ptr(1.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 	// Different bytes at the same path are a different book.
@@ -454,29 +528,33 @@ func testSeriesClaimRefusals(t *testing.T, open OpenFunc) {
 	elsewhere := seriesIDByName(t, s, "Elsewhere")
 
 	// The folder layer is what the disk said; nobody claims it.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
-		store.SeriesSourceFolder, nil, now); !errors.Is(err, store.ErrInvalidInput) {
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourceFolder, nil,
+		store.SeriesClaimMutation{At: now},
+	); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("claiming the folder layer: want ErrInvalidInput, got %v", err)
 	}
 	// A series first observed in another folder is still this book's to
 	// join: a series is a library-wide row (ADR-0019), and shelving a
 	// stray volume beside the rest of its series is the whole point.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
 		store.SeriesSourcePersonal,
-		[]store.SeriesClaimItem{{SeriesID: elsewhere}},
-		now); err != nil {
+		[]store.SeriesClaimItem{{SeriesID: elsewhere}}, store.SeriesClaimMutation{At: now}); err != nil {
 		t.Fatalf("joining a series held in another folder: %v", err)
 	}
 	// An item that names nothing names nothing.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{Name: "   "}},
-		now); !errors.Is(err, store.ErrInvalidInput) {
+		store.SeriesClaimMutation{At: now},
+	); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("a nameless claim: want ErrInvalidInput, got %v", err)
 	}
 	// A book that is not there cannot be claimed about.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, "no-such-book",
-		store.SeriesSourcePersonal, nil, now); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, "no-such-book",
+		store.SeriesSourcePersonal, nil,
+		store.SeriesClaimMutation{At: now},
+	); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("claiming about a missing book: want ErrNotFound, got %v", err)
 	}
 	// Neither can a series that does not exist be reordered.

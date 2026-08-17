@@ -916,6 +916,7 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Malformed input, unwritable scope, invalid membership, unknown series id, non-finite position, or too many series" }
         "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "client_ts was reused for different claim state" }
     delete:
       tags: [library]
       summary: Clear one layer's series claim for a book
@@ -932,6 +933,16 @@ paths:
           required: false
           description: The claim layer to clear. Defaults to `personal`.
           schema: { $ref: "#/components/schemas/SeriesClaimScope" }
+        - name: client_ts
+          in: query
+          required: false
+          description: Client-generated stable idempotency key. Reuse it exactly when retrying the same deletion.
+          schema: { type: string, format: date-time }
+        - name: if_updated_at
+          in: query
+          required: false
+          description: Last server claim revision observed by the client. A different current revision returns `stale` without mutation.
+          schema: { type: string, format: date-time }
       responses:
         "200":
           description: The effective series and all layers after clearing
@@ -941,6 +952,7 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Unwritable scope" }
         "403": { $ref: "#/components/responses/Error", description: "The token lacks library-manage, or the shared layer requires admin" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "client_ts was reused for different claim state" }
 
   /v1/entities/{kind}:
     get:
@@ -1790,7 +1802,8 @@ components:
         returned by every other catalog read. `folder` is what the last
         reconcile pass observed. `shared` and `personal` are `null` when
         that layer has no claim, and an array — possibly empty — when it
-        does.
+        does. `shared_updated_at` and `personal_updated_at` are the last
+        layer revisions, including a deletion represented by a null layer.
       required: [book_id, source, series, folder, shared, personal]
       properties:
         book_id: { type: string, format: uuid }
@@ -1821,6 +1834,9 @@ components:
         `series` array is the whole claim, not a diff. Omitted or empty
         means "this book is in no series"; use `DELETE` to remove the
         claim and fall back.
+        shared_updated_at: { type: string, format: date-time }
+        personal_updated_at: { type: string, format: date-time }
+        outcome: { $ref: "#/components/schemas/SeriesClaimOutcome" }
       properties:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
         series:
@@ -1831,6 +1847,14 @@ components:
 
     BookSeriesClaimItem:
       type: object
+        client_ts:
+          type: string
+          format: date-time
+          description: Client-generated stable idempotency key. Reuse exactly on retry; reuse with different state returns 409.
+        if_updated_at:
+          type: [string, "null"]
+          format: date-time
+          description: Last server revision observed for this layer. A non-matching revision returns `stale` without mutation.
       description: |
         One series membership in a claim. Exactly one of `series_id` and
         `name` is accepted. A `series_id` must already exist. A `name`
@@ -1855,6 +1879,11 @@ components:
         the named series and preserves each book's other series
         memberships.
       required: [order]
+    SeriesClaimOutcome:
+      type: string
+      enum: [applied, stale, duplicate]
+      description: "`applied` changed the layer; `stale` was older than its revision; `duplicate` retried the current deletion."
+
       properties:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
         order:
