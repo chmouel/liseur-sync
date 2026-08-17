@@ -277,6 +277,50 @@ func testSeriesClaimRevisionPrecondition(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testSeriesClaimRevisionIsMillisecondPrecise pins the precision the
+// protocol promises. A client quotes a revision back as a precondition,
+// and a client that keeps it as milliseconds since the epoch cannot
+// quote a microsecond. A revision finer than that would make every
+// precondition miss, and a reader whose claim is waiting to be sent
+// would be told it was stale forever, on every retry, for good.
+func testSeriesClaimRevisionIsMillisecondPrecise(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	reader := MkUser(t, s, "precision-reader")
+	folder := MkFolder(t, s, "series-precision", store.FolderPlain)
+	now := time.Date(2026, time.August, 17, 12, 0, 0, 123456789, time.UTC)
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-precision", Title: "Book",
+	}}, true, now)
+	bookID := bookIDByPath(t, s, folder.ID, "book.epub")
+	if got, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal, []store.SeriesClaimItem{{Name: "First"}},
+		store.SeriesClaimMutation{ClientTS: "first", At: now},
+	); err != nil || got != store.SeriesClaimApplied {
+		t.Fatalf("first claim: %q, %v", got, err)
+	}
+	layers, err := s.BookSeriesLayers(ctx, reader.ID, bookID)
+	if err != nil || layers.PersonalUpdatedAt == nil {
+		t.Fatalf("claim revision: %+v %v", layers, err)
+	}
+	revision := layers.PersonalUpdatedAt.UTC()
+	if revision.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Fatalf("revision %s is finer than a millisecond", revision.Format(time.RFC3339Nano))
+	}
+	// What a client holds: the revision as whole milliseconds, taken
+	// apart and put back together the way a database column would.
+	quoted := time.UnixMilli(revision.UnixMilli()).UTC()
+	if got, err := s.ClearBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal,
+		store.SeriesClaimMutation{
+			ClientTS: "delete", IfUpdatedAt: &quoted, At: now.Add(time.Second),
+		},
+	); err != nil || got != store.SeriesClaimApplied {
+		t.Fatalf("delete against a millisecond revision: %q, %v", got, err)
+	}
+}
+
 // testSeriesClaimSurvivesReconcile is the rule that makes the layer
 // worth having: a pass rewrites what it observed and leaves every claim
 // alone, including a claim on a series no pass has ever seen.

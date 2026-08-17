@@ -89,7 +89,7 @@ func (s *Store) SetBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
 	items []store.SeriesClaimItem, mutation store.SeriesClaimMutation,
 ) (store.SeriesClaimOutcome, error) {
-	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, mutation.At.UTC()
+	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, store.ClaimRevision(mutation.At)
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
 		return "", err
@@ -147,7 +147,7 @@ func setSeriesClaimTx(
 			}
 			return "", store.ErrConflict
 		}
-		if ifUpdatedAt != nil && !current.Equal(ifUpdatedAt.UTC()) {
+		if ifUpdatedAt != nil && !store.SameClaimRevision(current, *ifUpdatedAt) {
 			return store.SeriesClaimStale, nil
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
@@ -227,7 +227,7 @@ func (s *Store) ClearBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
 	mutation store.SeriesClaimMutation,
 ) (store.SeriesClaimOutcome, error) {
-	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, mutation.At.UTC()
+	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, store.ClaimRevision(mutation.At)
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
 		return "", err
@@ -258,7 +258,7 @@ func (s *Store) ClearBookSeriesOverride(
 			}
 			return "", store.ErrConflict
 		}
-		if ifUpdatedAt != nil && !current.Equal(ifUpdatedAt.UTC()) {
+		if ifUpdatedAt != nil && !store.SameClaimRevision(current, *ifUpdatedAt) {
 			return store.SeriesClaimStale, nil
 		}
 	} else if errors.Is(err, sql.ErrNoRows) {
@@ -340,7 +340,8 @@ func (s *Store) ReorderSeries(
 			})
 		}
 		if _, err := setSeriesClaimTx(
-			ctx, tx, scopeUser, userID, placement.BookID, items, "", nil, at,
+			ctx, tx, scopeUser, userID, placement.BookID, items, "",
+			nil, store.ClaimRevision(at),
 		); err != nil {
 			return err
 		}

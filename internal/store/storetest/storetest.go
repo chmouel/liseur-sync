@@ -124,6 +124,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("SeriesClaimRevisionPrecondition", func(t *testing.T) {
 		testSeriesClaimRevisionPrecondition(t, open)
 	})
+	t.Run("SeriesClaimRevisionIsMillisecondPrecise", func(t *testing.T) {
+		testSeriesClaimRevisionIsMillisecondPrecise(t, open)
+	})
 	t.Run("SeriesClaimSurvivesReconcile", func(t *testing.T) {
 		testSeriesClaimSurvivesReconcile(t, open)
 	})

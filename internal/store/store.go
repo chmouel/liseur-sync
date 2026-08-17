@@ -504,6 +504,24 @@ type SeriesClaimMutation struct {
 	At time.Time
 }
 
+// ClaimRevision rounds a revision to the precision the protocol
+// promises. A revision is quoted back by a client as a precondition, and
+// a client that keeps it as milliseconds since the epoch — which an
+// Android reader storing it in a database column does — cannot quote a
+// microsecond back. Left finer, every precondition would miss and every
+// writer would be told it was stale forever.
+func ClaimRevision(at time.Time) time.Time {
+	return at.UTC().Truncate(time.Millisecond)
+}
+
+// SameClaimRevision says whether a quoted revision names the stored one.
+// It compares at the protocol's precision rather than exactly, so a row
+// written before revisions were rounded still answers to the
+// millisecond a client can hold.
+func SameClaimRevision(stored, quoted time.Time) bool {
+	return ClaimRevision(stored).Equal(ClaimRevision(quoted))
+}
+
 // SeriesClaimRequestHash identifies the stable state stated by one
 // idempotent claim request. A client_ts may only be reused for this same
 // state; the server rejects a reuse that would mean something different.
