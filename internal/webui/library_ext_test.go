@@ -139,6 +139,33 @@ func TestLibraryChipsMeanWhatTheySay(t *testing.T) {
 	}
 }
 
+// TestLibrarySortCanBeReversed pins two things at once: the default
+// "Recently added" sort is newest first, matching its label, and
+// dir=asc reverses it. It would have caught the bug where this page
+// paged the oldest-first store method while its chip claimed to show
+// what was recent.
+func TestLibrarySortCanBeReversed(t *testing.T) {
+	f := newBooksFixture(t)
+	first := f.addBook(t, "first", []byte(strings.Repeat("first-epub", 40)))
+	second := f.addBook(t, "second", []byte(strings.Repeat("second-epub", 40)))
+
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	body := grid(page)
+	if i, j := strings.Index(body, first), strings.Index(body, second); i < 0 || j < 0 || i < j {
+		t.Errorf("default sort is not newest-first: %q at %d, %q at %d\n%s", first, i, second, j, body)
+	}
+
+	_, asc := f.get(t, "/ui/library?folder="+f.folder+"&dir=asc", f.cookie)
+	body = grid(asc)
+	if i, j := strings.Index(body, first), strings.Index(body, second); i < 0 || j < 0 || i > j {
+		t.Errorf("dir=asc is not oldest-first: %q at %d, %q at %d\n%s", first, i, second, j, body)
+	}
+	// dir survives in the page's own links, the same way filter does.
+	if !strings.Contains(asc, `dir=asc`) {
+		t.Errorf("dir=asc is not kept in the page's own links:\n%s", asc)
+	}
+}
+
 // TestLibraryHeroResumesTheLastBook pins the shortcut at the top of the
 // page: the newest thing started and not finished, and nothing at all
 // when there is nothing to go back to.

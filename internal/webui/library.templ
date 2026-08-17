@@ -50,6 +50,9 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				if v.Sort != sortRecent {
 					<input type="hidden" name="sort" value={ v.Sort }/>
 				}
+				if v.Dir != sortDirDesc {
+					<input type="hidden" name="dir" value={ v.Dir }/>
+				}
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
 			if v.Selected != "" {
@@ -83,6 +86,10 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			<a class="chip sortchip" href={ prefix + v.SortURL }>
 				{ sortLabel(v.Sort) }
 				<span aria-hidden="true">⇅</span>
+			</a>
+			<a class="chip sortchip" href={ prefix + v.DirURL } title="Reverse the sort order">
+				{ dirLabel(v.Dir) }
+				<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
 			</a>
 		</div>
 		<section class="card">
