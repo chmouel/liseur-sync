@@ -64,13 +64,14 @@ deletion. This also stops a single vanished file declaring a whole pass
 blind, which under the old code meant no book in that library could ever
 be judged again.
 
-**A work the deletion emptied is collected; a work with reading behind
-it is not.** After a purge, works that lost their last book mapping in
-that transaction and hold no ops, no sessions and no rollups are
-deleted. Anything with a single op survives its file, as a work with no
-book on this server — which is what *synced elsewhere* is supposed to
-mean. The sweep only ever considers works this transaction unmapped, so
-a pending kosync work that has not synced yet is never a candidate.
+**Empty established works are collected; a work with reading behind it
+is not.** After a complete, non-empty Calibre pass, every non-pending work
+with no book mapping, ops, sessions or rollups is deleted. The sweep is
+deliberately broader than the books that pass removed, so it also drains
+orphans left by older reconciliation and replacement behavior. Anything
+with a single op survives its file, as a work with no book on this server
+— which is what *synced elsewhere* is supposed to mean. Pending sync
+works are never candidates.
 
 **A book whose bytes changed keeps its readers, and its readers learn
 the new digest.** When a Calibre book's `content_sha256` changes, every
@@ -90,7 +91,7 @@ sides, and a scan does not make that decision on the reader's behalf.
 - A curator's deletions take effect. The shadow shelf drains itself on
   the next pass.
 - Reading history is never deleted by a scan. The most a scan does is
-  delete a work that had none.
+  delete a non-pending, unmapped work that had none.
 - A metadata edit in Calibre no longer forks a reader's work in two.
   Duplicates already in a database are not healed by this — nothing
   links a work carrying the old title to a book that now has a new one —

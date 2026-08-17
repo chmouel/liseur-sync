@@ -69,6 +69,24 @@ func (s *Store) ReconcileFolder(
 		if err != nil {
 			return err
 		}
+		// A non-empty Calibre pass can register digests for any reader and,
+		// when complete, delete empty works after a purge. Take the global
+		// work-graph gate before the first catalog write so those changes
+		// cannot race a sync or resolution transaction.
+		if byCalibreID && len(observed) > 0 {
+			if err := lockAllWorkGraphs(ctx, tx); err != nil {
+				return err
+			}
+		}
+		// Drain old bookkeeping before rekeying so an alias held only by a
+		// disposable orphan does not block the mapped work from learning the
+		// book's current digest. The same sweep runs after purge for works
+		// orphaned by this transaction.
+		if byCalibreID && complete && len(observed) > 0 {
+			if err := collectEmptyWorksTx(ctx, tx); err != nil {
+				return err
+			}
+		}
 
 		// A Calibre folder identifies books by calibre_id, so a pass can
 		// legitimately want to give book A the path book B currently
@@ -453,14 +471,13 @@ func markBookMissingTx(
 }
 
 // purgeUnseenTx deletes the books a complete Calibre pass did not find
-// in metadata.db, and then the reader works those deletions emptied.
+// in metadata.db, then collects every established work with no catalog
+// mapping or reading history.
 //
-// The work sweep is deliberately narrow. Only works this transaction
-// just unmapped are considered, and only those that hold no reading
-// history at all: a work with one op, one session or one rollup is
-// somebody's reading, and it survives its file as a work with no book
-// here. A pending kosync work that has simply not synced yet is never a
-// candidate, because nothing here ever unmapped it.
+// The sweep includes orphans left by earlier book deletion and replacement
+// behavior, but not pending sync work. A work with one op, one session or one
+// rollup is somebody's reading and survives its file as a work with no book
+// here.
 func purgeUnseenTx(
 	ctx context.Context, tx *sql.Tx, folderID string, seen map[string]bool,
 ) (int, error) {
@@ -468,52 +485,35 @@ func purgeUnseenTx(
 	if err != nil {
 		return 0, err
 	}
-	type userWork struct{ userID, workID string }
-	var emptied []userWork
 	count := 0
 	for key, prior := range existing {
 		if seen[key] {
 			continue
-		}
-		rows, err := tx.QueryContext(ctx, q(
-			`SELECT user_id, work_id FROM user_book_works WHERE book_id = ?`), prior.id)
-		if err != nil {
-			return 0, err
-		}
-		for rows.Next() {
-			var uw userWork
-			if err := rows.Scan(&uw.userID, &uw.workID); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			emptied = append(emptied, uw)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return 0, err
 		}
 		if err := deleteBookTx(ctx, tx, folderID, prior.id); err != nil {
 			return 0, err
 		}
 		count++
 	}
-	for _, uw := range emptied {
-		if _, err := tx.ExecContext(ctx, q(
-			`DELETE FROM works
-			  WHERE user_id = ? AND id = ?
-			    AND NOT EXISTS (SELECT 1 FROM user_book_works m
-			                     WHERE m.user_id = works.user_id AND m.work_id = works.id)
-			    AND NOT EXISTS (SELECT 1 FROM ops o
-			                     WHERE o.user_id = works.user_id AND o.work_id = works.id)
-			    AND NOT EXISTS (SELECT 1 FROM sessions s
-			                     WHERE s.user_id = works.user_id AND s.work_id = works.id)
-			    AND NOT EXISTS (SELECT 1 FROM session_rollups r
-			                     WHERE r.user_id = works.user_id AND r.work_id = works.id)`),
-			uw.userID, uw.workID); err != nil {
-			return 0, err
-		}
+	if err := collectEmptyWorksTx(ctx, tx); err != nil {
+		return 0, err
 	}
 	return count, nil
+}
+
+func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, q(
+		`DELETE FROM works
+		  WHERE pending = FALSE
+		    AND NOT EXISTS (SELECT 1 FROM user_book_works m
+		                     WHERE m.user_id = works.user_id AND m.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM ops o
+		                     WHERE o.user_id = works.user_id AND o.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM sessions s
+		                     WHERE s.user_id = works.user_id AND s.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM session_rollups r
+		                     WHERE r.user_id = works.user_id AND r.work_id = works.id)`))
+	return err
 }
 
 // registerReaderDigestTx teaches every reader of a book the digest its
@@ -563,12 +563,11 @@ func registerReaderDigestTx(
 	fingerprint := metadata.TitleAuthorFingerprint(obs.Title, primaryAuthorOf(obs))
 	count := 0
 	for _, uw := range readers {
-		moved := false
-		added, err := addAliasIfFreeTx(ctx, tx, uw.userID, "sha256", obs.ContentSHA256, uw.workID)
+		moved, err := registerDigestIfFreeTx(
+			ctx, tx, uw.userID, obs.ContentSHA256, uw.workID)
 		if err != nil {
 			return 0, err
 		}
-		moved = moved || added
 		if fingerprint != "" {
 			added, err := addAliasIfFreeTx(ctx, tx, uw.userID, "ta", fingerprint, uw.workID)
 			if err != nil {
@@ -576,28 +575,55 @@ func registerReaderDigestTx(
 			}
 			moved = moved || added
 		}
-		// The edition row is what an op or a session hangs its digest
-		// on, so a device reporting the new bytes needs one to point at.
-		var owner string
-		err = tx.QueryRowContext(ctx, q(
-			`SELECT work_id FROM editions WHERE user_id = ? AND sha256 = ?`),
-			uw.userID, obs.ContentSHA256).Scan(&owner)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			if _, err := tx.ExecContext(ctx, q(
-				`INSERT INTO editions (user_id, sha256, work_id) VALUES (?, ?, ?)`),
-				uw.userID, obs.ContentSHA256, uw.workID); err != nil {
-				return 0, err
-			}
-			moved = true
-		case err != nil:
-			return 0, err
-		}
 		if moved {
 			count++
 		}
 	}
 	return count, nil
+}
+
+// registerDigestIfFreeTx registers the sha256 alias and edition as one unit.
+// Either table can already carry a digest, so neither row is added when the
+// other one belongs to a different work.
+func registerDigestIfFreeTx(
+	ctx context.Context, tx *sql.Tx, userID, sha, workID string,
+) (bool, error) {
+	var aliasOwner, editionOwner string
+	aliasErr := tx.QueryRowContext(ctx, q(
+		`SELECT work_id FROM aliases WHERE user_id = ? AND kind = 'sha256' AND value = ?`),
+		userID, sha).Scan(&aliasOwner)
+	if aliasErr != nil && !errors.Is(aliasErr, sql.ErrNoRows) {
+		return false, aliasErr
+	}
+	editionErr := tx.QueryRowContext(ctx, q(
+		`SELECT work_id FROM editions WHERE user_id = ? AND sha256 = ?`),
+		userID, sha).Scan(&editionOwner)
+	if editionErr != nil && !errors.Is(editionErr, sql.ErrNoRows) {
+		return false, editionErr
+	}
+	if aliasErr == nil && aliasOwner != workID ||
+		editionErr == nil && editionOwner != workID {
+		return false, nil
+	}
+
+	added := false
+	if errors.Is(aliasErr, sql.ErrNoRows) {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO aliases (user_id, kind, value, work_id)
+			 VALUES (?, 'sha256', ?, ?)`), userID, sha, workID); err != nil {
+			return false, err
+		}
+		added = true
+	}
+	if errors.Is(editionErr, sql.ErrNoRows) {
+		if _, err := tx.ExecContext(ctx, q(
+			`INSERT INTO editions (user_id, sha256, work_id) VALUES (?, ?, ?)`),
+			userID, sha, workID); err != nil {
+			return false, err
+		}
+		added = true
+	}
+	return added, nil
 }
 
 // addAliasIfFreeTx registers one alias, and says so, unless somebody

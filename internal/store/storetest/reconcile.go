@@ -611,6 +611,70 @@ func testReconcileCalibreIncompletePassPurgesNothing(t *testing.T, open OpenFunc
 	}
 }
 
+// testReconcileCalibreCollectsExistingEmptyWorks covers the broad side of
+// ADR-0022's work cleanup. The work need not have been unmapped by this pass:
+// complete Calibre reconciliation also drains established bookkeeping left by
+// older deletion and replacement behavior. Pending sync work remains protected.
+func testReconcileCalibreCollectsExistingEmptyWorks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "calibre-orphan-cleanup", store.FolderCalibre)
+	now := time.Date(2026, time.February, 3, 12, 0, 0, 0, time.UTC)
+	user := MkUser(t, s, "calibre-orphan-cleanup-reader")
+
+	id := int64(23)
+	observed := []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "Kept (23)/book.epub", SizeBytes: 1,
+		MTime: now, ContentSHA256: "sha-kept-23", Title: "Kept",
+	}}
+	doReconcile(t, s, folder.ID, observed, true, now)
+	bookID := knownByCalibreID(t, s, folder.ID)[id].ID
+	mapped := store.Work{
+		ID: "kept-mapped-work", UserID: user.ID, Title: "Kept", CreatedAt: now,
+	}
+	if _, err := s.ResolveCatalogBookWork(ctx, user.ID, bookID, mapped,
+		[]store.Edition{{UserID: user.ID, SHA256: "sha-kept-23", WorkID: mapped.ID}},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-kept-23"}}, false, now); err != nil {
+		t.Fatal(err)
+	}
+
+	orphan := store.Work{
+		ID: "old-empty-orphan", UserID: user.ID, Title: "Old orphan", CreatedAt: now,
+	}
+	if err := s.CreateWork(ctx, orphan,
+		&store.Edition{UserID: user.ID, SHA256: "sha-new-23", WorkID: orphan.ID},
+		[]store.Identifier{{Kind: "sha256", Value: "sha-new-23"}}); err != nil {
+		t.Fatal(err)
+	}
+	pendingID, _, err := s.CreatePendingWork(ctx, user.ID, "pending-orphan-md5")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changed := []store.ObservedBook{{
+		CalibreID: &id, RelativePath: "Kept (23)/book.epub", SizeBytes: 2,
+		MTime: now.Add(time.Minute), ContentSHA256: "sha-new-23", Title: "Kept",
+	}}
+	result := doReconcile(t, s, folder.ID, changed, true, now.Add(time.Hour))
+	if result.Purged != 0 {
+		t.Fatalf("cleanup-only pass unexpectedly purged a book: %+v", result)
+	}
+	if _, err := s.WorkByID(ctx, user.ID, orphan.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("existing empty work survived a complete Calibre pass: %v", err)
+	}
+	if _, err := s.WorkByID(ctx, user.ID, pendingID); err != nil {
+		t.Fatalf("pending sync work was collected: %v", err)
+	}
+	aliasOwner, err := s.WorkIDByAlias(ctx, user.ID, "sha256", "sha-new-23")
+	if err != nil || aliasOwner != mapped.ID {
+		t.Fatalf("stale orphan blocked digest registration: %q %v", aliasOwner, err)
+	}
+	edition, err := s.EditionBySHA(ctx, user.ID, "sha-new-23")
+	if err != nil || edition.WorkID != mapped.ID {
+		t.Fatalf("new digest edition did not move to mapped work: %+v %v", edition, err)
+	}
+}
+
 // testReconcilePlainFolderNeverPurges guards the other side of ADR-0022:
 // only a Calibre folder has a catalog to be absent from. Under a plain
 // folder absence is evidence about a disk — an unmounted share, a
@@ -724,6 +788,13 @@ func testReconcileDigestCollisionChangesNothing(t *testing.T, open OpenFunc) {
 	// Somebody else's work already holds the digest the file is about to
 	// have.
 	other := MkWork(t, s, user, "collide-other-work", "collide-after")
+	if _, err := s.AppendOps(ctx, user.ID, "d-collide", []store.Op{{
+		OpID: "018e6f1a-0000-7000-8000-0000000000cc", WorkID: other.ID,
+		EditionSHA: Ptr("collide-after"), ClientTS: now, Progression: 0.2,
+		Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
 
 	doReconcile(t, s, folder.ID, []store.ObservedBook{{
 		CalibreID: &id, RelativePath: "New (41)/book.epub", SizeBytes: 2, MTime: now.Add(time.Minute),
@@ -740,5 +811,96 @@ func testReconcileDigestCollisionChangesNothing(t *testing.T, open OpenFunc) {
 	mapping, err := s.UserBookWork(ctx, user.ID, bookID)
 	if err != nil || mapping.WorkID != work.ID {
 		t.Fatalf("the book's own mapping moved: %+v %v", mapping, err)
+	}
+}
+
+// testReconcilePartialDigestCollisionChangesNothing covers work graphs in
+// which only one of the two sha256 records exists. CreateWork deliberately
+// permits an edition without an alias and an alias without an edition, so a
+// scan must check both owners before adding either missing half.
+func testReconcilePartialDigestCollisionChangesNothing(t *testing.T, open OpenFunc) {
+	tests := []struct {
+		name        string
+		withAlias   bool
+		withEdition bool
+	}{
+		{name: "edition owned by another work", withEdition: true},
+		{name: "alias owned by another work", withAlias: true},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t)
+			ctx := context.Background()
+			folder := MkFolder(t, s, "calibre-partial-collide", store.FolderCalibre)
+			now := time.Date(2026, time.February, 7, 0, 0, 0, 0, time.UTC)
+			user := MkUser(t, s, "calibre-partial-collide-reader")
+
+			calibreID := int64(50 + i)
+			doReconcile(t, s, folder.ID, []store.ObservedBook{{
+				CalibreID: &calibreID, RelativePath: "Old/book.epub", SizeBytes: 1,
+				MTime: now, ContentSHA256: "partial-before", Title: "Old Title",
+			}}, true, now)
+			bookID := knownByCalibreID(t, s, folder.ID)[calibreID].ID
+
+			mapped := store.Work{
+				ID: "partial-mapped", UserID: user.ID, Title: "Old Title", CreatedAt: now,
+			}
+			if _, err := s.ResolveCatalogBookWork(ctx, user.ID, bookID, mapped,
+				[]store.Edition{{UserID: user.ID, SHA256: "partial-before", WorkID: mapped.ID}},
+				[]store.Identifier{{Kind: "sha256", Value: "partial-before"}}, false, now); err != nil {
+				t.Fatal(err)
+			}
+
+			other := store.Work{
+				ID: "partial-other", UserID: user.ID, Title: "Other", CreatedAt: now,
+			}
+			var edition *store.Edition
+			if tt.withEdition {
+				edition = &store.Edition{
+					UserID: user.ID, SHA256: "partial-after", WorkID: other.ID,
+				}
+			}
+			var aliases []store.Identifier
+			if tt.withAlias {
+				aliases = []store.Identifier{{Kind: "sha256", Value: "partial-after"}}
+			}
+			if err := s.CreateWork(ctx, other, edition, aliases); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.AppendOps(ctx, user.ID, "d-partial-collide", []store.Op{{
+				OpID: "018e6f1a-0000-7000-8000-0000000000dd", WorkID: other.ID,
+				ClientTS: now, Progression: 0.2, Origin: store.OriginNative,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+
+			doReconcile(t, s, folder.ID, []store.ObservedBook{{
+				CalibreID: &calibreID, RelativePath: "New/book.epub", SizeBytes: 2,
+				MTime: now.Add(time.Minute), ContentSHA256: "partial-after", Title: "New Title",
+			}}, true, now.Add(time.Hour))
+
+			aliasOwner, aliasErr := s.WorkIDByAlias(ctx, user.ID, "sha256", "partial-after")
+			if tt.withAlias {
+				if aliasErr != nil || aliasOwner != other.ID {
+					t.Fatalf("digest alias changed owner: %q %v", aliasOwner, aliasErr)
+				}
+			} else if !errors.Is(aliasErr, store.ErrNotFound) {
+				t.Fatalf("scan added an alias despite an edition collision: %q %v", aliasOwner, aliasErr)
+			}
+
+			gotEdition, editionErr := s.EditionBySHA(ctx, user.ID, "partial-after")
+			if tt.withEdition {
+				if editionErr != nil || gotEdition.WorkID != other.ID {
+					t.Fatalf("digest edition changed owner: %+v %v", gotEdition, editionErr)
+				}
+			} else if !errors.Is(editionErr, store.ErrNotFound) {
+				t.Fatalf("scan added an edition despite an alias collision: %+v %v", gotEdition, editionErr)
+			}
+
+			mapping, err := s.UserBookWork(ctx, user.ID, bookID)
+			if err != nil || mapping.WorkID != mapped.ID {
+				t.Fatalf("the book's own mapping moved: %+v %v", mapping, err)
+			}
+		})
 	}
 }

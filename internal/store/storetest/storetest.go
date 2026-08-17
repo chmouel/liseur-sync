@@ -187,6 +187,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ReconcileCalibreIncompletePassPurgesNothing", func(t *testing.T) {
 		testReconcileCalibreIncompletePassPurgesNothing(t, open)
 	})
+	t.Run("ReconcileCalibreCollectsExistingEmptyWorks", func(t *testing.T) {
+		testReconcileCalibreCollectsExistingEmptyWorks(t, open)
+	})
 	t.Run("ReconcilePlainFolderNeverPurges", func(t *testing.T) {
 		testReconcilePlainFolderNeverPurges(t, open)
 	})
@@ -195,6 +198,9 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("ReconcileDigestCollisionChangesNothing", func(t *testing.T) {
 		testReconcileDigestCollisionChangesNothing(t, open)
+	})
+	t.Run("ReconcilePartialDigestCollisionChangesNothing", func(t *testing.T) {
+		testReconcilePartialDigestCollisionChangesNothing(t, open)
 	})
 	t.Run("ResolveAliases", func(t *testing.T) { testResolveAliases(t, open) })
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
