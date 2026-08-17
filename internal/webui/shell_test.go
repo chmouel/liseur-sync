@@ -40,35 +40,53 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, body := page(t, ts, cookie, "/ui/library")
-	csrf := extractCSRF(t, body)
+	for _, theme := range []string{themeLight, themeTokyoNight, themeRosePine} {
+		t.Run(theme, func(t *testing.T) {
+			_, body := page(t, ts, cookie, "/ui/library")
+			csrf := extractCSRF(t, body)
 
-	code, _ := postForm(t, ts, cookie, "/ui/preferences", url.Values{
-		"csrf": {csrf}, "theme": {"light"}, "back": {"books"},
-	})
-	if code != http.StatusSeeOther {
-		t.Fatalf("set theme: want 303, got %d", code)
-	}
-	pref := prefCookie(t, ts, cookie, csrf, url.Values{
-		"csrf": {csrf}, "theme": {"light"}, "back": {"books"},
-	})
-	if !strings.Contains(pref.Value, "light") {
-		t.Fatalf("cookie did not record the theme: %q", pref.Value)
-	}
+			code, _ := postForm(t, ts, cookie, "/ui/preferences", url.Values{
+				"csrf": {csrf}, "theme": {theme}, "back": {"books"},
+			})
+			if code != http.StatusSeeOther {
+				t.Fatalf("set theme: want 303, got %d", code)
+			}
+			pref := prefCookie(t, ts, cookie, csrf, url.Values{
+				"csrf": {csrf}, "theme": {theme}, "back": {"books"},
+			})
+			if !strings.Contains(pref.Value, theme) {
+				t.Fatalf("cookie did not record the theme: %q", pref.Value)
+			}
 
-	// And the next page renders in it, with no script involved.
-	req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
-	req.AddCookie(cookie)
-	req.AddCookie(pref)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+			// And the next page renders in it, with no script involved.
+			req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
+			req.AddCookie(cookie)
+			req.AddCookie(pref)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			buf := make([]byte, 4096)
+			n, _ := resp.Body.Read(buf)
+			if !strings.Contains(string(buf[:n]), `data-theme="`+theme+`"`) {
+				t.Errorf("theme cookie did not reach the root element")
+			}
+		})
 	}
-	defer resp.Body.Close()
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	if !strings.Contains(string(buf[:n]), `data-theme="light"`) {
-		t.Error("theme cookie did not reach the root element")
+}
+
+func TestThemeCycleIncludesNamedThemes(t *testing.T) {
+	t.Parallel()
+
+	got := themeDark
+	for _, want := range []string{
+		themeLight, themeSystem, themeTokyoNight, themeRosePine, themeDark,
+	} {
+		got = nextTheme(got)
+		if got != want {
+			t.Fatalf("nextTheme: got %q, want %q", got, want)
+		}
 	}
 }
 

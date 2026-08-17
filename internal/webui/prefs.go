@@ -20,9 +20,11 @@ const prefsCookie = "liseur_ui"
 // Theme values. Dark is the default because that is what a reading
 // application is for; system defers to the browser.
 const (
-	themeDark   = "dark"
-	themeLight  = "light"
-	themeSystem = "system"
+	themeDark       = "dark"
+	themeLight      = "light"
+	themeSystem     = "system"
+	themeTokyoNight = "tokyo-night"
+	themeRosePine   = "rose-pine"
 )
 
 // View values. The grid is for recognising a book by its cover, the list
@@ -52,7 +54,7 @@ func readPrefs(r *http.Request) prefs {
 	}
 	for _, part := range strings.Split(c.Value, ".") {
 		switch part {
-		case themeDark, themeLight, themeSystem:
+		case themeDark, themeLight, themeSystem, themeTokyoNight, themeRosePine:
 			p.Theme = part
 		case viewGrid, viewList:
 			p.View = part
@@ -93,7 +95,7 @@ func (s *Server) handlePreferences(
 	}
 	p := readPrefs(r)
 	switch theme := r.FormValue("theme"); theme {
-	case themeDark, themeLight, themeSystem:
+	case themeDark, themeLight, themeSystem, themeTokyoNight, themeRosePine:
 		p.Theme = theme
 	}
 	switch view := r.FormValue("view"); view {
@@ -127,13 +129,17 @@ func safeUIPath(p string) bool {
 }
 
 // nextTheme is the cycle the one-button toggle walks: dark → light →
-// system → dark.
+// system → Tokyo Night → Rosé Pine → dark.
 func nextTheme(current string) string {
 	switch current {
 	case themeDark:
 		return themeLight
 	case themeLight:
 		return themeSystem
+	case themeSystem:
+		return themeTokyoNight
+	case themeTokyoNight:
+		return themeRosePine
 	default:
 		return themeDark
 	}
@@ -144,7 +150,7 @@ func nextTheme(current string) string {
 // cache.
 func themeGlyph(current string) string {
 	switch current {
-	case themeDark:
+	case themeDark, themeTokyoNight, themeRosePine:
 		return "☾"
 	case themeLight:
 		return "☀"

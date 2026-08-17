@@ -365,6 +365,18 @@ const THEMES = {
   light: { bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light" },
   sepia: { bg: "#f6ecd9", fg: "#5b4636", link: "#8a5a2b", scheme: "light" },
   dark: { bg: "#202124", fg: "#cfcfd4", link: "#8ab4f8", scheme: "dark" },
+  "tokyo-night": {
+    bg: "#1a1b26",
+    fg: "#c0caf5",
+    link: "#7aa2f7",
+    scheme: "dark",
+  },
+  "rose-pine": {
+    bg: "#191724",
+    fg: "#e0def4",
+    link: "#c4a7e7",
+    scheme: "dark",
+  },
   black: { bg: "#000000", fg: "#ababae", link: "#7aa2d8", scheme: "dark" },
 };
 const FONTS = {

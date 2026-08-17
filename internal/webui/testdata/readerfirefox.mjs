@@ -154,6 +154,8 @@ const probe = `(() => {
     frameReachable: !!document.querySelector('#reader-view iframe'),
     text: body ? (body.innerText || '').slice(0, 60) : '',
     colour: body ? doc.defaultView.getComputedStyle(body).color : '',
+    stageBackground: document.getElementById('reader-view')
+      ? getComputedStyle(document.getElementById('reader-view')).backgroundColor : '',
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
     cfi: loc?.cfi || '',
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
@@ -191,18 +193,29 @@ check('the book pages past page 2', distinct >= 6, `${distinct} distinct pages i
 check('the reader leaves the first chapter',
   seen.some((p) => p.chapter !== diag.chapter), seen.map((p) => p.chapter).join(' '));
 
-// Same appearance round-trip as the Chromium harness: dark theme in,
-// publisher styling back out.
+// Same appearance round-trip as the Chromium harness: verify both named
+// palettes reach the publication and the reader stage, then restore the
+// publisher styling.
 at('appearance settings');
-await evalIn(`(() => {
-  const radio = document.querySelector('#reader-settings-form input[name="theme"][value="dark"]');
-  radio.checked = true;
-  radio.dispatchEvent(new Event('input', { bubbles: true }));
-})()`);
-await new Promise((r) => setTimeout(r, 700));
-const themed = JSON.parse(await evalIn(probe));
-check('the dark theme restyles the publication',
-  themed.colour.replace(/\s/g, '') === 'rgb(207,207,212)', themed.colour);
+for (const [value, label, colour, background] of [
+  ['tokyo-night', 'Tokyo Night', 'rgb(192,202,245)', 'rgb(26,27,38)'],
+  ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)'],
+]) {
+  await evalIn(`(() => {
+    const radio = document.querySelector(
+      '#reader-settings-form input[name="theme"][value="${value}"]',
+    );
+    radio.checked = true;
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const themed = JSON.parse(await evalIn(probe));
+  check(`the ${label} theme restyles the publication`,
+    themed.colour.replace(/\s/g, '') === colour, themed.colour);
+  check(`the ${label} theme colors the reader stage`,
+    themed.stageBackground.replace(/\s/g, '') === background,
+    themed.stageBackground);
+}
 await evalIn(`document.getElementById('reader-settings-reset').click()`);
 await new Promise((r) => setTimeout(r, 700));
 const unthemed = JSON.parse(await evalIn(probe));
