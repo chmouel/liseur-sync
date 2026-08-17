@@ -352,9 +352,6 @@ CREATE TABLE book_series_overrides (
     scope_user TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
     updated_by TEXT NOT NULL,
-    deleted_at  TIMESTAMPTZ,
-    client_ts   TEXT,
-    request_hash TEXT,
     PRIMARY KEY (book_id, scope_user),
     FOREIGN KEY (folder_id, book_id)
         REFERENCES books(folder_id, id) ON DELETE CASCADE
@@ -457,6 +454,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-// migrations is deliberately one element long, for the reason the SQLite
-// copy gives.
-var migrations = []string{schema}
+// claimRevisions is the SQLite copy's migration 2; see it for why these
+// columns arrive as a migration rather than as an edit to the baseline.
+const claimRevisions = `
+ALTER TABLE book_series_overrides ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE book_series_overrides ADD COLUMN client_ts TEXT;
+ALTER TABLE book_series_overrides ADD COLUMN request_hash TEXT;
+`
+
+// migrations is append-only, for the reason the SQLite copy gives.
+var migrations = []string{schema, claimRevisions}
