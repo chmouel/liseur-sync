@@ -52,6 +52,25 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// errCodeUnknownWork is the one refusal a client has a move for: the
+// batch named a work the server no longer holds (orphan cleanup deleted
+// it), so the client re-resolves the book and retries under the fresh
+// work id.
+const errCodeUnknownWork = "unknown_work"
+
+// writeUnknownWork answers a batch item that named a work the server
+// does not hold. The message stays what it always was; the extra fields
+// let a client recover without parsing it: which work is gone, and
+// which item of the batch blamed it ("op_id" or "session_id").
+func writeUnknownWork(w http.ResponseWriter, msg, itemField, itemID, workID string) {
+	writeJSON(w, http.StatusBadRequest, map[string]string{
+		"error":   msg,
+		"code":    errCodeUnknownWork,
+		"work_id": workID,
+		itemField: itemID,
+	})
+}
+
 // LogServerErrors wraps a handler and logs every 5xx response, so a
 // failing endpoint shows up in the server log instead of only on the
 // client.

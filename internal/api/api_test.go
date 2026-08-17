@@ -577,6 +577,109 @@ func TestSessionsAndInsights(t *testing.T) {
 
 func ptrI64(v int64) *int64 { return &v }
 
+// A batch item that names a work the server no longer holds — orphan
+// cleanup deleted it — is the one refusal a client can recover from, so
+// it answers with the machine-readable code and the exact ids. The
+// batch stays atomic: nothing from it is stored.
+func TestUnknownWorkRefusal(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st)
+	devTok, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+
+	w := store.Work{ID: "w-real", UserID: u.ID, CreatedAt: time.Now()}
+	if err := st.CreateWork(ctx, w, &store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w-real"},
+		[]store.Identifier{{Kind: "sha256", Value: "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	op := func(id, workID string) map[string]any {
+		return map[string]any{
+			"op_id": id, "work_id": workID, "client_ts": now.Format(time.RFC3339Nano),
+			"progression": 0.41,
+		}
+	}
+
+	// Unknown work in an ops batch: 400 with the structured fields, and
+	// the exact ids the client needs to recover.
+	code, out := post(t, ts.URL+"/v1/ops", devTok, map[string]any{
+		"ops": []map[string]any{op("op-good", "w-real"), op("op-gone", "w-gone")},
+	})
+	if code != 400 {
+		t.Fatalf("unknown work op: want 400, got %d %v", code, out)
+	}
+	if out["error"] != "op op-gone: unknown work" {
+		t.Fatalf("error message changed: %v", out)
+	}
+	if out["code"] != "unknown_work" || out["work_id"] != "w-gone" || out["op_id"] != "op-gone" {
+		t.Fatalf("structured fields: %v", out)
+	}
+
+	// The batch was atomic: the valid op that rode along is not stored.
+	code, out = get(t, ts.URL+"/v1/changes?since=0", devTok)
+	if code != 200 || len(out["ops"].([]any)) != 0 {
+		t.Fatalf("rejected ops batch must store nothing: %d %v", code, out)
+	}
+
+	// Unknown work in a sessions batch: the analogous shape, keyed by
+	// session_id.
+	sess := func(id, workID string) map[string]any {
+		return map[string]any{
+			"session_id": id, "work_id": workID,
+			"started_at":        now.Add(-time.Hour).Format(time.RFC3339Nano),
+			"ended_at":          now.Format(time.RFC3339Nano),
+			"start_progression": 0.1, "end_progression": 0.2,
+		}
+	}
+	code, out = post(t, ts.URL+"/v1/sessions", devTok, map[string]any{
+		"sessions": []map[string]any{sess("s-good", "w-real"), sess("s-gone", "w-gone")},
+	})
+	if code != 400 {
+		t.Fatalf("unknown work session: want 400, got %d %v", code, out)
+	}
+	if out["error"] != "session s-gone: unknown work" {
+		t.Fatalf("error message changed: %v", out)
+	}
+	if out["code"] != "unknown_work" || out["work_id"] != "w-gone" || out["session_id"] != "s-gone" {
+		t.Fatalf("structured fields: %v", out)
+	}
+
+	// Nothing from the rejected session batch was stored either.
+	code, out = post(t, ts.URL+"/v1/sessions", devTok, map[string]any{
+		"sessions": []map[string]any{sess("s-good", "w-real")},
+	})
+	if code != 200 {
+		t.Fatalf("re-push after rejection: %d %v", code, out)
+	}
+
+	// Every other 400 keeps its old shape: the message, and nothing a
+	// client could mistake for a recoverable refusal.
+	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{"ops": []map[string]any{}})
+	if code != 400 || out["error"] != "ops required" || out["code"] != nil {
+		t.Fatalf("empty batch: %d %v", code, out)
+	}
+	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
+		"ops": []map[string]any{op("op-bad", "")},
+	})
+	if code != 400 || out["error"] != "op op-bad: work_id required" || out["code"] != nil {
+		t.Fatalf("missing work_id: %d %v", code, out)
+	}
+	bad := sess("s-bad", "w-real")
+	bad["ended_at"] = now.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	code, out = post(t, ts.URL+"/v1/sessions", devTok, map[string]any{
+		"sessions": []map[string]any{bad},
+	})
+	if code != 400 || out["error"] != "session s-bad: ended_at before started_at" || out["code"] != nil {
+		t.Fatalf("inverted session: %d %v", code, out)
+	}
+}
+
 func TestSessionRollupPreservesTotals(t *testing.T) {
 	_, st := testServer(t)
 	ctx := t.Context()
