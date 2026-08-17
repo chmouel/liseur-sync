@@ -266,12 +266,8 @@ CREATE UNIQUE INDEX folders_root ON folders(root_path);
 -- there is exactly one publication per row and the join was pure cost.
 --
 -- status is 'active' or 'missing' and nothing else. A missing book is
--- one a completed scan did not find, or one a Calibre library still
--- lists but that has no file this server can serve. In a plain folder
--- it is kept, not deleted, because the file usually comes back; in a
--- Calibre folder a book absent from metadata.db is deleted outright,
--- because there the scan reads a curated catalog and absence is a
--- decision (ADR-0022).
+-- one a completed scan did not find; it is kept, not deleted, because
+-- the file usually comes back.
 --
 -- relative_path is slash-separated and relative to the folder root, so
 -- it is the same string everywhere and is what an open is rooted at.

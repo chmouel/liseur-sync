@@ -147,8 +147,8 @@ of them.
   position each time. Calibre metadata is re-read on every pass.
 - **In a Calibre folder, `metadata.db` is authoritative** (ADR-0022): a
   book a complete, non-empty pass did not find there is *deleted*, not
-  flagged missing, and a work that deletion leaves with no book and no
-  ops, sessions or rollups is deleted with it. A plain folder still
+  flagged missing, and every non-pending work with no book mapping, ops,
+  sessions or rollups is collected after the pass. A plain folder still
   keeps a missing book, because there absence is only evidence about a
   disk. A book Calibre still lists but whose file this server cannot
   serve is observed as `Unservable`: marked missing, kept, exempt from

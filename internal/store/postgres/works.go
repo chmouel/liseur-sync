@@ -11,9 +11,26 @@ import (
 // lockWorkGraph serializes every alias mutation for one user. PostgreSQL row
 // locks cannot protect aliases that do not exist yet, so use a transaction-
 // scoped advisory lock keyed by user identity.
+//
+// The shared gate keeps the lock order compatible with catalog reconciliation,
+// which sometimes has to update every reader mapped to a Calibre book. It takes
+// the gate exclusively before touching catalog rows, while ordinary work-graph
+// mutations take it shared and then lock their one user.
 func lockWorkGraph(ctx context.Context, tx *sql.Tx, userID string) error {
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock_shared(1280525653, 1464292167)`); err != nil {
+		return err
+	}
 	_, err := tx.ExecContext(ctx, q(
 		`SELECT pg_advisory_xact_lock(hashtextextended(?, 0))`), userID)
+	return err
+}
+
+// lockAllWorkGraphs excludes per-user work-graph mutations for a transaction
+// that can affect an unknown number of readers.
+func lockAllWorkGraphs(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(1280525653, 1464292167)`)
 	return err
 }
 

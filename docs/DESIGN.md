@@ -687,9 +687,10 @@ of the folders the operator names. A folder added at runtime is watched
 and reconciled without a restart; a file appearing under it shows up
 without waiting for the safety timer; a file removed by a complete pass
 marks its book missing; a book removed from a Calibre library's
-`metadata.db` is deleted, and a work that deletion leaves with no book
-and no reading history goes with it (ADR-0022); a vanished or empty mount
-marks nothing missing; and the server never mutates the watched tree.
+`metadata.db` is deleted, and a complete, non-empty Calibre pass collects
+every non-pending work with no book mapping or reading history (ADR-0022);
+a vanished or empty mount marks nothing missing; and the server never
+mutates the watched tree.
 
 ## 11. Future work (explicitly out of v1)
 
