@@ -89,14 +89,16 @@ the same behaviour under a finger as under a pointer.
 
 **Dark first.** The default theme is dark, because that is what a
 reading application is for and what the comparison does. Light remains,
-as a full palette rather than a grudging inversion.
+as a full palette rather than a grudging inversion. Tokyo Night and Rosé
+Pine are also available as named dark palettes.
 
 **The theme is a cookie, not local storage.** The server renders
 `<html data-theme="dark">`, so a reload cannot flash the wrong palette,
-and the toggle is a form POST carrying the session's CSRF token like
-every other mutation in this UI. It therefore works with JavaScript
-off. Local storage would mean a client-side flash on every navigation
-and a preference the server cannot honour on first paint.
+and the toggle cycles dark, light, system, Tokyo Night and Rosé Pine as a
+form POST carrying the session's CSRF token like every other mutation in
+this UI. It therefore works with JavaScript off. Local storage would
+mean a client-side flash on every navigation and a preference the server
+cannot honour on first paint.
 
 **Tables are kept, not deleted.** The grid becomes the default view and
 the table becomes the list view, behind a toggle stored in the same
@@ -162,7 +164,8 @@ rendering bug hunt would make both harder to judge.
 ## Implementation phases
 
 1. **Design system and shell.** Tokens — colour scales, spacing,
-   radius, elevation, type scale — dark first with a light override.
+   radius, elevation, type scale — dark first with light and named dark
+   palette overrides.
    `layout.templ` becomes a left rail, a top bar holding search and the
    account menu, and a content column, collapsing to a drawer on narrow
    screens.

@@ -100,8 +100,9 @@ templ railLink(href string, label string, current bool) {
 	}
 }
 
-// themeToggle cycles dark → light → system. One button rather than three
-// keeps the top bar quiet, and the label says which way it is going.
+// themeToggle cycles dark → light → system → Tokyo Night → Rosé Pine. One
+// button rather than five keeps the top bar quiet, and the label says
+// which way it is going.
 templ themeToggle(prefix string, csrf string, u userCtx) {
 	<form method="post" action={ prefix + "preferences" }>
 		<input type="hidden" name="csrf" value={ csrf }/>

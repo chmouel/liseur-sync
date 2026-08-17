@@ -68,6 +68,50 @@
 	--shadow-sm: 0 1px 2px rgb(16 20 30 / .1);
 }
 
+[data-theme="tokyo-night"] {
+	color-scheme: dark;
+
+	--bg: #1a1b26;
+	--surface: #16161e;
+	--surface-2: #1f2335;
+	--surface-3: #292e42;
+	--line: #3b4261;
+	--line-soft: #292e42;
+	--ink: #c0caf5;
+	--ink-dim: #a9b1d6;
+	--muted: #565f89;
+	--primary: #7aa2f7;
+	--primary-dim: #3d59a1;
+	--on-primary: #1a1b26;
+	--danger: #f7768e;
+	--ok: #73daca;
+	--warn: #e0af68;
+
+	--c1: #1f2a44; --c2: #2d4f7a; --c3: #3d7fb3; --c4: #7dcfff;
+}
+
+[data-theme="rose-pine"] {
+	color-scheme: dark;
+
+	--bg: #191724;
+	--surface: #1f1d2e;
+	--surface-2: #26233a;
+	--surface-3: #403d52;
+	--line: #524f67;
+	--line-soft: #26233a;
+	--ink: #e0def4;
+	--ink-dim: #908caa;
+	--muted: #6e6a86;
+	--primary: #c4a7e7;
+	--primary-dim: #907aa9;
+	--on-primary: #191724;
+	--danger: #eb6f92;
+	--ok: #9ccfd8;
+	--warn: #f6c177;
+
+	--c1: #213b44; --c2: #2f6172; --c3: #6e9ca8; --c4: #9ccfd8;
+}
+
 /* "system" defers to the browser: the dark tokens above are already the
    default, so only the light case needs stating. */
 @media (prefers-color-scheme: light) {
@@ -692,6 +736,8 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .reader-body[data-reader-theme="light"] #reader-view{background:#ffffff}
 .reader-body[data-reader-theme="sepia"] #reader-view{background:#f6ecd9}
 .reader-body[data-reader-theme="dark"] #reader-view{background:#202124}
+.reader-body[data-reader-theme="tokyo-night"] #reader-view{background:#1a1b26}
+.reader-body[data-reader-theme="rose-pine"] #reader-view{background:#191724}
 .reader-body[data-reader-theme="black"] #reader-view{background:#000000}
 
 /* htmx's request indicators. These are the rules htmx injects into the
