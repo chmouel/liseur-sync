@@ -499,6 +499,11 @@ later mutation; a different current revision returns `"outcome":
 was observed. A successful write returns `"outcome": "applied"` plus
 the current layers.
 
+Revisions are millisecond-precise, and a precondition is compared at that
+precision. A client may therefore keep one as milliseconds since the
+epoch — which is all an integer column holds — and quote it back without
+losing the match.
+
 Leaving `series` out, or sending `"series": []`, is a claim that the
 book is in no series. It is not a reset. To drop the claim and fall
 back to the layer beneath, delete it:

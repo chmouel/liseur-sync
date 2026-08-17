@@ -941,7 +941,7 @@ paths:
         - name: if_updated_at
           in: query
           required: false
-          description: Last server claim revision observed by the client. A different current revision returns `stale` without mutation.
+          description: Last server claim revision observed by the client. A different current revision returns `stale` without mutation. Revisions are millisecond-precise and compared at that precision.
           schema: { type: string, format: date-time }
       responses:
         "200":
@@ -1812,6 +1812,8 @@ components:
         that layer has no claim, and an array — possibly empty — when it
         does. `shared_updated_at` and `personal_updated_at` are the last
         layer revisions, including a deletion represented by a null layer.
+        Revisions are millisecond-precise, so a client may hold one as
+        milliseconds since the epoch and quote it back as a precondition.
       required: [book_id, source, series, folder, shared, personal]
       properties:
         book_id: { type: string, format: uuid }
@@ -1854,7 +1856,7 @@ components:
         if_updated_at:
           type: [string, "null"]
           format: date-time
-          description: Last server revision observed for this layer. A non-matching revision returns `stale` without mutation.
+          description: Last server revision observed for this layer. A non-matching revision returns `stale` without mutation. Revisions are millisecond-precise and compared at that precision.
         series:
           type: array
           maxItems: 64
