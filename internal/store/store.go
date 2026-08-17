@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -432,8 +433,10 @@ type BookContributor struct {
 // drawn from, for a whole page of books at once, keyed by book id. It
 // answers "what does a shelf need to show these books".
 type CatalogBookRelations struct {
-	Contributors map[string][]BookContributor
-	Series       map[string][]BookSeries
+	Contributors         map[string][]BookContributor
+	Series               map[string][]BookSeries
+	SeriesSource         map[string]SeriesSource
+	SeriesClaimUpdatedAt map[string]*time.Time
 }
 
 // SeriesClaimItem is one membership in a claim. Exactly one of SeriesID
@@ -459,12 +462,60 @@ type SeriesPlacement struct {
 // "nobody said" from the empty claim "in no series". Effective is the
 // one in force, and is what every other read returns.
 type BookSeriesLayers struct {
-	Folder    []BookSeries
-	Shared    []BookSeries
-	Personal  []BookSeries
-	Effective []BookSeries
+	Folder            []BookSeries
+	Shared            []BookSeries
+	Personal          []BookSeries
+	Effective         []BookSeries
+	SharedUpdatedAt   *time.Time
+	PersonalUpdatedAt *time.Time
 	// Source names the layer Effective came from.
 	Source SeriesSource
+}
+
+// SeriesClaimOutcome says whether a timestamped claim mutation changed the
+// current layer. A duplicate is the retry of an already deleted revision;
+// a stale mutation does not supersede the current revision and changes
+// nothing.
+type SeriesClaimOutcome string
+
+const (
+	SeriesClaimApplied   SeriesClaimOutcome = "applied"
+	SeriesClaimStale     SeriesClaimOutcome = "stale"
+	SeriesClaimDuplicate SeriesClaimOutcome = "duplicate"
+)
+
+// SeriesClaimMutation is what a claim write carries besides the claim
+// itself: when it happened, which revision the writer had seen, and the
+// key that makes a retry recognisable as one.
+//
+// A struct rather than three trailing parameters, so that a caller with
+// nothing to say about idempotency writes SeriesClaimMutation{At: now}
+// and still gets told by the compiler when the contract changes.
+type SeriesClaimMutation struct {
+	// ClientTS is the writer's own name for this mutation. Replaying it
+	// with the same claim is a duplicate, not a second write; reusing it
+	// for a different claim is a conflict.
+	ClientTS string
+	// IfUpdatedAt is the revision the writer had seen. A mutation made
+	// against an older revision than the one stored is stale and changes
+	// nothing. Nil means the writer had seen no revision at all.
+	IfUpdatedAt *time.Time
+	// At is the server's clock reading for this write.
+	At time.Time
+}
+
+// SeriesClaimRequestHash identifies the stable state stated by one
+// idempotent claim request. A client_ts may only be reused for this same
+// state; the server rejects a reuse that would mean something different.
+func SeriesClaimRequestHash(deleted bool, items []SeriesClaimItem) string {
+	if items == nil {
+		items = []SeriesClaimItem{}
+	}
+	raw, _ := json.Marshal(struct {
+		Deleted bool              `json:"deleted"`
+		Items   []SeriesClaimItem `json:"items"`
+	}{deleted, items})
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
 // UserBookWork is the privacy boundary between a shared catalog book and
@@ -1142,11 +1193,17 @@ type Store interface {
 	// exactly as a pass would.
 	//
 	// userID is the writer; it is also the layer for a personal claim.
-	SetBookSeriesOverride(ctx context.Context, userID, bookID string, scope SeriesSource, items []SeriesClaimItem, at time.Time) error
+	SetBookSeriesOverride(
+		ctx context.Context, userID, bookID string, scope SeriesSource,
+		items []SeriesClaimItem, mutation SeriesClaimMutation,
+	) (SeriesClaimOutcome, error)
 	// ClearBookSeriesOverride drops one layer's claim, so the book falls
 	// back to the layer beneath. Clearing a claim that is not there is
 	// not an error: the caller asked for an absence and got one.
-	ClearBookSeriesOverride(ctx context.Context, userID, bookID string, scope SeriesSource) error
+	ClearBookSeriesOverride(
+		ctx context.Context, userID, bookID string, scope SeriesSource,
+		mutation SeriesClaimMutation,
+	) (SeriesClaimOutcome, error)
 	// ReorderSeries restates the positions of books within one series in
 	// one layer, in one transaction.
 	//

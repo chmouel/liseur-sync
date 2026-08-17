@@ -123,10 +123,11 @@ func testSeriesMergeCarriesClaims(t *testing.T, open OpenFunc) {
 
 	// This reader says their book belongs on the shelf that is about to
 	// be absorbed, at a number of their own choosing.
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, book,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, book,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{SeriesID: absorbed, Position: Ptr(7.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 

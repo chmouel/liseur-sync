@@ -37,8 +37,10 @@ type seriesClaimItemBody struct {
 }
 
 type seriesClaimBody struct {
-	Scope  string                `json:"scope"`
-	Series []seriesClaimItemBody `json:"series"`
+	Scope       string                `json:"scope"`
+	Series      []seriesClaimItemBody `json:"series"`
+	ClientTS    string                `json:"client_ts"`
+	IfUpdatedAt *string               `json:"if_updated_at"`
 }
 
 type seriesReorderBody struct {
@@ -87,6 +89,8 @@ func writeSeriesClaimError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "book not found")
 	case errors.Is(err, store.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "client_ts was reused for a different series claim")
 	default:
 		writeError(w, http.StatusInternalServerError, "series claim failed")
 	}
@@ -140,13 +144,24 @@ func (s *Server) HandleSetBookSeries(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	bookID := r.PathValue("id")
-	if err := s.St.SetBookSeriesOverride(
-		r.Context(), tok.UserID, bookID, scope, items, time.Now(),
-	); err != nil {
+	ifUpdatedAt, err := claimPrecondition(body.IfUpdatedAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "if_updated_at must be an RFC 3339 timestamp")
+		return
+	}
+	outcome, err := s.St.SetBookSeriesOverride(
+		r.Context(), tok.UserID, bookID, scope, items,
+		store.SeriesClaimMutation{
+			ClientTS:    body.ClientTS,
+			IfUpdatedAt: ifUpdatedAt,
+			At:          time.Now().UTC(),
+		},
+	)
+	if err != nil {
 		writeSeriesClaimError(w, err)
 		return
 	}
-	s.writeSeriesLayers(w, r, tok.UserID, bookID)
+	s.writeSeriesLayers(w, r, tok.UserID, bookID, outcome)
 }
 
 // HandleClearBookSeries implements DELETE /v1/books/{id}/series. It
@@ -163,13 +178,24 @@ func (s *Server) HandleClearBookSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bookID := r.PathValue("id")
-	if err := s.St.ClearBookSeriesOverride(
+	ifUpdatedAt, err := claimPreconditionPtr(r.URL.Query().Get("if_updated_at"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "if_updated_at must be an RFC 3339 timestamp")
+		return
+	}
+	outcome, err := s.St.ClearBookSeriesOverride(
 		r.Context(), tok.UserID, bookID, scope,
-	); err != nil {
+		store.SeriesClaimMutation{
+			ClientTS:    r.URL.Query().Get("client_ts"),
+			IfUpdatedAt: ifUpdatedAt,
+			At:          time.Now().UTC(),
+		},
+	)
+	if err != nil {
 		writeSeriesClaimError(w, err)
 		return
 	}
-	s.writeSeriesLayers(w, r, tok.UserID, bookID)
+	s.writeSeriesLayers(w, r, tok.UserID, bookID, outcome)
 }
 
 // HandleReorderSeries implements
@@ -251,11 +277,11 @@ func (s *Server) HandleBookSeriesLayers(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	s.writeSeriesLayers(w, r, tok.UserID, r.PathValue("id"))
+	s.writeSeriesLayers(w, r, tok.UserID, r.PathValue("id"), "")
 }
 
 func (s *Server) writeSeriesLayers(
-	w http.ResponseWriter, r *http.Request, userID, bookID string,
+	w http.ResponseWriter, r *http.Request, userID, bookID string, outcome store.SeriesClaimOutcome,
 ) {
 	layers, err := s.St.BookSeriesLayers(r.Context(), userID, bookID)
 	if err != nil {
@@ -267,6 +293,9 @@ func (s *Server) writeSeriesLayers(
 		"source":  string(layers.Source),
 		"series":  seriesListJSON(layers.Effective),
 		"folder":  seriesListJSON(layers.Folder),
+	}
+	if outcome != "" {
+		body["outcome"] = string(outcome)
 	}
 	// A nil layer is "nobody claimed", an empty one is the claim "in no
 	// series". JSON null and [] carry that difference, so a client can
@@ -281,7 +310,32 @@ func (s *Server) writeSeriesLayers(
 	} else {
 		body["personal"] = nil
 	}
+	if layers.SharedUpdatedAt != nil {
+		body["shared_updated_at"] = layers.SharedUpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if layers.PersonalUpdatedAt != nil {
+		body["personal_updated_at"] = layers.PersonalUpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func claimPrecondition(raw *string) (*time.Time, error) {
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	return claimPreconditionPtr(*raw)
+}
+
+func claimPreconditionPtr(raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, err
+	}
+	at = at.UTC()
+	return &at, nil
 }
 
 // seriesListJSON renders memberships in the same shape the book payload

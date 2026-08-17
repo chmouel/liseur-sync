@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -53,18 +54,20 @@ eff_series AS (
     SELECT bs.folder_id, bs.book_id, bs.series_id, bs.position,
            'folder'::text AS source
       FROM book_series bs
-     WHERE NOT EXISTS (
-           SELECT 1 FROM book_series_overrides o
-            WHERE o.book_id = bs.book_id
-              AND o.scope_user IN ('', ?))
+		WHERE NOT EXISTS (
+			SELECT 1 FROM book_series_overrides o
+			 WHERE o.book_id = bs.book_id
+			   AND o.scope_user IN ('', ?)
+			   AND o.deleted_at IS NULL)
     UNION ALL
     SELECT i.folder_id, i.book_id, i.series_id, i.position,
            (CASE WHEN i.scope_user = '' THEN 'shared' ELSE 'personal' END)::text
       FROM book_series_override_items i
      WHERE i.scope_user = (
-           CASE WHEN EXISTS (
-                     SELECT 1 FROM book_series_overrides p
-                      WHERE p.book_id = i.book_id AND p.scope_user = ?)
+			CASE WHEN EXISTS (
+				      SELECT 1 FROM book_series_overrides p
+				       WHERE p.book_id = i.book_id AND p.scope_user = ?
+				         AND p.deleted_at IS NULL)
                 THEN ? ELSE '' END))
 `
 
@@ -84,62 +87,97 @@ func seriesReadArgs(userID string, rest ...any) []any {
 // SetBookSeriesOverride replaces one layer's claim about one book.
 func (s *Store) SetBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
-	items []store.SeriesClaimItem, at time.Time,
-) error {
+	items []store.SeriesClaimItem, mutation store.SeriesClaimMutation,
+) (store.SeriesClaimOutcome, error) {
+	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, mutation.At.UTC()
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if userID == "" {
-		return fmt.Errorf("%w: a series claim needs a writer", store.ErrInvalidInput)
+		return "", fmt.Errorf("%w: a series claim needs a writer", store.ErrInvalidInput)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
-	if err := setSeriesClaimTx(
-		ctx, tx, scopeUser, userID, bookID, items, at,
-	); err != nil {
-		return err
+	outcome, err := setSeriesClaimTx(
+		ctx, tx, scopeUser, userID, bookID, items, clientTS, ifUpdatedAt, at,
+	)
+	if err != nil {
+		return "", err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return outcome, nil
 }
 
 func setSeriesClaimTx(
 	ctx context.Context, tx *sql.Tx, scopeUser, writer, bookID string,
-	items []store.SeriesClaimItem, at time.Time,
-) error {
+	items []store.SeriesClaimItem, clientTS string, ifUpdatedAt *time.Time,
+	at time.Time,
+) (store.SeriesClaimOutcome, error) {
 	var folderID string
 	err := tx.QueryRowContext(ctx, q(
 		`SELECT folder_id FROM books WHERE id = ?`), bookID).Scan(&folderID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return store.ErrNotFound
+		return "", store.ErrNotFound
 	}
 	if err != nil {
-		return err
+		return "", err
+	}
+	for _, item := range items {
+		if item.SeriesID == "" && strings.TrimSpace(item.Name) == "" {
+			return "", fmt.Errorf("%w: a series claim needs a name", store.ErrInvalidInput)
+		}
+	}
+	var current time.Time
+	var storedClientTS, storedHash string
+	err = tx.QueryRowContext(ctx, q(`SELECT updated_at, client_ts, request_hash
+		FROM book_series_overrides WHERE book_id = ? AND scope_user = ?`),
+		bookID, scopeUser).Scan(&current, &storedClientTS, &storedHash)
+	if err == nil {
+		current = current.UTC()
+		hash := store.SeriesClaimRequestHash(false, items)
+		if clientTS != "" && clientTS == storedClientTS {
+			if hash == storedHash {
+				return store.SeriesClaimDuplicate, nil
+			}
+			return "", store.ErrConflict
+		}
+		if ifUpdatedAt != nil && !current.Equal(ifUpdatedAt.UTC()) {
+			return store.SeriesClaimStale, nil
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+	} else {
+		return "", err
 	}
 
 	if _, err := tx.ExecContext(ctx, q(
 		`INSERT INTO book_series_overrides
-		     (folder_id, book_id, scope_user, updated_at, updated_by)
-		 VALUES (?, ?, ?, ?, ?)
+		     (folder_id, book_id, scope_user, updated_at, updated_by, deleted_at, client_ts, request_hash)
+		 VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
 		 ON CONFLICT (book_id, scope_user) DO UPDATE SET
 		     updated_at = excluded.updated_at,
-		     updated_by = excluded.updated_by`),
-		folderID, bookID, scopeUser, at.UTC(), writer); err != nil {
-		return err
+		     updated_by = excluded.updated_by,
+		     deleted_at = NULL, client_ts = excluded.client_ts,
+		     request_hash = excluded.request_hash`),
+		folderID, bookID, scopeUser, at.UTC(), writer, clientTS,
+		store.SeriesClaimRequestHash(false, items)); err != nil {
+		return "", err
 	}
 	if _, err := tx.ExecContext(ctx, q(
 		`DELETE FROM book_series_override_items
 		  WHERE book_id = ? AND scope_user = ?`), bookID, scopeUser); err != nil {
-		return err
+		return "", err
 	}
 
 	for _, item := range items {
 		seriesID, err := claimSeriesIDTx(ctx, tx, item, at)
 		if err != nil {
-			return err
+			return "", err
 		}
 		var position any
 		if item.Position != nil {
@@ -152,10 +190,10 @@ func setSeriesClaimTx(
 			 ON CONFLICT (book_id, scope_user, series_id)
 			 DO UPDATE SET position = excluded.position`),
 			folderID, bookID, scopeUser, seriesID, position); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return store.SeriesClaimApplied, nil
 }
 
 func claimSeriesIDTx(
@@ -187,15 +225,65 @@ func claimSeriesIDTx(
 // ClearBookSeriesOverride drops one layer's claim.
 func (s *Store) ClearBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
-) error {
+	mutation store.SeriesClaimMutation,
+) (store.SeriesClaimOutcome, error) {
+	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, mutation.At.UTC()
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = s.db.ExecContext(ctx, q(
-		`DELETE FROM book_series_overrides WHERE book_id = ? AND scope_user = ?`),
-		bookID, scopeUser)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var folderID string
+	if err := tx.QueryRowContext(ctx, q(`SELECT folder_id FROM books WHERE id = ?`), bookID).Scan(&folderID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", store.ErrNotFound
+		}
+		return "", err
+	}
+	var current time.Time
+	var storedClientTS, storedHash string
+	err = tx.QueryRowContext(ctx, q(`SELECT updated_at, client_ts, request_hash
+		FROM book_series_overrides WHERE book_id = ? AND scope_user = ?`),
+		bookID, scopeUser).Scan(&current, &storedClientTS, &storedHash)
+	if err == nil {
+		current = current.UTC()
+		hash := store.SeriesClaimRequestHash(true, nil)
+		if clientTS != "" && clientTS == storedClientTS {
+			if hash == storedHash {
+				return store.SeriesClaimDuplicate, nil
+			}
+			return "", store.ErrConflict
+		}
+		if ifUpdatedAt != nil && !current.Equal(ifUpdatedAt.UTC()) {
+			return store.SeriesClaimStale, nil
+		}
+	} else if errors.Is(err, sql.ErrNoRows) {
+	} else {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, q(`INSERT INTO book_series_overrides
+		(folder_id, book_id, scope_user, updated_at, updated_by, deleted_at, client_ts, request_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (book_id, scope_user) DO UPDATE SET
+		updated_at = excluded.updated_at, updated_by = excluded.updated_by,
+		deleted_at = excluded.deleted_at, client_ts = excluded.client_ts,
+		request_hash = excluded.request_hash`), folderID, bookID, scopeUser,
+		at.UTC(), userID, at.UTC(), clientTS,
+		store.SeriesClaimRequestHash(true, nil)); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, q(`DELETE FROM book_series_override_items
+		WHERE book_id = ? AND scope_user = ?`), bookID, scopeUser); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return store.SeriesClaimApplied, nil
 }
 
 // ReorderSeries restates where books sit in one series, in one layer.
@@ -251,8 +339,8 @@ func (s *Store) ReorderSeries(
 				SeriesID: seriesID, Position: placement.Position,
 			})
 		}
-		if err := setSeriesClaimTx(
-			ctx, tx, scopeUser, userID, placement.BookID, items, at,
+		if _, err := setSeriesClaimTx(
+			ctx, tx, scopeUser, userID, placement.BookID, items, "", nil, at,
 		); err != nil {
 			return err
 		}
@@ -291,6 +379,7 @@ func (s *Store) BookSeriesLayers(
 		return out, err
 	}
 	out.Shared, out.Personal = claimed.shared, claimed.personal
+	out.SharedUpdatedAt, out.PersonalUpdatedAt = claimed.sharedUpdatedAt, claimed.personalUpdatedAt
 
 	switch {
 	case claimed.hasPersonal:
@@ -310,10 +399,12 @@ func (s *Store) BookSeriesLayers(
 // layers. The booleans matter independently of the slices: an existing
 // claim with no memberships is the statement "in no series".
 type layerRows struct {
-	shared      []store.BookSeries
-	personal    []store.BookSeries
-	hasShared   bool
-	hasPersonal bool
+	shared            []store.BookSeries
+	personal          []store.BookSeries
+	hasShared         bool
+	hasPersonal       bool
+	sharedUpdatedAt   *time.Time
+	personalUpdatedAt *time.Time
 }
 
 func claimedLayers(
@@ -321,20 +412,30 @@ func claimedLayers(
 ) (layerRows, error) {
 	var out layerRows
 	rows, err := db.QueryContext(ctx, q(
-		`SELECT scope_user FROM book_series_overrides
+		`SELECT scope_user, updated_at, deleted_at FROM book_series_overrides
 		  WHERE book_id = ? AND scope_user IN ('', ?)`), bookID, userID)
 	if err != nil {
 		return out, err
 	}
 	if err := eachRow(rows, func(scan func(...any) error) error {
 		var scopeUser string
-		if err := scan(&scopeUser); err != nil {
+		var updatedAt time.Time
+		var deletedAt sql.NullTime
+		if err := scan(&scopeUser, &updatedAt, &deletedAt); err != nil {
 			return err
 		}
 		if scopeUser == store.SharedSeriesScope {
-			out.hasShared = true
+			at := updatedAt.UTC()
+			out.sharedUpdatedAt = &at
+			if !deletedAt.Valid {
+				out.hasShared = true
+			}
 		} else {
-			out.hasPersonal = true
+			at := updatedAt.UTC()
+			out.personalUpdatedAt = &at
+			if !deletedAt.Valid {
+				out.hasPersonal = true
+			}
 		}
 		return nil
 	}); err != nil {

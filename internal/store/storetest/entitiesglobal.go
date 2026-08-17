@@ -94,10 +94,11 @@ func testEntityOrphansAreCollected(t *testing.T, open OpenFunc) {
 	// still name the series once the folder is gone.
 	claimed := seriesIDByName(t, s, "Claimed")
 	keptBook := bookIDByPath(t, s, keep.ID, "kept.epub")
-	if err := s.SetBookSeriesOverride(ctx, reader.ID, keptBook,
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, keptBook,
 		store.SeriesSourcePersonal,
 		[]store.SeriesClaimItem{{SeriesID: claimed, Position: Ptr(2.0)}},
-		now); err != nil {
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
 		t.Fatal(err)
 	}
 

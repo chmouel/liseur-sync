@@ -592,6 +592,12 @@ so every series-bearing read takes the reader's id, and every series a
 payload names carries the layer it came from. A claim speaks for the
 whole book: its empty form is the statement "this book is in no series",
 which is why the claim is a row of its own rather than a set of items.
+A catalog response carries the effective claim layer per book even when
+that claim is empty, plus that claim's server-assigned revision. A client
+timestamp is an idempotency key only; a client protects an offline edit
+with the last server revision it observed. A deleted claim retains its
+revision and idempotency key so retries are safe and old writes cannot
+resurrect it. This is catalog state, not an op log.
 A series also carries a name layer, in the same two scopes
 (ADR-0020). `series_name_overrides` says what a reader calls a shelf;
 `series.name` and `series.normalized_name` keep meaning what the last

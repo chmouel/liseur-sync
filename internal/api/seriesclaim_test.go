@@ -216,6 +216,9 @@ func TestSeriesClaimLayersRoute(t *testing.T) {
 	if body["personal"] == nil {
 		t.Error("an empty claim read back as no claim at all")
 	}
+	if body["personal_updated_at"] == nil {
+		t.Error("an existing personal claim has no revision")
+	}
 	if got := len(body["series"].([]any)); got != 0 {
 		t.Errorf("effective series is %d long, want empty", got)
 	}
@@ -234,6 +237,107 @@ func TestSeriesClaimLayersRoute(t *testing.T) {
 	}
 	if len(body["series"].([]any)) != 1 {
 		t.Errorf("a reset did not restore the folder's series: %v", body["series"])
+	}
+}
+
+func TestCatalogSeriesClaimMarkerAndRevision(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.writeBook(t, "Foundation/one.epub", []byte("one"))
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeLibraryManage)
+	clientTS := "1970-01-01T00:00:00Z"
+	status, body := f.sendJSON(t, http.MethodPut, "/v1/books/"+bookID+"/series", tok,
+		map[string]any{"series": []map[string]any{}, "client_ts": clientTS})
+	if status != http.StatusOK || body["outcome"] != "applied" {
+		t.Fatalf("setting empty claim: %d %v", status, body)
+	}
+	_, body = getJSON(t, f.ts.URL+"/v1/books/"+bookID, tok)
+	if body["series_source"] != "personal" {
+		t.Errorf("series_source = %v, want personal", body["series_source"])
+	}
+	revision, ok := body["series_claim_updated_at"].(string)
+	if !ok || revision == clientTS {
+		t.Errorf("series claim revision = %v, want server revision distinct from %s", body["series_claim_updated_at"], clientTS)
+	}
+	if len(body["series"].([]any)) != 0 {
+		t.Errorf("empty claim returned memberships: %v", body["series"])
+	}
+	other := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
+	_, body = getJSON(t, f.ts.URL+"/v1/books/"+bookID, other)
+	if body["series_source"] != "folder" {
+		t.Errorf("other reader source = %v, want folder", body["series_source"])
+	}
+	if _, ok := body["series_claim_updated_at"]; ok {
+		t.Error("personal claim revision leaked to another reader")
+	}
+}
+
+func TestSeriesClaimIdempotencyAndPreconditions(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publishAs(t, "dune", "Dune", []byte("dune"))
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeLibraryManage)
+	path := "/v1/books/" + bookID + "/series"
+	firstKey := "2100-01-01T00:00:00Z"
+	status, body := f.sendJSON(t, http.MethodPut, path, tok, map[string]any{
+		"client_ts": firstKey, "series": []map[string]any{{"name": "First"}},
+	})
+	if status != http.StatusOK || body["outcome"] != "applied" {
+		t.Fatalf("first put: %d %v", status, body)
+	}
+	revision := body["personal_updated_at"].(string)
+	if revision == firstKey {
+		t.Fatalf("client timestamp became server revision: %s", revision)
+	}
+	status, body = f.sendJSON(t, http.MethodPut, path, tok, map[string]any{
+		"client_ts": firstKey, "series": []map[string]any{{"name": "First"}},
+	})
+	if status != http.StatusOK || body["outcome"] != "duplicate" {
+		t.Fatalf("duplicate put: %d %v", status, body)
+	}
+	if body["personal_updated_at"] != revision {
+		t.Errorf("duplicate changed revision: %v, want %s", body["personal_updated_at"], revision)
+	}
+	status, body = f.sendJSON(t, http.MethodPut, path, tok, map[string]any{
+		"client_ts": firstKey, "series": []map[string]any{{"name": "Different"}},
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("reused key with different claim: %d %v", status, body)
+	}
+	status, body = f.sendJSON(t, http.MethodPut, path, tok, map[string]any{
+		"client_ts": "new-key", "if_updated_at": "1970-01-01T00:00:00Z",
+		"series": []map[string]any{{"name": "Stale"}},
+	})
+	if status != http.StatusOK || body["outcome"] != "stale" {
+		t.Fatalf("stale precondition put: %d %v", status, body)
+	}
+	if got := seriesNames(t, body); len(got) != 1 || got[0] != "First" {
+		t.Errorf("stale put replaced current claim: %v", got)
+	}
+	status, body = f.sendJSON(t, http.MethodDelete,
+		path+"?client_ts=delete-key&if_updated_at=1970-01-01T00:00:00Z", tok, nil)
+	if status != http.StatusOK || body["outcome"] != "stale" {
+		t.Fatalf("stale delete: %d %v", status, body)
+	}
+	if got := seriesNames(t, body); len(got) != 1 || got[0] != "First" {
+		t.Errorf("stale delete removed current claim: %v", got)
+	}
+	status, body = f.sendJSON(t, http.MethodDelete,
+		path+"?client_ts=delete-key&if_updated_at="+revision, tok, nil)
+	if status != http.StatusOK || body["outcome"] != "applied" {
+		t.Fatalf("delete: %d %v", status, body)
+	}
+	status, body = f.sendJSON(t, http.MethodDelete, path+"?client_ts=delete-key", tok, nil)
+	if status != http.StatusOK || body["outcome"] != "duplicate" {
+		t.Fatalf("duplicate delete: %d %v", status, body)
+	}
+	status, body = f.sendJSON(t, http.MethodPut, path, tok, map[string]any{
+		"client_ts": "old-put", "if_updated_at": revision,
+		"series": []map[string]any{{"name": "Revived"}},
+	})
+	if status != http.StatusOK || body["outcome"] != "stale" {
+		t.Fatalf("old put after delete: %d %v", status, body)
+	}
+	if body["source"] != "folder" {
+		t.Errorf("old put revived deleted claim: %v", body)
 	}
 }
 
