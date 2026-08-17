@@ -48,6 +48,7 @@ const titleText = document.getElementById("reader-title-text");
 const tocPanel = document.getElementById("reader-toc");
 const tocList = document.getElementById("reader-toc-list");
 const tocButton = document.getElementById("reader-toc-button");
+const fullscreenBtn = document.getElementById("reader-fullscreen");
 
 let view = null;
 let workID = null;
@@ -549,6 +550,33 @@ if (settingsForm) {
     }
   });
 }
+// -------------------------------------------------------- fullscreen
+
+const MAXIMIZE_PATH = "M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3m10 0h3a2 2 0 002-2v-3";
+const MINIMIZE_PATH = "M4 14h3a2 2 0 012 2v3m6 0v-3a2 2 0 012-2h3M20 10h-3a2 2 0 01-2-2V5m-6 0v3a2 2 0 01-2 2H4";
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+if (fullscreenBtn) {
+  fullscreenBtn.addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", () => {
+    const p = fullscreenBtn.querySelector("path");
+    if (document.fullscreenElement) {
+      p.setAttribute("d", MINIMIZE_PATH);
+      fullscreenBtn.title = "Exit full screen (f)";
+    } else {
+      p.setAttribute("d", MAXIMIZE_PATH);
+      fullscreenBtn.title = "Full screen (f)";
+    }
+  });
+}
+
 // The stage should match the chosen theme before the book arrives, so
 // a dark reader does not open with a white flash.
 applySettings();
@@ -799,6 +827,10 @@ function handleKeys(e) {
     case "t":
       e.preventDefault();
       toggleTOC(true);
+      break;
+    case "f":
+      e.preventDefault();
+      toggleFullscreen();
       break;
     case "Home":
       if (view) view.goToFraction(0);
