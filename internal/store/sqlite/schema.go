@@ -385,9 +385,6 @@ CREATE TABLE book_series_overrides (
     scope_user TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     updated_by TEXT NOT NULL,
-    deleted_at  TEXT,
-    client_ts   TEXT,
-    request_hash TEXT,
     PRIMARY KEY (book_id, scope_user),
     FOREIGN KEY (folder_id, book_id)
         REFERENCES books(folder_id, id) ON DELETE CASCADE
@@ -525,7 +522,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `
 
-// migrations is deliberately one element long. A second entry may be
-// appended once this has shipped somewhere; until then, changing the
-// schema means editing the baseline and throwing the database away.
-var migrations = []string{schema}
+// A series claim carries the state that makes a write conditional and a
+// retry safe: when it was withdrawn, the idempotency key of the write
+// that last touched it, and a hash of what that write asked for. The
+// baseline shipped without them, so they arrive as a migration rather
+// than as an edit to the baseline: there are databases in the world that
+// have already applied it and will never apply it again.
+const claimRevisions = `
+ALTER TABLE book_series_overrides ADD COLUMN deleted_at TEXT;
+ALTER TABLE book_series_overrides ADD COLUMN client_ts TEXT;
+ALTER TABLE book_series_overrides ADD COLUMN request_hash TEXT;
+`
+
+// migrations is append-only: entry n is applied to a database that has
+// applied n-1 of them, so an entry that has shipped is never edited
+// again — the baseline included.
+var migrations = []string{schema, claimRevisions}
