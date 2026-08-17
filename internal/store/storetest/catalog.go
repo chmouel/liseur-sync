@@ -377,6 +377,78 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testCatalogSeriesSourceIsPerReader covers who a claim belongs to. The
+// shared scope is stored under the empty user id, which is also the user
+// id of a caller who has not signed in — so a reader with no account must
+// not be handed the shared claim as though it were their own personal one.
+func testCatalogSeriesSourceIsPerReader(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "claim-scope", store.FolderPlain)
+	now := time.Date(2026, time.August, 17, 10, 0, 0, 0, time.UTC)
+	admin := MkUser(t, s, "claim-scope-admin")
+	reader := MkUser(t, s, "claim-scope-reader")
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "book.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-claim-scope", Title: "Book",
+	}}, true, now)
+	bookID := knownByPath(t, s, folder.ID)["book.epub"].ID
+
+	if _, err := s.SetBookSeriesOverride(ctx, admin.ID, bookID,
+		store.SeriesSourceShared,
+		[]store.SeriesClaimItem{{Name: "Corrected", Position: Ptr(1.0)}},
+		store.SeriesClaimMutation{At: now},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Signed out: the shared claim is in force, but it is nobody's own.
+	relations, err := s.CatalogBookRelationsForBooks(ctx, anyReader, []string{bookID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := relations.SeriesSource[bookID]; got != store.SeriesSourceShared {
+		t.Fatalf("series source for a signed-out reader: %q", got)
+	}
+	if relations.SeriesClaimUpdatedAt[bookID] == nil {
+		t.Fatal("the shared claim reported no revision")
+	}
+
+	// A reader with no claim of their own sees the same shared answer.
+	relations, err = s.CatalogBookRelationsForBooks(ctx, reader.ID, []string{bookID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := relations.SeriesSource[bookID]; got != store.SeriesSourceShared {
+		t.Fatalf("series source before a personal claim: %q", got)
+	}
+
+	// Once they disagree, the claim is theirs and says so.
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, bookID,
+		store.SeriesSourcePersonal,
+		[]store.SeriesClaimItem{{Name: "Mine", Position: Ptr(2.0)}},
+		store.SeriesClaimMutation{At: now.Add(time.Second)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	relations, err = s.CatalogBookRelationsForBooks(ctx, reader.ID, []string{bookID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := relations.SeriesSource[bookID]; got != store.SeriesSourcePersonal {
+		t.Fatalf("series source after a personal claim: %q", got)
+	}
+	// And the reader next door is untouched by it.
+	relations, err = s.CatalogBookRelationsForBooks(ctx, anyReader, []string{bookID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := relations.SeriesSource[bookID]; got != store.SeriesSourceShared {
+		t.Fatalf("another reader saw a personal claim: %q", got)
+	}
+}
+
 // testUserBookWorkIsPerUser covers ADR-0017's privacy boundary: the
 // catalog book is shared by every account, but the link to a reader's
 // own work is never visible to another account, and resolving is an

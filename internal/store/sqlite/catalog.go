@@ -141,19 +141,28 @@ func (s *Store) listCatalogBooks(
 }
 
 // CatalogBookRelationsForBooks reads a whole page's contributors and
-// series in two queries rather than two per book (ADR-0015): a shelf of
-// fifty books used to cost a hundred round trips.
+// series in bounded batched queries rather than per book (ADR-0015): a
+// shelf of fifty books never costs a hundred round trips.
 func (s *Store) CatalogBookRelationsForBooks(
 	ctx context.Context, userID string, bookIDs []string,
 ) (store.CatalogBookRelations, error) {
 	out := store.CatalogBookRelations{
-		Contributors: map[string][]store.BookContributor{},
-		Series:       map[string][]store.BookSeries{},
+		Contributors:         map[string][]store.BookContributor{},
+		Series:               map[string][]store.BookSeries{},
+		SeriesSource:         map[string]store.SeriesSource{},
+		SeriesClaimUpdatedAt: map[string]*time.Time{},
 	}
 	if len(bookIDs) == 0 {
 		return out, nil
 	}
 	placeholders, args := inArgs(bookIDs)
+	readerScope := userID
+	if readerScope == "" {
+		readerScope = store.NoReaderScope
+	}
+	for _, bookID := range bookIDs {
+		out.SeriesSource[bookID] = store.SeriesSourceFolder
+	}
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT bc.book_id, c.id, c.name, c.normalized_name, bc.role, bc.position
@@ -206,6 +215,41 @@ func (s *Store) CatalogBookRelationsForBooks(
 			sr.Position = &p
 		}
 		out.Series[bookID] = append(out.Series[bookID], sr)
+		return nil
+	}); err != nil {
+		return out, err
+	}
+
+	// A claim can deliberately contain no memberships, so its source and
+	// revision cannot be derived from the effective membership rows.
+	rows, err = s.db.QueryContext(ctx, `SELECT book_id, scope_user, updated_at
+		FROM book_series_overrides
+		WHERE book_id IN (`+placeholders+`) AND scope_user IN ('', ?)
+		AND deleted_at IS NULL`, append(args, readerScope)...)
+	if err != nil {
+		return out, err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var bookID, scopeUser, updatedAt string
+		if err := scan(&bookID, &scopeUser, &updatedAt); err != nil {
+			return err
+		}
+		shared := scopeUser == store.SharedSeriesScope &&
+			out.SeriesSource[bookID] == store.SeriesSourceFolder
+		if scopeUser == readerScope || shared {
+			at, err := parseTime(updatedAt)
+			if err != nil {
+				return err
+			}
+			out.SeriesSource[bookID] = store.SeriesSourceShared
+			// Not scopeUser == userID: a signed-out caller has a userID of
+			// "", which is also the shared scope, and would be handed every
+			// other reader's shared claim as if it were their own.
+			if userID != "" && scopeUser == readerScope {
+				out.SeriesSource[bookID] = store.SeriesSourcePersonal
+			}
+			out.SeriesClaimUpdatedAt[bookID] = &at
+		}
 		return nil
 	}); err != nil {
 		return out, err

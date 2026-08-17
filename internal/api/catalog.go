@@ -379,6 +379,12 @@ func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[st
 		series = append(series, bookSeriesJSON(s))
 	}
 	out["series"] = series
+	// This describes the effective layer once per book, including an empty
+	// claim whose membership list has no row from which to infer it.
+	out["series_source"] = string(rel.SeriesSource[b.ID])
+	if updatedAt := rel.SeriesClaimUpdatedAt[b.ID]; updatedAt != nil {
+		out["series_claim_updated_at"] = updatedAt.UTC().Format(time.RFC3339Nano)
+	}
 	return out
 }
 
