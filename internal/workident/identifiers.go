@@ -74,14 +74,10 @@ func ForCatalogBook(
 }
 
 // TitleAuthorFingerprint is the fuzzy fallback alias. It must fold exactly
-// the way a client's does or the two never meet, so it reuses the same
-// normalization the catalog uses to match contributor names.
+// the way a client's does or the two never meet, so it delegates to the
+// one implementation, beside the normalization the catalog uses.
 func TitleAuthorFingerprint(title, author string) string {
-	folded := metadata.NormalizeName(title)
-	if folded == "" {
-		return ""
-	}
-	return folded + "|" + metadata.NormalizeName(author)
+	return metadata.TitleAuthorFingerprint(title, author)
 }
 
 // Plan is everything ResolveCatalogBookWork needs for one catalog book,

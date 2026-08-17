@@ -123,8 +123,9 @@ already have.**
 - **Reconciliation is stateless.** A pass enumerates a folder, compares
   it with the `books` rows, reads metadata for new or changed files, and
   upserts. Books not
-  observed by a complete, non-empty pass are marked `missing`; they are
-  not removed.
+  observed by a complete, non-empty pass are marked `missing` and kept —
+  except in a Calibre folder, where the pass reads a curated catalog and
+  a book absent from `metadata.db` is deleted (ADR-0022).
 
 ## 4. Identity: works, editions, aliases
 
@@ -457,10 +458,11 @@ The four rules from ADR-0017 are load-bearing:
 1. **A pass that did not fully succeed never concludes anything is
    absent.** Any per-file read or parse failure, and any hit against the
    file or depth bound, makes the pass incomplete. It may upsert what it
-   saw; it may not mark anything missing.
+   saw; it may not mark anything missing, and it may not purge.
 2. **A zero-observation pass never marks anything missing.** An unmounted
    mount point can be readable and empty, which otherwise hides the
-   whole catalog.
+   whole catalog. The same guard is what stands between an unreadable
+   `metadata.db` and an emptied Calibre library.
 3. **The server never writes under a watched folder.** No temporary
    files, no extracted covers beside a book, no Calibre writes, no
    renames.
@@ -684,8 +686,10 @@ content plan: the catalog is not a transfer pipeline, it is a reflection
 of the folders the operator names. A folder added at runtime is watched
 and reconciled without a restart; a file appearing under it shows up
 without waiting for the safety timer; a file removed by a complete pass
-marks its book missing; a vanished or empty mount marks nothing missing;
-and the server never mutates the watched tree.
+marks its book missing; a book removed from a Calibre library's
+`metadata.db` is deleted, and a work that deletion leaves with no book
+and no reading history goes with it (ADR-0022); a vanished or empty mount
+marks nothing missing; and the server never mutates the watched tree.
 
 ## 11. Future work (explicitly out of v1)
 
@@ -719,6 +723,7 @@ and the server never mutates the watched tree.
 | SQLite write contention at larger scale | WAL remains the self-host default; PostgreSQL parity is enforced through shared store tests |
 | Shared catalog leaks private reading data | Catalog routes have no reading-state vocabulary; per-user works join only through `user_book_works` |
 | Malicious or oversized EPUB exhausts or escapes the server | Bounded EPUB parser, rooted read-only opens, symlink refusal, hostile fixture corpus |
-| A mounted folder disappears and looks empty | Incomplete and zero-observation passes never mark books missing |
+| A mounted folder disappears and looks empty | Incomplete and zero-observation passes never mark books missing and never purge |
+| A Calibre metadata edit rewrites a book and forks the reader's work | A changed digest is registered additively against the work already mapped to the book; a digest another work claims is left for an explicit merge |
 | Publisher content attacks the authenticated web UI | Sandboxed documents, strict CSP, fixed MIME and `nosniff`, optional separate reader origin |
 | Content features expand maintenance cost | ADR-0017 keeps the content side to watched folders and a disposable cover cache |

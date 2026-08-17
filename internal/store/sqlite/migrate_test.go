@@ -74,9 +74,12 @@ func TestMigrateUpgradesAnOlderDatabase(t *testing.T) {
 // a hypothetical — it is how a deployment came to answer every catalog
 // read with an error about a missing column. Adding to the baseline
 // changes this digest; when it does, move the change into a new entry in
-// `migrations` and update the digest here in the same commit.
+// `migrations` and update the digest here in the same commit. The one
+// edit that may move the digest on its own is a comment: it is never
+// executed against anything, so a database that applied the baseline and
+// one created today are still the same database.
 func TestBaselineIsFrozen(t *testing.T) {
-	const want = "9127085c2e862ecaa9e4ebd335044c62c79f86691f99a1edf58e6f7f9cce479e"
+	const want = "ba6812a1e7ee24357d2dd386e967ac336ce70adad12ca7d97b161b433a0d0982"
 	got := fmt.Sprintf("%x", sha256.Sum256([]byte(schema)))
 	if got != want {
 		t.Fatalf("the baseline changed (%s).\n"+

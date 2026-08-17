@@ -46,6 +46,7 @@ loose ends that must come before any of it, are in
 | [0019](0019-library-wide-entities.md) | Catalog entities belong to the library | Later | Accepted | Renaming decided in [0020](0020-series-renaming.md), merge and split in [0021](0021-series-merge-split.md) |
 | [0020](0020-series-renaming.md) | Renaming a series | Later | Accepted; implemented | Merge and split decided in [0021](0021-series-merge-split.md) |
 | [0021](0021-series-merge-split.md) | Merging and splitting a series | Later | Accepted; implemented | All four phases; Calibre write-back constrained here, decided in its own ADR |
+| [0022](0022-calibre-metadata-db-is-authoritative.md) | A Calibre library's `metadata.db` is authoritative | Later | Accepted; implemented | Purge, unservable observations and digest re-registration; amends rules on [0017](0017-folders-not-pipelines.md) |
 
 ## Convention
 

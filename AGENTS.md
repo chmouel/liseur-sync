@@ -139,12 +139,24 @@ of them.
   opens; symlinks refused; no temp files, no cover extracted beside the
   book, no `metadata.db` writes.
 - **A pass that did not fully succeed, or that observed nothing, never
-  marks anything missing.** Both rules are enforced by
+  marks anything missing, and never purges.** Both rules are enforced by
   `ReconcileFolder`'s signature rather than by care.
 - **A plain folder is keyed by relative path; a Calibre folder is keyed
   by `calibre_id`, never by path.** Calibre rewrites a book's directory
   on every title or author edit, and path-keying would lose the reading
   position each time. Calibre metadata is re-read on every pass.
+- **In a Calibre folder, `metadata.db` is authoritative** (ADR-0022): a
+  book a complete, non-empty pass did not find there is *deleted*, not
+  flagged missing, and a work that deletion leaves with no book and no
+  ops, sessions or rollups is deleted with it. A plain folder still
+  keeps a missing book, because there absence is only evidence about a
+  disk. A book Calibre still lists but whose file this server cannot
+  serve is observed as `Unservable`: marked missing, kept, exempt from
+  the purge, and it never makes the pass incomplete. A Calibre book
+  whose bytes changed keeps its readers — the new `sha256` and `ta`
+  fingerprint are registered *additively* against the work already
+  mapped to it, and a value another work already claims is left alone,
+  never merged by a scan.
 - **The op log and sessions are append-only within their retention
   windows.** Same id with a different payload is a conflict, never an
   overwrite. Aged immutable sessions become daily rollup totals plus
