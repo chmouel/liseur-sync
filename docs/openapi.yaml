@@ -484,7 +484,14 @@ paths:
                   results:
                     type: array
                     items: { $ref: "#/components/schemas/OpResult" }
-        "400": { $ref: "#/components/responses/Error" }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: |
+            Malformed batch, or one item naming a work the server no
+            longer holds. The whole batch is rejected atomically. An
+            unknown work comes back as `code: unknown_work` with the
+            `work_id` and the offending `op_id`: re-resolve the book to
+            refresh its cached identity, then retry.
 
   /v1/changes:
     get:
@@ -593,7 +600,14 @@ paths:
               schema:
                 type: object
                 properties: { accepted: { type: integer } }
-        "400": { $ref: "#/components/responses/Error" }
+        "400":
+          $ref: "#/components/responses/Error"
+          description: |
+            Malformed batch, or one item naming a work the server no
+            longer holds. The whole batch is rejected atomically. An
+            unknown work comes back as `code: unknown_work` with the
+            `work_id` and the offending `session_id`: re-resolve the book
+            to refresh its cached identity, then retry.
         "409": { $ref: "#/components/responses/Error", description: "session_id reused with different payload" }
 
   /v1/insights/summary:
@@ -1618,12 +1632,36 @@ components:
 
   responses:
     Error:
-      description: Error with a human-readable reason
+      description: |
+        Error with a human-readable reason. Most failures carry only
+        `error`; a refusal a client can act on also carries a
+        machine-readable `code` and the identifiers that explain it.
+        Clients must key any recovery off `code`, never off the message
+        text.
       content:
         application/json:
           schema:
             type: object
-            properties: { error: { type: string } }
+            required: [error]
+            properties:
+              error: { type: string }
+              code:
+                type: string
+                enum: [unknown_work]
+                description: |
+                  Present when the refusal is recoverable. `unknown_work`
+                  means a batch item named a work the server no longer
+                  holds — refresh the cached work identity (re-resolve the
+                  book) and retry the batch.
+              work_id:
+                type: string
+                description: The work the server no longer holds.
+              op_id:
+                type: string
+                description: The op that named the unknown work.
+              session_id:
+                type: string
+                description: The session that named the unknown work.
     StatusOK:
       description: OK
       content:

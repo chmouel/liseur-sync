@@ -76,7 +76,7 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := s.St.WorkByID(r.Context(), tok.UserID, in.WorkID); err != nil {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": unknown work")
+			writeUnknownWork(w, "session "+in.SessionID+": unknown work", "session_id", in.SessionID, in.WorkID)
 			return
 		}
 		sessions[i] = store.Session{

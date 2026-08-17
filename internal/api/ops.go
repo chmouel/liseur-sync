@@ -63,7 +63,7 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 		}
 		// Verify the work belongs to the user.
 		if _, err := s.St.WorkByID(r.Context(), tok.UserID, in.WorkID); err != nil {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": unknown work")
+			writeUnknownWork(w, "op "+in.OpID+": unknown work", "op_id", in.OpID, in.WorkID)
 			return
 		}
 		ops[i] = store.Op{

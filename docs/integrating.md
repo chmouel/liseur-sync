@@ -193,6 +193,24 @@ keep it until the server acknowledges it. A network retry then reports
 the original `seq` instead of writing twice. Never reuse an `op_id` for
 a different position; the server rejects it as a conflict.
 
+One refusal is recoverable. Orphan cleanup can delete a work that has
+no catalog mapping and no reading history, and a batch naming it then
+fails — atomically, nothing is stored — with `400` and a structured
+body:
+
+```json
+{ "error": "op <op-id>: unknown work", "code": "unknown_work",
+  "work_id": "…", "op_id": "…" }
+```
+
+`POST /v1/sessions` answers the same shape keyed by `session_id`. Key
+the recovery off `code`, never off the message text: re-resolve the
+book (`POST /v1/works/resolve`, or `/v1/books/{id}/resolve` for a
+catalog book), reseed from the fresh work's positions, rebuild the
+batch under the new `work_id` — the `op_id` derives from it — and
+retry. Any other `400` is malformed input and will never be accepted
+as-is.
+
 `progression` is the lingua franca every device understands. `locator`
 is your reader's exact position — a Readium locator, a CFI, whatever
 your engine uses. The server stores and replays it verbatim and never
@@ -716,7 +734,9 @@ round-trips verbatim to kosync pulls.
 ## Errors and limits
 
 - Every error is `{"error": "reason"}` with a 4xx; a 5xx is a server
-  bug, report it.
+  bug, report it. A refusal a client can recover from also carries a
+  machine-readable `code` — currently only `unknown_work` (see
+  [Pushing](#pushing)).
 - Batch limits: 500 ops, 1000 sessions per request, 1
   MiB body, 16 KiB per `locator`.
 - Auth endpoints are rate-limited per
