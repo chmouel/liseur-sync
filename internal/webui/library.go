@@ -52,6 +52,13 @@ const (
 	sortLastRead = "read"
 )
 
+// The sort direction. desc is the default for both fields: newest
+// added, or most recently read, first.
+const (
+	sortDirDesc = "desc"
+	sortDirAsc  = "asc"
+)
+
 // finished is where a progression stops being "reading". It is not 1.0
 // because no reader ever lands exactly on the last byte: back matter,
 // an index and a colophon all sit past the point a book is over.
@@ -153,6 +160,8 @@ type LibraryView struct {
 	Filter  string
 	Sort    string
 	SortURL string
+	Dir     string
+	DirURL  string
 	NextURL string
 	Notice  string
 	Problem string
@@ -172,6 +181,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		View:    readPrefs(r).View,
 		Filter:  normalizeFilter(r.URL.Query().Get("filter")),
 		Sort:    normalizeSort(r.URL.Query().Get("sort")),
+		Dir:     normalizeDir(r.URL.Query().Get("dir")),
 	}
 	selected := r.URL.Query().Get("folder")
 	if selected == "" && len(folders) > 0 {
@@ -185,9 +195,12 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 			v.Selected = selected
 		}
 	}
-	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, "")
-	v.Chips = libraryChips(v.Selected, v.Filter, v.Sort)
-	v.SortURL = libraryURL(v.Selected, v.Filter, otherSort(v.Sort), "")
+	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, "")
+	v.Chips = libraryChips(v.Selected, v.Filter, v.Sort, v.Dir)
+	// Switching field resets direction to the default: a field's
+	// natural order is not the other field's reversal.
+	v.SortURL = libraryURL(v.Selected, v.Filter, otherSort(v.Sort), "", "")
+	v.DirURL = libraryURL(v.Selected, v.Filter, v.Sort, otherDir(v.Dir), "")
 
 	// A folder id from the query string that no longer exists is
 	// treated as no selection at all, rather than as an error: it is
@@ -221,7 +234,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	}
 	v.Rows = rows
 	if next != "" {
-		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, next)
+		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
 	v.Hero = s.libraryHero(r, works, workBookIDs, loc)
 
@@ -302,7 +315,7 @@ func (s *Server) libraryRows(
 		return s.readingRows(r, v, works, workBookIDs, loc), "", nil
 	}
 
-	books, next, err := s.listBooksPage(r, v.Selected)
+	books, next, err := s.listBooksPage(r, v.Selected, v.Dir)
 	if err != nil {
 		return nil, "", err
 	}
@@ -383,6 +396,9 @@ func (s *Server) readingRows(
 		rows = kept
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
+		if v.Dir == sortDirAsc {
+			return rows[i].lastActiveAt < rows[j].lastActiveAt
+		}
 		return rows[i].lastActiveAt > rows[j].lastActiveAt
 	})
 	return rows
@@ -534,10 +550,38 @@ func sortLabel(current string) string {
 	return "Recently added"
 }
 
+func normalizeDir(raw string) string {
+	if strings.ToLower(strings.TrimSpace(raw)) == sortDirAsc {
+		return sortDirAsc
+	}
+	return sortDirDesc
+}
+
+func otherDir(current string) string {
+	if current == sortDirAsc {
+		return sortDirDesc
+	}
+	return sortDirAsc
+}
+
+func dirLabel(current string) string {
+	if current == sortDirAsc {
+		return "Oldest first"
+	}
+	return "Newest first"
+}
+
+func dirArrow(current string) string {
+	if current == sortDirAsc {
+		return "↑"
+	}
+	return "↓"
+}
+
 // libraryURL keeps the whole state of the page in its URL, so a filtered
 // shelf is something you can send to somebody and an htmx continuation
 // asks for more of what is on screen rather than more of the default.
-func libraryURL(folder, filter, sortBy, cursor string) string {
+func libraryURL(folder, filter, sortBy, dir, cursor string) string {
 	q := url.Values{}
 	if folder != "" {
 		q.Set("folder", folder)
@@ -548,6 +592,9 @@ func libraryURL(folder, filter, sortBy, cursor string) string {
 	if sortBy != "" && sortBy != sortRecent {
 		q.Set("sort", sortBy)
 	}
+	if dir != "" && dir != sortDirDesc {
+		q.Set("dir", dir)
+	}
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
@@ -557,7 +604,7 @@ func libraryURL(folder, filter, sortBy, cursor string) string {
 	return "library?" + q.Encode()
 }
 
-func libraryChips(folder, filter, sortBy string) []FilterChip {
+func libraryChips(folder, filter, sortBy, dir string) []FilterChip {
 	defs := []struct{ key, label string }{
 		{filterAll, "All"},
 		{filterReading, "Reading"},
@@ -570,7 +617,7 @@ func libraryChips(folder, filter, sortBy string) []FilterChip {
 		chips = append(chips, FilterChip{
 			Key:    d.key,
 			Label:  d.label,
-			URL:    libraryURL(folder, d.key, sortBy, ""),
+			URL:    libraryURL(folder, d.key, sortBy, dir, ""),
 			Active: d.key == filter,
 		})
 	}

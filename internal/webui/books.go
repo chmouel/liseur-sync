@@ -43,9 +43,11 @@ func isHTMXRequest(r *http.Request) bool {
 }
 
 // listBooksPage returns one page of a folder's books and the cursor for
-// the next, or "" when this is the last one.
+// the next, or "" when this is the last one. dir picks the direction:
+// sortDirAsc pages oldest first, anything else (the default) newest
+// first.
 func (s *Server) listBooksPage(
-	r *http.Request, folderID string,
+	r *http.Request, folderID, dir string,
 ) ([]store.CatalogBook, string, error) {
 	after, err := decodeBooksCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
@@ -54,7 +56,11 @@ func (s *Server) listBooksPage(
 		// than the first page.
 		after = nil
 	}
-	books, err := s.St.ListCatalogBooks(r.Context(), folderID, after, booksPageSize)
+	list := s.St.ListRecentCatalogBooks
+	if dir == sortDirAsc {
+		list = s.St.ListCatalogBooks
+	}
+	books, err := list(r.Context(), folderID, after, booksPageSize)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, "", nil
