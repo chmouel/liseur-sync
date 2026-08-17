@@ -55,6 +55,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogBookRelationsForBooks", func(t *testing.T) {
 		testCatalogBookRelationsForBooks(t, open)
 	})
+	t.Run("CatalogSeriesSourceIsPerReader", func(t *testing.T) {
+		testCatalogSeriesSourceIsPerReader(t, open)
+	})
 	t.Run("UserBookWorkIsPerUser", func(t *testing.T) {
 		testUserBookWorkIsPerUser(t, open)
 	})
@@ -117,6 +120,9 @@ func Run(t *testing.T, open OpenFunc) {
 	})
 	t.Run("SeriesClaimEmptyMeansNoSeries", func(t *testing.T) {
 		testSeriesClaimEmptyMeansNoSeries(t, open)
+	})
+	t.Run("SeriesClaimRevisionPrecondition", func(t *testing.T) {
+		testSeriesClaimRevisionPrecondition(t, open)
 	})
 	t.Run("SeriesClaimSurvivesReconcile", func(t *testing.T) {
 		testSeriesClaimSurvivesReconcile(t, open)

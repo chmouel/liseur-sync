@@ -1689,6 +1689,7 @@ components:
         - cover_url
         - contributors
         - series
+        - series_source
       properties:
         book_id: { type: string, format: uuid }
         folder_id: { type: string, format: uuid }
@@ -1761,6 +1762,13 @@ components:
             `source` field names the layer now in force for this
             membership.
           items: { $ref: "#/components/schemas/CatalogSeriesMembership" }
+        series_source:
+          allOf: [{ $ref: "#/components/schemas/SeriesSource" }]
+          description: Effective layer for the whole book, including when `series` is empty. `personal` is only the caller's own claim.
+        series_claim_updated_at:
+          type: string
+          format: date-time
+          description: Revision of the effective shared or personal claim. Omitted for the folder layer.
 
     CatalogSeriesMembership:
       type: object
@@ -1826,6 +1834,9 @@ components:
           description: |
             `null` means no personal claim exists; `[]` means the
             personal layer claims the book is in no series.
+        shared_updated_at: { type: string, format: date-time }
+        personal_updated_at: { type: string, format: date-time }
+        outcome: { $ref: "#/components/schemas/SeriesClaimOutcome" }
 
     BookSeriesClaim:
       type: object
@@ -1834,19 +1845,8 @@ components:
         `series` array is the whole claim, not a diff. Omitted or empty
         means "this book is in no series"; use `DELETE` to remove the
         claim and fall back.
-        shared_updated_at: { type: string, format: date-time }
-        personal_updated_at: { type: string, format: date-time }
-        outcome: { $ref: "#/components/schemas/SeriesClaimOutcome" }
       properties:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
-        series:
-          type: array
-          maxItems: 64
-          default: []
-          items: { $ref: "#/components/schemas/BookSeriesClaimItem" }
-
-    BookSeriesClaimItem:
-      type: object
         client_ts:
           type: string
           format: date-time
@@ -1855,6 +1855,14 @@ components:
           type: [string, "null"]
           format: date-time
           description: Last server revision observed for this layer. A non-matching revision returns `stale` without mutation.
+        series:
+          type: array
+          maxItems: 64
+          default: []
+          items: { $ref: "#/components/schemas/BookSeriesClaimItem" }
+
+    BookSeriesClaimItem:
+      type: object
       description: |
         One series membership in a claim. Exactly one of `series_id` and
         `name` is accepted. A `series_id` must already exist. A `name`
@@ -1871,6 +1879,11 @@ components:
           type: number
           description: Omitted when the claimant does not place the book in the series; NaN and infinities are rejected.
 
+    SeriesClaimOutcome:
+      type: string
+      enum: [applied, stale, duplicate]
+      description: "`applied` changed the layer; `stale` was older than its revision; `duplicate` retried the current deletion."
+
     SeriesReorder:
       type: object
       description: |
@@ -1879,11 +1892,6 @@ components:
         the named series and preserves each book's other series
         memberships.
       required: [order]
-    SeriesClaimOutcome:
-      type: string
-      enum: [applied, stale, duplicate]
-      description: "`applied` changed the layer; `stale` was older than its revision; `duplicate` retried the current deletion."
-
       properties:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
         order:
