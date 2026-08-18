@@ -1201,6 +1201,15 @@ type Store interface {
 	// -----------------------------------------------------------------
 
 	CatalogBookByID(ctx context.Context, bookID string) (CatalogBook, error)
+	// CatalogBookByDigest finds an active book by its content digest.
+	//
+	// It is what makes an upload idempotent (ADR-0023): the bytes are
+	// the key, so a client that retries a transfer costs one indexed
+	// lookup and creates nothing. It is also how an upload finds the
+	// book its own reconcile pass just made, which is why it does not
+	// take a folder id — the same file may already be somewhere else,
+	// and that copy is the answer.
+	CatalogBookByDigest(ctx context.Context, sha string) (CatalogBook, error)
 	// ListCatalogBooks pages one folder's books, oldest first.
 	ListCatalogBooks(ctx context.Context, folderID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// ListRecentCatalogBooks pages the same books newest first, for the

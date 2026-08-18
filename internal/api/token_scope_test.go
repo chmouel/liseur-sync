@@ -135,6 +135,7 @@ const (
 	gateInsights                       // bearer, scope read-insights
 	gateLibraryRead                    // bearer, scope library-read
 	gateLibraryManage                  // bearer, scope library-manage
+	gateLibraryUpload                  // bearer, scope library-upload
 	gateResolveBoth                    // bearer, library-read AND sync
 	gateOPDS                           // HTTP Basic, scope library-read
 	gateTokenSelf                      // bearer, no scope beyond authenticating
@@ -188,6 +189,11 @@ var registeredRouteGates = map[string]routeGate{
 	"POST /v1/entities/{kind}/{entity}/split":                gateLibraryManage,
 	"GET /v1/entities/{kind}/{entity}/bindings":              gateLibraryManage,
 	"DELETE /v1/entities/{kind}/{entity}/bindings/{binding}": gateLibraryManage,
+
+	// ADR-0023. Deliberately not library-manage: that scope grants
+	// series claims and nothing else, and writing to this server's disk
+	// is a different question.
+	"POST /v1/folders/{folder}/books": gateLibraryUpload,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
 
@@ -301,6 +307,7 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 	libraryReadOnly := mint(store.ScopeLibraryRead)
 	both := mint(store.ScopeLibraryRead, store.ScopeSync)
 	libraryManageOnly := mint(store.ScopeLibraryManage)
+	libraryUploadOnly := mint(store.ScopeLibraryUpload)
 
 	// A real login credential, minted the same way HandleLogin mints one
 	// — through Login itself, in-process, since this matrix is about
@@ -398,6 +405,21 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				}
 				if got := bearer(method, path, libraryManageOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
 					t.Errorf("library-manage token on a library-manage route: %d, should have passed the gate", got)
+				}
+			case gateLibraryUpload:
+				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
+					t.Errorf("no token: %d, want 401", got)
+				}
+				// Tidying your own shelves is not permission to write to
+				// the disk they sit on.
+				if got := bearer(method, path, libraryManageOnly); got != http.StatusForbidden {
+					t.Errorf("library-manage token on a library-upload route: %d, want 403", got)
+				}
+				if got := bearer(method, path, libraryReadOnly); got != http.StatusForbidden {
+					t.Errorf("library-read token on a library-upload route: %d, want 403", got)
+				}
+				if got := bearer(method, path, libraryUploadOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
+					t.Errorf("library-upload token on a library-upload route: %d, should have passed the gate", got)
 				}
 			case gateResolveBoth:
 				if got := bearer(method, path, ""); got != http.StatusUnauthorized {

@@ -164,6 +164,14 @@ func cmdServe(args []string) error {
 	// offering an unthrottled way around the other.
 	loginLimiter := auth.NewRateLimiter(10, time.Minute)
 
+	// The reconciler is built before the API server because an upload
+	// hands its bytes straight to a pass (ADR-0023), and the watcher
+	// wraps the same reconciler rather than a second one.
+	reconciler := content.NewReconciler(st, content.ScanLimits{
+		MaxFiles: cfg.Content.ScanMaxFiles,
+		MaxDepth: cfg.Content.ScanMaxDepth,
+	}, cfg.EPUBLimits(), slog.Default())
+
 	apiSrv := &api.Server{
 		St:           st,
 		Auth:         auth.NewService(st),
@@ -171,6 +179,7 @@ func cmdServe(args []string) error {
 		LoginLimiter: loginLimiter,
 		Files:        content.NewFiles(st),
 		Covers:       cache,
+		Ingest:       content.NewIngester(reconciler),
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,
@@ -183,10 +192,7 @@ func cmdServe(args []string) error {
 	// every folder at startup, whenever a tree changes, and on a slow
 	// safety timer; a pass is idempotent and holds no state, so there is
 	// no queue to drain and nothing to recover on restart (ADR-0017).
-	watcher := content.NewWatcher(st, content.NewReconciler(st, content.ScanLimits{
-		MaxFiles: cfg.Content.ScanMaxFiles,
-		MaxDepth: cfg.Content.ScanMaxDepth,
-	}, cfg.EPUBLimits(), slog.Default()), slog.Default())
+	watcher := content.NewWatcher(st, reconciler, slog.Default())
 	// The UI delegates downloads and covers back to the API server, so
 	// the two surfaces share one implementation of the rules about what
 	// a stored file may claim to be.
