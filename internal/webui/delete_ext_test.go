@@ -52,7 +52,7 @@ func rmBook(t *testing.T, f *booksFixture, relative string) {
 func TestDeleteWorkForgetsAWorkNoBookBacks(t *testing.T) {
 	f, _ := missingBookFixture(t)
 
-	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
 	if !strings.Contains(page, `action="works/w-elsewhere/delete"`) {
 		t.Fatalf("a work no book backs has no delete on the shelf:\n%s", page)
 	}
@@ -184,7 +184,7 @@ func TestDeleteMissingBookIsAdminWork(t *testing.T) {
 	if _, err := f.st.WorkByID(t.Context(), "u1", "w-vanished"); err != nil {
 		t.Fatalf("a reader's work went with the catalog row: %v", err)
 	}
-	_, page = f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	_, page = f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
 	if !strings.Contains(page, `action="works/w-vanished/delete"`) {
 		t.Fatalf("the work the delete orphaned has no delete of its own:\n%s", page)
 	}

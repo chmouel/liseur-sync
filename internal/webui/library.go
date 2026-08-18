@@ -547,8 +547,21 @@ func (s *Server) markLibraryReadable(r *http.Request, rows []LibraryRow) []Libra
 	return rows
 }
 
+// normalizeFilter is the chip a request is asking for.
+//
+// Asking for nothing is the landing view, and that is "on this server"
+// rather than everything: "all" also carries the works this server holds
+// no file for, and a wall of coverless text tiles is a poor first
+// impression of a library. They are one chip away, which is where a
+// thing that is not really on the shelf belongs.
+//
+// A name that is not a chip is still everything, though. That is the one
+// case where the wrong answer should be the generous one: a mistyped or
+// stale link should not quietly hide books.
 func normalizeFilter(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return filterHere
 	case filterReading:
 		return filterReading
 	case filterUnread:

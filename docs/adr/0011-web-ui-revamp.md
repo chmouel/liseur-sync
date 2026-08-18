@@ -58,7 +58,11 @@ than redirected, this project never having shipped.
 
 Over the grid are filter chips (`All`, `Reading`, `Unread`, `Finished`,
 `On this server`) and a sort, both kept in the URL so a filtered shelf
-is a link somebody can send. Above them is a continue-reading banner:
+is a link somebody can send. `On this server` is the one the page lands
+on, added later: the union above is what the library *is*, but a work
+with no file is a card you cannot open, and a shelf should open on the
+books. `All` is one chip away and is still the whole union. Above them
+is a continue-reading banner:
 the most recently started unfinished book whose file is here, absent
 entirely when there is nothing to go back to. It repeats a card from
 the grid on purpose — coming back to a half-read book is the commonest
