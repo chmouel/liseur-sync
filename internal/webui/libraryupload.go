@@ -28,7 +28,7 @@ import (
 // "uploaded" would be a lie the second time.
 type Uploader interface {
 	ReceiveUploadTo(
-		w http.ResponseWriter, r *http.Request, folder store.Folder,
+		w http.ResponseWriter, r *http.Request, folder store.Folder, userID string,
 	) (bookID string, duplicate bool, err error)
 }
 
@@ -36,7 +36,6 @@ type Uploader interface {
 func (s *Server) handleLibraryUpload(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
-	_ = u
 	// Relative to the page the form is on, not to this route: the
 	// browser resolves a relative Location against the URL it posted to
 	// (/ui/library/upload), so "library" would land on /ui/library/library.
@@ -66,7 +65,7 @@ func (s *Server) handleLibraryUpload(
 		s.uploadDone(w, back, "", "that folder does not accept uploads")
 		return
 	}
-	_, duplicate, err := s.Uploads.ReceiveUploadTo(w, r, folder)
+	_, duplicate, err := s.Uploads.ReceiveUploadTo(w, r, folder, u.ID)
 	if err != nil {
 		s.uploadDone(w, back, "", err.Error())
 		return

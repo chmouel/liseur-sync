@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,6 +24,36 @@ type catalogResolveResponse struct {
 	Confidence  string           `json:"confidence"`
 	Created     bool             `json:"created"`
 	Identifiers []identifierJSON `json:"identifiers"`
+}
+
+// resolveBookWork joins a catalog book to one user's work and is the
+// whole of what resolving means, so the route a reader asks through and
+// the upload that does it unasked cannot decide it differently.
+//
+// It returns the identifiers it resolved on as well, because the route
+// hands them back and the caller has no other way to learn which digest
+// the server matched.
+func (s *Server) resolveBookWork(
+	ctx context.Context, userID, bookID string, confirmed bool, at time.Time,
+) (store.WorkResolution, []store.Identifier, error) {
+	book, err := s.St.CatalogBookByID(ctx, bookID)
+	if err != nil {
+		return store.WorkResolution{}, nil, err
+	}
+	bookIDs, author, err := workident.Evidence(ctx, s.St, bookID)
+	if err != nil {
+		return store.WorkResolution{}, nil, err
+	}
+	workID, err := newID()
+	if err != nil {
+		return store.WorkResolution{}, nil, err
+	}
+	proposed, editions, ids := workident.Plan(userID, workID, book, bookIDs, author)
+	proposed.CreatedAt = at
+	result, err := s.St.ResolveCatalogBookWork(
+		ctx, userID, bookID, proposed, editions, ids, confirmed, at,
+	)
+	return result, ids, err
 }
 
 // HandleResolveBookWork implements POST /v1/books/{id}/resolve: it joins a
@@ -55,31 +86,10 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	result, ids, err := s.resolveBookWork(r.Context(), tok.UserID, bookID, req.Confirmed, time.Now())
 	if err != nil {
-		writeCatalogError(w, err, "book not found")
-		return
-	}
-	bookIDs, author, err := workident.Evidence(r.Context(), s.St, bookID)
-	if err != nil {
-		writeCatalogError(w, err, "book not found")
-		return
-	}
-
-	workID, err := newID()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "id generation failed")
-		return
-	}
-	proposed, editions, ids := workident.Plan(tok.UserID, workID, book, bookIDs, author)
-	proposed.CreatedAt = time.Now()
-
-	result, err := s.St.ResolveCatalogBookWork(r.Context(), tok.UserID, bookID,
-		proposed, editions, ids, req.Confirmed, time.Now())
-	if err != nil {
-		// The read above already found the book, so reaching this means
-		// it was replaced or its folder removed in between. A race is
-		// still a 404, not a 500.
+		// A book that was replaced, or whose folder was removed, between
+		// the lookup and the write is still a 404 rather than a 500.
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "book not found")
 			return

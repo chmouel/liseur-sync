@@ -141,6 +141,37 @@ neither finds it, `202` with no `book_id` — the bytes are safe, the
 watcher will catch them, and the client resolves the book later rather
 than being told its upload failed when it did not.
 
+### The upload names the work, because only it can
+
+A book added on a device syncs its position long before it is sent
+anywhere. So by the time the file arrives the server usually already
+holds a *work* for it — the reader's place, and no file to open. The
+upload then adds a catalog book beside that work, and unless something
+joins the two the library draws the same book twice: one card with the
+reading, one with the file.
+
+The join is `user_book_work`, and `POST /v1/books/{id}/resolve` is how a
+client asks for it. But the client cannot always ask: a book sent from
+the browser form has no client, and one sent from the phone must know to
+re-resolve under its new catalog identity. At ingest the server holds
+both halves already — the file's digest, and the uploader — so it does
+the join itself, through the same `resolveBookWork` the route uses, so
+the two cannot drift.
+
+It runs for a duplicate answer as much as a fresh one: a retry over a bad
+connection must settle the work as surely as the first attempt, or
+whether the reading is joined depends on the network. It resolves
+`confirmed = false` — a digest match joins on its own, but a title and
+author guess is still a guess, and uploading a file is not the reader
+saying yes to it. And it is advisory: a failed join is logged and the
+upload still succeeds, because the bytes are on the disk and the client's
+own resolve will come along later.
+
+This is the one write outside a pass, and it is not a catalog table: the
+book row is still `ReconcileFolder`'s alone. `user_book_work` is per
+user, which is precisely why the pass — which knows no user — could never
+have written it.
+
 ### A Calibre folder is written the way Calibre writes
 
 A Calibre library is not a directory of EPUBs that happens to have a

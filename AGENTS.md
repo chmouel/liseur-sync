@@ -71,7 +71,9 @@ an administrator marked `accepts_uploads` can be written into by
 ([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)), and that route
 creates a file (or, in a Calibre folder, a Calibre book) and then runs
 a pass. It never touches a catalog table itself, so an uploaded book
-and a book somebody copied in by hand are the same kind of thing. One watcher goroutine
+and a book somebody copied in by hand are the same kind of thing. (It
+does write one non-catalog row: the uploader's `user_book_work` link, so
+a book whose position was already syncing does not appear twice.) One watcher goroutine
 (`internal/content/watch_linux.go`) triggers a pass at startup, on a
 debounced fsnotify event, and on a slow safety timer. There is no ingest
 job, no content-addressed store, no quota, no trash and no review queue:
