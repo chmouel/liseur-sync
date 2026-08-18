@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"unicode"
 
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -36,8 +37,8 @@ var ErrNameExhausted = errors.New("content: no free filename")
 // one title is not a case worth serving.
 const maxNameAttempts = 100
 
-// Place writes a publication into a folder that accepts uploads and
-// answers with its path relative to the root.
+// Place writes a publication into a plain folder that accepts uploads
+// and answers with its path relative to the root.
 //
 // The bytes come from a file the caller already validated somewhere
 // outside every folder root, so a partial transfer was never visible to
@@ -47,7 +48,7 @@ const maxNameAttempts = 100
 // half-copied EPUB under a watched root is litter that every future pass
 // would trip over.
 func Place(
-	ctx context.Context, folder store.Folder, src io.Reader, base string,
+	ctx context.Context, folder store.Folder, up Upload,
 ) (string, error) {
 	if !folder.AcceptsUploads {
 		return "", ErrUploadsRefused
@@ -58,7 +59,7 @@ func Place(
 	}
 	defer root.Close()
 
-	name := SanitizeBookFilename(base)
+	name := SanitizeBookFilename(up.Base)
 	for attempt := range maxNameAttempts {
 		candidate := name + ".epub"
 		if attempt > 0 {
@@ -72,7 +73,7 @@ func Place(
 		if err != nil {
 			return "", fmt.Errorf("content: create %q: %w", candidate, err)
 		}
-		if err := copyInto(ctx, file, src); err != nil {
+		if err := copyInto(ctx, file, up.Source); err != nil {
 			file.Close()
 			_ = root.Remove(candidate)
 			return "", err
@@ -164,6 +165,23 @@ func BookFilenameFrom(title, author, uploaded string) string {
 	}
 }
 
+// Upload is one publication on its way into a folder, already validated
+// and already spooled somewhere outside every folder root.
+//
+// It carries the publication's own metadata because a Calibre folder
+// needs it: there, adding a book means writing rows, and the rows say
+// what the EPUB says. A plain folder uses only Base.
+type Upload struct {
+	Source io.Reader
+	Size   int64
+	// Base is the filename to build from, for a plain folder.
+	Base string
+	// Meta is the publication's declared metadata, for a Calibre folder.
+	Meta epub.Metadata
+	// Cover is the publication's cover as JPEG bytes, or nil.
+	Cover []byte
+}
+
 // Ingester places a publication and then reconciles the folder it went
 // into, which is the whole of ADR-0023's write path: the catalog is
 // still written by a pass and only by a pass, so an uploaded book and a
@@ -178,15 +196,23 @@ func NewIngester(rec *Reconciler) *Ingester { return &Ingester{rec: rec} }
 // Ingest writes the publication into the folder and reads the folder
 // back.
 //
+// Which of the two write paths runs is the folder's kind and nothing
+// else. A plain folder gets a file; a Calibre folder gets a Calibre
+// book, because a file alone would not be one (ADR-0022).
+//
 // The reconcile error is deliberately not returned. By the time it runs
 // the bytes are on the disk and durable, so a pass that failed — or that
 // rules 1 and 2 stopped from concluding anything — has not lost the
 // upload. The watcher will come back to it. What the caller needs to
 // know is whether the file landed, and that is what the error says.
 func (i *Ingester) Ingest(
-	ctx context.Context, folder store.Folder, src io.Reader, base string,
+	ctx context.Context, folder store.Folder, up Upload,
 ) (string, error) {
-	relative, err := Place(ctx, folder, src, base)
+	place := Place
+	if folder.Kind == store.FolderCalibre {
+		place = placeCalibre
+	}
+	relative, err := place(ctx, folder, up)
 	if err != nil {
 		return "", err
 	}
