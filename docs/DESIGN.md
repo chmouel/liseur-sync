@@ -449,6 +449,16 @@ was not there (ADR-0023); it never modifies, renames or deletes. The
 only unconditionally writable directory in the content system is the
 cover cache.
 
+There is one implementation of that write, reached two ways.
+`api.ReceiveUpload` bounds the body, validates the EPUB, hashes it,
+short-circuits on a digest the catalog already holds, and hands the
+bytes to a pass. `POST /v1/folders/{folder}/books` calls it for an app
+holding the `library-upload` scope; the library page's form calls it for
+a signed-in browser, through the same kind of interface downloads and
+covers already use. A browser has no scope, so its gate is the folder
+flag plus the session — the decision about which folder may be written
+to having already been made, once, by whoever marked it.
+
 ### 9.2 Reconcile passes
 
 A pass is stateless and idempotent. It enumerates one folder, compares

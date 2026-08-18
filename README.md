@@ -38,9 +38,14 @@ A folder is read-only from the server's point of view unless you ask
 otherwise. Books stay where they already are; the server never modifies,
 renames, or deletes anything below the folder root. A folder an
 administrator marks as accepting uploads can have books *added* to it —
-a new file, or a new book in a Calibre library — and nothing else. The
-only other files the server creates are rendered covers in its
-disposable cache directory.
+a new file, or a new book in a Calibre library — and nothing else, from
+the library page in your browser or from an app holding a token with the
+`library-upload` scope. The only other files the server creates are
+rendered covers in its disposable cache directory.
+
+```
+liseur-sync admin folder-uploads <folder-id> on
+```
 
 Browse by series, contributor, or tag, and search across the collection.
 In a plain folder, the directory tree is the organisation: a
