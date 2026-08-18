@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
@@ -31,6 +32,14 @@ type Server struct {
 	// reports 503: a server with no watcher has nothing to reconcile
 	// with, so accepting the bytes would be a promise it cannot keep.
 	Ingest BookIngest
+	// uploading serialises an upload from the digest check through the
+	// write it guards. Two copies of one book arriving together would
+	// otherwise both find nothing in the catalog and both be written,
+	// which is the single thing the digest is there to prevent. The
+	// body is already spooled before this is taken, uploads are rare,
+	// and a book is small: one lock is cheaper than the machinery to
+	// hold one per digest.
+	uploading sync.Mutex
 	// Kosync is the kosync adapter (nil disables it regardless of
 	// config).
 	Kosync interface {
