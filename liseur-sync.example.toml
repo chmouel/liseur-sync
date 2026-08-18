@@ -40,11 +40,18 @@ driver = "sqlite"                  # sqlite | postgres
 url = "liseur-sync.db"             # sqlite path, or postgres DSN
 
 [content]
-# The only directory this server writes to. It holds rendered covers and
-# nothing else, so it is safe to delete while the server is running: the
-# cost is a re-render. Books are never copied here — the server reads
-# them from the folders you point it at and never writes below one.
+# Rendered covers, and the spool an upload is received into before it is
+# placed. Safe to delete while the server is running: the cost is a
+# re-render and any upload in flight.
 cache_dir = "cache"
+
+# The largest publication an upload may carry. Not a quota — nothing
+# counts what a folder holds — but the size above which the server stops
+# reading a request body, so one POST cannot fill a disk. Uploads only
+# reach folders an administrator marked with
+# `liseur-sync admin folder-uploads <id> on`; every other folder is
+# read-only to this server, as it always was.
+max_upload_bytes = 209715200              # 200 MiB
 
 epub_max_entries = 10000
 epub_max_directory_bytes = 67108864       # 64 MiB
