@@ -75,6 +75,31 @@ func grid(page string) string {
 	return page[i:]
 }
 
+// TestTheLandingViewIsWhatIsOnThisServer pins which chip an address
+// with no filter means. Orphan works — a reader's position for a book
+// this server holds no file for — are worth keeping and poor to open
+// on, being coverless text tiles among covers. So they moved one chip
+// away rather than being hidden.
+func TestTheLandingViewIsWhatIsOnThisServer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		query string
+		want  bool
+	}{
+		"no filter at all":          {"", false},
+		"asking for all":            {"&filter=all", true},
+		"asking for here":           {"&filter=here", false},
+		"a chip that is not a chip": {"&filter=nonsense", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := libraryFixture(t)
+			_, page := f.get(t, "/ui/library?folder="+f.folder+tc.query, f.cookie)
+			if got := strings.Contains(page, "works/w-elsewhere"); got != tc.want {
+				t.Errorf("orphan work shown = %v, want %v:\n%s", got, tc.want, page)
+			}
+		})
+	}
+}
+
 // TestLibraryPageIsTheUnionOfBothOldPages is the whole reason this page
 // exists. Before it there were two — a catalog and a reading history —
 // and a book that was in both appeared twice while a book that was in
@@ -83,7 +108,8 @@ func grid(page string) string {
 func TestLibraryPageIsTheUnionOfBothOldPages(t *testing.T) {
 	f, ids := libraryFixture(t)
 
-	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	// Orphan works live under "all"; the landing view is what is here.
+	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
 	for what, want := range map[string]string{
 		"a book that has been read":       `books/` + ids["midway"],
 		"a book that has never been read": `books/` + ids["fresh"],
@@ -199,7 +225,7 @@ func TestLibraryHeroResumesTheLastBook(t *testing.T) {
 func TestLibraryCardOpensTheBookRatherThanAMenu(t *testing.T) {
 	f, ids := libraryFixture(t)
 
-	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
 	if !strings.Contains(page, `class="cardopen" href="books/`+ids["fresh"]+`"`) {
 		t.Errorf("a card has no way to its book's page:\n%s", page)
 	}

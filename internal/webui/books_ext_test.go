@@ -580,7 +580,7 @@ func TestReadingCardHidesReadWithoutAFile(t *testing.T) {
 	}
 	f.reconcile(t)
 
-	_, page := f.get(t, "/ui/library", f.cookie)
+	_, page := f.get(t, "/ui/library?filter=all", f.cookie)
 	if strings.Contains(page, `books/`+bookID+`/read`) {
 		t.Errorf("offered to read a book whose file is gone:\n%s", page)
 	}
