@@ -26,6 +26,11 @@ type Server struct {
 	// Covers caches rendered covers. Nil is not an error: covers are then
 	// rendered on every request, which is slow but correct.
 	Covers CoverCache
+	// Ingest writes an uploaded publication into a folder and asks for
+	// a pass (ADR-0023). Nil disables the upload route, which then
+	// reports 503: a server with no watcher has nothing to reconcile
+	// with, so accepting the bytes would be a promise it cannot keep.
+	Ingest BookIngest
 	// Kosync is the kosync adapter (nil disables it regardless of
 	// config).
 	Kosync interface {

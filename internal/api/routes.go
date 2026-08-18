@@ -412,6 +412,15 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("DELETE /v1/entities/{kind}/{entity}/bindings/{binding}",
 		manageH(s.HandleDeleteSeriesBinding))
 
+	// library-upload scope: putting a book into a folder that accepts
+	// one (ADR-0023). It is separate from library-manage because
+	// tidying your own series and writing to this server's disk are
+	// different questions, and one token should not answer both.
+	mux.Handle("POST /v1/folders/{folder}/books",
+		auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryUpload,
+				http.HandlerFunc(s.HandleUploadBook))))
+
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog
 	// and it writes the caller's work graph (ADR-0003).

@@ -46,6 +46,13 @@ type Config struct {
 		ScanMaxFiles int `toml:"scan_max_files"`
 		ScanMaxDepth int `toml:"scan_max_depth"`
 
+		// MaxUploadBytes bounds one uploaded publication (ADR-0023).
+		// It is not a quota: there is no quota, and nothing counts what
+		// a folder holds. It is the size above which this server stops
+		// reading a request body, so a client cannot fill a disk with
+		// one POST.
+		MaxUploadBytes int64 `toml:"max_upload_bytes"`
+
 		EPUBMaxEntries        int   `toml:"epub_max_entries"`
 		EPUBMaxDirectoryBytes int64 `toml:"epub_max_directory_bytes"`
 		EPUBMaxExpandedBytes  int64 `toml:"epub_max_expanded_bytes"`
@@ -110,6 +117,7 @@ func Default() Config {
 	c.Database.Driver = "sqlite"
 	c.Database.URL = "liseur-sync.db"
 	c.Content.CacheDir = "cache"
+	c.Content.MaxUploadBytes = 200 << 20
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
 	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
@@ -193,6 +201,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.ScanMaxFiles < 1 {
 		return fmt.Errorf("content.scan_max_files must be >= 1")
+	}
+	if c.Content.MaxUploadBytes < 1 {
+		return fmt.Errorf("content.max_upload_bytes must be >= 1")
 	}
 	if c.Content.ScanMaxDepth < 1 || c.Content.ScanMaxDepth > 256 {
 		return fmt.Errorf("content.scan_max_depth must be between 1 and 256")

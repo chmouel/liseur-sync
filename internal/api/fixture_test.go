@@ -82,6 +82,7 @@ func newFolderFixture(t *testing.T) *folderFixture {
 
 	cfg := config.Default()
 	cfg.InsecureHTTP = true // httptest is plain HTTP
+	cfg.Content.CacheDir = cacheRoot
 
 	srv := &Server{
 		St:           st,
@@ -109,6 +110,10 @@ func newFolderFixture(t *testing.T) *folderFixture {
 	}
 	f.rec = content.NewReconciler(st, content.ScanLimits{}, epub.DefaultLimits(),
 		slog.New(slog.DiscardHandler))
+	// The upload route hands its bytes to the same reconciler the tests
+	// drive by hand, so an uploaded book and a book written under the
+	// root go through exactly one pass implementation (ADR-0023).
+	srv.Ingest = content.NewIngester(f.rec)
 	return f
 }
 

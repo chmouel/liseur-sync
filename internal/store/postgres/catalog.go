@@ -74,6 +74,24 @@ func (s *Store) CatalogBookByID(ctx context.Context, bookID string) (store.Catal
 	return book, err
 }
 
+// CatalogBookByDigest finds an active book by content digest. Two
+// folders may hold the same bytes; the oldest row wins, so the answer
+// does not change as the catalog grows.
+func (s *Store) CatalogBookByDigest(
+	ctx context.Context, sha string,
+) (store.CatalogBook, error) {
+	row := s.db.QueryRowContext(ctx, q(`SELECT `+bookColumns+`
+		   FROM books b
+		  WHERE b.content_sha256 = ? AND b.status = 'active'
+		  ORDER BY b.created_at, b.id
+		  LIMIT 1`), sha)
+	book, err := scanCatalogBook(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.CatalogBook{}, store.ErrNotFound
+	}
+	return book, err
+}
+
 func (s *Store) ListCatalogBooks(
 	ctx context.Context, folderID string, after *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
