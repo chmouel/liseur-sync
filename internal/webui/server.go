@@ -315,6 +315,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/folders", sec(s.requireAdmin(s.handleAdminCreateFolder)))
 	mux.Handle("POST /ui/admin/folders/{id}/scan",
 		sec(s.requireAdmin(s.handleAdminScanFolder)))
+	mux.Handle("POST /ui/admin/folders/{id}/uploads",
+		sec(s.requireAdmin(s.handleAdminSetFolderUploads)))
 	mux.Handle("POST /ui/admin/folders/{id}/delete",
 		sec(s.requireAdmin(s.handleAdminDeleteFolder)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))

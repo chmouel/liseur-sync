@@ -73,10 +73,11 @@ func (s *Server) HandleFolders(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(folders))
 	for _, f := range folders {
 		out = append(out, map[string]any{
-			"folder_id":  f.ID,
-			"name":       f.Name,
-			"kind":       string(f.Kind),
-			"created_at": f.CreatedAt.UTC().Format(time.RFC3339Nano),
+			"folder_id":       f.ID,
+			"name":            f.Name,
+			"kind":            string(f.Kind),
+			"accepts_uploads": f.AcceptsUploads,
+			"created_at":      f.CreatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
 	body := map[string]any{"folders": out}

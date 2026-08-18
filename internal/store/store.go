@@ -65,6 +65,11 @@ const (
 	// ScopeLibraryManage permits stating series claims (ADR-0018). It
 	// shapes how the catalog reads; it never writes to a watched folder.
 	ScopeLibraryManage Scope = "library-manage"
+	// ScopeLibraryUpload permits putting a book into a folder that
+	// accepts uploads (ADR-0023). It is separate from library-manage
+	// because tidying your own shelves and writing to the server's disk
+	// are different questions, and one token should not answer both.
+	ScopeLibraryUpload Scope = "library-upload"
 	ScopeAdmin         Scope = "admin"
 )
 
@@ -73,7 +78,8 @@ var scopeOrder = map[Scope]int{
 	ScopeReadInsights:  1,
 	ScopeLibraryRead:   2,
 	ScopeLibraryManage: 3,
-	ScopeAdmin:         4,
+	ScopeLibraryUpload: 4,
+	ScopeAdmin:         5,
 }
 
 // ScopeSet is the canonical, duplicate-free set of capabilities on a token.
@@ -238,12 +244,18 @@ func (k FolderKind) Valid() bool {
 // sees RootPath, which is a filesystem oracle and not a reader's
 // business. Nothing beneath RootPath is ever written.
 type Folder struct {
-	ID        string
-	Name      string
-	RootPath  string
-	Kind      FolderKind
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID       string
+	Name     string
+	RootPath string
+	Kind     FolderKind
+	// AcceptsUploads is the one place the server is allowed to write
+	// under a folder root (ADR-0023). It is false unless an
+	// administrator set it, and it is the amendment to ADR-0017's rule
+	// 3: writes happen only where somebody asked for them, and only by
+	// creating a file that was not there.
+	AcceptsUploads bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // FolderCursor is the opaque pagination cursor of the folder list,
@@ -1134,6 +1146,9 @@ type Store interface {
 
 	CreateFolder(ctx context.Context, folder Folder) error
 	FolderByID(ctx context.Context, folderID string) (Folder, error)
+	// SetFolderUploads turns a folder's upload permission on or off
+	// (ADR-0023). Returns ErrNotFound if the folder is gone.
+	SetFolderUploads(ctx context.Context, folderID string, accepts bool, at time.Time) error
 	// ListFolders pages folders ordered by name then id. after is a
 	// FolderCursor, empty for the first page.
 	ListFolders(ctx context.Context, after string, limit int) ([]Folder, error)
