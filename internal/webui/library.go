@@ -167,6 +167,12 @@ type LibraryView struct {
 	Problem string
 	View    string
 	Back    string
+	// CanUpload is the selected folder taking uploads, which is the
+	// only thing that puts the send-a-book form on the page. It is the
+	// administrator's decision (ADR-0023), read back rather than
+	// guessed at, so a reader is never offered a form that would be
+	// refused.
+	CanUpload bool
 }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -193,6 +199,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		})
 		if f.ID == selected {
 			v.Selected = selected
+			v.CanUpload = f.AcceptsUploads && s.Uploads != nil
 		}
 	}
 	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, "")

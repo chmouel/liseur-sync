@@ -69,6 +69,9 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			<span class="spacer"></span>
 			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>
+		if v.CanUpload {
+			@uploadForm(prefix, csrf, v.Selected)
+		}
 		if v.Hero != nil {
 			@heroCard(prefix, *v.Hero)
 		}
@@ -328,4 +331,24 @@ templ libraryTable(prefix string, v LibraryView) {
 	if v.NextURL != "" {
 		<p><a href={ v.NextURL }>Next page</a></p>
 	}
+}
+
+// uploadForm sends a book to the selected folder (ADR-0023). It appears
+// only where an administrator asked for that folder to be writable.
+//
+// The CSRF token goes in the action's query string rather than in a
+// hidden field, because the handler has to check it before the body is
+// read and the body is a whole book: a field would mean buffering the
+// upload to find the token that says whether to accept the upload.
+templ uploadForm(prefix, csrf, folder string) {
+	<form
+		class="toolbar upload"
+		method="post"
+		enctype="multipart/form-data"
+		action={ prefix + "library/upload?folder=" + folder + "&csrf=" + csrf }
+	>
+		<label class="visually-hidden" for="upload-file">EPUB to add</label>
+		<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
+		<button type="submit">Send a book</button>
+	</form>
 }

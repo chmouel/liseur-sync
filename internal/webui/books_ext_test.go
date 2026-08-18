@@ -89,15 +89,18 @@ func newBooksFixture(t *testing.T) *booksFixture {
 
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
+	reconciler := content.NewReconciler(st, content.ScanLimits{},
+		cfg.EPUBLimits(), nil)
 	apiSrv := &api.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Files:        content.NewFiles(st), Covers: cache,
+		Ingest: content.NewIngester(reconciler),
 	}
 	ui := &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
-		Downloads:    apiSrv, Covers: apiSrv,
+		Downloads:    apiSrv, Covers: apiSrv, Uploads: apiSrv,
 	}
 	mux := http.NewServeMux()
 	ui.Mount(mux, func(h http.Handler) http.Handler { return h })
@@ -107,8 +110,7 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	f := &booksFixture{
 		ts: ts, st: st, cache: cache, api: apiSrv, ui: ui, cfg: cfg,
 		folder: folder.ID, root: root,
-		rec: content.NewReconciler(st, content.ScanLimits{},
-			cfg.EPUBLimits(), nil),
+		rec: reconciler,
 	}
 	f.cookie = f.login(t, "alice")
 	return f

@@ -50,6 +50,11 @@ type Server struct {
 	// Covers renders book covers. Nil shows the placeholder everywhere,
 	// which is a page that looks plain rather than a page that fails.
 	Covers CoverServer
+	// Uploads receives a book sent from the browser. Like Downloads it
+	// is the API's implementation behind an interface, so there is one
+	// set of rules about what may be written into a folder. Nil hides
+	// the form rather than showing one that cannot work.
+	Uploads Uploader
 	// Watching is told about a folder the moment somebody adds or
 	// removes one, so "add a folder and the books show up" is true
 	// without a restart. Nil means the server was started without a
@@ -109,7 +114,14 @@ func (s *Server) session(r *http.Request) (store.AuthSession, *store.User, bool)
 }
 
 func (s *Server) checkCSRF(r *http.Request, a store.AuthSession) bool {
-	return subtle.ConstantTimeCompare([]byte(r.FormValue("csrf")), []byte(csrfFor(a))) == 1
+	return checkCSRFValue(r.FormValue("csrf"), a)
+}
+
+// checkCSRFValue compares a token that has already been read. The upload
+// form needs this: r.FormValue would parse the multipart body to find
+// the field, and that body is a book being streamed to disk.
+func checkCSRFValue(got string, a store.AuthSession) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(csrfFor(a))) == 1
 }
 
 // redirectRel emits a redirect with a relative Location header. Unlike
@@ -267,6 +279,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
+	mux.Handle("POST /ui/library/upload", sec(s.requireAuth(s.handleLibraryUpload)))
 	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
 	mux.Handle("POST /ui/books/{id}/series/reset",
 		sec(s.requireAuth(s.handleSeriesReset)))
