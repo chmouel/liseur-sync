@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,6 +153,53 @@ func TestUploadTwiceMakesOneBook(t *testing.T) {
 	}
 	if len(books) != 1 {
 		t.Fatalf("folder holds %d books, want 1", len(books))
+	}
+}
+
+// The same book sent twice at once is the case the digest check cannot
+// answer on its own: without the lock both requests look, both find
+// nothing, and both write.
+func TestUploadTwiceAtOnceMakesOneBook(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+	body := makeEPUB(t, "Ancillary Mercy", "Ann Leckie", []byte("three"))
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	ids := make([]any, 2)
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, got := f.upload(t, token, "a.epub", body)
+			codes[i] = resp.StatusCode
+			ids[i] = got["book_id"]
+		}()
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusCreated && code != http.StatusOK {
+			t.Fatalf("request %d = %d, want 201 or 200", i, code)
+		}
+	}
+	if ids[0] != ids[1] {
+		t.Fatalf("two book ids for one book: %v and %v", ids[0], ids[1])
+	}
+	books, err := f.st.BooksInFolder(t.Context(), f.folder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("folder holds %d books, want 1", len(books))
+	}
+	entries, err := os.ReadDir(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("folder holds %d files, want 1", len(entries))
 	}
 }
 

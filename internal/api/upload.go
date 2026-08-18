@@ -167,6 +167,12 @@ func (s *Server) ReceiveUpload(
 	}
 	defer spooled.cleanup()
 
+	// From here to the write, one at a time: the check below is only
+	// worth anything if nothing can be written between it and the
+	// write it guards.
+	s.uploading.Lock()
+	defer s.uploading.Unlock()
+
 	// The catalog may already hold these bytes, in this folder or
 	// another. Either way the upload is done and this is the book.
 	existing, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha)
