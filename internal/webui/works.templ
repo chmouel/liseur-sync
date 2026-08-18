@@ -61,10 +61,10 @@ type OpRow struct {
 }
 
 templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
-	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(prefix, d, ops, sessions))
+	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(prefix, csrf, d, ops, sessions))
 }
 
-templ workBody(prefix string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
+templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
 	<h1>{ orPlaceholder(d.Work.Title) }</h1>
 	if d.Work.Author != "" {
 		<p class="muted">{ d.Work.Author }</p>
@@ -129,4 +129,29 @@ templ workBody(prefix string, d WorkDetail, ops []OpRow, sessions []SessionRow) 
 			</table>
 		}
 	</section>
+	// A work no book on this server backs is the reader's to forget:
+	// it is reading state about a file that is somewhere else, or
+	// nowhere. A work with a book keeps its history with the book, even
+	// when the file is missing, so this section is simply not here
+	// (ADR-0024).
+	if d.BookID == "" {
+		<section class="card">
+			<h2>Delete</h2>
+			<p class="muted">
+				This server holds no file for this book — the reading came
+				from a device. Deleting it removes these positions, these
+				sessions and the statistics above, for this account only.
+				A device still syncing this book will bring it back as a new
+				entry, starting from wherever that device is now.
+			</p>
+			<form
+				method="post"
+				action={ prefix + "works/" + d.Work.ID + "/delete" }
+				hx-confirm="Delete this book's reading history? A device still syncing this book will bring it back as a new entry."
+			>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<button class="danger" type="submit">Delete reading history</button>
+			</form>
+		</section>
+	}
 }

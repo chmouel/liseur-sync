@@ -1156,6 +1156,17 @@ type Store interface {
 	// that hung off it. Nothing beneath its root path is touched: the
 	// files were never this server's to delete.
 	DeleteFolder(ctx context.Context, folderID string) error
+	// DeleteMissingBook removes one catalog book a pass has already
+	// marked missing, with the same cascade and the same entity
+	// collection a pass that dropped it would run. It is how an
+	// administrator retires a file that is not coming back.
+	//
+	// A book that is still active is ErrInvalidInput: an active book is
+	// re-added by the next pass, so deleting one would be theatre. A
+	// book that does not exist is ErrNotFound. Readers' works are not
+	// deleted with it — a work with reading history survives its book
+	// and becomes an entry only its own reader can remove.
+	DeleteMissingBook(ctx context.Context, bookID string) error
 
 	// -----------------------------------------------------------------
 	// Reconciliation.
@@ -1383,6 +1394,19 @@ type Store interface {
 	ListWorks(ctx context.Context, userID string) ([]WorkSummary, error)
 	SplitWork(ctx context.Context, userID, workID, editionSHA string, aliasValues []Identifier, newWork Work) error
 	MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID string) error
+	// DeleteWork removes one of the caller's works and everything that
+	// hangs off it — ops, sessions, rollups, editions, aliases and the
+	// book mapping — in one transaction. It is the reader's own
+	// decision to forget a book, and the deliberate exception to the
+	// append-only rule (ADR-0024); it is not a way to edit history,
+	// because the unit is the whole work or nothing.
+	//
+	// Only a work no book on this server backs can be deleted:
+	// ErrInvalidInput when a mapping still names a catalog book, so
+	// that a file this server currently holds — or holds and cannot
+	// find today — never loses its reading state by a click. It returns
+	// ErrNotFound when the work is not this user's.
+	DeleteWork(ctx context.Context, userID, workID string) error
 
 	// User settings.
 	UpdateUserSettings(ctx context.Context, userID, timezone string, kosyncEnabled, kopluginEnabled bool) error

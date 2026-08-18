@@ -281,6 +281,12 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
 	mux.Handle("POST /ui/library/upload", sec(s.requireAuth(s.handleLibraryUpload)))
 	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
+	// Deleting (ADR-0024). A work is the reader's own, so it is
+	// requireAuth and the store checks whose it is; a catalog row is
+	// shared, so retiring one is admin work.
+	mux.Handle("POST /ui/works/{id}/delete", sec(s.requireAuth(s.handleDeleteWork)))
+	mux.Handle("POST /ui/books/{id}/delete",
+		sec(s.requireAdmin(s.handleDeleteMissingBook)))
 	mux.Handle("POST /ui/books/{id}/series/reset",
 		sec(s.requireAuth(s.handleSeriesReset)))
 	// Renaming a series (ADR-0020). The reset arrives on the same route

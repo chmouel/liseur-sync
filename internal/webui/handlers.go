@@ -82,17 +82,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 				EndProg:   ses.EndProg,
 			})
 		}
-		workBookIDs := s.workBookIDs(r.Context(), u.ID, works)
+		links := s.workBookIDs(r.Context(), u.ID, works)
 		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 			sum, heat, recent,
-			s.markReadable(r, continueReading(works, workBookIDs, loc))).
+			s.markReadable(r, continueReading(works, links.active, loc))).
 			Render(r.Context(), w)
 		return
 	}
-	workBookIDs := s.workBookIDs(r.Context(), u.ID, works)
+	links := s.workBookIDs(r.Context(), u.ID, works)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum, nil, nil,
-		s.markReadable(r, continueReading(works, workBookIDs, loc))).
+		s.markReadable(r, continueReading(works, links.active, loc))).
 		Render(r.Context(), w)
 }
 

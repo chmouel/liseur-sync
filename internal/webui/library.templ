@@ -99,10 +99,10 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			if len(v.Rows) == 0 {
 				@libraryEmpty(v)
 			} else if v.View == viewList {
-				@libraryTable(prefix, v)
+				@libraryTable(prefix, csrf, v)
 			} else {
 				<div class="grid">
-					@libraryFragment(prefix, v)
+					@libraryFragment(prefix, csrf, v)
 				</div>
 			}
 		</section>
@@ -176,9 +176,9 @@ templ heroCard(prefix string, row LibraryRow) {
 //
 // The sentinel is a link first and a trigger second: with scripting off
 // it is the "next page" the table view has always had.
-templ libraryFragment(prefix string, v LibraryView) {
+templ libraryFragment(prefix, csrf string, v LibraryView) {
 	for _, row := range v.Rows {
-		@libraryCard(prefix, row)
+		@libraryCard(prefix, csrf, row)
 	}
 	if v.NextURL != "" {
 		<div
@@ -202,7 +202,7 @@ templ libraryFragment(prefix string, v LibraryView) {
 // hover, because hover does not exist on a phone and long-press is not
 // something a web page can claim — that was the whole reason this page
 // needed designing rather than merging.
-templ libraryCard(prefix string, row LibraryRow) {
+templ libraryCard(prefix, csrf string, row LibraryRow) {
 	<article class="bookcard">
 		if row.BookID != "" {
 			<div class="art">
@@ -259,8 +259,35 @@ templ libraryCard(prefix string, row LibraryRow) {
 			if row.CanGet && row.BookID != "" {
 				<a href={ prefix + "books/" + row.BookID + "/download" }>Get</a>
 			}
+			if row.Bookless {
+				@deleteWorkForm(prefix, csrf, row.WorkID, "closest article")
+			}
 		</nav>
 	</article>
+}
+
+// deleteWorkForm removes one work of the reader's own from a list,
+// without leaving the list: htmx takes the row out where it stood, and
+// with scripting off the same form is a plain POST that comes back to
+// the library.
+//
+// It appears only on a work no book on this server backs. A row whose
+// book is merely missing keeps its "synced elsewhere" tile and no
+// button, because that absence is about a disk rather than a decision
+// (ADR-0024).
+templ deleteWorkForm(prefix, csrf, workID, target string) {
+	<form
+		class="inline-delete"
+		method="post"
+		action={ prefix + "works/" + workID + "/delete" }
+		hx-post={ prefix + "works/" + workID + "/delete" }
+		hx-target={ target }
+		hx-swap="outerHTML"
+		hx-confirm="Delete this book's reading history? A device still syncing this book will bring it back as a new entry."
+	>
+		<input type="hidden" name="csrf" value={ csrf }/>
+		<button class="linkish danger" type="submit">Delete</button>
+	</form>
 }
 
 // cardOpen is how a card reaches everything it can do without hover and
@@ -286,7 +313,7 @@ templ cardOpen(prefix string, row LibraryRow) {
 
 // libraryTable is the same rows for the times when scanning five
 // thousand titles beats looking at five thousand pictures.
-templ libraryTable(prefix string, v LibraryView) {
+templ libraryTable(prefix, csrf string, v LibraryView) {
 	<table>
 		<tr><th></th><th>Title</th><th>Progress</th><th>Last read</th><th>Added</th><th></th></tr>
 		for _, row := range v.Rows {
@@ -324,7 +351,12 @@ templ libraryTable(prefix string, v LibraryView) {
 				</td>
 				<td>{ orDash(row.LastActive) }</td>
 				<td>{ orDash(row.Added) }</td>
-				<td><a href={ row.detailURL(prefix) }>Open</a></td>
+				<td>
+					<a href={ row.detailURL(prefix) }>Open</a>
+					if row.Bookless {
+						@deleteWorkForm(prefix, csrf, row.WorkID, "closest tr")
+					}
+				</td>
 			</tr>
 		}
 	</table>

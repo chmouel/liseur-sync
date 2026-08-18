@@ -48,6 +48,7 @@ loose ends that must come before any of it, are in
 | [0021](0021-series-merge-split.md) | Merging and splitting a series | Later | Accepted; implemented | All four phases; Calibre write-back constrained here, decided in its own ADR |
 | [0022](0022-calibre-metadata-db-is-authoritative.md) | A Calibre library's `metadata.db` is authoritative | Later | Accepted; implemented | Purge, unservable observations and digest re-registration; amends rules on [0017](0017-folders-not-pipelines.md) |
 | [0023](0023-uploads-land-in-a-folder.md) | An upload is a file written into a folder | Later | Accepted; implemented | Folder opt-in, `library-upload` scope, plain and Calibre folders; amends rule 3 of [0017](0017-folders-not-pipelines.md) and reinstates phase C of [0008](0008-android-client.md) |
+| [0024](0024-deleting-a-work.md) | Deleting is a reader forgetting, or an administrator retiring | Later | Accepted; implemented | Per-user work delete for a work no book backs, admin delete of a missing catalog row; amends the append-only rule for that one case |
 
 ## Convention
 
