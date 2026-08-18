@@ -42,13 +42,18 @@ change capabilities without changing the token secret, device id, or
 retry identity.
 
 The scopes are `sync`, `read-insights`, `library-read`,
-`library-manage`, and `admin`. `admin` implies every scope and is not
+`library-manage`, `library-upload`, and `admin`. `admin` implies every scope and is not
 self-grantable: requesting it returns `403` unless the account is
 already an administrator. Clients normally need only `sync`; add
 `library-read` to browse and download books, `read-insights` to show
 statistics, and `library-manage` only when the client lets readers state
 series claims. `library-manage` does not grant catalog reads, so a
 series editor usually asks for both `library-read` and `library-manage`.
+Add `library-upload` to send a book up to a folder that accepts them
+(ADR-0023); a client that holds it should still read `accepts_uploads`
+from `GET /v1/folders`, because the right and the folder are two
+separate answers and an account can hold the first with no folder
+giving the second.
 
 All API calls then use `Authorization: Bearer <secret>`.
 

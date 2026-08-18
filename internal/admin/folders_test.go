@@ -234,3 +234,53 @@ func TestFolderRootIsStoredAbsolute(t *testing.T) {
 		t.Fatalf("root_path = %q, want an absolute path", folder.RootPath)
 	}
 }
+
+// TestFolderUploadsIsOffUntilAskedFor: ADR-0023 narrows ADR-0017's rule
+// 3 rather than repealing it, so a folder takes uploads only where
+// somebody said so. The panel has a toggle; a server administered over
+// SSH needs this.
+func TestFolderUploadsIsOffUntilAskedFor(t *testing.T) {
+	st := newAdminStore(t)
+	root := t.TempDir()
+
+	added, err := capture(t, st, "add-folder", "Books", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := folderIDFrom(t, added)
+
+	folder, err := st.FolderByID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folder.AcceptsUploads {
+		t.Fatal("a new folder accepted uploads without being asked")
+	}
+
+	if _, err := capture(t, st, "folder-uploads", id, "on"); err != nil {
+		t.Fatal(err)
+	}
+	if folder, err = st.FolderByID(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if !folder.AcceptsUploads {
+		t.Fatal("folder-uploads on did not take")
+	}
+
+	if _, err := capture(t, st, "folder-uploads", id, "off"); err != nil {
+		t.Fatal(err)
+	}
+	if folder, err = st.FolderByID(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if folder.AcceptsUploads {
+		t.Fatal("folder-uploads off did not take")
+	}
+
+	// A typo must not read as "off": turning a permission off by
+	// accident is survivable, leaving one on because the word was not
+	// understood is not.
+	if _, err := capture(t, st, "folder-uploads", id, "maybe"); err == nil {
+		t.Fatal("folder-uploads accepted a word it does not know")
+	}
+}

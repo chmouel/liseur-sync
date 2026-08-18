@@ -438,8 +438,8 @@ books    id, folder_id, status, relative_path, calibre_id?, stat,
 There is no owner on `folders`. Every logged-in account sees every
 folder's books. Only administrators manage folders because adding one
 names a path on the server. The admin panel and CLI share the same
-rules: `add-folder <name> <root>`, `list-folders`, and `remove-folder
-<folder-id>`.
+rules: `add-folder <name> <root>`, `list-folders`, `remove-folder
+<folder-id>` and `folder-uploads <folder-id> <on|off>`.
 
 `root_path` is stored absolute and never appears in a non-admin API
 response. A folder root is opened read-only; symlinks inside the tree
