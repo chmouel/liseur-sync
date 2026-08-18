@@ -269,8 +269,25 @@ changes shape.
 3. **Calibre folders.** `calibre.Writer`, the registered trigger
    functions, the layout, the all-or-nothing transaction, the lock
    refusal, and a fixture that has the triggers a real library has.
-4. **The web UI.** An upload form on the library page, its folder picker
-   limited to folders that accept uploads.
+4. **The web UI.** An upload form on the library page, shown only where
+   the selected folder accepts uploads.
+
+   Two things about it were settled while building it. The browser gets
+   at the rules through the same code the JSON route runs — the API's
+   `ReceiveUpload`, reached through an interface the way downloads and
+   covers already are — so there is one answer to "what may be written
+   into a folder" and not a second one that drifts.
+
+   And the form is for any signed-in reader, not for administrators
+   alone. The gate is the folder, which an administrator marked, plus a
+   session; a per-user upload right would be a third permission model
+   beside scopes and the admin flag, for a decision that has already
+   been made once. The bound on what that costs is `max_upload_bytes`.
+
+   The CSRF token travels in the query string rather than as a hidden
+   field, because reading a form field parses the multipart body, and
+   the check that decides whether to accept an upload must not be the
+   thing that buffers it first.
 5. **Documentation and deployment.** `openapi.yaml`, `AGENTS.md`,
    `DESIGN.md`, `deployment.md`, `README.md`, `compose.yaml`.
 
