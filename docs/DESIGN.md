@@ -672,6 +672,20 @@ Nothing here writes under a watched folder or into Calibre's
 - Browser-reader
   CSP, sandbox, asset-header, and linked-token lifecycle tests.
 
+A Go test cannot tell you the Calibre writer worked. It only ever reads
+back its own rows, and Calibre's opinion of a library is formed by
+opening it. `PRAGMA user_version` is the sharp edge: a library left at 0
+is one Calibre upgrades from the beginning on sight, rebuilding the
+tables and dropping every book in them — which is why the fixture in
+`internal/calibre/testdata/schema.sql` carries the real version. The
+check that settles it is Calibre's own:
+
+    calibredb --with-library=<copy of the folder> list \
+      --fields=id,title,authors,formats
+
+Run it on a *copy*, because it is Calibre and it will upgrade what it
+opens.
+
 ### 10.4 Client-side work
 
 1. Add `start/end_progression` to Liseur's session recorder. 2. A

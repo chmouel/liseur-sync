@@ -1,3 +1,14 @@
+-- The schema of a real Calibre library, dumped from one, because the
+-- triggers are the point: they call title_sort() and uuid4(), which
+-- Calibre registers at runtime and a writer has to supply itself.
+--
+-- user_version is part of that faithfulness. Calibre keys its schema
+-- upgrades off it, so a library left at 0 is one it upgrades from the
+-- beginning on sight -- rebuilding the tables and dropping every book
+-- that was in them. A fixture without this line looks fine to a test
+-- and is not a library Calibre would recognise.
+PRAGMA user_version = 27;
+
 CREATE TABLE authors ( id   INTEGER PRIMARY KEY,
                               name TEXT NOT NULL COLLATE NOCASE,
                               sort TEXT COLLATE NOCASE,

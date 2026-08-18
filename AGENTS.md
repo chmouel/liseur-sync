@@ -142,9 +142,14 @@ of them.
   would put a redirect in every series-bearing read.
 - **`root_path` never reaches a non-admin.** It is a filesystem oracle;
   a `library-read` response names books, not paths.
-- **The server never writes under a watched folder.** Rooted, read-only
-  opens; symlinks refused; no temp files, no cover extracted beside the
-  book, no `metadata.db` writes.
+- **The server writes under a watched folder only where an
+  administrator asked it to, and then only by creating something new.**
+  Everywhere else: rooted, read-only opens; symlinks refused; no temp
+  files, no cover extracted beside the book, no `metadata.db` writes. In
+  a folder marked `accepts_uploads` an upload creates a file — and in a
+  Calibre folder a book directory and a `metadata.db` row — and still
+  never modifies or deletes one that was already there
+  ([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)).
 - **A pass that did not fully succeed, or that observed nothing, never
   marks anything missing, and never purges.** Both rules are enforced by
   `ReconcileFolder`'s signature rather than by care.
