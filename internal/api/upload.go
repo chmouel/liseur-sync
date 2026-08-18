@@ -14,7 +14,9 @@ import (
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/calibre"
 	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/cover"
 	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -25,7 +27,7 @@ import (
 // rather than panicking, exactly as Files does for downloads.
 type BookIngest interface {
 	Ingest(
-		ctx context.Context, folder store.Folder, src io.Reader, base string,
+		ctx context.Context, folder store.Folder, up content.Upload,
 	) (string, error)
 }
 
@@ -65,15 +67,6 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 			"this folder does not accept uploads")
 		return
 	}
-	// Phase 3 of ADR-0023. A file dropped into a Calibre library's tree
-	// is not a book there: discovery comes from metadata.db, so the pass
-	// would not see it and the curator would not either. Refusing is
-	// better than leaving litter under somebody's library.
-	if folder.Kind == store.FolderCalibre {
-		writeError(w, http.StatusNotImplemented,
-			"uploading into a Calibre library is not supported yet")
-		return
-	}
 
 	spooled, err := s.spoolUpload(w, r)
 	if err != nil {
@@ -102,11 +95,28 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "upload could not be read")
 		return
 	}
-	base := content.BookFilenameFrom(
-		spooled.meta.Title, firstAuthor(spooled.meta), spooled.filename)
-	relative, err := s.Ingest.Ingest(r.Context(), folder, spooled.file, base)
+	up := content.Upload{
+		Source: spooled.file,
+		Size:   spooled.size,
+		Base: content.BookFilenameFrom(
+			spooled.meta.Title, firstAuthor(spooled.meta), spooled.filename),
+		Meta: spooled.meta,
+	}
+	// A Calibre book records whether it has a cover and Calibre draws
+	// the cover.jpg beside it, so the cover has to be extracted here,
+	// while the bytes are still in hand. A publication without one is
+	// not an error: Calibre draws a placeholder.
+	if folder.Kind == store.FolderCalibre {
+		up.Cover = s.uploadedCover(r.Context(), spooled)
+	}
+	relative, err := s.Ingest.Ingest(r.Context(), folder, up)
 	if errors.Is(err, content.ErrUploadsRefused) {
 		writeError(w, http.StatusForbidden, "this folder does not accept uploads")
+		return
+	}
+	if errors.Is(err, calibre.ErrLocked) {
+		writeError(w, http.StatusConflict,
+			"that Calibre library is open in Calibre; close it and try again")
 		return
 	}
 	if err != nil {
@@ -145,8 +155,28 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 type spooledUpload struct {
 	file     *os.File
 	sha      string
+	size     int64
 	filename string
 	meta     epub.Metadata
+}
+
+// uploadedCover renders the publication's cover as the JPEG Calibre
+// keeps beside a book. Every failure is nil and silent: a cover is
+// decoration, and refusing an upload because its artwork would not
+// decode would be refusing the book over the picture on it.
+func (s *Server) uploadedCover(
+	ctx context.Context, spooled spooledUpload,
+) []byte {
+	image, err := epub.ReadCover(ctx, spooled.file, spooled.size,
+		s.Cfg.EPUBLimits(), maxCoverSourceBytes)
+	if err != nil {
+		return nil
+	}
+	rendered, err := cover.Render(image.Data, cover.SizeFull, cover.DefaultLimits())
+	if err != nil {
+		return nil
+	}
+	return rendered
 }
 
 func (u spooledUpload) cleanup() {
@@ -207,6 +237,7 @@ func (s *Server) spoolUpload(
 		return spooledUpload{}, err
 	}
 	spooled.sha = hex.EncodeToString(digest.Sum(nil))
+	spooled.size = size
 	spooled.meta = result.Metadata
 	return spooled, nil
 }

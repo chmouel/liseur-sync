@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // The upload route is ADR-0023, and what these tests are mostly about is
@@ -247,32 +249,104 @@ func TestUploadRefusesABodyOverTheBound(t *testing.T) {
 	assertNoSpool(t, f.srv.Cfg.Content.CacheDir)
 }
 
-// A Calibre library is read from metadata.db, so a file dropped into its
-// tree is litter rather than a book. Phase 3 of ADR-0023 writes Calibre
-// properly; until then the honest answer is that this is not supported.
-func TestUploadIntoACalibreFolderIsRefused(t *testing.T) {
+// A Calibre library is read from metadata.db, so a file dropped into
+// its tree would be litter rather than a book. Phase 3 of ADR-0023
+// writes Calibre properly: rows, the layout Calibre names, a cover and
+// an OPF. The assertion that matters is that the pass then catalogs it,
+// because that is the difference between a book and a file.
+func TestUploadIntoACalibreFolderAddsACalibreBook(t *testing.T) {
 	f := newFolderFixture(t)
-	f.allowUploads(t)
-	if _, err := f.st.FolderByID(t.Context(), f.folder.ID); err != nil {
-		t.Fatal(err)
-	}
-	calibre := store.Folder{
-		ID: store.NewID(), Name: "Calibre", RootPath: t.TempDir(),
+	root := newCalibreLibrary(t)
+	library := store.Folder{
+		ID: store.NewID(), Name: "Calibre", RootPath: root,
 		Kind: store.FolderCalibre, AcceptsUploads: true,
 	}
-	if err := f.st.CreateFolder(t.Context(), calibre); err != nil {
+	if err := f.st.CreateFolder(t.Context(), library); err != nil {
 		t.Fatal(err)
 	}
 	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
 	saved := f.folder
-	f.folder = calibre
-	resp, _ := f.upload(t, token, "a.epub",
-		makeEPUB(t, "Nope", "Nobody", []byte("x")))
+	f.folder = library
+	resp, body := f.upload(t, token, "whatever.epub",
+		makeEPUB(t, "The Dispossessed", "Ursula K. Le Guin", []byte("chapter")))
 	f.folder = saved
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", resp.StatusCode, body)
 	}
-	assertRootIsEmpty(t, calibre.RootPath)
+	got := body
+	want := "Ursula K. Le Guin/The Dispossessed (1)/" +
+		"The Dispossessed - Ursula K. Le Guin.epub"
+	if got["relative_path"] != want {
+		t.Errorf("relative_path = %v, want %q", got["relative_path"], want)
+	}
+	if got["book_id"] == nil || got["book_id"] == "" {
+		t.Errorf("no book_id, so the pass did not catalog it: %v", got)
+	}
+	if got["duplicate"] != false {
+		t.Errorf("duplicate = %v, want false", got["duplicate"])
+	}
+	// No cover.jpg: this publication declares no cover art, and
+	// inventing one would be editing metadata. Calibre draws a
+	// placeholder for a book whose has_cover is 0.
+	for _, name := range []string{
+		want,
+		"Ursula K. Le Guin/The Dispossessed (1)/metadata.opf",
+	} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(name))); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+}
+
+// The digest is the idempotency key everywhere, and a Calibre folder is
+// not an exception: a client retrying a transfer must not leave the
+// library with the book in it twice.
+func TestUploadingTheSameBookIntoCalibreTwiceMakesOneBook(t *testing.T) {
+	f := newFolderFixture(t)
+	library := store.Folder{
+		ID: store.NewID(), Name: "Calibre", RootPath: newCalibreLibrary(t),
+		Kind: store.FolderCalibre, AcceptsUploads: true,
+	}
+	if err := f.st.CreateFolder(t.Context(), library); err != nil {
+		t.Fatal(err)
+	}
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+	f.folder = library
+	payload := makeEPUB(t, "Once", "Only", []byte("chapter"))
+	first, firstBody := f.upload(t, token, "a.epub", payload)
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first status = %d: %s", first.StatusCode, firstBody)
+	}
+	second, secondBody := f.upload(t, token, "a.epub", payload)
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("second status = %d, want 200: %s", second.StatusCode, secondBody)
+	}
+	one, two := firstBody, secondBody
+	if two["duplicate"] != true || two["book_id"] != one["book_id"] {
+		t.Fatalf("second upload = %v, want the first book back", two)
+	}
+}
+
+// newCalibreLibrary builds an empty library from a real Calibre
+// schema — triggers included, which is where writing to Calibre goes
+// wrong.
+func newCalibreLibrary(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	schema, err := os.ReadFile(filepath.Join(
+		"..", "calibre", "testdata", "schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "metadata.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatalf("apply Calibre schema: %v", err)
+	}
+	return root
 }
 
 // GET /v1/folders has to say which folders take uploads, or a client
