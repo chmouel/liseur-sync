@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -175,4 +176,40 @@ func (s *Server) handleAdminDeleteFolder(
 		Notice: "Stopped watching " + folder.Name +
 			". Nothing under that directory was changed.",
 	})
+}
+
+// handleAdminSetFolderUploads flips whether a folder accepts uploads.
+//
+// This is the only switch that lets this server write under a root
+// (ADR-0023), so it lives beside the root path rather than anywhere a
+// reader can reach, and it is off until somebody turns it on.
+func (s *Server) handleAdminSetFolderUploads(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	folderID := r.PathValue("id")
+	folder, err := s.St.FolderByID(r.Context(), folderID)
+	if err != nil {
+		logAdminAction(r, u, "folder-uploads", folderID, err)
+		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})
+		return
+	}
+	accepts := !folder.AcceptsUploads
+	err = s.St.SetFolderUploads(r.Context(), folderID, accepts, time.Now().UTC())
+	logAdminAction(r, u, "folder-uploads", folderID, err)
+	if err != nil {
+		s.renderAdminFolders(w, r, a, u, Flash{
+			Error: "that folder could not be changed; try again",
+		})
+		return
+	}
+	notice := folder.Name + " no longer accepts uploads."
+	if accepts {
+		notice = folder.Name + " accepts uploads. Books sent to it are " +
+			"written into that directory; nothing already there is touched."
+	}
+	s.renderAdminFolders(w, r, a, u, Flash{Notice: notice})
 }

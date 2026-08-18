@@ -534,7 +534,14 @@ ALTER TABLE book_series_overrides ADD COLUMN client_ts TEXT;
 ALTER TABLE book_series_overrides ADD COLUMN request_hash TEXT;
 `
 
+// folderUploads is migration 3. A folder that accepts uploads is the
+// only place the server writes under a root (ADR-0023); everything else
+// stays read-only, so the column defaults to off.
+const folderUploads = `
+ALTER TABLE folders ADD COLUMN accepts_uploads BOOLEAN NOT NULL DEFAULT 0;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
-var migrations = []string{schema, claimRevisions}
+var migrations = []string{schema, claimRevisions, folderUploads}

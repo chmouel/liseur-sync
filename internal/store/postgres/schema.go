@@ -462,5 +462,10 @@ ALTER TABLE book_series_overrides ADD COLUMN client_ts TEXT;
 ALTER TABLE book_series_overrides ADD COLUMN request_hash TEXT;
 `
 
+// folderUploads is the SQLite copy's migration 3 (ADR-0023).
+const folderUploads = `
+ALTER TABLE folders ADD COLUMN accepts_uploads BOOLEAN NOT NULL DEFAULT FALSE;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
-var migrations = []string{schema, claimRevisions}
+var migrations = []string{schema, claimRevisions, folderUploads}

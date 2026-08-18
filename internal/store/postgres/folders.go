@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -13,16 +14,19 @@ import (
 // take a user id. That is ADR-0017's deliberate carve-out from the
 // user-scoping rule: the catalog is shared, reading state is not.
 
-const folderColumns = `id, name, root_path, kind, created_at, updated_at`
+const folderColumns = `id, name, root_path, kind, accepts_uploads,
+	created_at, updated_at`
 
 func (s *Store) CreateFolder(ctx context.Context, folder store.Folder) error {
 	if !folder.Kind.Valid() {
 		return fmt.Errorf("%w: folder kind %q", store.ErrInvalidInput, folder.Kind)
 	}
 	_, err := s.db.ExecContext(ctx, q(
-		`INSERT INTO folders (id, name, root_path, kind, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`),
+		`INSERT INTO folders
+		     (id, name, root_path, kind, accepts_uploads, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`),
 		folder.ID, folder.Name, folder.RootPath, string(folder.Kind),
+		folder.AcceptsUploads,
 		folder.CreatedAt.UTC(), folder.UpdatedAt.UTC())
 	if isUniqueErr(err) {
 		return store.ErrConflict
@@ -36,13 +40,34 @@ func scanFolder(row interface{ Scan(...any) error }) (store.Folder, error) {
 		kind string
 	)
 	if err := row.Scan(&f.ID, &f.Name, &f.RootPath, &kind,
-		&f.CreatedAt, &f.UpdatedAt); err != nil {
+		&f.AcceptsUploads, &f.CreatedAt, &f.UpdatedAt); err != nil {
 		return store.Folder{}, err
 	}
 	f.Kind = store.FolderKind(kind)
 	f.CreatedAt = f.CreatedAt.UTC()
 	f.UpdatedAt = f.UpdatedAt.UTC()
 	return f, nil
+}
+
+// SetFolderUploads is the whole of ADR-0023's permission model: one
+// boolean an administrator sets on the folder whose path they chose.
+func (s *Store) SetFolderUploads(
+	ctx context.Context, folderID string, accepts bool, at time.Time,
+) error {
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE folders SET accepts_uploads = ?, updated_at = ? WHERE id = ?`),
+		accepts, at.UTC(), folderID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) FolderByID(ctx context.Context, folderID string) (store.Folder, error) {

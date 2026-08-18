@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -18,9 +19,11 @@ func (s *Store) CreateFolder(ctx context.Context, folder store.Folder) error {
 		return fmt.Errorf("%w: folder kind %q", store.ErrInvalidInput, folder.Kind)
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO folders (id, name, root_path, kind, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO folders
+		     (id, name, root_path, kind, accepts_uploads, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		folder.ID, folder.Name, folder.RootPath, string(folder.Kind),
+		folder.AcceptsUploads,
 		formatTime(folder.CreatedAt), formatTime(folder.UpdatedAt))
 	if isUniqueErr(err) {
 		return store.ErrConflict
@@ -34,7 +37,8 @@ func scanFolder(row interface{ Scan(...any) error }) (store.Folder, error) {
 		kind            string
 		createdAt, upAt string
 	)
-	if err := row.Scan(&f.ID, &f.Name, &f.RootPath, &kind, &createdAt, &upAt); err != nil {
+	if err := row.Scan(&f.ID, &f.Name, &f.RootPath, &kind,
+		&f.AcceptsUploads, &createdAt, &upAt); err != nil {
 		return store.Folder{}, err
 	}
 	f.Kind = store.FolderKind(kind)
@@ -48,7 +52,29 @@ func scanFolder(row interface{ Scan(...any) error }) (store.Folder, error) {
 	return f, nil
 }
 
-const folderColumns = `id, name, root_path, kind, created_at, updated_at`
+const folderColumns = `id, name, root_path, kind, accepts_uploads,
+	created_at, updated_at`
+
+// SetFolderUploads is the whole of ADR-0023's permission model: one
+// boolean an administrator sets on the folder whose path they chose.
+func (s *Store) SetFolderUploads(
+	ctx context.Context, folderID string, accepts bool, at time.Time,
+) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE folders SET accepts_uploads = ?, updated_at = ? WHERE id = ?`,
+		accepts, formatTime(at), folderID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
 
 func (s *Store) FolderByID(ctx context.Context, folderID string) (store.Folder, error) {
 	row := s.db.QueryRowContext(ctx,

@@ -7,10 +7,15 @@ package webui
 templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, flash Flash) {
 	<h1>Folders</h1>
 	<p class="muted">
-		Directories this server reads. It reads them and nothing else: it
-		never writes, moves or renames anything under a root, and removing
-		a folder here forgets this server's record of it while leaving
-		every file where it is.
+		Directories this server reads. It never moves, renames or deletes
+		anything under a root, and removing a folder here forgets this
+		server's record of it while leaving every file where it is.
+	</p>
+	<p class="muted">
+		A folder that accepts uploads is the one exception: a reader can
+		send a book to it and the server writes that one new file. It is
+		off until you turn it on, and a folder whose disk is mounted
+		read-only cannot take it.
 	</p>
 	<p class="muted">
 		A folder is read when it changes and again on a slow timer, so
@@ -28,14 +33,29 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 			</p>
 		} else {
 			<table>
-				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Added</th><th></th></tr>
+				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Uploads</th><th>Added</th><th></th></tr>
 				for _, f := range folders {
 					<tr>
 						<td>{ f.Folder.Name }</td>
 						<td class="muted">{ f.Kind() }</td>
 						<td><code>{ f.Folder.RootPath }</code></td>
+						<td>
+							if f.Folder.AcceptsUploads {
+								{ "Accepted" }
+							} else {
+								<span class="muted">{ "Refused" }</span>
+							}
+						</td>
 						<td>{ f.Folder.CreatedAt.Format("2006-01-02") }</td>
 						<td>
+							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/uploads" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								if f.Folder.AcceptsUploads {
+									<button type="submit">Refuse uploads</button>
+								} else {
+									<button type="submit">Accept uploads</button>
+								}
+							</form>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<button type="submit">Scan now</button>
