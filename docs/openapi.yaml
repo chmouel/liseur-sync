@@ -753,6 +753,13 @@ paths:
                             covers. `plain` otherwise, where the
                             directory tree is the organisation: a
                             subdirectory of EPUBs is a series.
+                        accepts_uploads:
+                          type: boolean
+                          description: |
+                            Whether an administrator turned uploads on
+                            for this folder. A client offers the action
+                            only where this is true; the server refuses
+                            it everywhere else regardless.
                         created_at: { type: string, format: date-time }
 
   /v1/folders/{folder}/books:
@@ -800,6 +807,94 @@ paths:
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such folder" }
+
+    post:
+      tags: [library]
+      summary: Upload a book into a folder
+      security: [{ deviceToken: [] }]  # requires library-upload scope
+      description: |
+        An upload is a file written into a folder, and nothing more
+        (ADR-0023). This route does not write the catalog: it puts the
+        publication where the folder can see it and then runs the same
+        pass a file copied in by hand would get.
+
+        Two conditions, both deliberate. The folder must have
+        `accepts_uploads` — an administrator turns that on per folder —
+        and the token must carry `library-upload`, which no other route
+        uses. A folder nobody marked is refused even with the scope.
+
+        In a Calibre folder the file alone would not be a book, because
+        discovery there comes from `metadata.db`. So a Calibre folder
+        gets a Calibre book: rows, Calibre's directory layout, a
+        `cover.jpg` and a `metadata.opf`.
+
+        The SHA-256 of the bytes is the idempotency key. There is no
+        client-supplied key and no pending state: a retry after a lost
+        connection is answered with the book the first attempt made.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The EPUB. Other parts are ignored.
+      responses:
+        "201":
+          description: The book was written and the pass catalogued it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_id, folder_id, relative_path, content_sha256, duplicate]
+                properties:
+                  book_id: { type: string, format: uuid }
+                  folder_id: { type: string, format: uuid }
+                  relative_path: { type: string }
+                  content_sha256: { type: string }
+                  duplicate: { type: boolean, enum: [false] }
+        "200":
+          description: |
+            The catalog already held these bytes, here or in another
+            folder. Nothing was written and this is the book.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_id, folder_id, content_sha256, duplicate]
+                properties:
+                  book_id: { type: string, format: uuid }
+                  folder_id: { type: string, format: uuid }
+                  content_sha256: { type: string }
+                  duplicate: { type: boolean, enum: [true] }
+        "202":
+          description: |
+            The bytes are on the disk and durable, but the pass
+            concluded nothing yet — rules 1 and 2 of ADR-0017 allow
+            that. The watcher will come back to it; resolve the book
+            later by its digest.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folder_id, relative_path, content_sha256]
+                properties:
+                  folder_id: { type: string, format: uuid }
+                  relative_path: { type: string }
+                  content_sha256: { type: string }
+        "403":
+          description: The folder does not accept uploads, or the token lacks `library-upload`.
+        "404": { description: No such folder }
+        "409":
+          description: |
+            A Calibre library that is busy. Close Calibre and retry.
+        "413": { description: Larger than `content.max_upload_bytes` }
+        "422": { description: Not a readable EPUB }
+        "503": { description: This server is running without a folder watcher }
 
   /v1/folders/{folder}/search:
     get:

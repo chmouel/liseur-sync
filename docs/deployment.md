@@ -189,11 +189,20 @@ Removing a folder removes the catalog rows that came from it and stops
 watching the root. Nothing below the root is touched. Adding it back
 reads the same files again.
 
-A folder root needs only read access. Mount it read-only if you can;
-that makes the rule enforceable by the operating system, not just by
-this program. The server opens books and Calibre's `metadata.db`
-read-only, refuses symlinks inside a watched tree, and never writes,
-renames or deletes anything below the root.
+A folder root needs only read access unless you want uploads. The
+server opens books and Calibre's `metadata.db` read-only, refuses
+symlinks inside a watched tree, and never writes, renames or deletes
+anything below the root — so mounting it read-only makes that rule
+enforceable by the operating system rather than only by this program,
+and costs nothing.
+
+The exception is a folder you mark as accepting uploads
+([ADR-0023](adr/0023-uploads-land-in-a-folder.md)). That one needs
+write access, and it is opt-in twice over: an administrator turns it on
+per folder, and a token needs the `library-upload` scope to use it.
+Even then the server only ever *creates* — a file that was not there,
+or a book Calibre did not have. It still never modifies, renames or
+deletes one.
 or deletes anything below the root. The cover cache is the only
 directory it writes to.
 

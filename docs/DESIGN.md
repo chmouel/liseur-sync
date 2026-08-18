@@ -443,8 +443,11 @@ rules: `add-folder <name> <root>`, `list-folders`, and `remove-folder
 
 `root_path` is stored absolute and never appears in a non-admin API
 response. A folder root is opened read-only; symlinks inside the tree
-are refused. The server never writes under a watched folder. The only
-writable directory in the content system is the cover cache.
+are refused. The server writes under a watched folder only where an
+administrator set `accepts_uploads`, and only to create something that
+was not there (ADR-0023); it never modifies, renames or deletes. The
+only unconditionally writable directory in the content system is the
+cover cache.
 
 ### 9.2 Reconcile passes
 
@@ -490,7 +493,9 @@ the disk; §9.2 rule 3 stands.
 ### 9.4 Calibre folders
 
 A Calibre folder is a root containing `metadata.db`. The server reads
-the database read-only and keys books by Calibre id, never by path.
+the database read-only — a separate `calibre.Writer`, used only for an
+upload into a folder that accepts them, is the one thing that does not —
+and keys books by Calibre id, never by path.
 Calibre renames a book's directory when title or author changes; path
 identity would lose the reading-position mapping on every such edit.
 

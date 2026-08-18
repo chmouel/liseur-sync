@@ -34,10 +34,13 @@ Point `liseur-sync` at a directory of EPUBs or at a Calibre library. The
 server watches it, reads metadata, and serves the books through the web
 UI, the native catalog API, and OPDS 1.2.
 
-A folder is read-only from the server's point of view. Books stay where
-they already are; the server never writes, renames, or deletes anything
-below the folder root. The only files it creates are rendered covers in
-its disposable cache directory.
+A folder is read-only from the server's point of view unless you ask
+otherwise. Books stay where they already are; the server never modifies,
+renames, or deletes anything below the folder root. A folder an
+administrator marks as accepting uploads can have books *added* to it —
+a new file, or a new book in a Calibre library — and nothing else. The
+only other files the server creates are rendered covers in its
+disposable cache directory.
 
 Browse by series, contributor, or tag, and search across the collection.
 In a plain folder, the directory tree is the organisation: a
