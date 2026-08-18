@@ -53,6 +53,7 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 								@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
 								@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
 								@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
+								@scopeChoice(store.ScopeLibraryUpload, hasScope(t.Scopes, store.ScopeLibraryUpload))
 								<button type="submit">Update</button>
 							</form>
 						} else {
@@ -85,6 +86,7 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 			@scopeChoice(store.ScopeReadInsights, false)
 			@scopeChoice(store.ScopeLibraryRead, false)
 			@scopeChoice(store.ScopeLibraryManage, false)
+			@scopeChoice(store.ScopeLibraryUpload, false)
 			<button type="submit" class="primary">New token</button>
 		</form>
 	</section>

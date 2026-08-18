@@ -304,6 +304,37 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 	}
 }
 
+// A scope the store knows but no page offers is a scope only the admin
+// CLI can grant, which is how library-upload shipped: the reader could
+// see the offer in the app and had no way to authorise it.
+func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/devices")
+	csrf := extractCSRF(t, body)
+
+	for _, scope := range []store.Scope{
+		store.ScopeSync, store.ScopeReadInsights, store.ScopeLibraryRead,
+		store.ScopeLibraryManage, store.ScopeLibraryUpload,
+	} {
+		if !strings.Contains(body, `value="`+string(scope)+`"`) {
+			t.Errorf("the devices page offers no checkbox for %q", scope)
+		}
+	}
+
+	// And the one that was missing can be granted, not just displayed.
+	code, _ := postForm(t, ts, cookie, "/ui/tokens", url.Values{
+		"name": {"Phone"}, "scopes": {"sync", "library-upload"}, "csrf": {csrf},
+	})
+	if code != 200 {
+		t.Fatalf("minting a library-upload token: %d", code)
+	}
+	toks, _ := st.ListTokens(t.Context(), "u1")
+	if len(toks) != 1 || !toks[0].Scopes.Contains(store.ScopeLibraryUpload) {
+		t.Fatalf("token did not keep the upload scope: %+v", toks)
+	}
+}
+
 func TestSettingsSave(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
