@@ -47,8 +47,8 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: sqlite
       LISEUR_DATABASE_URL: /data/liseur-sync.db
-      LISEUR_CONTENT_ROOT: /data/content
-      # LISEUR_LIBRARY_ROOTS: /books
+      LISEUR_CACHE_DIR: /data/cache
+      # LISEUR_FOLDER_ROOTS: /books
     volumes:
       - sqlite-data:/data
       # - /srv/books:/books
@@ -89,8 +89,8 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: postgres://liseur:${POSTGRES_PASSWORD}@postgres:5432/liseur_sync
-      LISEUR_CONTENT_ROOT: /data/content
-      # LISEUR_LIBRARY_ROOTS: /books
+      LISEUR_CACHE_DIR: /data/cache
+      # LISEUR_FOLDER_ROOTS: /books
     volumes:
       - content-data:/data
       # - /srv/books:/books
@@ -107,8 +107,8 @@ services:
       LISEUR_LISTEN_ADDR: 0.0.0.0:8585
       LISEUR_DATABASE_DRIVER: postgres
       LISEUR_DATABASE_URL: ${LISEUR_DATABASE_URL:-}
-      LISEUR_CONTENT_ROOT: /data/content
-      # LISEUR_LIBRARY_ROOTS: /books
+      LISEUR_CACHE_DIR: /data/cache
+      # LISEUR_FOLDER_ROOTS: /books
       # Reverse proxy on the docker host reaches the app via the bridge
       # gateway; trust X-Forwarded-Proto from the stack's subnet.
       LISEUR_TRUSTED_PROXIES: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}

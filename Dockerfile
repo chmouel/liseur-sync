@@ -11,7 +11,7 @@ RUN templ generate ./internal/webui/ \
 FROM scratch
 # non-root; tzdata is embedded in the binary (time/tzdata)
 USER 65532:65532
-ENV LISEUR_CONTENT_ROOT=/data/content
+ENV LISEUR_CACHE_DIR=/data/cache
 COPY --from=build /out/liseur-sync /liseur-sync
 EXPOSE 8585
 ENTRYPOINT ["/liseur-sync"]
