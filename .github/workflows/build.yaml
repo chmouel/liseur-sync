@@ -75,7 +75,7 @@ jobs:
             --tmpfs /data:rw,uid=65532,gid=65532 \
             -e LISEUR_LISTEN_ADDR=0.0.0.0:8585 \
             -e LISEUR_DATABASE_URL=/data/liseur-sync.db \
-            -e LISEUR_CONTENT_ROOT=/data/content \
+            -e LISEUR_CACHE_DIR=/data/cache \
             "$IMAGE" serve
           for i in $(seq 1 20); do
             sleep 1

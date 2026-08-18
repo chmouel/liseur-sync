@@ -467,7 +467,7 @@ install_docker() {
 	local compose_file="$INSTALL_DIR/compose.yaml"
 
 	if [ -f "$compose_file" ] &&
-		{ ! grep -q 'LISEUR_CONTENT_ROOT:' "$compose_file" ||
+		{ ! grep -q 'LISEUR_CACHE_DIR:' "$compose_file" ||
 			{ [ "$DB" = "postgres" ] &&
 				{ ! grep -q 'content-data:/data' "$compose_file" ||
 					! grep -q 'content-init:' "$compose_file"; }; }; }; then
@@ -630,7 +630,7 @@ Volume=liseur-sync-data:/data:Z,U
 Environment=LISEUR_LISTEN_ADDR=0.0.0.0:8585
 Environment=LISEUR_DATABASE_DRIVER=${DB}
 Environment=LISEUR_DATABASE_URL=${db_url}
-Environment=LISEUR_CONTENT_ROOT=/data/content
+Environment=LISEUR_CACHE_DIR=/data/cache
 Exec=serve
 
 [Service]
