@@ -3,6 +3,7 @@ package calibre_test
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,7 +207,7 @@ func TestAddBookSharesAnAuthorRow(t *testing.T) {
 // ADR-0022 makes metadata.db the authority, so a file whose row did not
 // land is invisible forever and a row whose file did not land is a book
 // that cannot be served. Neither is recoverable, so a failure has to
-// leave nothing at all behind.
+// leave nothing at all behind — rows and directories both.
 func TestAddBookLeavesNothingBehindWhenTheFileCannotBeWritten(t *testing.T) {
 	root := newLibrary(t)
 	writer, err := calibre.OpenWriter(root)
@@ -215,20 +216,99 @@ func TestAddBookLeavesNothingBehindWhenTheFileCannotBeWritten(t *testing.T) {
 	}
 	defer func() { _ = writer.Close() }()
 
-	// A directory where the publication's file has to go: the create
-	// fails, and everything already written has to come back out.
-	blocked := filepath.Join(root, "Nobody",
-		"Doomed (1)", "Doomed - Nobody.epub")
-	if err := os.MkdirAll(blocked, 0o755); err != nil {
+	// A transfer that dies half way, which is the realistic version of
+	// this failure: the rows are written, the directories are made, and
+	// then the bytes stop arriving.
+	if _, _, err := writer.AddBook(t.Context(), calibre.NewBook{
+		Title: "Doomed", Authors: []string{"Nobody"},
+	}, brokenReader{}, 10); err == nil {
+		t.Fatal("AddBook succeeded but the publication could not be written")
+	}
+	_ = writer.Close()
+	assertLibraryIsEmpty(t, root)
+}
+
+// brokenReader is a transfer that stops part way through.
+type brokenReader struct{}
+
+func (brokenReader) Read(p []byte) (int, error) {
+	n := copy(p, "half a bo")
+	return n, errors.New("the connection went away")
+}
+
+// A book's directory carries its id, so finding one already there means
+// something this code did not create is in the way. Writing into it
+// would overwrite a book somebody has. Refusing is the only safe answer,
+// and the directory has to survive being refused.
+func TestAddBookWillNotWriteIntoADirectoryItDidNotMake(t *testing.T) {
+	root := newLibrary(t)
+	writer, err := calibre.OpenWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	// The first book takes id 1, so this is where it would go.
+	existing := filepath.Join(root, "Nobody", "Doomed (1)")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	precious := filepath.Join(existing, "someone-elses-book.epub")
+	if err := os.WriteFile(precious, []byte("do not touch"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := writer.AddBook(t.Context(), calibre.NewBook{
 		Title: "Doomed", Authors: []string{"Nobody"},
 	}, strings.NewReader("x"), 1); err == nil {
-		t.Fatal("AddBook succeeded but the publication could not be written")
+		t.Fatal("AddBook overwrote a directory it did not create")
 	}
 	_ = writer.Close()
 
+	got, err := os.ReadFile(precious)
+	if err != nil || string(got) != "do not touch" {
+		t.Fatalf("the existing book was disturbed: %q %v", got, err)
+	}
+	assertRowsAreEmpty(t, root)
+}
+
+// A symlink in the library must not turn a write — or a rollback's
+// delete — into one somewhere else. The plain-folder path has always
+// refused to follow one; a Calibre library deserves the same care.
+func TestAddBookDoesNotFollowASymlinkOutOfTheLibrary(t *testing.T) {
+	root := newLibrary(t)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "keep-me")
+	if err := os.WriteFile(victim, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An author directory that is really a door out of the library.
+	if err := os.Symlink(outside, filepath.Join(root, "Nobody")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	writer, err := calibre.OpenWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Close() }()
+	if _, _, err := writer.AddBook(t.Context(), calibre.NewBook{
+		Title: "Doomed", Authors: []string{"Nobody"},
+	}, strings.NewReader("x"), 1); err == nil {
+		t.Fatal("AddBook followed a symlink out of the library")
+	}
+	_ = writer.Close()
+
+	if got, err := os.ReadFile(victim); err != nil || string(got) != "mine" {
+		t.Fatalf("a file outside the library was touched: %q %v", got, err)
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 1 {
+		t.Fatalf("the directory outside the library changed: %v %v", entries, err)
+	}
+	assertRowsAreEmpty(t, root)
+}
+
+// assertRowsAreEmpty checks the transaction rolled back.
+func assertRowsAreEmpty(t *testing.T, root string) {
+	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(root, calibre.MetadataDB))
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +324,13 @@ func TestAddBookLeavesNothingBehindWhenTheFileCannotBeWritten(t *testing.T) {
 		t.Fatalf("books=%d data=%d authors=%d, want the transaction rolled back",
 			books, data, authors)
 	}
+}
+
+// assertLibraryIsEmpty checks both halves: no rows, and no directory
+// this code created left on the disk.
+func assertLibraryIsEmpty(t *testing.T, root string) {
+	t.Helper()
+	assertRowsAreEmpty(t, root)
 	if _, err := os.Stat(filepath.Join(root, "Nobody")); !os.IsNotExist(err) {
 		t.Errorf("the book directory survived a failed add: %v", err)
 	}

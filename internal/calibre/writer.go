@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,11 +36,21 @@ import (
 // there — it is litter the pass will not see and the curator will not
 // see. Adding a book means adding a Calibre book.
 
-// ErrLocked is Calibre itself holding the database. It caches
-// metadata.db in memory and writes its cache back, so a row inserted
-// underneath it can be lost or can confuse it. Racing it and hoping is
-// not a policy, so an upload during a Calibre session is refused.
-var ErrLocked = errors.New("calibre: the library is open in Calibre")
+// ErrLocked is the database refusing to be written because something
+// else holds it.
+//
+// It is worth being honest about how far this goes. Calibre caches
+// metadata.db in memory and writes its cache back, and an *idle*
+// Calibre holds no lock at all — so this catches Calibre mid-write and
+// nothing else. A book added while somebody has the library open in
+// Calibre can still be lost when Calibre next saves.
+//
+// There is no fix for that on this side: Calibre offers no lock to take
+// and no protocol to ask. The mitigation is the one the deployment
+// already implies — a server's library is not also somebody's desktop
+// Calibre session — and the answer here is a 409 telling the reader to
+// close Calibre, not a pretence that the race was handled.
+var ErrLocked = errors.New("calibre: the library is busy")
 
 // ErrNoTitle is a publication with nothing to file it under. Calibre's
 // own default is "Unknown", and using it silently would bury the book
@@ -138,8 +149,15 @@ type Identifier struct {
 
 // Writer adds books to a Calibre library.
 type Writer struct {
-	db   *sql.DB
+	db *sql.DB
+	// root is the library root as a path, for the database DSN.
 	root string
+	// dir is the same root as a root: every file this type creates goes
+	// through it, so a symlink cannot redirect a write — or a rollback's
+	// delete — outside the library. The plain-folder path has always
+	// worked this way and there is no reason a Calibre library deserves
+	// less care than a folder of loose EPUBs.
+	dir *os.Root
 }
 
 // OpenWriter opens a library for writing.
@@ -159,46 +177,61 @@ func OpenWriter(root string) (*Writer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("calibre: open root %q: %w", absolute, err)
 	}
-	defer rooted.Close()
 	link, err := rooted.Lstat(MetadataDB)
 	if err != nil {
+		rooted.Close()
 		return nil, fmt.Errorf("%w: %w", ErrNotCalibre, err)
 	}
 	if !link.Mode().IsRegular() {
+		rooted.Close()
 		return nil, fmt.Errorf("%w: %s is not a regular file",
 			ErrNotCalibre, MetadataDB)
 	}
 	file, err := rooted.Open(MetadataDB)
 	if err != nil {
+		rooted.Close()
 		return nil, fmt.Errorf("%w: %w", ErrNotCalibre, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
+		rooted.Close()
 		return nil, fmt.Errorf("calibre: stat %s: %w", MetadataDB, err)
 	}
 	db, err := sql.Open("sqlite",
 		writeDSN(filepath.Join(absolute, MetadataDB)))
 	if err != nil {
+		rooted.Close()
 		return nil, fmt.Errorf("calibre: open %s: %w", MetadataDB, err)
 	}
 	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		db.Close()
+		rooted.Close()
 		return nil, fmt.Errorf("calibre: open %s for writing: %w", MetadataDB, err)
 	}
 	if err := sameFileAsOpened(db, info); err != nil {
 		db.Close()
+		rooted.Close()
 		return nil, err
 	}
-	return &Writer{db: db, root: absolute}, nil
+	return &Writer{db: db, root: absolute, dir: rooted}, nil
 }
 
-func (w *Writer) Close() error { return w.db.Close() }
+// Close releases the database and the root. Calling it twice is safe,
+// which matters because the tests do exactly that.
+func (w *Writer) Close() error {
+	err := w.db.Close()
+	if w.dir != nil {
+		w.dir.Close()
+		w.dir = nil
+	}
+	return err
+}
 
-// writeDSN is the read-only DSN's counterpart. The busy timeout is the
-// interesting part: it is how long this server waits for Calibre to let
-// go before deciding the library is in use and refusing.
+// writeDSN is the read-only DSN's counterpart. The busy timeout is how
+// long this server waits for another writer to let go before giving up;
+// see ErrLocked for what that does and does not protect against.
 func writeDSN(pathname string) string {
 	u := url.URL{Scheme: "file", Path: pathname}
 	return u.String() +
@@ -228,32 +261,24 @@ func (w *Writer) AddBook(
 		return 0, "", fmt.Errorf("calibre: begin: %w", err)
 	}
 	committed := false
-	var bookDir string
+	var made madeDirs
 	defer func() {
 		if committed {
 			return
 		}
 		_ = tx.Rollback()
-		if bookDir != "" {
-			_ = os.RemoveAll(filepath.Join(w.root, filepath.FromSlash(bookDir)))
-			// And the author's directory, if this was the only thing in
-			// it. os.Remove refuses a non-empty directory, which is
-			// exactly the guard wanted here: an author who already had
-			// books keeps them.
-			_ = os.Remove(filepath.Join(w.root,
-				filepath.FromSlash(path.Dir(bookDir))))
-		}
+		w.remove(made)
 	}()
 
 	id, relative, dir, err := w.insert(ctx, tx, title, book, size)
-	bookDir = dir
 	if err != nil {
 		if isLocked(err) {
 			return 0, "", ErrLocked
 		}
 		return 0, "", err
 	}
-	if err := w.writeFiles(book, dir, relative, src); err != nil {
+	made, err = w.writeFiles(book, dir, relative, src)
+	if err != nil {
 		return 0, "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -457,38 +482,87 @@ func upsertNamed(
 // virtue of containing the book id, which no other book has.
 func (w *Writer) writeFiles(
 	book NewBook, dir, relative string, src io.Reader,
-) error {
-	full := filepath.Join(w.root, filepath.FromSlash(dir))
-	if err := os.MkdirAll(full, 0o755); err != nil {
-		return fmt.Errorf("calibre: create book directory: %w", err)
+) (made madeDirs, err error) {
+	author := path.Dir(dir)
+	// The author's directory is shared: two books by one writer live
+	// under it, so finding it already there is the normal case and not
+	// a collision. The book's directory is not shared — it carries the
+	// book id — so finding *that* there means something this code did
+	// not create is in the way, and writing into it would overwrite
+	// somebody's book.
+	switch err := w.dir.Mkdir(author, 0o755); {
+	case err == nil:
+		made.author = author
+	case errors.Is(err, os.ErrExist):
+	default:
+		return made, fmt.Errorf("calibre: create author directory: %w", err)
 	}
-	target := filepath.Join(w.root, filepath.FromSlash(relative))
-	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return fmt.Errorf("calibre: create publication: %w", err)
+	if err := w.dir.Mkdir(dir, 0o755); err != nil {
+		return made, fmt.Errorf("calibre: create book directory: %w", err)
 	}
-	if _, err := io.Copy(file, src); err != nil {
-		file.Close()
-		return fmt.Errorf("calibre: write publication: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return fmt.Errorf("calibre: sync publication: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("calibre: close publication: %w", err)
+	made.book = dir
+
+	if err := w.create(relative, func(f *os.File) error {
+		if _, err := io.Copy(f, src); err != nil {
+			return err
+		}
+		return f.Sync()
+	}); err != nil {
+		return made, fmt.Errorf("calibre: write publication: %w", err)
 	}
 	if len(book.Cover) > 0 {
-		if err := os.WriteFile(
-			filepath.Join(full, CoverName), book.Cover, 0o644); err != nil {
-			return fmt.Errorf("calibre: write cover: %w", err)
+		if err := w.create(path.Join(dir, CoverName), func(f *os.File) error {
+			_, err := f.Write(book.Cover)
+			return err
+		}); err != nil {
+			return made, fmt.Errorf("calibre: write cover: %w", err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(full, "metadata.opf"),
-		[]byte(book.opf()), 0o644); err != nil {
-		return fmt.Errorf("calibre: write metadata.opf: %w", err)
+	if err := w.create(path.Join(dir, OPFName), func(f *os.File) error {
+		_, err := io.WriteString(f, book.opf())
+		return err
+	}); err != nil {
+		return made, fmt.Errorf("calibre: write metadata.opf: %w", err)
 	}
-	return nil
+	return made, nil
+}
+
+// create makes one file that was not there. O_EXCL and O_NOFOLLOW are
+// both load-bearing: the first is what makes this an addition rather
+// than an overwrite, and the second stops a symlink somebody left in
+// the library from turning a write into a write somewhere else.
+func (w *Writer) create(name string, write func(*os.File) error) error {
+	file, err := w.dir.OpenFile(name,
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	if err := write(file); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// madeDirs is what a failed add has to undo. Only directories this code
+// created are in it, so a rollback can never remove a directory that
+// was already somebody's.
+type madeDirs struct {
+	author string
+	book   string
+}
+
+// remove undoes the directories, innermost first. The book's directory
+// holds only files this code just wrote, and the author's is removed
+// with Remove rather than RemoveAll — which refuses a non-empty
+// directory, so an author who already had books keeps them.
+func (w *Writer) remove(made madeDirs) {
+	if made.book != "" {
+		_ = w.dir.RemoveAll(made.book)
+	}
+	if made.author != "" {
+		_ = w.dir.Remove(made.author)
+	}
 }
 
 // calibreTime is the timestamp format Calibre stores and this package
@@ -497,8 +571,8 @@ func calibreTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04:05.000000-07:00")
 }
 
-// isLocked recognises the one failure worth its own answer: Calibre is
-// running and holding the database.
+// isLocked recognises the one failure worth its own answer: something
+// else is writing the database right now.
 func isLocked(err error) bool {
 	if err == nil {
 		return false

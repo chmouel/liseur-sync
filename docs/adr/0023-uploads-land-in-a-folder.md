@@ -184,13 +184,35 @@ requirements rather than details:
   ADR-0022 a file with no row is invisible forever, and a row with no
   file is an unservable book the pass will keep re-observing. So the
   write is all-or-nothing: one transaction, and on any failure the
-  transaction rolls back *and* the book directory is removed.
+  transaction rolls back *and* the directories are removed — but only
+  the ones this code created. An author's directory is shared, so
+  finding it already there is normal and it is removed only if it is
+  empty again afterwards.
 
-**An upload is refused while Calibre itself is running against the
-library.** Calibre holds `metadata.db` in memory and writes its cache
-back, so a row inserted underneath it can be lost, or can confuse it. A
-lock that does not clear within the busy timeout is answered with `409`
-and a message saying so. Racing it and hoping is not a policy.
+"Only creates" means the same thing here as it does for a plain folder,
+and is enforced the same way. Every path goes through `os.Root`, so a
+symlink cannot redirect a write — or a rollback's delete — outside the
+library. The book's directory is created with `Mkdir` rather than
+`MkdirAll`, and the publication, cover and OPF with `O_EXCL` and
+`O_NOFOLLOW`: a book directory that already exists is something this
+code did not make, so the upload is refused rather than written into.
+Overwriting it would destroy a book that was already there, which is
+the one outcome ADR-0017 rule 3 exists to prevent.
+
+**A library that is also somebody's open Calibre session is not
+supported, and cannot be.** Calibre holds `metadata.db` in memory and
+writes its cache back, so a row inserted underneath it can be lost. A
+write lock that does not clear within the busy timeout is answered with
+`409` — but this is worth stating plainly rather than overselling: an
+*idle* Calibre holds no lock, so that check catches Calibre mid-write
+and nothing else.
+
+There is no fix available on this side. Calibre offers no lock to take
+and no protocol to ask, and the only reliable answer — refusing to serve
+a library any desktop Calibre might open — is a deployment rule, not
+code. It is the rule a server-side library already implies. The `409` is
+therefore a courtesy for the case it can detect, and this paragraph is
+the honest statement of the case it cannot.
 
 The rejected alternative is worth recording because it is the fallback if
 the above proves unsafe in the field: uploads to a Calibre folder could
