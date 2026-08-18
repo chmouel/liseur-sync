@@ -125,6 +125,73 @@ func TestUploadCataloguesTheBook(t *testing.T) {
 	}
 }
 
+// TestUploadJoinsTheWorkTheReaderWasAlreadySyncing is the bug this
+// exists for. A book added on a device syncs its position long before it
+// is ever sent anywhere, so the server ends up holding a work with the
+// reader's place in it and no file. Uploading the file used to add a
+// catalog entry beside that work and join neither to the other, and the
+// library drew the same book twice: one card with the reading, one with
+// the file.
+func TestUploadJoinsTheWorkTheReaderWasAlreadySyncing(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+
+	body := makeEPUB(t, "Ancillary Justice", "Ann Leckie", []byte("one"))
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+
+	// The device, weeks earlier: it has the file, so it names the book
+	// on the file's digest and syncs a position under that name.
+	sync := f.mintToken(t, f.user.ID, store.ScopeSync)
+	code, out := post(t, f.ts.URL+"/v1/works/resolve", sync, map[string]any{
+		"identifiers": []map[string]string{{"kind": "sha256", "value": digest}},
+		"title":       "Ancillary Justice",
+		"author":      "Ann Leckie",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("resolve: %d %v", code, out)
+	}
+	workID := out["work_id"].(string)
+
+	upload := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+	resp, got := f.upload(t, upload, "whatever.epub", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%v)", resp.StatusCode, got)
+	}
+	bookID := got["book_id"].(string)
+
+	link, err := f.st.UserBookWork(t.Context(), f.user.ID, bookID)
+	if err != nil {
+		t.Fatalf("the uploaded book was joined to no work at all: %v", err)
+	}
+	if link.WorkID != workID {
+		t.Fatalf("book joined work %q, want %q — the reading it already had",
+			link.WorkID, workID)
+	}
+}
+
+// A retry over a bad connection must settle the work as surely as the
+// first attempt, or whether the reading is joined depends on the network.
+func TestUploadingTwiceStillJoinsTheWork(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+
+	body := makeEPUB(t, "Ancillary Justice", "Ann Leckie", []byte("one"))
+	if _, got := f.upload(t, token, "whatever.epub", body); got["book_id"] == nil {
+		t.Fatalf("no book id in %v", got)
+	}
+	resp, got := f.upload(t, token, "whatever.epub", body)
+	if resp.StatusCode != http.StatusOK || got["duplicate"] != true {
+		t.Fatalf("second upload = %d %v, want 200 and duplicate", resp.StatusCode, got)
+	}
+	if _, err := f.st.UserBookWork(
+		t.Context(), f.user.ID, got["book_id"].(string),
+	); err != nil {
+		t.Fatalf("a re-sent book was joined to no work: %v", err)
+	}
+}
+
 // The bytes are the idempotency key, which is the whole reason this
 // route needs neither a job table nor a client-supplied key.
 func TestUploadTwiceMakesOneBook(t *testing.T) {

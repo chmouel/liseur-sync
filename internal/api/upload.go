@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/calibre"
@@ -44,7 +46,8 @@ type BookIngest interface {
 // client that retries a transfer over a bad connection costs one indexed
 // lookup and creates nothing.
 func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -53,7 +56,7 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 		writeUploadError(w, err)
 		return
 	}
-	result, err := s.ReceiveUpload(w, r, folder)
+	result, err := s.ReceiveUpload(w, r, folder, tok.UserID)
 	if err != nil {
 		writeUploadError(w, err)
 		return
@@ -154,7 +157,56 @@ func (s *Server) uploadFolder(ctx context.Context, id string) (store.Folder, err
 // The response writer is here only so the body can be bounded; nothing
 // is written to it. Every refusal comes back as an *UploadError holding
 // the status and a sentence fit to show.
+//
+// userID is who is sending it, and is what lets the book be joined to
+// the work they may already be syncing a position for. It is the only
+// part of this that is per-reader; everything else about an upload is a
+// file written into a folder.
 func (s *Server) ReceiveUpload(
+	w http.ResponseWriter, r *http.Request, folder store.Folder, userID string,
+) (UploadResult, error) {
+	result, err := s.receiveUpload(w, r, folder)
+	// Both answers that carry a book — the one just written and the one
+	// the catalog already held — are joined here, so a retry over a bad
+	// connection settles the work as surely as the first attempt did.
+	if err == nil && result.BookID != "" {
+		s.nameUploadedWork(r.Context(), userID, result.BookID)
+	}
+	return result, err
+}
+
+// nameUploadedWork joins a book just received to the sender's own work.
+//
+// Without this the server ends up holding both halves of one book and
+// no link between them: a work with the reader's position and no file,
+// because they had been syncing it from the device for weeks, and a
+// catalog entry with the file and no reading. The library draws them
+// side by side, which is how it was noticed.
+//
+// The client makes the same join when it resolves the book, but only a
+// client that knows it uploaded anything. A book sent from the browser
+// has no such client, and this is the only chance to do it.
+//
+// Never fatal, and never visible: the bytes are written and catalogued,
+// which is all the upload promised. A join that failed is one the next
+// resolve will make.
+func (s *Server) nameUploadedWork(ctx context.Context, userID, bookID string) {
+	if userID == "" {
+		return
+	}
+	// Not confirmed: a title-and-author match is a guess, and sending a
+	// file is not the reader saying yes to it. A digest match needs
+	// nobody's permission, and is the case this exists for.
+	result, _, err := s.resolveBookWork(ctx, userID, bookID, false, time.Now())
+	switch {
+	case err != nil:
+		slog.Warn("upload: could not name the work", "book", bookID, "err", err)
+	case len(result.ConflictingWorkIDs) > 0:
+		slog.Info("upload: identifiers name more than one work", "book", bookID)
+	}
+}
+
+func (s *Server) receiveUpload(
 	w http.ResponseWriter, r *http.Request, folder store.Folder,
 ) (UploadResult, error) {
 	if s.Ingest == nil {
@@ -240,9 +292,9 @@ func (s *Server) ReceiveUpload(
 // web package can delegate to these rules while still depending on
 // nothing but the store.
 func (s *Server) ReceiveUploadTo(
-	w http.ResponseWriter, r *http.Request, folder store.Folder,
+	w http.ResponseWriter, r *http.Request, folder store.Folder, userID string,
 ) (string, bool, error) {
-	result, err := s.ReceiveUpload(w, r, folder)
+	result, err := s.ReceiveUpload(w, r, folder, userID)
 	return result.BookID, result.Duplicate, err
 }
 
