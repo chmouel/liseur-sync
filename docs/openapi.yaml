@@ -812,6 +812,8 @@ paths:
       tags: [library]
       summary: Upload a book into a folder
       security: [{ deviceToken: [] }]  # requires library-upload scope
+      parameters:
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
       description: |
         An upload is a file written into a folder, and nothing more
         (ADR-0023). This route does not write the catalog: it puts the
