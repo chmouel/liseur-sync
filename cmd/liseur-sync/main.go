@@ -193,14 +193,16 @@ func cmdServe(args []string) error {
 	// safety timer; a pass is idempotent and holds no state, so there is
 	// no queue to drain and nothing to recover on restart (ADR-0017).
 	watcher := content.NewWatcher(st, reconciler, slog.Default())
-	// The UI delegates downloads and covers back to the API server, so
-	// the two surfaces share one implementation of the rules about what
-	// a stored file may claim to be.
+	// The UI delegates downloads, covers and uploads back to the API
+	// server, so the two surfaces share one implementation of the rules
+	// about what a stored file may claim to be, and one about what may
+	// be written into a watched folder.
 	apiSrv.WebUI = &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: loginLimiter,
 		Downloads:    apiSrv,
 		Covers:       apiSrv,
+		Uploads:      apiSrv,
 		Watching:     watcher,
 	}
 	mux := apiSrv.Handler()

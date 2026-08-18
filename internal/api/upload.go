@@ -48,29 +48,122 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if s.Ingest == nil {
-		writeError(w, http.StatusServiceUnavailable,
-			"this server is running without a folder watcher")
+	folder, err := s.uploadFolder(r.Context(), r.PathValue("folder"))
+	if err != nil {
+		writeUploadError(w, err)
 		return
 	}
-	folder, err := s.St.FolderByID(r.Context(), r.PathValue("folder"))
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "no such folder")
+	result, err := s.ReceiveUpload(w, r, folder)
+	if err != nil {
+		writeUploadError(w, err)
 		return
+	}
+	if result.Duplicate {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"book_id":        result.BookID,
+			"folder_id":      result.FolderID,
+			"content_sha256": result.ContentSHA256,
+			"duplicate":      true,
+		})
+		return
+	}
+	// Rules 1 and 2 of ADR-0017 mean the pass may legitimately have
+	// concluded nothing. The file is on the disk either way, so a
+	// missing row is "not yet", not "failed": the watcher will come
+	// back to it and the client resolves the book later.
+	if result.BookID == "" {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"folder_id":      result.FolderID,
+			"relative_path":  result.RelativePath,
+			"content_sha256": result.ContentSHA256,
+		})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"book_id":        result.BookID,
+		"folder_id":      result.FolderID,
+		"relative_path":  result.RelativePath,
+		"content_sha256": result.ContentSHA256,
+		"duplicate":      false,
+	})
+}
+
+// UploadResult is what came of receiving one publication.
+//
+// An empty BookID with no Duplicate is the "not yet" case: the bytes are
+// on the disk and the pass has not catalogued them.
+type UploadResult struct {
+	BookID        string
+	FolderID      string
+	RelativePath  string
+	ContentSHA256 string
+	Duplicate     bool
+}
+
+// UploadError is a refusal with the status and the sentence that goes
+// with it. Every message here is written to be shown to whoever sent the
+// file, so a browser form can print it as it stands and the JSON API can
+// put it in an error body.
+type UploadError struct {
+	Status  int
+	Message string
+}
+
+func (e *UploadError) Error() string { return e.Message }
+
+func uploadErr(status int, msg string) *UploadError {
+	return &UploadError{Status: status, Message: msg}
+}
+
+func writeUploadError(w http.ResponseWriter, err error) {
+	var refusal *UploadError
+	if errors.As(err, &refusal) {
+		writeError(w, refusal.Status, refusal.Message)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "the upload failed")
+}
+
+// uploadFolder resolves a folder and satisfies itself that somebody
+// asked for it to be writable.
+func (s *Server) uploadFolder(ctx context.Context, id string) (store.Folder, error) {
+	if s.Ingest == nil {
+		return store.Folder{}, uploadErr(http.StatusServiceUnavailable,
+			"this server is running without a folder watcher")
+	}
+	folder, err := s.St.FolderByID(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Folder{}, uploadErr(http.StatusNotFound, "no such folder")
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "folder lookup failed")
-		return
+		return store.Folder{}, uploadErr(http.StatusInternalServerError,
+			"folder lookup failed")
 	}
 	if !folder.AcceptsUploads {
-		writeError(w, http.StatusForbidden,
+		return store.Folder{}, uploadErr(http.StatusForbidden,
 			"this folder does not accept uploads")
-		return
 	}
+	return folder, nil
+}
 
+// ReceiveUpload writes one publication from a multipart body into a
+// folder and reconciles it, and is the whole of what an upload is. Both
+// surfaces call it — the JSON route above and the browser form in the
+// web UI — so the rules about what may be written where exist once.
+//
+// The response writer is here only so the body can be bounded; nothing
+// is written to it. Every refusal comes back as an *UploadError holding
+// the status and a sentence fit to show.
+func (s *Server) ReceiveUpload(
+	w http.ResponseWriter, r *http.Request, folder store.Folder,
+) (UploadResult, error) {
+	if s.Ingest == nil {
+		return UploadResult{}, uploadErr(http.StatusServiceUnavailable,
+			"this server is running without a folder watcher")
+	}
 	spooled, err := s.spoolUpload(w, r)
 	if err != nil {
-		return // spoolUpload has answered.
+		return UploadResult{}, err
 	}
 	defer spooled.cleanup()
 
@@ -78,22 +171,22 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 	// another. Either way the upload is done and this is the book.
 	existing, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha)
 	if err == nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"book_id":        existing.ID,
-			"folder_id":      existing.FolderID,
-			"content_sha256": existing.ContentSHA256,
-			"duplicate":      true,
-		})
-		return
+		return UploadResult{
+			BookID:        existing.ID,
+			FolderID:      existing.FolderID,
+			RelativePath:  existing.RelativePath,
+			ContentSHA256: existing.ContentSHA256,
+			Duplicate:     true,
+		}, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "catalog lookup failed")
-		return
+		return UploadResult{}, uploadErr(http.StatusInternalServerError,
+			"catalog lookup failed")
 	}
 
 	if _, err := spooled.file.Seek(0, io.SeekStart); err != nil {
-		writeError(w, http.StatusInternalServerError, "upload could not be read")
-		return
+		return UploadResult{}, uploadErr(http.StatusInternalServerError,
+			"upload could not be read")
 	}
 	up := content.Upload{
 		Source: spooled.file,
@@ -111,40 +204,40 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 	}
 	relative, err := s.Ingest.Ingest(r.Context(), folder, up)
 	if errors.Is(err, content.ErrUploadsRefused) {
-		writeError(w, http.StatusForbidden, "this folder does not accept uploads")
-		return
+		return UploadResult{}, uploadErr(http.StatusForbidden,
+			"this folder does not accept uploads")
 	}
 	if errors.Is(err, calibre.ErrLocked) {
-		writeError(w, http.StatusConflict,
+		return UploadResult{}, uploadErr(http.StatusConflict,
 			"that Calibre library is open in Calibre; close it and try again")
-		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError,
+		return UploadResult{}, uploadErr(http.StatusInternalServerError,
 			"the book could not be written to that folder")
-		return
 	}
 
-	// Rules 1 and 2 of ADR-0017 mean the pass may legitimately have
-	// concluded nothing. The file is on the disk either way, so a
-	// missing row is "not yet", not "failed": the watcher will come
-	// back to it and the client resolves the book later.
-	book, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha)
-	if err != nil {
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"folder_id":      folder.ID,
-			"relative_path":  relative,
-			"content_sha256": spooled.sha,
-		})
-		return
+	result := UploadResult{
+		FolderID:      folder.ID,
+		RelativePath:  relative,
+		ContentSHA256: spooled.sha,
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"book_id":        book.ID,
-		"folder_id":      book.FolderID,
-		"relative_path":  book.RelativePath,
-		"content_sha256": book.ContentSHA256,
-		"duplicate":      false,
-	})
+	if book, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha); err == nil {
+		result.BookID = book.ID
+		result.RelativePath = book.RelativePath
+	}
+	return result, nil
+}
+
+// ReceiveUploadTo is ReceiveUpload in the shape the web UI needs: the
+// book's id and whether the catalog already held these bytes, without
+// the parts only a JSON body has a use for. It lives here so that the
+// web package can delegate to these rules while still depending on
+// nothing but the store.
+func (s *Server) ReceiveUploadTo(
+	w http.ResponseWriter, r *http.Request, folder store.Folder,
+) (string, bool, error) {
+	result, err := s.ReceiveUpload(w, r, folder)
+	return result.BookID, result.Duplicate, err
 }
 
 // spooledUpload is a validated publication in a temporary file, which is
@@ -185,9 +278,9 @@ func (u spooledUpload) cleanup() {
 	_ = os.Remove(name)
 }
 
-// spoolUpload reads the multipart body, hashes and validates it, and
-// answers the request itself on every failure. A non-nil error means the
-// response is already written.
+// spoolUpload reads the multipart body, hashes and validates it. Every
+// refusal comes back as an *UploadError; nothing is written to the
+// response writer, which is here only to bound the body.
 func (s *Server) spoolUpload(
 	w http.ResponseWriter, r *http.Request,
 ) (spooledUpload, error) {
@@ -196,20 +289,20 @@ func (s *Server) spoolUpload(
 
 	part, filename, err := multipartPublication(r)
 	if err != nil {
-		writeOversizeOr(w, limit, err, http.StatusBadRequest, err.Error())
-		return spooledUpload{}, err
+		return spooledUpload{}, oversizeOr(limit, err,
+			http.StatusBadRequest, err.Error())
 	}
 	defer part.Close()
 
 	dir := s.Cfg.Content.CacheDir
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		writeError(w, http.StatusInternalServerError, "upload could not be stored")
-		return spooledUpload{}, err
+		return spooledUpload{}, uploadErr(http.StatusInternalServerError,
+			"upload could not be stored")
 	}
 	file, err := os.CreateTemp(dir, "upload-*.epub")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upload could not be stored")
-		return spooledUpload{}, err
+		return spooledUpload{}, uploadErr(http.StatusInternalServerError,
+			"upload could not be stored")
 	}
 	spooled := spooledUpload{file: file, filename: filename}
 
@@ -217,24 +310,21 @@ func (s *Server) spoolUpload(
 	size, err := io.Copy(io.MultiWriter(file, digest), part)
 	if err != nil {
 		spooled.cleanup()
-		writeOversizeOr(w, limit, err,
+		return spooledUpload{}, oversizeOr(limit, err,
 			http.StatusBadRequest, "the upload did not finish")
-		return spooledUpload{}, err
 	}
 	if size == 0 {
 		spooled.cleanup()
-		err := errors.New("the upload was empty")
-		writeError(w, http.StatusBadRequest, err.Error())
-		return spooledUpload{}, err
+		return spooledUpload{}, uploadErr(http.StatusBadRequest,
+			"the upload was empty")
 	}
 
 	result, err := epub.Validate(r.Context(), file, size, s.Cfg.EPUBLimits())
 	if err != nil {
 		spooled.cleanup()
 		code, _ := epub.ErrorCode(err)
-		writeError(w, http.StatusUnprocessableEntity,
+		return spooledUpload{}, uploadErr(http.StatusUnprocessableEntity,
 			"that file is not a readable EPUB: "+string(code))
-		return spooledUpload{}, err
 	}
 	spooled.sha = hex.EncodeToString(digest.Sum(nil))
 	spooled.size = size
@@ -242,23 +332,20 @@ func (s *Server) spoolUpload(
 	return spooled, nil
 }
 
-// writeOversizeOr answers 413 when the body ran past the bound and the
-// caller's own answer otherwise.
+// oversizeOr answers 413 when the body ran past the bound and the
+// caller's own refusal otherwise.
 //
 // The bound can be reached while reading the multipart headers rather
 // than the publication, and a client that sent too much should be told
 // the same thing either way rather than being told its request was
 // malformed.
-func writeOversizeOr(
-	w http.ResponseWriter, limit int64, err error, status int, msg string,
-) {
+func oversizeOr(limit int64, err error, status int, msg string) *UploadError {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		writeError(w, http.StatusRequestEntityTooLarge,
+		return uploadErr(http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("a book may be at most %d bytes", limit))
-		return
 	}
-	writeError(w, status, msg)
+	return uploadErr(status, msg)
 }
 
 // multipartPublication finds the one part that matters. The field is
