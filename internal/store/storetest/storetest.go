@@ -193,6 +193,16 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ReconcilePlainFolderNeverPurges", func(t *testing.T) {
 		testReconcilePlainFolderNeverPurges(t, open)
 	})
+	t.Run("DeleteWork", func(t *testing.T) { testDeleteWork(t, open) })
+	t.Run("DeleteWorkRefusesAMappedWork", func(t *testing.T) {
+		testDeleteWorkRefusesAMappedWork(t, open)
+	})
+	t.Run("DeleteWorkIsPerUser", func(t *testing.T) {
+		testDeleteWorkIsPerUser(t, open)
+	})
+	t.Run("DeleteMissingBook", func(t *testing.T) {
+		testDeleteMissingBook(t, open)
+	})
 	t.Run("ReconcileCalibreDigestChangeFollowsReader", func(t *testing.T) {
 		testReconcileCalibreDigestChangeFollowsReader(t, open)
 	})

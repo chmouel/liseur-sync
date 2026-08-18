@@ -50,6 +50,11 @@ type BookView struct {
 	// nothing to download until the file comes back.
 	Present bool
 	CanRead bool
+	// Retirable is a missing book an administrator may take out of the
+	// catalog: admin, file already reported missing, and not in a
+	// Calibre folder, where metadata.db is authoritative and the next
+	// pass would put the book back (ADR-0022, ADR-0024).
+	Retirable bool
 	Notice  string
 	Problem string
 	// Chips are the book's entities as links: the fastest way from one
@@ -152,6 +157,20 @@ templ bookBody(prefix, csrf string, b BookView) {
 				file. Nothing has been deleted — it comes back on its own if
 				the file does.
 			</p>
+			if b.Retirable {
+				<form
+					method="post"
+					action={ prefix + "books/" + b.ID + "/delete" }
+					hx-confirm="Remove this book from the catalog? Readers keep what they read, and the file on disk is untouched."
+				>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<button class="danger" type="submit">Remove from the catalog</button>
+					<span class="muted">
+						For a file that is not coming back. Anyone who read it keeps
+						their reading, as an entry only they can remove.
+					</span>
+				</form>
+			}
 		} else {
 			<table>
 				<tr><th>Name</th><th>Type</th><th></th></tr>

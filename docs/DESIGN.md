@@ -228,6 +228,15 @@ Positions are an **append-only operation log per work per user**:
 
 The server assigns each accepted op a **per-user monotonic `seq`**.
 
+Append-only means history is never edited: no later write rewrites a
+position that was reported or a session that happened. It does not mean
+a reader cannot ask this server to forget a book. Deleting a work
+removes its whole graph at once — ops, sessions, rollups, editions,
+aliases and its book mapping — and only for a work no catalog book backs
+any more ([ADR-0024](adr/0024-deleting-a-work.md)). There is no deleting
+one op or one session, and no deletion record: a device still syncing
+the book creates the work again.
+
 ### 5.2 Delta sync in one round trip
 
 ```

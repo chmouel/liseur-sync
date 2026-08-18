@@ -87,6 +87,11 @@ type LibraryRow struct {
 	// file. A PDF is downloadable and not readable here.
 	CanRead bool
 	CanGet  bool
+	// Bookless is a work no catalog book maps at all, as against one
+	// whose book is merely missing. Only a bookless work is the
+	// reader's to delete: a missing book is evidence about a disk, and
+	// the disk comes back (ADR-0024).
+	Bookless bool
 	// lastActiveAt is the unformatted time, kept for sorting only.
 	lastActiveAt int64
 }
@@ -226,15 +231,15 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	workBookIDs := s.workBookIDs(r.Context(), u.ID, works)
+	links := s.workBookIDs(r.Context(), u.ID, works)
 	byBook := make(map[string]store.WorkSummary, len(works))
 	for _, ws := range works {
-		if id := workBookIDs[ws.Work.ID]; id != "" {
+		if id := links.active[ws.Work.ID]; id != "" {
 			byBook[id] = ws
 		}
 	}
 
-	rows, next, err := s.libraryRows(r, v, works, workBookIDs, byBook, loc)
+	rows, next, err := s.libraryRows(r, v, works, links, byBook, loc)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -243,13 +248,13 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	if next != "" {
 		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
-	v.Hero = s.libraryHero(r, works, workBookIDs, loc)
+	v.Hero = s.libraryHero(r, works, links, loc)
 
 	// An htmx continuation asks for more of one list, not for the page
 	// around it: answering with the whole document would append a second
 	// copy of the shell to the grid.
 	if isHTMXRequest(r) {
-		libraryFragment(relPrefix(r.URL.Path), v).Render(r.Context(), w)
+		libraryFragment(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
 		return
 	}
 	libraryPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
@@ -275,9 +280,14 @@ const folderPickerLimit = 200
 // renders as a text tile through orphanRows rather than as a cover that
 // resolves to a 410. The mapping itself is untouched: the file coming
 // back restores the tile.
+// The second answer is the one deletion needs: whether the catalog
+// lists any book for this work at all, missing file or not. A work
+// whose book is only missing looks bookless on this page, and must not
+// be offered a delete — the row is the record of a disk, and the disk
+// comes back.
 func (s *Server) workBookIDs(
 	ctx context.Context, userID string, works []store.WorkSummary,
-) map[string]string {
+) bookLinks {
 	candidates := make(map[string][]string, len(works))
 	var all []string
 	for _, ws := range works {
@@ -289,16 +299,29 @@ func (s *Server) workBookIDs(
 		all = append(all, ids...)
 	}
 	books := s.booksByID(ctx, all)
-	out := make(map[string]string, len(candidates))
+	links := bookLinks{
+		active: make(map[string]string, len(candidates)),
+		mapped: make(map[string]bool, len(candidates)),
+	}
 	for workID, ids := range candidates {
+		links.mapped[workID] = true
 		for _, id := range ids {
 			if book, ok := books[id]; ok && book.Status == store.BookActive {
-				out[workID] = id
+				links.active[workID] = id
 				break
 			}
 		}
 	}
-	return out
+	return links
+}
+
+// bookLinks is what one reader's works resolve to on this server: the
+// book each work opens from, and whether the catalog lists a book for
+// it at all. The two differ for a work whose only book is missing, and
+// that difference decides what a row may do.
+type bookLinks struct {
+	active map[string]string
+	mapped map[string]bool
 }
 
 // libraryRows builds the union, and returns the cursor for the next page
@@ -315,11 +338,11 @@ func (s *Server) workBookIDs(
 // book you are in the middle of.
 func (s *Server) libraryRows(
 	r *http.Request, v LibraryView,
-	works []store.WorkSummary, workBookIDs map[string]string,
+	works []store.WorkSummary, links bookLinks,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryRow, string, error) {
 	if v.Filter == filterReading || v.Filter == filterFinished || v.Sort == sortLastRead {
-		return s.readingRows(r, v, works, workBookIDs, loc), "", nil
+		return s.readingRows(r, v, works, links, loc), "", nil
 	}
 
 	books, next, err := s.listBooksPage(r, v.Selected, v.Dir)
@@ -370,7 +393,7 @@ func (s *Server) libraryRows(
 	// opened. Repeating them on every page would be the alternative,
 	// and it would be a bug.
 	if v.Filter == filterAll && r.URL.Query().Get("cursor") == "" {
-		rows = append(orphanRows(works, workBookIDs, loc), rows...)
+		rows = append(orphanRows(works, links, loc), rows...)
 	}
 	return rows, next, nil
 }
@@ -380,11 +403,12 @@ func (s *Server) libraryRows(
 // newest read first.
 func (s *Server) readingRows(
 	r *http.Request, v LibraryView,
-	works []store.WorkSummary, workBookIDs map[string]string, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, loc *time.Location,
 ) []LibraryRow {
 	rows := make([]LibraryRow, 0, len(works))
 	for _, ws := range works {
-		row := workRowOf(ws, workBookIDs[ws.Work.ID], loc)
+		row := workRowOf(ws, links.active[ws.Work.ID], loc)
+		row.Bookless = !links.mapped[ws.Work.ID]
 		if !keepRow(row, v.Filter) {
 			continue
 		}
@@ -415,14 +439,16 @@ func (s *Server) readingRows(
 // text tiles, because there is no cover to show and inventing one would
 // be pretending the file is here.
 func orphanRows(
-	works []store.WorkSummary, workBookIDs map[string]string, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, loc *time.Location,
 ) []LibraryRow {
 	rows := make([]LibraryRow, 0)
 	for _, ws := range works {
-		if workBookIDs[ws.Work.ID] != "" {
+		if links.active[ws.Work.ID] != "" {
 			continue
 		}
-		rows = append(rows, workRowOf(ws, "", loc))
+		row := workRowOf(ws, "", loc)
+		row.Bookless = !links.mapped[ws.Work.ID]
+		rows = append(rows, row)
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
 		return rows[i].lastActiveAt > rows[j].lastActiveAt
@@ -469,12 +495,12 @@ func keepRow(row LibraryRow, filter string) bool {
 // view of the list below it.
 func (s *Server) libraryHero(
 	r *http.Request,
-	works []store.WorkSummary, workBookIDs map[string]string, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, loc *time.Location,
 ) *LibraryRow {
 	best := LibraryRow{}
 	found := false
 	for _, ws := range works {
-		bookID := workBookIDs[ws.Work.ID]
+		bookID := links.active[ws.Work.ID]
 		if bookID == "" || ws.LastActive == nil {
 			continue
 		}

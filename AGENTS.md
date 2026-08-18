@@ -173,7 +173,13 @@ of them.
   windows.** Same id with a different payload is a conflict, never an
   overwrite. Aged immutable sessions become daily rollup totals plus
   compact idempotency tombstones; koplugin revisions remain raw and
-  become new rows in `session_supersessions`, never updates.
+  become new rows in `session_supersessions`, never updates. The one
+  exception is a reader deleting a whole work (ADR-0024): the unit is
+  the entire work graph, never one op or one session, and only a work no
+  catalog book maps any more — a missing book keeps its reading, because
+  absence is evidence about a disk. An admin may delete a *missing*
+  catalog book (never an active one, never in a Calibre folder), which
+  leaves each reader's work behind as theirs to remove.
 - **`seq` is never renumbered**, including by compaction. Heads (newest
   op per work+device) are never compacted.
 - **Adapters write native records only.** No legacy wire shape is stored

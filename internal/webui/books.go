@@ -4,10 +4,12 @@ package webui
 // handling is delegated — this file decides what a page shows, not how
 // a file is opened or served.
 //
-// Nothing here writes. A folder's contents belong to whoever curates it
-// on disk (ADR-0017), so there is no upload, no delete, no trash and no
-// metadata form: the catalog says what the folder says, and the way to
-// change it is to change the folder.
+// Almost nothing here writes. A folder's contents belong to whoever
+// curates it on disk (ADR-0017), so there is no trash and no metadata
+// form: the catalog says what the folder says, and the way to change it
+// is to change the folder. The one exception is an administrator
+// retiring a catalog row whose file a pass already reported missing
+// (ADR-0024) — a row leaves, never a file.
 
 import (
 	"context"
@@ -135,6 +137,15 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 		SHA256:    book.ContentSHA256,
 	}
 	v.CanRead = bookReadable(book)
+	// Retiring a missing row is the one write this page offers, and
+	// only where it would stick: a Calibre folder's metadata.db is
+	// authoritative, so a book it still lists comes back on the next
+	// pass (ADR-0022, ADR-0024).
+	if !v.Present && isAdmin(r) {
+		if folder, err := s.St.FolderByID(r.Context(), book.FolderID); err == nil {
+			v.Retirable = folder.Kind != store.FolderCalibre
+		}
+	}
 	if rel, err := s.St.CatalogBookRelationsForBooks(
 		r.Context(), readerID(u), []string{book.ID},
 	); err == nil {
