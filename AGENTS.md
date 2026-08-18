@@ -61,15 +61,22 @@ full-fidelity surface; legacy protocols are edge adapters
 native records only. The web UI (`internal/webui`) is templ + vendored
 htmx, no CDN, no build pipeline beyond `go tool templ generate`.
 
-Books come from **watched folders**, never from an upload
+Books come from **watched folders**
 ([ADR-0017](docs/adr/0017-folders-not-pipelines.md)). A folder is a row
 (`id, name, root_path, kind`); `internal/content` walks it, reads
 metadata and calls one store method, `ReconcileFolder`, which is the
-single write path into the catalog. One watcher goroutine
+single write path into the catalog — including for an upload. A folder
+an administrator marked `accepts_uploads` can be written into by
+`POST /v1/folders/{folder}/books`
+([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)), and that route
+creates a file (or, in a Calibre folder, a Calibre book) and then runs
+a pass. It never touches a catalog table itself, so an uploaded book
+and a book somebody copied in by hand are the same kind of thing. One watcher goroutine
 (`internal/content/watch_linux.go`) triggers a pass at startup, on a
 debounced fsnotify event, and on a slow safety timer. There is no ingest
-job, no content-addressed store, no quota, no trash and no review queue;
-the only directory the server writes to is the cover cache.
+job, no content-addressed store, no quota, no trash and no review queue:
+an upload is a file written into a folder and nothing more, and the
+only other directory the server writes to is the cover cache.
 
 The API contract is [docs/openapi.yaml](docs/openapi.yaml) — update it
 in the same commit as any route/shape change, and keep

@@ -11,9 +11,18 @@
 # To index a folder of EPUBs or a Calibre library you already have,
 # uncomment the two `books` lines in the service you run. The admin
 # panel can only name a path this container can see, and library_roots
-# bounds it to that one tree. Mount it read-only: the server opens
-# library files O_RDONLY and Calibre's metadata.db with `mode=ro`, so
-# the mount costs nothing and makes a bug incapable of data loss.
+# bounds it to that one tree.
+#
+# The mount is read-write, and that is a deliberate change: a folder an
+# administrator marks as accepting uploads is written into, and a
+# Calibre folder has its metadata.db written too (ADR-0023). Append
+# `:ro` to the mount if you want the old guarantee back — indexing works
+# exactly as before, and uploads into that folder simply fail.
+#
+# What has not changed is that nothing writes there unless somebody
+# asked for it: a folder accepts uploads only once an administrator
+# turns it on, and the write only ever creates a file that was not
+# there. It never modifies, renames or deletes one.
 
 x-app: &app
   image: ghcr.io/chmouel/liseur-sync:latest
@@ -42,7 +51,7 @@ services:
       # LISEUR_LIBRARY_ROOTS: /books
     volumes:
       - sqlite-data:/data
-      # - /srv/books:/books:ro
+      # - /srv/books:/books
     depends_on:
       sqlite-init:
         condition: service_completed_successfully
@@ -84,7 +93,7 @@ services:
       # LISEUR_LIBRARY_ROOTS: /books
     volumes:
       - content-data:/data
-      # - /srv/books:/books:ro
+      # - /srv/books:/books
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,7 +114,7 @@ services:
       LISEUR_TRUSTED_PROXIES: ${LISEUR_DOCKER_SUBNET:-172.29.0.0/16}
     volumes:
       - content-data:/data
-      # - /srv/books:/books:ro
+      # - /srv/books:/books
     depends_on:
       content-init:
         condition: service_completed_successfully
