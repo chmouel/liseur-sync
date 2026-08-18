@@ -330,19 +330,27 @@ func buildMetadata(
 		case "subject":
 			appendUniqueString(&metadata.Subjects, subjectSeen, value.value)
 		case "creator", "contributor":
-			role := value.role
-			if refined := refinementValue(refinements[value.id], "role"); refined != "" {
-				role = refined
+			roles := refinementValues(refinements[value.id], "role")
+			if len(roles) == 0 && value.role != "" {
+				roles = []string{value.role}
 			}
-			if role == "" && value.kind == "creator" {
-				role = "author"
+			if len(roles) == 0 {
+				if value.kind == "creator" {
+					roles = []string{"author"}
+				} else {
+					roles = []string{"contributor"}
+				}
 			}
-			if role == "" {
-				role = "contributor"
+			// One person can be credited more than once for the same
+			// book, and EPUB 3 says so with several `role` refinements
+			// on one entry. Standard Ebooks writes `ann` and `aut` on
+			// its authors, so reading only the first loses the author
+			// on every book they publish.
+			for _, role := range roles {
+				appendContributor(&metadata.Contributors, contributorSeen, Contributor{
+					Name: value.value, Role: normalizeContributorRole(role),
+				})
 			}
-			appendContributor(&metadata.Contributors, contributorSeen, Contributor{
-				Name: value.value, Role: normalizeContributorRole(role),
-			})
 		}
 	}
 	if metadata.Title == "" {
@@ -402,6 +410,21 @@ func refinementValue(
 		}
 	}
 	return ""
+}
+
+// refinementValues is refinementValue for a property that may legally
+// appear more than once on one entry, such as a contributor's role.
+func refinementValues(
+	refinements []metadataRefinement,
+	property string,
+) []string {
+	var values []string
+	for _, refinement := range refinements {
+		if refinement.property == property {
+			values = append(values, refinement.value)
+		}
+	}
+	return values
 }
 
 func inferIdentifierScheme(value string) string {

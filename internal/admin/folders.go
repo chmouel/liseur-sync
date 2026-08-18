@@ -218,3 +218,39 @@ func removeFolder(ctx context.Context, st store.Store, args []string) error {
 	fmt.Println("nothing under that directory was changed")
 	return nil
 }
+
+// setFolderUploads turns a folder's upload permission on or off.
+//
+// The counterpart of the panel's toggle, for a server administered over
+// SSH rather than through a browser. Uploads stay off until somebody
+// asks for them, per ADR-0023, and this is one of the two ways of
+// asking.
+func setFolderUploads(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: folder-uploads <folder-id> <on|off>")
+	}
+	folderID := strings.TrimSpace(args[0])
+	var accepts bool
+	switch strings.TrimSpace(args[1]) {
+	case "on", "true", "yes":
+		accepts = true
+	case "off", "false", "no":
+		accepts = false
+	default:
+		return fmt.Errorf("want on or off, got %q", args[1])
+	}
+	folder, err := st.FolderByID(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	if err := st.SetFolderUploads(ctx, folderID, accepts, time.Now().UTC()); err != nil {
+		return err
+	}
+	if accepts {
+		fmt.Printf("%q (%s) now accepts uploads\n", folder.Name, folder.RootPath)
+		fmt.Println("the server will create files under that directory, and only create")
+	} else {
+		fmt.Printf("%q (%s) no longer accepts uploads\n", folder.Name, folder.RootPath)
+	}
+	return nil
+}

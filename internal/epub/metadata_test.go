@@ -2,6 +2,7 @@ package epub
 
 import (
 	"archive/zip"
+	"bytes"
 	"testing"
 )
 
@@ -313,5 +314,41 @@ func TestValidateDeduplicatesMetadataWithoutChangingOrder(t *testing.T) {
 			Name: "Ada", Role: "author",
 		}) {
 		t.Fatalf("deduplicated metadata: %+v", metadata)
+	}
+}
+
+// TestValidateKeepsEveryRoleOfOneContributor guards the shape Standard
+// Ebooks writes on every book it publishes: one `dc:creator` carrying
+// several `role` refinements, the authoring one not first. Reading only
+// the first leaves the publication with no author at all, and whatever
+// asks for one then picks the font designer.
+func TestValidateKeepsEveryRoleOfOneContributor(t *testing.T) {
+	data := epubWithPackage(t, `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata>
+  <dc:title>A Study in Scarlet</dc:title>
+  <dc:contributor id="type-designer">The League of Moveable Type</dc:contributor>
+  <meta property="role" refines="#type-designer" scheme="marc:relators">tyd</meta>
+  <dc:creator id="author">Arthur Conan Doyle</dc:creator>
+  <meta property="role" refines="#author" scheme="marc:relators">ann</meta>
+  <meta property="role" refines="#author" scheme="marc:relators">aut</meta>
+ </metadata>
+ <manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest>
+ <spine><itemref idref="c"/></spine>
+</package>`)
+
+	result, err := Validate(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	var authors []string
+	for _, c := range result.Metadata.Contributors {
+		if c.Role == "author" {
+			authors = append(authors, c.Name)
+		}
+	}
+	if len(authors) != 1 || authors[0] != "Arthur Conan Doyle" {
+		t.Fatalf("authors: %+v (all: %+v)", authors, result.Metadata.Contributors)
 	}
 }

@@ -56,6 +56,8 @@ func Run(st store.Store, args []string) error {
 		return listFolders(ctx, st, args[1:])
 	case "remove-folder":
 		return removeFolder(ctx, st, args[1:])
+	case "folder-uploads":
+		return setFolderUploads(ctx, st, args[1:])
 	case "backfill-works":
 		return backfillWorks(ctx, st, args[1:])
 	default:
@@ -113,6 +115,12 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 a metadata.db is read as a Calibre
                                 library, anything else as plain files
   list-folders                  list the folders this server watches
+  folder-uploads <folder-id> <on|off>
+                                let books be uploaded into a folder, or
+                                stop letting them. Off until asked for:
+                                the server creates files under a folder
+                                only where somebody said it may, and
+                                then only creates
   remove-folder <folder-id>     stop watching a folder and forget what
                                 was catalogued from it; nothing under the
                                 directory is touched
