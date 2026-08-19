@@ -35,8 +35,9 @@ backend (throwaway database).
 
 The web reader has a browser check (`TestReaderOpensInARealBrowser`)
 that drives Chromium over CDP. It skips when no Chromium is found,
-including in CI; set `LISEUR_CHROME` to point at one, and
-`LISEUR_READER_SCREENSHOT=/tmp/reader.png` to keep what it saw. Run it
+including in CI. On a desktop run, set `LISEUR_CHROME=/path/to/chrome`
+to opt in explicitly; CI likewise runs it only when that variable is set.
+Set `LISEUR_READER_SCREENSHOT=/tmp/reader.png` to keep what it saw. Run it
 after touching `static/reader*.js`, `reader.templ` or the reader's CSP:
 a `srcdoc` document inherits the framing page's policy, so a page CSP
 that is slightly too strict renders a blank frame with no error
