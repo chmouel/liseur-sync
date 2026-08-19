@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -250,5 +251,212 @@ func testDeleteMissingBook(t *testing.T, open OpenFunc) {
 	// And the reader can now remove the work the book left behind.
 	if err := s.DeleteWork(ctx, u.ID, surviving.ID); err != nil {
 		t.Fatalf("DeleteWork on the orphan the delete created: %v", err)
+	}
+}
+
+// mkUploadFolder is a folder an administrator marked writable, which is
+// the only kind a book can be deleted out of (ADR-0025).
+func mkUploadFolder(t *testing.T, s store.Store, name string) store.Folder {
+	t.Helper()
+	f := MkFolder(t, s, name, store.FolderPlain)
+	if err := s.SetFolderUploads(
+		context.Background(), f.ID, true, time.Now().UTC(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	f.AcceptsUploads = true
+	return f
+}
+
+// testDeleteCatalogBook is the delete an upload earns: a book in a
+// folder the server may write into leaves the catalog, and one in a
+// folder it may not is refused however it is asked.
+func testDeleteCatalogBook(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	writable := mkUploadFolder(t, s, "deletable")
+	doReconcile(t, s, writable.ID, []store.ObservedBook{{
+		RelativePath: "sent.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-sent", Title: "Sent",
+	}}, true, now)
+	sentID := knownByPath(t, s, writable.ID)["sent.epub"].ID
+
+	// A folder nobody marked is what every folder used to be: observed,
+	// never written, and not this server's to delete out of.
+	readOnly := MkFolder(t, s, "curated", store.FolderPlain)
+	doReconcile(t, s, readOnly.ID, []store.ObservedBook{{
+		RelativePath: "theirs.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-theirs-file", Title: "Theirs",
+	}}, true, now)
+	theirsID := knownByPath(t, s, readOnly.ID)["theirs.epub"].ID
+
+	if _, err := s.DeleteCatalogBook(
+		ctx, theirsID, store.DeleteBookOptions{},
+	); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("deleting out of a folder that takes no uploads: "+
+			"want ErrInvalidInput, got %v", err)
+	}
+	if _, err := s.CatalogBookByID(ctx, theirsID); err != nil {
+		t.Fatalf("a refused delete took the book anyway: %v", err)
+	}
+
+	if _, err := s.DeleteCatalogBook(
+		ctx, sentID, store.DeleteBookOptions{},
+	); err != nil {
+		t.Fatalf("DeleteCatalogBook: %v", err)
+	}
+	if _, err := s.CatalogBookByID(ctx, sentID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the book survived its own deletion: %v", err)
+	}
+	if _, err := s.DeleteCatalogBook(
+		ctx, sentID, store.DeleteBookOptions{},
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleting a book twice: want ErrNotFound, got %v", err)
+	}
+	if _, err := s.DeleteCatalogBook(
+		ctx, "b-never-existed", store.DeleteBookOptions{},
+	); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleting an unknown book: want ErrNotFound, got %v", err)
+	}
+}
+
+// testDeleteCatalogBookForgetsOneReader is the second question the
+// delete asks. The file is shared, so it goes for everybody; the
+// reading is per-user, so only the reader who asked loses theirs.
+func testDeleteCatalogBookForgetsOneReader(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	mine := MkUser(t, s, "forget-mine")
+	theirs := MkUser(t, s, "forget-theirs")
+
+	folder := mkUploadFolder(t, s, "shared")
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "shared.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-shared", Title: "Shared",
+	}}, true, now)
+	bookID := knownByPath(t, s, folder.ID)["shared.epub"].ID
+
+	readIt := func(u store.User, workID string) {
+		t.Helper()
+		w := store.Work{ID: workID, UserID: u.ID, Title: "Shared", CreatedAt: now}
+		if _, err := s.ResolveCatalogBookWork(ctx, u.ID, bookID, w,
+			[]store.Edition{{UserID: u.ID, SHA256: "sha-shared", WorkID: workID}},
+			[]store.Identifier{{Kind: "sha256", Value: "sha-shared"}},
+			false, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AppendOps(ctx, u.ID, "d-"+workID, []store.Op{{
+			OpID:   "018e6f1a-0000-7000-8000-00000000" + workID[len(workID)-4:],
+			WorkID: workID, EditionSHA: Ptr("sha-shared"), ClientTS: now,
+			Progression: 0.3, Origin: store.OriginNative,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readIt(mine, "w-fa01")
+	readIt(theirs, "w-fa02")
+
+	out, err := s.DeleteCatalogBook(ctx, bookID, store.DeleteBookOptions{
+		ForgetReadingFor: mine.ID,
+	})
+	if err != nil {
+		t.Fatalf("DeleteCatalogBook: %v", err)
+	}
+	if !out.ReadingForgotten || out.ReadingKept {
+		t.Fatalf("result = %+v, want the caller's reading forgotten", out)
+	}
+	if _, err := s.WorkByID(ctx, mine.ID, "w-fa01"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the caller asked to forget and did not: %v", err)
+	}
+	// The other reader never asked, so their reading survives as the
+	// bookless work only they can remove (ADR-0024).
+	if _, err := s.WorkByID(ctx, theirs.ID, "w-fa02"); err != nil {
+		t.Fatalf("one reader's delete took another's reading: %v", err)
+	}
+	if err := s.DeleteWork(ctx, theirs.ID, "w-fa02"); err != nil {
+		t.Fatalf("the surviving work is not its own reader's to remove: %v", err)
+	}
+}
+
+// testDeleteCatalogBookKeepsReadingASecondCopyHolds is the case a
+// per-user, per-book mapping makes possible: the same book twice, one
+// work behind both. Deleting one copy must not take reading the other
+// still holds, and the reader is told so rather than told it failed.
+func testDeleteCatalogBookKeepsReadingASecondCopyHolds(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	u := MkUser(t, s, "two-copies")
+
+	folder := mkUploadFolder(t, s, "twice")
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "first.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-first", Title: "Twice",
+	}, {
+		RelativePath: "second.epub", SizeBytes: 2, MTime: now,
+		ContentSHA256: "sha-second", Title: "Twice",
+	}}, true, now)
+	byPath := knownByPath(t, s, folder.ID)
+
+	// Two files, one book: they differ byte for byte, so the catalog
+	// keeps them apart, but they carry the same partial-md5 and so
+	// resolve to one work — which is the reader's position in a book
+	// they happen to hold twice.
+	var workID string
+	for i, b := range []struct{ id, sha string }{
+		{byPath["first.epub"].ID, "sha-first"},
+		{byPath["second.epub"].ID, "sha-second"},
+	} {
+		proposed := store.Work{
+			ID:     fmt.Sprintf("w-twice-%d", i),
+			UserID: u.ID, Title: "Twice", CreatedAt: now,
+		}
+		res, err := s.ResolveCatalogBookWork(ctx, u.ID, b.id, proposed,
+			[]store.Edition{{UserID: u.ID, SHA256: b.sha, WorkID: proposed.ID}},
+			[]store.Identifier{
+				{Kind: "sha256", Value: b.sha},
+				{Kind: "partial-md5", Value: "md5-twice"},
+			},
+			false, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if workID == "" {
+			workID = res.WorkID
+		} else if res.WorkID != workID {
+			t.Fatalf("the second copy resolved to work %q, want %q: "+
+				"this test needs one work behind both books",
+				res.WorkID, workID)
+		}
+	}
+	w := store.Work{ID: workID}
+
+	out, err := s.DeleteCatalogBook(ctx, byPath["first.epub"].ID,
+		store.DeleteBookOptions{ForgetReadingFor: u.ID})
+	if err != nil {
+		t.Fatalf("DeleteCatalogBook: %v", err)
+	}
+	if out.ReadingForgotten || !out.ReadingKept {
+		t.Fatalf("result = %+v, want the reading kept by the second copy", out)
+	}
+	if _, err := s.WorkByID(ctx, u.ID, w.ID); err != nil {
+		t.Fatalf("reading a second copy still holds was deleted: %v", err)
+	}
+
+	// With the last copy gone there is nothing left to hold it, so the
+	// same request now forgets.
+	out, err = s.DeleteCatalogBook(ctx, byPath["second.epub"].ID,
+		store.DeleteBookOptions{ForgetReadingFor: u.ID})
+	if err != nil {
+		t.Fatalf("DeleteCatalogBook: %v", err)
+	}
+	if !out.ReadingForgotten || out.ReadingKept {
+		t.Fatalf("result = %+v, want the reading forgotten", out)
+	}
+	if _, err := s.WorkByID(ctx, u.ID, w.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the last copy went and the reading stayed: %v", err)
 	}
 }

@@ -267,6 +267,28 @@ type Folder struct {
 	UpdatedAt      time.Time
 }
 
+// DeleteBookOptions tunes deleting a catalog book (ADR-0025).
+type DeleteBookOptions struct {
+	// ForgetReadingFor is the reader whose work goes with the book, or
+	// empty to leave every reader's reading behind. It is only ever one
+	// reader — the one who asked — because a work is per-user and the
+	// caller has no standing to forget anybody else's (ADR-0024).
+	ForgetReadingFor string
+}
+
+// DeleteBookResult reports what happened to the caller's reading, which
+// they cannot infer from success alone.
+type DeleteBookResult struct {
+	// ReadingForgotten is true when the caller's work went with the
+	// book.
+	ReadingForgotten bool
+	// ReadingKept is true when forgetting was asked for and declined
+	// because another catalog book still maps that work — a second copy
+	// of the same book, which the reading now belongs to. Not a failure:
+	// the reader asked to forget a book they still have.
+	ReadingKept bool
+}
+
 // FolderCursor is the opaque pagination cursor of the folder list,
 // ordered by name then id. The id comes first because it cannot contain
 // a space and a folder name can contain anything, so cutting at the
@@ -1176,6 +1198,22 @@ type Store interface {
 	// deleted with it — a work with reading history survives its book
 	// and becomes an entry only its own reader can remove.
 	DeleteMissingBook(ctx context.Context, bookID string) error
+	// DeleteCatalogBook removes one catalog book whose file this server
+	// has just deleted (ADR-0025), with the same cascade and the same
+	// entity collection DeleteMissingBook runs.
+	//
+	// It is the counterpart of an upload, and bounded the same way: a
+	// book whose folder does not accept uploads is ErrInvalidInput, and
+	// that is re-read inside the transaction rather than trusted from a
+	// check the caller made earlier. Unlike DeleteMissingBook it does
+	// not require the book to be marked missing — the file is already
+	// gone by the time this is called, so no pass will put it back.
+	//
+	// ForgetReadingFor names the one reader whose work goes with it, and
+	// only ever theirs.
+	DeleteCatalogBook(
+		ctx context.Context, bookID string, opts DeleteBookOptions,
+	) (DeleteBookResult, error)
 
 	// -----------------------------------------------------------------
 	// Reconciliation.
