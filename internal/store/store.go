@@ -70,6 +70,14 @@ const (
 	// because tidying your own shelves and writing to the server's disk
 	// are different questions, and one token should not answer both.
 	ScopeLibraryUpload Scope = "library-upload"
+	// ScopeLibraryDelete permits deleting a book out of a folder that
+	// accepts uploads (ADR-0025). Separate from library-upload for the
+	// reason that one is separate from library-manage: adding your own
+	// book and removing one every account can see are different
+	// questions. It bounds a token rather than dividing users — any
+	// account may mint it — so its job is to stop a sync token from
+	// deleting a library by accident or by compromise.
+	ScopeLibraryDelete Scope = "library-delete"
 	ScopeAdmin         Scope = "admin"
 )
 
@@ -79,7 +87,8 @@ var scopeOrder = map[Scope]int{
 	ScopeLibraryRead:   2,
 	ScopeLibraryManage: 3,
 	ScopeLibraryUpload: 4,
-	ScopeAdmin:         5,
+	ScopeLibraryDelete: 5,
+	ScopeAdmin:         6,
 }
 
 // ScopeSet is the canonical, duplicate-free set of capabilities on a token.
