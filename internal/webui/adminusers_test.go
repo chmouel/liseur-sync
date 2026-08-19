@@ -406,6 +406,12 @@ func TestAdminCreationFailuresLeaveNoPartialState(t *testing.T) {
 			},
 		},
 		{
+			name: "invite short entropy output",
+			tune: func(s *Server) {
+				s.newSecret = func() (string, error) { return "short", nil }
+			},
+		},
+		{
 			name: "invite store failure",
 			tune: func(s *Server) { s.St = createInviteFailStore{Store: s.St} },
 		},
