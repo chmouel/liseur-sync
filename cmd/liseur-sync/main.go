@@ -172,6 +172,9 @@ func cmdServe(args []string) error {
 		MaxDepth: cfg.Content.ScanMaxDepth,
 	}, cfg.EPUBLimits(), slog.Default())
 
+	// One Ingester is both halves of ADR-0023 and ADR-0025: it is the
+	// only thing that writes under a folder root, in either direction.
+	ingester := content.NewIngester(reconciler)
 	apiSrv := &api.Server{
 		St:           st,
 		Auth:         auth.NewService(st),
@@ -179,7 +182,8 @@ func cmdServe(args []string) error {
 		LoginLimiter: loginLimiter,
 		Files:        content.NewFiles(st),
 		Covers:       cache,
-		Ingest:       content.NewIngester(reconciler),
+		Ingest:       ingester,
+		Removal:      ingester,
 		Kosync: &kosync.Server{
 			St:          st,
 			OpenReg:     cfg.OpenRegistration,
