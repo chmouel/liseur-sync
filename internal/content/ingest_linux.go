@@ -219,3 +219,18 @@ func (i *Ingester) Ingest(
 	_, _ = i.rec.Reconcile(ctx, folder)
 	return relative, nil
 }
+
+// Remove deletes a book's file from its folder, the mirror of Ingest
+// and the other half of what this type is for: it is the one place the
+// server writes under a folder root, in either direction.
+//
+// Unlike Ingest it does not ask for a pass. An upload needs one because
+// a pass is the only thing that writes the catalog; a delete does not,
+// because the caller removes the row itself in the same breath. A pass
+// run here would run between the two and see a file gone whose row is
+// still there, and mark missing a book that is about to be deleted.
+func (i *Ingester) Remove(
+	ctx context.Context, folder store.Folder, book store.CatalogBook,
+) error {
+	return Remove(ctx, folder, book)
+}

@@ -103,28 +103,37 @@ type UploadResult struct {
 	Duplicate     bool
 }
 
-// UploadError is a refusal with the status and the sentence that goes
-// with it. Every message here is written to be shown to whoever sent the
-// file, so a browser form can print it as it stands and the JSON API can
-// put it in an error body.
-type UploadError struct {
+// WriteError is a refusal with the status and the sentence that goes
+// with it, from either of the two writes this server makes to a folder:
+// putting a book in (ADR-0023) and taking one out (ADR-0025). Every
+// message is written to be shown to whoever asked, so a browser form
+// can print it as it stands and the JSON API can put it in an error
+// body.
+type WriteError struct {
 	Status  int
 	Message string
 }
 
-func (e *UploadError) Error() string { return e.Message }
+func (e *WriteError) Error() string { return e.Message }
 
-func uploadErr(status int, msg string) *UploadError {
-	return &UploadError{Status: status, Message: msg}
+func uploadErr(status int, msg string) *WriteError {
+	return &WriteError{Status: status, Message: msg}
 }
 
 func writeUploadError(w http.ResponseWriter, err error) {
-	var refusal *UploadError
+	writeWriteError(w, err, "the upload failed")
+}
+
+// writeWriteError turns a refusal into an answer, and anything else
+// into a 500 with the given sentence — never the underlying error,
+// which may name a path on this server's disk.
+func writeWriteError(w http.ResponseWriter, err error, fallback string) {
+	var refusal *WriteError
 	if errors.As(err, &refusal) {
 		writeError(w, refusal.Status, refusal.Message)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, "the upload failed")
+	writeError(w, http.StatusInternalServerError, fallback)
 }
 
 // uploadFolder resolves a folder and satisfies itself that somebody
@@ -155,7 +164,7 @@ func (s *Server) uploadFolder(ctx context.Context, id string) (store.Folder, err
 // web UI — so the rules about what may be written where exist once.
 //
 // The response writer is here only so the body can be bounded; nothing
-// is written to it. Every refusal comes back as an *UploadError holding
+// is written to it. Every refusal comes back as an *WriteError holding
 // the status and a sentence fit to show.
 //
 // userID is who is sending it, and is what lets the book be joined to
@@ -337,7 +346,7 @@ func (u spooledUpload) cleanup() {
 }
 
 // spoolUpload reads the multipart body, hashes and validates it. Every
-// refusal comes back as an *UploadError; nothing is written to the
+// refusal comes back as an *WriteError; nothing is written to the
 // response writer, which is here only to bound the body.
 func (s *Server) spoolUpload(
 	w http.ResponseWriter, r *http.Request,
@@ -397,7 +406,7 @@ func (s *Server) spoolUpload(
 // than the publication, and a client that sent too much should be told
 // the same thing either way rather than being told its request was
 // malformed.
-func oversizeOr(limit int64, err error, status int, msg string) *UploadError {
+func oversizeOr(limit int64, err error, status int, msg string) *WriteError {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		return uploadErr(http.StatusRequestEntityTooLarge,

@@ -136,6 +136,7 @@ const (
 	gateLibraryRead                    // bearer, scope library-read
 	gateLibraryManage                  // bearer, scope library-manage
 	gateLibraryUpload                  // bearer, scope library-upload
+	gateLibraryDelete                  // bearer, scope library-delete
 	gateResolveBoth                    // bearer, library-read AND sync
 	gateOPDS                           // HTTP Basic, scope library-read
 	gateTokenSelf                      // bearer, no scope beyond authenticating
@@ -194,6 +195,10 @@ var registeredRouteGates = map[string]routeGate{
 	// series claims and nothing else, and writing to this server's disk
 	// is a different question.
 	"POST /v1/folders/{folder}/books": gateLibraryUpload,
+
+	// ADR-0025. Deliberately not library-upload either: sending your own
+	// book and destroying everyone's are not the same permission.
+	"DELETE /v1/books/{id}": gateLibraryDelete,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
 
@@ -308,6 +313,7 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 	both := mint(store.ScopeLibraryRead, store.ScopeSync)
 	libraryManageOnly := mint(store.ScopeLibraryManage)
 	libraryUploadOnly := mint(store.ScopeLibraryUpload)
+	libraryDeleteOnly := mint(store.ScopeLibraryDelete)
 
 	// A real login credential, minted the same way HandleLogin mints one
 	// — through Login itself, in-process, since this matrix is about
@@ -420,6 +426,21 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				}
 				if got := bearer(method, path, libraryUploadOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
 					t.Errorf("library-upload token on a library-upload route: %d, should have passed the gate", got)
+				}
+			case gateLibraryDelete:
+				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
+					t.Errorf("no token: %d, want 401", got)
+				}
+				// Being allowed to add a book is not being allowed to
+				// destroy one, and neither is tidying the shelves.
+				if got := bearer(method, path, libraryUploadOnly); got != http.StatusForbidden {
+					t.Errorf("library-upload token on a library-delete route: %d, want 403", got)
+				}
+				if got := bearer(method, path, libraryManageOnly); got != http.StatusForbidden {
+					t.Errorf("library-manage token on a library-delete route: %d, want 403", got)
+				}
+				if got := bearer(method, path, libraryDeleteOnly); got == http.StatusUnauthorized || got == http.StatusForbidden {
+					t.Errorf("library-delete token on a library-delete route: %d, should have passed the gate", got)
 				}
 			case gateResolveBoth:
 				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
