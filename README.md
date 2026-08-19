@@ -14,6 +14,46 @@ optional, multi-user.
 
 ![The library](docs/screenshots/library.png)
 
+## Why liseur-sync
+
+Neither Komga nor calibre-web covers everything a personal ebook library
+needs from a single server:
+
+- **Komga** has excellent position sync (full Readium locators) and a
+  clean REST API, but it cannot accept book uploads from a client — its
+  design is filesystem-first, so books must be placed in library folders
+  by other means. It cannot delete books remotely either. And it is a
+  JVM application (~600 MB on disk), heavy for a Raspberry Pi or a small
+  VPS.
+
+- **calibre-web** can delete books and has a rich web UI, but its
+  position sync only carries percentages (Kobo protocol), not exact
+  reading positions. Its upload and delete routes are web-UI form posts
+  behind browser sessions and CSRF tokens — not a proper API, fragile to
+  scrape, and liable to break across versions.
+
+- Neither server syncs books that never came from its own catalog (a
+  book opened from a file manager, for example), and neither offers
+  personal series claims or an append-only sync log that makes conflict
+  resolution deterministic.
+
+liseur-sync was built to be the one server that does all of it:
+full-locator position sync (including for books it has never seen, via
+hash-based resolution), proper file upload and delete through a real
+REST API, personal series claims, and a lightweight footprint (~30 MB on
+a Raspberry Pi). A single binary covers catalog, download, upload,
+delete, position sync, and series management.
+
+| Capability         | Komga            | calibre-web       | liseur-sync      |
+|--------------------|------------------|-------------------|------------------|
+| Catalog and search | REST API         | OPDS              | REST API + OPDS  |
+| File download      | REST API         | OPDS              | REST API         |
+| Position sync      | Full locators    | Percentages only  | Full locators    |
+| Book upload        | Not possible     | Web UI form only  | REST API         |
+| Book delete        | Not possible     | Web UI form only  | REST API         |
+| Series management  | Read-only        | None              | Personal claims  |
+| Footprint          | ~600 MB (JVM)    | ~200 MB (Python)  | ~30 MB (Go)      |
+
 ## Features
 
 ### Reading progress sync
