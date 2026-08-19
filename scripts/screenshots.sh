@@ -5,7 +5,7 @@
 # you ran this. So this script runs the thing. It builds the binary,
 # points a server in a temporary directory at a folder of eight real
 # books from Standard Ebooks, reads a bit of two of them, photographs
-# four pages in a headless browser and throws the server away.
+# five pages in a headless browser and throws the server away.
 #
 #   scripts/screenshots.sh            # writes docs/screenshots/*.png
 #   OUT=/tmp/shots scripts/screenshots.sh
@@ -168,22 +168,61 @@ done
 	die "the shelf has ${#BOOK_IDS[@]} of $WANT books"
 echo "catalogued ${#BOOK_IDS[@]} books"
 
-# A shelf where nothing has been read is a file listing. Two books get a
-# position, pushed the way a real client pushes one.
-read_to() {
-	local book=$1 fraction=$2 op=$3
+# A shelf where nothing has been read is a file listing. Two books get
+# positions and a week of sessions, pushed the way a real client pushes
+# them, so the dashboard has something useful to show.
+resolve_work() {
+	local book=$1
 	local work
 	work=$(api -X POST -H 'Content-Type: application/json' -d '{"confirmed":true}' \
 		"$BASE/v1/books/$book/resolve" | jq -r .work_id)
-	[ -n "$work" ] || die "no work for $book"
+	[ -n "$work" ] && [ "$work" != null ] || die "no work for $book"
+	printf '%s\n' "$work"
+}
+read_to() {
+	local work=$1 fraction=$2 op=$3 when=$4
 	api -X POST -H 'Content-Type: application/json' -o /dev/null \
 		-d "$(jq -nc --arg w "$work" --arg id "$op" --argjson p "$fraction" \
-			--arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+			--arg ts "$when" \
 			'{ops:[{op_id:$id, work_id:$w, client_ts:$ts, progression:$p}]}')" \
 		"$BASE/v1/ops"
 }
-read_to "${BOOK_IDS[0]}" 0.37 "018e6f1a-0000-7000-8000-0000000000a1"
-read_to "${BOOK_IDS[2]}" 0.68 "018e6f1a-0000-7000-8000-0000000000a2"
+push_session() {
+	local id=$1 work=$2 days_ago=$3 start_prog=$4 end_prog=$5
+	local started ended
+	started=$(date -u -d "$days_ago days ago 10:00" +%Y-%m-%dT%H:%M:%SZ)
+	ended=$(date -u -d "$days_ago days ago 10:30" +%Y-%m-%dT%H:%M:%SZ)
+	api -X POST -H 'Content-Type: application/json' -o /dev/null \
+		-d "$(jq -nc --arg id "$id" --arg w "$work" --arg start "$started" \
+			--arg end "$ended" --argjson sp "$start_prog" --argjson ep "$end_prog" \
+			'{sessions:[{session_id:$id,work_id:$w,started_at:$start,ended_at:$end,start_progression:$sp,end_progression:$ep}]}')" \
+		"$BASE/v1/sessions"
+}
+
+WORK0=$(resolve_work "${BOOK_IDS[0]}")
+WORK2=$(resolve_work "${BOOK_IDS[2]}")
+read_to "$WORK0" 0.11 "018e6f1a-0000-7000-8000-0000000000b1" \
+	"$(date -u -d '7 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK2" 0.18 "018e6f1a-0000-7000-8000-0000000000b2" \
+	"$(date -u -d '6 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK0" 0.20 "018e6f1a-0000-7000-8000-0000000000b3" \
+	"$(date -u -d '5 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK2" 0.31 "018e6f1a-0000-7000-8000-0000000000b4" \
+	"$(date -u -d '4 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK0" 0.29 "018e6f1a-0000-7000-8000-0000000000b5" \
+	"$(date -u -d '3 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK2" 0.49 "018e6f1a-0000-7000-8000-0000000000b6" \
+	"$(date -u -d '2 days ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+read_to "$WORK2" 0.68 "018e6f1a-0000-7000-8000-0000000000b7" \
+	"$(date -u -d '1 day ago 10:30' +%Y-%m-%dT%H:%M:%SZ)"
+
+push_session "018e6f1a-0000-7000-8000-0000000000c1" "$WORK0" 7 0.05 0.11
+push_session "018e6f1a-0000-7000-8000-0000000000c2" "$WORK2" 6 0.10 0.18
+push_session "018e6f1a-0000-7000-8000-0000000000c3" "$WORK0" 5 0.11 0.20
+push_session "018e6f1a-0000-7000-8000-0000000000c4" "$WORK2" 4 0.18 0.31
+push_session "018e6f1a-0000-7000-8000-0000000000c5" "$WORK0" 3 0.20 0.29
+push_session "018e6f1a-0000-7000-8000-0000000000c6" "$WORK2" 2 0.31 0.49
+push_session "018e6f1a-0000-7000-8000-0000000000c7" "$WORK2" 1 0.49 0.68
 
 # A panel with one account in it does not show what a panel is for.
 csrf_from() {
@@ -210,8 +249,8 @@ READER=${BOOK_IDS[0]}
 # knows, and clipped to the window, because a full-page capture resizes
 # the frame the book is in and gets a white rectangle. Everything else
 # is ready when the page is.
-WAIT=$'\n'"document.querySelector('foliate-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
-EVAL=$'\n'"(() => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); return 'dark' })()"$'\n\n'
+WAIT=$'\n\n'"document.querySelector('foliate-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
+EVAL=$'\n\n'"(() => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); return 'dark' })()"$'\n\n'
 
 cd internal/webui
 SHOT_CHROME="$CHROME" \
@@ -219,11 +258,11 @@ SHOT_CHROME="$CHROME" \
 	SHOT_COOKIE="$SESSION" \
 	SHOT_DIR="$ROOT/$OUT" \
 	SHOT_WIDTHS=1440 \
-	SHOT_PATHS="/ui/library,/ui/books/$READER/read,/ui/books/$BOOK,/ui/settings?section=admin&view=users" \
-	SHOT_NAMES="library,reader,book,admin" \
+	SHOT_PATHS="/ui,/ui/library,/ui/books/$READER/read,/ui/books/$BOOK,/ui/settings?section=admin&view=users" \
+	SHOT_NAMES="dashboard,library,reader,book,admin" \
 	SHOT_WAIT="$WAIT" \
 	SHOT_EVAL="$EVAL" \
-	SHOT_CLIP=",viewport,," \
+	SHOT_CLIP=",,viewport,," \
 	node testdata/uishots.mjs
 cd "$ROOT"
 rm -rf "$OUT/profile"

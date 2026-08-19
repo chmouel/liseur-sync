@@ -10,6 +10,8 @@ KOReader through a kosync-compatible API.
 `liseur-sync` ships as a single Go binary. SQLite by default, PostgreSQL
 optional, multi-user.
 
+![The dashboard](docs/screenshots/dashboard.png)
+
 ![The library](docs/screenshots/library.png)
 
 ## Features
