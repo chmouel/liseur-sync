@@ -536,6 +536,9 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a st
 		return
 	}
 	code, err := s.generateSecret()
+	if err == nil && len(code) < 32 {
+		err = errors.New("generated secret is too short")
+	}
 	if err != nil {
 		logAdminAction(r, u, "create-invite", "", err)
 		slog.ErrorContext(r.Context(), "create invite failed", "error", err)
