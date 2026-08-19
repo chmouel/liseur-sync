@@ -9,7 +9,6 @@ import (
 	"crypto/subtle"
 	"embed"
 	"io/fs"
-	"net"
 	"net/http"
 	"time"
 
@@ -398,17 +397,14 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, stor
 	})
 }
 
-// rateLimited throttles a credential-verifying handler per remote IP.
-// It renders the login page with a message rather than the API's JSON
-// 429, since the only caller is a browser form.
+// rateLimited throttles a credential-verifying handler per client IP
+// (the forwarded client when behind a trusted proxy, never the proxy
+// itself). It renders the login page with a message rather than the
+// API's JSON 429, since the only caller is a browser form.
 func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.LoginLimiter != nil {
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				host = r.RemoteAddr
-			}
-			if !s.LoginLimiter.Allow(host) {
+			if !s.LoginLimiter.Allow(auth.ClientIP(r, s.Cfg)) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
 				loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "too many attempts, try again later").

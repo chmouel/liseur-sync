@@ -3,7 +3,6 @@ package webui
 import (
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,7 +68,7 @@ func (s *Server) reauth(r *http.Request, actor *store.User) error {
 	if s.AdminReauthUserLimiter != nil && !s.AdminReauthUserLimiter.Allow(actor.ID) {
 		return errRateLimited
 	}
-	if s.AdminReauthIPLimiter != nil && !s.AdminReauthIPLimiter.Allow(remoteHost(r)) {
+	if s.AdminReauthIPLimiter != nil && !s.AdminReauthIPLimiter.Allow(auth.ClientIP(r, s.Cfg)) {
 		return errRateLimited
 	}
 	ok, err := auth.CheckPassword(r.FormValue("admin_password"), actor.Argon2Hash)
@@ -83,14 +82,6 @@ var (
 	errRateLimited      = errors.New("too many attempts; wait a minute and try again")
 	errBadAdminPassword = errors.New("your password is wrong")
 )
-
-func remoteHost(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
 
 // logAdminAction is the audit trail: one structured line per cross-user
 // mutation, actor and target by id, outcome named. No persisted table

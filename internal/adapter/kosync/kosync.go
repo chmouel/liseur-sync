@@ -20,13 +20,15 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // Server is the kosync adapter.
 type Server struct {
 	St          store.Store
-	OpenReg     bool // open_registration config
+	Cfg         config.Config // for trusted-proxy-aware rate limiting
+	OpenReg     bool          // open_registration config
 	PairingTTL  time.Duration
 	AuthRateLim *auth.RateLimiter
 	PairingUser func(r *http.Request) string // reserved for future web pairing
@@ -269,9 +271,9 @@ func strPtr(s string) *string { return &s }
 // proxies are enforced by the caller's middleware chain.
 func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler) {
 	mux.Handle("POST /adapter/kosync/users/create",
-		secure(auth.RateLimitIP(s.AuthRateLim, http.HandlerFunc(s.HandleCreateUser))))
+		secure(auth.RateLimitIP(s.AuthRateLim, s.Cfg, http.HandlerFunc(s.HandleCreateUser))))
 	mux.Handle("GET /adapter/kosync/users/auth",
-		secure(auth.RateLimitIP(s.AuthRateLim, http.HandlerFunc(s.HandleAuth))))
+		secure(auth.RateLimitIP(s.AuthRateLim, s.Cfg, http.HandlerFunc(s.HandleAuth))))
 	mux.Handle("PUT /adapter/kosync/syncs/progress",
 		secure(http.HandlerFunc(s.HandlePutProgress)))
 	mux.Handle("GET /adapter/kosync/syncs/progress/{document}",

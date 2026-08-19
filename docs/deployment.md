@@ -48,6 +48,10 @@ Add your proxy's addresses to `trusted_proxies` so the app can see the
 real scheme; without that it refuses credential traffic as insecure —
 that includes the whole `/ui` surface, not just the login form, and the
 session cookie is issued with `Secure` unless `insecure_http` is set.
+The same trust powers the per-IP rate limits: behind a trusted proxy
+they key on the `X-Forwarded-For` client rather than the proxy's own
+address, so one visitor probing the login cannot exhaust everyone
+else's budget. A forwarded header from any other peer is ignored.
 
 Caddy example:
 
