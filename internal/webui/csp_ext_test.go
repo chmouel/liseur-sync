@@ -25,8 +25,8 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 	f := newBooksFixture(t)
 
 	pages := map[string]*http.Cookie{
-		"/ui/":        f.cookie,
-		"/ui/library": f.cookie,
+		"/ui/":                         f.cookie,
+		"/ui/library":                  f.cookie,
 		"/ui/settings?section=devices": f.cookie,
 		// The page a signed-out browser sees, and the one that posts a
 		// password: it needs the policy at least as much as the rest.
