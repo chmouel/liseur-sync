@@ -1,23 +1,54 @@
 package webui
 
-// Settings.
-
-templ settingsPage(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
-	@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, saved, zones, pwMsg, pwErr))
+templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
+	@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, v))
 }
 
-templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []string, pwMsg string, pwErr bool) {
-	<h1>Settings</h1>
-	if saved {
-		<p class="ok">Saved.</p>
+templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
+	<header class="settings-heading">
+		<h1>Settings</h1>
+		<p class="muted">
+			Your account, connected readers and instance administration in one
+			place.
+		</p>
+	</header>
+	<nav class="settings-tabs" aria-label="Settings sections">
+		@settingsTab(settingsHref(prefix, settingsProfile), "Profile & security", v.Section == settingsProfile)
+		@settingsTab(settingsHref(prefix, settingsDevices), "Devices & integrations", v.Section == settingsDevices)
+		if u.IsAdmin {
+			@settingsTab(settingsHref(prefix, settingsAdmin), "Administration", v.Section == settingsAdmin)
+		}
+	</nav>
+	if v.Section == settingsDevices {
+		@devicesBody(prefix, csrf, v.Devices.Tokens, v.Devices.Browsers,
+			v.Devices.Kosync, v.Devices.Koplugin, v.Devices.Base, v.Flash)
+	} else if v.Section == settingsAdmin {
+		@settingsAdminBody(prefix, csrf, v)
+	} else {
+		@settingsProfileBody(prefix, u, csrf, v)
 	}
-	<section class="card">
+}
+
+templ settingsTab(href string, label string, current bool) {
+	if current {
+		<a href={ href } aria-current="page">{ label }</a>
+	} else {
+		<a href={ href }>{ label }</a>
+	}
+}
+
+templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView) {
+	<section class="card settings-card">
 		<h2>Profile</h2>
+		<p class="muted">Choose how reading activity is recorded for your account.</p>
+		if v.Saved {
+			<p class="ok">Saved.</p>
+		}
 		<form method="post" action={ prefix + "settings" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<label>Timezone
 				<select name="timezone">
-					for _, z := range zones {
+					for _, z := range v.Zones {
 						if z == u.User.Timezone {
 							<option value={ z } selected>{ z }</option>
 						} else {
@@ -45,16 +76,17 @@ templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []st
 					statistics plugin (koplugin)
 				</label>
 			</fieldset>
-			<button type="submit" class="primary">Save</button>
+			<button type="submit" class="primary">Save profile</button>
 		</form>
 	</section>
-	<section class="card">
+	<section class="card settings-card">
 		<h2>Change password</h2>
-		if pwMsg != "" {
-			if pwErr {
-				<p class="error">{ pwMsg }</p>
+		<p class="muted">Changing it signs out your other web sessions.</p>
+		if v.PasswordMessage != "" {
+			if v.PasswordError {
+				<p class="error">{ v.PasswordMessage }</p>
 			} else {
-				<p class="ok">{ pwMsg }</p>
+				<p class="ok">{ v.PasswordMessage }</p>
 			}
 		}
 		<form method="post" action={ prefix + "settings/password" }>
@@ -67,3 +99,31 @@ templ settingsBody(prefix string, u userCtx, csrf string, saved bool, zones []st
 	</section>
 }
 
+templ settingsAdminBody(prefix string, csrf string, v settingsView) {
+	<nav class="settings-subnav" aria-label="Administration sections">
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminOverview), "Overview", v.Admin.View == settingsAdminOverview)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminUsers), "Users", v.Admin.View == settingsAdminUsers || v.Admin.View == settingsAdminUser)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminFolders), "Folders", v.Admin.View == settingsAdminFolders)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMaintenance), "Maintenance", v.Admin.View == settingsAdminMaintenance)
+	</nav>
+	if v.Admin.View == settingsAdminFolders {
+		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Flash)
+	} else if v.Admin.View == settingsAdminUsers {
+		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Flash)
+	} else if v.Admin.View == settingsAdminUser && v.Admin.HasUser {
+		@adminUserBody(prefix, csrf, v.Admin.User, v.Flash)
+	} else if v.Admin.View == settingsAdminMaintenance {
+		@adminMaintenanceBody(prefix, v.Admin.Maintenance, v.Flash)
+	} else {
+		@adminFlash(v.Flash)
+		@adminOverviewBody(prefix, v.Admin.Counts, v.Admin.Build, v.Admin.Config)
+	}
+}
+
+templ settingsAdminTab(href string, label string, current bool) {
+	if current {
+		<a href={ href } aria-current="page">{ label }</a>
+	} else {
+		<a href={ href }>{ label }</a>
+	}
+}

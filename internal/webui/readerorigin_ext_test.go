@@ -236,8 +236,8 @@ func TestReaderOriginServesOnlyTheReader(t *testing.T) {
 	}
 
 	for _, path := range []string{
-		"/ui/", "/ui/library", "/ui/books/" + bookID, "/ui/settings", "/ui/admin",
-		"/ui/login", "/ui/devices", "/v1/books", "/v1/ops", "/healthz",
+		"/ui/", "/ui/library", "/ui/books/" + bookID, "/ui/settings",
+		"/ui/login", "/v1/books", "/v1/ops", "/healthz",
 		"/ui/books/" + bookID + "/download", "/opds/v1.2",
 	} {
 		resp, body := ask(t, ts, http.MethodGet, readerHost, path, cookie)

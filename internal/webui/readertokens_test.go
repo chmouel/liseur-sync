@@ -21,7 +21,7 @@ func TestDevicesHidesReaderTokens(t *testing.T) {
 		}
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 
 	if strings.Contains(body, auth.ReaderTokenName) {
 		t.Fatalf("the tokens table still lists %q", auth.ReaderTokenName)
@@ -49,7 +49,7 @@ func TestBrowsersAreOneRowPerBrowser(t *testing.T) {
 		deviceID = tok.DeviceID
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 
 	if n := strings.Count(body, ">"+deviceID+"<"); n != 1 {
 		t.Fatalf("four reader credentials rendered %d rows, want 1", n)
@@ -66,7 +66,7 @@ func TestSignOutOfBrowserReadingRevokes(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 	csrf := extractCSRF(t, body)
 
 	if code, _ := postForm(t, ts, cookie, "/ui/browsers/revoke", url.Values{}); code != 403 {
@@ -103,7 +103,7 @@ func TestAdminUserPageCountsBrowsers(t *testing.T) {
 		}
 	}
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/admin/users/u1")
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user=u1")
 	if code != 200 {
 		t.Fatalf("admin user page: %d", code)
 	}

@@ -192,7 +192,7 @@ csrf_from() {
 }
 for mate in bob carol; do
 	curl -fsS -b "$WORK/cookies" -o /dev/null \
-		--data-urlencode "csrf=$(csrf_from /ui/admin/users)" \
+		--data-urlencode "csrf=$(csrf_from '/ui/settings?section=admin&view=users')" \
 		--data-urlencode "name=$mate" \
 		--data-urlencode "password=$PASSWORD" \
 		--data-urlencode "repeat=$PASSWORD" \
@@ -219,7 +219,7 @@ SHOT_CHROME="$CHROME" \
 	SHOT_COOKIE="$SESSION" \
 	SHOT_DIR="$ROOT/$OUT" \
 	SHOT_WIDTHS=1440 \
-	SHOT_PATHS="/ui/library,/ui/books/$READER/read,/ui/books/$BOOK,/ui/admin/users" \
+	SHOT_PATHS="/ui/library,/ui/books/$READER/read,/ui/books/$BOOK,/ui/settings?section=admin&view=users" \
 	SHOT_NAMES="library,reader,book,admin" \
 	SHOT_WAIT="$WAIT" \
 	SHOT_EVAL="$EVAL" \
