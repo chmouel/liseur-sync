@@ -55,7 +55,7 @@ func TestAdminUserPageAndCredentialRevocation(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	if code != 200 {
 		t.Fatalf("user page: %d", code)
 	}
@@ -131,7 +131,7 @@ func TestAdminResetPassword(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	csrf := extractCSRF(t, body)
 
 	// Mismatched confirmation is refused before the admin password is
@@ -175,7 +175,7 @@ func TestAdminGrantAndRevokeRole(t *testing.T) {
 	bob := mkTarget(t, st, "bob")
 	ctx := t.Context()
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	csrf := extractCSRF(t, body)
 
 	c, _ := postForm(t, ts, cookie, "/ui/admin/users/"+bob.ID+"/admin", url.Values{
@@ -225,7 +225,7 @@ func TestAdminReauthIsRateLimited(t *testing.T) {
 	}
 	bob := mkTarget(t, st, "bob")
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	csrf := extractCSRF(t, body)
 
 	form := url.Values{"csrf": {csrf}, "admin_password": {"wrong"}}
@@ -261,7 +261,7 @@ func TestAdminCreateUserFromThePanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
 	csrf := extractCSRF(t, body)
 
 	c, body := postForm(t, ts, cookie, "/ui/admin/users", url.Values{
@@ -297,6 +297,25 @@ func TestAdminCreateUserFromThePanel(t *testing.T) {
 	}
 }
 
+// TestAdminUserPageMissingUserIsNotFound pins a regression: visiting the
+// per-user Settings page for a user id that does not exist (a stale
+// bookmark, a typo, or a deleted account) must answer 404 without
+// leaking the store's internal error text, not a 500.
+func TestAdminUserPageMissingUserIsNotFound(t *testing.T) {
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user=does-not-exist")
+	if code != http.StatusNotFound {
+		t.Fatalf("missing user page: got %d, want %d", code, http.StatusNotFound)
+	}
+	if strings.Contains(body, "store:") {
+		t.Fatalf("response leaked internal store error text: %q", body)
+	}
+}
+
 // TestAdminUserPagination covers the cursor the list pages with.
 func TestAdminUserPagination(t *testing.T) {
 	ts, st := testServer(t)
@@ -307,7 +326,7 @@ func TestAdminUserPagination(t *testing.T) {
 		mkTarget(t, st, "user"+string(rune('a'+i%26))+string(rune('a'+i/26)))
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
 	if !strings.Contains(body, "Next page") {
 		t.Fatal("a list longer than one page offers no next page")
 	}
@@ -339,7 +358,7 @@ func TestAdminDisableAccount(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	csrf := extractCSRF(t, body)
 	if !strings.Contains(body, "Disable this account") {
 		t.Fatal("per-user page does not offer disabling")
@@ -407,7 +426,7 @@ func TestAdminDisableAccount(t *testing.T) {
 	}); code != http.StatusSeeOther {
 		t.Fatalf("a disabled admin still reached the panel: %d", code)
 	}
-	if resp, _ := get(t, ts, cookie, "/ui/admin/users/"+bob.ID); resp.StatusCode != http.StatusSeeOther {
+	if resp, _ := get(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("a disabled admin still reads the panel: %d", resp.StatusCode)
 	}
 	// The store is the guard of last resort for the last administrator.

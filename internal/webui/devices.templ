@@ -2,12 +2,6 @@ package webui
 
 import "github.com/chmouel/liseur-sync/internal/store"
 
-// Devices page: tokens, kosync slots, koplugin capabilities, pairing.
-
-templ devicesPage(prefix string, u userCtx, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
-	@layout("Devices", prefix, u, csrf, devicesBody(prefix, csrf, toks, browsers, kosyncDevs, kopluginDevs, base, flash))
-}
-
 // Flash carries one-time results (a shown-once secret).
 type Flash struct {
 	Secret      string
@@ -20,12 +14,15 @@ type Flash struct {
 }
 
 templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
-	<h1>Devices</h1>
+	<h2>Devices & integrations</h2>
 	if flash.Secret != "" {
 		<div class="card secret">
 			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
 			<code class="big">{ flash.Secret }</code>
 		</div>
+	}
+	if flash.Error != "" {
+		<p class="error">{ flash.Error }</p>
 	}
 	if flash.Notice != "" {
 		<p class="ok">{ flash.Notice }</p>

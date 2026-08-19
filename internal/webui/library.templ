@@ -21,7 +21,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			if admin {
 				<p class="muted">
 					This server watches no folders yet. Point it at one from
-					<a href={ prefix + "admin/folders" }>Folders</a> in the admin
+					<a href={ settingsAdminHref(prefix, "folders") }>Folders</a> in Settings
 					panel, or with <code>liseur-sync admin add-folder</code>.
 				</p>
 			} else {

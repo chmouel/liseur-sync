@@ -54,7 +54,7 @@ func TestAddingAFolderTellsTheWatcher(t *testing.T) {
 	root := t.TempDir()
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
@@ -110,7 +110,7 @@ func TestAFolderCanBeAddedWithoutAWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
 		"csrf": {csrf}, "name": {"Books"}, "root": {t.TempDir()},
@@ -135,7 +135,7 @@ func TestScanNowAsksTheWatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
 		"csrf": {csrf}, "name": {"Books"}, "root": {t.TempDir()},
@@ -184,7 +184,7 @@ func TestScanNowWithoutAWatcherSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
 		"csrf": {csrf}, "name": {"Books"}, "root": {t.TempDir()},

@@ -1,13 +1,10 @@
 package webui
 
 import (
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/buildinfo"
 	"github.com/chmouel/liseur-sync/internal/config"
-	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // configFacts is the configuration as the overview shows it: an
@@ -71,20 +68,6 @@ func orValue(s, empty string) string {
 		return empty
 	}
 	return s
-}
-
-func (s *Server) handleAdminOverview(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	counts, err := s.St.AdminCounts(r.Context())
-	if err != nil {
-		http.Error(w, "counts unavailable", http.StatusInternalServerError)
-		return
-	}
-	adminPage("Admin", relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), "overview",
-		adminOverviewBody(relPrefix(r.URL.Path), counts, buildinfo.Get(),
-			describeConfig(s.Cfg))).
-		Render(r.Context(), w)
 }
 
 // inviteTTL is how long an invite code is worth typing. A week is long

@@ -5,12 +5,12 @@ package webui
 // stuck?", and a count answers it (ADR-0013).
 
 templ adminMaintenanceBody(prefix string, v maintenanceView, flash Flash) {
-	<h1>Maintenance</h1>
+	<h2>Maintenance</h2>
 	<p class="muted">
 		What this server is reflecting, as the database sees it. Nothing
 		here is a job to start or a queue to drain: a folder is read when
 		it changes and again on a slow timer. If a count looks wrong,
-		<a href={ prefix + "admin/folders" }>Folders</a> has a Scan now for
+		<a href={ settingsAdminHref(prefix, "folders") }>Folders</a> has a Scan now for
 		each one — which is what a network share needs, because the kernel
 		does not report changes on those.
 	</p>
@@ -29,7 +29,7 @@ templ adminMaintenanceBody(prefix string, v maintenanceView, flash Flash) {
 			A folder's kind is read off the disk rather than chosen: a tree
 			holding a Calibre database is a Calibre folder, and everything
 			else is a plain one. They are listed, with their roots, on
-			<a href={ prefix + "admin/folders" }>Folders</a>.
+			<a href={ settingsAdminHref(prefix, "folders") }>Folders</a>.
 		</p>
 	</section>
 	<section class="card">

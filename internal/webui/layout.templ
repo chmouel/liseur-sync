@@ -61,16 +61,7 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 						<nav aria-label="Sections">
 							@railLink(prefix+".", "Dashboard", u.Section == "dashboard")
 							@railLink(prefix+"library", "Library", u.Section == "library")
-							<span class="rail-head">Account</span>
-							@railLink(prefix+"devices", "Devices", u.Section == "devices")
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")
-							if u.IsAdmin {
-								// Straight to Folders, not the overview: the
-								// overview only summarises the pages beside it,
-								// and adding or checking a folder is what an
-								// operator opens Admin to do.
-								@railLink(prefix+"admin/folders", "Admin", u.Section == "admin")
-							}
 						</nav>
 					</aside>
 					<main id="content">

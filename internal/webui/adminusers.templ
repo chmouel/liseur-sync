@@ -23,7 +23,7 @@ templ adminFlash(flash Flash) {
 }
 
 templ adminUsersBody(prefix string, csrf string, users []store.User, next string, invites []store.Invite, flash Flash) {
-	<h1>Users</h1>
+	<h2>Users</h2>
 	@adminFlash(flash)
 	<section class="card">
 		<h2>Accounts</h2>
@@ -31,7 +31,7 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 			<tr><th>Name</th><th>Role</th><th>Created</th></tr>
 			for _, usr := range users {
 				<tr>
-					<td><a href={ prefix + "admin/users/" + usr.ID }>{ usr.Name }</a></td>
+					<td><a href={ settingsAdminUserHref(prefix, usr.ID) }>{ usr.Name }</a></td>
 					<td>
 						if !usr.Enabled() {
 							<span class="tag">disabled</span>
@@ -46,7 +46,7 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 			}
 		</table>
 		if next != "" {
-			<p><a href={ prefix + "admin/users?after=" + next }>Next page →</a></p>
+			<p><a href={ next }>Next page →</a></p>
 		}
 	</section>
 	<section class="card">
@@ -103,7 +103,7 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 }
 
 templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
-	<h1>{ v.User.Name }</h1>
+	<h2>{ v.User.Name }</h2>
 	<p class="muted">
 		<code>{ v.User.ID }</code> · created { v.User.CreatedAt.Format("2006-01-02") }
 		if v.User.IsAdmin {
@@ -380,7 +380,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			<button type="submit" class="danger">Revoke everything</button>
 		</form>
 	</section>
-	<p><a href={ prefix + "admin/users" }>← All users</a></p>
+	<p><a href={ settingsAdminHref(prefix, "users") }>← All users</a></p>
 }
 
 // adminPasswordField is the re-verification every high-impact action

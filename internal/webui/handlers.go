@@ -278,21 +278,8 @@ func humanDuration(d time.Duration) string {
 
 // --- devices ---
 
-func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	s.renderDevices(w, r, a, u, Flash{})
-}
-
 func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash) {
-	toks, _ := s.St.ListTokens(r.Context(), u.ID)
-	kosyncDevs, _ := s.St.ListKosyncDevices(r.Context(), u.ID)
-	kopluginDevs, _ := s.St.ListKopluginDevices(r.Context(), u.ID)
-	toks, browsers := splitReaderTokens(toks)
-	sortTokens(toks)
-	sortKosyncDevices(kosyncDevs)
-	sortKopluginDevices(kopluginDevs)
-	devicesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		toks, browsers, kosyncDevs, kopluginDevs, s.serverBaseURL(r), flash).
-		Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsDevices, "", "", flash, false, "", false)
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -459,7 +446,8 @@ func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a st
 // --- settings ---
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	settingsPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), false, commonZones, "", false).Render(r.Context(), w)
+	section, view, userID := settingsSelection(r)
+	s.renderSettings(w, r, a, u, section, view, userID, Flash{}, false, "", false)
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -480,7 +468,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 	u.Timezone = tz
 	u.KosyncEnabled = kosyncOn
 	u.KopluginEnabled = kopluginOn
-	settingsPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), true, commonZones, "", false).Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsProfile, "", "", Flash{}, true, "", false)
 }
 
 // handleChangePassword verifies the current password, then replaces the
@@ -488,7 +476,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 // live so the user isn't logged out mid-action).
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	render := func(msg string, isErr bool) {
-		settingsPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), false, commonZones, msg, isErr).Render(r.Context(), w)
+		s.renderSettings(w, r, a, u, settingsProfile, "", "", Flash{}, false, msg, isErr)
 	}
 	if !s.checkCSRF(r, a) {
 		http.Error(w, "forbidden", http.StatusForbidden)

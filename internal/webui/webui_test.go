@@ -181,7 +181,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 
-	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/devices", "/ui/settings"} {
+	for _, path := range []string{"/ui", "/ui/", "/ui/library", "/ui/settings", "/ui/settings?section=devices"} {
 		code, body = page(t, ts, cookie, path)
 		if code != 200 || !strings.Contains(body, "liseur-sync") {
 			t.Fatalf("%s: %d", path, code)
@@ -199,22 +199,26 @@ func TestAuthFlowAndPages(t *testing.T) {
 	if !strings.Contains(body, "heatmap") || !strings.Contains(body, "day streak") {
 		t.Fatal("dashboard missing heatmap/stats")
 	}
-	// Every admin page is forbidden to an ordinary account, and the
-	// rail does not advertise the section in the first place.
+	// The admin tab is forbidden to an ordinary account, and the rail does
+	// not advertise it in the first place.
 	_, body = page(t, ts, cookie, "/ui")
-	if strings.Contains(body, `>Admin<`) {
-		t.Fatal("rail offers Admin to a non-admin")
+	if strings.Contains(body, `>Administration<`) {
+		t.Fatal("rail offers Administration to a non-admin")
+	}
+	code, body = page(t, ts, cookie, "/ui/settings?section=admin")
+	if code != 403 {
+		t.Fatalf("admin Settings tab as a non-admin: want 403, got %d", code)
+	}
+	if !strings.Contains(body, "Not allowed") {
+		t.Fatalf("admin Settings denial is not the rendered page: %q", body)
 	}
 	for _, p := range []string{
 		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/folders",
 		"/ui/admin/maintenance",
 	} {
-		code, body = page(t, ts, cookie, p)
-		if code != 403 {
-			t.Fatalf("GET %s as a non-admin: want 403, got %d", p, code)
-		}
-		if !strings.Contains(body, "Not allowed") {
-			t.Fatalf("GET %s denial is not the rendered page: %q", p, body)
+		code, _ = page(t, ts, cookie, p)
+		if code != http.StatusNotFound {
+			t.Fatalf("removed GET %s as a non-admin: want 404, got %d", p, code)
 		}
 	}
 	for _, p := range []string{
@@ -237,7 +241,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 func TestDevicesCRUDAndCSRF(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 	csrf := extractCSRF(t, body)
 
 	// Mutation without CSRF is rejected.
@@ -310,7 +314,7 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 	csrf := extractCSRF(t, body)
 
 	for _, scope := range []store.Scope{
@@ -360,12 +364,12 @@ func TestAdminInvites(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/admin/users")
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
 	if code != 200 || !strings.Contains(body, "Invite codes") {
 		t.Fatalf("admin users page: %d", code)
 	}
-	if !strings.Contains(body, `>Admin<`) {
-		t.Fatal("rail hides Admin from an admin")
+	if !strings.Contains(body, `>Administration<`) {
+		t.Fatal("Settings hides Administration from an admin")
 	}
 	csrf := extractCSRF(t, body)
 	code, body = postForm(t, ts, cookie, "/ui/admin/invites", url.Values{"csrf": {csrf}})
@@ -397,7 +401,7 @@ func TestAdminOverview(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/admin")
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin")
 	if code != 200 {
 		t.Fatalf("admin overview: %d", code)
 	}
@@ -409,8 +413,12 @@ func TestAdminOverview(t *testing.T) {
 			t.Fatalf("overview is missing %q", want)
 		}
 	}
-	// Sub-navigation reaches every page of the section.
-	for _, want := range []string{`"admin/users"`, `"admin/folders"`, `"admin/maintenance"`} {
+	// Nested navigation reaches every page of the section.
+	for _, want := range []string{
+		`settings?section=admin&amp;view=users`,
+		`settings?section=admin&amp;view=folders`,
+		`settings?section=admin&amp;view=maintenance`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("subnav is missing %s", want)
 		}
@@ -524,9 +532,8 @@ func TestCrossUserIsolation(t *testing.T) {
 func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
 	for _, p := range []string{
-		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/devices", "/ui/settings",
-		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/folders",
-		"/ui/admin/maintenance",
+		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/settings",
+		"/ui/settings?section=devices", "/ui/settings?section=admin",
 		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/search",
 	} {
@@ -754,7 +761,7 @@ func TestCreditStopsAtThree(t *testing.T) {
 func TestDevicesShowsTheOPDSAddress(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
 
 	want := ts.URL + "/opds/v1.2"
 	if !strings.Contains(body, want) {
@@ -770,10 +777,9 @@ func TestDevicesShowsTheOPDSAddress(t *testing.T) {
 	}
 }
 
-// TestAdminRailGoesToFolders pins where the Admin entry lands. The
-// overview only summarises the pages beside it, so it is a poor front
-// door: an operator opens Admin to add or check a folder.
-func TestAdminRailGoesToFolders(t *testing.T) {
+// TestSettingsRailAndAdminTab pins the account navigation after the
+// account and instance controls were consolidated.
+func TestSettingsRailAndAdminTab(t *testing.T) {
 	ts, st := testServer(t)
 	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
 		t.Fatal(err)
@@ -781,10 +787,14 @@ func TestAdminRailGoesToFolders(t *testing.T) {
 	cookie := loginCookie(t, ts)
 	_, body := page(t, ts, cookie, "/ui/library")
 
-	if !strings.Contains(body, `href="admin/folders"`) {
-		t.Fatal("the rail's Admin entry does not point at Folders")
+	if !strings.Contains(body, `href="settings"`) {
+		t.Fatal("the rail does not point at Settings")
 	}
-	if strings.Contains(body, `href="admin"`) {
-		t.Fatal("the rail still points at the admin overview")
+	if strings.Contains(body, `href="admin`) {
+		t.Fatal("the rail still exposes a separate Admin entry")
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=admin")
+	if !strings.Contains(body, `settings?section=admin&amp;view=folders`) {
+		t.Fatal("the Settings Administration tab does not reach Folders")
 	}
 }

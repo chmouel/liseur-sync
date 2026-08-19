@@ -247,3 +247,9 @@ Phases 1 to 8 are in. What differs from the plan above, and why:
   `LISEUR_UI_SHOTS` is set) because a layout is judged by looking at it.
   It asserts nothing; the assertions that can be written about a layout
   are in the other tests.
+- **Account and instance controls share one Settings hub.** Devices and
+  the admin panel no longer occupy separate rail entries or GET routes.
+  `/ui/settings` renders profile/security, devices/integrations and an
+  admin-only section selected by query parameters; the existing mutation
+  endpoints keep their authorization and CSRF behavior, and the old GET
+  pages are removed rather than redirected.
