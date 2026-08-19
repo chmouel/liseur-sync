@@ -70,6 +70,14 @@ const (
 	// because tidying your own shelves and writing to the server's disk
 	// are different questions, and one token should not answer both.
 	ScopeLibraryUpload Scope = "library-upload"
+	// ScopeLibraryDelete permits deleting a book out of a folder that
+	// accepts uploads (ADR-0025). Separate from library-upload for the
+	// reason that one is separate from library-manage: adding your own
+	// book and removing one every account can see are different
+	// questions. It bounds a token rather than dividing users — any
+	// account may mint it — so its job is to stop a sync token from
+	// deleting a library by accident or by compromise.
+	ScopeLibraryDelete Scope = "library-delete"
 	ScopeAdmin         Scope = "admin"
 )
 
@@ -79,7 +87,8 @@ var scopeOrder = map[Scope]int{
 	ScopeLibraryRead:   2,
 	ScopeLibraryManage: 3,
 	ScopeLibraryUpload: 4,
-	ScopeAdmin:         5,
+	ScopeLibraryDelete: 5,
+	ScopeAdmin:         6,
 }
 
 // ScopeSet is the canonical, duplicate-free set of capabilities on a token.
@@ -242,20 +251,44 @@ func (k FolderKind) Valid() bool {
 // It has no owner, no quota principal and no access list. Every
 // signed-in account sees every folder's books; only an administrator
 // sees RootPath, which is a filesystem oracle and not a reader's
-// business. Nothing beneath RootPath is ever written.
+// business. Nothing beneath RootPath is written unless AcceptsUploads
+// says somebody asked for it.
 type Folder struct {
 	ID       string
 	Name     string
 	RootPath string
 	Kind     FolderKind
 	// AcceptsUploads is the one place the server is allowed to write
-	// under a folder root (ADR-0023). It is false unless an
+	// under a folder root (ADR-0023, ADR-0025). It is false unless an
 	// administrator set it, and it is the amendment to ADR-0017's rule
-	// 3: writes happen only where somebody asked for them, and only by
-	// creating a file that was not there.
+	// 3: writes happen only where somebody asked for them — creating a
+	// file that was not there, or deleting one this server could have
+	// created. Never modifying or renaming one.
 	AcceptsUploads bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// DeleteBookOptions tunes deleting a catalog book (ADR-0025).
+type DeleteBookOptions struct {
+	// ForgetReadingFor is the reader whose work goes with the book, or
+	// empty to leave every reader's reading behind. It is only ever one
+	// reader — the one who asked — because a work is per-user and the
+	// caller has no standing to forget anybody else's (ADR-0024).
+	ForgetReadingFor string
+}
+
+// DeleteBookResult reports what happened to the caller's reading, which
+// they cannot infer from success alone.
+type DeleteBookResult struct {
+	// ReadingForgotten is true when the caller's work went with the
+	// book.
+	ReadingForgotten bool
+	// ReadingKept is true when forgetting was asked for and declined
+	// because another catalog book still maps that work — a second copy
+	// of the same book, which the reading now belongs to. Not a failure:
+	// the reader asked to forget a book they still have.
+	ReadingKept bool
 }
 
 // FolderCursor is the opaque pagination cursor of the folder list,
@@ -1167,6 +1200,22 @@ type Store interface {
 	// deleted with it — a work with reading history survives its book
 	// and becomes an entry only its own reader can remove.
 	DeleteMissingBook(ctx context.Context, bookID string) error
+	// DeleteCatalogBook removes one catalog book whose file this server
+	// has just deleted (ADR-0025), with the same cascade and the same
+	// entity collection DeleteMissingBook runs.
+	//
+	// It is the counterpart of an upload, and bounded the same way: a
+	// book whose folder does not accept uploads is ErrInvalidInput, and
+	// that is re-read inside the transaction rather than trusted from a
+	// check the caller made earlier. Unlike DeleteMissingBook it does
+	// not require the book to be marked missing — the file is already
+	// gone by the time this is called, so no pass will put it back.
+	//
+	// ForgetReadingFor names the one reader whose work goes with it, and
+	// only ever theirs.
+	DeleteCatalogBook(
+		ctx context.Context, bookID string, opts DeleteBookOptions,
+	) (DeleteBookResult, error)
 
 	// -----------------------------------------------------------------
 	// Reconciliation.

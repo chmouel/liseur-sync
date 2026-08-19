@@ -203,6 +203,15 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("DeleteMissingBook", func(t *testing.T) {
 		testDeleteMissingBook(t, open)
 	})
+	t.Run("DeleteCatalogBook", func(t *testing.T) {
+		testDeleteCatalogBook(t, open)
+	})
+	t.Run("DeleteCatalogBookForgetsOneReader", func(t *testing.T) {
+		testDeleteCatalogBookForgetsOneReader(t, open)
+	})
+	t.Run("DeleteCatalogBookKeepsReadingASecondCopyHolds", func(t *testing.T) {
+		testDeleteCatalogBookKeepsReadingASecondCopyHolds(t, open)
+	})
 	t.Run("ReconcileCalibreDigestChangeFollowsReader", func(t *testing.T) {
 		testReconcileCalibreDigestChangeFollowsReader(t, open)
 	})

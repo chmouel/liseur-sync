@@ -55,6 +55,9 @@ type Server struct {
 	// set of rules about what may be written into a folder. Nil hides
 	// the form rather than showing one that cannot work.
 	Uploads Uploader
+	// Deletes takes a book back out of a folder that accepts uploads
+	// (ADR-0025). Nil hides the control.
+	Deletes Deleter
 	// Watching is told about a folder the moment somebody adds or
 	// removes one, so "add a folder and the books show up" is true
 	// without a restart. Nil means the server was started without a
@@ -287,6 +290,12 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/works/{id}/delete", sec(s.requireAuth(s.handleDeleteWork)))
 	mux.Handle("POST /ui/books/{id}/delete",
 		sec(s.requireAdmin(s.handleDeleteMissingBook)))
+	// Deleting a book outright (ADR-0025). Admin, because a browser
+	// session carries no scopes at all — the account carries the role,
+	// a token carries capabilities — so there is nothing here to check
+	// library-delete against.
+	mux.Handle("POST /ui/books/{id}/destroy",
+		sec(s.requireAdmin(s.handleDeleteBookFile)))
 	mux.Handle("POST /ui/books/{id}/series/reset",
 		sec(s.requireAuth(s.handleSeriesReset)))
 	// Renaming a series (ADR-0020). The reset arrives on the same route
