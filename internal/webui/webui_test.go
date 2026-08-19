@@ -216,7 +216,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin", "/ui/admin/users", "/ui/admin/users/u1", "/ui/admin/folders",
 		"/ui/admin/maintenance",
 	} {
-		code, body = page(t, ts, cookie, p)
+		code, _ = page(t, ts, cookie, p)
 		if code != http.StatusNotFound {
 			t.Fatalf("removed GET %s as a non-admin: want 404, got %d", p, code)
 		}

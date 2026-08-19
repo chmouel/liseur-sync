@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"net/http"
 	"slices"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -43,12 +42,6 @@ type maintenanceView struct {
 type countRow struct {
 	Label string
 	Count int
-}
-
-func (s *Server) renderAdminMaintenance(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
-) {
-	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminMaintenance, "", flash, false, "", false)
 }
 
 // countRows lists the known keys first, in the order given, then
