@@ -140,7 +140,7 @@ func TestFirstRunSetupOnboarding(t *testing.T) {
 	}
 
 	// Signed in, and the admin section is open to them.
-	if code, _ := page(t, ts, cookie, "/ui/admin"); code != http.StatusOK {
+	if code, _ := page(t, ts, cookie, "/ui/settings?section=admin"); code != http.StatusOK {
 		t.Fatalf("admin overview after setup: got %d", code)
 	}
 }

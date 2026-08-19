@@ -5,46 +5,10 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// The admin section (ADR-0013). One rail entry, several pages behind a
-// sub-navigation: the panel administers accounts and instance-wide
-// infrastructure, and each of those is a page rather than a tab on a
-// settings form.
-//
-// Nothing here renders another account's data. There is no book title,
-// author, filename, source path or error string from somebody else's
-// library on any of these pages — that boundary is what lets an
-// administrator page exist at all, and it is asserted in the tests
-// rather than left to reviewers.
-
-templ adminPage(title string, prefix string, u userCtx, csrf string, current string, body templ.Component) {
-	@layout(title, prefix, u, csrf, adminShell(prefix, current, body))
-}
-
-templ adminShell(prefix string, current string, body templ.Component) {
-	<nav class="subnav" aria-label="Admin sections">
-		// Folders leads. Adding one is the first thing an operator does
-		// and the thing they come back to; the overview is a summary of
-		// the three pages above it, so it reads last.
-		@subnavLink(prefix+"admin/folders", "Folders", current == "folders")
-		@subnavLink(prefix+"admin/users", "Users", current == "users")
-		@subnavLink(prefix+"admin/maintenance", "Maintenance", current == "maintenance")
-		@subnavLink(prefix+"admin", "Overview", current == "overview")
-	</nav>
-	@body
-}
-
-templ subnavLink(href string, label string, current bool) {
-	if current {
-		<a href={ href } aria-current="page">{ label }</a>
-	} else {
-		<a href={ href }>{ label }</a>
-	}
-}
-
 // adminOverview is the page an operator lands on: what this build is,
 // how much of everything there is, and how the server was configured.
 templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo.Info, cfg configFacts) {
-	<h1>Overview</h1>
+	<h2>Administration overview</h2>
 	<section class="card">
 		<h2>This build</h2>
 		<dl class="facts">
@@ -88,7 +52,7 @@ templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo
 			</dd>
 		</dl>
 		<p class="muted">
-			<a href={ prefix + "admin/maintenance" }>Maintenance</a> breaks the
+			<a href={ settingsAdminHref(prefix, "maintenance") }>Maintenance</a> breaks the
 			same figures down by folder kind and book status. A run of missing
 			books usually means a disk is not where it was.
 		</p>
@@ -109,4 +73,3 @@ templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo
 		</dl>
 	</section>
 }
-

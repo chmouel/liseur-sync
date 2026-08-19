@@ -5,9 +5,18 @@
 - **Depends on:** [ADR-0002](0002-library-storage-and-ownership.md),
   [ADR-0011](0011-web-ui-revamp.md)
 
+## Implementation amendment
+
+The operator surface is implemented inside the account Settings hub rather
+than as a separate rail entry. Administrators use
+`/ui/settings?section=admin`, with `view=users`, `view=user&user={id}`,
+`view=folders`, and `view=maintenance` selecting the nested pages. The
+existing `/ui/admin/...` mutation endpoints remain in place so their
+authorization, CSRF, and reauthentication behavior is unchanged.
+
 ## Context
 
-`/ui/admin` today is two tables: every user's name and id, and the
+The Administration section today is two tables: every user's name and id, and the
 invite codes this admin created. Everything else an operator does is a
 subcommand of `liseur-sync admin` — creating users, minting and revoking
 tokens for them, creating managed and watched libraries, granting and
@@ -47,12 +56,12 @@ credential.
 
 ## Decision
 
-Make `/ui/admin` the operator surface for the instance: everything a
-self-hosted administrator does routinely, done in a browser, with the
-CLI kept as the equal-capability path for the cases where a browser is
-the wrong tool (bootstrapping the first user, running from cron,
-verifying a backup) and as the recovery path when the UI is what is
-broken.
+Make the Administration section of `/ui/settings` the operator surface
+for the instance: everything a self-hosted administrator does routinely,
+done in a browser, with the CLI kept as the equal-capability path for the
+cases where a browser is the wrong tool (bootstrapping the first user,
+running from cron, verifying a backup) and as the recovery path when the
+UI is what is broken.
 
 ### Admin becomes an account property, not a token
 
@@ -360,17 +369,17 @@ id, target id, action, outcome — at `INFO`. Secrets never appear in it.
 
 ### Shape of the pages
 
-`/ui/admin` becomes a section with sub-navigation. The rail keeps one
-Admin entry, shown only to admins.
+The Administration section of `/ui/settings` has its own
+sub-navigation. The rail exposes one Settings entry, and the
+Administration tab is shown only to admins.
 
 | Route | Purpose |
 |---|---|
-| `GET /ui/admin` | Overview: instance facts, counts, config |
-| `GET /ui/admin/users` | Users (paginated) and invites |
-| `GET /ui/admin/users/{id}` | One user: tokens, devices, libraries, actions |
-| `GET /ui/admin/libraries` | Every library, its kind, owner, root and grants |
-| `GET /ui/admin/libraries/{id}/review` | One library's review queue, by book id |
-| `GET /ui/admin/maintenance` | Aggregate ingest, review, trash, blob state |
+| `GET /ui/settings?section=admin` | Overview: instance facts, counts, config |
+| `GET /ui/settings?section=admin&view=users` | Users (paginated) and invites |
+| `GET /ui/settings?section=admin&view=user&user={id}` | One user: tokens, devices and actions |
+| `GET /ui/settings?section=admin&view=folders` | Watched folders and scans |
+| `GET /ui/settings?section=admin&view=maintenance` | Aggregate maintenance state |
 
 Mutations, each `POST` with the per-session CSRF token, redirecting back
 with a flash:
@@ -543,7 +552,7 @@ column already exists from Phase 1.
   or one they just typed into the attach form), or any string drawn from
   another user's books. A test plants a Postgres DSN with a password and
   a distinctively titled book in another user's library, then asserts
-  neither appears anywhere under `/ui/admin`.
+  neither appears anywhere under the Settings Administration section.
 - No new store method reads another user's ops, sessions, rollups,
   positions or works. The six new `Admin*` methods are the complete list
   of global reads added, each documented in the interface.

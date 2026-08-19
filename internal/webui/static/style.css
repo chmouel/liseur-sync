@@ -269,11 +269,6 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 .rail a[aria-current="page"] {
 	background: var(--surface-3); color: var(--ink); font-weight: 600;
 }
-.rail .rail-head {
-	color: var(--muted); font-size: .72rem; text-transform: uppercase;
-	letter-spacing: .08em; padding: 1rem .7rem .3rem;
-}
-
 main { grid-area: main; padding: 1.4rem 1.5rem 4rem; min-width: 0; }
 .page { max-width: 78rem; margin: 0 auto; }
 .foot { color: var(--muted); font-size: .8rem; text-align: center; padding: 2rem 0 0; }
@@ -342,6 +337,47 @@ details.advanced[open] > summary::before { content: "−"; }
 }
 
 .narrow { max-width: 23rem; margin: 4rem auto; }
+
+/* Settings is the single account hub. The two-level tab treatment keeps
+   profile, devices and admin work distinct without adding another rail
+   entry or requiring JavaScript. */
+.settings-heading { margin: 0 0 .9rem; }
+.settings-heading p { margin: 0; max-width: 42rem; }
+.settings-tabs, .settings-subnav {
+	display: flex; flex-wrap: wrap; gap: .35rem;
+	margin: 0 0 var(--gap); padding: .35rem;
+	border: 1px solid var(--line);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+.settings-tabs a, .settings-subnav a {
+	padding: .42rem .8rem;
+	border-radius: var(--radius-sm);
+	color: var(--ink-dim);
+	text-decoration: none;
+	font-size: .9rem;
+	white-space: nowrap;
+}
+.settings-tabs a:hover, .settings-subnav a:hover {
+	background: var(--surface-3);
+	color: var(--ink);
+}
+.settings-tabs a[aria-current="page"] {
+	background: var(--primary);
+	color: var(--on-primary);
+	font-weight: 600;
+}
+.settings-subnav {
+	margin-top: -.25rem;
+	background: var(--surface-2);
+	border-color: var(--line-soft);
+}
+.settings-subnav a[aria-current="page"] {
+	background: var(--surface-3);
+	color: var(--ink);
+	font-weight: 600;
+}
+.settings-card > form { max-width: 48rem; }
 
 /* The admin section's own navigation: one rail entry, several pages. */
 .subnav {
@@ -634,6 +670,10 @@ button.linkish:hover, button.linkish:focus-visible {
    unreadable stack. */
 @media (max-width: 46em) {
 	.card > table { display: block; overflow-x: auto; }
+	.settings-tabs, .settings-subnav {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+	}
 }
 
 .cover-thumb { width: 40px; height: 60px; object-fit: cover; border-radius: 2px; display: block; }
