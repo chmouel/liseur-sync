@@ -42,7 +42,7 @@ change capabilities without changing the token secret, device id, or
 retry identity.
 
 The scopes are `sync`, `read-insights`, `library-read`,
-`library-manage`, `library-upload`, and `admin`. `admin` implies every scope and is not
+`library-manage`, `library-upload`, `library-delete`, and `admin`. `admin` implies every scope and is not
 self-grantable: requesting it returns `403` unless the account is
 already an administrator. Clients normally need only `sync`; add
 `library-read` to browse and download books, `read-insights` to show
@@ -54,6 +54,13 @@ Add `library-upload` to send a book up to a folder that accepts them
 from `GET /v1/folders`, because the right and the folder are two
 separate answers and an account can hold the first with no folder
 giving the second.
+
+Add `library-delete` to take a book back out of such a folder
+(ADR-0025). It is deliberately not implied by `library-upload`: that
+one adds your own book, this one destroys everyone's, and the file is
+gone with no trash behind it. The same `accepts_uploads` caveat
+applies, and for the same reason — it is the flag that decides where
+this server may write at all.
 
 All API calls then use `Authorization: Bearer <secret>`.
 
