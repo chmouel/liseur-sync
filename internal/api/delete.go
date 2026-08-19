@@ -149,3 +149,13 @@ func (s *Server) HandleDeleteBook(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// DeleteBookFrom is DeleteBook in the shape the web UI needs. It lives
+// here so that the web package can delegate to these rules while still
+// depending on nothing but the store.
+func (s *Server) DeleteBookFrom(
+	ctx context.Context, bookID, userID string, forgetReading bool,
+) (string, bool, bool, error) {
+	out, err := s.DeleteBook(ctx, bookID, userID, forgetReading)
+	return out.Title, out.ReadingForgotten, out.ReadingKept, err
+}
