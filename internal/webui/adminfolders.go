@@ -2,7 +2,6 @@ package webui
 
 import (
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -38,38 +37,10 @@ func (v adminFolderView) Kind() string {
 	return "Folder of books"
 }
 
-func (s *Server) handleAdminFolders(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	s.renderAdminFolders(w, r, a, u, Flash{})
-}
-
 func (s *Server) renderAdminFolders(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
 ) {
-	after := r.URL.Query().Get("after")
-	// One row more than the page shows: the extra row is the answer to
-	// "is there another page", with no second counting query.
-	folders, err := s.St.ListFolders(r.Context(), after, adminFoldersPerPage+1)
-	if err != nil {
-		http.Error(w, "folder list unavailable", http.StatusInternalServerError)
-		return
-	}
-	prefix := relPrefix(r.URL.Path)
-	var next string
-	if len(folders) > adminFoldersPerPage {
-		folders = folders[:adminFoldersPerPage]
-		next = prefix + "admin/folders?after=" +
-			url.QueryEscape(store.FolderCursor(folders[len(folders)-1]))
-	}
-	views := make([]adminFolderView, 0, len(folders))
-	for _, folder := range folders {
-		views = append(views, adminFolderView{Folder: folder})
-	}
-	adminPage("Folders", prefix, uiCtx(r, u), csrfFor(a), "folders",
-		adminFoldersBody(prefix, csrfFor(a), views, next,
-			s.Cfg.Content.FolderRoots, flash)).
-		Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminFolders, "", flash, false, "", false)
 }
 
 // handleAdminCreateFolder registers a directory this server will read.

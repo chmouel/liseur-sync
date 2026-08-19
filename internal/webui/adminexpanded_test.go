@@ -39,7 +39,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	root := t.TempDir()
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 	if !strings.Contains(body, "Watch a folder") {
 		t.Fatalf("the add form is not on the page:\n%s", body)
@@ -82,7 +82,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 
 	// The root path is on this page, and this page only: it is a
 	// filesystem oracle and no part of reading a catalog.
-	_, body = page(t, ts, cookie, "/ui/admin/folders")
+	_, body = page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	if !strings.Contains(body, root) {
 		t.Fatalf("the folder list does not say where the folder is:\n%s", body)
 	}
@@ -126,7 +126,7 @@ func TestAdminFolderHonoursTheAllowlist(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/folders")
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	csrf := extractCSRF(t, body)
 	if !strings.Contains(body, allowed) {
 		t.Fatalf("the page does not say where folders may live:\n%s", body)
@@ -198,7 +198,7 @@ func TestAdminMintsCredentialsForAnotherAccount(t *testing.T) {
 	bob := mkTarget(t, st, "bob")
 
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/admin/users/"+bob.ID)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
 	csrf := extractCSRF(t, body)
 
 	// Without the admin's password, nothing is minted.
@@ -282,7 +282,7 @@ func TestAdminMaintenanceReportsWhatIsStuck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, body := page(t, ts, loginCookie(t, ts), "/ui/admin/maintenance")
+	code, body := page(t, ts, loginCookie(t, ts), "/ui/settings?section=admin&view=maintenance")
 	if code != 200 {
 		t.Fatalf("maintenance: %d", code)
 	}

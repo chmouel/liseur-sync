@@ -106,33 +106,10 @@ func logAdminAction(r *http.Request, actor *store.User, action, targetID string,
 		"outcome", outcome)
 }
 
-func (s *Server) handleAdminUsers(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	s.renderAdminUsers(w, r, a, u, Flash{})
-}
-
 func (s *Server) renderAdminUsers(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
 ) {
-	after := r.URL.Query().Get("after")
-	// One row more than the page shows: the extra row is the answer to
-	// "is there another page", with no second counting query.
-	users, err := s.St.ListUsersPage(r.Context(), after, adminUsersPerPage+1)
-	if err != nil {
-		http.Error(w, "user list unavailable", http.StatusInternalServerError)
-		return
-	}
-	var next string
-	if len(users) > adminUsersPerPage {
-		users = users[:adminUsersPerPage]
-		next = users[len(users)-1].Name
-	}
-	invites, _ := s.St.ListInvites(r.Context(), u.ID)
-	prefix := relPrefix(r.URL.Path)
-	adminPage("Users", prefix, uiCtx(r, u), csrfFor(a), "users",
-		adminUsersBody(prefix, csrfFor(a), users, next, invites, flash)).
-		Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminUsers, "", flash, false, "", false)
 }
 
 func (s *Server) handleAdminCreateUser(
@@ -159,36 +136,11 @@ func (s *Server) handleAdminCreateUser(
 	})
 }
 
-func (s *Server) handleAdminUser(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	s.renderAdminUser(w, r, a, u, r.PathValue("id"), Flash{})
-}
-
 func (s *Server) renderAdminUser(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 	targetID string, flash Flash,
 ) {
-	target, err := s.St.UserByID(r.Context(), targetID)
-	if err != nil {
-		http.Error(w, "no such user", http.StatusNotFound)
-		return
-	}
-	view := adminUserView{User: target, Self: target.ID == u.ID, Base: s.serverBaseURL(r)}
-	// Browser-reader tokens are the server's own machinery — one an hour
-	// for as long as someone reads — so they are counted, not listed.
-	// An admin looking at an account wants the credentials it was given,
-	// and how many browsers it reads in, not a log of refreshes.
-	ownTokens, browsers := splitReaderTokens(listOrNil(s.St.ListTokens(r.Context(), target.ID)))
-	view.Tokens, view.MoreTokens = capSlice(ownTokens)
-	view.Browsers = len(browsers)
-	view.Kosync, view.MoreKosync = capSlice(listOrNil(s.St.ListKosyncDevices(r.Context(), target.ID)))
-	view.Koplugin, view.MoreKoplugin = capSlice(listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)))
-
-	prefix := relPrefix(r.URL.Path)
-	adminPage(target.Name, prefix, uiCtx(r, u), csrfFor(a), "users",
-		adminUserBody(prefix, csrfFor(a), view, flash)).
-		Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminUser, targetID, flash, false, "", false)
 }
 
 // listOrNil drops the error from a per-account list: an account whose

@@ -5,7 +5,7 @@ package webui
 // (ADR-0017).
 
 templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, flash Flash) {
-	<h1>Folders</h1>
+	<h2>Folders</h2>
 	<p class="muted">
 		Directories this server reads. It never moves, renames or deletes
 		anything under a root, and removing a folder here forgets this

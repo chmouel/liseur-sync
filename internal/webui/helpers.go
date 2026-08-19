@@ -91,8 +91,8 @@ func sectionOf(path string) string {
 	// concerned: there is nowhere else those pages could belong.
 	case "works", "books":
 		return "library"
-	case "devices", "settings", "admin":
-		return head
+	case "devices", "settings", "admin", "tokens", "pairing", "koplugin", "kosync", "browsers":
+		return "settings"
 	case "libraries":
 		if strings.Contains(rest, "/search") {
 			return "search"

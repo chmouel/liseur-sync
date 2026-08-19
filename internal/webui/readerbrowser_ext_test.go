@@ -436,7 +436,7 @@ func TestUIScreenshots(t *testing.T) {
 		"SHOT_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SHOT_DIR="+outDir,
 		"SHOT_PATHS=/ui/,/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
-			"/ui/folders/"+f.folder+"/contributors,/ui/devices,/ui/settings",
+			"/ui/folders/"+f.folder+"/contributors,/ui/settings?section=devices,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
 		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),
 	)

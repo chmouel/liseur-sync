@@ -262,14 +262,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/entities/{kind}/{entity}",
 		sec(s.requireAuth(s.handleEntityBooks)))
 	mux.Handle("GET /ui/search", sec(s.requireAuth(s.handleTopSearch)))
-	mux.Handle("GET /ui/devices", sec(s.requireAuth(s.handleDevices)))
 	mux.Handle("GET /ui/settings", sec(s.requireAuth(s.handleSettings)))
-	mux.Handle("GET /ui/admin", sec(s.requireAdmin(s.handleAdminOverview)))
-	mux.Handle("GET /ui/admin/users", sec(s.requireAdmin(s.handleAdminUsers)))
-	mux.Handle("GET /ui/admin/users/{id}", sec(s.requireAdmin(s.handleAdminUser)))
-	mux.Handle("GET /ui/admin/folders", sec(s.requireAdmin(s.handleAdminFolders)))
-	mux.Handle("GET /ui/admin/maintenance",
-		sec(s.requireAdmin(s.handleAdminMaintenance)))
 
 	mux.Handle("POST /ui/login", sec(s.rateLimited(s.handleLogin)))
 	mux.Handle("POST /ui/logout", sec(s.handleLogout))

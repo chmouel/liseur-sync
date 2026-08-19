@@ -128,10 +128,10 @@ the server. The server detects the kind: a root with `metadata.db` is a
 Calibre folder, anything else is a plain folder. The running server
 reconciles the folder immediately and watches it without a restart.
 
-## The admin panel
+## The Administration section
 
-`/ui/admin` is where an administrator runs the instance without a shell.
-It holds four things:
+The Administration section of `/ui/settings` is where an administrator runs
+the instance without a shell. It holds four things:
 
 - **Overview** — version, build and uptime, how many accounts, folders,
   books and devices there are, and the effective configuration with the
@@ -177,7 +177,7 @@ has no owner and no access list. Every logged-in user sees every
 folder's books; only an admin sees or changes folders, because a folder
 is the only place a filesystem path appears.
 
-Add one from `/ui/admin/folders`, or from a shell:
+Add one from Settings → Administration → Folders, or from a shell:
 
 ```
 liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books
@@ -227,7 +227,8 @@ start and the folder does not become unusable.
 
 A network mount is the case where this matters. NFS and SMB report
 nothing to inotify, so such a folder is only ever read by the periodic
-pass, which is up to half an hour behind. **Admin → Folders** has a
+pass, which is up to half an hour behind. **Settings → Administration → Folders**
+has a
 *Scan now* for each folder that runs a pass immediately. It is safe to
 press at any time and safe to press twice: a pass is idempotent, so
 asking again is asking once.

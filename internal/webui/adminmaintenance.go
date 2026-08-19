@@ -45,29 +45,10 @@ type countRow struct {
 	Count int
 }
 
-func (s *Server) handleAdminMaintenance(
-	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
-) {
-	s.renderAdminMaintenance(w, r, a, u, Flash{})
-}
-
 func (s *Server) renderAdminMaintenance(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
 ) {
-	counts, err := s.St.AdminCounts(r.Context())
-	if err != nil {
-		http.Error(w, "counts unavailable", http.StatusInternalServerError)
-		return
-	}
-	view := maintenanceView{
-		Counts: counts,
-		Kinds:  countRows(counts.FoldersByKind, folderKindOrder),
-		Books:  countRows(counts.BooksByStatus, bookStatusOrder),
-	}
-	prefix := relPrefix(r.URL.Path)
-	adminPage("Maintenance", prefix, uiCtx(r, u), csrfFor(a), "maintenance",
-		adminMaintenanceBody(prefix, view, flash)).
-		Render(r.Context(), w)
+	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminMaintenance, "", flash, false, "", false)
 }
 
 // countRows lists the known keys first, in the order given, then

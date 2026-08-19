@@ -111,16 +111,16 @@ Once the server is running, open `/ui/`.
 If no accounts exist yet, the setup page is displayed automatically. The
 first account created becomes the initial administrator.
 
-Add a folder from `/ui/admin/folders`, or from a shell:
+Add a folder from Settings → Administration → Folders, or from a shell:
 
 ```sh
 liseur-sync admin add-folder Shelf /srv/books
 ```
 
-Manage users, folders, API tokens, and reader pairing from the admin UI
-or the `admin` CLI.
+Manage users, folders, API tokens, and reader pairing from the Settings
+hub or the `admin` CLI.
 
-![The admin panel](docs/screenshots/admin.png)
+![The administration section](docs/screenshots/admin.png)
 
 See [docs/deployment.md](docs/deployment.md) for KOReader pairing, TLS,
 watched folders, Calibre integration, and backups.

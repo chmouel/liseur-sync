@@ -331,15 +331,15 @@ func TestAnEmptyLibraryPointsAdminsAtTheAdminPanel(t *testing.T) {
 	if !strings.Contains(html, "watches no folders yet") {
 		t.Fatalf("empty shelf not shown: %s", html)
 	}
-	if strings.Contains(html, `href="admin/folders"`) {
-		t.Fatal("a plain reader was offered the admin folders page")
+	if strings.Contains(html, `href="settings?section=admin`) {
+		t.Fatal("a plain reader was offered the admin Settings page")
 	}
 
 	if err := f.st.SetUserAdmin(t.Context(), "u2", true); err != nil {
 		t.Fatal(err)
 	}
 	_, html = f.get(t, "/ui/library", bob)
-	if !strings.Contains(html, `href="admin/folders"`) {
-		t.Fatalf("an administrator was not offered the admin folders page: %s", html)
+	if !strings.Contains(html, `href="settings?section=admin&amp;view=folders"`) {
+		t.Fatalf("an administrator was not offered the admin Settings folders view: %s", html)
 	}
 }
