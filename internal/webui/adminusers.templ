@@ -61,6 +61,7 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 			<label>Name <input name="name" required autocomplete="off"/></label>
 			<label>Password <input name="password" type="password" required autocomplete="new-password"/></label>
 			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			@adminPasswordField(csrf)
 			<button type="submit" class="primary">Create</button>
 		</form>
 	</section>
@@ -69,6 +70,7 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 		<p class="muted">Registration is invite-only. Codes expire after 7 days and are single-use.</p>
 		<form method="post" action={ prefix + "admin/invites" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
+			@adminPasswordField(csrf)
 			<button type="submit" class="primary">New invite</button>
 		</form>
 		if len(invites) > 0 {

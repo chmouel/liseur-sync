@@ -337,7 +337,7 @@ Implements the four calls KOReader's kosync plugin makes:
 
 | kosync call | Translation |
 |---|---|
-| `POST /users/create` | Creates a device credential bound to an existing liseur-sync user via a one-time pairing code used as the kosync password. Open registration is off by default. |
+| `POST /users/create` | Creates a device credential bound to an existing liseur-sync user via a valid, unexpired, single-use pairing code used as the kosync password. It never creates an account. |
 | `GET /users/auth` | Validates the device credential. |
 | `PUT /syncs/progress` | Resolves `document` (a partialMD5) via the alias table, then appends a native op with `origin: kosync`, `foreign_pos` = the xpointer, `progression` = percentage. |
 | `GET /syncs/progress/:document` | Returns the newest op: `progress` = stored `foreign_pos` if the newest op has one, else the percentage string; `percentage`, `device`, `timestamp` filled natively. |
@@ -390,7 +390,9 @@ Designed as the direct negation of the KoInsight findings.
   registration, health, and adapter-pairing routes. There is no
   anonymous catalog read; CORS is deny-by-default with an explicit
   origin allowlist.
-- Registration is invite-only by default.
+- Registration is invite-only. An administrator can also create an account
+  directly, and both account and invite creation in the panel re-verify the
+  acting administrator's password before minting durable access.
 - Per-token and per-IP rate limits protect auth endpoints; credential checks
   use constant-time compares.
 - Reading state is scoped by `user_id` at
@@ -406,6 +408,8 @@ KOReader cannot do better. Containment:
 
 - The kosync user/password pair is a dedicated pairing credential, never
   the account password.
+- `POST /adapter/kosync/users/create` accepts only a one-time pairing code;
+  supplying an account password creates neither an account nor a device.
 - Compromise of that key exposes exactly one
   revocable device slot with `sync` scope, not the account.
 - The kosync

@@ -76,6 +76,16 @@ type Server struct {
 	// Mount fills in defaults when they are nil.
 	AdminReauthUserLimiter *auth.RateLimiter
 	AdminReauthIPLimiter   *auth.RateLimiter
+	// newSecret is an entropy-failure test hook. Production leaves it nil
+	// and generateSecret uses auth.NewSecret.
+	newSecret func() (string, error)
+}
+
+func (s *Server) generateSecret() (string, error) {
+	if s.newSecret != nil {
+		return s.newSecret()
+	}
+	return auth.NewSecret()
 }
 
 // FolderWatcher is the watcher surface the admin panel needs. It is an

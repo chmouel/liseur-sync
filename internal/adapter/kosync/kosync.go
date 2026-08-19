@@ -28,7 +28,6 @@ import (
 type Server struct {
 	St          store.Store
 	Cfg         config.Config // for trusted-proxy-aware rate limiting
-	OpenReg     bool          // open_registration config
 	PairingTTL  time.Duration
 	AuthRateLim *auth.RateLimiter
 	PairingUser func(r *http.Request) string // reserved for future web pairing
@@ -89,10 +88,10 @@ func (s *Server) HandleAuth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"authorized":"OK"}`))
 }
 
-// HandleCreateUser implements POST /users/create. With open
-// registration off (default), the kosync "password" must be a valid
-// pairing code; the code is redeemed and a device slot created, keyed
-// on MD5(pairing code) — the key KOReader will present on future calls.
+// HandleCreateUser implements POST /users/create. The kosync "password"
+// must be a valid pairing code; the code is redeemed and a device slot
+// created, keyed on MD5(pairing code) — the key KOReader will present on
+// future calls. This route never creates an account (ADR-0026).
 func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -109,35 +108,6 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	now := time.Now()
-
-	if s.OpenReg {
-		// Open registration: the password IS the account password; create
-		// the account and a device slot. Off by default (design §7.1).
-		hash, err := auth.HashPassword(req.Password)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
-			return
-		}
-		id, _ := auth.NewSecret()
-		u := store.User{
-			ID: id[:16], Name: req.Username, Argon2Hash: hash, Timezone: "UTC",
-			KosyncEnabled: true, KopluginEnabled: true, CreatedAt: now,
-		}
-		if err := s.St.CreateUser(ctx, u); err != nil {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "username taken"})
-			return
-		}
-		d := store.KosyncDevice{
-			UserID: u.ID, DeviceSlot: req.Username,
-			KeySHA256: auth.HashSecret(md5hex(req.Password)), Label: "kosync",
-		}
-		if err := s.St.CreateKosyncDevice(ctx, d); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]string{"username": req.Username})
-		return
-	}
 
 	// Pairing flow: password is a pairing code. KOReader will derive
 	// MD5(code) as its auth key, so the slot key is the hash of that.

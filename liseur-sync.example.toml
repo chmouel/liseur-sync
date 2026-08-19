@@ -2,7 +2,7 @@
 # Env overrides: LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER,
 # LISEUR_DATABASE_URL, LISEUR_CACHE_DIR, LISEUR_FOLDER_ROOTS,
 # LISEUR_INSECURE_HTTP,
-# LISEUR_OPEN_REGISTRATION, LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES,
+# LISEUR_CORS_ORIGINS, LISEUR_TRUSTED_PROXIES,
 # LISEUR_READER_ORIGIN.
 
 # Top-level settings must stay above the first [table] header. TOML binds
@@ -29,9 +29,6 @@ insecure_http = false
 # server; it serves the reader page and the static assets and nothing
 # else. Empty (the default) reads books on the main origin.
 # reader_origin = "https://read.example.com"
-
-# Allow kosync users/create without a pairing code (NOT recommended).
-open_registration = false
 
 pairing_code_ttl_min = 15
 
