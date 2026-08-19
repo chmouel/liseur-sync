@@ -27,7 +27,7 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	}
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
-	s := &Server{St: st, Cfg: cfg, OpenReg: false, AuthRateLim: auth.NewRateLimiter(1000, time.Minute)}
+	s := &Server{St: st, Cfg: cfg, AuthRateLim: auth.NewRateLimiter(1000, time.Minute)}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler {
 		return auth.RequireSecureTransport(cfg, h)
@@ -39,21 +39,21 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 
 // pairDevice runs the pairing flow and returns the x-auth headers
 // KOReader would use.
-func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot string) (user, key string) {
+func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot string) (user, key, pairingCode string) {
 	t.Helper()
 	// Admin generates a pairing code.
-	code, _ := auth.NewSecret()
-	code = code[:32]
+	pairingCode, _ = auth.NewSecret()
+	pairingCode = pairingCode[:32]
 	id, _ := auth.NewSecret()
 	if err := st.CreatePairingCode(t.Context(), store.PairingCode{
-		ID: id, UserID: userID, CodeSHA256: auth.HashSecret(code),
+		ID: id, UserID: userID, CodeSHA256: auth.HashSecret(pairingCode),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// KOReader calls users/create with username=slot, password=code.
-	body, _ := json.Marshal(map[string]string{"username": slot, "password": code})
+	body, _ := json.Marshal(map[string]string{"username": slot, "password": pairingCode})
 	resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +64,8 @@ func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot 
 	}
 
 	// KOReader derives MD5(password) as the auth key.
-	key = md5hex(code)
-	return slot, key
+	key = md5hex(pairingCode)
+	return slot, key, pairingCode
 }
 
 func kreq(t *testing.T, method, url, user, key string, body any) (int, map[string]any) {
@@ -98,7 +98,7 @@ func TestPairingFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	user, key := pairDevice(t, ts, st, u.ID, "my-kobo")
+	user, key, pairingCode := pairDevice(t, ts, st, u.ID, "my-kobo")
 
 	// users/auth succeeds with the derived key.
 	code, out := kreq(t, "GET", ts.URL+"/adapter/kosync/users/auth", user, key, nil)
@@ -113,12 +113,45 @@ func TestPairingFlow(t *testing.T) {
 	}
 
 	// Pairing code is single-use.
-	codeBody, _ := json.Marshal(map[string]string{"username": "other", "password": "nonexistent"})
+	codeBody, _ := json.Marshal(map[string]string{"username": "other", "password": pairingCode})
 	resp, _ := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(codeBody))
 	if resp.StatusCode != 403 {
 		t.Fatalf("bad pairing code: want 403, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	devices, err := st.ListKosyncDevices(t.Context(), u.ID)
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("single-use pairing created more than one device: %+v err=%v", devices, err)
+	}
+}
+
+func TestAccountPasswordCannotRegisterOrPair(t *testing.T) {
+	ts, st := testServer(t)
+	password := "hunter2hunter"
+	hash, _ := auth.HashPassword(password)
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, KosyncEnabled: true, KopluginEnabled: true, CreatedAt: time.Now()}
+	if err := st.CreateUser(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, username := range []string{"alice", "new-account"} {
+		body, _ := json.Marshal(map[string]string{"username": username, "password": password})
+		resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("account password for %q: want 403, got %d", username, resp.StatusCode)
+		}
+	}
+	if _, err := st.UserByName(t.Context(), "new-account"); err == nil {
+		t.Fatal("kosync account password created an account")
+	}
+	devices, err := st.ListKosyncDevices(t.Context(), u.ID)
+	if err != nil || len(devices) != 0 {
+		t.Fatalf("kosync account password created a device: %+v err=%v", devices, err)
+	}
 }
 
 func TestProgressRoundTrip(t *testing.T) {
@@ -128,7 +161,7 @@ func TestProgressRoundTrip(t *testing.T) {
 	if err := st.CreateUser(t.Context(), u); err != nil {
 		t.Fatal(err)
 	}
-	user, key := pairDevice(t, ts, st, u.ID, "kobo-1")
+	user, key, _ := pairDevice(t, ts, st, u.ID, "kobo-1")
 
 	doc := "aabbccdd"
 	xpointer := "/body/DocFragment[11]/body/div/p[3]/text()[1].0"
@@ -164,7 +197,7 @@ func TestFalsyZeroPercentage(t *testing.T) {
 	if err := st.CreateUser(t.Context(), u); err != nil {
 		t.Fatal(err)
 	}
-	user, key := pairDevice(t, ts, st, u.ID, "kobo-2")
+	user, key, _ := pairDevice(t, ts, st, u.ID, "kobo-2")
 
 	code, _ := kreq(t, "PUT", ts.URL+"/adapter/kosync/syncs/progress", user, key, map[string]any{
 		"document": "deadbeef01", "progress": "/body/DocFragment[1]/body/p[1]/text()[1].0",
@@ -190,7 +223,7 @@ func TestPendingWorkLaterResolves(t *testing.T) {
 	if err := st.CreateUser(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	user, key := pairDevice(t, ts, st, u.ID, "kobo-3")
+	user, key, _ := pairDevice(t, ts, st, u.ID, "kobo-3")
 
 	doc := "cafe1234"
 	kreq(t, "PUT", ts.URL+"/adapter/kosync/syncs/progress", user, key, map[string]any{

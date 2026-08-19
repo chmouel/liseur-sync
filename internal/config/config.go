@@ -93,10 +93,6 @@ type Config struct {
 		Koplugin bool `toml:"koplugin"`
 	} `toml:"adapters"`
 
-	// OpenRegistration allows kosync users/create without a pairing
-	// code. Off by default (design 7.1).
-	OpenRegistration bool `toml:"open_registration"`
-
 	Ops struct {
 		MaxBatch           int   `toml:"max_batch"`            // default 500
 		MaxBodyBytes       int64 `toml:"max_body_bytes"`       // default 1 MiB
@@ -143,7 +139,7 @@ func Default() Config {
 
 // applyEnv applies LISEUR_* environment overrides. Supported:
 // LISEUR_LISTEN_ADDR, LISEUR_DATABASE_DRIVER, LISEUR_DATABASE_URL,
-// LISEUR_CACHE_DIR, LISEUR_INSECURE_HTTP, LISEUR_OPEN_REGISTRATION,
+// LISEUR_CACHE_DIR, LISEUR_INSECURE_HTTP,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
 // (comma-separated), LISEUR_READER_ORIGIN,
 // LISEUR_FOLDER_ROOTS (comma-separated).
@@ -177,7 +173,6 @@ func (c *Config) applyEnv() {
 	setStr(&c.Content.CacheDir, "LISEUR_CACHE_DIR")
 	setStr(&c.ReaderOrigin, "LISEUR_READER_ORIGIN")
 	setBool(&c.InsecureHTTP, "LISEUR_INSECURE_HTTP")
-	setBool(&c.OpenRegistration, "LISEUR_OPEN_REGISTRATION")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
 	setList(&c.Content.FolderRoots, "LISEUR_FOLDER_ROOTS")

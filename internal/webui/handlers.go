@@ -3,6 +3,7 @@ package webui
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -525,13 +526,36 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a st
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	code, _ := auth.NewSecret()
+	if err := s.reauth(r, u); err != nil {
+		logAdminAction(r, u, "create-invite", "", err)
+		if errors.Is(err, errRateLimited) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+		return
+	}
+	code, err := s.generateSecret()
+	if err != nil {
+		logAdminAction(r, u, "create-invite", "", err)
+		slog.ErrorContext(r.Context(), "create invite failed", "error", err)
+		s.renderAdminUsers(w, r, a, u, Flash{Error: "Could not create invite."})
+		return
+	}
 	code = code[:32]
-	id, _ := auth.NewSecret()
-	_ = s.St.CreateInvite(r.Context(), store.Invite{
-		ID: id, CodeSHA256: auth.HashSecret(code), CreatedBy: u.ID,
-		ExpiresAt: time.Now().Add(inviteTTL),
-	})
+	id, err := s.generateSecret()
+	if err == nil {
+		err = s.St.CreateInvite(r.Context(), store.Invite{
+			ID: id, CodeSHA256: auth.HashSecret(code), CreatedBy: u.ID,
+			ExpiresAt: time.Now().Add(inviteTTL),
+		})
+	}
+	logAdminAction(r, u, "create-invite", id, err)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "create invite failed", "error", err)
+		s.renderAdminUsers(w, r, a, u, Flash{Error: "Could not create invite."})
+		return
+	}
 	s.renderAdminUsers(w, r, a, u, Flash{
 		Secret:      code,
 		SecretLabel: "Invite code (7 days, single use)",

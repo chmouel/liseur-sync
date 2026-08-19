@@ -1,6 +1,10 @@
 package webui
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -8,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -253,19 +258,73 @@ func TestAdminReauthIsRateLimited(t *testing.T) {
 	}
 }
 
+func TestAdminReauthSpendsBothBudgetsOnEveryAttempt(t *testing.T) {
+	hash, _ := auth.HashPassword("hunter2hunter")
+	actor1 := &store.User{ID: "admin-1", Argon2Hash: hash}
+	actor2 := &store.User{ID: "admin-2", Argon2Hash: hash}
+	s := &Server{
+		Cfg:                    config.Default(),
+		AdminReauthUserLimiter: auth.NewRateLimiter(1, time.Minute),
+		AdminReauthIPLimiter:   auth.NewRateLimiter(1, time.Minute),
+	}
+	request := func(addr string) *http.Request {
+		r, _ := http.NewRequest(http.MethodPost, "/", strings.NewReader(
+			url.Values{"admin_password": {"wrong"}}.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.RemoteAddr = addr
+		_ = r.ParseForm()
+		return r
+	}
+
+	if err := s.reauth(request("192.0.2.1:1000"), actor1); !errors.Is(err, errBadAdminPassword) {
+		t.Fatalf("first attempt: got %v", err)
+	}
+	if err := s.reauth(request("192.0.2.2:1000"), actor1); !errors.Is(err, errRateLimited) {
+		t.Fatalf("exhausted user budget: got %v", err)
+	}
+	// The second request must still have spent 192.0.2.2's IP budget even
+	// though actor1's user budget was already exhausted.
+	if err := s.reauth(request("192.0.2.2:1000"), actor2); !errors.Is(err, errRateLimited) {
+		t.Fatalf("IP budget was skipped after user refusal: got %v", err)
+	}
+}
+
 // TestAdminCreateUserFromThePanel covers the create form and the shared
 // validation behind it.
 func TestAdminCreateUserFromThePanel(t *testing.T) {
-	ts, st := testServer(t)
+	ts, st := testServerCfg(t, nil, generousReauth)
 	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
 	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
 	csrf := extractCSRF(t, body)
+	if !strings.Contains(body, `name="admin_password"`) {
+		t.Fatal("account and invite forms do not ask for the administrator password")
+	}
+
+	if c, _ := postForm(t, ts, cookie, "/ui/admin/users", url.Values{
+		"name": {"carol"}, "password": {"a-good-password"}, "repeat": {"a-good-password"},
+		"admin_password": {"hunter2hunter"},
+	}); c != http.StatusForbidden {
+		t.Fatalf("create without CSRF: want 403, got %d", c)
+	}
+	for _, adminPassword := range []string{"", "wrong-password"} {
+		c, body := postForm(t, ts, cookie, "/ui/admin/users", url.Values{
+			"csrf": {csrf}, "name": {"carol"}, "password": {"a-good-password"},
+			"repeat": {"a-good-password"}, "admin_password": {adminPassword},
+		})
+		if c != http.StatusOK || !strings.Contains(body, "your password is wrong") {
+			t.Fatalf("admin password %q: got %d %q", adminPassword, c, body)
+		}
+		if _, err := st.UserByName(t.Context(), "carol"); err == nil {
+			t.Fatal("refused re-verification still created carol")
+		}
+	}
 
 	c, body := postForm(t, ts, cookie, "/ui/admin/users", url.Values{
 		"csrf": {csrf}, "name": {"carol"}, "password": {"short"}, "repeat": {"short"},
+		"admin_password": {"hunter2hunter"},
 	})
 	if c != 200 || !strings.Contains(body, "at least 8 characters") {
 		t.Fatalf("short password: %d %q", c, body)
@@ -273,6 +332,7 @@ func TestAdminCreateUserFromThePanel(t *testing.T) {
 	c, body = postForm(t, ts, cookie, "/ui/admin/users", url.Values{
 		"csrf": {csrf}, "name": {"carol dvorak"},
 		"password": {"a-good-password"}, "repeat": {"a-good-password"},
+		"admin_password": {"hunter2hunter"},
 	})
 	if c != 200 || !strings.Contains(body, "may contain letters") {
 		t.Fatalf("invalid name: %d %q", c, body)
@@ -280,6 +340,7 @@ func TestAdminCreateUserFromThePanel(t *testing.T) {
 	c, body = postForm(t, ts, cookie, "/ui/admin/users", url.Values{
 		"csrf": {csrf}, "name": {"carol"},
 		"password": {"a-good-password"}, "repeat": {"a-good-password"},
+		"admin_password": {"hunter2hunter"},
 	})
 	if c != 200 || !strings.Contains(body, "Created carol") {
 		t.Fatalf("create: %d %q", c, body)
@@ -291,9 +352,168 @@ func TestAdminCreateUserFromThePanel(t *testing.T) {
 	c, body = postForm(t, ts, cookie, "/ui/admin/users", url.Values{
 		"csrf": {csrf}, "name": {"carol"},
 		"password": {"a-good-password"}, "repeat": {"a-good-password"},
+		"admin_password": {"hunter2hunter"},
 	})
 	if c != 200 || !strings.Contains(body, "taken") {
 		t.Fatalf("duplicate name: %d %q", c, body)
+	}
+}
+
+type createUserFailStore struct{ store.Store }
+
+func (createUserFailStore) CreateUser(context.Context, store.User) error {
+	return errors.New("injected create-user failure")
+}
+
+type createInviteFailStore struct{ store.Store }
+
+func (createInviteFailStore) CreateInvite(context.Context, store.Invite) error {
+	return errors.New("injected create-invite failure")
+}
+
+func TestAdminCreationFailuresLeaveNoPartialState(t *testing.T) {
+	t.Run("account store failure", func(t *testing.T) {
+		ts, st := testServerCfg(t, nil, func(s *Server) {
+			generousReauth(s)
+			s.St = createUserFailStore{Store: s.St}
+		})
+		if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+			t.Fatal(err)
+		}
+		cookie := loginCookie(t, ts)
+		_, pageBody := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
+		code, body := postForm(t, ts, cookie, "/ui/admin/users", url.Values{
+			"csrf": {extractCSRF(t, pageBody)}, "name": {"carol"},
+			"password": {"a-good-password"}, "repeat": {"a-good-password"},
+			"admin_password": {"hunter2hunter"},
+		})
+		if code != http.StatusOK || !strings.Contains(body, "Could not create account") {
+			t.Fatalf("store failure: %d %q", code, body)
+		}
+		if _, err := st.UserByName(t.Context(), "carol"); err == nil {
+			t.Fatal("failed account creation left an account behind")
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		tune func(*Server)
+	}{
+		{
+			name: "invite entropy failure",
+			tune: func(s *Server) {
+				s.newSecret = func() (string, error) { return "", errors.New("injected entropy failure") }
+			},
+		},
+		{
+			name: "invite store failure",
+			tune: func(s *Server) { s.St = createInviteFailStore{Store: s.St} },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, st := testServerCfg(t, nil, func(s *Server) {
+				generousReauth(s)
+				tc.tune(s)
+			})
+			if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+				t.Fatal(err)
+			}
+			cookie := loginCookie(t, ts)
+			_, pageBody := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
+			code, body := postForm(t, ts, cookie, "/ui/admin/invites", url.Values{
+				"csrf": {extractCSRF(t, pageBody)}, "admin_password": {"hunter2hunter"},
+			})
+			if code != http.StatusOK || !strings.Contains(body, "Could not create invite") ||
+				strings.Contains(body, `class="big"`) {
+				t.Fatalf("failed invite creation: %d %q", code, body)
+			}
+			if invites, err := st.ListInvites(t.Context(), "u1"); err != nil || len(invites) != 0 {
+				t.Fatalf("failed invite creation left state: %+v err=%v", invites, err)
+			}
+		})
+	}
+}
+
+func TestAdminCreationPathsEnforceBothLimiters(t *testing.T) {
+	for _, action := range []string{"account", "invite"} {
+		for _, limited := range []string{"user", "ip"} {
+			t.Run(action+"/"+limited, func(t *testing.T) {
+				ts, st := testServerCfg(t, nil, func(s *Server) {
+					userLimit, ipLimit := 100, 100
+					if limited == "user" {
+						userLimit = 1
+					} else {
+						ipLimit = 1
+					}
+					s.AdminReauthUserLimiter = auth.NewRateLimiter(userLimit, time.Minute)
+					s.AdminReauthIPLimiter = auth.NewRateLimiter(ipLimit, time.Minute)
+				})
+				if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+					t.Fatal(err)
+				}
+				cookie := loginCookie(t, ts)
+				_, pageBody := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
+				csrf := extractCSRF(t, pageBody)
+				path := "/ui/admin/invites"
+				form := url.Values{"csrf": {csrf}}
+				if action == "account" {
+					path = "/ui/admin/users"
+					form.Set("name", "blocked-user")
+					form.Set("password", "a-good-password")
+					form.Set("repeat", "a-good-password")
+				}
+				form.Set("admin_password", "wrong")
+				if code, _ := postForm(t, ts, cookie, path, form); code != http.StatusOK {
+					t.Fatalf("first attempt: got %d", code)
+				}
+				form.Set("admin_password", "hunter2hunter")
+				if code, body := postForm(t, ts, cookie, path, form); code != http.StatusTooManyRequests ||
+					!strings.Contains(body, "too many attempts") {
+					t.Fatalf("limited attempt: got %d %q", code, body)
+				}
+				if _, err := st.UserByName(t.Context(), "blocked-user"); err == nil {
+					t.Fatal("rate-limited request created an account")
+				}
+				if invites, err := st.ListInvites(t.Context(), "u1"); err != nil || len(invites) != 0 {
+					t.Fatalf("rate-limited request created an invite: %+v err=%v", invites, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAdminCreationAuditDoesNotLogSecrets(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, pageBody := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
+	csrf := extractCSRF(t, pageBody)
+	newPassword, wrongAdminPassword := "new-user-secret", "wrong-admin-secret"
+	postForm(t, ts, cookie, "/ui/admin/users", url.Values{
+		"csrf": {csrf}, "name": {"carol"}, "password": {newPassword},
+		"repeat": {newPassword}, "admin_password": {wrongAdminPassword},
+	})
+	_, inviteBody := postForm(t, ts, cookie, "/ui/admin/invites", url.Values{
+		"csrf": {csrf}, "admin_password": {"hunter2hunter"},
+	})
+	inviteCode := secretFromPage(t, inviteBody)
+	got := logs.String()
+	for _, want := range []string{`"actor_id":"u1"`, `"action":"create-user"`, `"action":"create-invite"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("audit log is missing %s: %s", want, got)
+		}
+	}
+	for _, secret := range []string{newPassword, wrongAdminPassword, inviteCode, auth.HashSecret(inviteCode)} {
+		if strings.Contains(got, secret) {
+			t.Errorf("audit log leaked a secret: %s", got)
+		}
 	}
 }
 

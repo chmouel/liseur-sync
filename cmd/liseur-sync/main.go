@@ -187,7 +187,6 @@ func cmdServe(args []string) error {
 		Kosync: &kosync.Server{
 			St:          st,
 			Cfg:         cfg,
-			OpenReg:     cfg.OpenRegistration,
 			PairingTTL:  time.Duration(cfg.PairingCodeTTLMin) * time.Minute,
 			AuthRateLim: auth.NewRateLimiter(10, time.Minute),
 		},

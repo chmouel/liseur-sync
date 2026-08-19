@@ -145,9 +145,9 @@ the instance without a shell. It holds four things:
   administrator role, revoke a device credential or every credential at
   once, disable or enable the account, mint an API token with the scopes
   you choose, generate a kosync pairing code, add a statistics-plugin
-  capability, and map the account's books to works. Everything that
-  hands out or takes away a way into the account asks for your password
-  again, and every attempt is logged.
+  capability, and map the account's books to works. Creating an account or
+  invite, and every action that hands out or takes away a way into an account,
+  asks for your password again; every attempt is logged.
 - **Folders** — every watched
   folder on the instance. Add a plain or Calibre folder by naming an
   existing path, or remove one the server should stop reflecting. Only
@@ -356,8 +356,7 @@ epub_max_xml_depth = 128
 Environment overrides follow the same names: `LISEUR_CACHE_DIR` for the
 cover cache and `LISEUR_FOLDER_ROOTS` for the comma-separated allowed
 roots. `LISEUR_LISTEN_ADDR`, `LISEUR_DATABASE_DRIVER`,
-`LISEUR_DATABASE_URL`, `LISEUR_INSECURE_HTTP`,
-`LISEUR_OPEN_REGISTRATION`, `LISEUR_CORS_ORIGINS`,
+`LISEUR_DATABASE_URL`, `LISEUR_INSECURE_HTTP`, `LISEUR_CORS_ORIGINS`,
 `LISEUR_TRUSTED_PROXIES`, and `LISEUR_READER_ORIGIN` keep their usual
 meanings.
 

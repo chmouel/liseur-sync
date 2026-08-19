@@ -125,6 +125,21 @@ func extractCSRF(t *testing.T, html string) string {
 	return rest[:strings.Index(rest, `"`)]
 }
 
+func secretFromPage(t *testing.T, html string) string {
+	t.Helper()
+	const marker = `<code class="big">`
+	i := strings.Index(html, marker)
+	if i < 0 {
+		t.Fatalf("no shown-once secret in page: %s", html)
+	}
+	rest := html[i+len(marker):]
+	end := strings.Index(rest, "</code>")
+	if end < 0 {
+		t.Fatalf("unterminated shown-once secret in page: %s", html)
+	}
+	return rest[:end]
+}
+
 func TestAuthFlowAndPages(t *testing.T) {
 	ts, _ := testServer(t)
 
@@ -358,7 +373,7 @@ func TestSettingsSave(t *testing.T) {
 }
 
 func TestAdminInvites(t *testing.T) {
-	ts, st := testServer(t)
+	ts, st := testServerCfg(t, nil, generousReauth)
 	// Admin is an account property (ADR-0013), not a token.
 	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
 		t.Fatal(err)
@@ -372,13 +387,46 @@ func TestAdminInvites(t *testing.T) {
 		t.Fatal("Settings hides Administration from an admin")
 	}
 	csrf := extractCSRF(t, body)
-	code, body = postForm(t, ts, cookie, "/ui/admin/invites", url.Values{"csrf": {csrf}})
+	if got, _ := postForm(t, ts, cookie, "/ui/admin/invites", url.Values{
+		"admin_password": {"hunter2hunter"},
+	}); got != http.StatusForbidden {
+		t.Fatalf("invite without CSRF: want 403, got %d", got)
+	}
+	for _, password := range []string{"", "wrong-password"} {
+		code, body = postForm(t, ts, cookie, "/ui/admin/invites", url.Values{
+			"csrf": {csrf}, "admin_password": {password},
+		})
+		if code != http.StatusOK || !strings.Contains(body, "your password is wrong") {
+			t.Fatalf("invite with admin password %q: %d %q", password, code, body)
+		}
+		if invs, err := st.ListInvites(t.Context(), "u1"); err != nil || len(invs) != 0 {
+			t.Fatalf("refused invite created state: %+v err=%v", invs, err)
+		}
+	}
+	code, body = postForm(t, ts, cookie, "/ui/admin/invites", url.Values{
+		"csrf": {csrf}, "admin_password": {"hunter2hunter"},
+	})
 	if code != 200 || !strings.Contains(body, "Invite code") {
 		t.Fatalf("invite create: %d", code)
 	}
+	secret := secretFromPage(t, body)
+	if len(secret) != 32 || strings.Count(body, secret) != 1 {
+		t.Fatalf("invite code should be shown exactly once: %q", secret)
+	}
 	invs, _ := st.ListInvites(t.Context(), "u1")
-	if len(invs) != 1 {
+	if len(invs) != 1 || invs[0].CodeSHA256 != auth.HashSecret(secret) {
 		t.Fatalf("invites: %+v", invs)
+	}
+	_, nextBody := page(t, ts, cookie, "/ui/settings?section=admin&view=users")
+	if strings.Contains(nextBody, secret) {
+		t.Fatal("invite code was shown after its creation response")
+	}
+	// Revocation reduces authority, so CSRF is enough; no password
+	// re-verification field is sent.
+	code, body = postForm(t, ts, cookie, "/ui/admin/invites/"+invs[0].ID+"/revoke",
+		url.Values{"csrf": {csrf}})
+	if code != http.StatusOK || !strings.Contains(body, "Invite revoked") {
+		t.Fatalf("invite revoke without password: %d %q", code, body)
 	}
 }
 
