@@ -73,7 +73,11 @@ creates a file (or, in a Calibre folder, a Calibre book) and then runs
 a pass. It never touches a catalog table itself, so an uploaded book
 and a book somebody copied in by hand are the same kind of thing. (It
 does write one non-catalog row: the uploader's `user_book_work` link, so
-a book whose position was already syncing does not appear twice.) One watcher goroutine
+a book whose position was already syncing does not appear twice.)
+`DELETE /v1/books/{id}` is its counterpart
+([ADR-0025](docs/adr/0025-deleting-a-book.md)), bounded by the same
+flag: the file goes and then the row, and only in a folder that accepts
+uploads. One watcher goroutine
 (`internal/content/watch_linux.go`) triggers a pass at startup, on a
 debounced fsnotify event, and on a slow safety timer. There is no ingest
 job, no content-addressed store, no quota, no trash and no review queue:
@@ -145,13 +149,17 @@ of them.
 - **`root_path` never reaches a non-admin.** It is a filesystem oracle;
   a `library-read` response names books, not paths.
 - **The server writes under a watched folder only where an
-  administrator asked it to, and then only by creating something new.**
-  Everywhere else: rooted, read-only opens; symlinks refused; no temp
-  files, no cover extracted beside the book, no `metadata.db` writes. In
-  a folder marked `accepts_uploads` an upload creates a file — and in a
-  Calibre folder a book directory and a `metadata.db` row — and still
-  never modifies or deletes one that was already there
-  ([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)).
+  administrator asked it to.** Everywhere else: rooted, read-only opens;
+  symlinks refused; no temp files, no cover extracted beside the book,
+  no `metadata.db` writes. In a folder marked `accepts_uploads` an
+  upload creates a file — and in a Calibre folder a book directory and a
+  `metadata.db` row
+  ([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)) — and a delete
+  takes one back out
+  ([ADR-0025](docs/adr/0025-deleting-a-book.md)). It still never
+  modifies or renames anything, and the delete refuses a file that has
+  changed since the last pass: there is no trash behind it, so it
+  deletes the book the catalog described or nothing.
 - **A pass that did not fully succeed, or that observed nothing, never
   marks anything missing, and never purges.** Both rules are enforced by
   `ReconcileFolder`'s signature rather than by care.

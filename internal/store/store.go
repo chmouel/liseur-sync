@@ -251,17 +251,19 @@ func (k FolderKind) Valid() bool {
 // It has no owner, no quota principal and no access list. Every
 // signed-in account sees every folder's books; only an administrator
 // sees RootPath, which is a filesystem oracle and not a reader's
-// business. Nothing beneath RootPath is ever written.
+// business. Nothing beneath RootPath is written unless AcceptsUploads
+// says somebody asked for it.
 type Folder struct {
 	ID       string
 	Name     string
 	RootPath string
 	Kind     FolderKind
 	// AcceptsUploads is the one place the server is allowed to write
-	// under a folder root (ADR-0023). It is false unless an
+	// under a folder root (ADR-0023, ADR-0025). It is false unless an
 	// administrator set it, and it is the amendment to ADR-0017's rule
-	// 3: writes happen only where somebody asked for them, and only by
-	// creating a file that was not there.
+	// 3: writes happen only where somebody asked for them — creating a
+	// file that was not there, or deleting one this server could have
+	// created. Never modifying or renaming one.
 	AcceptsUploads bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
