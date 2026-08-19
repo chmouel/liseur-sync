@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,6 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	text := string(body)
 	for from, to := range map[string]string{
 		"insecure_http = false":                                "insecure_http = true",
-		"open_registration = false":                            "open_registration = true",
 		"pairing_code_ttl_min = 15":                            "pairing_code_ttl_min = 42",
 		`# trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]`: `trusted_proxies = ["10.0.0.0/8"]`,
 		`# cors_allowed_origins = ["https://app.example.com"]`: `cors_allowed_origins = ["https://app.example.com"]`,
@@ -48,9 +48,6 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	}
 	if !cfg.InsecureHTTP {
 		t.Fatal("insecure_http did not reach the top-level setting")
-	}
-	if !cfg.OpenRegistration {
-		t.Fatal("open_registration did not reach the top-level setting")
 	}
 	if cfg.PairingCodeTTLMin != 42 {
 		t.Fatalf("pairing_code_ttl_min: got %d", cfg.PairingCodeTTLMin)
@@ -90,6 +87,11 @@ func TestUnknownKeyIsAStartupError(t *testing.T) {
 			"[nonsense]\nvalue = 1\n",
 			"nonsense.value",
 		},
+		{
+			"removed open registration",
+			"open_registration = true\n",
+			"open_registration",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,6 +103,21 @@ func TestUnknownKeyIsAStartupError(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestRemovedOpenRegistrationEnvironmentVariableHasNoEffect(t *testing.T) {
+	want, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LISEUR_OPEN_REGISTRATION", "true")
+	got, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("removed environment variable changed config:\n got: %+v\nwant: %+v", got, want)
 	}
 }
 

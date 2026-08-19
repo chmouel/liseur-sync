@@ -65,10 +65,14 @@ type adminUserView struct {
 // remote address, so one account cannot spend the whole instance's.
 // Both must allow the attempt.
 func (s *Server) reauth(r *http.Request, actor *store.User) error {
-	if s.AdminReauthUserLimiter != nil && !s.AdminReauthUserLimiter.Allow(actor.ID) {
-		return errRateLimited
+	userAllowed, ipAllowed := true, true
+	if s.AdminReauthUserLimiter != nil {
+		userAllowed = s.AdminReauthUserLimiter.Allow(actor.ID)
 	}
-	if s.AdminReauthIPLimiter != nil && !s.AdminReauthIPLimiter.Allow(auth.ClientIP(r, s.Cfg)) {
+	if s.AdminReauthIPLimiter != nil {
+		ipAllowed = s.AdminReauthIPLimiter.Allow(auth.ClientIP(r, s.Cfg))
+	}
+	if !userAllowed || !ipAllowed {
 		return errRateLimited
 	}
 	ok, err := auth.CheckPassword(r.FormValue("admin_password"), actor.Argon2Hash)
@@ -111,15 +115,30 @@ func (s *Server) handleAdminCreateUser(
 		return
 	}
 	name := r.FormValue("name")
+	if err := s.reauth(r, u); err != nil {
+		logAdminAction(r, u, "create-user", name, err)
+		if errors.Is(err, errRateLimited) {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}
+		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+		return
+	}
 	pw, repeat := r.FormValue("password"), r.FormValue("repeat")
 	if err := admin.ValidatePassword(pw, repeat); err != nil {
-		s.renderAdminUsers(w, r, a, u, Flash{Notice: "", Error: err.Error()})
+		logAdminAction(r, u, "create-user", name, err)
+		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
 		return
 	}
 	created, err := admin.CreateUser(r.Context(), s.St, name, pw)
 	logAdminAction(r, u, "create-user", name, err)
 	if err != nil {
-		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+		if isUserError(err) {
+			s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+			return
+		}
+		slog.ErrorContext(r.Context(), "create account failed", "error", err)
+		s.renderAdminUsers(w, r, a, u, Flash{Error: "Could not create account."})
 		return
 	}
 	s.renderAdminUsers(w, r, a, u, Flash{

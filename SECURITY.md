@@ -75,8 +75,9 @@ and go out in the next release; there are no backports to older tags.
 - terminate TLS in front of the server and leave `insecure_http =
   false`. Set `trusted_proxies` to the proxy's address so
   `X-Forwarded-Proto` is honoured only from it.
-- leave registration invite-only; hand out invite codes instead of
-  sharing an account.
+- registration is invite-only; hand out invite codes instead of sharing an
+  account. Creating an account or invite in the administration panel requires
+  the acting administrator's password again.
 - give each device its own token so a lost e-reader costs one
   revocation, and enable only the adapters you use.
 - keep backups of the database — it holds the only copy of the op log.
@@ -95,6 +96,8 @@ tests:
   `/v1/register`, and the adapter pairing endpoints
 - credential-bearing routes refuse plain HTTP unless `insecure_http` is
   set; web UI mutations require a per-session CSRF token
+- web creation of an account or invite additionally re-verifies the acting
+  administrator on independent per-account and per-address rate limits
 - tenant isolation and the route/scope matrix have dedicated tests; the
   CI suite runs `go vet` and the full race-enabled tests against both
   SQLite and PostgreSQL on every pull request

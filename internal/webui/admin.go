@@ -39,7 +39,6 @@ func describeConfig(c config.Config) configFacts {
 	add("Op log compaction", onOff(c.Ops.CompactionEnabled))
 	add("kosync adapter", onOff(c.Adapters.Kosync))
 	add("koplugin adapter", onOff(c.Adapters.Koplugin))
-	add("Open registration", onOff(c.OpenRegistration))
 	add("Credentials over plain HTTP", onOff(c.InsecureHTTP))
 	add("Trusted proxies", listOr(c.TrustedProxies, "none"))
 	add("CORS origins", listOr(c.CORSAllowedOrigins, "none"))
