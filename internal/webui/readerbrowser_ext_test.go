@@ -26,6 +26,12 @@ func findChrome() string {
 	if named := os.Getenv("LISEUR_CHROME"); named != "" {
 		return named
 	}
+	// Hosted CI images may include Chrome incidentally. This is an
+	// opt-in browser check, so a runner image change must not turn it
+	// into a flaky gate; LISEUR_CHROME above remains the explicit opt-in.
+	if os.Getenv("CI") != "" {
+		return ""
+	}
 	for _, name := range []string{
 		"chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome",
 	} {
@@ -45,6 +51,15 @@ func findChrome() string {
 		return found[len(found)-1]
 	}
 	return ""
+}
+
+func TestFindChromeDoesNotAutoDiscoverInCI(t *testing.T) {
+	t.Setenv("CI", "1")
+	t.Setenv("LISEUR_CHROME", "")
+
+	if got := findChrome(); got != "" {
+		t.Fatalf("findChrome() = %q in CI without explicit opt-in, want empty", got)
+	}
 }
 
 // browserTestEPUB is a small but real publication, and it is deliberately
