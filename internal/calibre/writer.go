@@ -630,3 +630,108 @@ func FilenameSafe(value string, maxBytes int) string {
 	}
 	return out
 }
+
+// ErrNoSuchBook is a book id metadata.db does not have. Deleting one
+// that is already gone is the caller's business to forgive, not this
+// package's to hide.
+var ErrNoSuchBook = errors.New("calibre: no such book")
+
+// DeleteBook removes one book from the library: its row, everything the
+// schema hangs off that row, and the directory holding its files
+// (ADR-0025).
+//
+// The cascade is Calibre's own. books_delete_trg deletes the author,
+// publisher, rating, series, tag and language links, the formats, the
+// comments, the identifiers, the annotations, the read positions, the
+// conversion options and the plugin data. Enumerating those here would
+// be a second copy of the schema to drift out of date, so this deletes
+// the row and lets the trigger do what it exists to do. What the
+// trigger does not do is prune the author, tag or series rows it
+// unlinked: Calibre leaves those to its own clean pass, and so does
+// this — pruning a shared row is a library-wide decision.
+//
+// The directory comes from books.path read inside the transaction, not
+// from anything a caller cached. Calibre renames a book's directory when
+// its title or author changes, so a path from an earlier pass may name a
+// directory that has since moved — or one Calibre has since given to a
+// different book.
+//
+// This is the one delete in the server that removes the file after the
+// row rather than before, because here it can: metadata.db is a
+// transaction, so a failed removal rolls the row back rather than
+// leaving a library whose files have no book.
+func (w *Writer) DeleteBook(ctx context.Context, id int64) error {
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		if isLocked(err) {
+			return ErrLocked
+		}
+		return fmt.Errorf("calibre: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var dir string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT path FROM books WHERE id = ?`, id).Scan(&dir); {
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrNoSuchBook
+	case isLocked(err):
+		return ErrLocked
+	case err != nil:
+		return fmt.Errorf("calibre: read book path: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM books WHERE id = ?`, id); err != nil {
+		if isLocked(err) {
+			return ErrLocked
+		}
+		return fmt.Errorf("calibre: delete book: %w", err)
+	}
+	if err := w.removeBookDir(dir); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		if isLocked(err) {
+			return ErrLocked
+		}
+		return fmt.Errorf("calibre: commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// removeBookDir removes a book's directory and, if that empties it, the
+// author's above it. Rooted, and refusing anything that is not a plain
+// directory: a symlink where a book's directory should be is not a book
+// this server put there, and following it would delete somewhere else.
+func (w *Writer) removeBookDir(dir string) error {
+	dir = path.Clean(dir)
+	if dir == "" || dir == "." || dir == "/" || strings.HasPrefix(dir, "../") {
+		return fmt.Errorf("calibre: refusing to remove %q", dir)
+	}
+	info, err := w.dir.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		// Already gone. The row is what the library reads, and it is
+		// about to go too.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("calibre: stat book directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("calibre: %q is not a directory", dir)
+	}
+	if err := w.dir.RemoveAll(dir); err != nil {
+		return fmt.Errorf("calibre: remove book directory: %w", err)
+	}
+	// Remove, not RemoveAll: an author with other books keeps them.
+	if author := path.Dir(dir); author != "." && author != "/" {
+		_ = w.dir.Remove(author)
+	}
+	return nil
+}

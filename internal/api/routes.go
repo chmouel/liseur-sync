@@ -421,6 +421,15 @@ func (s *Server) Routes() *http.ServeMux {
 			auth.RequireScope(s.Auth, store.ScopeLibraryUpload,
 				http.HandlerFunc(s.HandleUploadBook))))
 
+	// library-delete scope: taking a book back out of a folder that
+	// accepts one (ADR-0025). Separate from library-upload for the
+	// reason upload is separate from library-manage — adding your own
+	// book and removing everyone's are different questions.
+	mux.Handle("DELETE /v1/books/{id}",
+		auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryDelete,
+				http.HandlerFunc(s.HandleDeleteBook))))
+
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog
 	// and it writes the caller's work graph (ADR-0003).

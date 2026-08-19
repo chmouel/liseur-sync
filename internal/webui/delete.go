@@ -1,15 +1,20 @@
 package webui
 
-// Deleting: the two ways something leaves this server from a browser.
+// Deleting: the ways something leaves this server from a browser.
 //
-// They are deliberately different things. A reader deletes their own
-// work — the reading, not a file — and may only do it when no catalog
-// book backs it any more, so a disk that is merely unplugged never
-// costs anybody their history. An administrator deletes a catalog row
-// whose file a pass already reported missing, which is a decision that
-// the file is not coming back; the folder on disk is untouched either
-// way, because those files were never this server's to delete
-// (ADR-0017, ADR-0024).
+// The two here are deliberately different things. A reader deletes
+// their own work — the reading, not a file — and may only do it when no
+// catalog book backs it any more, so a disk that is merely unplugged
+// never costs anybody their history. An administrator deletes a catalog
+// row whose file a pass already reported missing, which is a decision
+// that the file is not coming back. Neither touches the folder on disk,
+// because those files were never this server's to delete (ADR-0017,
+// ADR-0024).
+//
+// The third is in librarydelete.go, and is the exception that names the
+// rule: a book this server could have written itself, in a folder an
+// administrator marked as accepting uploads, may be deleted outright —
+// file and all (ADR-0023, ADR-0025).
 
 import (
 	"errors"

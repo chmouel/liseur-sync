@@ -55,8 +55,13 @@ type BookView struct {
 	// Calibre folder, where metadata.db is authoritative and the next
 	// pass would put the book back (ADR-0022, ADR-0024).
 	Retirable bool
-	Notice  string
-	Problem string
+	// Deletable is a book an administrator may delete outright: file,
+	// row and all. Only where a book could have been uploaded in the
+	// first place, because that flag is what marks the one place this
+	// server may write under a folder root (ADR-0023, ADR-0025).
+	Deletable bool
+	Notice    string
+	Problem   string
 	// Chips are the book's entities as links: the fastest way from one
 	// book to the rest of its author or its series.
 	Authors []ChipLink
@@ -180,6 +185,26 @@ templ bookBody(prefix, csrf string, b BookView) {
 					<td><a href={ prefix + "books/" + b.ID + "/download" }>Download</a></td>
 				</tr>
 			</table>
+			if b.Deletable {
+				<form
+					method="post"
+					action={ prefix + "books/" + b.ID + "/destroy" }
+					hx-confirm="Delete this book from the server? The file itself is deleted, for every device. This cannot be undone."
+				>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<button class="danger" type="submit">Delete this book</button>
+					<label class="muted">
+						<input type="checkbox" name="forget_reading" value="true"/>
+						Also delete my reading history for it
+					</label>
+					<span class="muted">
+						The file is deleted from this server's disk. There is no
+						trash to take it back out of. Everybody's reading survives
+						unless they remove it themselves; the box above removes
+						yours.
+					</span>
+				</form>
+			}
 		}
 	</section>
 	<p><a href={ prefix + "library?folder=" + b.FolderID }>Back to the library</a></p>

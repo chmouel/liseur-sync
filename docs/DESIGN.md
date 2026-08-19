@@ -453,10 +453,10 @@ rules: `add-folder <name> <root>`, `list-folders`, `remove-folder
 `root_path` is stored absolute and never appears in a non-admin API
 response. A folder root is opened read-only; symlinks inside the tree
 are refused. The server writes under a watched folder only where an
-administrator set `accepts_uploads`, and only to create something that
-was not there (ADR-0023); it never modifies, renames or deletes. The
-only unconditionally writable directory in the content system is the
-cover cache.
+administrator set `accepts_uploads` — to create something that was not
+there (ADR-0023), or to delete something it could have created
+(ADR-0025). It never modifies or renames. The only unconditionally
+writable directory in the content system is the cover cache.
 
 There is one implementation of that write, reached two ways.
 `api.ReceiveUpload` bounds the body, validates the EPUB, hashes it,
@@ -467,6 +467,22 @@ a signed-in browser, through the same kind of interface downloads and
 covers already use. A browser has no scope, so its gate is the folder
 flag plus the session — the decision about which folder may be written
 to having already been made, once, by whoever marked it.
+
+Deleting is the same shape in the other direction. `api.DeleteBook`
+removes the file and then the row — that order, because a crash between
+them leaves a book the next pass marks missing, a state the system
+models, while the reverse leaves a file the next pass puts straight
+back. `DELETE /v1/books/{id}` calls it for an app holding
+`library-delete`; the book page's control calls it for a signed-in
+administrator. The scope is separate from `library-upload` because
+adding your own book and destroying everyone's are different questions,
+and the browser's gate is the role rather than a scope because a
+session carries none.
+
+A Calibre folder inverts that order, and only it can: there the row is
+the book, `metadata.db` is a transaction, and a failed directory
+removal rolls the row back rather than leaving a library whose files
+have no book.
 
 ### 9.2 Reconcile passes
 

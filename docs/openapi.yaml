@@ -970,6 +970,59 @@ paths:
               schema: { $ref: "#/components/schemas/CatalogBook" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
 
+    delete:
+      tags: [library]
+      summary: Delete a book from the server
+      security: [{ deviceToken: [] }]  # requires library-delete scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: forget_reading
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            Also forget the caller's own reading of this book, and only
+            theirs. Another reader's history is never touched.
+      description: |
+        The counterpart of an upload, bounded the same way (ADR-0025).
+        This deletes the file itself and then the catalog row: the bytes
+        are gone from this server's disk, for every device, and there is
+        no trash to take them back out of.
+
+        Two conditions, and they mirror the upload's. The book's folder
+        must have `accepts_uploads` — that flag marks the one place this
+        server may write under a folder root, and deleting is a write —
+        and the token must carry `library-delete`, which no other route
+        uses. `library-upload` is not enough: sending your own book and
+        destroying everyone's are different questions.
+
+        Reading survives by default. A work with history outlives its
+        book and becomes an entry only its own reader can remove
+        (ADR-0024), which is what lets a reader on another device keep
+        their position. `forget_reading=true` removes the caller's, and
+        is declined silently when another copy of the same book still
+        maps that work — the reader asked to forget a book they still
+        have.
+
+        In a Calibre folder the row is the book, so the delete goes
+        through `metadata.db`: the row goes, Calibre's own triggers take
+        the links with it, and the book's directory is removed. The
+        directory comes from `books.path`, not from anything cached,
+        because Calibre renames directories when metadata changes.
+      responses:
+        "204": { description: The book is gone. }
+        "403":
+          description: |
+            The book's folder does not accept uploads, or the token
+            lacks `library-delete`.
+        "404": { description: No such book }
+        "409":
+          description: |
+            The file changed since it was last scanned and was left
+            alone, or a Calibre library is busy — close Calibre and
+            retry.
+        "503": { description: This server is running without a folder watcher }
+
   /v1/books/{id}/series:
     get:
       tags: [library]
@@ -2188,11 +2241,15 @@ components:
 
     Scope:
       type: string
-      enum: [sync, read-insights, library-read, library-manage, admin]
+      enum: [sync, read-insights, library-read, library-manage, library-upload, library-delete, admin]
       description: |
         `sync` writes and reads positions, `read-insights` reads
         statistics, `library-read` reads the catalog, and
-        `library-manage` states series claims. `library-manage` does
+        `library-manage` states series claims. `library-upload` sends a
+        book into a folder that accepts uploads (ADR-0023), and
+        `library-delete` takes one back out of one (ADR-0025); the two
+        are separate because sending your own book and destroying
+        everyone's are different questions. `library-manage` does
         not grant catalog reads; request `library-read` too when a
         client needs both. `admin` implies all scopes. No other scope
         implies another. `admin` cannot be self-granted: creating or

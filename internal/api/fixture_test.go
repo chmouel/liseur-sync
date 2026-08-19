@@ -113,7 +113,9 @@ func newFolderFixture(t *testing.T) *folderFixture {
 	// The upload route hands its bytes to the same reconciler the tests
 	// drive by hand, so an uploaded book and a book written under the
 	// root go through exactly one pass implementation (ADR-0023).
-	srv.Ingest = content.NewIngester(f.rec)
+	ingester := content.NewIngester(f.rec)
+	srv.Ingest = ingester
+	srv.Removal = ingester
 	return f
 }
 

@@ -32,6 +32,11 @@ type Server struct {
 	// reports 503: a server with no watcher has nothing to reconcile
 	// with, so accepting the bytes would be a promise it cannot keep.
 	Ingest BookIngest
+	// Removal deletes a book's file from its folder (ADR-0025). Nil
+	// disables the delete route for the same reason Ingest's nil
+	// disables the upload one: without a watcher there is nothing to
+	// reconcile the folder back to.
+	Removal BookRemover
 	// uploading serialises an upload from the digest check through the
 	// write it guards. Two copies of one book arriving together would
 	// otherwise both find nothing in the catalog and both be written,
