@@ -71,7 +71,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 					</td>
 					<td>
 						if t.RevokedAt == nil {
-							<form method="post" action={ prefix + "tokens/" + t.ID + "/revoke" }>
+							<form method="post" action={ prefix + "tokens/" + t.ID + "/revoke" }
+								hx-confirm="Revoke this API token? The device using it will lose access until a new one is issued."
+							>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<button type="submit" class="danger">Revoke</button>
 							</form>
@@ -120,7 +122,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 					</tr>
 				}
 			</table>
-			<form method="post" action={ prefix + "browsers/revoke" }>
+			<form method="post" action={ prefix + "browsers/revoke" }
+				hx-confirm="Sign out of every browser? You will need to sign in again to read in a browser."
+			>
 				<input type="hidden" name="csrf" value={ csrf }/>
 				<button type="submit" class="danger">Sign out of browser reading</button>
 			</form>
@@ -161,7 +165,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 						</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }>
+								<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }
+									hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -207,7 +213,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 						</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }>
+								<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }
+									hx-confirm="Revoke this statistics device? It will stop sending reading data until re-paired."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>

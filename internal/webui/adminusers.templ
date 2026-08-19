@@ -87,7 +87,9 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 						</td>
 						<td>
 							if inv.UsedAt == nil {
-								<form method="post" action={ prefix + "admin/invites/" + inv.ID + "/revoke" }>
+								<form method="post" action={ prefix + "admin/invites/" + inv.ID + "/revoke" }
+									hx-confirm="Revoke this invite? It can no longer be used to create an account."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -128,7 +130,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 						<td>{ stamp(t.RevokedAt) }</td>
 						<td>
 							if t.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens/" + t.ID + "/revoke" }>
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens/" + t.ID + "/revoke" }
+									hx-confirm="Revoke this API token? The device using it will lose access."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -157,7 +161,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 						<td>{ stamp(d.RevokedAt) }</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/kosync/" + d.DeviceSlot + "/revoke" }>
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/kosync/" + d.DeviceSlot + "/revoke" }
+									hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -186,7 +192,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 						<td>{ stamp(d.RevokedAt) }</td>
 						<td>
 							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin/" + d.ID + "/revoke" }>
+								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin/" + d.ID + "/revoke" }
+									hx-confirm="Revoke this statistics device? It will stop sending reading data."
+								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
 								</form>
@@ -276,7 +284,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			nobody used on those is not a reason to unpair a household's
 			e-readers.
 		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/password" }>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/password" }
+			hx-confirm="Reset this user's password? Their web sessions will be revoked."
+		>
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<label>New password <input name="password" type="password" required autocomplete="new-password"/></label>
 			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
@@ -298,7 +308,11 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				the rights also revokes any admin-scoped API token the account
 				holds, and the last remaining administrator cannot be demoted.
 			</p>
-			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/admin" }>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/admin" }
+				if v.User.IsAdmin {
+					hx-confirm="Remove this user's administrator rights? Any admin-scoped API tokens will be revoked."
+				}
+			>
 				<input type="hidden" name="csrf" value={ csrf }/>
 				if v.User.IsAdmin {
 					<input type="hidden" name="admin" value="off"/>
@@ -330,7 +344,11 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				again brings the tokens and devices back. Web sessions do not
 				come back, because disabling revoked them.
 			</p>
-			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/disabled" }>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/disabled" }
+				if v.User.Enabled() {
+					hx-confirm="Disable this account? Every credential will be refused until re-enabled."
+				}
+			>
 				<input type="hidden" name="csrf" value={ csrf }/>
 				if v.User.Enabled() {
 					<input type="hidden" name="disabled" value="on"/>
@@ -354,7 +372,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			code, all at once. The account keeps its password — reset that as
 			well when the password is what leaked.
 		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/credentials/revoke" }>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/credentials/revoke" }
+			hx-confirm="Revoke every credential for this user? All tokens, sessions, kosync slots and statistics devices will stop working."
+		>
 			<input type="hidden" name="csrf" value={ csrf }/>
 			@adminPasswordField(csrf)
 			<button type="submit" class="danger">Revoke everything</button>
