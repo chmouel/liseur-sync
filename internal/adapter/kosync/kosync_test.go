@@ -27,7 +27,7 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	}
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
-	s := &Server{St: st, OpenReg: false, AuthRateLim: auth.NewRateLimiter(1000, time.Minute)}
+	s := &Server{St: st, Cfg: cfg, OpenReg: false, AuthRateLim: auth.NewRateLimiter(1000, time.Minute)}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler {
 		return auth.RequireSecureTransport(cfg, h)

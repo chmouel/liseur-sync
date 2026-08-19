@@ -309,10 +309,10 @@ func (s *Server) Routes() *http.ServeMux {
 	}))
 	mux.Handle("POST /v1/login",
 		auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.LoginLimiter, http.HandlerFunc(s.HandleLogin))))
+			auth.RateLimitIP(s.LoginLimiter, s.Cfg, http.HandlerFunc(s.HandleLogin))))
 	mux.Handle("POST /v1/register",
 		auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.LoginLimiter, http.HandlerFunc(s.HandleRegister))))
+			auth.RateLimitIP(s.LoginLimiter, s.Cfg, http.HandlerFunc(s.HandleRegister))))
 
 	syncH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
@@ -447,7 +447,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// catalog credential should not be able to read reading history.
 	opdsH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.LoginLimiter,
+			auth.RateLimitIP(s.LoginLimiter, s.Cfg,
 				auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead, h)))
 	}
 	mux.Handle("GET /opds/v1.2", opdsH(s.HandleOPDSRoot))
@@ -485,7 +485,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// Token management: login credential, rate-limited.
 	tokH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.LoginLimiter, h))
+			auth.RateLimitIP(s.LoginLimiter, s.Cfg, h))
 	}
 	mux.Handle("POST /v1/tokens", tokH(s.HandleCreateToken))
 	mux.Handle("GET /v1/tokens", tokH(s.HandleListTokens))
