@@ -141,9 +141,17 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	// only where it would stick: a Calibre folder's metadata.db is
 	// authoritative, so a book it still lists comes back on the next
 	// pass (ADR-0022, ADR-0024).
-	if !v.Present && isAdmin(r) {
+	// Deleting a book outright is the other write, and bounded by the
+	// flag that bounds uploading: a folder nobody marked as accepting
+	// one is still read-only to this server (ADR-0023, ADR-0025). Admin
+	// rather than a scope, because a browser session carries no scopes
+	// — the account carries the role.
+	if isAdmin(r) {
 		if folder, err := s.St.FolderByID(r.Context(), book.FolderID); err == nil {
-			v.Retirable = folder.Kind != store.FolderCalibre
+			if !v.Present {
+				v.Retirable = folder.Kind != store.FolderCalibre
+			}
+			v.Deletable = v.Present && folder.AcceptsUploads && s.Deletes != nil
 		}
 	}
 	if rel, err := s.St.CatalogBookRelationsForBooks(

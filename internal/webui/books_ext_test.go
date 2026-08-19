@@ -91,16 +91,18 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	cfg.InsecureHTTP = true
 	reconciler := content.NewReconciler(st, content.ScanLimits{},
 		cfg.EPUBLimits(), nil)
+	ingester := content.NewIngester(reconciler)
 	apiSrv := &api.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Files:        content.NewFiles(st), Covers: cache,
-		Ingest: content.NewIngester(reconciler),
+		Ingest: ingester, Removal: ingester,
 	}
 	ui := &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		Downloads:    apiSrv, Covers: apiSrv, Uploads: apiSrv,
+		Deletes: apiSrv,
 	}
 	mux := http.NewServeMux()
 	ui.Mount(mux, func(h http.Handler) http.Handler { return h })

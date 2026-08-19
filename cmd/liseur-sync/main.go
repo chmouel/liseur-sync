@@ -207,6 +207,7 @@ func cmdServe(args []string) error {
 		Downloads:    apiSrv,
 		Covers:       apiSrv,
 		Uploads:      apiSrv,
+		Deletes:      apiSrv,
 		Watching:     watcher,
 	}
 	mux := apiSrv.Handler()
