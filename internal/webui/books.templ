@@ -106,8 +106,8 @@ templ bookBody(prefix, csrf string, b BookView) {
 				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 				}
+				@markBookButton(prefix, csrf, b.ID, b.Finished)
 			</div>
-			@markBookForm(prefix, csrf, b.ID, b.Finished)
 			if len(b.Series) > 0 || len(b.Authors) > 0 {
 				<div class="chips">
 					for _, c := range b.Series {
@@ -219,6 +219,17 @@ templ markBookForm(prefix, csrf, bookID string, finished bool) {
 			<button class="linkish" type="submit" name="status" value="unread">Mark unread</button>
 		} else {
 			<button class="linkish" type="submit" name="status" value="read">Mark read</button>
+		}
+	</form>
+}
+
+templ markBookButton(prefix, csrf, bookID string, finished bool) {
+	<form class="reading-status" method="post" action={ prefix + "books/" + bookID + "/reading-status" }>
+		<input type="hidden" name="csrf" value={ csrf }/>
+		if finished {
+			<button class="btn" type="submit" name="status" value="unread">Mark unread</button>
+		} else {
+			<button class="btn" type="submit" name="status" value="read">Mark read</button>
 		}
 	</form>
 }

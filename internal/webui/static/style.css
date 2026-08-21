@@ -597,6 +597,7 @@ button.linkish:hover, button.linkish:focus-visible {
 	color: var(--danger); background: none; text-decoration: underline;
 }
 .rowlinks { display: flex; gap: .5rem; align-items: center; margin: .6rem 0 1rem; }
+.cta .reading-status { margin: 0; }
 
 /* Progress across the foot of the cover. The width is a class rather
    than a style attribute — see ADR-0011 — so the stylesheet keeps every
@@ -925,6 +926,7 @@ button.linkish:hover, button.linkish:focus-visible {
 	letter-spacing: .04em;
 }
 .volactions { display: flex; gap: .5rem; align-items: center; }
+.volactions .reading-status { margin: 0; }
 
 @media (max-width: 46em) {
 	.volactions { flex-basis: 100%; }
