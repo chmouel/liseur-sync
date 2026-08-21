@@ -34,14 +34,25 @@ const (
 	viewList = "list"
 )
 
+// Series grouping values. Both are written explicitly because an
+// unchecked checkbox submits no value; an older cookie with neither
+// token receives the new default, which is the grouped shelf.
+const (
+	seriesGrouped   = "series-grouped"
+	seriesUngrouped = "series-ungrouped"
+)
+
 // prefs is what the shell needs to know before it draws anything.
 type prefs struct {
-	Theme string
-	View  string
+	Theme       string
+	View        string
+	GroupSeries bool
 }
 
 // defaultPrefs is what a browser that has never said otherwise gets.
-func defaultPrefs() prefs { return prefs{Theme: themeDark, View: viewGrid} }
+func defaultPrefs() prefs {
+	return prefs{Theme: themeDark, View: viewGrid, GroupSeries: true}
+}
 
 // readPrefs reads the preference cookie, falling back to the defaults
 // for anything missing or unrecognised. A cookie is user input: an
@@ -58,6 +69,10 @@ func readPrefs(r *http.Request) prefs {
 			p.Theme = part
 		case viewGrid, viewList:
 			p.View = part
+		case seriesGrouped:
+			p.GroupSeries = true
+		case seriesUngrouped:
+			p.GroupSeries = false
 		}
 	}
 	return p
@@ -70,7 +85,7 @@ func readPrefs(r *http.Request) prefs {
 func writePrefs(w http.ResponseWriter, r *http.Request, p prefs) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     prefsCookie,
-		Value:    p.Theme + "." + p.View,
+		Value:    p.Theme + "." + p.View + "." + seriesPreference(p.GroupSeries),
 		Path:     "/",
 		MaxAge:   365 * 24 * 60 * 60,
 		HttpOnly: false,
@@ -102,6 +117,14 @@ func (s *Server) handlePreferences(
 	case viewGrid, viewList:
 		p.View = view
 	}
+	if r.FormValue("set") == "series" {
+		switch r.FormValue("group_series") {
+		case "1":
+			p.GroupSeries = true
+		case "":
+			p.GroupSeries = false
+		}
+	}
 	writePrefs(w, r, p)
 
 	// Back where they came from, but only if that is a place on this
@@ -112,6 +135,13 @@ func (s *Server) handlePreferences(
 		back = "."
 	}
 	redirectRel(w, back, http.StatusSeeOther)
+}
+
+func seriesPreference(grouped bool) string {
+	if grouped {
+		return seriesGrouped
+	}
+	return seriesUngrouped
 }
 
 // safeUIPath accepts only a relative path with no scheme and no

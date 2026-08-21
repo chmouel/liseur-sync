@@ -39,6 +39,10 @@
     const select = e.target;
     if (select && select.id === 'library-pick' && select.form) {
       select.form.submit();
+      return;
+    }
+    if (select && select.id === 'group-series-toggle' && select.form) {
+      select.form.requestSubmit();
     }
   });
 

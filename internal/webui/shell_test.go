@@ -76,6 +76,53 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSeriesGroupingPreferenceDefaultsOnAndRoundTrips(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/library")
+	csrf := extractCSRF(t, body)
+
+	// No cookie and an old two-token cookie both receive the new default.
+	if !defaultPrefs().GroupSeries {
+		t.Fatal("series grouping is not on by default")
+	}
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
+	req.AddCookie(cookie)
+	req.AddCookie(&http.Cookie{Name: prefsCookie, Value: "light.list"})
+	if got := readPrefs(req); !got.GroupSeries || got.Theme != themeLight || got.View != viewList {
+		t.Fatalf("old cookie did not retain its values and adopt grouping: %+v", got)
+	}
+
+	ungrouped := prefCookie(t, ts, cookie, csrf, url.Values{
+		"csrf": {csrf}, "set": {"series"}, "back": {"library"},
+	})
+	if !strings.Contains(ungrouped.Value, seriesUngrouped) {
+		t.Fatalf("cookie did not record ungrouping: %q", ungrouped.Value)
+	}
+
+	grouped := prefCookie(t, ts, cookie, csrf, url.Values{
+		"csrf": {csrf}, "set": {"series"}, "group_series": {"1"},
+		"back": {"library"},
+	})
+	if !strings.Contains(grouped.Value, seriesGrouped) {
+		t.Fatalf("cookie did not record grouping: %q", grouped.Value)
+	}
+}
+
+func TestAndroidShelfSortKey(t *testing.T) {
+	for input, want := range map[string]string{
+		"The Whale":  "whale",
+		"L’Étranger": "étranger",
+		"D'Artagnan": "artagnan",
+		"The":        "the",
+		"Foundation": "foundation",
+	} {
+		if got := androidShelfSortKey(input); got != want {
+			t.Errorf("androidShelfSortKey(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestThemeCycleIncludesNamedThemes(t *testing.T) {
 	t.Parallel()
 

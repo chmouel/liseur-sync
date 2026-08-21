@@ -377,6 +377,97 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testCatalogSeriesVolumesForBooks pins the Android shelf rule: a book
+// is filed under its first effective series, and expanding that seed
+// returns the whole active pile from the selected folder only.
+func testCatalogSeriesVolumesForBooks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	first := MkFolder(t, s, "series-piles-one", store.FolderPlain)
+	second := MkFolder(t, s, "series-piles-two", store.FolderPlain)
+	reader := MkUser(t, s, "series-piles-reader")
+	now := time.Date(2026, time.August, 21, 10, 0, 0, 0, time.UTC)
+
+	doReconcile(t, s, first.ID, []store.ObservedBook{
+		{
+			RelativePath: "one.epub", SizeBytes: 1, MTime: now,
+			ContentSHA256: "pile-one", Title: "One",
+			Series: []store.ObservedSeries{
+				{Name: "Zeta", Position: Ptr(1.0)},
+				{Name: "Alpha", Position: Ptr(10.0)},
+			},
+		},
+		{
+			RelativePath: "two.epub", SizeBytes: 1, MTime: now,
+			ContentSHA256: "pile-two", Title: "Two",
+			Series: []store.ObservedSeries{{Name: "Alpha", Position: Ptr(2.0)}},
+		},
+		{
+			RelativePath: "single.epub", SizeBytes: 1, MTime: now,
+			ContentSHA256: "pile-single", Title: "Single",
+			Series: []store.ObservedSeries{{Name: "Beta", Position: Ptr(1.0)}},
+		},
+	}, true, now)
+	doReconcile(t, s, second.ID, []store.ObservedBook{{
+		RelativePath: "elsewhere.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "pile-elsewhere", Title: "Elsewhere",
+		Series: []store.ObservedSeries{{Name: "Alpha", Position: Ptr(3.0)}},
+	}}, true, now)
+
+	known := knownByPath(t, s, first.ID)
+	one, two, single := known["one.epub"].ID, known["two.epub"].ID,
+		known["single.epub"].ID
+	volumes, err := s.CatalogSeriesVolumesForBooks(
+		ctx, reader.ID, first.ID, []string{one})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(volumes) != 2 {
+		t.Fatalf("Alpha pile: got %+v", volumes)
+	}
+	if volumes[0].SeriesName != "Alpha" || volumes[0].BookID != two ||
+		volumes[1].BookID != one {
+		t.Fatalf("primary series or volume order: %+v", volumes)
+	}
+	if volumes[0].Position == nil || *volumes[0].Position != 2 ||
+		volumes[1].Position == nil || *volumes[1].Position != 10 {
+		t.Fatalf("positions were not preserved: %+v", volumes)
+	}
+
+	// A one-book series is returned so presentation can leave it as a
+	// single. A book in another folder never joins this pile.
+	volumes, err = s.CatalogSeriesVolumesForBooks(
+		ctx, reader.ID, first.ID, []string{single})
+	if err != nil || len(volumes) != 1 || volumes[0].BookID != single {
+		t.Fatalf("single-volume series: %+v %v", volumes, err)
+	}
+
+	// Personal claims are resolved before grouping and never change the
+	// shelf another reader sees.
+	if _, err := s.SetBookSeriesOverride(ctx, reader.ID, one,
+		store.SeriesSourcePersonal,
+		[]store.SeriesClaimItem{{Name: "Mine", Position: Ptr(4.0)}},
+		store.SeriesClaimMutation{At: now.Add(time.Second)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	volumes, err = s.CatalogSeriesVolumesForBooks(
+		ctx, reader.ID, first.ID, []string{one})
+	if err != nil || len(volumes) != 1 || volumes[0].SeriesName != "Mine" {
+		t.Fatalf("personal primary series: %+v %v", volumes, err)
+	}
+	volumes, err = s.CatalogSeriesVolumesForBooks(
+		ctx, anyReader, first.ID, []string{one})
+	if err != nil || len(volumes) != 2 || volumes[0].SeriesName != "Alpha" {
+		t.Fatalf("personal claim leaked: %+v %v", volumes, err)
+	}
+
+	empty, err := s.CatalogSeriesVolumesForBooks(ctx, reader.ID, first.ID, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty request: %+v %v", empty, err)
+	}
+}
+
 // testCatalogSeriesSourceIsPerReader covers who a claim belongs to. The
 // shared scope is stored under the empty user id, which is also the user
 // id of a caller who has not signed in — so a reader with no account must
