@@ -7,11 +7,13 @@ info:
 
     Conventions that apply everywhere:
 
-    - **Auth**: every endpoint except `/healthz`, `/v1/login` and
-      `/v1/register` requires `Authorization: Bearer <token>`. Login
-      returns a short-lived *auth token* usable only for token
-      management; device tokens carry one or more scopes (`sync`,
-      `read-insights`, `library-read`, `library-manage`, `admin`).
+    - **Auth**: native `/v1` endpoints except `/v1/login` and
+      `/v1/register` require `Authorization: Bearer <token>`;
+      `/healthz` is unauthenticated. OPDS uses HTTP Basic with a device
+      token secret. Login returns a short-lived *auth token* usable only
+      for token management; device tokens carry one or more scopes
+      (`sync`, `read-insights`, `library-read`, `library-manage`,
+      `library-upload`, `library-delete`, `admin`).
     - **Identity**: books are *works*. Clients never need a work to
       exist before pushing: call `/v1/works/resolve` with every
       identifier you have and use the returned `work_id`.
@@ -38,7 +40,7 @@ tags:
   - name: sync
   - name: sessions
   - name: insights
-  - name: folder
+  - name: library
   - name: opds
 
 paths:
@@ -118,7 +120,9 @@ paths:
                 invite: { type: string }
                 username: { type: string }
                 password: { type: string, minLength: 8 }
-                timezone: { type: string, description: "IANA name, default UTC" }
+                timezone:
+                  type: string
+                  description: IANA name. Omitted or invalid values use UTC.
       responses:
         "201":
           description: Account created
@@ -356,6 +360,9 @@ paths:
                   items: { $ref: "#/components/schemas/Identifier" }
                 title: { type: string }
                 author: { type: string }
+                confirmed:
+                  type: boolean
+                  description: Confirm that a low-confidence title/author match is the same work.
       responses:
         "200":
           description: Resolved to an existing work
@@ -446,6 +453,7 @@ paths:
               schema:
                 type: object
                 properties: { work_id: { type: string } }
+        "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error", description: "Source work has compacted history" }
 
@@ -616,7 +624,10 @@ paths:
       summary: Reading totals, streak, speed over a range
       security: [{ deviceToken: [] }]  # requires read-insights scope
       parameters:
-        - { name: range, in: query, schema: { type: string, pattern: "^[0-9]+d$", default: 30d } }
+        - name: range
+          in: query
+          description: A whole number of days from 1 through 3660, such as `30d`. Omitted or invalid values use `30d`.
+          schema: { type: string, default: 30d }
       responses:
         "200":
           description: Aggregates (rereads count time but zero pages)
@@ -690,7 +701,10 @@ paths:
       summary: Daily reading minutes for a year (user's timezone)
       security: [{ deviceToken: [] }]  # requires read-insights scope
       parameters:
-        - { name: year, in: query, schema: { type: integer } }
+        - name: year
+          in: query
+          description: A year from 1971 through 2999. Omitted or invalid values use the server's current year.
+          schema: { type: integer }
       responses:
         "200":
           description: Days with activity; midnight-crossing sessions are split
@@ -888,6 +902,7 @@ paths:
                   folder_id: { type: string, format: uuid }
                   relative_path: { type: string }
                   content_sha256: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed multipart body or an empty upload" }
         "403":
           description: The folder does not accept uploads, or the token lacks `library-upload`.
         "404": { description: No such folder }
@@ -1101,7 +1116,7 @@ paths:
           in: query
           required: false
           description: Client-generated stable idempotency key. Reuse it exactly when retrying the same deletion.
-          schema: { type: string, format: date-time }
+          schema: { type: string }
         - name: if_updated_at
           in: query
           required: false
@@ -1517,6 +1532,7 @@ paths:
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
         "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
   /v1/books/{id}/cover:
@@ -1561,6 +1577,7 @@ paths:
         "304": { description: The client's copy is current }
         "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
@@ -1738,6 +1755,8 @@ paths:
         conditional requests behave identically.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
       responses:
         "200":
           description: The file
@@ -1747,14 +1766,46 @@ paths:
         "206": { description: The requested byte range }
         "304": { description: The client's copy is current }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
+  /opds/v1.2/books/{id}/cover:
+    get:
+      tags: [opds]
+      summary: Fetch a book cover over OPDS
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The same rendered JPEG cover as `/v1/books/{id}/cover`, reachable
+        with the Basic credential used for the OPDS feed. `HEAD` and
+        conditional requests behave identically.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: size
+          in: query
+          required: false
+          schema: { type: string, enum: [thumbnail, full], default: thumbnail }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The rendered cover
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "304": { description: The client's copy is current }
+        "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
 components:
   securitySchemes:
     deviceToken:
       type: http
       scheme: bearer
-      description: Scoped device token (`sync`, `read-insights`, `library-read`, `library-manage`, or `admin`)
+      description: Scoped device token (`sync`, `read-insights`, `library-read`, `library-manage`, `library-upload`, `library-delete`, or `admin`)
     loginAuth:
       type: http
       scheme: bearer
@@ -2039,7 +2090,6 @@ components:
         scope: { $ref: "#/components/schemas/SeriesClaimScope" }
         client_ts:
           type: string
-          format: date-time
           description: Client-generated stable idempotency key. Reuse exactly on retry; reuse with different state returns 409.
         if_updated_at:
           type: [string, "null"]
@@ -2355,10 +2405,9 @@ components:
         client_ts: { type: string, format: date-time }
         progression: { type: number, minimum: 0, maximum: 1 }
         locator:
-          type: object
           description: |
-            Reader-native position (e.g. Readium locator), opaque to the
-            server, replayed verbatim. Refused with 400 above
+            Any JSON reader-native position (for example, a Readium
+            locator), opaque to the server and replayed verbatim. Refused with 400 above
             `ops.max_locator_bytes` (16 KiB by default), and the refusal
             fails the whole batch. A client with an oversized locator
             should drop it and send the progression alone rather than
