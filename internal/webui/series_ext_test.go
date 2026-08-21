@@ -90,6 +90,9 @@ func TestSeriesShelfReadsInOrder(t *testing.T) {
 	if one > three {
 		t.Error("the shelf is not in reading order")
 	}
+	if got := strings.Count(html, "/cover?size=thumbnail"); got != 2 {
+		t.Errorf("reading order has %d thumbnail URLs, want one per volume", got)
+	}
 	// Book two is nowhere in the library, and the shelf says so rather
 	// than renumbering around it.
 	if !strings.Contains(html, "Book 2 is not in the library") {
