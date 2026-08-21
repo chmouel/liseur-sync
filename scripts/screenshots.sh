@@ -142,7 +142,7 @@ SHELF="$WORK/books"
 mkdir -p "$SHELF"
 cp "$CACHE"/*.epub "$SHELF/"
 admin add-folder "Alice's Books" "$SHELF" >/dev/null || die "could not watch the shelf"
-TOKEN=$(admin mint-token -scope sync,library-read alice "Screenshots" |
+TOKEN=$(admin mint-token -scope sync,library-read,library-manage alice "Screenshots" |
 	sed -n 's/^secret (shown once): //p')
 [ -n "$TOKEN" ] || die "no token"
 start_server
@@ -167,6 +167,17 @@ done
 [ "${#BOOK_IDS[@]}" -ge "$WANT" ] ||
 	die "the shelf has ${#BOOK_IDS[@]} of $WANT books"
 echo "catalogued ${#BOOK_IDS[@]} books"
+
+# Put two books in a series through the same personal claim endpoint a
+# client uses. This keeps the library screenshot honest: grouping is on
+# by default, so the shelf should include a real pile rather than only
+# the preference that controls it.
+for index in 0 1; do
+	api -X PUT -H 'Content-Type: application/json' -o /dev/null \
+		-d "$(jq -nc --argjson position "$((index + 1))" \
+			'{series:[{name:"Classic Adventures",position:$position}]}')" \
+		"$BASE/v1/books/${BOOK_IDS[$index]}/series"
+done
 
 # A shelf where nothing has been read is a file listing. Two books get
 # positions and a week of sessions, pushed the way a real client pushes

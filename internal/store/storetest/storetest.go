@@ -55,6 +55,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogBookRelationsForBooks", func(t *testing.T) {
 		testCatalogBookRelationsForBooks(t, open)
 	})
+	t.Run("CatalogSeriesVolumesForBooks", func(t *testing.T) {
+		testCatalogSeriesVolumesForBooks(t, open)
+	})
 	t.Run("CatalogSeriesSourceIsPerReader", func(t *testing.T) {
 		testCatalogSeriesSourceIsPerReader(t, open)
 	})
