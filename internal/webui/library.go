@@ -157,6 +157,11 @@ type LibraryView struct {
 	Folders  []FolderOption
 	Selected string
 	Rows     []LibraryRow
+	// Entries is the Android-style mixed grid: a standalone book or a
+	// whole series pile. Rows remains the ungrouped source and the list
+	// view, which deliberately stays one row per book.
+	Entries     []LibraryEntry
+	GroupSeries bool
 	// Hero is the one book to carry on with, or nil when there is
 	// nothing started. It is a shortcut rather than a section: it
 	// repeats a row that is also in the grid.
@@ -186,13 +191,15 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	p := readPrefs(r)
 	v := LibraryView{
-		Notice:  r.URL.Query().Get("notice"),
-		Problem: r.URL.Query().Get("problem"),
-		View:    readPrefs(r).View,
-		Filter:  normalizeFilter(r.URL.Query().Get("filter")),
-		Sort:    normalizeSort(r.URL.Query().Get("sort")),
-		Dir:     normalizeDir(r.URL.Query().Get("dir")),
+		Notice:      r.URL.Query().Get("notice"),
+		Problem:     r.URL.Query().Get("problem"),
+		View:        p.View,
+		GroupSeries: p.GroupSeries,
+		Filter:      normalizeFilter(r.URL.Query().Get("filter")),
+		Sort:        normalizeSort(r.URL.Query().Get("sort")),
+		Dir:         normalizeDir(r.URL.Query().Get("dir")),
 	}
 	selected := r.URL.Query().Get("folder")
 	if selected == "" && len(folders) > 0 {
@@ -239,12 +246,13 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		}
 	}
 
-	rows, next, err := s.libraryRows(r, v, works, links, byBook, loc)
+	rows, entries, next, err := s.libraryRows(r, u.ID, v, works, links, byBook, loc)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	v.Rows = rows
+	v.Entries = entries
 	if next != "" {
 		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
@@ -337,17 +345,23 @@ type bookLinks struct {
 // mean clicking "next page" past ninety unread books to find the second
 // book you are in the middle of.
 func (s *Server) libraryRows(
-	r *http.Request, v LibraryView,
+	r *http.Request, userID string, v LibraryView,
 	works []store.WorkSummary, links bookLinks,
 	byBook map[string]store.WorkSummary, loc *time.Location,
-) ([]LibraryRow, string, error) {
+) ([]LibraryRow, []LibraryEntry, string, error) {
 	if v.Filter == filterReading || v.Filter == filterFinished || v.Sort == sortLastRead {
-		return s.readingRows(r, v, works, links, loc), "", nil
+		rows := s.readingRows(r, v, works, links, loc)
+		if !v.groupedGrid() {
+			return rows, nil, "", nil
+		}
+		entries, err := s.groupedReadingEntries(
+			r, userID, v, rows, byBook, loc)
+		return rows, entries, "", err
 	}
 
 	books, next, err := s.listBooksPage(r, v.Selected, v.Dir)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	bookIDs := make([]string, 0, len(books))
 	for _, b := range books {
@@ -355,7 +369,7 @@ func (s *Server) libraryRows(
 	}
 	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
 
-	rows := make([]LibraryRow, 0, len(books))
+	raw := make([]LibraryRow, 0, len(books))
 	for _, b := range books {
 		row := LibraryRow{
 			BookID: b.ID,
@@ -380,10 +394,21 @@ func (s *Server) libraryRows(
 				row.lastActiveAt = ws.LastActive.Unix()
 			}
 		}
-		if !keepRow(row, v.Filter) {
-			continue
+		raw = append(raw, row)
+	}
+	rows := make([]LibraryRow, 0, len(raw))
+	for _, row := range raw {
+		if keepRow(row, v.Filter) {
+			rows = append(rows, row)
 		}
-		rows = append(rows, row)
+	}
+	var entries []LibraryEntry
+	if v.groupedGrid() {
+		entries, err = s.groupedCatalogEntries(
+			r, userID, v, raw, byBook, loc)
+		if err != nil {
+			return nil, nil, "", err
+		}
 	}
 
 	// Works with no book belong to the whole shelf, not to a folder, so
@@ -393,9 +418,17 @@ func (s *Server) libraryRows(
 	// opened. Repeating them on every page would be the alternative,
 	// and it would be a bug.
 	if v.Filter == filterAll && r.URL.Query().Get("cursor") == "" {
-		rows = append(orphanRows(works, links, loc), rows...)
+		orphans := orphanRows(works, links, loc)
+		rows = append(orphans, rows...)
+		if v.groupedGrid() {
+			entries = append(rowEntries(orphans), entries...)
+		}
 	}
-	return rows, next, nil
+	return rows, entries, next, nil
+}
+
+func (v LibraryView) groupedGrid() bool {
+	return v.View == viewGrid && v.GroupSeries
 }
 
 // readingRows answers the reading-state filters from the reading half of

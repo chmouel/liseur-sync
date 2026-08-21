@@ -230,6 +230,13 @@ Phases 1 to 8 are in. What differs from the plan above, and why:
   another in PostgreSQL, and a cursor that orders differently per
   backend is a cursor that skips rows. That is a schema decision, so it
   waits for one rather than for a layout.
+- **The cover grid groups series by default.** It follows Liseur's
+  Android shelf: two or more books in the selected folder become one
+  pile alongside standalone books, filed under the first effective
+  series membership. The next unfinished cover sits in front, progress
+  is one segment per volume, and a pile survives a filter when any of
+  its books matches. A toolbar checkbox stores the choice in the UI
+  cookie; the list view remains one row per book.
 - **Narrow tables scroll sideways rather than becoming cards.** A
   card-per-row stack needs every cell labelled, and the tables that are
   wide — tokens with an inline scope form, admin invites — are exactly
