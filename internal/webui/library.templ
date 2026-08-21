@@ -76,6 +76,24 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			@heroCard(prefix, *v.Hero)
 		}
 		<div class="toolbar filters">
+			if v.View == viewGrid {
+				<form class="groupseries" method="post" action={ prefix + "preferences" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input type="hidden" name="back" value={ v.Back }/>
+					<input type="hidden" name="set" value="series"/>
+					<label class="check" for="group-series-toggle">
+						<input
+							id="group-series-toggle"
+							type="checkbox"
+							name="group_series"
+							value="1"
+							checked?={ v.GroupSeries }
+						/>
+						Group by series
+					</label>
+					<noscript><button type="submit">Apply</button></noscript>
+				</form>
+			}
 			<nav class="chips" aria-label="Filter">
 				for _, c := range v.Chips {
 					if c.Active {
@@ -96,14 +114,21 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			</a>
 		</div>
 		<section class="card">
-			if len(v.Rows) == 0 {
-				@libraryEmpty(v)
-			} else if v.View == viewList {
-				@libraryTable(prefix, csrf, v)
+			if v.View == viewList {
+				if len(v.Rows) == 0 {
+					@libraryEmpty(v)
+				} else {
+					@libraryTable(prefix, csrf, v)
+				}
 			} else {
-				<div class="grid">
-					@libraryFragment(prefix, csrf, v)
-				</div>
+				if (v.groupedGrid() && len(v.Entries) == 0 && v.NextURL == "") ||
+					(!v.groupedGrid() && len(v.Rows) == 0) {
+					@libraryEmpty(v)
+				} else {
+					<div class="grid">
+						@libraryFragment(prefix, csrf, v)
+					</div>
+				}
 			}
 		</section>
 	}
@@ -177,8 +202,18 @@ templ heroCard(prefix string, row LibraryRow) {
 // The sentinel is a link first and a trigger second: with scripting off
 // it is the "next page" the table view has always had.
 templ libraryFragment(prefix, csrf string, v LibraryView) {
-	for _, row := range v.Rows {
-		@libraryCard(prefix, csrf, row)
+	if v.groupedGrid() {
+		for _, entry := range v.Entries {
+			if entry.Series != nil {
+				@librarySeriesCard(prefix, *entry.Series)
+			} else if entry.Row != nil {
+				@libraryCard(prefix, csrf, *entry.Row)
+			}
+		}
+	} else {
+		for _, row := range v.Rows {
+			@libraryCard(prefix, csrf, row)
+		}
 	}
 	if v.NextURL != "" {
 		<div
@@ -190,6 +225,89 @@ templ libraryFragment(prefix, csrf string, v LibraryView) {
 			<a href={ v.NextURL }>Next page</a>
 		</div>
 	}
+}
+
+// librarySeriesCard mirrors Liseur's compact shelf pile: the next-up
+// cover in front, two real volumes peeking out behind it, a count badge,
+// and one progress segment per volume.
+templ librarySeriesCard(prefix string, series LibrarySeries) {
+	<article class="bookcard seriescard">
+		<a
+			class="seriesart"
+			href={ prefix + "entities/series/" + series.ID }
+			aria-label={ series.Name + ", " + series.Summary() }
+		>
+			if len(series.BackBookIDs) > 1 {
+				<span class="stackback far">
+					<img
+						src={ prefix + "books/" + series.BackBookIDs[1] + "/cover?size=thumbnail" }
+						alt=""
+						loading="lazy"
+						decoding="async"
+						width="333"
+						height="500"
+					/>
+				</span>
+			}
+			if len(series.BackBookIDs) > 0 {
+				<span class="stackback near">
+					<img
+						src={ prefix + "books/" + series.BackBookIDs[0] + "/cover?size=thumbnail" }
+						alt=""
+						loading="lazy"
+						decoding="async"
+						width="333"
+						height="500"
+					/>
+				</span>
+			}
+			if series.Complete {
+				<span class="stackfront complete">
+					@seriesStackCover(prefix, series.CoverBookID)
+				</span>
+			} else {
+				<span class="stackfront">
+					@seriesStackCover(prefix, series.CoverBookID)
+				</span>
+			}
+			<span class="seriescount" aria-hidden="true">{ i2s(len(series.Volumes)) }</span>
+		</a>
+		<div class="seriesrail" aria-hidden="true">
+			for _, volume := range series.Volumes {
+				if volume.Row.Finished() {
+					<span class="done"></span>
+				} else if volume.Row.Started() {
+					<span class="started"></span>
+				} else {
+					<span></span>
+				}
+			}
+		</div>
+		<a class="title" href={ prefix + "entities/series/" + series.ID }>
+			{ orPlaceholder(series.Name) }
+		</a>
+		<span class="by">
+			if series.Author != "" {
+				{ series.Author }
+			} else {
+				{ series.Summary() }
+			}
+		</span>
+		<nav class="sublinks">
+			<a href={ prefix + "entities/series/" + series.ID }>{ series.Summary() }</a>
+		</nav>
+	</article>
+}
+
+templ seriesStackCover(prefix, bookID string) {
+	<img
+		src={ prefix + "books/" + bookID + "/cover?size=thumbnail" }
+		alt=""
+		loading="lazy"
+		decoding="async"
+		width="333"
+		height="500"
+	/>
 }
 
 // libraryCard is one row on the wall. The cover carries on reading when

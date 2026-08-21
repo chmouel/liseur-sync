@@ -484,6 +484,21 @@ type CatalogBookRelations struct {
 	SeriesClaimUpdatedAt map[string]*time.Time
 }
 
+// CatalogSeriesVolume is one active book in the primary series the
+// catalog presents for it. A book may claim several series, but Liseur's
+// shelf files it under the first effective membership, ordered by the
+// resolved normalized name and then id. The web shelf uses the same rule
+// so the two clients never group one book differently.
+type CatalogSeriesVolume struct {
+	SeriesID   string
+	SeriesName string
+	BookID     string
+	Title      string
+	MediaType  string
+	Position   *float64
+	CreatedAt  time.Time
+}
+
 // SeriesClaimItem is one membership in a claim. Exactly one of SeriesID
 // and Name identifies the series: an id points at one that exists, a
 // name creates it if it does not. Position is absent when the claimant
@@ -1283,6 +1298,12 @@ type Store interface {
 	// through that reader's override layers (ADR-0018). Contributors and
 	// every other relation stay shared.
 	CatalogBookRelationsForBooks(ctx context.Context, userID string, bookIDs []string) (CatalogBookRelations, error)
+	// CatalogSeriesVolumesForBooks returns every active primary-series
+	// volume in folderID for the series named by bookIDs. It is the
+	// batched expansion a mixed shelf needs: one book on the current page
+	// can stand for its whole folder-local pile without an entity lookup
+	// per card. Series membership and display names resolve for userID.
+	CatalogSeriesVolumesForBooks(ctx context.Context, userID, folderID string, bookIDs []string) ([]CatalogSeriesVolume, error)
 	// ListCatalogEntities pages the library's entities of one kind by
 	// normalized name, with the number of books claiming each. Series
 	// counts are resolved for userID; the other kinds ignore it.

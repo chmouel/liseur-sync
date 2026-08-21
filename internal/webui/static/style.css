@@ -829,6 +829,8 @@ button.linkish:hover, button.linkish:focus-visible {
    shelf has a URL somebody can send. */
 .toolbar.filters { margin: .2rem 0 .9rem; }
 .sortchip { display: inline-flex; gap: .35rem; align-items: center; }
+.groupseries label.check { margin: 0; white-space: nowrap; }
+.groupseries input { accent-color: var(--primary); }
 
 /* The open button on every cover.
 
@@ -856,6 +858,45 @@ button.linkish:hover, button.linkish:focus-visible {
 	gap: .3rem; height: 100%; text-decoration: none; color: inherit;
 }
 .bookcard .art-text .tag { align-self: center; margin-top: .4rem; }
+
+/* A series occupies one grid cell, just like Android's mixed shelf. The
+   front cover leaves a narrow edge at the right and foot for two real
+   volumes to peek through, so the pile reads before its label does. */
+.seriescard .seriesart {
+	position: relative; display: block; aspect-ratio: .62;
+	color: inherit; text-decoration: none;
+}
+.seriescard .stackback, .seriescard .stackfront {
+	position: absolute; display: block; overflow: hidden;
+	border: 1px solid var(--line); border-radius: var(--radius-sm);
+	background: var(--surface-2); box-shadow: var(--shadow-sm);
+}
+.seriescard .stackback.far { inset: .7rem 0 0 .7rem; }
+.seriescard .stackback.near { inset: .35rem .35rem .35rem .35rem; }
+.seriescard .stackfront { inset: 0 .7rem .7rem 0; }
+.seriescard .stackback img, .seriescard .stackfront img {
+	width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.seriescard .stackfront img { transition: transform .18s ease; }
+.seriescard .stackback.far img { opacity: .45; }
+.seriescard .stackback.near img { opacity: .65; }
+.seriescard .stackfront.complete img { opacity: .55; }
+.seriescard:hover .stackfront img { transform: scale(1.03); }
+.seriescount {
+	position: absolute; z-index: 2; top: .4rem; right: .9rem;
+	display: flex; align-items: center; justify-content: center;
+	width: 1.75rem; height: 1.75rem; border-radius: 50%;
+	border: 1px solid var(--primary); background: var(--surface-2);
+	color: var(--ink); font-size: .75rem; font-weight: 700;
+}
+.seriesrail {
+	display: flex; gap: 2px; height: 4px; margin: .1rem .7rem 0 0;
+}
+.seriesrail span {
+	flex: 1; min-width: 2px; border-radius: 2px; background: var(--surface-3);
+}
+.seriesrail span.started { background: var(--primary-dim); }
+.seriesrail span.done { background: var(--primary); }
 
 
 /* --------------------------------------------------------- series shelf */

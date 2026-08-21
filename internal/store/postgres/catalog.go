@@ -267,6 +267,67 @@ func (s *Store) CatalogBookRelationsForBooks(
 	return out, nil
 }
 
+func (s *Store) CatalogSeriesVolumesForBooks(
+	ctx context.Context, userID, folderID string, bookIDs []string,
+) ([]store.CatalogSeriesVolume, error) {
+	if len(bookIDs) == 0 {
+		return []store.CatalogSeriesVolume{}, nil
+	}
+	placeholders, ids := inArgs(bookIDs)
+	args := seriesReadArgs(userID, append([]any{folderID}, ids...)...)
+	args = append(args, folderID)
+	rows, err := s.db.QueryContext(ctx, q(
+		effectiveSeriesCTE+`,
+primary_series AS (
+    SELECT e.book_id, e.series_id, e.position,
+           n.name, n.normalized_name,
+           ROW_NUMBER() OVER (
+               PARTITION BY e.book_id
+               ORDER BY n.normalized_name, e.series_id
+           ) AS primary_rank
+      FROM eff_series e
+      JOIN series_names n ON n.series_id = e.series_id
+),
+wanted_series AS (
+    SELECT DISTINCT p.series_id
+      FROM primary_series p
+      JOIN books seed ON seed.id = p.book_id
+     WHERE p.primary_rank = 1
+       AND seed.folder_id = ? AND seed.status = 'active'
+       AND p.book_id IN (`+placeholders+`)
+)
+SELECT p.series_id, p.name, p.position,
+       b.id, b.title, b.media_type, b.created_at
+  FROM primary_series p
+  JOIN wanted_series w ON w.series_id = p.series_id
+  JOIN books b ON b.id = p.book_id
+ WHERE p.primary_rank = 1
+   AND b.folder_id = ? AND b.status = 'active'
+ ORDER BY p.normalized_name, p.series_id,
+          p.position IS NULL, p.position, b.created_at, b.id`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []store.CatalogSeriesVolume{}
+	for rows.Next() {
+		var v store.CatalogSeriesVolume
+		var position sql.NullFloat64
+		if err := rows.Scan(&v.SeriesID, &v.SeriesName,
+			&position, &v.BookID, &v.Title,
+			&v.MediaType, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		if position.Valid {
+			p := position.Float64
+			v.Position = &p
+		}
+		v.CreatedAt = v.CreatedAt.UTC()
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // CatalogAuthorsForBooks feeds the identity backfill that links a
 // catalog book to a sync work, which needs a title and its authors and
 // nothing else.
