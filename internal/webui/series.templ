@@ -89,7 +89,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 		} else {
 			<ol class="serieslist">
 				for _, vol := range v.Volumes {
-					@seriesVolumeRow(prefix, vol)
+					@seriesVolumeRow(prefix, csrf, vol)
 				}
 			</ol>
 		}
@@ -259,7 +259,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 	</details>
 }
 
-templ seriesVolumeRow(prefix string, vol SeriesVolume) {
+templ seriesVolumeRow(prefix, csrf string, vol SeriesVolume) {
 	<li class="seriesvol">
 		<a class="art" href={ prefix + "books/" + vol.BookID }>
 			<img
@@ -299,6 +299,7 @@ templ seriesVolumeRow(prefix string, vol SeriesVolume) {
 			if vol.CanRead {
 				<a class="btn" href={ prefix + "books/" + vol.BookID + "/read" }>Read</a>
 			}
+			@markBookForm(prefix, csrf, vol.BookID, vol.Finished())
 		</div>
 	</li>
 }
