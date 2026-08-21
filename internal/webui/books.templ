@@ -51,6 +51,9 @@ type BookView struct {
 	Present bool
 	CanRead bool
 	Finished bool
+	// Progression is the reader's newest known position for this book.
+	// Nil means the reader has not opened it on any synced device.
+	Progression *float64
 	// Retirable is a missing book an administrator may take out of the
 	// catalog: admin, file already reported missing, and not in a
 	// Calibre folder, where metadata.db is authoritative and the next
@@ -99,22 +102,46 @@ templ bookBody(prefix, csrf string, b BookView) {
 			if b.Byline != "" {
 				<p class="byline">{ b.Byline }</p>
 			}
+			<div class="reading-state">
+				if b.Finished {
+					<span class="tag done">Finished</span>
+				} else if b.Progression != nil && *b.Progression > 0 {
+					<span class="tag">Reading { pct(*b.Progression) }</span>
+					<div class="bar" aria-label={ pct(*b.Progression) + " read" }><span class={ pctClass(*b.Progression) }></span></div>
+				} else {
+					<span class="tag">Unread</span>
+				}
+			</div>
 			<div class="cta">
 				if b.CanRead {
 					<a class="btn primary" href={ prefix + "books/" + b.ID + "/read" }>Read</a>
 				}
+				@markBookButton(prefix, csrf, b.ID, b.Finished)
 				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 				}
-				@markBookButton(prefix, csrf, b.ID, b.Finished)
 			</div>
 			if len(b.Series) > 0 || len(b.Authors) > 0 {
-				<div class="chips">
+				<div class="bookrelations">
+					if len(b.Series) > 0 {
+						<div>
+							<span class="eyebrow">Series</span>
+							<div class="chips">
 					for _, c := range b.Series {
 						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
 					}
+							</div>
+						</div>
+					}
+					if len(b.Authors) > 0 {
+						<div>
+							<span class="eyebrow">Contributors</span>
+							<div class="chips">
 					for _, c := range b.Authors {
 						<a class="chip" href={ prefix + c.URL }>{ c.Name }</a>
+					}
+							</div>
+						</div>
 					}
 				</div>
 			}
@@ -140,24 +167,26 @@ templ bookBody(prefix, csrf string, b BookView) {
 			</div>
 		</section>
 	}
-	// The dialog is fetched rather than rendered: it is three store
-	// reads a reader who is not editing does not need, and htmx swaps it
-	// in where this placeholder sits. With scripting off the link is a
-	// plain link to the same fragment.
-	<div id="series-assign" class="card">
-		<h2>Series</h2>
-		<p>
-			<a
-				class="btn"
-				href={ prefix + "books/" + b.ID + "/series" }
-				hx-get={ prefix + "books/" + b.ID + "/series" }
-				hx-target="#series-assign"
-				hx-swap="outerHTML"
-			>Change this book's series</a>
-		</p>
-	</div>
-	<section class="card">
-		<h2>File</h2>
+	<details class="card bookorganization">
+		<summary>Library organization</summary>
+		// The dialog is fetched rather than rendered: it is three store
+		// reads a reader who is not editing does not need, and htmx swaps it
+		// in where this placeholder sits. With scripting off the link is a
+		// plain link to the same fragment.
+		<div id="series-assign" class="book-organization-section">
+			<h2>Series</h2>
+			<p>
+				<a
+					class="btn"
+					href={ prefix + "books/" + b.ID + "/series" }
+					hx-get={ prefix + "books/" + b.ID + "/series" }
+					hx-target="#series-assign"
+					hx-swap="outerHTML"
+				>Change this book's series</a>
+			</p>
+		</div>
+		<div class="book-organization-section">
+			<h2>File</h2>
 		if !b.Present {
 			<p class="muted">
 				The last look through this folder could not find this book's
@@ -208,7 +237,8 @@ templ bookBody(prefix, csrf string, b BookView) {
 				</form>
 			}
 		}
-	</section>
+		</div>
+	</details>
 	<p><a href={ prefix + "library?folder=" + b.FolderID }>Back to the library</a></p>
 }
 

@@ -313,7 +313,7 @@ templ seriesVolumeRow(prefix, csrf string, vol SeriesVolume) {
 // saved. Everything in it works without scripting too: the form posts
 // normally and the server answers with the same fragment.
 templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
-	<div id="series-assign" class="card">
+	<div id="series-assign" class="book-organization-section">
 		<h2>Series</h2>
 		if v.Problem != "" {
 			<p class="error" role="alert">{ v.Problem }</p>

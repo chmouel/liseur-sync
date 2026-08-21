@@ -40,7 +40,7 @@
 	/* A cover is taller than it is wide, and a grid that assumes one
 	   ratio is calmer than a grid that lets every publisher choose. */
 	--cover-ratio: 2 / 3;
-	--card-min: 9.5rem;
+	--card-min: 11.5rem;
 }
 
 [data-theme="light"] {
@@ -233,16 +233,6 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 }
 @media (max-width: 32em) { .brand .suffix { display: none; } }
 
-.topsearch { flex: 1; max-width: 34rem; margin: 0; display: flex; }
-.topsearch input {
-	width: 100%;
-	background: var(--surface-2);
-	border: 1px solid var(--line);
-	border-radius: 2rem;
-	padding: .4rem .9rem;
-}
-.topsearch input::placeholder { color: var(--muted); }
-
 .account { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
 .account .who { color: var(--muted); font-size: .85rem; }
 .account form { margin: 0; }
@@ -296,7 +286,6 @@ main { grid-area: main; padding: 1.4rem 1.5rem 4rem; min-width: 0; }
 		display: block; position: fixed; inset: 0; z-index: 40;
 		background: rgb(0 0 0 / .5);
 	}
-	.topsearch { max-width: none; }
 	main { padding: 1rem .9rem 3rem; }
 }
 
@@ -516,15 +505,34 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .viewtoggle :last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .viewtoggle .on { background: var(--surface-3); color: var(--ink); font-weight: 600; }
 
+.libraryhead {
+	display: flex; align-items: end; justify-content: space-between;
+	gap: 1rem; margin: 0 0 .75rem;
+}
+.libraryhead h1 { font-size: 2rem; line-height: 1.1; margin: 0; }
+.libraryhead .eyebrow { margin: 0 0 .15rem; }
+.folderpick { margin: 0; }
+.folderpick select { min-width: min(18rem, 52vw); }
+.librarytools {
+	display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+	padding: .65rem 0 1rem; margin: 0 0 1.2rem;
+	border-bottom: 1px solid var(--line);
+}
+.librarytools form { margin: 0; display: flex; gap: .4rem; align-items: center; }
+.librarytools form:first-child { flex: 1 1 18rem; }
+.librarytools input[type="search"] { width: min(100%, 30rem); border-radius: 2rem; padding: .48rem .9rem; }
+.librarytools .spacer { flex: 1; }
+.libraryshelf { margin: 0 0 var(--gap); }
+
 /* ------------------------------------------------------------- the grid */
 
 .grid {
-	display: grid; gap: 1.1rem;
+	display: grid; gap: 1.5rem 1.25rem;
 	grid-template-columns: repeat(auto-fill, minmax(var(--card-min), 1fr));
 	margin: 0 0 var(--gap);
 }
 
-.bookcard { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+.bookcard { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
 .bookcard .art {
 	position: relative; display: block;
 	aspect-ratio: var(--cover-ratio);
@@ -560,14 +568,14 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .bookcard .badge.done { background: var(--ok); }
 
 .bookcard .title {
-	font-size: .87rem; font-weight: 600; color: var(--ink);
+	font-size: .95rem; font-weight: 650; color: var(--ink);
 	text-decoration: none; line-height: 1.3;
 	display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 	overflow: hidden;
 }
 .bookcard .title:hover { color: var(--primary); }
 .bookcard .by {
-	font-size: .78rem; color: var(--muted);
+	font-size: .82rem; color: var(--muted);
 	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -650,17 +658,44 @@ button.linkish:hover, button.linkish:focus-visible {
 
 /* --------------------------------------------------------- book detail */
 
-.hero { display: flex; gap: 1.6rem; flex-wrap: wrap; align-items: flex-start; }
+.hero {
+	display: flex; gap: clamp(1.5rem, 4vw, 3rem); flex-wrap: wrap;
+	align-items: flex-start; margin: .75rem 0 2.5rem;
+}
 .hero .art {
-	flex: 0 0 15rem; max-width: 40%;
+	flex: 0 0 17rem; max-width: 42%;
 	border-radius: var(--radius); overflow: hidden;
 	border: 1px solid var(--line); box-shadow: var(--shadow);
 }
 .hero .art img { width: 100%; height: auto; display: block; }
-.hero .facts { flex: 1; min-width: 16rem; }
-.hero .facts h1 { margin-bottom: .2rem; }
+.hero .facts { flex: 1; min-width: min(100%, 18rem); max-width: 48rem; }
+.hero .facts h1 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.06; margin-bottom: .35rem; }
 .hero .byline { color: var(--muted); margin: 0 0 .8rem; }
 .hero .cta { display: flex; gap: .5rem; flex-wrap: wrap; margin: .9rem 0; }
+.reading-state { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; margin: .9rem 0 .3rem; }
+.reading-state .bar { margin: 0; width: 10rem; }
+.tag.done { background: color-mix(in srgb, var(--ok) 18%, var(--surface-3)); border-color: var(--ok); color: var(--ink); }
+.bookrelations { display: grid; gap: .7rem; margin: 1.2rem 0; }
+.bookrelations .chips { margin: .2rem 0 0; }
+.bookorganization { margin-top: 1.5rem; }
+.book-organization-section { padding: .9rem 0; border-top: 1px solid var(--line-soft); }
+.book-organization-section:first-of-type { border-top: 0; padding-top: .4rem; }
+.book-organization-section:last-child { padding-bottom: 0; }
+.book-organization-section > h2 { margin-bottom: .45rem; }
+.description { max-width: 68ch; }
+
+@media (max-width: 38em) {
+	.libraryhead { align-items: flex-start; flex-direction: column; }
+	.folderpick, .folderpick select { width: 100%; }
+	.librarytools { align-items: stretch; }
+	.librarytools form:first-child, .librarytools input[type="search"] { width: 100%; }
+	.librarytools .viewtoggle { margin-left: auto; }
+	.hero { gap: 1.25rem; margin-top: 0; }
+	.hero .art { flex-basis: 9rem; max-width: 38%; }
+	.hero .facts { min-width: 0; }
+	.hero .facts h1 { font-size: 2rem; }
+	.reading-state .bar { width: 8rem; }
+}
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem; font-size: .9rem; }
 .kv dt { color: var(--muted); }
@@ -809,27 +844,40 @@ button.linkish:hover, button.linkish:focus-visible {
 /* The continue-reading banner. It repeats a card that is also in the
    grid below, which is the point: coming back to a half-read book is
    the commonest reason to open this page. */
-.resume { display: flex; gap: 1.1rem; align-items: flex-start; }
+.resume {
+	display: flex; gap: 1.25rem; align-items: flex-start;
+	padding: .2rem 0 1.5rem; margin: 0 0 1.1rem;
+	border-bottom: 1px solid var(--line);
+}
 .resume .art {
-	flex: 0 0 6.5rem; display: block; overflow: hidden;
+	flex: 0 0 7.5rem; display: block; overflow: hidden;
 	border-radius: var(--radius-sm); border: 1px solid var(--line);
 	box-shadow: var(--shadow-sm); aspect-ratio: var(--cover-ratio);
 }
 .resume .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .resume .herotext { flex: 1; min-width: 12rem; display: flex; flex-direction: column; gap: .3rem; }
-.resume .eyebrow {
+.eyebrow {
 	font-size: .7rem; font-weight: 700; letter-spacing: .08em;
 	text-transform: uppercase; color: var(--muted);
 }
-.resume .title { font-size: 1.1rem; font-weight: 600; color: var(--ink); text-decoration: none; }
+.resume .title { font-size: 1.35rem; font-weight: 650; color: var(--ink); text-decoration: none; }
 .resume .title:hover { color: var(--primary); }
 .resume .by { color: var(--muted); font-size: .85rem; }
 .resume .bar { max-width: 22rem; }
 .resume .rowlinks { margin: .5rem 0 0; }
 
+@media (max-width: 32em) {
+	.resume .art { flex-basis: 5.5rem; }
+	.resume .title { font-size: 1.1rem; }
+	.resume .rowlinks .btn:not(.primary) { display: none; }
+}
+
 /* The filter row under the banner. A chip is a link, so a filtered
    shelf has a URL somebody can send. */
-.toolbar.filters { margin: .2rem 0 .9rem; }
+.toolbar.filters {
+	margin: .2rem 0 1.25rem; padding: .5rem 0;
+	border-bottom: 1px solid var(--line-soft);
+}
 .sortchip { display: inline-flex; gap: .35rem; align-items: center; }
 .groupseries label.check { margin: 0; white-space: nowrap; }
 .groupseries input { accent-color: var(--primary); }

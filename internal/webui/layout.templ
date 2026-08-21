@@ -39,14 +39,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<span class="brandmark" role="img" aria-label="Liseur sync"></span>
 							<span class="suffix" aria-hidden="true">sync</span>
 						</a>
-						<form class="topsearch" method="get" action={ prefix + "search" }>
-							<input
-								type="search"
-								name="q"
-								placeholder="Search titles, authors, series…"
-								aria-label="Search the library"
-							/>
-						</form>
 						<div class="account">
 							@themeToggle(prefix, csrf, u)
 							<span class="who">{ u.User.Name }</span>

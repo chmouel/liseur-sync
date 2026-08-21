@@ -139,6 +139,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	v.CanRead = bookReadable(book)
 	if link, err := s.St.UserBookWork(r.Context(), readerID(u), book.ID); err == nil {
 		if ops, err := s.St.Positions(r.Context(), readerID(u), link.WorkID, 1); err == nil && len(ops) > 0 {
+			v.Progression = &ops[0].Progression
 			v.Finished = ops[0].Progression >= finished
 		}
 	}
@@ -187,16 +188,30 @@ func contributorChips(folderID string, rows []store.BookContributor) ([]ChipLink
 	chips := make([]ChipLink, 0, len(rows))
 	var authors []string
 	var everyone []string
+	seenContributors := make(map[string]struct{}, len(rows))
+	seenAuthors := make(map[string]struct{}, len(rows))
 	for _, c := range rows {
-		chips = append(chips, ChipLink{
-			Name: c.Name,
-			URL:  entityURL(folderID, "contributors", c.ContributorID),
-		})
-		everyone = append(everyone, c.Name)
-		if c.Role == "" || strings.EqualFold(c.Role, store.ContributorRoleAuthor) ||
-			strings.EqualFold(c.Role, "aut") {
-			authors = append(authors, c.Name)
+		key := c.ContributorID
+		if key == "" {
+			key = c.Name
 		}
+		if _, seen := seenContributors[key]; !seen {
+			chips = append(chips, ChipLink{
+				Name: c.Name,
+				URL:  entityURL(folderID, "contributors", c.ContributorID),
+			})
+			everyone = append(everyone, c.Name)
+			seenContributors[key] = struct{}{}
+		}
+		if c.Role != "" && !strings.EqualFold(c.Role, store.ContributorRoleAuthor) &&
+			!strings.EqualFold(c.Role, "aut") {
+			continue
+		}
+		if _, seen := seenAuthors[key]; seen {
+			continue
+		}
+		seenAuthors[key] = struct{}{}
+		authors = append(authors, c.Name)
 	}
 	if len(authors) == 0 {
 		authors = everyone

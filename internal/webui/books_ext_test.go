@@ -337,7 +337,7 @@ func TestBookReadingStatusCanBeToggled(t *testing.T) {
 	bookID := f.addBook(t, "toggle", []byte(strings.Repeat("web-epub", 50)))
 
 	resp, page := f.get(t, "/ui/books/"+bookID, f.cookie)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "Mark read") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "Mark read") || !strings.Contains(page, ">Unread<") {
 		t.Fatalf("new book should offer mark read: status=%d page=%s", resp.StatusCode, page)
 	}
 	resp = f.postForm(t, "/ui/books/"+bookID+"/reading-status", f.cookie, url.Values{
@@ -356,7 +356,7 @@ func TestBookReadingStatusCanBeToggled(t *testing.T) {
 		t.Fatalf("mark read position: ops=%+v err=%v", ops, err)
 	}
 	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
-	if !strings.Contains(page, "Mark unread") {
+	if !strings.Contains(page, "Mark unread") || !strings.Contains(page, ">Finished<") {
 		t.Fatalf("read book should offer mark unread: %s", page)
 	}
 
@@ -371,7 +371,7 @@ func TestBookReadingStatusCanBeToggled(t *testing.T) {
 		t.Fatalf("mark unread position: ops=%+v err=%v", ops, err)
 	}
 	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
-	if !strings.Contains(page, "Mark read") {
+	if !strings.Contains(page, "Mark read") || !strings.Contains(page, ">Unread<") {
 		t.Fatalf("unread book should offer mark read: %s", page)
 	}
 }
