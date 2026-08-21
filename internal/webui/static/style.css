@@ -582,6 +582,7 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .bookcard .sublinks a:hover, .bookcard .sublinks a:focus-visible {
 	color: var(--primary); text-decoration: underline;
 }
+.bookcard .sublinks .reading-status { display: inline; margin: 0; }
 
 /* A delete that sits in a line of links has to look like one of them:
    the control is a form, because it writes, and a button that looked

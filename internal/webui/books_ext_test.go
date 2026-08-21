@@ -330,6 +330,52 @@ func TestBooksUIServesABook(t *testing.T) {
 	}
 }
 
+// TestBookReadingStatusCanBeToggled verifies the manual control writes the
+// same per-user position stream that other clients sync.
+func TestBookReadingStatusCanBeToggled(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "toggle", []byte(strings.Repeat("web-epub", 50)))
+
+	resp, page := f.get(t, "/ui/books/"+bookID, f.cookie)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "Mark read") {
+		t.Fatalf("new book should offer mark read: status=%d page=%s", resp.StatusCode, page)
+	}
+	resp = f.postForm(t, "/ui/books/"+bookID+"/reading-status", f.cookie, url.Values{
+		"csrf": {csrfFrom(t, page)}, "status": {"read"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("mark read: got %d", resp.StatusCode)
+	}
+
+	link, err := f.st.UserBookWork(t.Context(), "u1", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := f.st.Positions(t.Context(), "u1", link.WorkID, 1)
+	if err != nil || len(ops) != 1 || ops[0].Progression != 1 {
+		t.Fatalf("mark read position: ops=%+v err=%v", ops, err)
+	}
+	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
+	if !strings.Contains(page, "Mark unread") {
+		t.Fatalf("read book should offer mark unread: %s", page)
+	}
+
+	resp = f.postForm(t, "/ui/books/"+bookID+"/reading-status", f.cookie, url.Values{
+		"csrf": {csrfFrom(t, page)}, "status": {"unread"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("mark unread: got %d", resp.StatusCode)
+	}
+	ops, err = f.st.Positions(t.Context(), "u1", link.WorkID, 1)
+	if err != nil || len(ops) != 1 || ops[0].Progression != 0 {
+		t.Fatalf("mark unread position: ops=%+v err=%v", ops, err)
+	}
+	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
+	if !strings.Contains(page, "Mark read") {
+		t.Fatalf("unread book should offer mark read: %s", page)
+	}
+}
+
 // TestBookPageIsANotFoundForAnUnknownID: an id that is not a book is a
 // 404, not a blank page and not a 500.
 func TestBookPageIsANotFoundForAnUnknownID(t *testing.T) {

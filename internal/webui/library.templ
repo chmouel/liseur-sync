@@ -369,6 +369,7 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 		<nav class="sublinks">
 			if row.BookID != "" {
 				<a href={ prefix + "books/" + row.BookID }>Details</a>
+				@markBookForm(prefix, csrf, row.BookID, row.Finished())
 			}
 			if row.WorkID != "" {
 				<a href={ prefix + "works/" + row.WorkID }>Stats</a>
@@ -471,6 +472,9 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				<td>{ orDash(row.Added) }</td>
 				<td>
 					<a href={ row.detailURL(prefix) }>Open</a>
+					if row.BookID != "" {
+						@markBookForm(prefix, csrf, row.BookID, row.Finished())
+					}
 					if row.Bookless {
 						@deleteWorkForm(prefix, csrf, row.WorkID, "closest tr")
 					}
