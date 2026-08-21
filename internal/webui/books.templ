@@ -50,6 +50,7 @@ type BookView struct {
 	// nothing to download until the file comes back.
 	Present bool
 	CanRead bool
+	Finished bool
 	// Retirable is a missing book an administrator may take out of the
 	// catalog: admin, file already reported missing, and not in a
 	// Calibre folder, where metadata.db is authoritative and the next
@@ -106,6 +107,7 @@ templ bookBody(prefix, csrf string, b BookView) {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 				}
 			</div>
+			@markBookForm(prefix, csrf, b.ID, b.Finished)
 			if len(b.Series) > 0 || len(b.Authors) > 0 {
 				<div class="chips">
 					for _, c := range b.Series {
@@ -208,4 +210,15 @@ templ bookBody(prefix, csrf string, b BookView) {
 		}
 	</section>
 	<p><a href={ prefix + "library?folder=" + b.FolderID }>Back to the library</a></p>
+}
+
+templ markBookForm(prefix, csrf, bookID string, finished bool) {
+	<form class="reading-status" method="post" action={ prefix + "books/" + bookID + "/reading-status" }>
+		<input type="hidden" name="csrf" value={ csrf }/>
+		if finished {
+			<button class="linkish" type="submit" name="status" value="unread">Mark unread</button>
+		} else {
+			<button class="linkish" type="submit" name="status" value="read">Mark read</button>
+		}
+	</form>
 }

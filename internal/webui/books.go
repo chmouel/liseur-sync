@@ -137,6 +137,11 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 		SHA256:    book.ContentSHA256,
 	}
 	v.CanRead = bookReadable(book)
+	if link, err := s.St.UserBookWork(r.Context(), readerID(u), book.ID); err == nil {
+		if ops, err := s.St.Positions(r.Context(), readerID(u), link.WorkID, 1); err == nil && len(ops) > 0 {
+			v.Finished = ops[0].Progression >= finished
+		}
+	}
 	// Retiring a missing row is the one write this page offers, and
 	// only where it would stick: a Calibre folder's metadata.db is
 	// authoritative, so a book it still lists comes back on the next
