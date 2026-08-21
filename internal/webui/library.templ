@@ -32,8 +32,12 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			}
 		</section>
 	} else {
-		<div class="toolbar">
-			<form method="get" action={ prefix + "library" }>
+		<header class="libraryhead">
+			<div>
+				<p class="eyebrow">Your shelves</p>
+				<h1>Library</h1>
+			</div>
+			<form class="folderpick" method="get" action={ prefix + "library" }>
 				<label class="visually-hidden" for="folder-pick">Folder</label>
 				<select id="folder-pick" name="folder">
 					for _, f := range v.Folders {
@@ -55,17 +59,19 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				}
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
+		</header>
+		<div class="librarytools">
 			if v.Selected != "" {
 				@searchForm(prefix, SearchView{FolderID: v.Selected})
 			}
 			// Browsing by series, author or tag reaches the whole
 			// library (ADR-0019), so these do not wait for a folder to
 			// be picked the way search does.
-			<div class="chips">
+			<nav class="chips" aria-label="Browse the library">
 				<a class="chip" href={ prefix + "entities/series" }>Series</a>
 				<a class="chip" href={ prefix + "entities/contributors" }>Contributors</a>
 				<a class="chip" href={ prefix + "entities/tags" }>Tags</a>
-			</div>
+			</nav>
 			<span class="spacer"></span>
 			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>
@@ -113,7 +119,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
 			</a>
 		</div>
-		<section class="card">
+		<section class="libraryshelf" aria-label="Books">
 			if v.View == viewList {
 				if len(v.Rows) == 0 {
 					@libraryEmpty(v)

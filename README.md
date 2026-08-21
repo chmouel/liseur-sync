@@ -12,7 +12,7 @@ optional, multi-user.
 
 ![The dashboard](docs/screenshots/dashboard.png)
 
-![The library](docs/screenshots/library.png)
+![The reader-first library](docs/screenshots/library.png)
 
 ## Why liseur-sync
 
@@ -86,12 +86,12 @@ rendered covers in its cache directory.
 liseur-sync admin folder-uploads <folder-id> on
 ```
 
-Browse by series, contributor, or tag, and search across the collection.
+Browse by series, contributor, or tag, and search within a selected folder.
 In a plain folder, the directory tree is the organisation: a
 subdirectory of EPUBs is a series. In a Calibre library, `metadata.db`
 is read as the curator's catalog.
 
-![A book](docs/screenshots/book.png)
+![Book details and reading status](docs/screenshots/book.png)
 
 ## Web reader
 

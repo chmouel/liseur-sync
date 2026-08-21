@@ -91,8 +91,11 @@ func TestSearchIsOfferedOnTheLibraryPageAndScopedToTheLibrary(t *testing.T) {
 	bookWithMetadata(t, f, "offered")
 
 	_, books := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
-	if !strings.Contains(books, "/search") {
+	if !strings.Contains(books, `action="folders/`+f.folder+`/search"`) {
 		t.Fatalf("the library page offered no way to search it:\n%s", books)
+	}
+	if strings.Contains(books, `class="topsearch"`) {
+		t.Fatalf("the library page still has a second, ambiguous top-bar search:\n%s", books)
 	}
 
 	// Every signed-in account may search every folder (ADR-0017); a
