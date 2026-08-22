@@ -20,7 +20,7 @@ import (
 // contributes to how the book is rendered is the policy below.
 func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		http.NotFound(w, r)
 		return

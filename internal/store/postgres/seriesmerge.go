@@ -16,6 +16,12 @@ import (
 func (s *Store) MergeSeries(
 	ctx context.Context, userID, seriesID, intoID string, at time.Time,
 ) (string, error) {
+	if _, err := s.CatalogEntityByID(ctx, userID, seriesID, store.EntitySeries); err != nil {
+		return "", err
+	}
+	if _, err := s.CatalogEntityByID(ctx, userID, intoID, store.EntitySeries); err != nil {
+		return "", err
+	}
 	if seriesID == intoID {
 		return "", fmt.Errorf("%w: a series cannot be merged into itself",
 			store.ErrInvalidInput)
@@ -106,6 +112,12 @@ func (s *Store) MergeSeries(
 func (s *Store) SplitSeriesFolder(
 	ctx context.Context, userID, seriesID, folderID, name string, at time.Time,
 ) (string, error) {
+	if _, err := s.CatalogEntityByID(ctx, userID, seriesID, store.EntitySeries); err != nil {
+		return "", err
+	}
+	if _, err := s.FolderByID(ctx, userID, folderID); err != nil {
+		return "", err
+	}
 	if userID == "" {
 		return "", fmt.Errorf("%w: a split needs a writer", store.ErrInvalidInput)
 	}

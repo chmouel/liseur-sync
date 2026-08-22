@@ -81,13 +81,13 @@ func (s *Server) handleDeleteMissingBook(
 		return
 	}
 	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	back := relPrefix(r.URL.Path) + "library?folder=" + url.QueryEscape(book.FolderID)
-	folder, err := s.St.FolderByID(r.Context(), book.FolderID)
+	folder, err := s.St.FolderByID(r.Context(), u.ID, book.FolderID)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return

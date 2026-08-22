@@ -17,9 +17,10 @@ integrate.
   that sequence.
 - **Session**: one reading session, a measured fact with progression
   fractions. Sessions feed the statistics endpoints.
-- **Folder**: a watched server-side directory of books. It is shared by
-  every logged-in user, and its filesystem path is never returned to a
-  non-admin client.
+- **Folder**: a watched server-side directory of books. An administrator
+  explicitly grants it to accounts; its filesystem path is never returned to
+  a non-admin client. Administrator status does not itself add the folder to
+  that account's library.
 - **Device token**: a scoped bearer token per physical device. The
   server stamps ops and sessions with the token's `device_id`; you do
   not send one. A token may carry several scopes.
@@ -63,6 +64,11 @@ applies, and for the same reason; it is the flag that decides where
 this server may write at all.
 
 All API calls then use `Authorization: Bearer <secret>`.
+
+Folder grants and token scopes are independent. A catalog list contains only
+the caller's granted folders. Direct access to another folder or one of its
+books returns `404`; lacking the scope for the attempted operation returns
+`403`. A newly created account has no folder grants.
 
 ### Finding out what your token can do
 

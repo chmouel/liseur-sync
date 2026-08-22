@@ -79,12 +79,12 @@ type opdsText struct {
 // folders this server watches, which is all a reader needs to reach
 // every book: there is no other entry point.
 func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
-	_, ok := auth.TokenFrom(r)
+	tok, ok := auth.TokenFrom(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folders, err := s.St.ListFolders(r.Context(), "", maxCatalogPageSize)
+	folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "folder lookup failed")
 		return
@@ -117,7 +117,8 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 // paginated with the same cursor as the native catalog, exposed to the
 // reader only as an opaque `next` link.
 func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -132,7 +133,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := defaultCatalogPageSize
-	books, err := s.St.ListCatalogBooks(r.Context(), folderID, after, limit)
+	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, folderID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "folder not found")

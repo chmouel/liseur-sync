@@ -327,6 +327,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminSetRole)))
 	mux.Handle("POST /ui/admin/users/{id}/disabled",
 		sec(s.requireAdmin(s.handleAdminSetDisabled)))
+	mux.Handle("POST /ui/admin/users/{id}/folders",
+		sec(s.requireAdmin(s.handleAdminSetFolders)))
 	mux.Handle("POST /ui/admin/users/{id}/credentials/revoke",
 		sec(s.requireAdmin(s.handleAdminRevokeCredentials)))
 	mux.Handle("POST /ui/admin/users/{id}/tokens/{tokenID}/revoke",

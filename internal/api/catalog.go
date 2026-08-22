@@ -51,7 +51,8 @@ type BookFiles interface {
 // root_path is deliberately absent: it is a filesystem oracle and no
 // part of reading a catalog. Only the admin UI shows it.
 func (s *Server) HandleFolders(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -65,7 +66,7 @@ func (s *Server) HandleFolders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cursor is too long")
 		return
 	}
-	folders, err := s.St.ListFolders(r.Context(), after, limit)
+	folders, err := s.St.ListFolders(r.Context(), tok.UserID, after, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "folder lookup failed")
 		return
@@ -90,7 +91,8 @@ func (s *Server) HandleFolders(w http.ResponseWriter, r *http.Request) {
 
 // HandleFolderBooks implements GET /v1/folders/{folder}/books.
 func (s *Server) HandleFolderBooks(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -125,7 +127,7 @@ func (s *Server) HandleFolderBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	books, err := list(r.Context(), folderID, after, limit)
+	books, err := list(r.Context(), tok.UserID, folderID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "folder not found")
@@ -160,7 +162,7 @@ func (s *Server) HandleBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	book, err := s.St.CatalogBookByID(r.Context(), r.PathValue("id"))
+	book, err := s.St.CatalogBookByID(r.Context(), readerID(r), r.PathValue("id"))
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return
@@ -182,7 +184,7 @@ func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	s.ServeBookDownload(w, r, r.PathValue("id"))
+	s.ServeBookDownload(w, r, readerID(r), r.PathValue("id"))
 }
 
 // ServeBookDownload is the download itself, without the token. The web
@@ -191,13 +193,13 @@ func (s *Server) HandleBookDownload(w http.ResponseWriter, r *http.Request) {
 // below are what keep a hostile file from becoming a hostile download,
 // and there must not be a second copy of them.
 func (s *Server) ServeBookDownload(
-	w http.ResponseWriter, r *http.Request, bookID string,
+	w http.ResponseWriter, r *http.Request, viewerID, bookID string,
 ) {
 	if s.Files == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
 		return
 	}
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), viewerID, bookID)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return
@@ -305,8 +307,8 @@ func writeCatalogError(w http.ResponseWriter, err error, notFound string) {
 }
 
 // readerID is who a catalog read is answered for. Series memberships
-// resolve through that reader's override layers (ADR-0018); every other
-// part of the catalog is shared and does not depend on who is asking.
+// resolve through that reader's override layers (ADR-0018), and folder
+// grants decide which shared catalog rows are visible (ADR-0027).
 // It is empty only for a request that reached here unauthenticated,
 // which the handlers refuse before getting this far.
 func readerID(r *http.Request) string {

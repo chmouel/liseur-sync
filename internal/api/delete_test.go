@@ -53,7 +53,7 @@ func TestDeleteBookRemovesTheFileAndTheRow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.root, "gone.epub")); !os.IsNotExist(err) {
 		t.Errorf("the file survived: %v", err)
 	}
-	if _, err := f.st.CatalogBookByID(t.Context(), bookID); err == nil {
+	if _, err := f.st.CatalogBookByID(t.Context(), "", bookID); err == nil {
 		t.Error("the catalog row survived")
 	}
 }
@@ -71,7 +71,7 @@ func TestDeleteBookRefusesAFolderThatDoesNotAcceptUploads(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.root, "kept.epub")); err != nil {
 		t.Errorf("the file was deleted from a folder nobody marked: %v", err)
 	}
-	if _, err := f.st.CatalogBookByID(t.Context(), bookID); err != nil {
+	if _, err := f.st.CatalogBookByID(t.Context(), "", bookID); err != nil {
 		t.Errorf("the row went even though the file stayed: %v", err)
 	}
 }
@@ -103,6 +103,23 @@ func TestDeleteBookAnswers404ForABookThatIsNotThere(t *testing.T) {
 
 	if resp := f.deleteBook(t, token, "no-such-book", ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestDeleteBookAnswers404WithoutAFolderGrant(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+	bookID, _ := f.publishAs(t, "private", "Private", []byte("bytes"))
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryDelete)
+
+	if resp := f.deleteBook(t, token, bookID, ""); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "private.epub")); err != nil {
+		t.Fatalf("the inaccessible file was changed: %v", err)
 	}
 }
 

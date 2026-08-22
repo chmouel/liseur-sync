@@ -18,11 +18,11 @@ import (
 // be served live on the other side of this interface and are not repeated
 // here.
 //
-// There is no user id: the catalog is shared, so every signed-in account
-// may see every folder's covers (ADR-0017). Who is asking decides
+// The user id applies the same folder grant as every other catalog
+// surface (ADR-0027). Who is asking also decides
 // whether the request happens at all, not what it may see.
 type CoverServer interface {
-	ServeBookCover(w http.ResponseWriter, r *http.Request, bookID string)
+	ServeBookCover(w http.ResponseWriter, r *http.Request, viewerID, bookID string)
 }
 
 // handleBookCover shows a cover, or a placeholder when there is none.
@@ -36,12 +36,19 @@ type CoverServer interface {
 func (s *Server) handleBookCover(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
+	// A missing cover gets a placeholder, but a missing or inaccessible
+	// book must stay a 404. Check the scoped catalog row before the
+	// fallback writer deliberately turns later cover errors into images.
+	if _, err := s.St.CatalogBookByID(r.Context(), u.ID, r.PathValue("id")); err != nil {
+		http.NotFound(w, r)
+		return
+	}
 	if s.Covers == nil {
 		servePlaceholderCover(w, r)
 		return
 	}
 	intercept := &coverFallbackWriter{ResponseWriter: w, request: r}
-	s.Covers.ServeBookCover(intercept, r, r.PathValue("id"))
+	s.Covers.ServeBookCover(intercept, r, u.ID, r.PathValue("id"))
 	intercept.finish()
 }
 

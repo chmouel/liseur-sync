@@ -82,7 +82,7 @@ func TestDeleteBookFileTakesTheFileAndTheRow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.root, "doomed.epub")); !os.IsNotExist(err) {
 		t.Errorf("the file survived: %v", err)
 	}
-	if _, err := f.st.CatalogBookByID(t.Context(), bookID); err == nil {
+	if _, err := f.st.CatalogBookByID(t.Context(), "", bookID); err == nil {
 		t.Error("the catalog row survived")
 	}
 }

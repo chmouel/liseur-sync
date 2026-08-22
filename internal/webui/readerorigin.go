@@ -87,7 +87,7 @@ func (s *Server) handleReaderRoute(w http.ResponseWriter, r *http.Request) {
 // identity per user, a short expiry, and two scopes.
 func (s *Server) handleReaderHandoff(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		http.NotFound(w, r)
 		return

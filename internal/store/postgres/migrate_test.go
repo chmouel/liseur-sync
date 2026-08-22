@@ -35,6 +35,16 @@ func TestMigrateUpgradesAnOlderDatabase(t *testing.T) {
 		time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
+	created := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO users
+		(id, name, argon2_hash, created_at) VALUES ('old-user', 'old-user', 'x', $1)`, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO folders
+		(id, name, root_path, kind, created_at, updated_at)
+		VALUES ('old-folder', 'Old', '/old', 'plain', $1, $1)`, created); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("migrating an older database: %v", err)
@@ -51,6 +61,13 @@ func TestMigrateUpgradesAnOlderDatabase(t *testing.T) {
 		if count != 1 {
 			t.Errorf("book_series_overrides.%s is missing after the upgrade", column)
 		}
+	}
+	var grants int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_folders`).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 0 {
+		t.Fatalf("migration granted existing accounts %d folders, want none", grants)
 	}
 
 	// Idempotent: a second start must not try to add the columns again.

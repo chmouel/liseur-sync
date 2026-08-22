@@ -265,14 +265,11 @@ func concretePath(pattern string) string {
 	})
 }
 
-// TestScopeMatrixCoversEveryRegisteredRoute is the ADR-0017 obligation
-// that replaces the old library-manage scope: with folder management
-// gone from the API entirely and the catalog shared by every reader,
-// the only scope boundary left worth policing by hand is "does this
-// route ask for the credential routes.go says it asks for" — and this
-// test is honest about that boundary by reading routes.go rather than
-// guessing at it, so a route added without a matching gate here fails
-// loudly instead of shipping unchecked.
+// TestScopeMatrixCoversEveryRegisteredRoute checks the capability half of
+// access control. Folder grants are enforced inside catalog operations;
+// this matrix asks whether each route requires the token scope routes.go
+// declares for it. It reads routes.go rather than guessing, so a route
+// added without a matching gate here fails loudly.
 func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 	found := registeredRoutes(t)
 	seen := map[string]bool{}

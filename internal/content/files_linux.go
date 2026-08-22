@@ -46,7 +46,7 @@ func (f *Files) OpenBookCover(
 }
 
 func (f *Files) root(ctx context.Context, book store.CatalogBook) (string, error) {
-	folder, err := f.folders.FolderByID(ctx, book.FolderID)
+	folder, err := f.folders.FolderByID(ctx, "", book.FolderID)
 	if err != nil {
 		// A book whose folder has gone is a book whose bytes are not
 		// this server's to serve, which is what ErrRootMissing means to

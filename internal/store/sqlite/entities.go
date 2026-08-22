@@ -66,7 +66,36 @@ func (t entityTables) nameColumns(
 // whose page turns out to be blank.
 const entityCountExpr = `(SELECT COUNT(*) FROM %s m
 	         JOIN books b ON b.id = m.book_id
-	         WHERE m.%s = e.id AND b.status = 'active')`
+	         WHERE m.%s = e.id AND b.status = 'active'%s)`
+
+func scopedEntityCount(membership, column, userID string) (string, []any) {
+	access := ""
+	var args []any
+	if userID != "" {
+		access = ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, userID)
+	}
+	return fmt.Sprintf(entityCountExpr, membership, column, access), args
+}
+
+func scopedEntityBacking(tables entityTables, membership, userID string) (string, []any) {
+	if userID == "" {
+		return "", nil
+	}
+	backing := tables.membership
+	if backing == "book_series" {
+		// A series may be supported by what the folder observed, by an
+		// effective claim, or both. Preserve an emptied observed series
+		// while also admitting one created only by a claim.
+		backing = `(SELECT book_id, series_id FROM book_series
+			UNION SELECT book_id, series_id FROM ` + membership + `)`
+	}
+	return ` AND EXISTS (SELECT 1 FROM ` + backing + ` backing
+		JOIN books visible_book ON visible_book.id = backing.book_id
+		JOIN user_folders uf ON uf.folder_id = visible_book.folder_id
+		WHERE backing.` + tables.column + ` = e.id AND uf.user_id = ?)`, []any{userID}
+}
 
 func (s *Store) ListCatalogEntities(
 	ctx context.Context, userID string, kind store.EntityKind,
@@ -81,7 +110,12 @@ func (s *Store) ListCatalogEntities(
 	}
 	prefix, membership, args := tables.membershipFor(kind, userID)
 	nameJoin, name, normalized, scanned, source := tables.nameColumns(kind)
-	args = append(args, after, limit)
+	count, countArgs := scopedEntityCount(membership, tables.column, userID)
+	args = append(args, countArgs...)
+	backing, backingArgs := scopedEntityBacking(tables, membership, userID)
+	args = append(args, after)
+	args = append(args, backingArgs...)
+	args = append(args, limit)
 	// Paging is by the name the reader sees, not the one the scan wrote,
 	// or a renamed series would be listed in one place and paged past in
 	// another.
@@ -89,9 +123,9 @@ func (s *Store) ListCatalogEntities(
 		prefix+
 			`SELECT e.id, `+name+`, `+normalized+`, `+scanned+`, `+source+`,
 			        e.created_at,
-			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
+			        `+count+`
 			 FROM `+tables.entity+` e`+nameJoin+`
-			 WHERE `+normalized+` > ?
+			 WHERE `+normalized+` > ?`+backing+`
 			 ORDER BY `+normalized+` LIMIT ?`,
 		args...)
 	if err != nil {
@@ -124,16 +158,20 @@ func (s *Store) CatalogEntityByID(
 	}
 	prefix, membership, args := tables.membershipFor(kind, userID)
 	nameJoin, name, normalized, scanned, source := tables.nameColumns(kind)
+	count, countArgs := scopedEntityCount(membership, tables.column, userID)
+	args = append(args, countArgs...)
+	backing, backingArgs := scopedEntityBacking(tables, membership, userID)
 	args = append(args, entityID)
+	args = append(args, backingArgs...)
 	entity := store.CatalogEntity{Kind: kind}
 	var created string
 	err = s.db.QueryRowContext(ctx,
 		prefix+
 			`SELECT e.id, `+name+`, `+normalized+`, `+scanned+`, `+source+`,
 			        e.created_at,
-			        `+fmt.Sprintf(entityCountExpr, membership, tables.column)+`
+			        `+count+`
 			 FROM `+tables.entity+` e`+nameJoin+`
-			 WHERE e.id = ?`,
+			 WHERE e.id = ?`+backing,
 		args...).
 		Scan(&entity.ID, &entity.Name, &entity.NormalizedName,
 			&entity.ScannedName, &entity.NameSource,
@@ -185,6 +223,12 @@ func (s *Store) ListBooksByEntity(
 	order := "b.created_at, b.id"
 	cursor := ""
 	args = append(args, entityID)
+	access := ""
+	if userID != "" {
+		access = ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, userID)
+	}
 	if series {
 		order = sortKey + ", b.created_at, b.id"
 		if after != nil {
@@ -203,7 +247,7 @@ func (s *Store) ListBooksByEntity(
 			 FROM books b
 			 JOIN `+membership+` m ON m.book_id = b.id
 			 WHERE m.`+tables.column+` = ?
-			   AND b.status = 'active'`+
+			   AND b.status = 'active'`+access+
 			cursor+` ORDER BY `+order+` LIMIT ?`, args...)
 	if err != nil {
 		return nil, nil, err

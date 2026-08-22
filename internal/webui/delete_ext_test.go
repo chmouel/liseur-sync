@@ -177,7 +177,7 @@ func TestDeleteMissingBookIsAdminWork(t *testing.T) {
 		"&notice=removed+from+the+catalog" {
 		t.Fatalf("the catalog delete sent the browser to %q", got)
 	}
-	if _, err := f.st.CatalogBookByID(t.Context(), ids["vanished"]); err == nil {
+	if _, err := f.st.CatalogBookByID(t.Context(), "", ids["vanished"]); err == nil {
 		t.Fatal("the missing book is still in the catalog")
 	}
 	// The reader keeps the reading, now as a work they may delete.
@@ -205,6 +205,9 @@ func TestDeleteMissingBookRefusedInACalibreFolder(t *testing.T) {
 		Kind: store.FolderCalibre, CreatedAt: time.Now().UTC(),
 	}
 	if err := f.st.CreateFolder(t.Context(), calibre); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), "u1", calibre.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Catalogued first, then observed as unservable — a format this
@@ -243,7 +246,7 @@ func TestDeleteMissingBookRefusedInACalibreFolder(t *testing.T) {
 	if got := resp.Header.Get("Location"); !strings.Contains(got, "problem=") {
 		t.Fatalf("the route allowed a Calibre delete: %d %q", resp.StatusCode, got)
 	}
-	if _, err := f.st.CatalogBookByID(t.Context(), bookID); err != nil {
+	if _, err := f.st.CatalogBookByID(t.Context(), "", bookID); err != nil {
 		t.Fatalf("the Calibre book was deleted anyway: %v", err)
 	}
 }

@@ -110,11 +110,13 @@ of them.
 - **Every route is authenticated** except `/healthz`, `/v1/login`,
   `/v1/register` (invite), and the adapter pairing endpoints. Add new
   routes to the scope table in `internal/api/routes.go`.
-- **Reading state is scoped by `user_id`; the catalog is deliberately
-  not.** Ops, sessions, insights, devices and `user_book_works` are
+- **Reading state is scoped by `user_id`; catalog access is scoped by folder
+  grants.** Ops, sessions, insights, devices and `user_book_works` are
   per-user and must never be readable across users. Books, folders and
-  catalog entities are shared: every logged-in user sees every folder's
-  books, and only an admin sees or manages folders. **Series,
+  catalog entities remain shared rows, but a real viewer ID sees only books
+  supported by an explicit `user_folders` grant; administrator status never
+  implies a grant. Empty viewer IDs are reserved for reconciliation, watchers
+  and trusted administration. **Series,
   contributors and tags are library-wide, not folder-scoped**
   (ADR-0019): they are keyed by normalized name alone, one series held
   in two folders is one row, and an entity nothing names any more is

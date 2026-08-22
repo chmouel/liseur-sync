@@ -40,6 +40,9 @@ func splitMovesMissingCatalogMapping(t *testing.T, s *Store) {
 	if err := s.CreateFolder(ctx, folder); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.AssignUserFolder(ctx, user.ID, folder.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.ReconcileFolder(ctx, folder.ID, []store.ObservedBook{{
 		RelativePath:     "missing.epub",
 		SizeBytes:        1,

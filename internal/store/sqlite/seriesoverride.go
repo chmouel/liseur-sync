@@ -117,6 +117,9 @@ func (s *Store) SetBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
 	items []store.SeriesClaimItem, mutation store.SeriesClaimMutation,
 ) (store.SeriesClaimOutcome, error) {
+	if _, err := s.CatalogBookByID(ctx, userID, bookID); err != nil {
+		return "", err
+	}
 	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, store.ClaimRevision(mutation.At)
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
@@ -266,6 +269,9 @@ func (s *Store) ClearBookSeriesOverride(
 	ctx context.Context, userID, bookID string, scope store.SeriesSource,
 	mutation store.SeriesClaimMutation,
 ) (store.SeriesClaimOutcome, error) {
+	if _, err := s.CatalogBookByID(ctx, userID, bookID); err != nil {
+		return "", err
+	}
 	clientTS, ifUpdatedAt, at := mutation.ClientTS, mutation.IfUpdatedAt, store.ClaimRevision(mutation.At)
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
@@ -332,6 +338,14 @@ func (s *Store) ReorderSeries(
 	ctx context.Context, userID, seriesID string,
 	scope store.SeriesSource, order []store.SeriesPlacement, at time.Time,
 ) error {
+	if _, err := s.CatalogEntityByID(ctx, userID, seriesID, store.EntitySeries); err != nil {
+		return err
+	}
+	for _, placement := range order {
+		if _, err := s.CatalogBookByID(ctx, userID, placement.BookID); err != nil {
+			return err
+		}
+	}
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
 		return err
@@ -395,6 +409,9 @@ func (s *Store) BookSeriesLayers(
 	ctx context.Context, userID, bookID string,
 ) (store.BookSeriesLayers, error) {
 	var out store.BookSeriesLayers
+	if _, err := s.CatalogBookByID(ctx, userID, bookID); err != nil {
+		return out, err
+	}
 	var folderID string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT folder_id FROM books WHERE id = ?`, bookID).Scan(&folderID)

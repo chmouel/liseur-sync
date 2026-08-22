@@ -26,10 +26,10 @@ import (
 // way than by a token — here, by a session cookie. Reusing it keeps the
 // media-type allowlist and filename sanitizing in one place.
 //
-// There is no user id, because the catalog is shared: every signed-in
-// account may download every folder's books (ADR-0017).
+// The user id is part of the call because shared catalog rows are
+// visible only through that reader's folder grants (ADR-0027).
 type Downloader interface {
-	ServeBookDownload(w http.ResponseWriter, r *http.Request, bookID string)
+	ServeBookDownload(w http.ResponseWriter, r *http.Request, viewerID, bookID string)
 }
 
 // booksPageSize keeps the page short enough to read. The UI paginates
@@ -49,7 +49,7 @@ func isHTMXRequest(r *http.Request) bool {
 // sortDirAsc pages oldest first, anything else (the default) newest
 // first.
 func (s *Server) listBooksPage(
-	r *http.Request, folderID, dir string,
+	r *http.Request, userID, folderID, dir string,
 ) ([]store.CatalogBook, string, error) {
 	after, err := decodeBooksCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
@@ -62,7 +62,7 @@ func (s *Server) listBooksPage(
 	if dir == sortDirAsc {
 		list = s.St.ListCatalogBooks
 	}
-	books, err := list(r.Context(), folderID, after, booksPageSize)
+	books, err := list(r.Context(), userID, folderID, after, booksPageSize)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, "", nil
@@ -84,7 +84,7 @@ func (s *Server) listBooksPage(
 // there is nothing left to batch. The callers are the reading shelves,
 // which are bounded by construction; a catalog page already holds the
 // rows it needs.
-func (s *Server) booksByID(ctx context.Context, ids []string) map[string]store.CatalogBook {
+func (s *Server) booksByID(ctx context.Context, userID string, ids []string) map[string]store.CatalogBook {
 	out := make(map[string]store.CatalogBook, len(ids))
 	for _, id := range ids {
 		if id == "" {
@@ -93,7 +93,7 @@ func (s *Server) booksByID(ctx context.Context, ids []string) map[string]store.C
 		if _, done := out[id]; done {
 			continue
 		}
-		book, err := s.St.CatalogBookByID(ctx, id)
+		book, err := s.St.CatalogBookByID(ctx, userID, id)
 		if err != nil {
 			continue
 		}
@@ -115,10 +115,9 @@ func (s *Server) handleBook(w http.ResponseWriter, r *http.Request, a store.Auth
 }
 
 // bookView assembles the book page from one catalog row and its
-// relations. Every signed-in account sees the same page: the catalog is
-// shared, and nothing on it is anybody's to edit (ADR-0017).
+// relations. The row must be visible through this reader's folder grant.
 func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookView, bool) {
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		return BookView{}, false
 	}
@@ -153,7 +152,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	// rather than a scope, because a browser session carries no scopes
 	// — the account carries the role.
 	if isAdmin(r) {
-		if folder, err := s.St.FolderByID(r.Context(), book.FolderID); err == nil {
+		if folder, err := s.St.FolderByID(r.Context(), u.ID, book.FolderID); err == nil {
 			if !v.Present {
 				v.Retirable = folder.Kind != store.FolderCalibre
 			}
@@ -226,7 +225,7 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request, a st
 		http.Error(w, "content storage is unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	s.Downloads.ServeBookDownload(w, r, r.PathValue("id"))
+	s.Downloads.ServeBookDownload(w, r, u.ID, r.PathValue("id"))
 }
 
 func encodeBooksCursor(c store.CatalogBookCursor) string {

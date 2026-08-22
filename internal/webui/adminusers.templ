@@ -117,6 +117,36 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 	</p>
 	@adminFlash(flash)
 	<section class="card">
+		<h2>Folder access</h2>
+		<p class="muted">
+			Choose which folders appear in this account's library. Administrator
+			rights do not grant reading access; administrators may assign folders
+			to themselves here.
+		</p>
+		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/folders" }>
+			<input type="hidden" name="csrf" value={ csrf }/>
+			if v.FoldersUnmanageable {
+				<p class="muted">
+					This instance watches too many folders to list here. Assign
+					them with the admin CLI: <code>assign-folder</code>,
+					<code>unassign-folder</code> and <code>list-user-folders</code>.
+				</p>
+			} else if len(v.Folders) == 0 {
+				<p class="muted">No folders are watched.</p>
+			} else {
+				for _, f := range v.Folders {
+					<label class="check">
+						<input type="checkbox" name="folders" value={ f.Folder.ID } checked?={ f.Granted }/>
+						{ f.Folder.Name }
+					</label>
+				}
+			}
+			if !v.FoldersUnmanageable {
+				<button type="submit" class="primary">Save folder access</button>
+			}
+		</form>
+	</section>
+	<section class="card">
 		<h2>API tokens</h2>
 		if len(v.Tokens) == 0 {
 			<p class="muted">None.</p>

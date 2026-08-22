@@ -186,7 +186,7 @@ type LibraryView struct {
 }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
-	folders, err := s.St.ListFolders(r.Context(), "", folderPickerLimit)
+	folders, err := s.St.ListFolders(r.Context(), u.ID, "", folderPickerLimit)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -202,6 +202,26 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		Dir:         normalizeDir(r.URL.Query().Get("dir")),
 	}
 	selected := r.URL.Query().Get("folder")
+	if selected != "" {
+		folder, err := s.St.FolderByID(r.Context(), u.ID, selected)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		found := false
+		for _, listed := range folders {
+			if listed.ID == folder.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// A directly selected granted folder may sit beyond the
+			// bounded picker page. Keep direct access correct and include
+			// that selection in the control.
+			folders = append(folders, folder)
+		}
+	}
 	if selected == "" && len(folders) > 0 {
 		selected = folders[0].ID
 	}
@@ -220,17 +240,6 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	// natural order is not the other field's reversal.
 	v.SortURL = libraryURL(v.Selected, v.Filter, otherSort(v.Sort), "", "")
 	v.DirURL = libraryURL(v.Selected, v.Filter, v.Sort, otherDir(v.Dir), "")
-
-	// A folder id from the query string that no longer exists is
-	// treated as no selection at all, rather than as an error: it is
-	// most often a stale bookmark. The reading half of the page does
-	// not depend on a folder, but the catalog half is all there is to
-	// show once there is no folder to show it from.
-	if v.Selected == "" && len(folders) > 0 {
-		libraryPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
-			Render(r.Context(), w)
-		return
-	}
 
 	loc := userLoc(u)
 	works, err := s.St.ListWorks(r.Context(), u.ID)
@@ -256,7 +265,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	if next != "" {
 		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
-	v.Hero = s.libraryHero(r, works, links, loc)
+	v.Hero = s.libraryHero(r, u.ID, works, links, loc)
 
 	// An htmx continuation asks for more of one list, not for the page
 	// around it: answering with the whole document would append a second
@@ -306,7 +315,7 @@ func (s *Server) workBookIDs(
 		candidates[ws.Work.ID] = ids
 		all = append(all, ids...)
 	}
-	books := s.booksByID(ctx, all)
+	books := s.booksByID(ctx, userID, all)
 	links := bookLinks{
 		active: make(map[string]string, len(candidates)),
 		mapped: make(map[string]bool, len(candidates)),
@@ -350,7 +359,7 @@ func (s *Server) libraryRows(
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryRow, []LibraryEntry, string, error) {
 	if v.Filter == filterReading || v.Filter == filterFinished || v.Sort == sortLastRead {
-		rows := s.readingRows(r, v, works, links, loc)
+		rows := s.readingRows(r, userID, v, works, links, loc)
 		if !v.groupedGrid() {
 			return rows, nil, "", nil
 		}
@@ -359,7 +368,7 @@ func (s *Server) libraryRows(
 		return rows, entries, "", err
 	}
 
-	books, next, err := s.listBooksPage(r, v.Selected, v.Dir)
+	books, next, err := s.listBooksPage(r, userID, v.Selected, v.Dir)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -367,7 +376,7 @@ func (s *Server) libraryRows(
 	for _, b := range books {
 		bookIDs = append(bookIDs, b.ID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), userID, bookIDs)
 
 	raw := make([]LibraryRow, 0, len(books))
 	for _, b := range books {
@@ -435,7 +444,7 @@ func (v LibraryView) groupedGrid() bool {
 // the union: every work, whether or not this server holds its file,
 // newest read first.
 func (s *Server) readingRows(
-	r *http.Request, v LibraryView,
+	r *http.Request, userID string, v LibraryView,
 	works []store.WorkSummary, links bookLinks, loc *time.Location,
 ) []LibraryRow {
 	rows := make([]LibraryRow, 0, len(works))
@@ -447,7 +456,7 @@ func (s *Server) readingRows(
 		}
 		rows = append(rows, row)
 	}
-	rows = s.markLibraryReadable(r, rows)
+	rows = s.markLibraryReadable(r, userID, rows)
 	// A filter about the catalog, answered from reading data, still has
 	// to mean what it says on the chip.
 	if v.Filter == filterHere {
@@ -527,7 +536,7 @@ func keepRow(row LibraryRow, filter string) bool {
 // because it is a shortcut back to what you were doing rather than a
 // view of the list below it.
 func (s *Server) libraryHero(
-	r *http.Request,
+	r *http.Request, userID string,
 	works []store.WorkSummary, links bookLinks, loc *time.Location,
 ) *LibraryRow {
 	best := LibraryRow{}
@@ -550,7 +559,7 @@ func (s *Server) libraryHero(
 	}
 	// A hero with no Read button is a picture of a book and a dead end,
 	// so it only exists when the file is here and openable.
-	rows := s.markLibraryReadable(r, []LibraryRow{best})
+	rows := s.markLibraryReadable(r, userID, []LibraryRow{best})
 	if !rows[0].CanRead {
 		return nil
 	}
@@ -561,14 +570,14 @@ func (s *Server) libraryHero(
 // from a catalog listing already know — the book is in hand there — so
 // this is for the rows that came from the reading half of the union,
 // where all that is known is which book a work was resolved from.
-func (s *Server) markLibraryReadable(r *http.Request, rows []LibraryRow) []LibraryRow {
+func (s *Server) markLibraryReadable(r *http.Request, userID string, rows []LibraryRow) []LibraryRow {
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.BookID != "" {
 			ids = append(ids, row.BookID)
 		}
 	}
-	books := s.booksByID(r.Context(), ids)
+	books := s.booksByID(r.Context(), userID, ids)
 	for i := range rows {
 		book, ok := books[rows[i].BookID]
 		if !ok {

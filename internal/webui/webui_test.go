@@ -751,11 +751,20 @@ func seedFolderBook(
 	t.Helper()
 	ctx := t.Context()
 	now := time.Now().UTC()
-	if _, err := st.FolderByID(ctx, folderID); err != nil {
+	if _, err := st.FolderByID(ctx, "", folderID); err != nil {
 		if err := st.CreateFolder(ctx, store.Folder{
 			ID: folderID, Name: "Test Folder", RootPath: t.TempDir(),
 			Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
 		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	users, err := st.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if err := st.AssignUserFolder(ctx, user.ID, folderID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -767,7 +776,7 @@ func seedFolderBook(
 	}}, true, now); err != nil {
 		t.Fatal(err)
 	}
-	books, err := st.ListCatalogBooks(ctx, folderID, nil, 100)
+	books, err := st.ListCatalogBooks(ctx, "", folderID, nil, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

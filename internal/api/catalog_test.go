@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,11 +134,9 @@ func TestDownloadServesRangesAndConditionalRequests(t *testing.T) {
 	}
 }
 
-// TestTheCatalogIsSharedAcrossEveryReader is ADR-0017's central claim
-// checked over HTTP: every signed-in account sees the same folder's
-// books, with no grant involved, while a reading position stays private
-// to whoever set it.
-func TestTheCatalogIsSharedAcrossEveryReader(t *testing.T) {
+// TestAnAssignedCatalogCanBeSharedAcrossReaders checks that a folder may
+// be granted to more than one account while reading state stays private.
+func TestAnAssignedCatalogCanBeSharedAcrossReaders(t *testing.T) {
 	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "shared", []byte("a shared book"))
 	mine := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
@@ -176,6 +175,78 @@ func TestTheCatalogIsSharedAcrossEveryReader(t *testing.T) {
 	mapping, err = f.st.UserBookWork(t.Context(), f.other.ID, bookID)
 	if err != nil || mapping.WorkID != b.WorkID {
 		t.Fatalf("other's own mapping: %+v %v", mapping, err)
+	}
+}
+
+func TestFolderGrantsIsolateCatalogSurfaces(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publishWithAuthor(t, "private", "Private Book", "Private Author", []byte("secret"))
+	if _, err := f.st.SetBookSeriesOverride(t.Context(), f.user.ID, bookID,
+		store.SeriesSourceShared, []store.SeriesClaimItem{{Name: "Private Series"}},
+		store.SeriesClaimMutation{At: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	allContributors, err := f.st.ListCatalogEntities(
+		t.Context(), "", store.EntityContributor, "", 10)
+	if err != nil || len(allContributors) != 1 {
+		t.Fatalf("seed contributors = %+v, %v", allContributors, err)
+	}
+	allSeries, err := f.st.ListCatalogEntities(t.Context(), "", store.EntitySeries, "", 10)
+	if err != nil || len(allSeries) != 1 {
+		t.Fatalf("seed series = %+v, %v", allSeries, err)
+	}
+	if err := f.st.UnassignUserFolder(t.Context(), f.other.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	read := f.mintToken(t, f.other.ID, store.ScopeLibraryRead)
+
+	code, folders := getJSON(t, f.ts.URL+"/v1/folders", read)
+	if code != http.StatusOK || len(folders["folders"].([]any)) != 0 {
+		t.Fatalf("folders = %d %v, want an empty catalog", code, folders)
+	}
+	code, search := getJSON(t, f.ts.URL+f.searchPath(url.Values{"q": {"Private"}}), read)
+	if code != http.StatusNotFound {
+		t.Fatalf("search = %d %v, want 404 for a hidden folder", code, search)
+	}
+	code, entities := getJSON(t, f.ts.URL+"/v1/entities/contributors", read)
+	if code != http.StatusOK || len(entities["entities"].([]any)) != 0 {
+		t.Fatalf("contributors = %d %v, want no hidden contributors", code, entities)
+	}
+
+	for _, path := range []string{
+		"/v1/folders/" + f.folder.ID + "/books",
+		"/v1/books/" + bookID,
+		"/v1/books/" + bookID + "/download",
+		"/v1/books/" + bookID + "/cover",
+		"/v1/entities/contributors/" + allContributors[0].ID + "/books",
+		"/v1/entities/series/" + allSeries[0].ID + "/books",
+	} {
+		resp, _ := f.get(t, path, read)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, resp.StatusCode)
+		}
+	}
+
+	resp, raw := f.opds(t, "/opds/v1.2", "token", read)
+	if resp.StatusCode != http.StatusOK || len(parseFeed(t, raw).Entries) != 0 {
+		t.Fatalf("OPDS root = %d %s, want an empty feed", resp.StatusCode, raw)
+	}
+	resp, _ = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("OPDS folder = %d, want 404", resp.StatusCode)
+	}
+	resp, _ = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID+
+		"/contributors/"+allContributors[0].ID, "token", read)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("OPDS entity = %d, want 404", resp.StatusCode)
+	}
+
+	if err := f.st.SetUserAdmin(t.Context(), f.other.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ = f.get(t, "/v1/books/"+bookID, read)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("administrator without a grant = %d, want 404", resp.StatusCode)
 	}
 }
 

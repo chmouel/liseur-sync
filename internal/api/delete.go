@@ -56,14 +56,14 @@ func (s *Server) DeleteBook(
 		return DeleteOutcome{}, deleteErr(http.StatusServiceUnavailable,
 			"this server is running without a folder watcher")
 	}
-	book, err := s.St.CatalogBookByID(ctx, bookID)
+	book, err := s.St.CatalogBookByID(ctx, userID, bookID)
 	if errors.Is(err, store.ErrNotFound) {
 		return DeleteOutcome{}, deleteErr(http.StatusNotFound, "no such book")
 	}
 	if err != nil {
 		return DeleteOutcome{}, err
 	}
-	folder, err := s.St.FolderByID(ctx, book.FolderID)
+	folder, err := s.St.FolderByID(ctx, userID, book.FolderID)
 	if errors.Is(err, store.ErrNotFound) {
 		return DeleteOutcome{}, deleteErr(http.StatusNotFound, "no such book")
 	}

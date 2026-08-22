@@ -41,7 +41,7 @@ func reset(t *testing.T, s *Store) {
 		"book_contributors", "contributors",
 		"book_series_override_items", "book_series_overrides",
 		"series_name_overrides", "series_bindings", "book_series", "series",
-		"book_identifiers", "user_book_works",
+		"book_identifiers", "user_book_works", "user_folders",
 		"books", "folders",
 		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "kosync_devices",

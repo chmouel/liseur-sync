@@ -12,9 +12,8 @@ import (
 // The folders page (ADR-0013, ADR-0017).
 //
 // It is the one page in the whole UI that renders a root path. A folder
-// has no owner and no access list — every signed-in account sees every
-// folder's books — so what is administered here is not who may read
-// what, but which directories on this machine the server reflects. That
+// has no owner. This page administers which directories the server
+// reflects; each user page separately administers who may read them. That
 // is a privilege beyond administering the application, which is why the
 // form is bounded by content.folder_roots when an operator has set it.
 //
@@ -94,7 +93,7 @@ func (s *Server) handleAdminScanFolder(
 		return
 	}
 	folderID := r.PathValue("id")
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), "", folderID)
 	logAdminAction(r, u, "scan-folder", folderID, err)
 	if err != nil {
 		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})
@@ -126,7 +125,7 @@ func (s *Server) handleAdminDeleteFolder(
 		return
 	}
 	folderID := r.PathValue("id")
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), "", folderID)
 	if err != nil {
 		logAdminAction(r, u, "remove-folder", folderID, err)
 		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})
@@ -162,7 +161,7 @@ func (s *Server) handleAdminSetFolderUploads(
 		return
 	}
 	folderID := r.PathValue("id")
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), "", folderID)
 	if err != nil {
 		logAdminAction(r, u, "folder-uploads", folderID, err)
 		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})

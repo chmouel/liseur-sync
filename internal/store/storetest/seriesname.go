@@ -336,7 +336,7 @@ func testSeriesRenameDiesWithItsSeries(t *testing.T, open OpenFunc) {
 // folderIDOf finds a folder by the name a test gave it.
 func folderIDOf(t *testing.T, s store.Store, name string) string {
 	t.Helper()
-	folders, err := s.ListFolders(context.Background(), "", 100)
+	folders, err := s.ListFolders(context.Background(), "", "", 100)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,11 +36,11 @@ type catalogResolveResponse struct {
 func (s *Server) resolveBookWork(
 	ctx context.Context, userID, bookID string, confirmed bool, at time.Time,
 ) (store.WorkResolution, []store.Identifier, error) {
-	book, err := s.St.CatalogBookByID(ctx, bookID)
+	book, err := s.St.CatalogBookByID(ctx, userID, bookID)
 	if err != nil {
 		return store.WorkResolution{}, nil, err
 	}
-	bookIDs, author, err := workident.Evidence(ctx, s.St, bookID)
+	bookIDs, author, err := workident.Evidence(ctx, s.St, userID, bookID)
 	if err != nil {
 		return store.WorkResolution{}, nil, err
 	}

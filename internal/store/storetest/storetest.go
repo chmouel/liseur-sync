@@ -43,6 +43,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("Folders", func(t *testing.T) { testFolders(t, open) })
+	t.Run("FolderAccess", func(t *testing.T) { testFolderAccess(t, open) })
 	t.Run("CatalogListingsPageAndIsolate", func(t *testing.T) {
 		testCatalogListingsPageAndIsolate(t, open)
 	})
@@ -254,6 +255,25 @@ func MkUser(t *testing.T, s store.Store, name string) store.User {
 	}
 	if err := s.CreateUser(context.Background(), u); err != nil {
 		t.Fatal(err)
+	}
+	// Most shared-store tests predate explicit folder grants and use
+	// MkUser/MkFolder when catalog access is incidental. Keep those
+	// fixtures readable while grant-specific tests use raw creation.
+	var after string
+	for {
+		folders, err := s.ListFolders(context.Background(), "", after, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, folder := range folders {
+			if err := s.AssignUserFolder(context.Background(), u.ID, folder.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(folders) < 100 {
+			break
+		}
+		after = store.FolderCursor(folders[len(folders)-1])
 	}
 	return u
 }

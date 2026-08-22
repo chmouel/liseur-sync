@@ -174,10 +174,10 @@ the panel or the shell, so an instance cannot lock itself out.
 
 ## Watching folders
 
-A folder is a database row: `id`, `name`, `root_path`, and `kind`. It
-has no owner and no access list. Every logged-in user sees every
-folder's books; only an admin sees or changes folders, because a folder
-is the only place a filesystem path appears.
+A folder is a database row: `id`, `name`, `root_path`, and `kind`. It has no
+owner. An administrator explicitly grants folders to accounts; administrator
+status alone does not add a folder to that administrator's library. Only an
+admin sees or changes folder paths and grants.
 
 Add one from Settings > Administration > Folders, or from a shell:
 
@@ -185,7 +185,17 @@ Add one from Settings > Administration > Folders, or from a shell:
 liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books
 liseur-sync admin -config liseur-sync.toml list-folders
 liseur-sync admin -config liseur-sync.toml remove-folder <folder-id>
+liseur-sync admin -config liseur-sync.toml assign-folder alice <folder-id>
+liseur-sync admin -config liseur-sync.toml unassign-folder alice <folder-id>
+liseur-sync admin -config liseur-sync.toml list-user-folders alice
+liseur-sync admin -config liseur-sync.toml assign-all-folders alice
 ```
+
+The per-account checkboxes under Settings > Administration > Users submit
+the account's complete grant set, so the page lists every watched folder
+rather than a page of them. Past 500 folders it stops offering the form —
+a list it had to truncate would revoke whatever fell off the end — and the
+`assign-folder` and `unassign-folder` commands above take over.
 
 Removing a folder removes the catalog rows that came from it and stops
 watching the root. Nothing below the root is touched. Adding it back

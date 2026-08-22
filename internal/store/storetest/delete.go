@@ -218,7 +218,7 @@ func testDeleteMissingBook(t *testing.T, open OpenFunc) {
 	if err := s.DeleteMissingBook(ctx, unreadID); err != nil {
 		t.Fatalf("DeleteMissingBook: %v", err)
 	}
-	if _, err := s.CatalogBookByID(ctx, readID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", readID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a deleted book is still in the catalog: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func testDeleteCatalogBook(t *testing.T, open OpenFunc) {
 		t.Fatalf("deleting out of a folder that takes no uploads: "+
 			"want ErrInvalidInput, got %v", err)
 	}
-	if _, err := s.CatalogBookByID(ctx, theirsID); err != nil {
+	if _, err := s.CatalogBookByID(ctx, "", theirsID); err != nil {
 		t.Fatalf("a refused delete took the book anyway: %v", err)
 	}
 
@@ -307,7 +307,7 @@ func testDeleteCatalogBook(t *testing.T, open OpenFunc) {
 	); err != nil {
 		t.Fatalf("DeleteCatalogBook: %v", err)
 	}
-	if _, err := s.CatalogBookByID(ctx, sentID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", sentID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the book survived its own deletion: %v", err)
 	}
 	if _, err := s.DeleteCatalogBook(

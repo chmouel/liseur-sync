@@ -45,9 +45,12 @@ func (s *Server) handleDeleteBookFile(
 	}
 	bookID := r.PathValue("id")
 	back := relPrefix(r.URL.Path) + "library"
-	if book, err := s.St.CatalogBookByID(r.Context(), bookID); err == nil {
-		back += "?folder=" + url.QueryEscape(book.FolderID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
+	back += "?folder=" + url.QueryEscape(book.FolderID)
 	if s.Deletes == nil {
 		s.deleteDone(w, back, "", "this server cannot delete books")
 		return

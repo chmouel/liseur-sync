@@ -34,12 +34,11 @@ func entityKindFrom(r *http.Request) (store.EntityKind, bool) {
 	return kind, ok
 }
 
-// handleEntities lists the library's entities of one kind (ADR-0019).
-// There is nothing to gate: the catalog is shared, and browsing by
-// author or tag is reading it (ADR-0017).
+// handleEntities lists the library's entities of one kind (ADR-0019),
+// with counts and rows limited to books visible through folder grants.
 // readerID is who a catalog read is answered for. Series memberships
-// resolve through that reader's override layers (ADR-0018); every other
-// part of the catalog is shared and does not depend on who is asking.
+// resolve through that reader's override layers (ADR-0018), while folder
+// grants decide which backing books are visible (ADR-0027).
 func readerID(u *store.User) string {
 	if u == nil {
 		return ""
@@ -128,7 +127,7 @@ func (s *Server) handleEntityBooks(
 	for _, b := range books {
 		bookIDs = append(bookIDs, b.ID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
 	loc := userLoc(u)
 	v := EntityBooksView{
 		Kind:     r.PathValue("kind"),

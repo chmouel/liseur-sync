@@ -3,10 +3,10 @@
 //
 // Per-user reading state — ops, sessions, works, editions, aliases and
 // the user_book_works bridge — is scoped by user_id in every query, and
-// no caller constructs a cross-user one. The catalog is deliberately
-// not: ADR-0017 makes every folder's books visible to every signed-in
-// account, so catalog reads take a folder id and no principal. What
-// stays private is what somebody read, never what the server holds.
+// no caller constructs a cross-user one. Catalog rows are shared, but
+// catalog visibility is filtered through explicit per-user folder
+// grants. An empty viewer id is reserved for trusted internal and
+// administrative work.
 package store
 
 import (
@@ -248,11 +248,10 @@ func (k FolderKind) Valid() bool {
 
 // Folder is a directory this server reflects.
 //
-// It has no owner, no quota principal and no access list. Every
-// signed-in account sees every folder's books; only an administrator
-// sees RootPath, which is a filesystem oracle and not a reader's
-// business. Nothing beneath RootPath is written unless AcceptsUploads
-// says somebody asked for it.
+// It has no owner or quota principal. Readers see it through explicit
+// folder grants; only an administrator sees RootPath, which is a
+// filesystem oracle and not a reader's business. Nothing beneath
+// RootPath is written unless AcceptsUploads says somebody asked for it.
 type Folder struct {
 	ID       string
 	Name     string
@@ -708,7 +707,9 @@ const MaxEntityListLimit = 500
 // catalog's search to have no vocabulary for it.
 type SearchQuery struct {
 	FolderID string
-	// UserID is who is asking. Series filters and series facets resolve
+	// UserID is the catalog viewer. Empty is reserved for trusted
+	// internal work; a real user sees only explicitly granted folders.
+	// Series filters and series facets resolve
 	// through that reader's override layers (ADR-0018); the full-text
 	// index is deliberately shared and keeps indexing what the folder
 	// observed.
@@ -1186,20 +1187,23 @@ type Store interface {
 	// -----------------------------------------------------------------
 	// Folders.
 	//
-	// A folder has no owner and no access list, so none of these take a
-	// user id: every signed-in account sees every folder's books. Only
-	// an administrator is shown RootPath, and that is enforced at the
-	// handler edge, not here.
+	// A folder has no owner. Catalog-facing reads take a viewer id and
+	// require an explicit grant. The empty viewer id is the trusted path
+	// used by reconciliation, watchers and folder administration.
 	// -----------------------------------------------------------------
 
 	CreateFolder(ctx context.Context, folder Folder) error
-	FolderByID(ctx context.Context, folderID string) (Folder, error)
+	FolderByID(ctx context.Context, viewerID, folderID string) (Folder, error)
 	// SetFolderUploads turns a folder's upload permission on or off
 	// (ADR-0023). Returns ErrNotFound if the folder is gone.
 	SetFolderUploads(ctx context.Context, folderID string, accepts bool, at time.Time) error
 	// ListFolders pages folders ordered by name then id. after is a
 	// FolderCursor, empty for the first page.
-	ListFolders(ctx context.Context, after string, limit int) ([]Folder, error)
+	ListFolders(ctx context.Context, viewerID, after string, limit int) ([]Folder, error)
+	AssignUserFolder(ctx context.Context, userID, folderID string) error
+	UnassignUserFolder(ctx context.Context, userID, folderID string) error
+	ListUserFolders(ctx context.Context, userID, after string, limit int) ([]Folder, error)
+	ReplaceUserFolders(ctx context.Context, userID string, folderIDs []string) error
 	// DeleteFolder removes a folder and, by cascade, every catalog row
 	// that hung off it. Nothing beneath its root path is touched: the
 	// files were never this server's to delete.
@@ -1275,7 +1279,7 @@ type Store interface {
 	// Catalog reads.
 	// -----------------------------------------------------------------
 
-	CatalogBookByID(ctx context.Context, bookID string) (CatalogBook, error)
+	CatalogBookByID(ctx context.Context, viewerID, bookID string) (CatalogBook, error)
 	// CatalogBookByDigest finds an active book by its content digest.
 	//
 	// It is what makes an upload idempotent (ADR-0023): the bytes are
@@ -1284,12 +1288,12 @@ type Store interface {
 	// book its own reconcile pass just made, which is why it does not
 	// take a folder id — the same file may already be somewhere else,
 	// and that copy is the answer.
-	CatalogBookByDigest(ctx context.Context, sha string) (CatalogBook, error)
+	CatalogBookByDigest(ctx context.Context, viewerID, sha string) (CatalogBook, error)
 	// ListCatalogBooks pages one folder's books, oldest first.
-	ListCatalogBooks(ctx context.Context, folderID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	ListCatalogBooks(ctx context.Context, viewerID, folderID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// ListRecentCatalogBooks pages the same books newest first, for the
 	// "recently added" shelf and the OPDS feed of the same name.
-	ListRecentCatalogBooks(ctx context.Context, folderID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	ListRecentCatalogBooks(ctx context.Context, viewerID, folderID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// CatalogBookRelationsForBooks reads the contributors and series of a
 	// whole page of books at once, so that rendering a shelf costs one
 	// query rather than one per book (ADR-0015).
@@ -1323,13 +1327,13 @@ type Store interface {
 	SearchCatalogBooks(ctx context.Context, query SearchQuery) (SearchResult, error)
 	// AvailableBookMediaTypes reports the distinct media types a folder's
 	// books carry, so a feed can advertise what it actually holds.
-	AvailableBookMediaTypes(ctx context.Context, folderID string) ([]string, error)
+	AvailableBookMediaTypes(ctx context.Context, viewerID, folderID string) ([]string, error)
 	// CatalogBookIdentifiers reads one book's publication identifiers,
 	// which are the evidence a work resolution runs on.
-	CatalogBookIdentifiers(ctx context.Context, bookID string) ([]BookIdentifier, error)
+	CatalogBookIdentifiers(ctx context.Context, viewerID, bookID string) ([]BookIdentifier, error)
 	// CatalogAuthorsForBooks maps book id to author display names, for
 	// the identity backfill that links a catalog book to a sync work.
-	CatalogAuthorsForBooks(ctx context.Context, bookIDs []string) (map[string][]string, error)
+	CatalogAuthorsForBooks(ctx context.Context, viewerID string, bookIDs []string) (map[string][]string, error)
 
 	// -----------------------------------------------------------------
 	// Series claims (ADR-0018).

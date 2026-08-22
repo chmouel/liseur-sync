@@ -22,6 +22,15 @@ func MkFolder(t *testing.T, s store.Store, name string, kind store.FolderKind) s
 	if err := s.CreateFolder(context.Background(), f); err != nil {
 		t.Fatal(err)
 	}
+	users, err := s.ListUsers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if err := s.AssignUserFolder(context.Background(), user.ID, f.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return f
 }
 
@@ -88,7 +97,7 @@ func testReconcileIdempotency(t *testing.T, open OpenFunc) {
 		t.Fatalf("first pass: %+v", first)
 	}
 
-	books, err := s.ListCatalogBooks(context.Background(), folder.ID, nil, 50)
+	books, err := s.ListCatalogBooks(context.Background(), "", folder.ID, nil, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +116,7 @@ func testReconcileIdempotency(t *testing.T, open OpenFunc) {
 		t.Fatalf("second identical pass reported a change: %+v", second)
 	}
 
-	books, err = s.ListCatalogBooks(context.Background(), folder.ID, nil, 50)
+	books, err = s.ListCatalogBooks(context.Background(), "", folder.ID, nil, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +156,7 @@ func testReconcileMissingAndReturning(t *testing.T, open OpenFunc) {
 	if result.Missing != 1 {
 		t.Fatalf("want one missing book, got %+v", result)
 	}
-	got, err := s.CatalogBookByID(ctx, bookID)
+	got, err := s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +176,7 @@ func testReconcileMissingAndReturning(t *testing.T, open OpenFunc) {
 	if result.Returned != 1 {
 		t.Fatalf("want one returned book, got %+v", result)
 	}
-	got, err = s.CatalogBookByID(ctx, bookID)
+	got, err = s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +210,7 @@ func testReconcileIncompletePassMarksNothingMissing(t *testing.T, open OpenFunc)
 	if result.Missing != 0 {
 		t.Fatalf("an incomplete pass marked books missing: %+v", result)
 	}
-	got, err := s.CatalogBookByID(ctx, bID)
+	got, err := s.CatalogBookByID(ctx, "", bID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +240,7 @@ func testReconcileZeroObservationPassMarksNothingMissing(t *testing.T, open Open
 	if result.Missing != 0 {
 		t.Fatalf("a zero-observation complete pass marked books missing: %+v", result)
 	}
-	got, err := s.CatalogBookByID(ctx, bookID)
+	got, err := s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,13 +290,13 @@ func testReconcileReplacementDropsReadingMapping(t *testing.T, open OpenFunc) {
 	if newBookID == oldBookID {
 		t.Fatalf("replacement kept the old book id")
 	}
-	if _, err := s.CatalogBookByID(ctx, oldBookID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", oldBookID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("old book row survived a replacement: %v", err)
 	}
 	if _, err := s.UserBookWork(ctx, user.ID, oldBookID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("reading mapping survived a content replacement: %v", err)
 	}
-	newBook, err := s.CatalogBookByID(ctx, newBookID)
+	newBook, err := s.CatalogBookByID(ctx, "", newBookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +330,7 @@ func testReconcileUnchangedKeepsMetadata(t *testing.T, open OpenFunc) {
 	}
 	doReconcile(t, s, folder.ID, []store.ObservedBook{unchanged}, true, now.Add(time.Hour))
 
-	got, err := s.CatalogBookByID(ctx, bookID)
+	got, err := s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +390,7 @@ func testReconcileCalibrePathMoveKeepsIdentity(t *testing.T, open OpenFunc) {
 	if stillSameID.RelativePath != "New Title (7)/book.epub" {
 		t.Fatalf("book did not follow its new path: %+v", stillSameID)
 	}
-	got, err := s.CatalogBookByID(ctx, bookID)
+	got, err := s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +501,7 @@ func testReconcileCalibrePurgesDeletedBooks(t *testing.T, open OpenFunc) {
 	if len(after) != 1 {
 		t.Fatalf("want one book left after the purge, got %d", len(after))
 	}
-	if _, err := s.CatalogBookByID(ctx, droppedID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", droppedID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a book gone from metadata.db survived the pass: %v", err)
 	}
 	if _, err := s.WorkByID(ctx, user.ID, emptyWork.ID); !errors.Is(err, store.ErrNotFound) {
@@ -557,7 +566,7 @@ func testReconcileCalibreUnservableBookIsKept(t *testing.T, open OpenFunc) {
 	if known.RelativePath != "Converted (11)/book.epub" {
 		t.Fatalf("an unservable observation overwrote what the catalog knew: %+v", known)
 	}
-	stored, err := s.CatalogBookByID(ctx, bookID)
+	stored, err := s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}

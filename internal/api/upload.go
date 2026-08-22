@@ -51,7 +51,7 @@ func (s *Server) HandleUploadBook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folder, err := s.uploadFolder(r.Context(), r.PathValue("folder"))
+	folder, err := s.uploadFolder(r.Context(), tok.UserID, r.PathValue("folder"))
 	if err != nil {
 		writeUploadError(w, err)
 		return
@@ -138,12 +138,12 @@ func writeWriteError(w http.ResponseWriter, err error, fallback string) {
 
 // uploadFolder resolves a folder and satisfies itself that somebody
 // asked for it to be writable.
-func (s *Server) uploadFolder(ctx context.Context, id string) (store.Folder, error) {
+func (s *Server) uploadFolder(ctx context.Context, viewerID, id string) (store.Folder, error) {
 	if s.Ingest == nil {
 		return store.Folder{}, uploadErr(http.StatusServiceUnavailable,
 			"this server is running without a folder watcher")
 	}
-	folder, err := s.St.FolderByID(ctx, id)
+	folder, err := s.St.FolderByID(ctx, viewerID, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Folder{}, uploadErr(http.StatusNotFound, "no such folder")
 	}
@@ -174,7 +174,7 @@ func (s *Server) uploadFolder(ctx context.Context, id string) (store.Folder, err
 func (s *Server) ReceiveUpload(
 	w http.ResponseWriter, r *http.Request, folder store.Folder, userID string,
 ) (UploadResult, error) {
-	result, err := s.receiveUpload(w, r, folder)
+	result, err := s.receiveUpload(w, r, folder, userID)
 	// Both answers that carry a book — the one just written and the one
 	// the catalog already held — are joined here, so a retry over a bad
 	// connection settles the work as surely as the first attempt did.
@@ -216,7 +216,7 @@ func (s *Server) nameUploadedWork(ctx context.Context, userID, bookID string) {
 }
 
 func (s *Server) receiveUpload(
-	w http.ResponseWriter, r *http.Request, folder store.Folder,
+	w http.ResponseWriter, r *http.Request, folder store.Folder, userID string,
 ) (UploadResult, error) {
 	if s.Ingest == nil {
 		return UploadResult{}, uploadErr(http.StatusServiceUnavailable,
@@ -236,7 +236,7 @@ func (s *Server) receiveUpload(
 
 	// The catalog may already hold these bytes, in this folder or
 	// another. Either way the upload is done and this is the book.
-	existing, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha)
+	existing, err := s.St.CatalogBookByDigest(r.Context(), userID, spooled.sha)
 	if err == nil {
 		return UploadResult{
 			BookID:        existing.ID,
@@ -288,7 +288,7 @@ func (s *Server) receiveUpload(
 		RelativePath:  relative,
 		ContentSHA256: spooled.sha,
 	}
-	if book, err := s.St.CatalogBookByDigest(r.Context(), spooled.sha); err == nil {
+	if book, err := s.St.CatalogBookByDigest(r.Context(), userID, spooled.sha); err == nil {
 		result.BookID = book.ID
 		result.RelativePath = book.RelativePath
 	}

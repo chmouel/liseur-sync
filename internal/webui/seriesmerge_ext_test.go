@@ -36,10 +36,13 @@ func secondFolderSeries(t *testing.T, f *booksFixture, name, series string) {
 		ID: "folder-two", Name: "Shared Shelf", RootPath: f.root + "-two",
 		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
 	}
-	if _, err := f.st.FolderByID(t.Context(), folder.ID); err != nil {
+	if _, err := f.st.FolderByID(t.Context(), "", folder.ID); err != nil {
 		if err := f.st.CreateFolder(t.Context(), folder); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := f.st.AssignUserFolder(t.Context(), "u1", folder.ID); err != nil {
+		t.Fatal(err)
 	}
 	pos := 1.0
 	if _, err := f.st.ReconcileFolder(t.Context(), folder.ID,

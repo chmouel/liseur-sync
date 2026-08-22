@@ -86,14 +86,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		links := s.workBookIDs(r.Context(), u.ID, works)
 		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 			sum, heat, recent,
-			s.markReadable(r, continueReading(works, links.active, loc))).
+			s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
 			Render(r.Context(), w)
 		return
 	}
 	links := s.workBookIDs(r.Context(), u.ID, works)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum, nil, nil,
-		s.markReadable(r, continueReading(works, links.active, loc))).
+		s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
 		Render(r.Context(), w)
 }
 
@@ -169,14 +169,14 @@ func streakFrom(dayMin map[string]float64, u *store.User, now time.Time) int {
 // open. The shelf it answers for is bounded (continueReadingLimit), so
 // it is a handful of book lookups rather than the wall of them a whole
 // catalog page would be.
-func (s *Server) markReadable(r *http.Request, rows []WorkRow) []WorkRow {
+func (s *Server) markReadable(r *http.Request, userID string, rows []WorkRow) []WorkRow {
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.BookID != "" {
 			ids = append(ids, row.BookID)
 		}
 	}
-	books := s.booksByID(r.Context(), ids)
+	books := s.booksByID(r.Context(), userID, ids)
 	for i := range rows {
 		book, ok := books[rows[i].BookID]
 		rows[i].CanRead = ok && bookReadable(book)
@@ -233,7 +233,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		d.BookID = ids[0]
 	}
 	if d.BookID != "" {
-		if book, err := s.St.CatalogBookByID(r.Context(), d.BookID); err == nil {
+		if book, err := s.St.CatalogBookByID(r.Context(), u.ID, d.BookID); err == nil {
 			d.CanRead = bookReadable(book)
 		}
 	}

@@ -116,8 +116,8 @@ func TestResolveJoinsADownloadedBookToTheReadersWork(t *testing.T) {
 
 // TestResolveGivesEachReaderTheirOwnWork is the privacy property: a
 // shared catalog book must not become a shared work, or one reader's
-// position would be another's. Unlike the old library-ACL world there is
-// no grant to set up: every reader already sees this book.
+// position would be another's. The fixture assigns the same folder to
+// both readers before they resolve the book.
 func TestResolveGivesEachReaderTheirOwnWork(t *testing.T) {
 	f := newFolderFixture(t)
 	bookID, _ := f.publish(t, "shared", []byte("a shared book"))
