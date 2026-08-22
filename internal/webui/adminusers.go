@@ -31,6 +31,21 @@ const adminUsersPerPage = 50
 // the slice (ADR-0013).
 const adminListCap = 200
 
+// adminUserFoldersMax bounds what the per-user grant form will render.
+// The form submits the complete grant set, so a truncated list would
+// revoke every folder past the cut the moment somebody saved it. Past
+// this many folders the page declines to offer the form at all and the
+// admin CLI does the assigning.
+const adminUserFoldersMax = 500
+
+// errTooManyFolders is what the grant form answers once the instance
+// watches more folders than one page may safely replace.
+var errTooManyFolders = errors.New(
+	"this instance watches too many folders for the web form to replace the " +
+		"whole grant set safely: use the admin CLI (assign-folder, " +
+		"unassign-folder) instead",
+)
+
 // adminUserView is one account as the per-user page shows it.
 type adminUserView struct {
 	User     store.User
@@ -53,6 +68,19 @@ type adminUserView struct {
 	// for the addresses an operator has to read out to whoever owns the
 	// device being paired.
 	Base string
+	// Folders is every watched folder, not one page. The checkbox form
+	// replaces the complete grant set, so rendering a partial list would
+	// revoke everything on a later page when it was submitted.
+	Folders []adminUserFolderView
+	// FoldersUnmanageable says the instance watches more folders than
+	// adminUserFoldersMax, so Folders is empty on purpose and the page
+	// offers no form rather than a lossy one.
+	FoldersUnmanageable bool
+}
+
+type adminUserFolderView struct {
+	Folder  store.Folder
+	Granted bool
 }
 
 // reauth is the shared gate in front of every high-impact mutation: the
@@ -222,6 +250,25 @@ func (s *Server) handleAdminSetDisabled(
 		}
 		return target.Name + " is enabled again. Their tokens and devices work; " +
 			"their web sessions do not, so they sign in again.", nil
+	})
+}
+
+func (s *Server) handleAdminSetFolders(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	s.withTargetNoReauth(w, r, a, u, "set-folder-access", func(target store.User) (string, error) {
+		if _, tooMany, err := allFolders(r.Context(), s.St, "", adminUserFoldersMax); err != nil {
+			return "", err
+		} else if tooMany {
+			return "", errTooManyFolders
+		}
+		// PostForm, not Form: Form merges the URL query into the body, so
+		// reading it would let a crafted link decide which folders a saved
+		// form grants.
+		if err := s.St.ReplaceUserFolders(r.Context(), target.ID, r.PostForm["folders"]); err != nil {
+			return "", err
+		}
+		return "Folder access updated for " + target.Name + ".", nil
 	})
 }
 

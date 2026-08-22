@@ -179,7 +179,7 @@ func listFolders(ctx context.Context, st store.Store, args []string) error {
 	}
 	var after string
 	for {
-		folders, err := st.ListFolders(ctx, after, 100)
+		folders, err := st.ListFolders(ctx, "", after, 100)
 		if err != nil {
 			return err
 		}
@@ -207,7 +207,7 @@ func removeFolder(ctx context.Context, st store.Store, args []string) error {
 		return errors.New("usage: remove-folder <folder-id>")
 	}
 	folderID := strings.TrimSpace(args[0])
-	folder, err := st.FolderByID(ctx, folderID)
+	folder, err := st.FolderByID(ctx, "", folderID)
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func setFolderUploads(ctx context.Context, st store.Store, args []string) error 
 	default:
 		return fmt.Errorf("want on or off, got %q", args[1])
 	}
-	folder, err := st.FolderByID(ctx, folderID)
+	folder, err := st.FolderByID(ctx, "", folderID)
 	if err != nil {
 		return err
 	}
@@ -252,5 +252,96 @@ func setFolderUploads(ctx context.Context, st store.Store, args []string) error 
 	} else {
 		fmt.Printf("%q (%s) no longer accepts uploads\n", folder.Name, folder.RootPath)
 	}
+	return nil
+}
+
+func assignFolder(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: assign-folder <user> <folder-id>")
+	}
+	user, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	folderID := strings.TrimSpace(args[1])
+	if err := st.AssignUserFolder(ctx, user.ID, folderID); err != nil {
+		return err
+	}
+	folder, err := st.FolderByID(ctx, "", folderID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("assigned %q (%s) to %q\n", folder.Name, folder.ID, user.Name)
+	return nil
+}
+
+func unassignFolder(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 2 {
+		return errors.New("usage: unassign-folder <user> <folder-id>")
+	}
+	user, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	folderID := strings.TrimSpace(args[1])
+	if err := st.UnassignUserFolder(ctx, user.ID, folderID); err != nil {
+		return err
+	}
+	fmt.Printf("unassigned folder %s from %q\n", folderID, user.Name)
+	return nil
+}
+
+func listUserFolders(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: list-user-folders <user>")
+	}
+	user, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	var after string
+	for {
+		folders, err := st.ListUserFolders(ctx, user.ID, after, 100)
+		if err != nil {
+			return err
+		}
+		for _, folder := range folders {
+			fmt.Printf("%s\t%s\t%s\t%s\n",
+				folder.ID, folder.Kind, folder.Name, folder.RootPath)
+		}
+		if len(folders) < 100 {
+			return nil
+		}
+		after = store.FolderCursor(folders[len(folders)-1])
+	}
+}
+
+func assignAllFolders(ctx context.Context, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: assign-all-folders <user>")
+	}
+	user, err := st.UserByName(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	var ids []string
+	var after string
+	for {
+		folders, err := st.ListFolders(ctx, "", after, 100)
+		if err != nil {
+			return err
+		}
+		for _, folder := range folders {
+			ids = append(ids, folder.ID)
+		}
+		if len(folders) < 100 {
+			break
+		}
+		after = store.FolderCursor(folders[len(folders)-1])
+	}
+	if err := st.ReplaceUserFolders(ctx, user.ID, ids); err != nil {
+		return err
+	}
+	fmt.Printf("assigned %d folders to %q\n", len(ids), user.Name)
 	return nil
 }

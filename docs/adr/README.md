@@ -51,6 +51,7 @@ loose ends that must come before any of it, are in
 | [0024](0024-deleting-a-work.md) | Deleting is a reader forgetting, or an administrator retiring | Later | Accepted; implemented | Per-user work delete for a work no book backs, admin delete of a missing catalog row; amends the append-only rule for that one case |
 | [0025](0025-deleting-a-book.md) | A book may be deleted where a book may be written | Later | Accepted | Deleting a book's file and row from an `accepts_uploads` folder; `library-delete` scope over the API, admin in the browser; amends [0024](0024-deleting-a-work.md) and rule 3 of [0017](0017-folders-not-pipelines.md) again |
 | [0026](0026-credential-enrolment-does-not-weaken-account-authentication.md) | Credential enrolment does not weaken account authentication | MVP | Accepted; implemented | Kosync pairing only; administrator password re-verification before creating an account or invite |
+| [0027](0027-explicit-per-user-folder-access.md) | Explicit per-user folder access | MVP | Accepted; implemented | Folder grants across storage, catalog surfaces, administration and CLI; amends [0017](0017-folders-not-pipelines.md) |
 
 ## Convention
 

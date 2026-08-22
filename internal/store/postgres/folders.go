@@ -10,9 +10,8 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// A folder has no owner and no access list, so none of these queries
-// take a user id. That is ADR-0017's deliberate carve-out from the
-// user-scoping rule: the catalog is shared, reading state is not.
+// A folder has no owner. An empty viewer id is the trusted internal
+// view; every real viewer must have a user_folders grant.
 
 const folderColumns = `id, name, root_path, kind, accepts_uploads,
 	created_at, updated_at`
@@ -70,9 +69,15 @@ func (s *Store) SetFolderUploads(
 	return nil
 }
 
-func (s *Store) FolderByID(ctx context.Context, folderID string) (store.Folder, error) {
-	row := s.db.QueryRowContext(ctx,
-		q(`SELECT `+folderColumns+` FROM folders WHERE id = ?`), folderID)
+func (s *Store) FolderByID(ctx context.Context, viewerID, folderID string) (store.Folder, error) {
+	query := `SELECT ` + folderColumns + ` FROM folders WHERE id = ?`
+	args := []any{folderID}
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = folders.id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	row := s.db.QueryRowContext(ctx, q(query), args...)
 	folder, err := scanFolder(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.Folder{}, store.ErrNotFound
@@ -80,15 +85,27 @@ func (s *Store) FolderByID(ctx context.Context, folderID string) (store.Folder, 
 	return folder, err
 }
 
-func (s *Store) ListFolders(ctx context.Context, after string, limit int) ([]store.Folder, error) {
+func (s *Store) ListFolders(ctx context.Context, viewerID, after string, limit int) ([]store.Folder, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	query := `SELECT ` + folderColumns + ` FROM folders`
 	args := []any{}
+	where := false
+	if viewerID != "" {
+		query += ` WHERE EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = folders.id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+		where = true
+	}
 	if after != "" {
 		name, id := store.SplitFolderCursor(after)
-		query += ` WHERE (name COLLATE "C", id) > (?, ?)`
+		if where {
+			query += ` AND`
+		} else {
+			query += ` WHERE`
+		}
+		query += ` (name COLLATE "C", id) > (?, ?)`
 		args = append(args, name, id)
 	}
 	// COLLATE "C" is byte order, which is what SQLite gives with no
@@ -114,6 +131,80 @@ func (s *Store) ListFolders(ctx context.Context, after string, limit int) ([]sto
 		folders = append(folders, folder)
 	}
 	return folders, rows.Err()
+}
+
+func (s *Store) AssignUserFolder(ctx context.Context, userID, folderID string) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := validateGrantTargets(ctx, tx, userID, []string{folderID}); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO user_folders (user_id, folder_id)
+			VALUES ($1, $2) ON CONFLICT DO NOTHING`, userID, folderID)
+		return err
+	})
+}
+
+func (s *Store) UnassignUserFolder(ctx context.Context, userID, folderID string) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := validateGrantTargets(ctx, tx, userID, []string{folderID}); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx,
+			`DELETE FROM user_folders WHERE user_id = $1 AND folder_id = $2`, userID, folderID)
+		return err
+	})
+}
+
+func (s *Store) ListUserFolders(ctx context.Context, userID, after string, limit int) ([]store.Folder, error) {
+	if _, err := s.UserByID(ctx, userID); err != nil {
+		return nil, err
+	}
+	return s.ListFolders(ctx, userID, after, limit)
+}
+
+func (s *Store) ReplaceUserFolders(ctx context.Context, userID string, folderIDs []string) error {
+	unique := make([]string, 0, len(folderIDs))
+	seen := make(map[string]struct{}, len(folderIDs))
+	for _, id := range folderIDs {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			unique = append(unique, id)
+		}
+	}
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := validateGrantTargets(ctx, tx, userID, unique); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM user_folders WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+		for _, folderID := range unique {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO user_folders
+				(user_id, folder_id) VALUES ($1, $2)`, userID, folderID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func validateGrantTargets(ctx context.Context, tx *sql.Tx, userID string, folderIDs []string) error {
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = $1`, userID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		return err
+	}
+	for _, folderID := range folderIDs {
+		if err := tx.QueryRowContext(ctx, `SELECT 1 FROM folders WHERE id = $1`, folderID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return store.ErrNotFound
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteFolder removes the folder row. Everything catalog-side hangs off

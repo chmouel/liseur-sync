@@ -37,11 +37,11 @@ func testFolders(t *testing.T, open OpenFunc) {
 		t.Fatalf("invalid folder kind: want ErrInvalidInput, got %v", err)
 	}
 
-	got, err := s.FolderByID(ctx, "folders-a")
+	got, err := s.FolderByID(ctx, "", "folders-a")
 	if err != nil || got.RootPath != "/srv/dup" {
 		t.Fatalf("FolderByID: %+v %v", got, err)
 	}
-	if _, err := s.FolderByID(ctx, "no-such-folder"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.FolderByID(ctx, "", "no-such-folder"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing folder: want ErrNotFound, got %v", err)
 	}
 
@@ -57,7 +57,7 @@ func testFolders(t *testing.T, open OpenFunc) {
 	var names []string
 	cursor := ""
 	for {
-		page, err := s.ListFolders(ctx, cursor, 2)
+		page, err := s.ListFolders(ctx, "", cursor, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +90,7 @@ func testFolders(t *testing.T, open OpenFunc) {
 	if err := s.DeleteFolder(ctx, "folders-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("double delete: want ErrNotFound, got %v", err)
 	}
-	if _, err := s.CatalogBookByID(ctx, bookID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", bookID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("book survived its folder's deletion: %v", err)
 	}
 }
@@ -144,7 +144,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	var got []string
 	var cursor *store.CatalogBookCursor
 	for {
-		page, err := s.ListCatalogBooks(ctx, folder.ID, cursor, 2)
+		page, err := s.ListCatalogBooks(ctx, "", folder.ID, cursor, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,7 +176,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 
 	// Hidden, not deleted: the row is still there to be read by id, so a
 	// reader's work mapping still has something to point at.
-	away, err := s.CatalogBookByID(ctx, awayID)
+	away, err := s.CatalogBookByID(ctx, "", awayID)
 	if err != nil {
 		t.Fatalf("a missing book was deleted rather than hidden: %v", err)
 	}
@@ -188,7 +188,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	var recent []string
 	cursor = nil
 	for {
-		page, err := s.ListRecentCatalogBooks(ctx, folder.ID, cursor, 2)
+		page, err := s.ListRecentCatalogBooks(ctx, "", folder.ID, cursor, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -212,7 +212,7 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 		t.Fatalf("recent books: got %v want %v", recent, reversed)
 	}
 
-	if _, err := s.CatalogBookByID(ctx, "no-such-book"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CatalogBookByID(ctx, "", "no-such-book"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing book id: want ErrNotFound, got %v", err)
 	}
 }
@@ -247,7 +247,7 @@ func testAvailableBookMediaTypes(t *testing.T, open OpenFunc) {
 			Title: "C", MediaType: "application/vnd.comicbook+zip"},
 	}, true, now)
 
-	got, err := s.AvailableBookMediaTypes(ctx, folder.ID)
+	got, err := s.AvailableBookMediaTypes(ctx, "", folder.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
 		known["pair.epub"].ID, known["translated.epub"].ID,
 		known["anonymous.epub"].ID, "no-such-book",
 	}
-	got, err := s.CatalogAuthorsForBooks(ctx, ids)
+	got, err := s.CatalogAuthorsForBooks(ctx, "", ids)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func testCatalogAuthorsForBooks(t *testing.T, open OpenFunc) {
 		t.Fatalf("an unknown book id resolved to something: %v", got["no-such-book"])
 	}
 
-	empty, err := s.CatalogAuthorsForBooks(ctx, nil)
+	empty, err := s.CatalogAuthorsForBooks(ctx, "", nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty request: %v %v", empty, err)
 	}
@@ -559,7 +559,7 @@ func testUserBookWorkIsPerUser(t *testing.T, open OpenFunc) {
 	bookID := knownByPath(t, s, folder.ID)["shared.epub"].ID
 
 	// Both accounts can read the one shared catalog row.
-	if _, err := s.CatalogBookByID(ctx, bookID); err != nil {
+	if _, err := s.CatalogBookByID(ctx, "", bookID); err != nil {
 		t.Fatal(err)
 	}
 

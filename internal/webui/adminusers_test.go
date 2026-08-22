@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -27,6 +28,147 @@ func mkTarget(t *testing.T, st store.Store, name string) store.User {
 		t.Fatal(err)
 	}
 	return u
+}
+
+func TestAdminAssignsFolderAccessIncludingSelf(t *testing.T) {
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	bob := mkTarget(t, st, "bob")
+	folder := store.Folder{
+		ID: "folder-access", Name: "Private Shelf", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	if err := st.CreateFolder(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+	for i := range adminFoldersPerPage {
+		paged := store.Folder{
+			ID: store.NewID(), Name: fmt.Sprintf("Paged Shelf %02d", i),
+			RootPath: t.TempDir(), Kind: store.FolderPlain,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		if err := st.CreateFolder(t.Context(), paged); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cookie := loginCookie(t, ts)
+	path := "/ui/settings?section=admin&view=user&user=" + bob.ID
+	_, body := page(t, ts, cookie, path)
+	if !strings.Contains(body, "Private Shelf") ||
+		!strings.Contains(body, "Paged Shelf 49") ||
+		!strings.Contains(body, "Folder access") {
+		t.Fatalf("folder access form missing: %s", body)
+	}
+	csrf := extractCSRF(t, body)
+	postPath := "/ui/admin/users/" + bob.ID + "/folders"
+	if code, _ := postForm(t, ts, cookie, postPath,
+		url.Values{"folders": {folder.ID}}); code != http.StatusForbidden {
+		t.Fatalf("assignment without CSRF = %d", code)
+	}
+	if code, _ := postForm(t, ts, cookie, postPath,
+		url.Values{"csrf": {csrf}, "folders": {folder.ID}}); code != http.StatusOK {
+		t.Fatalf("assignment = %d", code)
+	}
+	if _, err := st.FolderByID(t.Context(), bob.ID, folder.ID); err != nil {
+		t.Fatalf("bob did not receive the folder: %v", err)
+	}
+
+	selfPath := "/ui/settings?section=admin&view=user&user=u1"
+	_, body = page(t, ts, cookie, selfPath)
+	csrf = extractCSRF(t, body)
+	if code, _ := postForm(t, ts, cookie, "/ui/admin/users/u1/folders",
+		url.Values{"csrf": {csrf}, "folders": {folder.ID}}); code != http.StatusOK {
+		t.Fatalf("self-assignment = %d", code)
+	}
+	if _, err := st.FolderByID(t.Context(), "u1", folder.ID); err != nil {
+		t.Fatalf("admin did not receive their self-grant: %v", err)
+	}
+	if code, _ := postForm(t, ts, cookie, postPath,
+		url.Values{"csrf": {csrf}}); code != http.StatusOK {
+		t.Fatalf("empty replacement = %d", code)
+	}
+	if _, err := st.FolderByID(t.Context(), bob.ID, folder.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("empty replacement left access: %v", err)
+	}
+}
+
+// TestAdminFolderGrantIgnoresQueryStringFolders pins the grant form to
+// the request body. r.Form merges the URL query into the parsed body, so
+// reading it would let a crafted link decide which folders a submitted
+// form grants — the admin sees their own checkboxes and saves something
+// else.
+func TestAdminFolderGrantIgnoresQueryStringFolders(t *testing.T) {
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	bob := mkTarget(t, st, "bob")
+	shown := store.Folder{
+		ID: "shown", Name: "Shown Shelf", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	smuggled := store.Folder{
+		ID: "smuggled", Name: "Smuggled Shelf", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	for _, f := range []store.Folder{shown, smuggled} {
+		if err := st.CreateFolder(t.Context(), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie,
+		"/ui/settings?section=admin&view=user&user="+bob.ID)
+	csrf := extractCSRF(t, body)
+	postPath := "/ui/admin/users/" + bob.ID + "/folders?folders=" + smuggled.ID
+	if code, _ := postForm(t, ts, cookie, postPath,
+		url.Values{"csrf": {csrf}, "folders": {shown.ID}}); code != http.StatusOK {
+		t.Fatalf("assignment = %d", code)
+	}
+	if _, err := st.FolderByID(t.Context(), bob.ID, shown.ID); err != nil {
+		t.Fatalf("the submitted folder was not granted: %v", err)
+	}
+	if _, err := st.FolderByID(t.Context(), bob.ID, smuggled.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a query-string folder was granted: %v", err)
+	}
+}
+
+// TestAllFoldersReportsOverflowRatherThanAPrefix covers the bound on the
+// grant form's folder list. A prefix would be worse than an error: the
+// form replaces the whole grant set, so saving a truncated page would
+// revoke every folder past the cut.
+func TestAllFoldersReportsOverflowRatherThanAPrefix(t *testing.T) {
+	_, st := testServer(t)
+	total := adminFoldersPerPage + 5
+	for i := range total {
+		f := store.Folder{
+			ID: store.NewID(), Name: fmt.Sprintf("Shelf %03d", i),
+			RootPath: t.TempDir(), Kind: store.FolderPlain,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		}
+		if err := st.CreateFolder(t.Context(), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, tooMany, err := allFolders(t.Context(), st, "", adminUserFoldersMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tooMany || len(all) != total {
+		t.Fatalf("under the cap: tooMany=%v len=%d want %d", tooMany, len(all), total)
+	}
+	all, tooMany, err = allFolders(t.Context(), st, "", adminFoldersPerPage-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tooMany {
+		t.Fatalf("over the cap returned %d folders instead of an overflow", len(all))
+	}
+	if all != nil {
+		t.Fatalf("overflow returned a prefix of %d folders", len(all))
+	}
 }
 
 // TestAdminUserPageAndCredentialRevocation walks the per-user page: it

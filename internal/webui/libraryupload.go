@@ -56,9 +56,9 @@ func (s *Server) handleLibraryUpload(
 		s.uploadDone(w, back, "", "this server cannot receive uploads")
 		return
 	}
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), u.ID, folderID)
 	if err != nil {
-		s.uploadDone(w, back, "", "no such folder")
+		http.NotFound(w, r)
 		return
 	}
 	if !folder.AcceptsUploads {

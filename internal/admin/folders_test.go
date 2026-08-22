@@ -113,7 +113,7 @@ func TestAddListRemoveFolder(t *testing.T) {
 	if !strings.Contains(removed, "nothing under that directory was changed") {
 		t.Fatalf("remove-folder said %q", removed)
 	}
-	after, err := st.ListFolders(t.Context(), "", 10)
+	after, err := st.ListFolders(t.Context(), "", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +124,60 @@ func TestAddListRemoveFolder(t *testing.T) {
 	// not have taken it with them.
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("remove-folder touched the disk: %v", err)
+	}
+}
+
+func TestFolderGrantCommands(t *testing.T) {
+	st := newAdminStore(t)
+	user := addUser(t, st, "reader")
+	administrator := addUser(t, st, "administrator")
+	if err := st.SetUserAdmin(t.Context(), administrator.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	one, err := capture(t, st, "add-folder", "One", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := capture(t, st, "add-folder", "Two", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneID, twoID := folderIDFrom(t, one), folderIDFrom(t, two)
+
+	if _, err := capture(t, st, "assign-folder", user.Name, oneID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := capture(t, st, "list-user-folders", user.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listed, oneID) || strings.Contains(listed, twoID) {
+		t.Fatalf("one-folder list = %q", listed)
+	}
+	if _, err := capture(t, st, "assign-all-folders", user.Name); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = capture(t, st, "list-user-folders", user.Name)
+	if err != nil || !strings.Contains(listed, oneID) || !strings.Contains(listed, twoID) {
+		t.Fatalf("all-folder list = %q, %v", listed, err)
+	}
+	if _, err := capture(t, st, "unassign-folder", user.Name, oneID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = capture(t, st, "list-user-folders", user.Name)
+	if err != nil || strings.Contains(listed, oneID) || !strings.Contains(listed, twoID) {
+		t.Fatalf("unassigned list = %q, %v", listed, err)
+	}
+	listed, err = capture(t, st, "list-user-folders", administrator.Name)
+	if err != nil || listed != "" {
+		t.Fatalf("administrator received implicit folders: %q, %v", listed, err)
+	}
+	if _, err := capture(t, st, "assign-folder", administrator.Name, oneID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = capture(t, st, "list-user-folders", administrator.Name)
+	if err != nil || !strings.Contains(listed, oneID) {
+		t.Fatalf("administrator explicit assignment = %q, %v", listed, err)
 	}
 }
 
@@ -249,7 +303,7 @@ func TestFolderUploadsIsOffUntilAskedFor(t *testing.T) {
 	}
 	id := folderIDFrom(t, added)
 
-	folder, err := st.FolderByID(t.Context(), id)
+	folder, err := st.FolderByID(t.Context(), "", id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +314,7 @@ func TestFolderUploadsIsOffUntilAskedFor(t *testing.T) {
 	if _, err := capture(t, st, "folder-uploads", id, "on"); err != nil {
 		t.Fatal(err)
 	}
-	if folder, err = st.FolderByID(t.Context(), id); err != nil {
+	if folder, err = st.FolderByID(t.Context(), "", id); err != nil {
 		t.Fatal(err)
 	}
 	if !folder.AcceptsUploads {
@@ -270,7 +324,7 @@ func TestFolderUploadsIsOffUntilAskedFor(t *testing.T) {
 	if _, err := capture(t, st, "folder-uploads", id, "off"); err != nil {
 		t.Fatal(err)
 	}
-	if folder, err = st.FolderByID(t.Context(), id); err != nil {
+	if folder, err = st.FolderByID(t.Context(), "", id); err != nil {
 		t.Fatal(err)
 	}
 	if folder.AcceptsUploads {

@@ -55,6 +55,9 @@ func newBackfillFixture(t *testing.T) *backfillFixture {
 	if err := st.CreateFolder(ctx, folder); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.AssignUserFolder(ctx, user.ID, folder.ID); err != nil {
+		t.Fatal(err)
+	}
 	return &backfillFixture{
 		st: st, user: user, folder: folder, now: now,
 		ids: map[string]string{},
@@ -287,10 +290,9 @@ func TestBackfillPagesPastOneQuery(t *testing.T) {
 	}
 }
 
-// TestBackfillMapsPerUser: the catalog is shared — every logged-in user
-// sees every folder — but a work mapping is not. Two users backfilling
-// the same folder each get their own works, which is what keeps a shared
-// shelf from also sharing what its readers read.
+// TestBackfillMapsPerUser: catalog rows are shared but a work mapping is
+// not. Two users granted the same folder each get their own works, which
+// keeps a shared shelf from also sharing what its readers read.
 func TestBackfillMapsPerUser(t *testing.T) {
 	f := newBackfillFixture(t)
 	f.book(t, "b1", "Dune", "Frank Herbert")
@@ -301,6 +303,9 @@ func TestBackfillMapsPerUser(t *testing.T) {
 		Timezone: "UTC", CreatedAt: f.now,
 	}
 	if err := f.st.CreateUser(ctx, reader); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(ctx, reader.ID, f.folder.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -382,12 +387,12 @@ type vanishingStore struct {
 }
 
 func (v vanishingStore) CatalogBookIdentifiers(
-	ctx context.Context, bookID string,
+	ctx context.Context, viewerID, bookID string,
 ) ([]store.BookIdentifier, error) {
 	if bookID == v.gone {
 		return nil, store.ErrNotFound
 	}
-	return v.Store.CatalogBookIdentifiers(ctx, bookID)
+	return v.Store.CatalogBookIdentifiers(ctx, viewerID, bookID)
 }
 
 func TestBackfillContinuesPastABookThatVanished(t *testing.T) {
@@ -417,7 +422,7 @@ type failingStore struct {
 }
 
 func (fs failingStore) CatalogBookIdentifiers(
-	ctx context.Context, bookID string,
+	ctx context.Context, _, bookID string,
 ) ([]store.BookIdentifier, error) {
 	return nil, fs.err
 }
@@ -448,15 +453,15 @@ type stuckStore struct {
 }
 
 func (ss stuckStore) ListCatalogBooks(
-	ctx context.Context, folderID string, _ *store.CatalogBookCursor, limit int,
+	ctx context.Context, viewerID, folderID string, _ *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
-	return ss.Store.ListCatalogBooks(ctx, folderID, nil, limit)
+	return ss.Store.ListCatalogBooks(ctx, viewerID, folderID, nil, limit)
 }
 
 func (ss stuckStore) ListFolders(
-	ctx context.Context, _ string, limit int,
+	ctx context.Context, viewerID, _ string, limit int,
 ) ([]store.Folder, error) {
-	return ss.Store.ListFolders(ctx, "", limit)
+	return ss.Store.ListFolders(ctx, viewerID, "", limit)
 }
 
 // stuckFolderStore is the same bug one level up: a full page of folders
@@ -467,7 +472,7 @@ type stuckFolderStore struct {
 }
 
 func (ss stuckFolderStore) ListFolders(
-	ctx context.Context, _ string, _ int,
+	ctx context.Context, _, _ string, _ int,
 ) ([]store.Folder, error) {
 	folders := make([]store.Folder, backfillPage)
 	for i := range folders {
@@ -480,7 +485,7 @@ func (ss stuckFolderStore) ListFolders(
 }
 
 func (stuckFolderStore) ListCatalogBooks(
-	context.Context, string, *store.CatalogBookCursor, int,
+	context.Context, string, string, *store.CatalogBookCursor, int,
 ) ([]store.CatalogBook, error) {
 	return nil, nil
 }

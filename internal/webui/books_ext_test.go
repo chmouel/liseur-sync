@@ -86,6 +86,11 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	if err := st.CreateFolder(t.Context(), folder); err != nil {
 		t.Fatal(err)
 	}
+	for _, userID := range []string{"u1", "u2"} {
+		if err := st.AssignUserFolder(t.Context(), userID, folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
@@ -169,7 +174,7 @@ func bookWithMetadata(t *testing.T, f *booksFixture, name string) string {
 // watcher does.
 func (f *booksFixture) reconcile(t *testing.T) {
 	t.Helper()
-	folder, err := f.st.FolderByID(t.Context(), f.folder)
+	folder, err := f.st.FolderByID(t.Context(), "", f.folder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +188,7 @@ func (f *booksFixture) reconcile(t *testing.T) {
 // a guess.
 func (f *booksFixture) bookAt(t *testing.T, relative string) string {
 	t.Helper()
-	books, err := f.st.ListCatalogBooks(t.Context(), f.folder, nil, 200)
+	books, err := f.st.ListCatalogBooks(t.Context(), "", f.folder, nil, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +237,8 @@ func (f *booksFixture) loginTo(
 	return nil
 }
 
-// readerCookie signs in a second account. It needs no grant: every
-// signed-in account reads every folder (ADR-0017).
+// readerCookie signs in the second account, which the fixture explicitly
+// grants access to its folder.
 func (f *booksFixture) readerCookie(t *testing.T) *http.Cookie {
 	t.Helper()
 	return f.login(t, "bob")
@@ -386,10 +391,9 @@ func TestBookPageIsANotFoundForAnUnknownID(t *testing.T) {
 	}
 }
 
-// TestBooksUIIsSharedByEverySignedInAccount pins ADR-0017's decision:
-// the catalog is the server's, not an account's. There is no owner and
-// no grant, so bob sees the same shelf alice does.
-func TestBooksUIIsSharedByEverySignedInAccount(t *testing.T) {
+// TestBooksUIAllowsTheSameFolderForTwoAssignedAccounts checks that grants
+// are many-to-many rather than folder ownership.
+func TestBooksUIAllowsTheSameFolderForTwoAssignedAccounts(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "shared", []byte(strings.Repeat("shared-bytes", 40)))
 
@@ -408,6 +412,57 @@ func TestBooksUIIsSharedByEverySignedInAccount(t *testing.T) {
 	resp, _ = f.get(t, "/ui/books/"+bookID+"/download", bob)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("bob's download: %d", resp.StatusCode)
+	}
+}
+
+func TestBooksUIHidesDirectURLsWithoutAFolderGrant(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := bookWithMetadata(t, f, "private")
+	if err := f.st.UnassignUserFolder(t.Context(), "u2", f.folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.SetUserAdmin(t.Context(), "u2", true); err != nil {
+		t.Fatal(err)
+	}
+	bob := f.login(t, "bob")
+
+	resp, page := f.get(t, "/ui/library?folder="+f.folder, bob)
+	if resp.StatusCode != http.StatusNotFound || strings.Contains(page, bookID) {
+		t.Fatalf("hidden library = %d, contains book = %v, want 404", resp.StatusCode, strings.Contains(page, bookID))
+	}
+	resp, page = f.get(t, "/ui/entities/contributors", bob)
+	if resp.StatusCode != http.StatusOK || strings.Contains(page, "Ann Author") {
+		t.Fatalf("hidden contributor leaked: status=%d page=%s", resp.StatusCode, page)
+	}
+
+	for _, path := range []string{
+		"/ui/folders/" + f.folder + "/search?q=private",
+		"/ui/books/" + bookID,
+		"/ui/books/" + bookID + "/download",
+		"/ui/books/" + bookID + "/cover",
+		"/ui/books/" + bookID + "/read",
+	} {
+		resp, _ := f.get(t, path, bob)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, resp.StatusCode)
+		}
+	}
+	_, emptyLibrary := f.get(t, "/ui/library", bob)
+	csrf := csrfFrom(t, emptyLibrary)
+	for path, form := range map[string]url.Values{
+		"/ui/books/" + bookID + "/reading-status": {
+			"csrf": {csrf}, "status": {"read"},
+		},
+		"/ui/books/" + bookID + "/series": {
+			"csrf": {csrf}, "name": {"Leaked Series"},
+		},
+		"/ui/books/" + bookID + "/destroy": {
+			"csrf": {csrf},
+		},
+	} {
+		if resp := f.postForm(t, path, bob, form); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("POST %s = %d, want 404", path, resp.StatusCode)
+		}
 	}
 }
 
@@ -448,7 +503,7 @@ func TestBooksUIDropsAMissingBooksDownload(t *testing.T) {
 	}
 	f.reconcile(t)
 
-	book, err := f.st.CatalogBookByID(t.Context(), bookID)
+	book, err := f.st.CatalogBookByID(t.Context(), "", bookID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,10 @@ info:
       for token management; device tokens carry one or more scopes
       (`sync`, `read-insights`, `library-read`, `library-manage`,
       `library-upload`, `library-delete`, `admin`).
+    - **Folder access**: catalog scopes and folder grants are independent.
+      Catalog listings contain only books from folders explicitly granted to
+      the token's account. Direct access to an inaccessible folder, book or
+      entity returns `404`; administrator status does not bypass this rule.
     - **Identity**: books are *works*. Clients never need a work to
       exist before pushing: call `/v1/works/resolve` with every
       identifier you have and use the returned `work_id`.
@@ -730,8 +734,8 @@ paths:
       security: [{ deviceToken: [] }]  # requires library-read scope
       description: |
         Where a catalog client starts: every other route needs a folder
-        id. Every logged-in user sees every folder, because a folder is a
-        shelf rather than an account. `root_path` is deliberately not
+        id. The list contains only folders explicitly granted to the token's
+        account; administrator status does not imply a grant. `root_path` is deliberately not
         here — it is a fact about the server's filesystem, and naming it
         would make this route an oracle for one.
       parameters:
@@ -820,7 +824,7 @@ paths:
                     type: string
                     description: Absent on the last page.
         "400": { $ref: "#/components/responses/Error", description: "Bad limit or malformed cursor" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder, or the folder is not granted to this account" }
 
     post:
       tags: [library]
@@ -875,8 +879,8 @@ paths:
                   duplicate: { type: boolean, enum: [false] }
         "200":
           description: |
-            The catalog already held these bytes, here or in another
-            folder. Nothing was written and this is the book.
+            The caller's visible catalog already held these bytes, here or in
+            another granted folder. Nothing was written and this is the book.
           content:
             application/json:
               schema:
@@ -905,7 +909,7 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Malformed multipart body or an empty upload" }
         "403":
           description: The folder does not accept uploads, or the token lacks `library-upload`.
-        "404": { description: No such folder }
+        "404": { description: "No such folder, or the folder is not granted to this account" }
         "409":
           description: |
             A Calibre library that is busy. Close Calibre and retry.
@@ -968,7 +972,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SearchResult" }
         "400": { $ref: "#/components/responses/Error", description: "Bad limit, over-long query, or malformed entity filter" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder, or the folder is not granted to this account" }
 
   /v1/books/{id}:
     get:
@@ -1030,7 +1034,7 @@ paths:
           description: |
             The book's folder does not accept uploads, or the token
             lacks `library-delete`.
-        "404": { description: No such book }
+        "404": { description: "No such book, or its folder is not granted to this account" }
         "409":
           description: |
             The file changed since it was last scanned and was left
@@ -2301,8 +2305,9 @@ components:
         are separate because sending your own book and destroying
         everyone's are different questions. `library-manage` does
         not grant catalog reads; request `library-read` too when a
-        client needs both. `admin` implies all scopes. No other scope
-        implies another. `admin` cannot be self-granted: creating or
+        client needs both. Scopes never imply folder grants, including
+        `admin`. `admin` implies all scopes. No other scope implies
+        another. `admin` cannot be self-granted: creating or
         updating a token to include it requires an existing admin token
         or the admin CLI.
     ScopeSet:
