@@ -110,6 +110,20 @@ func postForm(t *testing.T, ts *httptest.Server, cookie *http.Cookie, path strin
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	// A settings mutation answers with Post/Redirect/Get, so the notice
+	// it produced is on the page the browser is sent to, not in this
+	// response. Follow that one hop the way a browser would. Any other
+	// redirect — the bounce to /ui/login a revoked session gets, say —
+	// is returned as it is, because it is the thing under test.
+	if resp.StatusCode == http.StatusSeeOther {
+		loc, err := req.URL.Parse(resp.Header.Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(loc.Path, "/ui/settings") {
+			return page(t, ts, cookie, loc.RequestURI())
+		}
+	}
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }
