@@ -59,15 +59,15 @@ Add `library-delete` to take a book back out of such a folder
 (ADR-0025). It is deliberately not implied by `library-upload`: that
 one adds your own book, this one destroys everyone's, and the file is
 gone with no trash behind it. The same `accepts_uploads` caveat
-applies, and for the same reason — it is the flag that decides where
+applies, and for the same reason; it is the flag that decides where
 this server may write at all.
 
 All API calls then use `Authorization: Bearer <secret>`.
 
 ### Finding out what your token can do
 
-A client is usually handed a secret it did not mint — pasted into a
-settings field, copied from another device, restored from a backup — and
+A client is usually handed a secret it did not mint (pasted into a
+settings field, copied from another device, restored from a backup) and
 has no idea what it is allowed to do. Ask:
 
 ```
@@ -90,8 +90,8 @@ when `library-manage` is present, and the reading statistics when
 means the first thing the user sees is an error the client could have
 avoided.
 
-The route needs no particular scope — the narrowest token can ask about
-itself — but it is still authenticated: an absent, revoked or expired
+The route needs no particular scope (the narrowest token can ask about
+itself) but it is still authenticated: an absent, revoked or expired
 credential gets `401`. Treating that `401` as "this secret is no longer
 good, ask the user for a new one" is the correct reaction, and it is the
 cheapest way to check that a stored credential is still live.
@@ -207,7 +207,7 @@ a different position; the server rejects it as a conflict.
 
 One refusal is recoverable. Orphan cleanup can delete a work that has
 no catalog mapping and no reading history, and a batch naming it then
-fails — atomically, nothing is stored — with `400` and a structured
+fails (atomically, nothing is stored) with `400` and a structured
 body:
 
 ```json
@@ -219,12 +219,12 @@ body:
 the recovery off `code`, never off the message text: re-resolve the
 book (`POST /v1/works/resolve`, or `/v1/books/{id}/resolve` for a
 catalog book), reseed from the fresh work's positions, rebuild the
-batch under the new `work_id` — the `op_id` derives from it — and
+batch under the new `work_id` (the `op_id` derives from it) and
 retry. Any other `400` is malformed input and will never be accepted
 as-is.
 
 `progression` is the lingua franca every device understands. `locator`
-is your reader's exact position — a Readium locator, a CFI, whatever
+is your reader's exact position: a Readium locator, a CFI, whatever
 your engine uses. The server stores and replays it verbatim and never
 reads it.
 
@@ -234,7 +234,7 @@ Keep a cursor: the highest `seq` you have reconciled, starting at 0.
 
 ```
 GET /v1/changes?since=<cursor>&limit=500
-→ { "ops": [...], "high_water": 1234, "has_more": false }
+-> { "ops": [...], "high_water": 1234, "has_more": false }
 ```
 
 Apply the ops, then set your cursor to the last returned `seq`, or to
@@ -289,11 +289,11 @@ time (duration minus `idle_ms`). If you only know pages, convert through
 
 With a `read-insights` token:
 
-- `GET /v1/insights/summary?range=30d` — totals, streak, speed trend
-- `GET /v1/insights/works` — aggregates for every work with reading
+- `GET /v1/insights/summary?range=30d`: totals, streak, speed trend
+- `GET /v1/insights/works`: aggregates for every work with reading
   history
-- `GET /v1/insights/works/{id}` — per-work time, pace, ETA
-- `GET /v1/insights/calendar?year=2026` — daily minutes for heatmaps
+- `GET /v1/insights/works/{id}`: per-work time, pace, ETA
+- `GET /v1/insights/calendar?year=2026`: daily minutes for heatmaps
 
 All day boundaries are computed in the user's configured timezone.
 Rereading counts time but never negative pages. ETA is `null` until the
@@ -400,8 +400,8 @@ All of these need a token with `library-read`.
 ### Finding a book
 
 `GET /v1/folders/{folder}/search?q=left+hand` matches against everything
-a book says about itself — title, subtitle, description, publisher, and
-the names of the series, contributors and tags it claims — and returns
+a book says about itself (title, subtitle, description, publisher, and
+the names of the series, contributors and tags it claims) and returns
 the best matches first. A book called Dune ranks above one that only
 mentions it.
 
@@ -422,7 +422,7 @@ The answer is unpaged:
 ```
 
 `truncated` says the answer was cut at `limit` (100 at most). There is
-no cursor on purpose — a relevance order has no stable one, and search
+no cursor on purpose: a relevance order has no stable one, and search
 answers "where is that book", a question with a short answer. When you
 see `truncated`, ask for a narrower query rather than another page.
 
@@ -531,7 +531,7 @@ the current layers.
 
 Revisions are millisecond-precise, and a precondition is compared at that
 precision. A client may therefore keep one as milliseconds since the
-epoch — which is all an integer column holds — and quote it back without
+epoch (which is all an integer column holds) and quote it back without
 losing the match.
 
 Leaving `series` out, or sending `"series": []`, is a claim that the
@@ -583,7 +583,7 @@ PUT /v1/entities/series/{series}/name
 
 It answers with the entity as it now reads: `name` is what this reader
 sees, `scanned_name` is what the last scan called it, and `name_source`
-is the layer `name` came from — `folder`, `shared` or `personal`. Those
+is the layer `name` came from: `folder`, `shared` or `personal`. Those
 last two are what a client needs to show a rename as a rename and to
 offer a revert:
 
@@ -599,7 +599,7 @@ tag or a contributor is what the scan said it was.
 
 A name that already belongs to another series in the caller's view is a
 `409`. Giving two shelves one name would be a merge, which is a
-different request — see below.
+different request (see below).
 
 ### Merging and splitting a series
 
@@ -618,7 +618,7 @@ POST /v1/entities/series/{absorbed}/merge
 
 It answers with the survivor. Memberships and claims naming the
 absorbed series follow it, a book that was on both shelves keeps the
-survivor's position, and **nothing is renumbered** — two shelves that
+survivor's position, and **nothing is renumbered**; two shelves that
 each held a volume 1 still do. Reading state is untouched: a series
 never appears in the op log, in a session or in a position.
 
@@ -632,7 +632,7 @@ POST /v1/entities/series/{series}/split
 This undoes the automatic fold that put two folders' identically named
 series together (ADR-0019). Splitting a shelf whose books all came from
 one folder is a rename, and is refused as one; splitting a single
-folder's shelf in two — an omnibus directory holding two series — is a
+folder's shelf in two (an omnibus directory holding two series) is a
 per-book decision, so use a shared claim.
 
 Neither is a plain database edit, because the name on disk is what a
@@ -652,7 +652,7 @@ the absorbed `name`, a `folder_id` that is `null` when the binding
 applies to every folder, and when it was made. Deleting a binding moves
 no book. The next pass over a folder that observes the freed name
 resolves it to nothing, mints the series again and refills it from what
-the folder says — so an unmerge restores what the disk holds, not what
+the folder says, so an unmerge restores what the disk holds, not what
 readers claimed. A claim that named the absorbed series was repointed
 by the merge and stays repointed.
 
@@ -715,7 +715,7 @@ Create one per device.
 
 The root feed lists the folders that credential can read; each links to
 an acquisition feed of books, and each book to its EPUB. Feeds are
-catalog-only — they never expose positions, sessions or statistics, even
+catalog-only; they never expose positions, sessions or statistics, even
 if the same token also carries `sync`. Pair OPDS with the kosync adapter
 to get downloads and position sync on a stock device.
 
@@ -747,7 +747,7 @@ round-trips verbatim to kosync pulls.
 
 - Every error is `{"error": "reason"}` with a 4xx; a 5xx is a server
   bug, report it. A refusal a client can recover from also carries a
-  machine-readable `code` — currently only `unknown_work` (see
+  machine-readable `code`, currently only `unknown_work` (see
   [Pushing](#pushing)).
 - Batch limits: 500 ops, 1000 sessions per request, 1
   MiB body, 16 KiB per `locator`.

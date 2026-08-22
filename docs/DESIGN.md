@@ -1,4 +1,4 @@
-# liseur-sync — Design
+# liseur-sync: Design
 
 **Status:** living design; sync core and watched-folder catalog are the
 current architecture. Folder-based content is the accepted model in
@@ -8,7 +8,7 @@ current architecture. Folder-based content is the accepted model in
 first, third parties later) **Purpose:** define the data model,
 protocol, and architecture of a self-hostable server that syncs reading
 positions, collects reading statistics, and reflects EPUB folders for
-reader apps — including stock KOReader devices — without repeating the
+reader apps, including stock KOReader devices, without repeating the
 mistakes of the servers that came before it.
 
 ---
@@ -42,24 +42,23 @@ already have.**
 
 - **Formats other than EPUB.** PDF, comics, audiobooks, and fixed-layout
   formats require separate format-specific decisions.
-- **Not a merge
-  authority.** The server stores and orders operations; it never decides
-  which position wins. Conflict resolution is a client concern (§5.4). -
-  **No proprietary dependencies.** Same constraint as Liseur: the server
+- **Not a merge authority.** The server stores and orders operations; it
+  never decides which position wins. Conflict resolution is a client
+  concern (§5.4).
+- **No proprietary dependencies.** Same constraint as Liseur: the server
   and any client code must be FOSS-compatible.
-- **No E2E encryption in
-  v1.** Positions and sessions are visible to the server; that is what
-  enables server-side insights. An E2E mode with on-device-only insights
-  is acknowledged as future work (§10), and the schema keeps payloads
-  opaque enough not to preclude it.
-- **No server custody of book
-  files.** The catalog reflects watched folders. The server reads books
-  where they are and never takes over the directory that holds them.
+- **No E2E encryption in v1.** Positions and sessions are visible to the
+  server; that is what enables server-side insights. An E2E mode with
+  on-device-only insights is acknowledged as future work (§10), and the
+  schema keeps payloads opaque enough not to preclude it.
+- **No server custody of book files.** The catalog reflects watched
+  folders. The server reads books where they are and never takes over the
+  directory that holds them.
 
 ## 2. Goals
 
 1. **Correct multi-device position sync** for the same user across
-   Liseur instances, KOReader devices, and future clients — with
+   Liseur instances, KOReader devices, and future clients, with
    history, not last-write-wins.
 2. **Reading statistics done honestly**: sessions carry progression
    fractions measured at the time of reading; the server derives pages
@@ -123,7 +122,7 @@ already have.**
 - **Reconciliation is stateless.** A pass enumerates a folder, compares
   it with the `books` rows, reads metadata for new or changed files, and
   upserts. Books not
-  observed by a complete, non-empty pass are marked `missing` and kept —
+  observed by a complete, non-empty pass are marked `missing` and kept;
   except in a Calibre folder, where the pass reads a curated catalog and
   a book absent from `metadata.db` is deleted (ADR-0022).
 
@@ -134,34 +133,30 @@ harder.
 
 ### 4.1 Three layers
 
-- **Work** — the abstract book. Positions and statistics attach here.
+- **Work**: the abstract book. Positions and statistics attach here.
   Server-assigned UUID, scoped to one user.
-- **Edition** — one concrete
-  file: a specific EPUB with a specific SHA-256. Editions belong to a
-  work. Carries page-map metadata when a client knows it.
-- **Alias** — an identifier observed in the wild that maps to a work:
-  - `sha256:<hex>` — exact bytes, also the edition key
-  - `partial-md5:<hex>` — KOReader's fingerprint, registered so kosync
+- **Edition**: one concrete file, a specific EPUB with a specific
+  SHA-256. Editions belong to a work. Carries page-map metadata when a
+  client knows it.
+- **Alias**: an identifier observed in the wild that maps to a work:
+  - `sha256:<hex>`: exact bytes, also the edition key
+  - `partial-md5:<hex>`: KOReader's fingerprint, registered so kosync
     adapter traffic resolves
-  - `source:<catalog-id>` — the catalog server's own id for the book
-  - `dc:<urn>` — the EPUB's `dc:identifier` (ISBN, UUID, Calibre ID)
-  - `ta:<fingerprint>` — normalised title+author hash, the fuzzy fallback
+  - `source:<catalog-id>`: the catalog server's own id for the book
+  - `dc:<urn>`: the EPUB's `dc:identifier` (ISBN, UUID, Calibre ID)
+  - `ta:<fingerprint>`: normalised title+author hash, the fuzzy fallback
 
 ### 4.2 Resolution
 
 A client asks `POST /v1/works/resolve` with every identifier it has for
 a file. The server answers with the matching `work_id`, creating work,
-edition and aliases as needed. Resolution order is `sha256` →
-`partial-md5` → `source` → `dc` → `ta`, but every supplied alias
-that already matches must agree on one work. Aliases spanning
-multiple works return 409 without mutation. After one
-high-confidence match, supplied identifiers are registered as
-aliases of that work, which is how the graph converges over time.
-A `ta:`-only match stays low-confidence and does not promote
-stronger aliases until the reader confirms it.
-matches must agree on one work. Aliases spanning multiple works return
-409 without mutation. After one high-confidence match, supplied
-does not promote stronger aliases until the reader confirms it.
+edition and aliases as needed. Resolution order is `sha256` -> `partial-md5` -> `source` -> `dc` ->
+`ta`, but every supplied alias that already matches must agree on one
+work. Aliases spanning multiple works return 409 without mutation. After
+one high-confidence match, supplied identifiers are registered as aliases
+of that work, which is how the graph converges over time. A `ta:`-only
+match stays low-confidence and does not promote stronger aliases until
+the reader confirms it.
 
 Lookup, work/edition creation, alias registration and any catalog
 mapping are one store transaction. A uniqueness race is re-evaluated and
@@ -215,7 +210,7 @@ Positions are an **append-only operation log per work per user**:
 }
 ```
 
-- `progression` (0..1) is the lingua franca — every client can produce
+- `progression` (0..1) is the lingua franca; every client can produce
   and consume it. It is the only field the server itself reads.
 - `locator` is Liseur's exact position, opaque to the server, replayed
   verbatim to other Liseur devices.
@@ -231,8 +226,8 @@ The server assigns each accepted op a **per-user monotonic `seq`**.
 Append-only means history is never edited: no later write rewrites a
 position that was reported or a session that happened. It does not mean
 a reader cannot ask this server to forget a book. Deleting a work
-removes its whole graph at once — ops, sessions, rollups, editions,
-aliases and its book mapping — and only for a work no catalog book backs
+removes its whole graph at once (ops, sessions, rollups, editions,
+aliases and its book mapping) and only for a work no catalog book backs
 any more ([ADR-0024](adr/0024-deleting-a-work.md)). There is no deleting
 one op or one session, and no deletion record: a device still syncing
 the book creates the work again.
@@ -244,7 +239,7 @@ GET /v1/changes?since=<seq>&limit=500
 ```
 
 returns every op accepted for this user after `seq`, plus the new
-high-water mark. A whole-shelf sync is one request — the direct fix for
+high-water mark. A whole-shelf sync is one request, the direct fix for
 kosync's per-book polling. Pushing is symmetric: `POST /v1/ops` with a
 batch; the response reports each op's assigned `seq` or that it was
 already accepted.
@@ -288,7 +283,7 @@ which is exactly kosync's semantics today.
 ```
 
 `POST /v1/sessions` accepts batches, idempotent on `session_id`. Rows
-are never updated in place — a session is a historical fact. Immutable
+are never updated in place; a session is a historical fact. Immutable
 native and inferred sessions older than the configurable retention
 window are reduced to per-work, timezone-local daily totals, then their
 raw rows are removed. A compact fingerprint preserves the original
@@ -299,9 +294,10 @@ The design principle, learned from the Liseur/KoInsight investigation:
 **never fabricate resolution you didn't measure.** liseur-sync requires
 `start/end_progression` and derives everything else server-side:
 
-- pages read = progression delta × edition page count, when known -
-  reading speed = progression delta / active duration, per work and
-  rolling - streaks, per-book time, calendar heatmaps: raw sessions plus
+- pages read = progression delta × edition page count, when known
+- reading speed = progression delta / active duration, per work and
+  rolling
+- streaks, per-book time, calendar heatmaps: raw sessions plus
   daily rollups
 
 ### 6.2 Insight API
@@ -315,7 +311,7 @@ GET /v1/insights/works/{id}             per-book: time, sessions, pace, ETA
 GET /v1/insights/calendar?year=2026     daily minutes for heatmaps
 ```
 
-ETA = remaining progression / rolling speed — the same estimator Liseur
+ETA = remaining progression / rolling speed, the same estimator Liseur
 ships on-device, now computable across all devices' sessions combined.
 
 ### 6.3 Sessions inferred for position-only devices
@@ -355,11 +351,10 @@ reason.
 
 ### 7.3 Adapter rules
 
-- Adapters write native records; no legacy shape is ever stored. -
-  Adapters are feature-gated per instance and per user.
-- Anything the
-  legacy protocol cannot express is dropped at the edge, documented,
-  never approximated silently.
+- Adapters write native records; no legacy shape is ever stored.
+- Adapters are feature-gated per instance and per user.
+- Anything the legacy protocol cannot express is dropped at the edge,
+  documented, never approximated silently.
 
 ## 8. Security and auth
 
@@ -367,19 +362,17 @@ Designed as the direct negation of the KoInsight findings.
 
 ### 8.1 Accounts and tokens
 
-- Users authenticate with username + password, hashed with argon2id. -
-  Login yields nothing directly usable; it authorises creating
+- Users authenticate with username + password, hashed with argon2id.
+- Login yields nothing directly usable; it authorises creating
   per-device API tokens: random 256-bit, stored hashed (SHA-256), shown
   once, revocable individually, named by device.
-- Tokens carry scope
-  sets containing `sync`, `read-insights`, `library-read`,
-  `library-manage`, or `admin`. `admin` implies all scopes.
-  `library-manage` permits stating series claims (ADR-0018) and grants
-  no catalog reads of its own. Existing singleton tokens remain
+- Tokens carry scope sets containing `sync`, `read-insights`,
+  `library-read`, `library-manage`, or `admin`. `admin` implies all
+  scopes. `library-manage` permits stating series claims (ADR-0018) and
+  grants no catalog reads of its own. Existing singleton tokens remain
   wire-compatible, and explicit in-place scope updates preserve a token's
   device identity and secret. `admin` is never self-grantable.
-- An
-  account can be disabled rather than deleted. Every credential that
+- An account can be disabled rather than deleted. Every credential that
   resolves to a user checks the flag, so one write closes every door at
   once and enabling reopens exactly the same ones. The last enabled
   administrator can be neither demoted nor disabled.
@@ -457,7 +450,7 @@ rules: `add-folder <name> <root>`, `list-folders`, `remove-folder
 `root_path` is stored absolute and never appears in a non-admin API
 response. A folder root is opened read-only; symlinks inside the tree
 are refused. The server writes under a watched folder only where an
-administrator set `accepts_uploads` — to create something that was not
+administrator set `accepts_uploads`: to create something that was not
 there (ADR-0023), or to delete something it could have created
 (ADR-0025). It never modifies or renames. The only unconditionally
 writable directory in the content system is the cover cache.
@@ -469,14 +462,14 @@ bytes to a pass. `POST /v1/folders/{folder}/books` calls it for an app
 holding the `library-upload` scope; the library page's form calls it for
 a signed-in browser, through the same kind of interface downloads and
 covers already use. A browser has no scope, so its gate is the folder
-flag plus the session — the decision about which folder may be written
+flag plus the session, the decision about which folder may be written
 to having already been made, once, by whoever marked it.
 
 Deleting is the same shape in the other direction. `api.DeleteBook`
-removes the file and then the row — that order, because a crash between
+removes the file and then the row (that order, because a crash between
 them leaves a book the next pass marks missing, a state the system
 models, while the reverse leaves a file the next pass puts straight
-back. `DELETE /v1/books/{id}` calls it for an app holding
+back). `DELETE /v1/books/{id}` calls it for an app holding
 `library-delete`; the book page's control calls it for a signed-in
 administrator. The scope is separate from `library-upload` because
 adding your own book and destroying everyone's are different questions,
@@ -525,16 +518,16 @@ A number read from the filename wins; otherwise sorted order is the
 fallback. Files at the root are not in a series.
 
 What the directory tree says is not the last word: a reader can restate
-a book's series over it, for themselves or — as an admin — for everyone
+a book's series over it, for themselves or, as an admin, for everyone
 (ADR-0018), and rename the series itself (ADR-0020). Neither reaches
 the disk; §9.2 rule 3 stands.
 
 ### 9.4 Calibre folders
 
 A Calibre folder is a root containing `metadata.db`. The server reads
-the database read-only — a separate `calibre.Writer`, used only for an
-upload into a folder that accepts them, is the one thing that does not —
-and keys books by Calibre id, never by path.
+the database read-only. A separate `calibre.Writer`, used only for an
+upload into a folder that accepts them, is the one thing that does not.
+It keys books by Calibre id, never by path.
 Calibre renames a book's directory when title or author changes; path
 identity would lose the reading-position mapping on every such edit.
 
@@ -544,8 +537,8 @@ publication file. The server records a digest of `cover.jpg` so the
 cover cache invalidates when the curator replaces it.
 
 A book is served from the first of its formats that is actually on the
-disk, EPUB before KEPUB. Both are the same zip container — a KEPUB is an
-EPUB with Kobo's reading spans injected — so a book Calibre holds only
+disk, EPUB before KEPUB. Both are the same zip container (a KEPUB is an
+EPUB with Kobo's reading spans injected) so a book Calibre holds only
 as a KEPUB is a book rather than a gap, and a format row left behind by
 a deleted file falls through to the file next to it instead of making
 the pass incomplete. EPUB is preferred because those injected spans
@@ -617,7 +610,7 @@ normalized name alone, so the same series held in two folders is one row
 with one id, and its shelf spans both (ADR-0019). Only a *book* lives in
 a folder, so the membership tables keep `folder_id` for the composite
 foreign key that cascades a book's rows away with it. An entity nothing
-names any more — no membership and no reader's claim — is collected at
+names any more (no membership and no reader's claim) is collected at
 the end of the pass that emptied it, and when a folder is removed.
 
 Works are per-user in v1. The catalog is shared, but the
@@ -633,7 +626,7 @@ what the folder said on the last pass and is still rewritten wholesale by
 every reconcile; a *claim* over it lives beside it, in a shared layer
 (`scope_user = ''`, written by an admin) and a personal one
 (`scope_user = <user id>`, written by anyone with `library-manage`).
-Series are resolved at read time — personal, else shared, else folder —
+Series are resolved at read time (personal, else shared, else folder)
 so every series-bearing read takes the reader's id, and every series a
 payload names carries the layer it came from. A claim speaks for the
 whole book: its empty form is the statement "this book is in no series",
@@ -658,7 +651,7 @@ different operation.
 Merging and splitting are that operation (ADR-0021), and they are the
 one thing a name layer cannot express: they change which shelf a book is
 on. Because the fold key belongs to the disk, neither can be a plain
-edit — a shelf rearranged only here is rearranged back by the next pass
+edit; a shelf rearranged only here is rearranged back by the next pass
 that observes the old name. Both therefore write a `series_bindings`
 row, saying what an observed name means, and an observed name now
 resolves through that table first: this folder's binding, else the
@@ -705,7 +698,7 @@ A Go test cannot tell you the Calibre writer worked. It only ever reads
 back its own rows, and Calibre's opinion of a library is formed by
 opening it. `PRAGMA user_version` is the sharp edge: a library left at 0
 is one Calibre upgrades from the beginning on sight, rebuilding the
-tables and dropping every book in them — which is why the fixture in
+tables and dropping every book in them, which is why the fixture in
 `internal/calibre/testdata/schema.sql` carries the real version. The
 check that settles it is Calibre's own:
 
@@ -717,13 +710,13 @@ opens.
 
 ### 10.4 Client-side work
 
-1. Add `start/end_progression` to Liseur's session recorder. 2. A
-   `data/liseursync/` peer implementing the existing `PeerPositionSync`
-   interface. 3. Reuse `ReadingStateMerge` as-is for three-way
-   reconciliation. 4. Use the native catalog API to browse folders, keep
-   catalog `book_id` separate from sync `work_id`, and call
-   `/v1/books/{id}/resolve` before reporting reading state for a catalog
-   book.
+1. Add `start/end_progression` to Liseur's session recorder.
+2. A `data/liseursync/` peer implementing the existing
+   `PeerPositionSync` interface.
+3. Reuse `ReadingStateMerge` as-is for three-way reconciliation.
+4. Use the native catalog API to browse folders, keep catalog `book_id`
+   separate from sync `work_id`, and call `/v1/books/{id}/resolve`
+   before reporting reading state for a catalog book.
 
 ### 10.5 Milestones
 
@@ -756,21 +749,20 @@ mutates the watched tree.
   keeps only `progression` or nothing, sacrificing server insights. The
   schema already treats those fields as opaque data, so this is
   additive.
-- **Cross-user shared works / social features**:
-  deliberately excluded, privacy-sensitive and design-heavy. -
-  **Annotation sync.** Liseur has annotations; syncing them wants the
+- **Cross-user shared works / social features**: deliberately excluded,
+  privacy-sensitive and design-heavy.
+- **Annotation sync.** Liseur has annotations; syncing them wants the
   same op-log shape but its own conflict semantics.
-- **calibre-web /
-  Komga bridging**: the server pulling positions from a remote catalog
-  on the user's behalf. Liseur already handles this client-side. -
-  **OPDS 2.0 and OPDS-PSE.** OPDS 1.2 acquisition feeds land first for
+- **calibre-web / Komga bridging**: the server pulling positions from a
+  remote catalog on the user's behalf. Liseur already handles this
+  client-side.
+- **OPDS 2.0 and OPDS-PSE.** OPDS 1.2 acquisition feeds land first for
   existing-reader compatibility.
-- **Additional content formats.** PDF,
-  CBZ/CBR, audiobook, and fixed-layout support require format-specific
-  parsing, metadata, serving, and reader decisions.
-- **Two-way Calibre
-  synchronization.** Calibre remains authoritative for Calibre folders
-  until a later ADR defines a write side.
+- **Additional content formats.** PDF, CBZ/CBR, audiobook, and
+  fixed-layout support require format-specific parsing, metadata,
+  serving, and reader decisions.
+- **Two-way Calibre synchronization.** Calibre remains authoritative for
+  Calibre folders until a later ADR defines a write side.
 
 ## 12. Risks
 
