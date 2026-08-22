@@ -116,7 +116,7 @@ func TestUploadCataloguesTheBook(t *testing.T) {
 		t.Fatalf("the book is not on the disk: %v", err)
 	}
 
-	book, err := f.st.CatalogBookByID(t.Context(), got["book_id"].(string))
+	book, err := f.st.CatalogBookByID(t.Context(), "", got["book_id"].(string))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +220,64 @@ func TestUploadTwiceMakesOneBook(t *testing.T) {
 	}
 	if len(books) != 1 {
 		t.Fatalf("folder holds %d books, want 1", len(books))
+	}
+}
+
+func TestUploadDoesNotDeduplicateAgainstAnInaccessibleBook(t *testing.T) {
+	f := newFolderFixture(t)
+	body := makeEPUB(t, "Private Copy", "A Reader", []byte("same bytes"))
+	hiddenBookID, _ := f.writeBook(t, "hidden.epub", body)
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	targetRoot := t.TempDir()
+	target := store.Folder{
+		ID: store.NewID(), Name: "Uploads", RootPath: targetRoot,
+		Kind: store.FolderPlain,
+	}
+	if err := f.st.CreateFolder(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.folder, f.root = target, targetRoot
+	f.allowUploads(t)
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+
+	resp, got := f.upload(t, token, "copy.epub", body)
+	if resp.StatusCode != http.StatusCreated || got["duplicate"] != false {
+		t.Fatalf("upload = %d %v, want a new visible copy", resp.StatusCode, got)
+	}
+	if got["book_id"] == hiddenBookID {
+		t.Fatal("upload exposed the inaccessible book through digest deduplication")
+	}
+	books, err := f.st.BooksInFolder(t.Context(), target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(books) != 1 || books[0].ID != got["book_id"] {
+		t.Fatalf("target books = %+v, response = %v", books, got)
+	}
+}
+
+func TestUploadAnswers404WithoutAFolderGrant(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+
+	resp, got := f.upload(t, token, "private.epub",
+		makeEPUB(t, "Private", "", []byte("bytes")))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("upload = %d %v, want 404", resp.StatusCode, got)
+	}
+	entries, err := os.ReadDir(f.root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("inaccessible upload changed the folder: %+v, %v", entries, err)
 	}
 }
 
@@ -379,6 +437,9 @@ func TestUploadIntoACalibreFolderAddsACalibreBook(t *testing.T) {
 	if err := f.st.CreateFolder(t.Context(), library); err != nil {
 		t.Fatal(err)
 	}
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, library.ID); err != nil {
+		t.Fatal(err)
+	}
 	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
 	saved := f.folder
 	f.folder = library
@@ -423,6 +484,9 @@ func TestUploadingTheSameBookIntoCalibreTwiceMakesOneBook(t *testing.T) {
 		Kind: store.FolderCalibre, AcceptsUploads: true,
 	}
 	if err := f.st.CreateFolder(t.Context(), library); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, library.ID); err != nil {
 		t.Fatal(err)
 	}
 	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)

@@ -60,7 +60,7 @@ func Backfill(
 	var report Report
 	var folderCursor string
 	for {
-		folders, err := st.ListFolders(ctx, folderCursor, backfillPage)
+		folders, err := st.ListFolders(ctx, userID, folderCursor, backfillPage)
 		if err != nil {
 			return report, fmt.Errorf("list folders: %w", err)
 		}
@@ -70,7 +70,7 @@ func Backfill(
 		for _, folder := range folders {
 			var cursor *store.CatalogBookCursor
 			for {
-				books, err := st.ListCatalogBooks(ctx, folder.ID, cursor, backfillPage)
+				books, err := st.ListCatalogBooks(ctx, userID, folder.ID, cursor, backfillPage)
 				if err != nil {
 					return report, fmt.Errorf("list books in %s: %w", folder.ID, err)
 				}
@@ -119,7 +119,7 @@ func backfillBook(
 	report *Report,
 ) error {
 	report.Books++
-	ids, author, err := Evidence(ctx, st, book.ID)
+	ids, author, err := Evidence(ctx, st, userID, book.ID)
 	if err != nil {
 		// Replaced or its folder removed since the page was read.
 		// Nothing to map.
@@ -182,13 +182,13 @@ func backfillBook(
 // first read could land on two different works, and the reader's
 // position would silently stop following them between devices.
 func Evidence(
-	ctx context.Context, st store.Store, bookID string,
+	ctx context.Context, st store.Store, viewerID, bookID string,
 ) ([]store.BookIdentifier, string, error) {
-	ids, err := st.CatalogBookIdentifiers(ctx, bookID)
+	ids, err := st.CatalogBookIdentifiers(ctx, viewerID, bookID)
 	if err != nil {
 		return nil, "", err
 	}
-	authors, err := st.CatalogAuthorsForBooks(ctx, []string{bookID})
+	authors, err := st.CatalogAuthorsForBooks(ctx, viewerID, []string{bookID})
 	if err != nil {
 		return nil, "", err
 	}

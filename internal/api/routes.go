@@ -339,9 +339,9 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/insights/works/{id}", insH(s.HandleInsightsWork))
 	mux.Handle("GET /v1/insights/calendar", insH(s.HandleInsightsCalendar))
 
-	// library-read scope: the catalog. Every signed-in reader sees every
-	// folder's books — the catalog is deliberately shared (ADR-0017) —
-	// while reading state stays strictly per user.
+	// library-read scope: the catalog. Folder grants select the shared
+	// catalog rows this account may see (ADR-0027), while reading state
+	// stays strictly per user.
 	//
 	// There is no metadata-editing scope beyond series claims: with
 	// uploads gone, nothing else writes to the catalog but a reconcile

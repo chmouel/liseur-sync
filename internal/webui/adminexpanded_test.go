@@ -62,7 +62,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if strings.Contains(body, "Watching Nowhere") {
 		t.Fatalf("a missing directory was accepted: %s", body)
 	}
-	if folders, _ := st.ListFolders(ctx, "", 10); len(folders) != 0 {
+	if folders, _ := st.ListFolders(ctx, "", "", 10); len(folders) != 0 {
 		t.Fatalf("a refused add created %d folders", len(folders))
 	}
 
@@ -72,7 +72,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if !strings.Contains(body, "Watching Shelf") {
 		t.Fatalf("add: %s", body)
 	}
-	folders, err := st.ListFolders(ctx, "", 10)
+	folders, err := st.ListFolders(ctx, "", "", 10)
 	if err != nil || len(folders) != 1 {
 		t.Fatalf("folders = %d, %v", len(folders), err)
 	}
@@ -99,7 +99,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if !strings.Contains(body, "Stopped watching Shelf") {
 		t.Fatalf("delete: %s", body)
 	}
-	if folders, _ := st.ListFolders(ctx, "", 10); len(folders) != 0 {
+	if folders, _ := st.ListFolders(ctx, "", "", 10); len(folders) != 0 {
 		t.Fatalf("a removed folder is still listed: %v", folders)
 	}
 	if _, err := os.Stat(root); err != nil {
@@ -137,7 +137,7 @@ func TestAdminFolderHonoursTheAllowlist(t *testing.T) {
 	if !strings.Contains(body, "not below any of the roots") {
 		t.Fatalf("a root outside the allowlist was accepted: %s", body)
 	}
-	if folders, _ := st.ListFolders(t.Context(), "", 10); len(folders) != 0 {
+	if folders, _ := st.ListFolders(t.Context(), "", "", 10); len(folders) != 0 {
 		t.Fatalf("a refused root still created %d folders", len(folders))
 	}
 	// A directory below an allowed root is allowed.
@@ -180,7 +180,7 @@ func TestAdminFolderMutationsNeedTheSessionsToken(t *testing.T) {
 			t.Errorf("%s without a token: %d, want 403", path, code)
 		}
 	}
-	if folders, _ := st.ListFolders(ctx, "", 10); len(folders) != 1 {
+	if folders, _ := st.ListFolders(ctx, "", "", 10); len(folders) != 1 {
 		t.Fatalf("a forged request changed the folder list: %v", folders)
 	}
 }

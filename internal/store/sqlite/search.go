@@ -121,6 +121,9 @@ func (s *Store) SearchCatalogBooks(
 		return store.SearchResult{}, fmt.Errorf(
 			"%w: search limit %d", store.ErrInvalidInput, query.Limit)
 	}
+	if _, err := s.FolderByID(ctx, query.UserID, query.FolderID); err != nil {
+		return store.SearchResult{}, err
+	}
 	terms := store.SearchTerms(query.Text)
 	scored := len(terms) > 0
 	if !scored && len(query.Entities) == 0 {

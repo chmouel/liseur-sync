@@ -74,9 +74,9 @@ already have.**
    KoInsight-compatible endpoint. Neither contaminates the native model.
 6. **Multi-user** from day one: a family or small community on one
    instance, reading state strictly scoped per user.
-7. **First-class EPUB catalog**: every logged-in user can browse the
-   watched folders; only administrators manage them, because that is the
-   only place filesystem paths appear.
+7. **First-class EPUB catalog**: each account can browse the watched
+   folders explicitly granted to it; only administrators manage folders
+   and grants, because that is the only place filesystem paths appear.
 8. **Broad reader integration**: a native catalog API for Liseur clients,
    OPDS 1.2 for existing readers, and an isolated web reader using the
    same sync protocol.
@@ -106,9 +106,10 @@ already have.**
   deployments that already operate it. The server's own writable content
   directory is the cover cache, and everything in it can be recreated.
 - **Folders are the catalog source.** A folder is a row: `id`, `name`,
-  `root_path`, and `kind` (`plain` or `calibre`). It has no owner, no
-  access list, and no lease. Every logged-in account
-  sees every folder's books; only administrators see or change folders.
+  `root_path`, and `kind` (`plain` or `calibre`). It has no owner or
+  lease. Explicit `user_folders` grants decide whose library includes it;
+  administrators manage all folders and grants without receiving implicit
+  reading access ([ADR-0027](adr/0027-explicit-per-user-folder-access.md)).
 - **Adapters translate at the edge.** The kosync and koplugin
   endpoints parse the legacy wire formats and write native records
   tagged with their origin. Nothing downstream knows or cares which
@@ -388,10 +389,10 @@ Designed as the direct negation of the KoInsight findings.
   acting administrator's password before minting durable access.
 - Per-token and per-IP rate limits protect auth endpoints; credential checks
   use constant-time compares.
-- Reading state is scoped by `user_id` at
-  the query layer. Catalog rows are deliberately shared across signed-in
-  users, but positions, sessions, works, devices and `user_book_works`
-  are not.
+- Reading state is scoped by `user_id` at the query layer. Catalog rows are
+  shared, while their visibility is filtered through explicit per-user folder
+  grants. Positions, sessions, works, devices and `user_book_works` remain
+  private to one user.
 - `root_path` never reaches a non-admin response.
 
 ### 8.3 The kosync credential problem, contained
@@ -441,11 +442,11 @@ books    id, folder_id, status, relative_path, calibre_id?, stat,
          content digest, filename, media type, metadata, timestamps
 ```
 
-There is no owner on `folders`. Every logged-in account sees every
-folder's books. Only administrators manage folders because adding one
-names a path on the server. The admin panel and CLI share the same
-rules: `add-folder <name> <root>`, `list-folders`, `remove-folder
-<folder-id>` and `folder-uploads <folder-id> <on|off>`.
+There is no owner on `folders`. A reader sees a folder only through an
+explicit `user_folders` grant; new accounts and folders begin with none.
+Only administrators manage folders and grants because adding one names a path
+on the server. Administrator status grants management authority, not catalog
+visibility, so an administrator assigns a folder to themselves to read it.
 
 `root_path` is stored absolute and never appears in a non-admin API
 response. A folder root is opened read-only; symlinks inside the tree
@@ -584,6 +585,7 @@ ops                user_id, seq, op_id, work_id, edition_sha?, device_id,
 sessions           user_id, session_id, work_id, device_id, started_at,
                    ended_at, start_prog, end_prog, idle_ms, origin
 folders            id, name, root_path, kind
+user_folders        user_id, folder_id
 books              id, folder_id, status, relative_path, calibre_id?,
                    content_sha256, size_bytes, mtime, filename, media_type,
                    title, subtitle, description, publisher, published_date
@@ -613,12 +615,12 @@ foreign key that cascades a book's rows away with it. An entity nothing
 names any more (no membership and no reader's claim) is collected at
 the end of the pass that emptied it, and when a folder is removed.
 
-Works are per-user in v1. The catalog is shared, but the
-`user_book_works` bridge keeps the work graph private. Catalog metadata
-requires `library-read`. Work mappings, positions and completion require
-`sync`; aggregate statistics require `read-insights`. OPDS feeds remain
-metadata-only regardless of extra token scopes and therefore cannot
-inspect private reading state.
+Works are per-user in v1. Catalog records are shared, but `user_folders`
+filters which records a reader can reach and the `user_book_works` bridge
+keeps the work graph private. Catalog metadata requires both a folder grant
+and `library-read`. Work mappings, positions and completion require `sync`;
+aggregate statistics require `read-insights`. OPDS feeds apply the same folder
+grants and remain metadata-only regardless of extra token scopes.
 
 The two `book_series_override_*` tables are the one bounded exception to
 "the catalog is not user-scoped" (ADR-0018). `book_series` still means

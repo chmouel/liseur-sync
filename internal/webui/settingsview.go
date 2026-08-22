@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -211,7 +212,7 @@ func (s *Server) settingsAdmin(
 	switch view {
 	case settingsAdminFolders:
 		after := r.URL.Query().Get("after")
-		folders, err := s.St.ListFolders(r.Context(), after, adminFoldersPerPage+1)
+		folders, err := s.St.ListFolders(r.Context(), "", after, adminFoldersPerPage+1)
 		if err != nil {
 			return err
 		}
@@ -258,6 +259,28 @@ func (s *Server) settingsAdmin(
 		view.Koplugin, view.MoreKoplugin = capSlice(
 			listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)),
 		)
+		all, tooMany, err := allFolders(r.Context(), s.St, "", adminUserFoldersMax)
+		if err != nil {
+			return err
+		}
+		if tooMany {
+			view.FoldersUnmanageable = true
+		} else {
+			granted, _, err := allFolders(r.Context(), s.St, target.ID, adminUserFoldersMax)
+			if err != nil {
+				return err
+			}
+			grantSet := make(map[string]bool, len(granted))
+			for _, folder := range granted {
+				grantSet[folder.ID] = true
+			}
+			view.Folders = make([]adminUserFolderView, 0, len(all))
+			for _, folder := range all {
+				view.Folders = append(view.Folders, adminUserFolderView{
+					Folder: folder, Granted: grantSet[folder.ID],
+				})
+			}
+		}
 		v.User = view
 		v.HasUser = true
 	case settingsAdminMaintenance:
@@ -281,4 +304,28 @@ func (s *Server) settingsAdmin(
 		v.View = settingsAdminOverview
 	}
 	return nil
+}
+
+// allFolders walks the whole folder list a page at a time, up to max
+// folders. It stops and reports the overflow rather than returning a
+// prefix: every caller needs the complete set, and a silent prefix here
+// would become a silent revocation on the grant form.
+func allFolders(
+	ctx context.Context, st store.Store, viewerID string, limit int,
+) (folders []store.Folder, tooMany bool, err error) {
+	var after string
+	for {
+		page, err := st.ListFolders(ctx, viewerID, after, adminFoldersPerPage)
+		if err != nil {
+			return nil, false, err
+		}
+		folders = append(folders, page...)
+		if len(folders) > limit {
+			return nil, true, nil
+		}
+		if len(page) < adminFoldersPerPage {
+			return folders, false, nil
+		}
+		after = store.FolderCursor(page[len(page)-1])
+	}
 }

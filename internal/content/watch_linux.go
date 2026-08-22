@@ -37,8 +37,8 @@ const (
 // reconciling one folder are different concerns and a test usually wants
 // only one of them.
 type FolderSource interface {
-	ListFolders(ctx context.Context, after string, limit int) ([]store.Folder, error)
-	FolderByID(ctx context.Context, folderID string) (store.Folder, error)
+	ListFolders(ctx context.Context, viewerID, after string, limit int) ([]store.Folder, error)
+	FolderByID(ctx context.Context, viewerID, folderID string) (store.Folder, error)
 }
 
 // Watcher keeps the catalog reflecting the disk.
@@ -334,7 +334,7 @@ func (w *Watcher) allFolders(ctx context.Context) ([]store.Folder, error) {
 	var all []store.Folder
 	cursor := ""
 	for {
-		page, err := w.folders.ListFolders(ctx, cursor, 200)
+		page, err := w.folders.ListFolders(ctx, "", cursor, 200)
 		if err != nil {
 			return nil, err
 		}

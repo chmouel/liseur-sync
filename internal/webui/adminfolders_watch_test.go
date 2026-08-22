@@ -84,7 +84,7 @@ func TestAddingAFolderTellsTheWatcher(t *testing.T) {
 		t.Fatalf("a refused folder was announced: %d calls", count)
 	}
 
-	folders, err := st.ListFolders(t.Context(), "", 10)
+	folders, err := st.ListFolders(t.Context(), "", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestScanNowAsksTheWatcher(t *testing.T) {
 	if !strings.Contains(body, "Watching Books") {
 		t.Fatalf("the folder was not added: %s", body)
 	}
-	folders, err := st.ListFolders(t.Context(), "", 10)
+	folders, err := st.ListFolders(t.Context(), "", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestScanNowWithoutAWatcherSaysSo(t *testing.T) {
 	if !strings.Contains(body, "Watching Books") {
 		t.Fatal("the folder was not added")
 	}
-	folders, err := st.ListFolders(t.Context(), "", 10)
+	folders, err := st.ListFolders(t.Context(), "", "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

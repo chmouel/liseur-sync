@@ -171,7 +171,7 @@ func (s *Server) handleSeriesShelf(
 	for _, b := range books {
 		bookIDs = append(bookIDs, b.ID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
 	// Positions come from the same resolved relations the book payload
 	// uses, so the shelf and the book page never disagree about where a
 	// volume sits.
@@ -646,7 +646,7 @@ func (s *Server) handleSeriesAssignForm(
 func (s *Server) assignView(
 	r *http.Request, u *store.User, bookID string,
 ) (SeriesAssignView, bool) {
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		return SeriesAssignView{}, false
 	}

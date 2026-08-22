@@ -39,10 +39,8 @@ type folderFixture struct {
 	srv   *Server
 	cache *content.Cache
 
-	// user and other are two distinct accounts. The catalog is shared
-	// (ADR-0017), so most tests need only user; the ones asserting that
-	// sharing is real, and that reading state stays private, need other
-	// too.
+	// user and other are two distinct accounts. The fixture grants its
+	// default folder to both; isolation tests explicitly revoke one grant.
 	user  store.User
 	other store.User
 	// token is user's everyday credential: library-read and sync, the
@@ -108,6 +106,11 @@ func newFolderFixture(t *testing.T) *folderFixture {
 	if err := st.CreateFolder(t.Context(), f.folder); err != nil {
 		t.Fatal(err)
 	}
+	for _, user := range []store.User{f.user, f.other} {
+		if err := st.AssignUserFolder(t.Context(), user.ID, f.folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	f.rec = content.NewReconciler(st, content.ScanLimits{}, epub.DefaultLimits(),
 		slog.New(slog.DiscardHandler))
 	// The upload route hands its bytes to the same reconciler the tests
@@ -131,6 +134,22 @@ func (f *folderFixture) createUser(t *testing.T, name string) store.User {
 	}
 	if err := f.st.CreateUser(t.Context(), u); err != nil {
 		t.Fatal(err)
+	}
+	var after string
+	for {
+		folders, err := f.st.ListFolders(t.Context(), "", after, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, folder := range folders {
+			if err := f.st.AssignUserFolder(t.Context(), u.ID, folder.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(folders) < 100 {
+			break
+		}
+		after = store.FolderCursor(folders[len(folders)-1])
 	}
 	return u
 }
@@ -162,6 +181,11 @@ func (f *folderFixture) reconcile(t *testing.T) store.ReconcileResult {
 // the plain folder every other test uses.
 func (f *folderFixture) reconcileFolder(t *testing.T, folder store.Folder) store.ReconcileResult {
 	t.Helper()
+	for _, user := range []store.User{f.user, f.other} {
+		if err := f.st.AssignUserFolder(t.Context(), user.ID, folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	result, err := f.rec.Reconcile(t.Context(), folder)
 	if err != nil {
 		t.Fatal(err)

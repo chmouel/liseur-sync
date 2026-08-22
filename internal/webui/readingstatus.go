@@ -22,7 +22,7 @@ func (s *Server) handleBookReadingStatus(
 	}
 
 	bookID := r.PathValue("id")
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), u.ID, bookID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.NotFound(w, r)
@@ -85,7 +85,7 @@ func (s *Server) markWorkForBook(
 		return "", err
 	}
 
-	bookIDs, author, err := workident.Evidence(r.Context(), s.St, book.ID)
+	bookIDs, author, err := workident.Evidence(r.Context(), s.St, userID, book.ID)
 	if err != nil {
 		return "", err
 	}

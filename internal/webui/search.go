@@ -22,13 +22,12 @@ var entityKindSegments = map[store.EntityKind]string{
 // answer makes the facets the way to narrow rather than scrolling.
 const searchPageSize = 50
 
-// handleSearch answers a search over one folder. Being signed in is
-// enough: the catalog is shared, and finding a book is reading it.
+// handleSearch answers a search over one folder assigned to the reader.
 func (s *Server) handleSearch(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
 	folderID := r.PathValue("folder")
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), u.ID, folderID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -75,7 +74,7 @@ func (s *Server) handleSearch(
 	for _, b := range result.Books {
 		bookIDs = append(bookIDs, b.ID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), bookIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), u.ID, bookIDs)
 
 	loc := userLoc(u)
 	for _, b := range result.Books {
@@ -157,7 +156,7 @@ func (v SearchView) searchURL(filters []string) string {
 func (s *Server) handleTopSearch(
 	w http.ResponseWriter, r *http.Request, _ store.AuthSession, u *store.User,
 ) {
-	folders, err := s.St.ListFolders(r.Context(), "", 1)
+	folders, err := s.St.ListFolders(r.Context(), u.ID, "", 1)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return

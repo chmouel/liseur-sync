@@ -105,6 +105,25 @@ func TestSendingABookFromTheBrowserAddsIt(t *testing.T) {
 	}
 }
 
+func TestSendingABookAnswers404WithoutAFolderGrant(t *testing.T) {
+	f := newBooksFixture(t)
+	allowUploads(t, f)
+	csrf := csrfOnLibrary(t, f)
+	if err := f.st.UnassignUserFolder(t.Context(), "u1", f.folder); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := send(t, f, csrf, "private.epub",
+		browserEPUB(t, "Private", "Nobody"))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	entries, err := os.ReadDir(f.root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("inaccessible upload changed the folder: %+v, %v", entries, err)
+	}
+}
+
 // The same book twice is a success that has to read differently, or the
 // second send looks like it added a second copy.
 func TestSendingTheSameBookTwiceSaysSo(t *testing.T) {

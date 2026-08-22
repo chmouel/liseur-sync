@@ -467,5 +467,17 @@ const folderUploads = `
 ALTER TABLE folders ADD COLUMN accepts_uploads BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
+// folderAccess is migration 4. Grants are explicit and deliberately
+// empty for both existing and newly created accounts and folders.
+const folderAccess = `
+CREATE TABLE user_folders (
+    user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, folder_id)
+);
+
+CREATE INDEX user_folders_folder ON user_folders(folder_id);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
-var migrations = []string{schema, claimRevisions, folderUploads}
+var migrations = []string{schema, claimRevisions, folderUploads, folderAccess}

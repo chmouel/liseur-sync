@@ -58,6 +58,14 @@ func Run(st store.Store, args []string) error {
 		return removeFolder(ctx, st, args[1:])
 	case "folder-uploads":
 		return setFolderUploads(ctx, st, args[1:])
+	case "assign-folder":
+		return assignFolder(ctx, st, args[1:])
+	case "unassign-folder":
+		return unassignFolder(ctx, st, args[1:])
+	case "list-user-folders":
+		return listUserFolders(ctx, st, args[1:])
+	case "assign-all-folders":
+		return assignAllFolders(ctx, st, args[1:])
 	case "backfill-works":
 		return backfillWorks(ctx, st, args[1:])
 	default:
@@ -124,6 +132,12 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   remove-folder <folder-id>     stop watching a folder and forget what
                                 was catalogued from it; nothing under the
                                 directory is touched
+  assign-folder <user> <folder-id>
+                                add a folder to one account's library
+  unassign-folder <user> <folder-id>
+                                remove a folder from one account's library
+  list-user-folders <user>      list folders assigned to one account
+  assign-all-folders <user>     assign every folder watched right now
 
   backfill-works <user>         map every catalog book to a sync work
                                 for this user, so statistics do not wait

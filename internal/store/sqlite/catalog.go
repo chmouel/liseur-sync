@@ -71,9 +71,15 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	return b, nil
 }
 
-func (s *Store) CatalogBookByID(ctx context.Context, bookID string) (store.CatalogBook, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+bookColumns+` FROM books b WHERE b.id = ?`, bookID)
+func (s *Store) CatalogBookByID(ctx context.Context, viewerID, bookID string) (store.CatalogBook, error) {
+	query := `SELECT ` + bookColumns + ` FROM books b WHERE b.id = ?`
+	args := []any{bookID}
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	row := s.db.QueryRowContext(ctx, query, args...)
 	book, err := scanCatalogBook(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.CatalogBook{}, store.ErrNotFound
@@ -85,13 +91,21 @@ func (s *Store) CatalogBookByID(ctx context.Context, bookID string) (store.Catal
 // folders may hold the same bytes; the oldest row wins, so the answer
 // does not change as the catalog grows.
 func (s *Store) CatalogBookByDigest(
-	ctx context.Context, sha string,
+	ctx context.Context, viewerID, sha string,
 ) (store.CatalogBook, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+bookColumns+`
+	query := `SELECT ` + bookColumns + `
 		   FROM books b
-		  WHERE b.content_sha256 = ? AND b.status = 'active'
+		  WHERE b.content_sha256 = ? AND b.status = 'active'`
+	args := []any{sha}
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	query += `
 		  ORDER BY b.created_at, b.id
-		  LIMIT 1`, sha)
+		  LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	book, err := scanCatalogBook(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.CatalogBook{}, store.ErrNotFound
@@ -100,15 +114,15 @@ func (s *Store) CatalogBookByDigest(
 }
 
 func (s *Store) ListCatalogBooks(
-	ctx context.Context, folderID string, after *store.CatalogBookCursor, limit int,
+	ctx context.Context, viewerID, folderID string, after *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
-	return s.listCatalogBooks(ctx, folderID, after, limit, true)
+	return s.listCatalogBooks(ctx, viewerID, folderID, after, limit, true)
 }
 
 func (s *Store) ListRecentCatalogBooks(
-	ctx context.Context, folderID string, before *store.CatalogBookCursor, limit int,
+	ctx context.Context, viewerID, folderID string, before *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
-	return s.listCatalogBooks(ctx, folderID, before, limit, false)
+	return s.listCatalogBooks(ctx, viewerID, folderID, before, limit, false)
 }
 
 // listCatalogBooks pages a folder's books in either direction. Only
@@ -118,8 +132,11 @@ func (s *Store) ListRecentCatalogBooks(
 // readers' work mappings, and it returns to the listing whole the moment
 // a complete pass sees its file again.
 func (s *Store) listCatalogBooks(
-	ctx context.Context, folderID string, cursor *store.CatalogBookCursor, limit int, ascending bool,
+	ctx context.Context, viewerID, folderID string, cursor *store.CatalogBookCursor, limit int, ascending bool,
 ) ([]store.CatalogBook, error) {
+	if _, err := s.FolderByID(ctx, viewerID, folderID); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -172,6 +189,11 @@ func (s *Store) CatalogBookRelationsForBooks(
 	}
 	if len(bookIDs) == 0 {
 		return out, nil
+	}
+	var err error
+	bookIDs, err = s.visibleBookIDs(ctx, userID, bookIDs)
+	if err != nil || len(bookIDs) == 0 {
+		return out, err
 	}
 	placeholders, args := inArgs(bookIDs)
 	readerScope := userID
@@ -285,6 +307,14 @@ func (s *Store) CatalogSeriesVolumesForBooks(
 	if len(bookIDs) == 0 {
 		return []store.CatalogSeriesVolume{}, nil
 	}
+	if _, err := s.FolderByID(ctx, userID, folderID); err != nil {
+		return nil, err
+	}
+	var err error
+	bookIDs, err = s.visibleBookIDs(ctx, userID, bookIDs)
+	if err != nil || len(bookIDs) == 0 {
+		return []store.CatalogSeriesVolume{}, err
+	}
 	placeholders, ids := inArgs(bookIDs)
 	args := seriesReadArgs(userID, append([]any{folderID}, ids...)...)
 	args = append(args, folderID)
@@ -347,7 +377,7 @@ SELECT p.series_id, p.name, p.position,
 // catalog book to a sync work, which needs a title and its authors and
 // nothing else.
 func (s *Store) CatalogAuthorsForBooks(
-	ctx context.Context, bookIDs []string,
+	ctx context.Context, viewerID string, bookIDs []string,
 ) (map[string][]string, error) {
 	out := map[string][]string{}
 	if len(bookIDs) == 0 {
@@ -355,13 +385,19 @@ func (s *Store) CatalogAuthorsForBooks(
 	}
 	placeholders, args := inArgs(bookIDs)
 	args = append(args, store.ContributorRoleAuthor)
-	rows, err := s.db.QueryContext(ctx,
+	query :=
 		`SELECT bc.book_id, c.name
 		 FROM book_contributors bc
 		 JOIN contributors c ON c.id = bc.contributor_id
-		 WHERE bc.book_id IN (`+placeholders+`) AND bc.role = ?
-		 ORDER BY bc.book_id, bc.position, c.normalized_name`,
-		args...)
+		 JOIN books b ON b.id = bc.book_id
+		 WHERE bc.book_id IN (` + placeholders + `) AND bc.role = ?`
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	query += ` ORDER BY bc.book_id, bc.position, c.normalized_name`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +414,10 @@ func (s *Store) CatalogAuthorsForBooks(
 	return out, nil
 }
 
-func (s *Store) AvailableBookMediaTypes(ctx context.Context, folderID string) ([]string, error) {
+func (s *Store) AvailableBookMediaTypes(ctx context.Context, viewerID, folderID string) ([]string, error) {
+	if _, err := s.FolderByID(ctx, viewerID, folderID); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT DISTINCT media_type FROM books
 		 WHERE folder_id = ? AND status = 'active' AND media_type <> ''
@@ -426,7 +465,9 @@ func (s *Store) ResolveCatalogBookWork(
 		return store.WorkResolution{}, err
 	}
 	var folderID string
-	err = tx.QueryRowContext(ctx, `SELECT folder_id FROM books WHERE id = ?`, bookID).Scan(&folderID)
+	err = tx.QueryRowContext(ctx, `SELECT b.folder_id FROM books b
+		WHERE b.id = ? AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`, bookID, userID).Scan(&folderID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.WorkResolution{}, store.ErrNotFound
 	}
@@ -465,7 +506,9 @@ func (s *Store) ResolveCatalogBookWork(
 func (s *Store) UserBookWork(ctx context.Context, userID, bookID string) (store.UserBookWork, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT user_id, folder_id, book_id, work_id, created_at
-		 FROM user_book_works WHERE user_id = ? AND book_id = ?`, userID, bookID)
+		 FROM user_book_works ubw WHERE user_id = ? AND book_id = ?
+		 AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = ubw.folder_id AND uf.user_id = ?)`, userID, bookID, userID)
 	out, err := scanUserBookWork(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.UserBookWork{}, store.ErrNotFound
@@ -489,8 +532,11 @@ func scanUserBookWork(row interface{ Scan(...any) error }) (store.UserBookWork, 
 
 func (s *Store) WorkBookIDs(ctx context.Context, userID, workID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT book_id FROM user_book_works
-		 WHERE user_id = ? AND work_id = ? ORDER BY book_id`, userID, workID)
+		`SELECT ubw.book_id FROM user_book_works ubw
+		 WHERE ubw.user_id = ? AND ubw.work_id = ?
+		 AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = ubw.folder_id AND uf.user_id = ?)
+		 ORDER BY ubw.book_id`, userID, workID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +563,31 @@ func inArgs(ids []string) (string, []any) {
 	return strings.Join(placeholders, ","), args
 }
 
+func (s *Store) visibleBookIDs(ctx context.Context, viewerID string, ids []string) ([]string, error) {
+	if viewerID == "" || len(ids) == 0 {
+		return ids, nil
+	}
+	placeholders, args := inArgs(ids)
+	args = append(args, viewerID)
+	rows, err := s.db.QueryContext(ctx, `SELECT b.id FROM books b
+		WHERE b.id IN (`+placeholders+`)
+		AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func eachRow(rows *sql.Rows, each func(scan func(...any) error) error) error {
 	defer rows.Close()
 	for rows.Next() {
@@ -532,8 +603,11 @@ func eachRow(rows *sql.Rows, each func(scan func(...any) error) error) error {
 // They are the strongest evidence for joining a catalog book to a work
 // that is not the file's own digest.
 func (s *Store) CatalogBookIdentifiers(
-	ctx context.Context, bookID string,
+	ctx context.Context, viewerID, bookID string,
 ) ([]store.BookIdentifier, error) {
+	if _, err := s.CatalogBookByID(ctx, viewerID, bookID); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT scheme, value FROM book_identifiers
 		 WHERE book_id = ? ORDER BY scheme, value`, bookID)

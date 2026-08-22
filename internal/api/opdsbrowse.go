@@ -39,7 +39,8 @@ type opdsSearchURL struct {
 // The folder is checked before the document is written, so a document
 // never confirms a folder that does not exist.
 func (s *Server) HandleOPDSSearchDescription(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -48,7 +49,7 @@ func (s *Server) HandleOPDSSearchDescription(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
-	folder, err := s.St.FolderByID(r.Context(), folderID)
+	folder, err := s.St.FolderByID(r.Context(), tok.UserID, folderID)
 	if err != nil {
 		writeCatalogError(w, err, "folder not found")
 		return
@@ -89,7 +90,8 @@ func (s *Server) HandleOPDSSearchDescription(w http.ResponseWriter, r *http.Requ
 // link: a reader that reaches the end of this feed has seen the best
 // matches, and the answer to wanting more is a better query.
 func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -105,6 +107,7 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
 		FolderID: folderID,
+		UserID:   tok.UserID,
 		Text:     text,
 		Limit:    defaultCatalogPageSize,
 	})
@@ -269,7 +272,8 @@ func plainPlural(n int, noun string) string {
 // from the folder's own feed rather than the root, because "recent" only
 // means anything inside one folder.
 func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
-	if _, ok := auth.TokenFrom(r); !ok {
+	tok, ok := auth.TokenFrom(r)
+	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
@@ -284,7 +288,7 @@ func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := defaultCatalogPageSize
-	books, err := s.St.ListRecentCatalogBooks(r.Context(), folderID, before, limit)
+	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, folderID, before, limit)
 	if err != nil {
 		writeCatalogError(w, err, "folder not found")
 		return

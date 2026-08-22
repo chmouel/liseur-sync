@@ -164,7 +164,7 @@ func (s *Server) librarySeriesForRows(
 	for _, volume := range volumes {
 		volumeIDs = append(volumeIDs, volume.BookID)
 	}
-	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), volumeIDs)
+	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), userID, volumeIDs)
 
 	groups := make(map[string]*LibrarySeries)
 	for _, volume := range volumes {

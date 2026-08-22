@@ -21,6 +21,9 @@ func (s *Store) SetSeriesName(
 	ctx context.Context, userID, seriesID string, scope store.SeriesSource,
 	name string, at time.Time,
 ) error {
+	if _, err := s.CatalogEntityByID(ctx, userID, seriesID, store.EntitySeries); err != nil {
+		return err
+	}
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
 		return err
@@ -72,6 +75,9 @@ func (s *Store) SetSeriesName(
 func (s *Store) ClearSeriesName(
 	ctx context.Context, userID, seriesID string, scope store.SeriesSource,
 ) error {
+	if _, err := s.CatalogEntityByID(ctx, userID, seriesID, store.EntitySeries); err != nil {
+		return err
+	}
 	scopeUser, err := scope.ScopeUser(userID)
 	if err != nil {
 		return err

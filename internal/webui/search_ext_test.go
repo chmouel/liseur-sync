@@ -98,7 +98,7 @@ func TestSearchIsOfferedOnTheLibraryPageAndScopedToTheLibrary(t *testing.T) {
 		t.Fatalf("the library page still has a second, ambiguous top-bar search:\n%s", books)
 	}
 
-	// Every signed-in account may search every folder (ADR-0017); a
+	// The fixture explicitly assigns this folder to both accounts. A
 	// folder that does not exist is a 404 rather than an empty page.
 	resp, _ := f.get(t, "/ui/folders/"+f.folder+"/search?q=offered", f.readerCookie(t))
 	if resp.StatusCode != http.StatusOK {

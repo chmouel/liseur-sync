@@ -38,7 +38,7 @@ func (s *Server) HandleBookCover(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	s.ServeBookCover(w, r, r.PathValue("id"))
+	s.ServeBookCover(w, r, readerID(r), r.PathValue("id"))
 }
 
 // ServeBookCover is the cover itself, without the token, so the web UI
@@ -51,7 +51,7 @@ func (s *Server) HandleBookCover(w http.ResponseWriter, r *http.Request) {
 // server doing work for books nobody looks at, and a cache that has to
 // be kept in step with a folder somebody else edits.
 func (s *Server) ServeBookCover(
-	w http.ResponseWriter, r *http.Request, bookID string,
+	w http.ResponseWriter, r *http.Request, viewerID, bookID string,
 ) {
 	if s.Files == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
@@ -62,7 +62,7 @@ func (s *Server) ServeBookCover(
 		writeError(w, http.StatusBadRequest, "unknown cover size")
 		return
 	}
-	book, err := s.St.CatalogBookByID(r.Context(), bookID)
+	book, err := s.St.CatalogBookByID(r.Context(), viewerID, bookID)
 	if err != nil {
 		writeCatalogError(w, err, "book not found")
 		return

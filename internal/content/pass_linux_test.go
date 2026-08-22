@@ -97,7 +97,7 @@ func (c *fakeCatalog) snapshot() (int, []store.ObservedBook, bool) {
 // ListFolders and FolderByID make the fake a FolderSource too, so a
 // watcher test does not need a second double.
 func (c *fakeCatalog) ListFolders(
-	_ context.Context, after string, limit int,
+	_ context.Context, _ string, after string, limit int,
 ) ([]store.Folder, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -115,7 +115,7 @@ func (c *fakeCatalog) ListFolders(
 }
 
 func (c *fakeCatalog) FolderByID(
-	_ context.Context, folderID string,
+	_ context.Context, _ string, folderID string,
 ) (store.Folder, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

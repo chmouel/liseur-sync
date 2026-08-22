@@ -40,7 +40,7 @@ func bookIDByPath(
 	t *testing.T, s store.Store, folderID, path string,
 ) string {
 	t.Helper()
-	books, err := s.ListCatalogBooks(context.Background(), folderID, nil, 100)
+	books, err := s.ListCatalogBooks(context.Background(), "", folderID, nil, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
