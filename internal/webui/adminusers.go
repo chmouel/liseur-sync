@@ -132,6 +132,18 @@ func logAdminAction(r *http.Request, actor *store.User, action, targetID string,
 func (s *Server) renderAdminUsers(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
 ) {
+	if settingsRedirect(w, r, settingsAdmin, settingsAdminUsers, "", flash) {
+		return
+	}
+	s.renderAdminUsersInPlace(w, r, a, u, flash)
+}
+
+// renderAdminUsersInPlace draws the page under the URL that was posted
+// to, for the one case a redirect would erase: a status the browser has
+// to see, such as the 429 the reauth budget answers with.
+func (s *Server) renderAdminUsersInPlace(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
+) {
 	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminUsers, "", flash, false, "", false)
 }
 
@@ -148,6 +160,8 @@ func (s *Server) handleAdminCreateUser(
 		if errors.Is(err, errRateLimited) {
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
+			s.renderAdminUsersInPlace(w, r, a, u, Flash{Error: err.Error()})
+			return
 		}
 		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
 		return
@@ -175,6 +189,18 @@ func (s *Server) handleAdminCreateUser(
 }
 
 func (s *Server) renderAdminUser(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+	targetID string, flash Flash,
+) {
+	if settingsRedirect(w, r, settingsAdmin, settingsAdminUser, targetID, flash) {
+		return
+	}
+	s.renderAdminUserInPlace(w, r, a, u, targetID, flash)
+}
+
+// renderAdminUserInPlace is renderAdminUser without the redirect, for a
+// response whose status the browser has to keep.
+func (s *Server) renderAdminUserInPlace(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 	targetID string, flash Flash,
 ) {
@@ -471,6 +497,8 @@ func (s *Server) withTargetSecret(
 		if errors.Is(err, errRateLimited) {
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
+			s.renderAdminUserInPlace(w, r, a, u, targetID, Flash{Error: err.Error()})
+			return
 		}
 		s.renderAdminUser(w, r, a, u, targetID, Flash{Error: err.Error()})
 		return
@@ -520,6 +548,8 @@ func (s *Server) runUserMutation(
 			if errors.Is(err, errRateLimited) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
+				s.renderAdminUserInPlace(w, r, a, u, targetID, Flash{Error: err.Error()})
+				return
 			}
 			s.renderAdminUser(w, r, a, u, targetID, Flash{Error: err.Error()})
 			return

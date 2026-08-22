@@ -39,6 +39,9 @@ func (v adminFolderView) Kind() string {
 func (s *Server) renderAdminFolders(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
 ) {
+	if settingsRedirect(w, r, settingsAdmin, settingsAdminFolders, "", flash) {
+		return
+	}
 	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminFolders, "", flash, false, "", false)
 }
 

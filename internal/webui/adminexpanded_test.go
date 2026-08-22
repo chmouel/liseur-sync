@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -293,5 +294,64 @@ func TestAdminMaintenanceReportsWhatIsStuck(t *testing.T) {
 	}
 	if strings.Contains(body, root) || strings.Contains(body, "Shelf") {
 		t.Errorf("maintenance named a folder rather than counting one:\n%s", body)
+	}
+}
+
+// TestSettingsMutationLeavesTheBrowserOnTheSettingsPage pins
+// Post/Redirect/Get on the admin controls.
+//
+// These handlers used to render the settings page in the response to the
+// form post, which left the browser sitting on a URL like
+// /ui/admin/folders/{id}/uploads: three segments below /ui, so every
+// relative link on the page — the stylesheet included — resolved into a
+// directory that does not exist, and a refresh was a GET the route does
+// not answer.
+func TestSettingsMutationLeavesTheBrowserOnTheSettingsPage(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	folder := store.Folder{
+		ID: "folder-prg", Name: "Shelf", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	if err := st.CreateFolder(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	csrf := extractCSRF(t, body)
+
+	post := "/ui/admin/folders/" + folder.ID + "/uploads"
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+post,
+		strings.NewReader(url.Values{"csrf": {csrf}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	resp, err := noRedirect().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("the toggle rendered a page instead of redirecting: %d", resp.StatusCode)
+	}
+	loc, err := req.URL.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Path != "/ui/settings" {
+		t.Fatalf("redirected to %q, not to the settings page", loc.Path)
+	}
+	if loc.Query().Get("view") != settingsAdminFolders {
+		t.Fatalf("redirected away from the folders view: %q", loc.RawQuery)
+	}
+	code, followed := page(t, ts, cookie, loc.RequestURI())
+	if code != http.StatusOK || !strings.Contains(followed, "accepts uploads") {
+		t.Fatalf("the notice did not survive the redirect: %d %s", code, followed)
+	}
+	// And the URL the form posted to answers nothing on a refresh, which
+	// is exactly why the browser must not be left there.
+	if code, _ := page(t, ts, cookie, post); code != http.StatusNotFound {
+		t.Fatalf("GET %s = %d", post, code)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/buildinfo"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -94,6 +95,72 @@ func settingsBack(section, view, userID string) string {
 	return settingsAdminHref("", view)
 }
 
+// settingsTarget is the settings page a mutation belongs to, relative to
+// the URL the browser posted to.
+func settingsTarget(r *http.Request, section, view, userID string) string {
+	prefix := relPrefix(r.URL.Path)
+	if section != settingsAdmin {
+		return settingsHref(prefix, section)
+	}
+	if view == settingsAdminUser && userID != "" {
+		return settingsAdminUserHref(prefix, userID)
+	}
+	return settingsAdminHref(prefix, view)
+}
+
+// settingsRedirect finishes a settings mutation with Post/Redirect/Get,
+// and says whether it did.
+//
+// Rendering the page under the URL a form posted to leaves the browser
+// somewhere the page was never meant to live: /ui/admin/folders/{id}/uploads
+// is three segments deeper than /ui/settings, so every relative link on
+// it — the stylesheet first of all — resolves against the wrong
+// directory, and a refresh is a GET that route does not answer. The
+// notice travels in the query string instead, which is also what makes
+// the reload harmless.
+//
+// A flash carrying a one-time secret is the exception: a token or a
+// pairing code goes in a page, never in a URL that lands in history, a
+// proxy log and the next request's Referer. Those render in place.
+func settingsRedirect(
+	w http.ResponseWriter, r *http.Request,
+	section, view, userID string, flash Flash,
+) bool {
+	if r.Method != http.MethodPost || flash.Secret != "" {
+		return false
+	}
+	target := settingsTarget(r, section, view, userID)
+	if q := flashQuery(flash); q != "" {
+		sep := "?"
+		if strings.Contains(target, "?") {
+			sep = "&"
+		}
+		target += sep + q
+	}
+	redirectRel(w, target, http.StatusSeeOther)
+	return true
+}
+
+// flashQuery encodes what a redirect has to carry across. It uses the
+// same notice/problem pair the library and reader pages already use.
+func flashQuery(flash Flash) string {
+	switch {
+	case flash.Error != "":
+		return "problem=" + url.QueryEscape(flash.Error)
+	case flash.Notice != "":
+		return "notice=" + url.QueryEscape(flash.Notice)
+	}
+	return ""
+}
+
+// flashFromQuery reads back what settingsRedirect sent.
+func flashFromQuery(r *http.Request) Flash {
+	return Flash{
+		Notice: r.URL.Query().Get("notice"),
+		Error:  r.URL.Query().Get("problem"),
+	}
+}
+
 func settingsSelection(r *http.Request) (section, view, userID string) {
 	section = r.URL.Query().Get("section")
 	switch section {
@@ -144,7 +211,7 @@ func (s *Server) renderSettings(
 	if section == settingsAdmin && !isAdmin(r) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
-		forbiddenPage(relPrefix("/ui/settings"),
+		forbiddenPage(relPrefix(r.URL.Path),
 			settingsContext(r, u, section, adminView, targetID), csrfFor(a)).
 			Render(r.Context(), w)
 		return
@@ -180,7 +247,7 @@ func (s *Server) renderSettings(
 	}
 
 	settingsPage(
-		relPrefix("/ui/settings"),
+		relPrefix(r.URL.Path),
 		settingsContext(r, u, view.Section, view.Admin.View, targetID),
 		csrfFor(a),
 		view,

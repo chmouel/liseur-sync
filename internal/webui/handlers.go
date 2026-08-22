@@ -280,6 +280,9 @@ func humanDuration(d time.Duration) string {
 // --- devices ---
 
 func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash) {
+	if settingsRedirect(w, r, settingsDevices, "", "", flash) {
+		return
+	}
 	s.renderSettings(w, r, a, u, settingsDevices, "", "", flash, false, "", false)
 }
 
@@ -448,7 +451,7 @@ func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a st
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	section, view, userID := settingsSelection(r)
-	s.renderSettings(w, r, a, u, section, view, userID, Flash{}, false, "", false)
+	s.renderSettings(w, r, a, u, section, view, userID, flashFromQuery(r), false, "", false)
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -531,6 +534,8 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a st
 		if errors.Is(err, errRateLimited) {
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
+			s.renderAdminUsersInPlace(w, r, a, u, Flash{Error: err.Error()})
+			return
 		}
 		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
 		return
