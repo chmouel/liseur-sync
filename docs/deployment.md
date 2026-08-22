@@ -45,8 +45,8 @@ Books are read from the folders you register.
 
 Terminate TLS at a reverse proxy. The app publishes on localhost only.
 Add your proxy's addresses to `trusted_proxies` so the app can see the
-real scheme; without that it refuses credential traffic as insecure —
-that includes the whole `/ui` surface, not just the login form, and the
+real scheme; without that it refuses credential traffic as insecure.
+That includes the whole `/ui` surface, not just the login form, and the
 session cookie is issued with `Secure` unless `insecure_http` is set.
 The same trust powers the per-IP rate limits: behind a trusted proxy
 they key on the `X-Forwarded-For` client rather than the proxy's own
@@ -61,7 +61,7 @@ reader.example.com {
 }
 ```
 
-nginx example — the koplugin capability URLs carry a secret in the path.
+nginx example: the koplugin capability URLs carry a secret in the path.
 The app redacts it from its own logs; do the same at the proxy:
 
 ```nginx
@@ -80,8 +80,8 @@ location / {
 ```
 
 `insecure_http = true` exists only for LAN-only setups where TLS is
-genuinely out of scope. It is a top-level key, so it must appear above
-the first `[table]` header in the config file — TOML binds a bare key to
+out of scope. It is a top-level key, so it must appear above
+the first `[table]` header in the config file; TOML binds a bare key to
 the table above it, and `insecure_http` written under `[content]`
 becomes `content.insecure_http`. The server refuses to start on an
 unrecognized key rather than ignoring one, so a misplaced setting is
@@ -93,7 +93,7 @@ The API is fully authenticated by design, but you can put an extra
 basicauth layer in front of the whole path for non-LAN clients. Caveat:
 kosync clients cannot send HTTP basic-auth headers, so this only works
 while KOReader devices sync from the LAN. If one ever needs WAN access,
-exempt `/adapter/*` from the proxy auth — the adapter authenticates with
+exempt `/adapter/*` from the proxy auth; the adapter authenticates with
 its own credentials either way.
 
 ## First run
@@ -137,32 +137,30 @@ reconciles the folder immediately and watches it without a restart.
 The Administration section of `/ui/settings` is where an administrator runs
 the instance without a shell. It holds four things:
 
-- **Overview** — version, build and uptime, how many accounts, folders,
+- **Overview**: version, build and uptime, how many accounts, folders,
   books and devices there are, and the effective configuration with the
   database URL left out on purpose.
-- **Users** — the account list, and
-  a page per account: reset a password, grant or revoke the
-  administrator role, revoke a device credential or every credential at
-  once, disable or enable the account, mint an API token with the scopes
-  you choose, generate a kosync pairing code, add a statistics-plugin
-  capability, and map the account's books to works. Creating an account or
-  invite, and every action that hands out or takes away a way into an account,
-  asks for your password again; every attempt is logged.
-- **Folders** — every watched
-  folder on the instance. Add a plain or Calibre folder by naming an
-  existing path, or remove one the server should stop reflecting. Only
-  this page shows `root_path`.
-- **Maintenance** — background health:
-  whether scheduled jobs are running, whether folders have missing
-  books, and the backup check.
+- **Users**: the account list, and a page per account: reset a password,
+  grant or revoke the administrator role, revoke a device credential or
+  every credential at once, disable or enable the account, mint an API
+  token with the scopes you choose, generate a kosync pairing code, add
+  a statistics-plugin capability, and map the account's books to works.
+  Creating an account or invite, and every action that hands out or takes
+  away a way into an account, asks for your password again; every attempt
+  is logged.
+- **Folders**: every watched folder on the instance. Add a plain or
+  Calibre folder by naming an existing path, or remove one the server
+  should stop reflecting. Only this page shows `root_path`.
+- **Maintenance**: whether scheduled jobs are running, whether folders
+  have missing books, and the backup check.
 
 The panel administers accounts and folders. It never shows what anybody
 is reading, and no page there can open another user's private reading
 state.
 
 Disabling an account is the reversible half of deleting one. Every way
-in stops at once — password, web session, API token, kosync device,
-koplugin device, pairing code — and sessions are revoked, so a signed-in
+in stops at once (password, web session, API token, kosync device,
+koplugin device, pairing code) and sessions are revoked, so a signed-in
 user is out on their next click. Enabling it restores exactly what it
 had; nothing is minted or revoked in between:
 
@@ -181,7 +179,7 @@ has no owner and no access list. Every logged-in user sees every
 folder's books; only an admin sees or changes folders, because a folder
 is the only place a filesystem path appears.
 
-Add one from Settings → Administration → Folders, or from a shell:
+Add one from Settings > Administration > Folders, or from a shell:
 
 ```
 liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books
@@ -196,7 +194,7 @@ reads the same files again.
 A folder root needs only read access unless you want uploads. The
 server opens books and Calibre's `metadata.db` read-only, refuses
 symlinks inside a watched tree, and never writes, renames or deletes
-anything below the root — so mounting it read-only makes that rule
+anything below the root, so mounting it read-only makes that rule
 enforceable by the operating system rather than only by this program,
 and costs nothing.
 
@@ -204,11 +202,9 @@ The exception is a folder you mark as accepting uploads
 ([ADR-0023](adr/0023-uploads-land-in-a-folder.md)). That one needs
 write access, and it is opt-in twice over: an administrator turns it on
 per folder, and a token needs the `library-upload` scope to use it.
-Even then the server only ever *creates* — a file that was not there,
+Even then the server only ever *creates*: a file that was not there,
 or a book Calibre did not have. It still never modifies, renames or
-deletes one.
-or deletes anything below the root. The cover cache is the only
-directory it writes to.
+deletes one. The cover cache is the only directory it writes to.
 
 The browser form can be narrowed with `content.folder_roots`, which
 lists the directories an admin may choose from. Empty means anywhere the
@@ -231,7 +227,7 @@ start and the folder does not become unusable.
 
 A network mount is the case where this matters. NFS and SMB report
 nothing to inotify, so such a folder is only ever read by the periodic
-pass, which is up to half an hour behind. **Settings → Administration → Folders**
+pass, which is up to half an hour behind. **Settings > Administration > Folders**
 has a
 *Scan now* for each folder that runs a pass immediately. It is safe to
 press at any time and safe to press twice: a pass is idempotent, so
@@ -241,7 +237,7 @@ asking again is asking once.
 against pointing at too much, not tuning knobs. A pass that hits either
 bound is incomplete: it may add or update what it saw, but it is not
 allowed to mark anything missing because it did not see the whole tree.
-Raise them only when the folder really is that large.
+Raise them only when the folder is that large.
 
 ### Plain folders
 
@@ -284,8 +280,8 @@ books claiming a cover that is not there:
 scripts/calibre-audit.sh /path/to/Calibre
 ```
 
-It is read-only — the database is opened immutable, so it is safe to run
-against a library Calibre has open — and it exits non-zero when it finds
+It is read-only: the database is opened immutable, so it is safe to run
+against a library Calibre has open. It exits non-zero when it finds
 something, so it can be run from cron. It prints the `calibredb` command
 that fixes each finding but never runs it: `metadata.db` belongs to
 Calibre, and Calibre should be the only thing that writes to it.
@@ -306,8 +302,8 @@ with it, because a disconnected disk is not a deleted book. It does
 drop out of the listings: browse, search and the entity pages offer
 only active books, because the download and cover routes answer `410`
 for anything else and listing a book the server will refuse to serve is
-advertising a dead end. The reading it already has is still reachable —
-a work whose book is missing appears on the shelf as a text tile, the
+advertising a dead end. The reading it already has is still reachable.
+A work whose book is missing appears on the shelf as a text tile, the
 same as a work this server never held a file for. The book returns to
 the listing whole as soon as a complete pass sees its file again.
 
@@ -369,7 +365,7 @@ your ordinary database backup.
 
 Back up the folders themselves with whatever already protects your book
 collection. They are not owned by this server, and restoring the server
-database without restoring the same mounted folders simply leaves books
+database without restoring the same mounted folders leaves books
 `missing` until the paths return.
 
 The cache directory may be skipped. Every file in it is a rendered cover

@@ -140,7 +140,7 @@ Once the server is running, open `/ui/`.
 When no accounts exist, the setup page opens automatically. The first
 account becomes the administrator.
 
-Add a folder from Settings → Administration → Folders, or from a shell:
+Add a folder from Settings > Administration > Folders, or from a shell:
 
 ```sh
 liseur-sync admin add-folder Shelf /srv/books
