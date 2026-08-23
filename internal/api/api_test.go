@@ -827,7 +827,7 @@ func TestInsightsBadRangeFallsBackToDefault(t *testing.T) {
 	svc := auth.NewService(st)
 	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
 
-	for _, raw := range []string{"wat", "0d", "-3d", "99999d"} {
+	for _, raw := range []string{"wat", "30", "0d", "-3d", "99999d"} {
 		code, out := get(t, ts.URL+"/v1/insights/summary?range="+raw, roSecret)
 		if code != 200 {
 			t.Fatalf("range=%s: %d %v", raw, code, out)
