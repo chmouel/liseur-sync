@@ -812,6 +812,41 @@ func TestInsightsRangeIsWholeDays(t *testing.T) {
 	}
 }
 
+// A malformed span is not a licence to answer about everything. The
+// summary's default is thirty days; a `range` that cannot be read must
+// land there rather than on the whole history, which is both the most
+// expensive answer the endpoint has and one nobody asked for.
+func TestInsightsBadRangeFallsBackToDefault(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, Timezone: "UTC", CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
+
+	for _, raw := range []string{"wat", "0d", "-3d", "99999d"} {
+		code, out := get(t, ts.URL+"/v1/insights/summary?range="+raw, roSecret)
+		if code != 200 {
+			t.Fatalf("range=%s: %d %v", raw, code, out)
+		}
+		if got := out["range_days"].(float64); got != 30 {
+			t.Fatalf("range=%s: want the 30d default, got range_days=%v", raw, got)
+		}
+	}
+	// The works endpoints have no default, so there a bad span is still
+	// the lifetime they answered with before spans existed.
+	code, out := get(t, ts.URL+"/v1/insights/works?range=wat", roSecret)
+	if code != 200 {
+		t.Fatalf("works range=wat: %d %v", code, out)
+	}
+	if got := out["range_days"].(float64); got != 0 {
+		t.Fatalf("works range=wat: want unbounded, got range_days=%v", got)
+	}
+}
+
 // A sitting that begins before the span and runs into it belongs to one
 // day, and both the summary and the per-work rows have to pick the same
 // one — otherwise a dashboard showing them together displays a headline
