@@ -577,6 +577,308 @@ func TestSessionsAndInsights(t *testing.T) {
 
 func ptrI64(v int64) *int64 { return &v }
 
+// A range narrows what the totals cover but must never narrow what the
+// server knows. The per-book aggregates gain the same window the
+// summary already had, so a dashboard's headline and its rows describe
+// one span; the streak keeps counting every day on record, because a
+// hundred-day run is still a hundred days when you ask about last week.
+func TestInsightsRanges(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, Timezone: "UTC", CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st)
+	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
+
+	w := store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()}
+	if err := st.CreateWork(ctx, w, &store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w1"},
+		[]store.Identifier{{Kind: "sha256", Value: "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	current := time.Now().UTC()
+	noon := time.Date(current.Year(), current.Month(), current.Day(), 12, 0, 0, 0, time.UTC)
+	// Ten consecutive days ending today, plus one session far enough
+	// back that a thirty-day window cannot see it.
+	sessions := []map[string]any{}
+	mk := func(id string, start time.Time, sp, ep float64) map[string]any {
+		return map[string]any{
+			"session_id": id, "work_id": "w1", "edition_sha": "abc123",
+			"started_at":        start.Format(time.RFC3339Nano),
+			"ended_at":          start.Add(30 * time.Minute).Format(time.RFC3339Nano),
+			"start_progression": sp, "end_progression": ep,
+		}
+	}
+	for day := range 10 {
+		sessions = append(sessions, mk(
+			fmt.Sprintf("recent-%d", day),
+			noon.AddDate(0, 0, -day),
+			0.5, 0.5,
+		))
+	}
+	sessions = append(sessions, mk("ancient", noon.AddDate(0, 0, -100), 0.1, 0.2))
+	if code, out := post(t, ts.URL+"/v1/sessions", syncSecret,
+		map[string]any{"sessions": sessions}); code != 200 {
+		t.Fatalf("sessions push: %d %v", code, out)
+	}
+
+	// A seven-day window sees seven of the eleven sessions.
+	code, out := get(t, ts.URL+"/v1/insights/works/w1?range=7d", roSecret)
+	if code != 200 {
+		t.Fatalf("ranged work insights: %d %v", code, out)
+	}
+	if got := out["sessions"].(float64); got != 7 {
+		t.Fatalf("7d work sessions: want 7, got %v", got)
+	}
+	// And a lifetime one, asked for by name, sees all of them.
+	code, out = get(t, ts.URL+"/v1/insights/works/w1?range=all", roSecret)
+	if code != 200 || out["sessions"].(float64) != 11 {
+		t.Fatalf("range=all work sessions: %d %v", code, out["sessions"])
+	}
+	// No range at all still means lifetime, as it always has.
+	code, out = get(t, ts.URL+"/v1/insights/works/w1", roSecret)
+	if code != 200 || out["sessions"].(float64) != 11 {
+		t.Fatalf("unranged work sessions: %d %v", code, out["sessions"])
+	}
+	// The collection endpoint honours the same window.
+	code, out = get(t, ts.URL+"/v1/insights/works?range=7d", roSecret)
+	works, ok := out["works"].([]any)
+	if code != 200 || !ok || len(works) != 1 {
+		t.Fatalf("ranged works: %d %v", code, out)
+	}
+	if got := works[0].(map[string]any)["sessions"].(float64); got != 7 {
+		t.Fatalf("7d works sessions: want 7, got %v", got)
+	}
+
+	// The streak is the reader's, not the window's: ten days either way.
+	for _, rng := range []string{"7d", "30d", "all"} {
+		code, out = get(t, ts.URL+"/v1/insights/summary?range="+rng, roSecret)
+		if code != 200 {
+			t.Fatalf("summary %s: %d", rng, code)
+		}
+		if got := out["streak_days"].(float64); got != 10 {
+			t.Fatalf("streak at range=%s: want 10, got %v", rng, got)
+		}
+	}
+	// The totals, unlike the streak, do follow the window.
+	code, out = get(t, ts.URL+"/v1/insights/summary?range=7d", roSecret)
+	if code != 200 || out["sessions"].(float64) != 7 {
+		t.Fatalf("7d summary sessions: %d %v", code, out["sessions"])
+	}
+	// A bounded answer names the days it counted. Without that a client
+	// cannot tell a narrowed total from an old server's lifetime one.
+	wantFrom := noon.AddDate(0, 0, -6).Format("2006-01-02")
+	wantTo := noon.Format("2006-01-02")
+	if out["from"] != wantFrom || out["to"] != wantTo {
+		t.Fatalf("summary echo: want %s..%s, got %v..%v", wantFrom, wantTo, out["from"], out["to"])
+	}
+	if out["range_days"].(float64) != 7 {
+		t.Fatalf("7d range_days: %v", out["range_days"])
+	}
+	code, out = get(t, ts.URL+"/v1/insights/summary?range=all", roSecret)
+	if code != 200 || out["sessions"].(float64) != 11 {
+		t.Fatalf("all summary sessions: %d %v", code, out["sessions"])
+	}
+	// Everything on record has no bounds to name, and says so by naming
+	// none rather than by quoting a ten-year window it did not mean.
+	if _, echoed := out["from"]; echoed {
+		t.Fatalf("range=all echoed bounds: %v", out)
+	}
+	if out["range_days"].(float64) != 0 {
+		t.Fatalf("range=all range_days: want 0, got %v", out["range_days"])
+	}
+	// The collection endpoint echoes on the same terms.
+	code, out = get(t, ts.URL+"/v1/insights/works?range=7d", roSecret)
+	if code != 200 || out["from"] != wantFrom || out["to"] != wantTo {
+		t.Fatalf("works echo: %d %v..%v", code, out["from"], out["to"])
+	}
+	code, out = get(t, ts.URL+"/v1/insights/works", roSecret)
+	if _, echoed := out["from"]; code != 200 || echoed {
+		t.Fatalf("unranged works echoed bounds: %d %v", code, out)
+	}
+	// A span named as days is the same span named as dates.
+	code, out = get(t, ts.URL+"/v1/insights/summary?from="+wantFrom+"&to="+wantTo, roSecret)
+	if code != 200 || out["sessions"].(float64) != 7 {
+		t.Fatalf("dated summary sessions: %d %v", code, out["sessions"])
+	}
+
+	// A bounded calendar answers one span in one request and echoes the
+	// bounds, so a client can tell it apart from a server that ignored
+	// them and replied with this calendar year.
+	from := noon.AddDate(0, 0, -100).Format("2006-01-02")
+	to := noon.Format("2006-01-02")
+	code, out = get(t, ts.URL+"/v1/insights/calendar?from="+from+"&to="+to, roSecret)
+	if code != 200 {
+		t.Fatalf("bounded calendar: %d %v", code, out)
+	}
+	if out["from"] != from || out["to"] != to {
+		t.Fatalf("calendar echo: want %s..%s, got %v..%v", from, to, out["from"], out["to"])
+	}
+	if got := len(out["days"].([]any)); got != 11 {
+		t.Fatalf("bounded calendar days: want 11, got %d", got)
+	}
+	// A span the reader did not read in is empty, not the whole year.
+	early := noon.AddDate(0, 0, -400).Format("2006-01-02")
+	code, out = get(t, ts.URL+"/v1/insights/calendar?from="+early+"&to="+early, roSecret)
+	if code != 200 || len(out["days"].([]any)) != 0 {
+		t.Fatalf("empty bounded calendar: %d %v", code, out["days"])
+	}
+	// Nonsense bounds fall back to the year form, and say so by not
+	// echoing anything.
+	code, out = get(t, ts.URL+"/v1/insights/calendar?from=whenever&to=later", roSecret)
+	if code != 200 {
+		t.Fatalf("malformed calendar bounds: %d", code)
+	}
+	if _, echoed := out["from"]; echoed {
+		t.Fatalf("malformed bounds echoed as honoured: %v", out)
+	}
+	if out["year"].(float64) != float64(noon.Year()) {
+		t.Fatalf("fallback year: %v", out["year"])
+	}
+	// A calendar longer than any reader can have is refused rather than
+	// walked: one authenticated request must not be able to ask the
+	// store for an unbounded history.
+	huge := noon.AddDate(-40, 0, 0).Format("2006-01-02")
+	if code, _ = get(t, ts.URL+"/v1/insights/calendar?from="+huge+"&to="+to, roSecret); code != 400 {
+		t.Fatalf("over-long calendar span: want 400, got %d", code)
+	}
+}
+
+// A range names calendar days, not a count of hours ending now.
+//
+// The reader's device works in whole local days, and a headline that
+// disagreed with the list beneath it by one partial day would be
+// unexplainable. The old spelling reached back N times twenty-four
+// hours from the moment of the request, so an evening request counted
+// part of an eighth day; these two sessions sit either side of that
+// difference.
+func TestInsightsRangeIsWholeDays(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, Timezone: "UTC", CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st)
+	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
+	if err := st.CreateWork(ctx,
+		store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()},
+		&store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w1"},
+		[]store.Identifier{{Kind: "sha256", Value: "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	current := time.Now().UTC()
+	midnight := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, time.UTC)
+	at := func(id string, start time.Time) map[string]any {
+		return map[string]any{
+			"session_id": id, "work_id": "w1", "edition_sha": "abc123",
+			"started_at":        start.Format(time.RFC3339Nano),
+			"ended_at":          start.Add(20 * time.Minute).Format(time.RFC3339Nano),
+			"start_progression": 0.5, "end_progression": 0.5,
+		}
+	}
+	// Just inside the seventh day back, and just outside the eighth.
+	inside := midnight.AddDate(0, 0, -6).Add(30 * time.Minute)
+	outside := midnight.AddDate(0, 0, -7).Add(22 * time.Hour)
+	if code, out := post(t, ts.URL+"/v1/sessions", syncSecret, map[string]any{
+		"sessions": []map[string]any{at("inside", inside), at("outside", outside)},
+	}); code != 200 {
+		t.Fatalf("sessions push: %d %v", code, out)
+	}
+
+	code, out := get(t, ts.URL+"/v1/insights/summary?range=7d", roSecret)
+	if code != 200 {
+		t.Fatalf("7d summary: %d %v", code, out)
+	}
+	if got := out["sessions"].(float64); got != 1 {
+		t.Fatalf("7d covers whole days only: want 1 session, got %v", got)
+	}
+	code, out = get(t, ts.URL+"/v1/insights/works/w1?range=7d", roSecret)
+	if code != 200 || out["sessions"].(float64) != 1 {
+		t.Fatalf("7d work sessions: %d %v", code, out["sessions"])
+	}
+	// Eight days reaches the earlier one, which is the proof that it was
+	// excluded for being on the wrong day rather than lost.
+	code, out = get(t, ts.URL+"/v1/insights/summary?range=8d", roSecret)
+	if code != 200 || out["sessions"].(float64) != 2 {
+		t.Fatalf("8d summary sessions: %d %v", code, out["sessions"])
+	}
+}
+
+// A sitting that begins before the span and runs into it belongs to one
+// day, and both the summary and the per-work rows have to pick the same
+// one — otherwise a dashboard showing them together displays a headline
+// that its own rows do not add up to.
+func TestInsightsStraddlingSessionCountedOnce(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, Timezone: "UTC", CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(st)
+	syncSecret, _, _ := svc.MintToken(ctx, u.ID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
+	if err := st.CreateWork(ctx,
+		store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()},
+		&store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w1"},
+		[]store.Identifier{{Kind: "sha256", Value: "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	current := time.Now().UTC()
+	midnight := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, time.UTC)
+	// Begins on the day before the window opens, ends inside it.
+	start := midnight.AddDate(0, 0, -7).Add(23*time.Hour + 30*time.Minute)
+	if code, out := post(t, ts.URL+"/v1/sessions", syncSecret, map[string]any{
+		"sessions": []map[string]any{{
+			"session_id": "straddle", "work_id": "w1", "edition_sha": "abc123",
+			"started_at":        start.Format(time.RFC3339Nano),
+			"ended_at":          start.Add(time.Hour).Format(time.RFC3339Nano),
+			"start_progression": 0.1, "end_progression": 0.2,
+		}},
+	}); code != 200 {
+		t.Fatalf("sessions push: %d %v", code, out)
+	}
+
+	code, summary := get(t, ts.URL+"/v1/insights/summary?range=7d", roSecret)
+	if code != 200 {
+		t.Fatalf("summary: %d %v", code, summary)
+	}
+	code, work := get(t, ts.URL+"/v1/insights/works/w1?range=7d", roSecret)
+	if code != 200 {
+		t.Fatalf("work: %d %v", code, work)
+	}
+	if summary["sessions"] != work["sessions"] {
+		t.Fatalf("summary and work disagree: %v vs %v", summary["sessions"], work["sessions"])
+	}
+	if summary["total_active_minutes"] != work["total_active_minutes"] {
+		t.Fatalf("minutes disagree: %v vs %v",
+			summary["total_active_minutes"], work["total_active_minutes"])
+	}
+	// It ended inside the window, so it counts — the two agreeing on
+	// nothing would pass the checks above and prove nothing.
+	if summary["sessions"].(float64) != 1 {
+		t.Fatalf("sitting ending inside the span should count: %v", summary["sessions"])
+	}
+	code, collection := get(t, ts.URL+"/v1/insights/works?range=7d", roSecret)
+	works, ok := collection["works"].([]any)
+	if code != 200 || !ok || len(works) != 1 {
+		t.Fatalf("works collection: %d %v", code, collection)
+	}
+	if works[0].(map[string]any)["sessions"] != work["sessions"] {
+		t.Fatalf("collection disagrees with the single work: %v", works[0])
+	}
+}
+
 // A batch item that names a work the server no longer holds — orphan
 // cleanup deleted it — is the one refusal a client can recover from, so
 // it answers with the machine-readable code and the exact ids. The
