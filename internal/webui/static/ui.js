@@ -31,19 +31,27 @@
     }
   });
 
-  // Choosing a library goes there at once. Without this the form still
-  // works — the <noscript> button submits it — so this is the same
-  // behaviour the onchange attribute used to give, minus the attribute
-  // the CSP now refuses.
+  // Choosing a library, or a span on the dashboard, goes there at once.
+  // Without this the forms still work — their <noscript> buttons submit
+  // them — so this is the same behaviour the onchange attribute used to
+  // give, minus the attribute the CSP now refuses.
+  const goOnChange = ['folder-pick', 'span-pick'];
   document.addEventListener('change', function (e) {
     const select = e.target;
-    if (select && select.id === 'library-pick' && select.form) {
+    if (!select || !select.form) return;
+    if (goOnChange.indexOf(select.id) !== -1) {
       select.form.submit();
       return;
     }
-    if (select && select.id === 'group-series-toggle' && select.form) {
+    if (select.id === 'group-series-toggle') {
       select.form.requestSubmit();
     }
+  });
+
+  // The heatmap opens at its far end: the reader came to see how this
+  // week went, not how last January did.
+  document.querySelectorAll('[data-scroll-end]').forEach(function (el) {
+    el.scrollLeft = el.scrollWidth;
   });
 
 })();

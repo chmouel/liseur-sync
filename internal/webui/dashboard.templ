@@ -1,9 +1,18 @@
 package webui
 
+import "github.com/chmouel/liseur-sync/internal/insights"
+
 // Dashboard data carriers (populated by handlers).
 
 type SummaryData struct {
-	RangeDays     int
+	// Span is what the reader asked for; RangeDays is how many days
+	// that came to, which is nought for all time.
+	Span      insights.Span
+	RangeDays int
+	// Bars says whether the span is short enough to read as one bar a
+	// day. Decided in the handler, which is the only place that knows
+	// the reader's timezone and the moment being asked about.
+	Bars          bool
 	ActiveMinutes float64
 	Pages         float64
 	Sessions      int
@@ -18,25 +27,33 @@ type DayCell struct {
 
 templ dashboard(
 	prefix string, u userCtx, csrf string,
-	sum SummaryData, heatmap []DayCell, recent []SessionRow, reading []WorkRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow,
 ) {
-	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, heatmap, recent, reading))
+	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, days, recent, reading))
 }
 
 templ dashboardBody(
 	prefix string, csrf string,
-	sum SummaryData, heatmap []DayCell, recent []SessionRow, reading []WorkRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow,
 ) {
-	<h1>Dashboard</h1>
+	<header class="dashhead">
+		<div>
+			<p class="eyebrow">{ sum.Span.Label() }</p>
+			<h1>Dashboard</h1>
+		</div>
+		@spanPicker(sum.Span)
+	</header>
 	<section class="cards">
-		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes ({ i2s(sum.RangeDays) }d)</span></div>
+		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes</span></div>
 		if sum.Pages > 0 {
 			<div class="stat"><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
 		}
 		<div class="stat"><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
-		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak</span></div>
+		// The streak deliberately reaches back past the span, so it says
+		// so rather than being left to look like another figure about
+		// the last week.
+		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak (all time)</span></div>
 	</section>
-
 	if len(reading) > 0 {
 		<section class="card">
 			<h2>Continue reading</h2>
@@ -47,16 +64,16 @@ templ dashboardBody(
 			</div>
 		</section>
 	}
-
 	<section class="card">
-		<h2>This year</h2>
-		<div class="heatmap" role="img" aria-label="daily reading minutes">
-			for _, d := range heatmap {
-				<span class={ cellClass(d.Minutes) } title={ d.Date + " — " + f0(d.Minutes) + " min" }></span>
-			}
-		</div>
+		<h2>{ chartHeading(sum.Span) }</h2>
+		if len(days) == 0 {
+			<p class="muted">Nothing recorded in this span.</p>
+		} else if sum.Bars {
+			@dayBars(days)
+		} else {
+			@readingHeatmap(days)
+		}
 	</section>
-
 	<section class="card">
 		<h2>Recent sessions</h2>
 		if len(recent) == 0 {
@@ -76,4 +93,85 @@ templ dashboardBody(
 			</table>
 		}
 	</section>
+}
+
+// spanPicker is how far back the dashboard looks.
+//
+// A menu rather than a row of chips: six spans across a phone would
+// either wrap into a paragraph or shrink to initials, and this is a
+// control a reader touches rarely and deliberately. It submits itself
+// where there is scripting (static/ui.js) and shows its button where
+// there is not, like every other picker here.
+templ spanPicker(current insights.Span) {
+	// No action: the dashboard is the only page this draws on, and a
+	// form without one submits to wherever it already is.
+	<form class="spanpick" method="get">
+		<label class="visually-hidden" for="span-pick">How far back</label>
+		<select id="span-pick" name="span">
+			for _, s := range insights.Spans {
+				if s == current {
+					<option value={ string(s) } selected>{ s.Label() }</option>
+				} else {
+					<option value={ string(s) }>{ s.Label() }</option>
+				}
+			}
+		</select>
+		<noscript><button type="submit">Show</button></noscript>
+	</form>
+}
+
+// dayBars is one bar a day, for a span short enough that a day is still
+// a readable unit.
+//
+// Only every seventh day is captioned, counted back from the last so
+// that today always carries its own label. Captioning all thirty turns
+// the axis into a smear; captioning every fifth lands on a different
+// weekday each time the span changes.
+templ dayBars(days []DayCell) {
+	{{ chart := layOutBars(days) }}
+	<div class="daybars" role="img" aria-label={ chart.Label }>
+		for _, b := range chart.Bars {
+			<div class="daybar" title={ b.Title }>
+				<div class="daybar-track"><span class={ b.Class }></span></div>
+				<span class="daybar-cap">{ b.Caption }</span>
+			</div>
+		}
+	</div>
+}
+
+// readingHeatmap is a square a day, for a span too long to read as bars.
+//
+// Where the bars show how much, this shows when: months of daily bars
+// are a picket fence nobody can read a date off, but the same months as
+// a grid make the shape of a reading habit visible at a glance — the
+// fortnight on holiday, the month nothing happened.
+//
+// The columns are weeks and the rows are weekdays, which is what makes
+// a square findable at all: without the leading padding the grid is a
+// spiral and the row a square sits in means nothing. It scrolls, and
+// opens at its far end — the reader came to see how this week went, not
+// how last January did.
+//
+// Each month label sits in the column it names, so the two stay
+// together whatever the browser does with the widths.
+templ readingHeatmap(days []DayCell) {
+	{{ grid := layOutHeatmap(days) }}
+	<div class="heatwrap" data-scroll-end="1">
+		<div class="heatmap" role="img" aria-label={ grid.Label }>
+			for _, wk := range grid.Weeks {
+				<div class="heatweek">
+					<span class="heatmonth" aria-hidden="true">{ wk.Month }</span>
+					<div class="heatdays">
+						for _, c := range wk.Days {
+							if c.Blank {
+								<span class="cell blank" aria-hidden="true"></span>
+							} else {
+								<span class={ c.Class } title={ c.Title }></span>
+							}
+						}
+					</div>
+				</div>
+			}
+		</div>
+	</div>
 }

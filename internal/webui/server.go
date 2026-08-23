@@ -231,7 +231,14 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	// directory with the other top-level pages and relative links
 	// resolve identically everywhere.
 	mux.Handle("GET /ui", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		redirectRel(w, "ui/", http.StatusMovedPermanently)
+		// Carry the query across: /ui?span=90d is a link somebody
+		// bookmarked, and a redirect that dropped it would answer a
+		// different question than the one that was asked.
+		to := "ui/"
+		if r.URL.RawQuery != "" {
+			to += "?" + r.URL.RawQuery
+		}
+		redirectRel(w, to, http.StatusMovedPermanently)
 	}))
 	mux.Handle("GET /ui/", sec(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ui/" {
