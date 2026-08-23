@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chmouel/liseur-sync/internal/insights"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -42,16 +43,25 @@ const (
 	seriesUngrouped = "series-ungrouped"
 )
 
+// spanTokenPrefix is how the dashboard's chosen span is written into
+// the cookie: "span-30d" and so on, so that an old cookie without one
+// falls through to the default like any other missing token.
+const spanTokenPrefix = "span-"
+
 // prefs is what the shell needs to know before it draws anything.
 type prefs struct {
 	Theme       string
 	View        string
 	GroupSeries bool
+	Span        insights.Span
 }
 
 // defaultPrefs is what a browser that has never said otherwise gets.
 func defaultPrefs() prefs {
-	return prefs{Theme: themeDark, View: viewGrid, GroupSeries: true}
+	return prefs{
+		Theme: themeDark, View: viewGrid, GroupSeries: true,
+		Span: insights.DefaultSpan,
+	}
 }
 
 // readPrefs reads the preference cookie, falling back to the defaults
@@ -73,6 +83,10 @@ func readPrefs(r *http.Request) prefs {
 			p.GroupSeries = true
 		case seriesUngrouped:
 			p.GroupSeries = false
+		default:
+			if raw, ok := strings.CutPrefix(part, spanTokenPrefix); ok {
+				p.Span = insights.ParseSpan(raw)
+			}
 		}
 	}
 	return p
@@ -84,8 +98,9 @@ func readPrefs(r *http.Request) prefs {
 // to the wrong path.
 func writePrefs(w http.ResponseWriter, r *http.Request, p prefs) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     prefsCookie,
-		Value:    p.Theme + "." + p.View + "." + seriesPreference(p.GroupSeries),
+		Name: prefsCookie,
+		Value: p.Theme + "." + p.View + "." + seriesPreference(p.GroupSeries) +
+			"." + spanTokenPrefix + string(p.Span),
 		Path:     "/",
 		MaxAge:   365 * 24 * 60 * 60,
 		HttpOnly: false,
@@ -187,4 +202,34 @@ func themeGlyph(current string) string {
 	default:
 		return "◐"
 	}
+}
+
+// dashboardSpan is the span the dashboard should draw, and remembers it.
+//
+// A `span` in the query wins, so that a link to a particular stretch of
+// reading is a link to it and can be bookmarked, shared or opened with
+// scripting switched off. Without one the reader gets back whatever
+// they last looked at.
+//
+// This writes the preference cookie from a GET, where every mutation in
+// this UI otherwise carries the session's CSRF token. The exception is
+// deliberate and narrow: nothing on the server changes, no other user
+// can observe the result, and the very same request already renders the
+// span — the worst a forged link could do is what the link plainly says
+// it does. Making it a POST would cost a redirect and the shareable URL
+// and buy nothing. Theme, view mode and series grouping still go
+// through the CSRF-checked POST, because those are set from a control
+// that has no page of its own to render.
+func dashboardSpan(w http.ResponseWriter, r *http.Request) insights.Span {
+	p := readPrefs(r)
+	raw := r.URL.Query().Get("span")
+	if raw == "" {
+		return p.Span
+	}
+	span := insights.ParseSpan(raw)
+	if span != p.Span {
+		p.Span = span
+		writePrefs(w, r, p)
+	}
+	return span
 }
