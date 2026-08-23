@@ -316,8 +316,11 @@ Prefer `from`/`to`. A count of days is resolved against the server's
 clock; a pair of dates says exactly what was meant and comes back in the
 answer.
 
-Every answer names the span it covers: `range_days` always, plus `from`
-and `to` when the span is bounded. **Check it.** A server too old to
+The summary and the works endpoints name the span they covered:
+`range_days` always, plus `from` and `to` when the span is bounded. The
+calendar echoes `from`, `to` and `range_days` only when it honoured an
+explicit `from`/`to` pair; a `year=` request comes back with `year` and
+`days` alone. **Check it.** A server too old to
 understand the parameters ignores them and answers about some other
 span, and the aggregates give no sign of it: thirty days of reading and
 ten years of it are both just a number of minutes. An answer that does
@@ -332,7 +335,9 @@ given nothing it understands, falls back on thirty days.
 A span is optional on the works endpoints, where absent means everything
 on record — which is what they answered before spans existed. The
 summary defaults to `30d` instead, for the same reason. Say `range=all`
-rather than leaving it out if you mean a lifetime.
+rather than leaving it out if you mean a lifetime. A `range` that cannot
+be parsed is treated as absent, so a malformed span gets the endpoint's
+default rather than its whole history.
 
 Give the works endpoints the same span as the summary if the two are
 shown on one screen: a headline covering thirty days above rows covering

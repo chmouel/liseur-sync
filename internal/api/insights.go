@@ -107,10 +107,15 @@ func (w window) days() int {
 
 // sessionBounds are the instants to query raw sessions between. An
 // unbounded window reaches back to the epoch, which predates every
-// session any store can hold.
-func (w window) sessionBounds(now time.Time) (time.Time, time.Time) {
+// session any store can hold, and forward to the end of today in the
+// user's timezone — the same far end a bounded window ending today has,
+// so that a lifetime total can never come out below a ranged one when a
+// device with a fast clock files a session a moment into the future.
+func (w window) sessionBounds(now time.Time, loc *time.Location) (time.Time, time.Time) {
 	if w.unbounded() {
-		return time.Unix(0, 0), now.AddDate(0, 0, 1)
+		today := now.In(loc)
+		endOfToday := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+		return time.Unix(0, 0), endOfToday
 	}
 	return w.from, w.to
 }
@@ -250,7 +255,7 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	loc := s.userLocation(r, tok.UserID)
 	win := insightsWindow(r, loc, now, defaultSummaryRange)
-	from, to := win.sessionBounds(now)
+	from, to := win.sessionBounds(now, loc)
 	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "summary failed")
@@ -418,8 +423,13 @@ func (s *Server) workInsightFrom(
 // the last N calendar days ending today — calendar days, so that a
 // request made at nine in the evening covers the same dates as one made
 // at dawn, which is what a reader means and what their own device
-// counts locally. `range=all`, an unparseable span, and an absent
-// parameter with no default all mean everything on record.
+// counts locally. `range=all` means everything on record, as does an
+// absent parameter where the endpoint has no default.
+//
+// A range that cannot be read falls back to the endpoint's default
+// rather than to everything: a typo asking for a fortnight should not
+// quietly become the most expensive query the endpoint can run, and the
+// echo would report a span the client never asked for either way.
 func insightsWindow(r *http.Request, loc *time.Location, now time.Time, def string) window {
 	q := r.URL.Query()
 	rawFrom, rawTo := q.Get("from"), q.Get("to")
@@ -437,7 +447,7 @@ func insightsWindow(r *http.Request, loc *time.Location, now time.Time, def stri
 	if raw == "" || raw == unboundedRange {
 		return window{}
 	}
-	days := parseRangeDays(raw, 0)
+	days := parseRangeDays(raw, parseRangeDays(def, 0))
 	if days <= 0 {
 		return window{}
 	}
@@ -465,7 +475,7 @@ func (s *Server) HandleInsightsWorks(w http.ResponseWriter, r *http.Request) {
 	loc := s.userLocation(r, tok.UserID)
 	now := time.Now()
 	win := insightsWindow(r, loc, now, "")
-	from, to := win.sessionBounds(now)
+	from, to := win.sessionBounds(now, loc)
 	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "work insights failed")

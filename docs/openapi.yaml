@@ -818,9 +818,10 @@ paths:
         "200":
           description: |
             Days with activity; midnight-crossing sessions are split.
-            `from` and `to` are echoed back only when they were honoured,
-            so a client can tell this server from one that predates them,
-            ignored them, and answered with the current year.
+            `from`, `to` and `range_days` are echoed back only when
+            `from`/`to` were honoured, so a client can tell this server
+            from one that predates them, ignored them, and answered with
+            the current year.
           content:
             application/json:
               schema:
@@ -829,6 +830,9 @@ paths:
                   year: { type: integer }
                   from: { type: string, format: date }
                   to: { type: string, format: date }
+                  range_days:
+                    type: integer
+                    description: Calendar days the answer covers, present only when `from`/`to` were honoured.
                   days:
                     type: array
                     items:
