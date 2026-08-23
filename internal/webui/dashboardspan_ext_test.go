@@ -259,3 +259,98 @@ func TestWorkCountsRollupsOnce(t *testing.T) {
 		t.Error("sessions are not 3 raw + 2 rolled up, counted once")
 	}
 }
+
+// TestDashboardExcludesSessionEndingPastTheSpan: the store answers with
+// an overlap, so a sitting that started inside the span and ran out the
+// far end of it comes back too. The window counts by the day a sitting
+// ended, and so must this page, or the totals include reading that has
+// not finished happening.
+func TestDashboardExcludesSessionEndingPastTheSpan(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ed := seedWork(t, st, "overrun", "Still being read")
+
+	// Starts before midnight tonight and ends after it, so it belongs
+	// to tomorrow and to no span that stops at today.
+	midnight := time.Now().Truncate(24*time.Hour).AddDate(0, 0, 1)
+	seedSession(t, st, "overrun-1", ed, midnight.Add(-20*time.Minute), midnight.Add(30*time.Minute))
+	// And an ordinary hour today, so the page has something to say.
+	today := time.Now().Add(-2 * time.Hour)
+	seedSession(t, st, "today-1", ed, today, today.Add(time.Hour))
+
+	_, body := page(t, ts, cookie, "/ui?span=7d")
+	if !strings.Contains(body, `<span class="num">60</span><span class="lbl">minutes</span>`) {
+		t.Error("the sitting running past the span was counted in the total")
+	}
+	if !strings.Contains(body, `<span class="num">1</span><span class="lbl">sessions</span>`) {
+		t.Error("the sitting running past the span was counted as a session")
+	}
+}
+
+// TestDashboardCountsPagesFromSessions: the page card was fed only by
+// rollups, so a reader whose history had not been compacted yet saw no
+// pages at all.
+func TestDashboardCountsPagesFromSessions(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+
+	w := store.Work{ID: "paged", UserID: "u1", Title: "A book with pages", CreatedAt: time.Now()}
+	count := int64(400)
+	ed := store.Edition{UserID: "u1", SHA256: "paged-edition", WorkID: w.ID, PageCount: &count}
+	if err := st.CreateWork(t.Context(), w, &ed, nil); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-2 * time.Hour)
+	err := st.AppendSessions(t.Context(), "u1", []store.Session{{
+		SessionID: "paged-1", WorkID: w.ID, EditionSHA: &ed.SHA256, DeviceID: "reader",
+		StartedAt: at, EndedAt: at.Add(time.Hour), StartProg: 0.10, EndProg: 0.20,
+		Origin: store.OriginNative,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := page(t, ts, cookie, "/ui?span=7d")
+	// A tenth of four hundred pages.
+	if !strings.Contains(body, `<span class="num">40</span><span class="lbl">pages</span>`) {
+		t.Error("pages read in sittings still held in full are not counted")
+	}
+}
+
+// TestHeatmapLabelsTheColumnHoldingTheFirst: a month almost never
+// starts on the day a column does. Captioning the column after the one
+// that holds the first of the month puts every label up to six days
+// late, drifting off the thing it names.
+func TestHeatmapLabelsTheColumnHoldingTheFirst(t *testing.T) {
+	// A Wednesday, so the column runs Mon 29 Sep to Sun 5 Oct and the
+	// first of October falls in the middle of it.
+	days := []DayCell{}
+	for d := time.Date(2025, 9, 29, 0, 0, 0, 0, time.UTC); d.Before(time.Date(2025, 10, 13, 0, 0, 0, 0, time.UTC)); d = d.AddDate(0, 0, 1) {
+		days = append(days, DayCell{Date: d.Format(insights.DayFormat)})
+	}
+	grid := layOutHeatmap(days)
+	if len(grid.Weeks) != 2 {
+		t.Fatalf("%d columns, want 2", len(grid.Weeks))
+	}
+	if grid.Weeks[0].Month != "Sep" {
+		t.Errorf("first column is %q, want Sep", grid.Weeks[0].Month)
+	}
+	if grid.Weeks[1].Month != "Oct" {
+		t.Errorf("the column holding 1 October is %q, want Oct", grid.Weeks[1].Month)
+	}
+}
+
+// TestDaySeriesStartsAtRealReading: a sitting that was all pause leaves
+// a day behind without leaving any reading behind, and an all-time
+// chart should not open on it.
+func TestDaySeriesStartsAtRealReading(t *testing.T) {
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	win := insights.SpanAllTime.Window(now, time.UTC)
+	cells := daySeries(win, map[string]float64{
+		"2026-01-01": 0,
+		"2026-03-08": 45,
+	}, now, time.UTC)
+	if len(cells) == 0 || cells[0].Date != "2026-03-08" {
+		t.Fatalf("the chart opens on %v, want 2026-03-08", cells[0].Date)
+	}
+}

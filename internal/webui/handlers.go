@@ -31,10 +31,21 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 	win := span.Window(now, loc)
 
 	from, to := win.SessionBounds(now, loc)
-	sessions, err := s.St.SessionsInRange(r.Context(), u.ID, from, to)
+	stored, err := s.St.SessionsInRange(r.Context(), u.ID, from, to)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
+	}
+	// SessionsInRange asks for an overlap, so it also answers with a
+	// sitting that began inside the span and ran out the far end of
+	// it. The window decides membership by the day a sitting ended,
+	// and it has to decide it here too or the totals count reading
+	// that has not happened yet.
+	sessions := make([]store.Session, 0, len(stored))
+	for _, ses := range stored {
+		if win.HoldsSession(ses) {
+			sessions = append(sessions, ses)
+		}
 	}
 	works, _ := s.St.ListWorks(r.Context(), u.ID)
 	titles := map[string]string{}
@@ -47,13 +58,23 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		Bars: span.SuitsDailyBars(now, loc),
 	}
 	dayMin := map[string]float64{}
+	pages := newPageCounter(s.St)
 	for _, ses := range sessions {
 		active := insights.ActiveSeconds(ses)
 		sum.ActiveMinutes += active / 60
 		sum.Sessions++
-		// By the day it ended, which is where the API and the app put
-		// it. A sitting read across midnight belongs to one day, and
-		// the three surfaces have to pick the same one.
+		sum.Pages += pages.of(r.Context(), ses)
+		// By the day it ended, which is where the app puts it and
+		// where the window draws its own edges. A sitting read across
+		// midnight belongs to one day, and the reader should find it
+		// on the same one wherever they look.
+		//
+		// A rollup is the exception, and knowingly: the materializer
+		// divides a crossing sitting between the days it touched, so
+		// once retention compacts that evening its minutes move off
+		// the end day. Making the two agree means changing how
+		// rollups are allocated, which is a change to stored data and
+		// to what the API answers, not to this page.
 		dayMin[ses.EndedAt.In(loc).Format(insights.DayFormat)] += active / 60
 	}
 	fromDay, toDay := win.DayBounds(now, loc)
@@ -68,7 +89,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 	// The streak is answered from further back than the span on
 	// purpose: asking about the last week must not report a
 	// months-long run as seven days.
-	sum.StreakDays = s.streakFor(r, u.ID, loc, now, dayMin)
+	sum.StreakDays = s.streakFor(r, u.ID, loc, now, win, dayMin)
 
 	links := s.workBookIDs(r.Context(), u.ID, works)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
@@ -84,8 +105,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 // A fortnight with two gaps in it is the information; a chart that
 // silently skipped them would read as an unbroken run.
 func daySeries(win insights.Window, dayMin map[string]float64, now time.Time, loc *time.Location) []DayCell {
+	// The days with nothing on them are what an unbounded span starts
+	// after, not what it starts at: a sitting that was all pause, or a
+	// rollup whose active time came to nothing, leaves a key behind
+	// without leaving any reading behind.
 	earliest := ""
-	for day := range dayMin {
+	for day, minutes := range dayMin {
+		if minutes <= 0 {
+			continue
+		}
 		if earliest == "" || day < earliest {
 			earliest = day
 		}
@@ -130,13 +158,19 @@ func recentSessions(sessions []store.Session, titles map[string]string, loc *tim
 // case — a span that reaches back further than the run — needs no
 // second read.
 func (s *Server) streakFor(
-	r *http.Request, userID string, loc *time.Location, now time.Time, known map[string]float64,
+	r *http.Request, userID string, loc *time.Location, now time.Time,
+	win insights.Window, known map[string]float64,
 ) int {
 	days := make(map[string]bool, len(known))
 	for day, minutes := range known {
 		if minutes > 0 {
 			days[day] = true
 		}
+	}
+	// An unbounded span has already read everything there is, so the
+	// lookback would be the same two queries over the same rows.
+	if win.Unbounded() {
+		return insights.StreakDays(days, loc, now)
 	}
 	from := now.AddDate(0, 0, -insights.StreakLookbackDays)
 	if sessions, err := s.St.SessionsInRange(r.Context(), userID, from, now); err == nil {
