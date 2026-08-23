@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/infer"
+	"github.com/chmouel/liseur-sync/internal/insights"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -122,7 +123,7 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 		byDay := make(map[key]*store.SessionRollup)
 		for _, ses := range sessions {
 			parts := s.splitDaysFull(ctx, ses, loc)
-			activeTotal := activeSeconds(ses)
+			activeTotal := insights.ActiveSeconds(ses)
 			progDelta := ses.EndProg - ses.StartProg
 			if progDelta < 0 {
 				progDelta = 0

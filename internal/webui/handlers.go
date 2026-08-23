@@ -10,15 +10,28 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/insights"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // --- dashboard ---
 
+// handleDashboard draws the reading dashboard over the span the reader
+// picked.
+//
+// One span, one window, one read. The two separate reads this replaced —
+// thirty days for the numbers and year-to-date for the heatmap — could
+// describe different stretches of time on the same screen, and neither
+// of them was the stretch the reader had asked about, because there was
+// no way to ask.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	now := time.Now()
-	from := now.AddDate(0, 0, -30)
-	sessions, err := s.St.SessionsInRange(r.Context(), u.ID, from, now)
+	loc := userLoc(u)
+	span := dashboardSpan(w, r)
+	win := span.Window(now, loc)
+
+	from, to := win.SessionBounds(now, loc)
+	sessions, err := s.St.SessionsInRange(r.Context(), u.ID, from, to)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -29,72 +42,119 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		titles[ws.Work.ID] = orPlaceholder(ws.Work.Title)
 	}
 
-	var sum SummaryData
-	sum.RangeDays = 30
+	sum := SummaryData{
+		Span: span, RangeDays: win.Days(),
+		Bars: span.SuitsDailyBars(now, loc),
+	}
 	dayMin := map[string]float64{}
-	loc := userLoc(u)
 	for _, ses := range sessions {
-		active := sessionActiveSeconds(ses)
+		active := insights.ActiveSeconds(ses)
 		sum.ActiveMinutes += active / 60
 		sum.Sessions++
-		dayMin[ses.StartedAt.In(loc).Format("2006-01-02")] += active / 60
+		// By the day it ended, which is where the API and the app put
+		// it. A sitting read across midnight belongs to one day, and
+		// the three surfaces have to pick the same one.
+		dayMin[ses.EndedAt.In(loc).Format(insights.DayFormat)] += active / 60
 	}
-	if rollups, err := s.St.RollupsInRange(r.Context(), u.ID,
-		from.In(loc).Format("2006-01-02"), now.In(loc).Format("2006-01-02")); err == nil {
+	fromDay, toDay := win.DayBounds(now, loc)
+	if rollups, err := s.St.RollupsInRange(r.Context(), u.ID, fromDay, toDay); err == nil {
 		for _, ru := range rollups {
 			sum.ActiveMinutes += ru.ActiveSeconds / 60
 			sum.Sessions += int(ru.SessionCount)
+			sum.Pages += ru.Pages
 			dayMin[ru.Day] += ru.ActiveSeconds / 60
 		}
 	}
-	sum.StreakDays = streakFrom(dayMin, u, now)
+	// The streak is answered from further back than the span on
+	// purpose: asking about the last week must not report a
+	// months-long run as seven days.
+	sum.StreakDays = s.streakFor(r, u.ID, loc, now, dayMin)
 
-	// Year heatmap.
-	yearStart := time.Date(now.In(loc).Year(), 1, 1, 0, 0, 0, 0, loc)
-	yearSessions, err := s.St.SessionsInRange(r.Context(), u.ID, yearStart, now)
-	if err == nil {
-		yearMin := map[string]float64{}
-		for _, ses := range yearSessions {
-			yearMin[ses.StartedAt.In(loc).Format("2006-01-02")] +=
-				sessionActiveSeconds(ses) / 60
-		}
-		if rollups, err := s.St.RollupsInRange(r.Context(), u.ID,
-			yearStart.Format("2006-01-02"), now.In(loc).Format("2006-01-02")); err == nil {
-			for _, ru := range rollups {
-				yearMin[ru.Day] += ru.ActiveSeconds / 60
-			}
-		}
-		var heat []DayCell
-		for d := yearStart; !d.After(now); d = d.AddDate(0, 0, 1) {
-			heat = append(heat, DayCell{Date: d.Format("2006-01-02"), Minutes: yearMin[d.Format("2006-01-02")]})
-		}
-
-		// Recent sessions (10 newest in the 30d window).
-		var recent []SessionRow
-		for i := len(sessions) - 1; i >= 0 && len(recent) < 10; i-- {
-			ses := sessions[i]
-			recent = append(recent, SessionRow{
-				When:      ses.StartedAt.In(loc).Format("Jan 2 15:04"),
-				WorkID:    ses.WorkID,
-				WorkTitle: titles[ses.WorkID],
-				DeviceID:  ses.DeviceID,
-				Minutes:   int(ses.EndedAt.Sub(ses.StartedAt).Minutes()),
-				StartProg: ses.StartProg,
-				EndProg:   ses.EndProg,
-			})
-		}
-		links := s.workBookIDs(r.Context(), u.ID, works)
-		dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-			sum, heat, recent,
-			s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
-			Render(r.Context(), w)
-		return
-	}
 	links := s.workBookIDs(r.Context(), u.ID, works)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
-		sum, nil, nil,
+		sum,
+		daySeries(win, dayMin, now, loc),
+		recentSessions(sessions, titles, loc),
 		s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
 		Render(r.Context(), w)
+}
+
+// daySeries is every day in the window, the empty ones included.
+//
+// A fortnight with two gaps in it is the information; a chart that
+// silently skipped them would read as an unbroken run.
+func daySeries(win insights.Window, dayMin map[string]float64, now time.Time, loc *time.Location) []DayCell {
+	earliest := ""
+	for day := range dayMin {
+		if earliest == "" || day < earliest {
+			earliest = day
+		}
+	}
+	var cells []DayCell
+	win.EachDay(earliest, now, loc, func(day string) {
+		cells = append(cells, DayCell{Date: day, Minutes: dayMin[day]})
+	})
+	return cells
+}
+
+// recentSessionLimit is how many sittings the table names one by one.
+// It is a glance at what has just been read, not a log; the log is the
+// per-work page.
+const recentSessionLimit = 10
+
+// recentSessions is the newest sittings in the window, newest first.
+func recentSessions(sessions []store.Session, titles map[string]string, loc *time.Location) []SessionRow {
+	rows := make([]SessionRow, 0, recentSessionLimit)
+	for i := len(sessions) - 1; i >= 0 && len(rows) < recentSessionLimit; i-- {
+		ses := sessions[i]
+		rows = append(rows, SessionRow{
+			When:      ses.EndedAt.In(loc).Format("Jan 2 15:04"),
+			WorkID:    ses.WorkID,
+			WorkTitle: titles[ses.WorkID],
+			DeviceID:  ses.DeviceID,
+			Minutes:   int(insights.ActiveSeconds(ses) / 60),
+			StartProg: ses.StartProg,
+			EndProg:   ses.EndProg,
+		})
+	}
+	return rows
+}
+
+// streakFor counts the reader's current run of days.
+//
+// It looks back over the whole lookback rather than over the span,
+// because a streak is a fact about the reader and not about the
+// question: narrowing it to the chosen span would report a
+// months-long run as seven days to anybody looking at their week.
+// The days already counted for the span are passed in so the common
+// case — a span that reaches back further than the run — needs no
+// second read.
+func (s *Server) streakFor(
+	r *http.Request, userID string, loc *time.Location, now time.Time, known map[string]float64,
+) int {
+	days := make(map[string]bool, len(known))
+	for day, minutes := range known {
+		if minutes > 0 {
+			days[day] = true
+		}
+	}
+	from := now.AddDate(0, 0, -insights.StreakLookbackDays)
+	if sessions, err := s.St.SessionsInRange(r.Context(), userID, from, now); err == nil {
+		for _, ses := range sessions {
+			if insights.ActiveSeconds(ses) > 0 {
+				days[ses.EndedAt.In(loc).Format(insights.DayFormat)] = true
+			}
+		}
+	}
+	if rollups, err := s.St.RollupsInRange(r.Context(), userID,
+		from.In(loc).Format(insights.DayFormat), now.In(loc).Format(insights.DayFormat)); err == nil {
+		for _, ru := range rollups {
+			if ru.ActiveSeconds > 0 {
+				days[ru.Day] = true
+			}
+		}
+	}
+	return insights.StreakDays(days, loc, now)
 }
 
 // continueReadingLimit is a shelf, not a list: the point is to get back
@@ -141,28 +201,6 @@ func userLoc(u *store.User) *time.Location {
 	return loc
 }
 
-func sessionActiveSeconds(ses store.Session) float64 {
-	active := ses.EndedAt.Sub(ses.StartedAt).Seconds() - float64(ses.IdleMs)/1000
-	if active < 0 {
-		return 0
-	}
-	return active
-}
-
-func streakFrom(dayMin map[string]float64, u *store.User, now time.Time) int {
-	loc := userLoc(u)
-	day := now.In(loc)
-	if dayMin[day.Format("2006-01-02")] == 0 {
-		day = day.AddDate(0, 0, -1)
-	}
-	streak := 0
-	for dayMin[day.Format("2006-01-02")] > 0 {
-		streak++
-		day = day.AddDate(0, 0, -1)
-	}
-	return streak
-}
-
 // --- works ---
 
 // markReadable says which of these works' books the browser reader can
@@ -197,7 +235,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	d.Sessions = len(sessions)
 	var progDelta float64
 	for _, ses := range sessions {
-		d.Minutes += sessionActiveSeconds(ses) / 60
+		d.Minutes += insights.ActiveSeconds(ses) / 60
 		if delta := ses.EndProg - ses.StartProg; delta > 0 {
 			progDelta += delta
 			if ses.EditionSHA != nil {
@@ -206,13 +244,17 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 				}
 			}
 		}
-		if rollups, err := s.St.RollupsForWork(r.Context(), u.ID, workID); err == nil {
-			for _, ru := range rollups {
-				d.Sessions += int(ru.SessionCount)
-				d.Minutes += ru.ActiveSeconds / 60
-				d.Pages += ru.Pages
-				progDelta += ru.ProgDelta
-			}
+	}
+	// Once, not once per sitting. A work old enough for its early
+	// sessions to have been compacted counted its rolled-up totals
+	// again for every session it still holds in full, so the longer a
+	// book had been read the more wrong this page was about it.
+	if rollups, err := s.St.RollupsForWork(r.Context(), u.ID, workID); err == nil {
+		for _, ru := range rollups {
+			d.Sessions += int(ru.SessionCount)
+			d.Minutes += ru.ActiveSeconds / 60
+			d.Pages += ru.Pages
+			progDelta += ru.ProgDelta
 		}
 	}
 	ops, _ := s.St.Positions(r.Context(), u.ID, workID, 50)
@@ -248,7 +290,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 			WorkID:    workID,
 			WorkTitle: wk.Title,
 			DeviceID:  ses.DeviceID,
-			Minutes:   int(sessionActiveSeconds(ses) / 60),
+			Minutes:   int(insights.ActiveSeconds(ses) / 60),
 			StartProg: ses.StartProg,
 			EndProg:   ses.EndProg,
 		})
