@@ -628,19 +628,48 @@ paths:
       summary: Reading totals, streak, speed over a range
       security: [{ deviceToken: [] }]  # requires read-insights scope
       parameters:
+        - name: from
+          in: query
+          description: |
+            First day of the span, inclusive, in the user's timezone.
+            Must be paired with `to`, and takes precedence over `range`.
+            Prefer this over `range`: a count of days is resolved against
+            the server's clock, a pair of dates says exactly what was
+            meant, and both are echoed back so a client can tell an
+            honoured span from one a server too old to understand it
+            ignored.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Last day of the span, inclusive. Must be paired with `from` and not fall before it.
+          schema: { type: string, format: date }
         - name: range
           in: query
-          description: A whole number of days from 1 through 3660, such as `30d`. Omitted or invalid values use `30d`.
+          description: |
+            The older spelling of a span: a whole number of *calendar*
+            days from 1 through 3660 ending today, such as `30d`, or
+            `all` for everything on record, which is genuinely unbounded.
+            Omitted or invalid values use `30d`. Ignored when a valid
+            `from`/`to` pair is given. `streak_days` is not narrowed by
+            any of this: it counts every consecutive day on record, so a
+            short span cannot truncate a long run.
           schema: { type: string, default: 30d }
       responses:
         "200":
-          description: Aggregates (rereads count time but zero pages)
+          description: |
+            Aggregates (rereads count time but zero pages). `from` and
+            `to` are echoed back whenever the span was bounded, and must
+            be checked: a server that did not understand the request
+            answers about a different span, and nothing in the totals
+            themselves would say so.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  range_days: { type: integer }
+                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
                   total_active_minutes: { type: number }
                   total_pages: { type: number }
                   sessions: { type: integer }
@@ -654,14 +683,45 @@ paths:
       security: [{ deviceToken: [] }]  # requires read-insights scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - name: from
+          in: query
+          description: |
+            First day of the span, inclusive, in the user's timezone.
+            Must be paired with `to`, and takes precedence over `range`.
+            Prefer this over `range`: a count of days is resolved against
+            the server's clock, a pair of dates says exactly what was
+            meant, and both are echoed back so a client can tell an
+            honoured span from one a server too old to understand it
+            ignored.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Last day of the span, inclusive. Must be paired with `from` and not fall before it.
+          schema: { type: string, format: date }
+        - name: range
+          in: query
+          description: |
+            The older spelling of a span: a whole number of calendar days
+            from 1 through 3660, or `all`. Omitted, the aggregate covers
+            the work's whole history, which is what this endpoint
+            answered before spans existed. `current_progression` and
+            `eta_seconds` are never narrowed: where the reader is in a
+            book is true now, whatever span the totals beside it cover.
+          schema: { type: string }
       responses:
         "200":
-          description: Per-work aggregates; eta_seconds is null when no speed history exists
+          description: |
+            One work's aggregate; `eta_seconds` is null when no speed
+            history exists. The span is named back as `range_days`
+            (always) and `from`/`to` (when bounded).
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
                   work_id: { type: string }
                   sessions: { type: integer }
                   total_active_minutes: { type: number }
@@ -676,15 +736,48 @@ paths:
       tags: [insights]
       summary: Per-work statistics for every work with reading history
       security: [{ deviceToken: [] }]  # requires read-insights scope
+      parameters:
+        - name: from
+          in: query
+          description: |
+            First day of the span, inclusive, in the user's timezone.
+            Must be paired with `to`, and takes precedence over `range`.
+            Prefer this over `range`: a count of days is resolved against
+            the server's clock, a pair of dates says exactly what was
+            meant, and both are echoed back so a client can tell an
+            honoured span from one a server too old to understand it
+            ignored.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Last day of the span, inclusive. Must be paired with `from` and not fall before it.
+          schema: { type: string, format: date }
+        - name: range
+          in: query
+          description: |
+            The older spelling of a span: a whole number of calendar days
+            from 1 through 3660, or `all`. Omitted, every aggregate
+            covers its work's whole history. Give this the same span as
+            `/v1/insights/summary` when the two are shown on one screen,
+            or the headline and the rows below it will describe
+            different spans.
+          schema: { type: string }
       responses:
         "200":
-          description: Per-work aggregates, ordered by active time descending
+          description: |
+            Per-work aggregates, ordered by active time descending.
+            `range_days` is always present, and `from`/`to` whenever the
+            span was bounded; both must be checked before the rows are
+            labelled with a span.
           content:
             application/json:
               schema:
                 type: object
-                required: [works]
+                required: [works, range_days]
                 properties:
+                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
                   works:
                     type: array
                     items:
@@ -702,22 +795,40 @@ paths:
   /v1/insights/calendar:
     get:
       tags: [insights]
-      summary: Daily reading minutes for a year (user's timezone)
+      summary: Daily reading minutes over a year or an arbitrary span (user's timezone)
       security: [{ deviceToken: [] }]  # requires read-insights scope
       parameters:
         - name: year
           in: query
-          description: A year from 1971 through 2999. Omitted or invalid values use the server's current year.
+          description: A year from 1971 through 2999. Omitted or invalid values use the server's current year. Ignored when a valid `from`/`to` pair is given.
           schema: { type: integer }
+        - name: from
+          in: query
+          description: |
+            First day to include. Must be paired with `to`. A rolling
+            window costs one request in this form rather than one per
+            calendar year it straddles. A span longer than 4000 days is
+            refused rather than served.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Last day to include, inclusive. Must be paired with `from` and not fall before it.
+          schema: { type: string, format: date }
       responses:
         "200":
-          description: Days with activity; midnight-crossing sessions are split
+          description: |
+            Days with activity; midnight-crossing sessions are split.
+            `from` and `to` are echoed back only when they were honoured,
+            so a client can tell this server from one that predates them,
+            ignored them, and answered with the current year.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   year: { type: integer }
+                  from: { type: string, format: date }
+                  to: { type: string, format: date }
                   days:
                     type: array
                     items:
@@ -726,6 +837,7 @@ paths:
                         date: { type: string, format: date }
                         minutes: { type: number }
                         pages: { type: number }
+        "400": { $ref: "#/components/responses/Error" }
 
   /v1/folders:
     get:

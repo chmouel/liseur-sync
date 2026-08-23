@@ -43,6 +43,123 @@ type workInsight struct {
 	LastReadAt         *time.Time `json:"last_read_at"`
 }
 
+// window is the span an insight covers, always a whole number of days
+// in the user's timezone.
+//
+// Whole days rather than a rolling count of hours, because that is what
+// the question means: a reader asking for their last seven days at nine
+// in the evening means the same seven dates they would have meant at
+// dawn, not the 168 hours ending now — which would reach back into an
+// eighth day and count part of it.
+//
+// A zero window is unbounded: "everything on record", which is what a
+// caller that names no range has always meant and must keep meaning.
+type window struct {
+	// from is the first instant counted, to the first instant after.
+	from time.Time
+	to   time.Time
+	// fromDay and toDay are the same bounds as tz-local dates, both
+	// inclusive, and are empty exactly when the window is unbounded.
+	fromDay string
+	toDay   string
+}
+
+func (w window) unbounded() bool { return w.fromDay == "" }
+
+// holdsSession reports whether a session ended inside the window. The
+// end is what places a session in a range, so that a stretch of reading
+// counts once, on the day it was finished, rather than being smeared
+// across a boundary it happened to straddle.
+func (w window) holdsSession(ses store.Session) bool {
+	if w.unbounded() {
+		return true
+	}
+	return !ses.EndedAt.Before(w.from) && ses.EndedAt.Before(w.to)
+}
+
+// holdsDay reports whether a rollup's tz-local day falls in the window.
+// Compared as strings because a rollup's day was fixed in the timezone
+// in force when it was rolled up, and re-parsing it in today's timezone
+// would move reading between days retroactively.
+func (w window) holdsDay(day string) bool {
+	if w.unbounded() {
+		return true
+	}
+	return day >= w.fromDay && day <= w.toDay
+}
+
+// days counts the calendar days the window covers, 0 when unbounded.
+//
+// Counted from the day strings in UTC rather than by dividing the
+// instants, because a span containing a daylight-saving change is not a
+// whole number of twenty-four hour periods and would come out short.
+func (w window) days() int {
+	if w.unbounded() {
+		return 0
+	}
+	from, errFrom := time.Parse("2006-01-02", w.fromDay)
+	to, errTo := time.Parse("2006-01-02", w.toDay)
+	if errFrom != nil || errTo != nil {
+		return 0
+	}
+	return int(to.Sub(from).Hours()/24) + 1
+}
+
+// sessionBounds are the instants to query raw sessions between. An
+// unbounded window reaches back to the epoch, which predates every
+// session any store can hold.
+func (w window) sessionBounds(now time.Time) (time.Time, time.Time) {
+	if w.unbounded() {
+		return time.Unix(0, 0), now.AddDate(0, 0, 1)
+	}
+	return w.from, w.to
+}
+
+// dayBounds are the inclusive tz-local dates to query rollups between.
+func (w window) dayBounds(now time.Time, loc *time.Location) (string, string) {
+	if w.unbounded() {
+		return epochDay, now.In(loc).Format("2006-01-02")
+	}
+	return w.fromDay, w.toDay
+}
+
+// describe adds the window to a response so a client can tell what was
+// actually counted from what it asked for. `range_days` is always
+// written — nought for an unbounded window — because "everything on
+// record" needs checking as much as any other span does: a server too
+// old to know the word answers with a horizon of its own and nothing in
+// the totals says which it was.
+//
+// This is what makes a new client safe against an old server. The
+// aggregates themselves look identical either way, so without an echo a
+// client cannot tell a range that was honoured from one that was
+// silently ignored — and would label a lifetime total as a fortnight.
+func (w window) describe(answer map[string]any) {
+	answer["range_days"] = w.days()
+	if w.unbounded() {
+		return
+	}
+	answer["from"] = w.fromDay
+	answer["to"] = w.toDay
+}
+
+// dayWindow builds the window covering firstDay through lastDay
+// inclusive, in loc.
+func dayWindow(firstDay, lastDay time.Time, loc *time.Location) window {
+	from := time.Date(firstDay.Year(), firstDay.Month(), firstDay.Day(), 0, 0, 0, 0, loc)
+	last := time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 0, 0, 0, 0, loc)
+	return window{
+		from:    from,
+		to:      last.AddDate(0, 0, 1),
+		fromDay: from.Format("2006-01-02"),
+		toDay:   last.Format("2006-01-02"),
+	}
+}
+
+// epochDay is older than any session or rollup a store can hold, and is
+// what an unbounded window uses where a query insists on a lower bound.
+const epochDay = "1970-01-01"
+
 // userLocation loads the user's configured timezone.
 func (s *Server) userLocation(r *http.Request, userID string) *time.Location {
 	u, err := s.St.UserByID(r.Context(), userID)
@@ -54,6 +171,52 @@ func (s *Server) userLocation(r *http.Request, userID string) *time.Location {
 		return time.UTC
 	}
 	return loc
+}
+
+// activeDays returns the set of tz-local days with reading on them,
+// across all of history rather than a requested window.
+//
+// The set the caller already built for its own range is reused as a
+// starting point, and an unbounded range has nothing left to add, so
+// the extra queries are skipped. Raw sessions only survive the
+// retention horizon, so the long tail here is rollups, which are one
+// row per work per day and cheap to walk.
+func (s *Server) activeDays(
+	ctx context.Context,
+	userID string,
+	loc *time.Location,
+	now time.Time,
+	known map[string]bool,
+	win window,
+) (map[string]bool, error) {
+	if win.unbounded() {
+		return known, nil
+	}
+	all := make(map[string]bool, len(known))
+	for day := range known {
+		all[day] = true
+	}
+	from := now.AddDate(0, 0, -streakLookbackDays)
+	sessions, err := s.St.SessionsInRange(ctx, userID, from, now)
+	if err != nil {
+		return nil, err
+	}
+	for _, ses := range sessions {
+		for _, day := range splitDays(ses, loc) {
+			all[day.date] = true
+		}
+	}
+	rollups, err := s.St.RollupsInRange(ctx, userID,
+		from.In(loc).Format("2006-01-02"), now.In(loc).Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	for _, ru := range rollups {
+		if ru.ActiveSeconds > 0 {
+			all[ru.Day] = true
+		}
+	}
+	return all, nil
 }
 
 // activeSeconds returns duration minus idle, clamped >= 0.
@@ -79,26 +242,37 @@ func (s *Server) pagesRead(ctx context.Context, ses store.Session) float64 {
 	return delta * float64(*ed.PageCount)
 }
 
-// HandleInsightsSummary implements GET /v1/insights/summary?range=30d.
+// HandleInsightsSummary implements GET /v1/insights/summary. The span
+// is either `from=2026-01-01&to=2026-03-31` or the older `range=30d`,
+// and defaults to the last thirty days when neither is given.
 func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
-	days := parseRangeDays(r.URL.Query().Get("range"), 30)
 	now := time.Now()
-	from := now.AddDate(0, 0, -days)
-	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, now)
+	loc := s.userLocation(r, tok.UserID)
+	win := insightsWindow(r, loc, now, defaultSummaryRange)
+	from, to := win.sessionBounds(now)
+	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "summary failed")
 		return
 	}
-	loc := s.userLocation(r, tok.UserID)
 
 	var totalActive float64
 	var totalPages float64
-	sessionCount := len(sessions)
+	sessionCount := 0
 	daySet := map[string]bool{}
 	// Rolling speed: progression delta per active second over range.
 	var progDelta float64
 	for _, ses := range sessions {
+		// A query by overlap returns a session that began before the
+		// window and ran into it. Where it counts is settled the same
+		// way here as for one book — by where it ended — so that the
+		// headline and the rows beneath it cannot disagree about a
+		// stretch of reading that straddles the first morning.
+		if !win.holdsSession(ses) {
+			continue
+		}
+		sessionCount++
 		a := activeSeconds(ses)
 		totalActive += a
 		totalPages += s.pagesRead(r.Context(), ses)
@@ -111,8 +285,8 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	// Aged sessions live as daily rollups; merge them in so ranges
 	// wider than the retention window stay correct.
-	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID,
-		from.In(loc).Format("2006-01-02"), now.In(loc).Format("2006-01-02"))
+	fromDay, toDay := win.dayBounds(now, loc)
+	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID, fromDay, toDay)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "summary failed")
 		return
@@ -126,31 +300,62 @@ func (s *Server) HandleInsightsSummary(w http.ResponseWriter, r *http.Request) {
 			daySet[ru.Day] = true
 		}
 	}
-	streak := streakDays(daySet, loc, now)
+	// A streak is a fact about the reader, not about the window they
+	// asked to look through. Counted from every day on record, so that
+	// asking for the last week cannot report a hundred-day run as seven.
+	streakSet, err := s.activeDays(r.Context(), tok.UserID, loc, now, daySet, win)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "summary failed")
+		return
+	}
+	streak := streakDays(streakSet, loc, now)
 
 	speed := 0.0
 	if totalActive > 0 {
 		speed = progDelta / totalActive // progression fraction per second
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"range_days":           days,
+	answer := map[string]any{
 		"total_active_minutes": totalActive / 60,
 		"total_pages":          totalPages,
 		"sessions":             sessionCount,
 		"streak_days":          streak,
 		"speed_prog_per_hour":  speed * 3600,
-	})
+	}
+	win.describe(answer)
+	writeJSON(w, http.StatusOK, answer)
 }
 
-func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *time.Location) (workInsight, error) {
-	sessions, err := s.St.CurrentSessionsForWork(ctx, userID, workID, 10_000)
+func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *time.Location, win window) (workInsight, error) {
+	sessions, err := s.St.CurrentSessionsForWork(ctx, userID, workID, sessionsPerWork)
 	if err != nil {
 		return workInsight{}, err
 	}
+	return s.workInsightFrom(ctx, userID, workID, loc, win, sessions)
+}
+
+// workInsightFrom builds one work's aggregate from sessions already in
+// hand.
+//
+// The collection endpoint fetches the whole window once and groups it,
+// rather than asking per work: that is one query instead of one per
+// book, and it is not subject to the row limit a per-work fetch needs —
+// which, applied newest-first to a narrow window deep in the past,
+// could otherwise drop the very sessions being asked about.
+func (s *Server) workInsightFrom(
+	ctx context.Context,
+	userID, workID string,
+	loc *time.Location,
+	win window,
+	sessions []store.Session,
+) (workInsight, error) {
 	var totalActive, totalPages, progDelta float64
-	sessionCount := len(sessions)
+	sessionCount := 0
 	var lastReadAt *time.Time
 	for _, ses := range sessions {
+		if !win.holdsSession(ses) {
+			continue
+		}
+		sessionCount++
 		totalActive += activeSeconds(ses)
 		totalPages += s.pagesRead(ctx, ses)
 		if d := ses.EndProg - ses.StartProg; d > 0 {
@@ -167,6 +372,9 @@ func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *ti
 		return workInsight{}, err
 	}
 	for _, ru := range rollups {
+		if !win.holdsDay(ru.Day) {
+			continue
+		}
 		totalActive += ru.ActiveSeconds
 		totalPages += ru.Pages
 		progDelta += ru.ProgDelta
@@ -176,7 +384,9 @@ func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *ti
 			lastReadAt = &day
 		}
 	}
-	// Current position: newest op.
+	// Current position: newest op. Never windowed — where the reader is
+	// in a book is true now, whatever span the totals beside it cover,
+	// and an estimate of what is left must be measured from there.
 	var currentProg float64
 	var etaSeconds *float64
 	if ops, err := s.St.Positions(ctx, userID, workID, 1); err == nil && len(ops) > 0 {
@@ -201,9 +411,50 @@ func (s *Server) workInsight(ctx context.Context, userID, workID string, loc *ti
 	}, nil
 }
 
+// insightsWindow resolves the span an insights request asks for.
+//
+// `from=2026-01-01&to=2026-03-31` names whole days in the user's own
+// timezone, both included. `range=Nd` is the older spelling and means
+// the last N calendar days ending today — calendar days, so that a
+// request made at nine in the evening covers the same dates as one made
+// at dawn, which is what a reader means and what their own device
+// counts locally. `range=all`, an unparseable span, and an absent
+// parameter with no default all mean everything on record.
+func insightsWindow(r *http.Request, loc *time.Location, now time.Time, def string) window {
+	q := r.URL.Query()
+	rawFrom, rawTo := q.Get("from"), q.Get("to")
+	if rawFrom != "" && rawTo != "" {
+		from, errFrom := time.ParseInLocation("2006-01-02", rawFrom, loc)
+		to, errTo := time.ParseInLocation("2006-01-02", rawTo, loc)
+		if errFrom == nil && errTo == nil && !to.Before(from) {
+			return dayWindow(from, to, loc)
+		}
+	}
+	raw := q.Get("range")
+	if raw == "" {
+		raw = def
+	}
+	if raw == "" || raw == unboundedRange {
+		return window{}
+	}
+	days := parseRangeDays(raw, 0)
+	if days <= 0 {
+		return window{}
+	}
+	today := now.In(loc)
+	return dayWindow(today.AddDate(0, 0, -(days-1)), today, loc)
+}
+
 // HandleInsightsWorks implements GET /v1/insights/works. It returns one
 // aggregate per work with reading history, so a client can render its
 // per-book dashboard without issuing one request for every catalog item.
+//
+// An optional span narrows every aggregate to the same window the
+// summary uses, so that a dashboard's headline and its per-book rows
+// add up to each other instead of describing two different spans. It is
+// echoed back for the same reason the calendar's is: a client must be
+// able to tell a narrowed answer from a lifetime one, because the two
+// are indistinguishable from the aggregates alone.
 func (s *Server) HandleInsightsWorks(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	workIDs, err := s.St.WorkIDsWithInsights(r.Context(), tok.UserID)
@@ -212,9 +463,22 @@ func (s *Server) HandleInsightsWorks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loc := s.userLocation(r, tok.UserID)
+	now := time.Now()
+	win := insightsWindow(r, loc, now, "")
+	from, to := win.sessionBounds(now)
+	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, to)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "work insights failed")
+		return
+	}
+	byWork := map[string][]store.Session{}
+	for _, ses := range sessions {
+		byWork[ses.WorkID] = append(byWork[ses.WorkID], ses)
+	}
 	works := make([]workInsight, 0, len(workIDs))
 	for _, workID := range workIDs {
-		insight, err := s.workInsight(r.Context(), tok.UserID, workID, loc)
+		insight, err := s.workInsightFrom(
+			r.Context(), tok.UserID, workID, loc, win, byWork[workID])
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "work insights failed")
 			return
@@ -226,7 +490,19 @@ func (s *Server) HandleInsightsWorks(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(works, func(i, j int) bool {
 		return works[i].TotalActiveMinutes > works[j].TotalActiveMinutes
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"works": works})
+	answer := map[string]any{"works": works}
+	win.describe(answer)
+	writeJSON(w, http.StatusOK, answer)
+}
+
+// workInsightAnswer is one work's aggregate with the span it covers.
+// The embedded type's fields are promoted, so this stays the flat object
+// it has always been rather than growing a nested envelope.
+type workInsightAnswer struct {
+	workInsight
+	RangeDays int    `json:"range_days"`
+	From      string `json:"from,omitempty"`
+	To        string `json:"to,omitempty"`
 }
 
 // HandleInsightsWork implements GET /v1/insights/works/{id}.
@@ -237,29 +513,38 @@ func (s *Server) HandleInsightsWork(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "work not found")
 		return
 	}
-	insight, err := s.workInsight(r.Context(), tok.UserID, workID, s.userLocation(r, tok.UserID))
+	loc := s.userLocation(r, tok.UserID)
+	win := insightsWindow(r, loc, time.Now(), "")
+	insight, err := s.workInsight(r.Context(), tok.UserID, workID, loc, win)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "work insights failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, insight)
+	writeJSON(w, http.StatusOK, workInsightAnswer{
+		workInsight: insight,
+		RangeDays:   win.days(),
+		From:        win.fromDay,
+		To:          win.toDay,
+	})
 }
 
-// HandleInsightsCalendar implements GET /v1/insights/calendar?year=2026 —
-// daily minutes for heatmaps, days in the user's timezone.
+// HandleInsightsCalendar implements GET /v1/insights/calendar — daily
+// minutes for heatmaps, days in the user's timezone.
+//
+// Either `year=2026` or `from=2025-04-01&to=2026-03-31`. The bounded
+// form exists so a rolling window costs one request rather than one per
+// calendar year it happens to straddle, and both bounds are echoed back
+// so a client can tell a server that understood them from one that
+// ignored them and answered with this year.
 func (s *Server) HandleInsightsCalendar(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
-	year := time.Now().Year()
-	if y := r.URL.Query().Get("year"); y != "" {
-		var v int
-		if _, err := parseInt(y, &v); err == nil && v > 1970 && v < 3000 {
-			year = v
-		}
-	}
 	loc := s.userLocation(r, tok.UserID)
-	from := time.Date(year, 1, 1, 0, 0, 0, 0, loc)
-	to := from.AddDate(1, 0, 0)
-	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, from, to)
+	win, bounded, ok := calendarBounds(r, loc)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "calendar span too long")
+		return
+	}
+	sessions, err := s.St.SessionsInRange(r.Context(), tok.UserID, win.from, win.to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "calendar failed")
 		return
@@ -276,8 +561,7 @@ func (s *Server) HandleInsightsCalendar(w http.ResponseWriter, r *http.Request) 
 			d.Pages += part.pages
 		}
 	}
-	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID,
-		from.Format("2006-01-02"), to.AddDate(0, 0, -1).Format("2006-01-02"))
+	rollups, err := s.St.RollupsInRange(r.Context(), tok.UserID, win.fromDay, win.toDay)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "calendar failed")
 		return
@@ -296,7 +580,42 @@ func (s *Server) HandleInsightsCalendar(w http.ResponseWriter, r *http.Request) 
 		out = append(out, *d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
-	writeJSON(w, http.StatusOK, map[string]any{"year": year, "days": out})
+	answer := map[string]any{"year": win.from.In(loc).Year(), "days": out}
+	if bounded {
+		win.describe(answer)
+	}
+	writeJSON(w, http.StatusOK, answer)
+}
+
+// calendarBounds resolves the requested span. It reports whether an
+// explicit from/to pair was honoured, which is what the response echo is
+// derived from: a client must not be able to mistake an ignored
+// parameter for an obeyed one. A span longer than any reader can have
+// is refused rather than served, so that one authenticated request
+// cannot ask the store to walk an unbounded history.
+func calendarBounds(r *http.Request, loc *time.Location) (window, bool, bool) {
+	q := r.URL.Query()
+	rawFrom, rawTo := q.Get("from"), q.Get("to")
+	if rawFrom != "" && rawTo != "" {
+		from, errFrom := time.ParseInLocation("2006-01-02", rawFrom, loc)
+		to, errTo := time.ParseInLocation("2006-01-02", rawTo, loc)
+		if errFrom == nil && errTo == nil && !to.Before(from) {
+			win := dayWindow(from, to, loc)
+			if win.days() > maxCalendarDays {
+				return window{}, true, false
+			}
+			return win, true, true
+		}
+	}
+	year := time.Now().In(loc).Year()
+	if y := q.Get("year"); y != "" {
+		var v int
+		if _, err := parseInt(y, &v); err == nil && v > 1970 && v < 3000 {
+			year = v
+		}
+	}
+	first := time.Date(year, 1, 1, 0, 0, 0, 0, loc)
+	return dayWindow(first, first.AddDate(1, 0, -1), loc), false, true
 }
 
 type dayPart struct {
@@ -379,10 +698,45 @@ func streakDays(daySet map[string]bool, loc *time.Location, now time.Time) int {
 	return streak
 }
 
+// maxRangeDays is as long a span as `range=Nd` may name: ten years,
+// which is longer than this software has existed. It is not a limit on
+// how far back an insight can reach — `range=all` and an absent range
+// are unbounded and always were, and rollups are kept indefinitely.
+const maxRangeDays = 3660
+
+// streakLookbackDays is how far back a streak is searched for. A run of
+// consecutive days is broken by the first day without reading on it, so
+// looking further back than any reader has been syncing cannot lengthen
+// one, and the query is bounded rather than open.
+const streakLookbackDays = maxRangeDays
+
+// sessionsPerWork bounds a single work's raw session fetch. Raw
+// sessions are reduced to daily rollups past the retention horizon, so
+// this is far more sittings than one book can hold; the collection
+// endpoint does not use it at all, fetching the window once and
+// grouping it instead.
+const sessionsPerWork = 10_000
+
+// maxCalendarDays is the longest calendar a single request may ask for.
+// Comfortably more than a client showing a year at a time needs, and
+// short of asking the store to walk an entire history per request.
+const maxCalendarDays = 4000
+
+// defaultSummaryRange is what the summary counts when a caller names
+// no span at all, kept from before ranges were selectable.
+const defaultSummaryRange = "30d"
+
+// unboundedRange is how a caller spells "everything on record" rather
+// than encoding it as a magic number of days nobody could read back.
+const unboundedRange = "all"
+
+// parseRangeDays reads a `range=Nd` parameter, returning def for
+// anything else — including `all`, which names no number of days and is
+// resolved to an unbounded window by insightsWindow instead.
 func parseRangeDays(s string, def int) int {
 	if len(s) >= 2 && s[len(s)-1] == 'd' {
 		var v int
-		if _, err := parseInt(s[:len(s)-1], &v); err == nil && v > 0 && v <= 3660 {
+		if _, err := parseInt(s[:len(s)-1], &v); err == nil && v > 0 && v <= maxRangeDays {
 			return v
 		}
 	}
