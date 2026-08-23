@@ -295,15 +295,76 @@ time (duration minus `idle_ms`). If you only know pages, convert through
 
 With a `read-insights` token:
 
-- `GET /v1/insights/summary?range=30d`: totals, streak, speed trend
-- `GET /v1/insights/works`: aggregates for every work with reading
-  history
-- `GET /v1/insights/works/{id}`: per-work time, pace, ETA
+- `GET /v1/insights/summary?from=2026-07-13&to=2026-08-11`: totals,
+  streak, speed trend
+- `GET /v1/insights/works?from=…&to=…`: aggregates for every work with
+  reading history
+- `GET /v1/insights/works/{id}?from=…&to=…`: per-work time, pace, ETA
 - `GET /v1/insights/calendar?year=2026`: daily minutes for heatmaps
+- `GET /v1/insights/calendar?from=2025-04-01&to=2026-03-31`: the same,
+  over an arbitrary span
+
+Every endpoint takes a span the same way: a `from`/`to` pair of
+`YYYY-MM-DD` days, **both inclusive**, resolved in the user's configured
+timezone. The older `range=Nd` (up to `3660d`) and `range=all` spellings
+still work, and `Nd` now means the last N *calendar* days ending today
+rather than N × 24 hours ending at the moment of the request — the
+difference is a partial extra day at the far end, which no client could
+reconcile against days it had counted for itself.
+
+Prefer `from`/`to`. A count of days is resolved against the server's
+clock; a pair of dates says exactly what was meant and comes back in the
+answer.
+
+Every answer names the span it covers: `range_days` always, plus `from`
+and `to` when the span is bounded. **Check it.** A server too old to
+understand the parameters ignores them and answers about some other
+span, and the aggregates give no sign of it: thirty days of reading and
+ten years of it are both just a number of minutes. An answer that does
+not name back the days you asked about is not an answer to your
+question.
+
+Check an unbounded request too, against `range_days == 0`. An older
+server answers `range=all` with the ten-year horizon it used to apply,
+and an older one still does not know the word at all — and the summary,
+given nothing it understands, falls back on thirty days.
+
+A span is optional on the works endpoints, where absent means everything
+on record — which is what they answered before spans existed. The
+summary defaults to `30d` instead, for the same reason. Say `range=all`
+rather than leaving it out if you mean a lifetime.
+
+Give the works endpoints the same span as the summary if the two are
+shown on one screen: a headline covering thirty days above rows covering
+a lifetime is a dashboard whose numbers cannot be added up.
+
+`streak_days` is deliberately **not** narrowed by the span. It counts
+consecutive days ending today or yesterday, looking back up to ten
+years, so asking about the last week does not report a hundred-day run
+as seven.
+
+`range_days` reports how many days the answer covers, and is `0` for an
+unbounded one.
+
+A sitting that straddles the first morning of the span counts, whole, on
+the day it *ended* — both in the summary and in the per-work rows, so
+the two cannot disagree. The calendar splits such a sitting across the
+midnight it crosses, because a day-by-day answer that did not would
+attribute an hour to a day it was not read on.
+
+The calendar additionally accepts `year`, and falls back to the current
+year when no usable span is given — which is what makes the echo the
+only way to tell an honoured request from an ignored one. A single
+calendar may not span more than 4000 days; a longer one is refused with
+`400` rather than served.
 
 All day boundaries are computed in the user's configured timezone.
 Rereading counts time but never negative pages. ETA is `null` until the
 user has enough speed history on the work.
+
+`current_progression` and `eta_seconds` are never narrowed by the span
+either. Where the reader is in a book is true now, whatever span the
+totals beside it cover.
 
 `total_pages` will be `0` unless the work has a page count on its
 edition, and nothing in the native API sets one. A reflowable EPUB has
