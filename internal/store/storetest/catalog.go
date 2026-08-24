@@ -379,7 +379,7 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 
 // testCatalogSeriesVolumesForBooks pins the Android shelf rule: a book
 // is filed under its first effective series, and expanding that seed
-// returns the whole active pile from the selected folder only.
+// returns the whole active pile across every folder the reader may see.
 func testCatalogSeriesVolumesForBooks(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := context.Background()
@@ -422,20 +422,33 @@ func testCatalogSeriesVolumesForBooks(t *testing.T, open OpenFunc) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(volumes) != 2 {
+	if len(volumes) != 3 {
 		t.Fatalf("Alpha pile: got %+v", volumes)
 	}
 	if volumes[0].SeriesName != "Alpha" || volumes[0].BookID != two ||
-		volumes[1].BookID != one {
+		volumes[1].BookID != knownByPath(t, s, second.ID)["elsewhere.epub"].ID ||
+		volumes[2].BookID != one {
 		t.Fatalf("primary series or volume order: %+v", volumes)
 	}
 	if volumes[0].Position == nil || *volumes[0].Position != 2 ||
-		volumes[1].Position == nil || *volumes[1].Position != 10 {
+		volumes[1].Position == nil || *volumes[1].Position != 3 ||
+		volumes[2].Position == nil || *volumes[2].Position != 10 {
 		t.Fatalf("positions were not preserved: %+v", volumes)
+	}
+	if err := s.UnassignUserFolder(ctx, reader.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	volumes, err = s.CatalogSeriesVolumesForBooks(
+		ctx, reader.ID, first.ID, []string{one})
+	if err != nil || len(volumes) != 2 {
+		t.Fatalf("ungranted folder leaked into pile: %+v %v", volumes, err)
+	}
+	if err := s.AssignUserFolder(ctx, reader.ID, second.ID); err != nil {
+		t.Fatal(err)
 	}
 
 	// A one-book series is returned so presentation can leave it as a
-	// single. A book in another folder never joins this pile.
+	// single.
 	volumes, err = s.CatalogSeriesVolumesForBooks(
 		ctx, reader.ID, first.ID, []string{single})
 	if err != nil || len(volumes) != 1 || volumes[0].BookID != single {
@@ -458,7 +471,7 @@ func testCatalogSeriesVolumesForBooks(t *testing.T, open OpenFunc) {
 	}
 	volumes, err = s.CatalogSeriesVolumesForBooks(
 		ctx, anyReader, first.ID, []string{one})
-	if err != nil || len(volumes) != 2 || volumes[0].SeriesName != "Alpha" {
+	if err != nil || len(volumes) != 3 || volumes[0].SeriesName != "Alpha" {
 		t.Fatalf("personal claim leaked: %+v %v", volumes, err)
 	}
 

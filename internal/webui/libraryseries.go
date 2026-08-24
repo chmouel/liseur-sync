@@ -3,8 +3,8 @@ package webui
 // The grouped library follows Liseur's Android shelf: one mixed grid of
 // standalone books and series piles, never a series section above a book
 // section. The store expands only the primary series of books already in
-// play, so a paged catalog stays paged and a reader's personal claims stay
-// inside that reader's view.
+// play, so a paged catalog stays paged and a reader's personal claims and
+// folder grants stay inside that reader's view.
 
 import (
 	"net/http"
@@ -23,8 +23,8 @@ type LibraryEntry struct {
 }
 
 // LibrarySeries is the compact pile standing in for two or more books in
-// the selected folder. Its detail page remains library-wide, as every
-// series-bearing read is under ADR-0019.
+// every folder the reader may see. Its position on a paged folder shelf is
+// still determined by a volume in that folder.
 type LibrarySeries struct {
 	ID                   string
 	Name                 string
@@ -45,6 +45,7 @@ type LibrarySeries struct {
 type LibrarySeriesVolume struct {
 	Row       LibraryRow
 	Position  *float64
+	FolderID  string
 	createdAt time.Time
 }
 
@@ -194,7 +195,8 @@ func (s *Server) librarySeriesForRows(
 			}
 		}
 		group.Volumes = append(group.Volumes, LibrarySeriesVolume{
-			Row: row, Position: volume.Position, createdAt: volume.CreatedAt,
+			Row: row, Position: volume.Position, FolderID: volume.FolderID,
+			createdAt: volume.CreatedAt,
 		})
 	}
 
@@ -219,7 +221,7 @@ func (s *Server) librarySeriesForRows(
 			}
 			return left.Row.BookID < right.Row.BookID
 		})
-		finalizeLibrarySeries(group)
+		finalizeLibrarySeries(group, folderID)
 		group.Author = commonSeriesAuthor(group.Volumes)
 		for _, volume := range group.Volumes {
 			byVolume[volume.Row.BookID] = group
@@ -260,7 +262,7 @@ func androidShelfSortKey(text string) string {
 	return key
 }
 
-func finalizeLibrarySeries(group *LibrarySeries) {
+func finalizeLibrarySeries(group *LibrarySeries, folderID string) {
 	cover := -1
 	unfinished := -1
 	complete := true
@@ -285,8 +287,8 @@ func finalizeLibrarySeries(group *LibrarySeries) {
 			group.LastActiveAt = volume.Row.lastActiveAt
 		}
 		added := volume.createdAt.UnixNano()
-		if newest < 0 || added > group.AddedAt ||
-			(added == group.AddedAt && volume.Row.BookID > group.Volumes[newest].Row.BookID) {
+		if volume.FolderID == folderID && (newest < 0 || added > group.AddedAt ||
+			(added == group.AddedAt && volume.Row.BookID > group.Volumes[newest].Row.BookID)) {
 			newest = i
 			group.AddedAt = added
 		}
