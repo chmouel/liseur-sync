@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,45 @@ const (
 	DeviceEReader = "ereader"
 	DeviceDesktop = "desktop"
 )
+
+// deviceLabels returns the names a reader chose for their devices, keyed by
+// the device id written into native sessions. The adapter ids are namespaced
+// so the three credential types can share this small lookup.
+func deviceLabels(ctx context.Context, st store.Store, userID string) map[string]string {
+	labels := map[string]string{}
+	if tokens, err := st.ListTokens(ctx, userID); err == nil {
+		for _, token := range tokens {
+			if token.Name != "" {
+				labels[token.DeviceID] = token.Name
+			}
+		}
+	}
+	if devices, err := st.ListKosyncDevices(ctx, userID); err == nil {
+		for _, device := range devices {
+			if device.Label != "" {
+				labels["kosync:"+device.DeviceSlot] = device.Label
+			}
+		}
+	}
+	if devices, err := st.ListKopluginDevices(ctx, userID); err == nil {
+		for _, device := range devices {
+			if device.Label != "" {
+				labels[device.DeviceID] = device.Label
+			}
+		}
+	}
+	return labels
+}
+
+const compactDeviceIDLimit = 20
+
+func compactDeviceID(id string) string {
+	runes := []rune(id)
+	if len(runes) <= compactDeviceIDLimit {
+		return id
+	}
+	return string(runes[:9]) + "…" + string(runes[len(runes)-8:])
+}
 
 func detectDeviceType(name, deviceID string) string {
 	s := strings.ToLower(name + " " + deviceID)

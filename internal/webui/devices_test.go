@@ -47,3 +47,15 @@ func TestSortTokensByDeviceType(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactDeviceID(t *testing.T) {
+	const id = "koplugin:012345678901234567890"
+
+	got := compactDeviceID(id)
+	if got != "koplugin:…34567890" {
+		t.Fatalf("compactDeviceID(%q) = %q", id, got)
+	}
+	if compactDeviceID("short-id") != "short-id" {
+		t.Fatal("short device IDs should not be changed")
+	}
+}

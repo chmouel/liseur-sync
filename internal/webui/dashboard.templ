@@ -85,7 +85,12 @@ templ dashboardBody(
 					<tr>
 						<td>{ s.When }</td>
 						<td><a href={ prefix + "works/" + s.WorkID }>{ s.WorkTitle }</a></td>
-						<td><code>{ s.DeviceID }</code></td>
+						<td class="session-device">
+							if s.DeviceName != "" {
+								<span class="device-name" title={ s.DeviceName }>{ s.DeviceName }</span>
+							}
+							<code class="device-id" title={ s.DeviceID }>{ s.DeviceIDShort }</code>
+						</td>
 						<td>{ i2s(s.Minutes) } min</td>
 						<td>{ pct(s.StartProg) } → { pct(s.EndProg) }</td>
 					</tr>
