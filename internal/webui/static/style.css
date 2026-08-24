@@ -438,7 +438,7 @@ tr:last-child td { border-bottom: 0; }
 }
 .session-device .device-name { font-weight: 600; }
 .session-device .device-id {
-	width: max-content; color: var(--muted); font-size: .76em;
+	width: 100%; color: var(--muted); font-size: .76em;
 }
 
 code {
