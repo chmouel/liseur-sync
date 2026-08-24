@@ -305,7 +305,12 @@ func (s *Store) CatalogSeriesVolumesForBooks(
 	}
 	placeholders, ids := inArgs(bookIDs)
 	args := seriesReadArgs(userID, append([]any{folderID}, ids...)...)
-	args = append(args, folderID)
+	visible := ""
+	if userID != "" {
+		visible = ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, userID)
+	}
 	rows, err := s.db.QueryContext(ctx, q(
 		effectiveSeriesCTE+`,
 primary_series AS (
@@ -327,12 +332,12 @@ wanted_series AS (
        AND p.book_id IN (`+placeholders+`)
 )
 SELECT p.series_id, p.name, p.position,
-       b.id, b.title, b.media_type, b.created_at
+       b.id, b.folder_id, b.title, b.media_type, b.created_at
   FROM primary_series p
   JOIN wanted_series w ON w.series_id = p.series_id
   JOIN books b ON b.id = p.book_id
  WHERE p.primary_rank = 1
-   AND b.folder_id = ? AND b.status = 'active'
+   AND b.status = 'active'`+visible+`
  ORDER BY p.normalized_name, p.series_id,
           p.position IS NULL, p.position, b.created_at, b.id`), args...)
 	if err != nil {
@@ -344,7 +349,7 @@ SELECT p.series_id, p.name, p.position,
 		var v store.CatalogSeriesVolume
 		var position sql.NullFloat64
 		if err := rows.Scan(&v.SeriesID, &v.SeriesName,
-			&position, &v.BookID, &v.Title,
+			&position, &v.BookID, &v.FolderID, &v.Title,
 			&v.MediaType, &v.CreatedAt); err != nil {
 			return nil, err
 		}
