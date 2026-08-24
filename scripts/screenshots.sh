@@ -141,7 +141,11 @@ admin() { "$WORK/liseur-sync" admin -config "$WORK/config.toml" "$@"; }
 SHELF="$WORK/books"
 mkdir -p "$SHELF"
 cp "$CACHE"/*.epub "$SHELF/"
-admin add-folder "Alice's Books" "$SHELF" >/dev/null || die "could not watch the shelf"
+ADD_OUTPUT=$(admin add-folder "Alice's Books" "$SHELF") || die "could not watch the shelf"
+SCREENSHOT_FOLDER=$(printf '%s\n' "$ADD_OUTPUT" | sed -n 's/.*(id \([^)]*\)).*/\1/p')
+[ -n "$SCREENSHOT_FOLDER" ] || die "could not read the screenshot folder id"
+admin assign-folder alice "$SCREENSHOT_FOLDER" >/dev/null ||
+	die "could not grant Alice the screenshot folder"
 TOKEN=$(admin mint-token -scope sync,library-read,library-manage alice "Screenshots" |
 	sed -n 's/^secret (shown once): //p')
 [ -n "$TOKEN" ] || die "no token"
