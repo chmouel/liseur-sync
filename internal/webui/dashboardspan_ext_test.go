@@ -63,6 +63,26 @@ func TestDashboardSpanPicker(t *testing.T) {
 	}
 }
 
+func TestDashboardSessionUsesDeviceName(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ed := seedWork(t, st, "named-work", "A named book")
+	seedSession(t, st, "named-session", ed, time.Now().Add(-time.Hour), time.Now())
+	if err := st.CreateToken(t.Context(), store.Token{
+		ID: "named-device-token", UserID: "u1", DeviceID: "reader",
+		Name: "Boox Palma", Scopes: store.ScopeSet{store.ScopeSync},
+		SHA256: "named-device-hash", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := page(t, ts, cookie, "/ui?span=7d")
+	want := `<span class="device-name" title="Boox Palma">Boox Palma</span>`
+	if !strings.Contains(body, want) {
+		t.Fatalf("dashboard did not show the device name %q: %s", want, body)
+	}
+}
+
 // TestDashboardSpanFallsBackToDefault is a span nobody offers. An
 // unknown token in a URL must not be an error page or an empty chart;
 // it is the default, which is what a reader who typed nothing gets.
