@@ -492,6 +492,7 @@ type CatalogSeriesVolume struct {
 	SeriesID   string
 	SeriesName string
 	BookID     string
+	FolderID   string
 	Title      string
 	MediaType  string
 	Position   *float64
@@ -1302,10 +1303,11 @@ type Store interface {
 	// through that reader's override layers (ADR-0018). Contributors and
 	// every other relation stay shared.
 	CatalogBookRelationsForBooks(ctx context.Context, userID string, bookIDs []string) (CatalogBookRelations, error)
-	// CatalogSeriesVolumesForBooks returns every active primary-series
-	// volume in folderID for the series named by bookIDs. It is the
+	// CatalogSeriesVolumesForBooks returns every visible active primary-series
+	// volume across the library for the series named by bookIDs. folderID
+	// identifies the selected shelf containing the seeds. It is the
 	// batched expansion a mixed shelf needs: one book on the current page
-	// can stand for its whole folder-local pile without an entity lookup
+	// can stand for its whole library-wide pile without an entity lookup
 	// per card. Series membership and display names resolve for userID.
 	CatalogSeriesVolumesForBooks(ctx context.Context, userID, folderID string, bookIDs []string) ([]CatalogSeriesVolume, error)
 	// ListCatalogEntities pages the library's entities of one kind by

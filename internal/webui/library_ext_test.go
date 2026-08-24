@@ -410,14 +410,16 @@ func TestLibraryGroupsSeriesLikeAndroidByDefault(t *testing.T) {
 		ContentSHA256: "series-standalone", OriginalFilename: "standalone.epub",
 		MediaType: "application/epub+zip", Title: "Standalone",
 	})
-	// The entity is library-wide, but the pile is made only from the
-	// selected folder. A third volume elsewhere belongs on the detail
-	// shelf, not in this folder's count.
+	// Like Android, the pile spans the whole library even though the web
+	// shelf is currently paged through one selected folder.
 	other := store.Folder{
 		ID: "folder-web-other", Name: "Other Books", RootPath: t.TempDir(),
 		Kind: store.FolderPlain, CreatedAt: now,
 	}
 	if err := f.st.CreateFolder(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), "u1", other.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.st.ReconcileFolder(t.Context(), other.ID, []store.ObservedBook{{
@@ -434,12 +436,9 @@ func TestLibraryGroupsSeriesLikeAndroidByDefault(t *testing.T) {
 	if strings.Count(body, `class="bookcard seriescard"`) != 1 {
 		t.Fatalf("default shelf did not contain one series pile:\n%s", body)
 	}
-	if !strings.Contains(body, "The Run") || !strings.Contains(body, "2 books") ||
+	if !strings.Contains(body, "The Run") || !strings.Contains(body, "3 books") ||
 		!strings.Contains(body, "Series Author") {
 		t.Fatalf("pile is missing its Android summary:\n%s", body)
-	}
-	if strings.Contains(body, "3 books") {
-		t.Fatal("a volume from another folder changed the selected folder's pile")
 	}
 	for _, volume := range []string{one, two} {
 		if strings.Contains(body, `href="books/`+volume+`/read"`) {
