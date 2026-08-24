@@ -430,6 +430,17 @@ th { color: var(--muted); font-weight: 600; font-size: .78rem;
 tbody tr:hover { background: var(--surface-2); }
 tr:last-child td { border-bottom: 0; }
 
+.session-device { width: 10rem; max-width: 10rem; }
+.session-device .device-name,
+.session-device .device-id {
+	display: block; max-width: 100%; overflow: hidden;
+	text-overflow: ellipsis; white-space: nowrap;
+}
+.session-device .device-name { font-weight: 600; }
+.session-device .device-id {
+	width: max-content; color: var(--muted); font-size: .76em;
+}
+
 code {
 	background: var(--surface-2); border: 1px solid var(--line-soft);
 	padding: .1em .35em; border-radius: var(--radius-sm);

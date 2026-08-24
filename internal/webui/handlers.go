@@ -92,10 +92,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 	sum.StreakDays = s.streakFor(r, u.ID, loc, now, win, dayMin)
 
 	links := s.workBookIDs(r.Context(), u.ID, works)
+	labels := deviceLabels(r.Context(), s.St, u.ID)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum,
 		daySeries(win, dayMin, now, loc),
-		recentSessions(sessions, titles, loc),
+		recentSessions(sessions, titles, loc, labels),
 		s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
 		Render(r.Context(), w)
 }
@@ -131,18 +132,20 @@ func daySeries(win insights.Window, dayMin map[string]float64, now time.Time, lo
 const recentSessionLimit = 10
 
 // recentSessions is the newest sittings in the window, newest first.
-func recentSessions(sessions []store.Session, titles map[string]string, loc *time.Location) []SessionRow {
+func recentSessions(sessions []store.Session, titles map[string]string, loc *time.Location, labels map[string]string) []SessionRow {
 	rows := make([]SessionRow, 0, recentSessionLimit)
 	for i := len(sessions) - 1; i >= 0 && len(rows) < recentSessionLimit; i-- {
 		ses := sessions[i]
 		rows = append(rows, SessionRow{
-			When:      ses.EndedAt.In(loc).Format("Jan 2 15:04"),
-			WorkID:    ses.WorkID,
-			WorkTitle: titles[ses.WorkID],
-			DeviceID:  ses.DeviceID,
-			Minutes:   int(insights.ActiveSeconds(ses) / 60),
-			StartProg: ses.StartProg,
-			EndProg:   ses.EndProg,
+			When:          ses.EndedAt.In(loc).Format("Jan 2 15:04"),
+			WorkID:        ses.WorkID,
+			WorkTitle:     titles[ses.WorkID],
+			DeviceID:      ses.DeviceID,
+			DeviceName:    labels[ses.DeviceID],
+			DeviceIDShort: compactDeviceID(ses.DeviceID),
+			Minutes:       int(insights.ActiveSeconds(ses) / 60),
+			StartProg:     ses.StartProg,
+			EndProg:       ses.EndProg,
 		})
 	}
 	return rows

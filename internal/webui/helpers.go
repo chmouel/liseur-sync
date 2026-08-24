@@ -118,13 +118,15 @@ func backTo(u *url.URL) string {
 
 // SessionRow is one recent session for the dashboard.
 type SessionRow struct {
-	When      string
-	WorkID    string
-	WorkTitle string
-	DeviceID  string
-	Minutes   int
-	StartProg float64
-	EndProg   float64
+	When          string
+	WorkID        string
+	WorkTitle     string
+	DeviceID      string
+	DeviceName    string
+	DeviceIDShort string
+	Minutes       int
+	StartProg     float64
+	EndProg       float64
 }
 
 func pct(f float64) string { return strconv.Itoa(int(f*100)) + "%" }
