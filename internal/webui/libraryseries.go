@@ -293,6 +293,16 @@ func finalizeLibrarySeries(group *LibrarySeries, folderID string) {
 			group.AddedAt = added
 		}
 	}
+	if newest < 0 {
+		for i := range group.Volumes {
+			added := group.Volumes[i].createdAt.UnixNano()
+			if newest < 0 || added > group.AddedAt ||
+				(added == group.AddedAt && group.Volumes[i].Row.BookID > group.Volumes[newest].Row.BookID) {
+				newest = i
+				group.AddedAt = added
+			}
+		}
+	}
 	if cover < 0 {
 		cover = unfinished
 	}
