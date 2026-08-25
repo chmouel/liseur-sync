@@ -1108,6 +1108,140 @@ type Heads struct {
 	SnapshotSeq int64
 }
 
+// AnnotationKind is what an annotation record is (ADR-0028). One
+// table, one API shape; kind is a column, not a schema.
+type AnnotationKind string
+
+const (
+	// AnnotationHighlight anchors to a range and may carry a body —
+	// that body is the attached note, not a second record.
+	AnnotationHighlight AnnotationKind = "highlight"
+	// AnnotationNote is a body with no anchor.
+	AnnotationNote AnnotationKind = "note"
+	// AnnotationBookmark is an anchor with no body.
+	AnnotationBookmark AnnotationKind = "bookmark"
+)
+
+// Valid reports whether k is a known annotation kind.
+func (k AnnotationKind) Valid() bool {
+	switch k {
+	case AnnotationHighlight, AnnotationNote, AnnotationBookmark:
+		return true
+	}
+	return false
+}
+
+// AnnotationColors is the fixed highlight palette. A color is a token
+// from this list, validated at the edge — never an arbitrary string a
+// page would hand to CSS.
+var AnnotationColors = []string{"yellow", "green", "blue", "pink", "purple", "orange"}
+
+// ValidAnnotationColor reports whether c is empty or a palette token.
+func ValidAnnotationColor(c string) bool {
+	if c == "" {
+		return true
+	}
+	for _, known := range AnnotationColors {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Annotation is one per-user annotation record (ADR-0028): the third
+// kind of reading state, and the first mutable one. It is a small
+// document the reader edits, not an observation, so it lives beside
+// the append-only op log rather than inside it: server-assigned rev
+// for compare-and-set, per-user annotation seq for the delta feed,
+// and a bounded tombstone when deleted.
+type Annotation struct {
+	UserID      string
+	ID          string // client-generated, opaque, deterministic (the op_id convention)
+	Seq         int64  // per-user annotation counter; stamped on every accepted write
+	Rev         int64  // server-assigned, incremented on every accepted write
+	WorkID      string
+	EditionSHA  *string
+	Kind        AnnotationKind
+	LocatorJSON []byte   // opaque envelope, same shape as ops.locator_json
+	Progression *float64 // 0..1; read by the server only to sort a list
+	Excerpt     string
+	Color       string
+	Body        string
+	DeviceID    string
+	ClientTS    time.Time // display metadata only; never decides a winner
+	UpdatedAt   time.Time
+	DeletedAt   *time.Time
+}
+
+// Deleted reports whether the record is a tombstone.
+func (a Annotation) Deleted() bool { return a.DeletedAt != nil }
+
+// AnnotationWrite is one item of a batched annotation push. BaseRev is
+// the rev the client last saw; 0 means create.
+type AnnotationWrite struct {
+	ID          string
+	BaseRev     int64
+	WorkID      string
+	EditionSHA  *string
+	Kind        AnnotationKind
+	LocatorJSON []byte
+	Progression *float64
+	Excerpt     string
+	Color       string
+	Body        string
+	ClientTS    time.Time
+}
+
+// AnnotationResult is the per-item outcome of an annotation write.
+type AnnotationResult struct {
+	ID     string
+	Status string // "applied" | "duplicate" | "conflict" | "invalid"
+	Rev    int64  // when applied or duplicate
+	Seq    int64  // when applied or duplicate
+	Reason string // when invalid
+	// Server is the server's current copy, carried on a conflict so
+	// the client resolves: the server orders, it never merges.
+	Server *Annotation
+}
+
+// SameAnnotationPayload reports whether an incoming write is
+// byte-identical to a stored record's content — the retry comparison:
+// an accepted write pushed again must be acknowledged, not conflicted.
+func SameAnnotationPayload(stored Annotation, w AnnotationWrite, deviceID string) bool {
+	if stored.Deleted() {
+		return false
+	}
+	if stored.WorkID != w.WorkID || stored.Kind != w.Kind ||
+		stored.DeviceID != deviceID ||
+		stored.Excerpt != w.Excerpt || stored.Color != w.Color ||
+		stored.Body != w.Body ||
+		// Compared at microsecond precision: Postgres timestamptz
+		// truncates nanoseconds on write, and a retry must still match.
+		!stored.ClientTS.UTC().Truncate(time.Microsecond).
+			Equal(w.ClientTS.UTC().Truncate(time.Microsecond)) {
+		return false
+	}
+	if !equalOptionalString(stored.EditionSHA, w.EditionSHA) {
+		return false
+	}
+	if (stored.Progression == nil) != (w.Progression == nil) ||
+		(stored.Progression != nil && *stored.Progression != *w.Progression) {
+		return false
+	}
+	return string(stored.LocatorJSON) == string(w.LocatorJSON)
+}
+
+// AnnotationChangesPage is one page of the annotation delta feed. It
+// is a state feed, not history: an edited record moves to the head of
+// the stream with its current content, and may appear on two pages of
+// one pull — harmless, the client keys by id and the newest rev wins.
+type AnnotationChangesPage struct {
+	Annotations []Annotation
+	HighWater   int64 // current annotation counter high-water for the user
+	HasMore     bool
+}
+
 // Store is the storage contract. Implementations: SQLite and Postgres.
 // All methods take a userID; cross-user access is impossible by
 // construction.
@@ -1523,6 +1657,35 @@ type Store interface {
 	HeadsFor(ctx context.Context, userID string) (Heads, error)
 	CompactionHorizon(ctx context.Context, userID string) (int64, error)
 	Compact(ctx context.Context, userID string, olderThan time.Time) (newHorizon int64, err error)
+
+	// Annotations (ADR-0028): mutable per-user reading state, never
+	// part of the op log. Every accepted write — create, edit,
+	// tombstone — stamps the record with the next value of a per-user
+	// annotation counter (a second counter beside the op one, never
+	// shared with it). Concurrency is compare-and-set on rev; a stale
+	// write is a conflict carrying the server's current copy.
+	//
+	// PushAnnotations is never atomic: one result per item, one bad
+	// item fails alone. maxLivePerWork is the per-work live-record cap,
+	// enforced inside the write transaction where two concurrent
+	// creates cannot both squeeze under it.
+	PushAnnotations(ctx context.Context, userID, deviceID string, items []AnnotationWrite, maxLivePerWork int) ([]AnnotationResult, error)
+	// AnnotationChanges returns records (tombstones included) with
+	// seq > since, in seq order, plus has_more and the high-water mark.
+	AnnotationChanges(ctx context.Context, userID string, since int64, limit int) (AnnotationChangesPage, error)
+	// WorkAnnotations is the live set for one work, ordered by
+	// progression then client_ts.
+	WorkAnnotations(ctx context.Context, userID, workID string) ([]Annotation, error)
+	// DeleteAnnotation writes the tombstone iff rev matches; a stale
+	// rev is a conflict with the server copy, and deleting a tombstone
+	// is a duplicate (already accepted). The tombstone keeps nothing
+	// but identity, rev, seq and when.
+	DeleteAnnotation(ctx context.Context, userID, id string, rev int64) (AnnotationResult, error)
+	// SweepAnnotationTombstones removes tombstones deleted before the
+	// cutoff. After the sweep the id is simply unknown: a device
+	// offline longer than the window that pushes it again creates a
+	// new record, rev starting over at 1.
+	SweepAnnotationTombstones(ctx context.Context, userID string, olderThan time.Time) (int64, error)
 
 	// Sessions.
 	AppendSessions(ctx context.Context, userID string, ss []Session) error

@@ -23,11 +23,11 @@ func TestStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { s.Close() })
 		reset(t, s)
 		if err := s.Migrate(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { s.Close() })
 		return s
 	}
 	storetest.Run(t, open)
@@ -43,7 +43,7 @@ func reset(t *testing.T, s *Store) {
 		"series_name_overrides", "series_bindings", "book_series", "series",
 		"book_identifiers", "user_book_works", "user_folders",
 		"books", "folders",
-		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "aliases", "editions",
+		"session_supersessions", "session_tombstones", "session_rollups", "sessions", "ops", "annotations", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "kosync_devices",
 		"koplugin_devices", "pairing_codes", "invites", "auth_sessions",
 		"token_scopes", "tokens", "users", "schema_migrations",

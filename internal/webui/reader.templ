@@ -156,6 +156,16 @@ templ readerPage(v ReaderView, csrf string) {
 			<aside id="reader-toc" class="reader-toc" aria-label="Table of contents" hidden>
 				<h2>Contents</h2>
 				<nav id="reader-toc-list"></nav>
+				// Annotations, view-only (ADR-0028): bookmarks, notes, and
+				// highlights the engine could not anchor, at their
+				// progression. Filled in from the sync API with the same
+				// derived token positions use; excerpts and bodies arrive
+				// as text nodes only — an annotation is reader-authored,
+				// but it is displayed as inertly as publisher content.
+				<section id="reader-annotations" class="reader-annotations" hidden>
+					<h2>Annotations</h2>
+					<nav id="reader-annotations-list"></nav>
+				</section>
 			</aside>
 			<div class="reader-stage">
 				<button id="reader-prev" class="reader-turn" type="button" aria-label="Previous page">&lsaquo;</button>

@@ -856,6 +856,22 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-toc span{opacity:.65}
 .reader-toc a:hover,.reader-toc a:focus-visible{background:var(--surface-3)}
 .reader-toc a.current{background:var(--surface-3);color:var(--primary);font-weight:600}
+.reader-annotations{margin-top:1rem;border-top:1px solid var(--line);padding-top:.75rem}
+.reader-ann-kind{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;opacity:.65}
+.reader-ann-text{display:block;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.annlist{list-style:none;margin:0;padding:0}
+.annlist li{padding:.6rem 0;border-bottom:1px solid var(--line)}
+.annlist li:last-child{border-bottom:none}
+.annlist .ann-kind{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;opacity:.75;
+  padding:.1rem .45rem;border-radius:999px;border:1px solid var(--line)}
+.annlist .ann-excerpt{margin:.35rem 0;padding-left:.75rem;border-left:3px solid var(--line);font-style:italic}
+.annlist .ann-body{margin:.35rem 0;white-space:pre-wrap}
+.ann-color-yellow{border-left:4px solid #ffd54f}
+.ann-color-green{border-left:4px solid #81c784}
+.ann-color-blue{border-left:4px solid #64b5f6}
+.ann-color-pink{border-left:4px solid #f06292}
+.ann-color-purple{border-left:4px solid #ba68c8}
+.ann-color-orange{border-left:4px solid #ffb74d}
 .reader-stage{flex:1;display:flex;min-height:0}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;

@@ -344,7 +344,26 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		}
 		opRows = append(opRows, row)
 	}
-	workPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), d, opRows, sessionRows).
+	// The reader's own highlights and notes for this work (ADR-0028),
+	// view-only: excerpts and bodies render as text, and the panel is
+	// simply absent when there are none.
+	var annRows []AnnotationRow
+	if anns, err := s.St.WorkAnnotations(r.Context(), u.ID, workID); err == nil {
+		for _, an := range anns {
+			row := AnnotationRow{
+				Kind:    string(an.Kind),
+				Color:   an.Color,
+				Excerpt: an.Excerpt,
+				Body:    an.Body,
+				When:    an.ClientTS.In(loc).Format("Jan 2 15:04"),
+			}
+			if an.Progression != nil {
+				row.Where = fmt.Sprintf("%d%%", int(*an.Progression*100))
+			}
+			annRows = append(annRows, row)
+		}
+	}
+	workPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), d, opRows, sessionRows, annRows).
 		Render(r.Context(), w)
 }
 

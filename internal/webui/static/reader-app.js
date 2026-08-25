@@ -13,6 +13,7 @@
 // POST /ui/reader/token. It gets no special treatment from the server.
 
 import "./vendor/foliate/view.js";
+import { Overlayer } from "./vendor/foliate/overlayer.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -139,6 +140,137 @@ async function lastPosition() {
   if (!resp.ok) return null;
   const ops = (await resp.json()).ops || [];
   return ops.length ? ops[0] : null;
+}
+
+// ------------------------------------------------------ annotations
+
+// View-only annotation rendering (ADR-0028). The live set comes from
+// the same sync API every client uses; highlights whose CFI the engine
+// can anchor draw through the vendored overlayer, and the rest — every
+// bookmark, every note, and any highlight whose locator no longer
+// resolves against this copy — degrade to a sidebar entry at their
+// progression. Best-effort display, never an error.
+const annPanel = document.getElementById("reader-annotations");
+const annList = document.getElementById("reader-annotations-list");
+
+// The palette is tokens on the wire, always; this table is the only
+// place a token becomes CSS, so nothing a client pushed reaches the
+// overlayer as a style.
+const ANNOTATION_COLORS = {
+  yellow: "#ffd54f",
+  green: "#81c784",
+  blue: "#64b5f6",
+  pink: "#f06292",
+  purple: "#ba68c8",
+  orange: "#ffb74d",
+};
+
+let annotations = []; // the live set, in the server's progression order
+const annColorByCFI = new Map(); // overlayer key -> validated palette token
+const annFailed = new Set(); // annotation ids whose CFI did not anchor
+
+function annotationCFI(a) {
+  const fragments =
+    (a && a.locator && a.locator.locations && a.locator.locations.fragments) ||
+    [];
+  for (const fragment of fragments) {
+    if (typeof fragment === "string" && fragment.indexOf("epubcfi(") === 0) {
+      return fragment;
+    }
+  }
+  return null;
+}
+
+// drawAnnotations (re)offers every drawable highlight to the engine.
+// addAnnotation draws into any chapter that is on screen and is a
+// no-op for the ones that are not, so this runs once after the fetch
+// and again on every create-overlay as chapters arrive. A CFI that
+// fails to anchor moves its annotation to the sidebar instead.
+async function drawAnnotations() {
+  if (!view) return;
+  let degraded = false;
+  for (const a of annotations) {
+    if (a.kind !== "highlight" || annFailed.has(a.id)) continue;
+    const cfi = annotationCFI(a);
+    if (!cfi) continue;
+    annColorByCFI.set(cfi, a.color);
+    try {
+      await view.addAnnotation({ value: cfi });
+    } catch (err) {
+      annFailed.add(a.id);
+      degraded = true;
+    }
+  }
+  if (degraded) buildAnnotationList();
+}
+
+// buildAnnotationList fills the sidebar with the entries that do not
+// draw over the text. Excerpts and bodies are set as text nodes only.
+function buildAnnotationList() {
+  if (!annPanel || !annList) return;
+  annList.textContent = "";
+  const listed = annotations.filter(
+    (a) =>
+      a.kind !== "highlight" || !annotationCFI(a) || annFailed.has(a.id),
+  );
+  annPanel.hidden = !listed.length;
+  if (!listed.length) return;
+  const ul = document.createElement("ul");
+  for (const a of listed) {
+    const li = document.createElement("li");
+    const cfi = a.kind === "highlight" ? null : annotationCFI(a);
+    const canNavigate =
+      !!cfi || (typeof a.progression === "number" && a.progression >= 0);
+    const entry = document.createElement(canNavigate ? "a" : "span");
+    if (canNavigate) {
+      entry.href = "#";
+      entry.addEventListener("click", (e) => {
+        e.preventDefault();
+        toggleTOC(false);
+        if (!view) return;
+        const fall = () => {
+          if (typeof a.progression === "number") {
+            view.goToFraction(Math.min(0.999, a.progression)).catch(() => {});
+          }
+        };
+        if (cfi) view.goTo(cfi).catch(fall);
+        else fall();
+      });
+    }
+    const kind = document.createElement("span");
+    kind.className = "reader-ann-kind";
+    kind.textContent = a.kind;
+    entry.append(kind);
+    const text = document.createElement("span");
+    text.className = "reader-ann-text";
+    text.textContent =
+      a.excerpt ||
+      a.body ||
+      (typeof a.progression === "number"
+        ? Math.round(a.progression * 100) + "%"
+        : "");
+    entry.append(text);
+    li.append(entry);
+    ul.append(li);
+  }
+  annList.append(ul);
+}
+
+// loadAnnotations is best-effort like every other sync call: a reader
+// on a server without the routes, or offline, still reads the book.
+async function loadAnnotations() {
+  if (!workID || !view) return;
+  try {
+    const resp = await api(
+      "v1/works/" + encodeURIComponent(workID) + "/annotations",
+    );
+    if (!resp.ok) return;
+    annotations = (await resp.json()).annotations || [];
+  } catch (err) {
+    return; /* offline: the book reads without its annotations */
+  }
+  buildAnnotationList();
+  await drawAnnotations();
 }
 
 // bookTitle is read from the package document rather than from the
@@ -885,6 +1017,20 @@ window.addEventListener("beforeunload", () => {
     view.addEventListener("load", (e) => {
       e.detail.doc.addEventListener("keydown", handleKeys);
     });
+    // Highlight drawing (ADR-0028): the engine asks how to draw each
+    // annotation it anchors, and asks again for every chapter it
+    // creates an overlay for. The color is resolved from the palette
+    // table above — a token in, a CSS value out, nothing pass-through.
+    view.addEventListener("draw-annotation", (e) => {
+      const { draw, annotation } = e.detail;
+      const color =
+        ANNOTATION_COLORS[annColorByCFI.get(annotation.value)] ||
+        ANNOTATION_COLORS.yellow;
+      draw(Overlayer.highlight, { color });
+    });
+    view.addEventListener("create-overlay", () => {
+      drawAnnotations().catch(() => {});
+    });
     await view.open(
       new File([blob], "book.epub", { type: "application/epub+zip" }),
     );
@@ -928,6 +1074,9 @@ window.addEventListener("beforeunload", () => {
       }
     }
     if (!opened) await view.init({ lastLocation: null });
+    // The annotations arrive after the book is on screen: they are
+    // decoration on the text, never the reason the text waits.
+    loadAnnotations().catch(() => {});
     say("");
   } catch (err) {
     say((err && err.message) || "this book could not be opened", true);

@@ -33,8 +33,31 @@ func (s *Server) RunMaterializer(ctx context.Context) {
 			s.compactOnce(ctx, retention)
 		}
 		s.rollupSessionsOnce(ctx, retention)
+		s.sweepAnnotationsOnce(ctx,
+			time.Duration(s.Cfg.Ops.AnnotationRetentionDays)*24*time.Hour)
 		if err := s.St.Housekeep(ctx, time.Now()); err != nil {
 			slog.Warn("housekeeping", "err", err)
+		}
+	}
+}
+
+// sweepAnnotationsOnce removes annotation tombstones older than the
+// retention window (ADR-0028): kept long enough for every device to
+// learn of the deletion, then the id is simply unknown.
+func (s *Server) sweepAnnotationsOnce(ctx context.Context, retention time.Duration) {
+	users, err := s.St.UserIDs(ctx)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-retention)
+	for _, userID := range users {
+		n, err := s.St.SweepAnnotationTombstones(ctx, userID, cutoff)
+		if err != nil {
+			slog.Warn("annotation sweep", "user", userID, "err", err)
+			continue
+		}
+		if n > 0 {
+			slog.Info("annotation sweep", "user", userID, "swept", n)
 		}
 	}
 }

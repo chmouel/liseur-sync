@@ -328,6 +328,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/heads", syncH(s.HandleHeads))
 	mux.Handle("GET /v1/works/{id}/positions", syncH(s.HandlePositions))
 	mux.Handle("POST /v1/sessions", syncH(s.HandlePushSessions))
+	// Annotations (ADR-0028) are reading state, they travel with
+	// positions, and the reader token already carries what they need.
+	mux.Handle("POST /v1/annotations", syncH(s.HandlePushAnnotations))
+	mux.Handle("GET /v1/annotations/changes", syncH(s.HandleAnnotationChanges))
+	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))
+	mux.Handle("GET /v1/works/{id}/annotations", syncH(s.HandleWorkAnnotations))
 
 	// read-insights scope.
 	insH := func(h http.HandlerFunc) http.Handler {
