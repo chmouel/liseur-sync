@@ -52,6 +52,7 @@ loose ends that must come before any of it, are in
 | [0025](0025-deleting-a-book.md) | A book may be deleted where a book may be written | Later | Accepted | Deleting a book's file and row from an `accepts_uploads` folder; `library-delete` scope over the API, admin in the browser; amends [0024](0024-deleting-a-work.md) and rule 3 of [0017](0017-folders-not-pipelines.md) again |
 | [0026](0026-credential-enrolment-does-not-weaken-account-authentication.md) | Credential enrolment does not weaken account authentication | MVP | Accepted; implemented | Kosync pairing only; administrator password re-verification before creating an account or invite |
 | [0027](0027-explicit-per-user-folder-access.md) | Explicit per-user folder access | MVP | Accepted; implemented | Folder grants across storage, catalog surfaces, administration and CLI; amends [0017](0017-folders-not-pipelines.md) |
+| [0028](0028-annotation-sync.md) | Annotations are mutable reading state, not history | Later | Accepted | Phase 1: the `annotations` table, second per-user counter and store methods in both backends, with the storetest suite |
 
 ## Convention
 
