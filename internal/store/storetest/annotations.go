@@ -380,6 +380,33 @@ func testAnnotationTombstoneSweep(t *testing.T, open OpenFunc) {
 		// a2 is live at rev 1; this stale delete must conflict, not error.
 		t.Fatal(err)
 	}
+
+	// The post-sweep resurrect quoting an old base is accepted at rev 1
+	// — and its byte-identical retry is a duplicate, never a conflict
+	// and never a second application, whatever base it quoted.
+	if _, err := s.DeleteAnnotation(ctx, u.ID, "a1", 1); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.SweepAnnotationTombstones(ctx, u.ID, time.Now().Add(time.Hour)); err != nil || n != 1 {
+		t.Fatalf("second sweep: %d %v", n, err)
+	}
+	for _, base := range []int64{1, 3} {
+		resurrect := annWrite("a1", w.ID, base)
+		first := pushOne(t, s, u.ID, "d1", resurrect)
+		if first.Status != "applied" || first.Rev != 1 {
+			t.Fatalf("resurrect at base %d: %+v", base, first)
+		}
+		retry := pushOne(t, s, u.ID, "d1", resurrect)
+		if retry.Status != "duplicate" || retry.Rev != first.Rev || retry.Seq != first.Seq {
+			t.Fatalf("resurrect retry at base %d: %+v (first %+v)", base, retry, first)
+		}
+		if _, err := s.DeleteAnnotation(ctx, u.ID, "a1", 1); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := s.SweepAnnotationTombstones(ctx, u.ID, time.Now().Add(time.Hour)); err != nil || n != 1 {
+			t.Fatalf("sweep between resurrects: %d %v", n, err)
+		}
+	}
 }
 
 func testAnnotationSplitMergeReassignment(t *testing.T, open OpenFunc) {

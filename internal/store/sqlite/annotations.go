@@ -112,9 +112,13 @@ func pushAnnotationTx(ctx context.Context, tx *sql.Tx, userID, deviceID string, 
 	}
 	if found {
 		switch {
-		case stored.Rev == item.BaseRev+1 && store.SameAnnotationPayload(stored, item, deviceID):
+		case (stored.Rev == item.BaseRev+1 || (stored.Rev == 1 && !stored.Deleted())) &&
+			store.SameAnnotationPayload(stored, item, deviceID):
 			// The accepted write, pushed again: a lost response is
-			// harmless.
+			// harmless. The rev-1 arm covers the post-sweep resurrect,
+			// whose accepted write started over at rev 1 whatever base
+			// the client quoted — its retry must be acknowledged too,
+			// not conflicted or applied twice.
 			r.Status, r.Rev, r.Seq = "duplicate", stored.Rev, stored.Seq
 			return r, nil
 		case stored.Rev != item.BaseRev || stored.WorkID != item.WorkID:
