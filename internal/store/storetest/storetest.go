@@ -234,6 +234,33 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("SessionRollups", func(t *testing.T) { testSessionRollups(t, open) })
 	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
+	t.Run("AnnotationPushIdempotencyAndRevConflict", func(t *testing.T) {
+		testAnnotationPushIdempotencyAndRevConflict(t, open)
+	})
+	t.Run("AnnotationCapPerWork", func(t *testing.T) {
+		testAnnotationCapPerWork(t, open)
+	})
+	t.Run("AnnotationCapUnderConcurrency", func(t *testing.T) {
+		testAnnotationCapUnderConcurrency(t, open)
+	})
+	t.Run("AnnotationChangesFeed", func(t *testing.T) {
+		testAnnotationChangesFeed(t, open)
+	})
+	t.Run("AnnotationTombstoneSweep", func(t *testing.T) {
+		testAnnotationTombstoneSweep(t, open)
+	})
+	t.Run("AnnotationSplitMergeReassignment", func(t *testing.T) {
+		testAnnotationSplitMergeReassignment(t, open)
+	})
+	t.Run("AnnotationCrossUserIsolation", func(t *testing.T) {
+		testAnnotationCrossUserIsolation(t, open)
+	})
+	t.Run("AnnotationDeleteWorkCascade", func(t *testing.T) {
+		testAnnotationDeleteWorkCascade(t, open)
+	})
+	t.Run("ConcurrentAnnotationPushMonotonicSeq", func(t *testing.T) {
+		testConcurrentAnnotationPush(t, open)
+	})
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
 	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })

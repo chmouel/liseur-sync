@@ -622,6 +622,143 @@ paths:
             to refresh its cached identity, then retry.
         "409": { $ref: "#/components/responses/Error", description: "session_id reused with different payload" }
 
+  /v1/annotations:
+    post:
+      tags: [sync]
+      summary: Push a batch of annotations (highlights, notes, bookmarks)
+      description: |
+        Annotations are the mutable kind of reading state (ADR-0028):
+        each record carries a `rev`, and every write is a compare-and-set
+        against it. A create sends `base_rev: 0`; an edit sends the rev
+        it read. A byte-identical retry of the last write is `duplicate`
+        and acknowledged with the stored rev and seq; any other stale
+        `base_rev` is a per-item `conflict` carrying the server's copy —
+        the server orders, it never merges. The batch is never atomic:
+        one bad item fails alone, whether its problem is shape (bad
+        kind, oversized excerpt or body, a color off the palette, a
+        locator on a note) or reference (unknown work, per-work cap) —
+        both come back as per-item `invalid` results with a reason.
+        Only a request nothing in it can excuse is refused whole:
+        malformed JSON, an empty batch or one over 100 items (400), or
+        a body larger than any legal batch could need (413).
+        `device_id` is taken from the token.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [annotations]
+              properties:
+                annotations:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/AnnotationInput" }
+      responses:
+        "200":
+          description: Per-item results (valid items applied even if others conflict)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/AnnotationResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
+  /v1/annotations/changes:
+    get:
+      tags: [sync]
+      summary: Delta-sync annotations after a seq
+      description: |
+        The annotation feed is *state*, not history: it has its own
+        per-user seq counter, separate from the op log, and an edit or
+        delete moves the record to the head of the feed with its current
+        content. Tombstones are included, carrying identity, `rev`,
+        `seq` and `deleted_at` and nothing else; after the retention
+        window they are swept, so a device offline longer than that
+        reconciles against the live set instead. `/v1/changes` remains
+        positions-only.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: since, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 500, maximum: 500 } }
+      responses:
+        "200":
+          description: Page of annotations with the new high-water mark
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  annotations:
+                    type: array
+                    items: { $ref: "#/components/schemas/Annotation" }
+                  high_water: { type: integer }
+                  has_more: { type: boolean }
+
+  /v1/annotations/{id}:
+    delete:
+      tags: [sync]
+      summary: Delete an annotation (tombstone, rev-checked)
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: rev
+          in: query
+          required: true
+          description: The rev the client read; the delete applies iff it is current.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Tombstone written (`applied`), or the record was already deleted (`duplicate`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [applied, duplicate] }
+                  rev: { type: integer }
+                  seq: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Stale rev; the body carries the server's current copy under `server`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  server: { $ref: "#/components/schemas/Annotation" }
+
+  /v1/works/{id}/annotations:
+    get:
+      tags: [sync]
+      summary: Live annotations for a work
+      description: |
+        The live set only — no tombstones — ordered by progression, then
+        `client_ts` (records without a progression sort last).
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Live annotations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  annotations:
+                    type: array
+                    items: { $ref: "#/components/schemas/Annotation" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /v1/insights/summary:
     get:
       tags: [insights]
@@ -2572,3 +2709,83 @@ components:
         start_progression: { type: number, minimum: 0, maximum: 1 }
         end_progression: { type: number, minimum: 0, maximum: 1 }
         idle_ms: { type: integer, minimum: 0, description: "Reader-visible idle time, excluded from speed" }
+    AnnotationInput:
+      type: object
+      required: [id, base_rev, work_id, kind, client_ts]
+      properties:
+        id:
+          type: string
+          maxLength: 64
+          description: |
+            Client-generated identity, opaque to the server, stable for
+            the record's whole life across edits and the delete. Unlike
+            an `op_id` it names a mutable record, not one write.
+        base_rev:
+          type: integer
+          minimum: 0
+          description: |
+            The rev this write was based on: 0 to create, the rev the
+            client read to edit. A mismatch is a per-item `conflict`.
+        work_id: { type: string, maxLength: 128, description: "From /v1/works/resolve" }
+        edition_sha: { type: string, maxLength: 128, description: "sha256 of the exact file the locator was made against, if known" }
+        kind:
+          type: string
+          enum: [highlight, note, bookmark]
+          description: |
+            A highlight anchors to the text and may carry a body; a
+            bookmark is an anchor with no body; a note is a body with no
+            anchor.
+        locator:
+          description: |
+            Any JSON reader-native anchor (for example, a Readium
+            locator), opaque to the server and replayed verbatim.
+            Required for a highlight or bookmark, refused on a note,
+            bounded by `ops.max_locator_bytes`. A JSON `null` counts
+            as absent.
+        progression: { type: number, minimum: 0, maximum: 1, description: "Position in the book, used only to sort" }
+        excerpt:
+          type: string
+          maxLength: 1024
+          description: The selected text a highlight shows in a list, bounded (1 KiB by default).
+        color:
+          type: string
+          enum: [yellow, green, blue, pink, purple, orange]
+          description: A palette token, never CSS; highlights only.
+        body:
+          type: string
+          description: The user's own words, bounded (16 KiB by default).
+        client_ts: { type: string, format: date-time, maxLength: 64 }
+    Annotation:
+      type: object
+      description: |
+        One annotation as the server holds it. A tombstone carries only
+        `id`, `rev`, `seq`, `updated_at`, `deleted` and `deleted_at`.
+      required: [id, rev]
+      properties:
+        id: { type: string }
+        rev: { type: integer }
+        seq: { type: integer, description: "Server-assigned per-user monotonic sequence, separate from the op log" }
+        work_id: { type: string }
+        edition_sha: { type: string }
+        kind: { type: string, enum: [highlight, note, bookmark] }
+        locator: { description: "The anchor, verbatim as pushed" }
+        progression: { type: number, minimum: 0, maximum: 1 }
+        excerpt: { type: string }
+        color: { type: string, enum: [yellow, green, blue, pink, purple, orange] }
+        body: { type: string }
+        device_id: { type: string }
+        client_ts: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deleted: { type: boolean }
+        deleted_at: { type: string, format: date-time }
+    AnnotationResult:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [applied, duplicate, conflict, invalid] }
+        rev: { type: integer, description: When applied or duplicate }
+        seq: { type: integer, description: When applied or duplicate }
+        reason: { type: string, description: When invalid }
+        server:
+          allOf: [{ $ref: "#/components/schemas/Annotation" }]
+          description: The server's current copy, carried on a conflict.

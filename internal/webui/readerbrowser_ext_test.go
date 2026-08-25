@@ -267,6 +267,54 @@ func seedStalePosition(t *testing.T, base string, cookie *http.Cookie, bookID st
 	}
 	payload, _ := json.Marshal(map[string]any{"ops": []any{op}})
 	api("/v1/ops", string(payload))
+
+	// Annotations (ADR-0028), through the same route a device uses:
+	// one highlight whose range CFI anchors in the title page the
+	// reader opens on, and two that cannot draw — a note (no anchor by
+	// definition) and a highlight whose locator carries no CFI — which
+	// must degrade to sidebar entries rather than errors.
+	ts := time.Now().UTC().Format(time.RFC3339)
+	anns, _ := json.Marshal(map[string]any{"annotations": []any{
+		map[string]any{
+			"id": "00000000-0000-4000-8000-0000000000a1", "base_rev": 0,
+			"work_id": workID, "kind": "highlight", "color": "green",
+			"excerpt": "title page, absolut", "progression": 0.001,
+			"client_ts": ts,
+			"locator": map[string]any{
+				"href": "pagetitre.xhtml", "type": "application/xhtml+xml",
+				"locations": map[string]any{
+					"fragments":        []string{"epubcfi(/6/2!/4/2/2,/1:2,/1:20)"},
+					"totalProgression": 0.001,
+				},
+			},
+		},
+		map[string]any{
+			"id": "00000000-0000-4000-8000-0000000000a2", "base_rev": 0,
+			"work_id": workID, "kind": "note",
+			"body": "A thought about the whale", "progression": 0.5,
+			"client_ts": ts,
+		},
+		map[string]any{
+			"id": "00000000-0000-4000-8000-0000000000a3", "base_rev": 0,
+			"work_id": workID, "kind": "highlight",
+			"excerpt": "an unanchored highlight", "progression": 0.9,
+			"client_ts": ts,
+			"locator": map[string]any{
+				"href":      "chapter5.xhtml",
+				"locations": map[string]any{"totalProgression": 0.9},
+			},
+		},
+	}})
+	out := api("/v1/annotations", string(anns))
+	if results, ok := out["results"].([]any); !ok || len(results) != 3 {
+		t.Fatalf("annotation seeding: %v", out)
+	} else {
+		for _, r := range results {
+			if r.(map[string]any)["status"] != "applied" {
+				t.Fatalf("annotation seeding: %v", out)
+			}
+		}
+	}
 }
 
 // TestReaderOpensInARealBrowser is the only test that can judge whether
@@ -311,6 +359,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_ANNOTATIONS=1",
 		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
 	)
 	out, err := cmd.CombinedOutput()
