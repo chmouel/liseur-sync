@@ -260,6 +260,83 @@ devices, and the last op you acknowledged as baseline. Liseur's
 implementation (`domain/ReadingStateMerge.kt`) is the reference; the
 protocol is shaped so that logic transfers unchanged.
 
+## Annotations
+
+Highlights, notes and bookmarks sync too (ADR-0028), and they are the
+one *mutable* kind of reading state: an annotation is a record with a
+stable client-chosen `id` and a server-held `rev`, and every write is a
+compare-and-set against that rev. A create sends `base_rev: 0`; an edit
+sends the rev you read. Like ops, they need only the `sync` scope, and
+`device_id` comes from your token.
+
+```json
+POST /v1/annotations
+{
+  "annotations": [{
+    "id": "018e6f20-…",
+    "base_rev": 0,
+    "work_id": "…",
+    "edition_sha": "…",
+    "kind": "highlight",
+    "locator": { "href": "…", "locations": { "…": "…" } },
+    "progression": 0.413,
+    "excerpt": "the sea was calm",
+    "color": "yellow",
+    "client_ts": "2026-07-13T10:00:00Z"
+  }]
+}
+-> { "results": [{ "id": "018e6f20-…", "status": "applied", "rev": 1, "seq": 7 }] }
+```
+
+The kinds carve up the fields: a **highlight** anchors to the text
+(`locator` required) and may carry a `body`; a **bookmark** is an
+anchor with no body; a **note** is a body with no anchor. `color` is a
+token from a fixed palette (`yellow, green, blue, pink, purple,
+orange`), highlights only, never CSS. Excerpts are capped at 1 KiB and
+bodies at 16 KiB by default.
+
+The rev dance:
+
+- A byte-identical retry of your last write answers `duplicate` with
+  the stored rev and seq — interrupted pushes are free to repeat.
+- Any other stale `base_rev` answers a per-item `conflict` carrying the
+  server's current copy. The server orders; it never merges. Show the
+  user both, or take the server copy and reapply — your call, then push
+  again from the new rev.
+- The batch is never atomic: one bad item fails alone, whatever its
+  problem — a shape error (bad kind, oversized field, a color off the
+  palette) and a bad reference (unknown work, per-work cap) both come
+  back as a per-item `invalid` with the reason. Only a request nothing
+  in it can excuse is refused whole: malformed JSON, an empty or
+  oversized batch (`400`), or a body larger than any legal batch could
+  need (`413`).
+
+Delete with the rev you read; a mismatch is a 409 with the server copy:
+
+```
+DELETE /v1/annotations/{id}?rev=3
+-> { "id": "…", "status": "applied", "rev": 4, "seq": 21 }
+```
+
+Pull with a cursor, exactly like `/v1/changes` but on its own counter:
+
+```
+GET /v1/annotations/changes?since=<cursor>&limit=500
+-> { "annotations": [...], "high_water": 42, "has_more": false }
+```
+
+This feed is *state*, not history: an edit moves the record to the head
+with its current content, so key by `id` and let the highest rev win.
+Deletes appear as tombstones — `id`, `rev`, `seq`, `deleted: true`,
+`deleted_at` and nothing else. Tombstones are swept after 180 days by
+default; a device offline longer than that must reconcile its local set
+against `GET /v1/works/{id}/annotations` (the live set, sorted by
+progression) rather than trust the delta feed alone — an annotation the
+feed no longer mentions and the live set does not contain is gone.
+
+Positions and annotations never mix: `/v1/changes` stays ops-only, and
+annotation writes do not move the op high-water.
+
 ## Reading sessions
 
 Report what you measured at the time of reading:

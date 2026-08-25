@@ -553,7 +553,45 @@ CREATE TABLE user_folders (
 CREATE INDEX user_folders_folder ON user_folders(folder_id);
 `
 
+// annotationSync is migration 5 (ADR-0028). Annotations are the third
+// kind of reading state and the first mutable one: rev-based
+// compare-and-set rather than append-only, a per-user annotation
+// counter beside — never shared with — the op counter, and a bounded
+// tombstone when deleted. Content columns are cleared on the
+// tombstone, which is why most of them are nullable.
+const annotationSync = `
+ALTER TABLE seq_counters ADD COLUMN next_annotation_seq INTEGER NOT NULL DEFAULT 1;
+
+CREATE TABLE annotations (
+    user_id      TEXT NOT NULL,
+    id           TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    rev          INTEGER NOT NULL,
+    work_id      TEXT NOT NULL,
+    edition_sha  TEXT,
+    kind         TEXT NOT NULL CHECK (kind IN ('highlight', 'note', 'bookmark')),
+    locator_json BLOB,
+    progression  REAL,
+    excerpt      TEXT NOT NULL DEFAULT '',
+    color        TEXT NOT NULL DEFAULT '',
+    body         TEXT NOT NULL DEFAULT '',
+    device_id    TEXT NOT NULL DEFAULT '',
+    client_ts    TEXT,
+    updated_at   TEXT NOT NULL,
+    deleted_at   TEXT,
+    PRIMARY KEY (user_id, id),
+    UNIQUE (user_id, seq),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id, edition_sha, work_id)
+        REFERENCES editions(user_id, sha256, work_id)
+        DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX annotations_work ON annotations(user_id, work_id, deleted_at);
+CREATE INDEX annotations_tombstones ON annotations(user_id, deleted_at)
+    WHERE deleted_at IS NOT NULL;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
-var migrations = []string{schema, claimRevisions, folderUploads, folderAccess}
+var migrations = []string{schema, claimRevisions, folderUploads, folderAccess, annotationSync}

@@ -13,6 +13,7 @@ const host = process.env.SMOKE_HOST;
 // somewhere, and it is not in DNS. Chrome will map it for us.
 const mapHost = process.env.SMOKE_MAP;
 const detached = process.env.SMOKE_DETACHED === '1';
+const withAnnotations = process.env.SMOKE_ANNOTATIONS === '1';
 
 const profile = mkdtempSync(join(tmpdir(), 'smoke-'));
 const proc = spawn(chrome, [
@@ -146,6 +147,15 @@ const probe = `(() => {
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
     svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
+    overlay: (() => {
+      const o = contents[0]?.overlayer;
+      if (!o) return null;
+      const g = o.element.querySelector('g');
+      return {
+        rects: o.element.querySelectorAll('rect').length,
+        fill: g ? g.getAttribute('fill') : '',
+      };
+    })(),
     pageTitle: document.title,
     fontSize: body ? doc.defaultView.getComputedStyle(body).fontSize : '',
     wrapWidth: body && body.firstElementChild
@@ -181,6 +191,35 @@ check('publication stylesheet was applied',
 // what stripping might miss. This is the promise the vendored engine
 // had to keep.
 check('publication script did not run', diag.ran === false, String(diag.ran));
+
+// Annotations (ADR-0028), when the harness seeded them: the highlight
+// whose CFI anchors in this very chapter must have actually drawn —
+// rects in the overlayer SVG, filled with the palette's green, never
+// raw CSS from the wire — and the two that cannot draw must be listed
+// in the sidebar rather than reported as errors.
+if (withAnnotations) {
+  check('a synced highlight draws over the text',
+    !!diag.overlay && diag.overlay.rects > 0 && diag.overlay.fill === '#81c784',
+    JSON.stringify(diag.overlay));
+  const anns = JSON.parse(await evalIn(`JSON.stringify((() => {
+    const panel = document.getElementById('reader-annotations');
+    return {
+      hidden: panel ? panel.hidden : null,
+      entries: [...(panel?.querySelectorAll('.reader-ann-text') ?? [])]
+        .map((s) => s.textContent),
+    };
+  })())`));
+  check('the sidebar lists the note',
+    anns.hidden === false &&
+      anns.entries.some((t) => t.includes('A thought about the whale')),
+    JSON.stringify(anns));
+  check('an unanchorable highlight degrades to a sidebar entry',
+    anns.entries.some((t) => t.includes('an unanchored highlight')),
+    JSON.stringify(anns));
+  check('the drawn highlight is not duplicated in the sidebar',
+    !anns.entries.some((t) => t.includes('title page, absolut')),
+    JSON.stringify(anns));
+}
 
 // It must have actually painted: an engine that renders nothing still
 // reports a chapter.

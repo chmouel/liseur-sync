@@ -479,5 +479,39 @@ CREATE TABLE user_folders (
 CREATE INDEX user_folders_folder ON user_folders(folder_id);
 `
 
+// annotationSync is migration 5 (ADR-0028); see the SQLite copy for
+// what an annotation is and why most of its columns are nullable.
+const annotationSync = `
+ALTER TABLE seq_counters ADD COLUMN next_annotation_seq BIGINT NOT NULL DEFAULT 1;
+
+CREATE TABLE annotations (
+    user_id      TEXT NOT NULL,
+    id           TEXT NOT NULL,
+    seq          BIGINT NOT NULL,
+    rev          BIGINT NOT NULL,
+    work_id      TEXT NOT NULL,
+    edition_sha  TEXT,
+    kind         TEXT NOT NULL CHECK (kind IN ('highlight', 'note', 'bookmark')),
+    locator_json BYTEA,
+    progression  DOUBLE PRECISION,
+    excerpt      TEXT NOT NULL DEFAULT '',
+    color        TEXT NOT NULL DEFAULT '',
+    body         TEXT NOT NULL DEFAULT '',
+    device_id    TEXT NOT NULL DEFAULT '',
+    client_ts    TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL,
+    deleted_at   TIMESTAMPTZ,
+    PRIMARY KEY (user_id, id),
+    UNIQUE (user_id, seq),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id, edition_sha, work_id)
+        REFERENCES editions(user_id, sha256, work_id)
+        DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX annotations_work ON annotations(user_id, work_id, deleted_at);
+CREATE INDEX annotations_tombstones ON annotations(user_id, deleted_at)
+    WHERE deleted_at IS NOT NULL;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
-var migrations = []string{schema, claimRevisions, folderUploads, folderAccess}
+var migrations = []string{schema, claimRevisions, folderUploads, folderAccess, annotationSync}

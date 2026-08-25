@@ -377,6 +377,11 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		newWork.ID, userID, editionSHA, workID); err != nil {
 		return err
 	}
+	// An annotation with this edition_sha follows its edition; one
+	// without stays with the surviving work (ADR-0028).
+	if err := moveAnnotationsTx(ctx, tx, userID, workID, newWork.ID, &editionSHA); err != nil {
+		return err
+	}
 	// The edition's SHA alias is implied by the split contract.
 	if errors.Is(shaAliasErr, sql.ErrNoRows) {
 		if _, err := tx.ExecContext(ctx,
@@ -559,6 +564,11 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET work_id = ? WHERE user_id = ? AND work_id = ?`, intoWorkID, userID, fromWorkID); err != nil {
+		return err
+	}
+	// Every annotation — tombstones included — follows to the survivor
+	// (ADR-0028), each as a new write so synced devices learn of it.
+	if err := moveAnnotationsTx(ctx, tx, userID, fromWorkID, intoWorkID, nil); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,

@@ -60,11 +60,34 @@ type OpRow struct {
 	ForeignPos  string
 }
 
-templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
-	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(prefix, csrf, d, ops, sessions))
+// AnnotationRow is one annotation on the work page (ADR-0028): the
+// excerpt and the reader's own words, rendered as text — never markup
+// — with the where and when beside them.
+type AnnotationRow struct {
+	Kind    string
+	Color   string
+	Excerpt string
+	Body    string
+	Where   string
+	When    string
 }
 
-templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow) {
+// annColorClass maps a stored palette token to a fixed CSS class. The
+// token was validated at write time, but the class list is still a
+// closed table here: nothing from the wire names a style.
+func annColorClass(color string) string {
+	switch color {
+	case "yellow", "green", "blue", "pink", "purple", "orange":
+		return "ann-color-" + color
+	}
+	return ""
+}
+
+templ workPage(prefix string, u userCtx, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow, anns []AnnotationRow) {
+	@layout(orPlaceholder(d.Work.Title), prefix, u, csrf, workBody(prefix, csrf, d, ops, sessions, anns))
+}
+
+templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []SessionRow, anns []AnnotationRow) {
 	<h1>{ orPlaceholder(d.Work.Title) }</h1>
 	if d.Work.Author != "" {
 		<p class="muted">{ d.Work.Author }</p>
@@ -88,6 +111,36 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 			<div class="stat"><span class="num">{ d.ETAHuman }</span><span class="lbl">left (est.)</span></div>
 		}
 	</section>
+	// Highlights and notes synced from the reader's devices (ADR-0028),
+	// view-only here. Each links back into the book when the viewer's
+	// folder grants reach one to open; otherwise it is simply listed.
+	if len(anns) > 0 {
+		<section class="card" id="annotations">
+			<h2>Annotations</h2>
+			<ul class="annlist">
+				for _, an := range anns {
+					<li>
+						<span class={ "ann-kind", annColorClass(an.Color) }>{ an.Kind }</span>
+						if an.Excerpt != "" {
+							<blockquote class="ann-excerpt">{ an.Excerpt }</blockquote>
+						}
+						if an.Body != "" {
+							<p class="ann-body">{ an.Body }</p>
+						}
+						<span class="muted small">
+							{ an.When }
+							if an.Where != "" {
+								&nbsp;·&nbsp;{ an.Where }
+							}
+						</span>
+						if d.CanRead && d.BookID != "" {
+							<a class="small" href={ prefix + "books/" + d.BookID + "/read" }>Open in reader</a>
+						}
+					</li>
+				}
+			</ul>
+		</section>
+	}
 	// The sessions this work still has in full. Older ones have been
 	// rolled up into daily totals (they are counted in the statistics
 	// above but no longer exist one by one), which is why this list can

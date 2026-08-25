@@ -101,6 +101,17 @@ type Config struct {
 		CompactionEnabled  bool  `toml:"compaction_enabled"`   // default true
 		InferenceGapMin    int   `toml:"inference_gap_min"`    // default 15
 		InferenceLateHours int   `toml:"inference_late_hours"` // default 24
+
+		// Annotation bounds (ADR-0028). Each refusal is a precise 4xx,
+		// nothing truncated silently. AnnotationMaxPerWork caps live
+		// records per user per work, enforced inside the store's write
+		// transaction. AnnotationRetentionDays is how long a deleted
+		// annotation's tombstone survives so every device learns of it.
+		AnnotationMaxBatch        int `toml:"annotation_max_batch"`         // default 100
+		AnnotationMaxExcerptBytes int `toml:"annotation_max_excerpt_bytes"` // default 1 KiB
+		AnnotationMaxBodyBytes    int `toml:"annotation_max_body_bytes"`    // default 16 KiB
+		AnnotationMaxPerWork      int `toml:"annotation_max_per_work"`      // default 2000
+		AnnotationRetentionDays   int `toml:"annotation_retention_days"`    // default 180
 	} `toml:"ops"`
 
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
@@ -133,6 +144,11 @@ func Default() Config {
 	c.Ops.CompactionEnabled = true
 	c.Ops.InferenceGapMin = 15
 	c.Ops.InferenceLateHours = 24
+	c.Ops.AnnotationMaxBatch = 100
+	c.Ops.AnnotationMaxExcerptBytes = 1 << 10
+	c.Ops.AnnotationMaxBodyBytes = 16 << 10
+	c.Ops.AnnotationMaxPerWork = 2000
+	c.Ops.AnnotationRetentionDays = 180
 	c.PairingCodeTTLMin = 15
 	return c
 }
@@ -223,6 +239,21 @@ func (c *Config) Validate() error {
 
 	if c.Ops.RetentionDays < 1 {
 		return fmt.Errorf("ops.retention_days must be >= 1")
+	}
+	if c.Ops.AnnotationMaxBatch < 1 {
+		return fmt.Errorf("ops.annotation_max_batch must be >= 1")
+	}
+	if c.Ops.AnnotationMaxExcerptBytes < 1 {
+		return fmt.Errorf("ops.annotation_max_excerpt_bytes must be >= 1")
+	}
+	if c.Ops.AnnotationMaxBodyBytes < 1 {
+		return fmt.Errorf("ops.annotation_max_body_bytes must be >= 1")
+	}
+	if c.Ops.AnnotationMaxPerWork < 1 {
+		return fmt.Errorf("ops.annotation_max_per_work must be >= 1")
+	}
+	if c.Ops.AnnotationRetentionDays < 1 {
+		return fmt.Errorf("ops.annotation_retention_days must be >= 1")
 	}
 	if c.Ops.InferenceGapMin < 1 {
 		return fmt.Errorf("ops.inference_gap_min must be >= 1")
