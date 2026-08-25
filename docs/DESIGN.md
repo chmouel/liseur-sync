@@ -753,8 +753,11 @@ mutates the watched tree.
   additive.
 - **Cross-user shared works / social features**: deliberately excluded,
   privacy-sensitive and design-heavy.
-- **Annotation sync.** Liseur has annotations; syncing them wants the
-  same op-log shape but its own conflict semantics.
+- **Annotation sync** is designed in
+  [ADR-0028](adr/0028-annotation-sync.md): highlights, notes and
+  bookmarks as mutable per-user state beside the op log, with rev-based
+  conflicts, bounded tombstones and their own delta feed. Not built in
+  v1.
 - **calibre-web / Komga bridging**: the server pulling positions from a
   remote catalog on the user's behalf. Liseur already handles this
   client-side.
