@@ -495,3 +495,60 @@ func TestUIScreenshots(t *testing.T) {
 		t.Fatalf("screenshot walk failed: %v", err)
 	}
 }
+
+// TestReaderRefusesANaNPositionButRecovers is the browser half of the
+// position-jumps fix (the web reader once pushed a NaN fraction that the
+// server stored as the start of the book). It is a local-only check:
+// findChrome() returns "" under CI, and internal/api/progression_test.go
+// is what actually gates the op log — this only proves the client fails
+// closed on a bad fraction and, crucially, still syncs the next good one
+// so the reader is not left unable to save its place.
+func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+	seedStalePosition(t, ts.URL, cookie, bookID)
+
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_NAN=1",
+		"SMOKE_SHOT=",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the reader did not fail closed on a NaN position: %v", err)
+	}
+
+	// The finite fraction the guard sent last must have reached the log,
+	// proving recovery end to end rather than only in the page.
+	page, err := f.st.Changes(t.Context(), "u1", 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := false
+	for _, op := range page.Ops {
+		if op.Progression == 0.47 {
+			recovered = true
+		}
+	}
+	if !recovered {
+		t.Error("the finite position pushed after the NaN never reached the op log")
+	}
+}

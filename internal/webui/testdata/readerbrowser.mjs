@@ -14,6 +14,9 @@ const host = process.env.SMOKE_HOST;
 const mapHost = process.env.SMOKE_MAP;
 const detached = process.env.SMOKE_DETACHED === '1';
 const withAnnotations = process.env.SMOKE_ANNOTATIONS === '1';
+// NaN-guard mode (the position-jumps fix): synthetic relocate events
+// with a NaN then a finite fraction, watching whether the reader pushes.
+const nan = process.env.SMOKE_NAN === '1';
 
 const profile = mkdtempSync(join(tmpdir(), 'smoke-'));
 const proc = spawn(chrome, [
@@ -105,6 +108,15 @@ const check = (name, ok, extra = '') => {
 
 const title = await evalIn('document.title');
 check('page loads', typeof title === 'string' && title.length > 0, title);
+
+// The NaN guard is a self-contained probe: it does not want the render,
+// page-turn and annotation battery below, so it runs and exits here.
+if (nan) {
+  await nanGuard(evalIn, check);
+  ws.close();
+  proc.kill();
+  process.exit(fail.length ? 1 : 0);
+}
 
 if (detached) {
   const where = await evalIn('JSON.stringify({href: location.href, cookie: document.cookie})');
@@ -449,3 +461,77 @@ check('no console errors', unexpected.length === 0);
 ws.close();
 proc.kill();
 process.exit(fail.length ? 1 : 0);
+
+// nanGuard proves the position-jumps fix from the page's own side. The
+// server now rejects a null progression whatever the client does, so a
+// test that only inspected the op log would be vacuous: the observable
+// thing is the *attempt*, so this wraps fetch and watches for the POST.
+// internal/api/progression_test.go is what actually protects the log;
+// this checks that the reader fails closed on a bad fraction without
+// wedging its ability to save again: a bad fraction must not be posted
+// as null, and it should prod the engine for a fresh layout rather than
+// wait indefinitely for the reader to turn another page.
+async function nanGuard(evalIn, check) {
+  // Record every POST to /v1/ops the page attempts, installed before a
+  // push can happen. api() reads the global `fetch` afresh on each call,
+  // so reassigning it here is enough to see the reader's own requests.
+  await evalIn(`(() => {
+    window.__pushedOps = [];
+    const orig = window.fetch;
+    window.fetch = function (input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method === 'POST' && url.indexOf('v1/ops') >= 0) {
+        window.__pushedOps.push(String((init && init.body) || ''));
+      }
+      return orig.apply(this, arguments);
+    };
+    return true;
+  })()`);
+
+  // A synthetic relocate carrying just enough of the detail shape that
+  // paint() and the push path touch — fraction, cfi, section, tocItem.
+  const relocate = (frac) => `(() => {
+    document.querySelector('foliate-view').dispatchEvent(
+      new CustomEvent('relocate', { detail: {
+        fraction: ${frac},
+        cfi: 'epubcfi(/6/8!/4/2/1:0)',
+        section: { current: 1, total: 12 },
+        tocItem: { label: 'Chowder' },
+      } }));
+    return true;
+  })()`;
+  const pushed = async () =>
+    JSON.parse(await evalIn('JSON.stringify(window.__pushedOps)'));
+  const finiteProgressions = (bodies) => bodies.map((body) => {
+    try {
+      return JSON.parse(body).ops[0].progression;
+    } catch (e) {
+      return null;
+    }
+  }).every((p) => typeof p === 'number' && Number.isFinite(p));
+  // Comfortably past the 1.5s debounce in schedulePush().
+  const settle = () => new Promise((r) => setTimeout(r, 2500));
+
+  await evalIn('(() => { window.__pushedOps = []; return true; })()');
+  await evalIn(relocate('NaN'));
+  await settle();
+  const afterNaN = await pushed();
+  check('a NaN fraction is never pushed as null',
+    finiteProgressions(afterNaN), JSON.stringify(afterNaN));
+  check('a skipped NaN schedules a layout retry',
+    afterNaN.length >= 1, JSON.stringify(afterNaN));
+
+  await evalIn(relocate('0.47'));
+  await settle();
+  const afterFinite = await pushed();
+  check('a finite fraction still pushes after a skipped NaN',
+    afterFinite.length >= 1, JSON.stringify(afterFinite));
+  let prog = null;
+  if (afterFinite.length) {
+    try {
+      prog = JSON.parse(afterFinite[afterFinite.length - 1]).ops[0].progression;
+    } catch (e) { /* leaves prog null, the check below reports it */ }
+  }
+  check('the recovered push carries the finite progression', prog === 0.47, String(prog));
+}
