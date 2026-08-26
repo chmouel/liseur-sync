@@ -10,13 +10,31 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+// opReqJSON is the inbound shape of POST /v1/ops. It carries only the
+// fields a client sends, and progression is a pointer on purpose: a
+// missing or null value is a rejected request, not a silent 0. opJSON
+// keeps a plain float64 because it also builds responses (opToJSON),
+// where a pointer would risk emitting "progression": null to every
+// existing client — a worse regression than the bug this guards. 0 is a
+// legitimate position (a reader at the very start of a book still
+// syncs); only null, absent, non-finite or out-of-range is refused.
+type opReqJSON struct {
+	OpID        string          `json:"op_id"`
+	WorkID      string          `json:"work_id"`
+	EditionSHA  *string         `json:"edition_sha"`
+	ClientTS    string          `json:"client_ts"`
+	Progression *float64        `json:"progression"`
+	Locator     json.RawMessage `json:"locator"`
+	ForeignPos  *string         `json:"foreign_pos"`
+}
+
 // HandlePushOps implements POST /v1/ops — batch, idempotent on op_id.
 // The token's server-side device_id stamps every op; a client-supplied
 // device_id is ignored.
 func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	var body struct {
-		Ops []opJSON `json:"ops"`
+		Ops []opReqJSON `json:"ops"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -44,7 +62,14 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "op "+in.OpID+": work_id required")
 			return
 		}
-		if in.Progression < 0 || in.Progression > 1 {
+		if in.Progression == nil {
+			writeError(w, http.StatusBadRequest, "op "+in.OpID+": progression required")
+			return
+		}
+		// Written as the negation of the in-range test so a NaN (both
+		// comparisons false) is rejected rather than let through, which
+		// the naive `p < 0 || p > 1` would do.
+		if p := *in.Progression; !(p >= 0 && p <= 1) {
 			writeError(w, http.StatusBadRequest, "op "+in.OpID+": progression out of range [0,1]")
 			return
 		}
@@ -71,7 +96,7 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 			WorkID:      in.WorkID,
 			EditionSHA:  in.EditionSHA,
 			ClientTS:    ts,
-			Progression: in.Progression,
+			Progression: *in.Progression,
 			LocatorJSON: in.Locator,
 			ForeignPos:  in.ForeignPos,
 			Origin:      store.OriginNative,

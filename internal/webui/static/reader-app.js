@@ -286,6 +286,14 @@ function bookTitle() {
   return values.length ? String(values[0]) : "";
 }
 
+// finite guards a value that must be a real number the reader can act
+// on. `typeof NaN === "number"` is true and `JSON.stringify(NaN)` emits
+// null, so a bare typeof check would let a NaN fraction reach the wire
+// as a "position unknown" the server records as the start of the book.
+function finite(v) {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
 // locatorFor builds the Readium Locator the sync protocol carries. The
 // server stores it verbatim and never reads it, so the shape is a
 // promise to the other clients rather than to the server.
@@ -299,7 +307,11 @@ function bookTitle() {
 // fraction, the section index, and a CFI. The engine estimates the
 // fraction from section sizes it already knows, so there is no separate
 // "generate locations" pass and no moment when progress is unknown.
+//
+// A non-finite fraction yields null: there is no position to push, and
+// the caller asks the engine to remeasure rather than record a wrong one.
 function locatorFor(location) {
+  if (!finite(location.fraction)) return null;
   const section = location.section || {};
   const index = typeof section.current === "number" ? section.current : 0;
   const sections = (view.book && view.book.sections) || [];
@@ -310,8 +322,7 @@ function locatorFor(location) {
     locations: {
       fragments: location.cfi ? [location.cfi] : [],
       progression: sectionProgression(location),
-      totalProgression:
-        typeof location.fraction === "number" ? location.fraction : 0,
+      totalProgression: location.fraction,
       position: index + 1,
     },
   };
@@ -326,8 +337,9 @@ function sectionProgression(location) {
   const index = typeof section.current === "number" ? section.current : 0;
   const lo = fractions[index];
   const hi = fractions[index + 1];
-  const total = typeof location.fraction === "number" ? location.fraction : 0;
-  if (typeof lo !== "number" || typeof hi !== "number" || hi <= lo) return 0;
+  if (!finite(location.fraction)) return 0;
+  const total = location.fraction;
+  if (!finite(lo) || !finite(hi) || hi <= lo) return 0;
   return Math.max(0, Math.min(1, (total - lo) / (hi - lo)));
 }
 
@@ -345,10 +357,63 @@ function sectionProgression(location) {
 // has it, and "conflict" means this id already belongs to another
 // payload, where replaying is the one thing that cannot help.
 let retryOp = null;
+let fractionRetryTimer = null;
+let fractionRetryAttempt = 0;
+const FRACTION_RETRY_DELAYS = [250, 750, 1500, 3000, 6000];
+const FRACTION_WAIT_MESSAGE =
+  "Position sync is paused until the reader can measure this page.";
+let fractionWaitShown = false;
+
+function cancelScheduledPush() {
+  clearTimeout(pending);
+  pending = null;
+}
+
+function clearFractionRetry() {
+  clearTimeout(fractionRetryTimer);
+  fractionRetryTimer = null;
+  fractionRetryAttempt = 0;
+  if (fractionWaitShown && status.textContent === FRACTION_WAIT_MESSAGE) {
+    say("");
+  }
+  fractionWaitShown = false;
+}
+
+function scheduleFractionRetry() {
+  if (!view || !here || finite(here.fraction) || fractionRetryTimer) return;
+  if (document.hidden) return;
+  if (fractionRetryAttempt >= FRACTION_RETRY_DELAYS.length) {
+    fractionWaitShown = true;
+    say(FRACTION_WAIT_MESSAGE, true);
+    return;
+  }
+  const delay = FRACTION_RETRY_DELAYS[fractionRetryAttempt++];
+  fractionRetryTimer = setTimeout(() => {
+    fractionRetryTimer = null;
+    if (!view || !here || finite(here.fraction)) return;
+    if (document.hidden) return;
+    const retry = () => {
+      const renderer = view && view.renderer;
+      if (renderer && typeof renderer.render === "function") renderer.render();
+      if (!fractionRetryTimer && !finite(here && here.fraction)) {
+        scheduleFractionRetry();
+      }
+    };
+    requestAnimationFrame(retry);
+  }, delay);
+}
 
 async function push() {
   if (!workID || !here) return;
   const locator = locatorFor(here);
+  // A non-finite fraction has no position to record. Return without
+  // touching retryOp; the layout retry below will prod the engine for
+  // a new relocate, and the next finite one goes through the normal
+  // debounce.
+  if (!locator) {
+    scheduleFractionRetry();
+    return;
+  }
   const key =
     (locator.locations.fragments[0] || "") +
     "@" +
@@ -413,9 +478,16 @@ function opID() {
 }
 
 function schedulePush() {
-  clearTimeout(pending);
+  cancelScheduledPush();
   pending = setTimeout(push, 1500);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && here && !finite(here.fraction)) {
+    fractionRetryAttempt = 0;
+    scheduleFractionRetry();
+  }
+});
 
 function cfiOf(op) {
   const fragments =
@@ -729,10 +801,13 @@ applySettings();
 
 function paint(location) {
   here = location;
-  const fraction =
-    typeof location.fraction === "number" ? location.fraction : 0;
-  progressBar.style.width = (fraction * 100).toFixed(1) + "%";
-  progressText.textContent = Math.round(fraction * 100) + "%";
+  // Leave the bar where it was when the fraction is unusable, so a
+  // transient NaN does not flash the progress back to 0%.
+  if (finite(location.fraction)) {
+    const fraction = location.fraction;
+    progressBar.style.width = (fraction * 100).toFixed(1) + "%";
+    progressText.textContent = Math.round(fraction * 100) + "%";
+  }
   // The chapter title the book itself gives this spot, falling back to
   // a plain count when the navigation has no entry covering it.
   const tocItem = location.tocItem;
@@ -1009,7 +1084,13 @@ window.addEventListener("beforeunload", () => {
     stage.append(view);
     view.addEventListener("relocate", (e) => {
       paint(e.detail);
-      schedulePush();
+      if (finite(e.detail.fraction)) {
+        clearFractionRetry();
+        schedulePush();
+      } else {
+        cancelScheduledPush();
+        scheduleFractionRetry();
+      }
     });
     // Each chapter document gets the reading keys: after a click in
     // the text, the frame owns the keyboard, and a listener on the

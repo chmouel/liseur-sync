@@ -10,16 +10,20 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// sessionJSON is the wire shape of a reading session (design §6.1).
-type sessionJSON struct {
-	SessionID  string  `json:"session_id"`
-	WorkID     string  `json:"work_id"`
-	EditionSHA *string `json:"edition_sha,omitempty"`
-	StartedAt  string  `json:"started_at"`
-	EndedAt    string  `json:"ended_at"`
-	StartProg  float64 `json:"start_progression"`
-	EndProg    float64 `json:"end_progression"`
-	IdleMs     int64   `json:"idle_ms,omitempty"`
+// sessionReqJSON is the inbound shape of POST /v1/sessions. Its
+// progression fields are pointers on purpose: a missing or null value
+// is a rejected request, not a silent 0. A session recorded as 0→0
+// corrupts the statistics it feeds. 0 remains a legitimate value; only
+// null, absent, non-finite or out-of-range is refused.
+type sessionReqJSON struct {
+	SessionID  string   `json:"session_id"`
+	WorkID     string   `json:"work_id"`
+	EditionSHA *string  `json:"edition_sha"`
+	StartedAt  string   `json:"started_at"`
+	EndedAt    string   `json:"ended_at"`
+	StartProg  *float64 `json:"start_progression"`
+	EndProg    *float64 `json:"end_progression"`
+	IdleMs     int64    `json:"idle_ms"`
 }
 
 // HandlePushSessions implements POST /v1/sessions — batch, idempotent
@@ -27,7 +31,7 @@ type sessionJSON struct {
 func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	var body struct {
-		Sessions []sessionJSON `json:"sessions"`
+		Sessions []sessionReqJSON `json:"sessions"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -66,7 +70,14 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": ended_at before started_at")
 			return
 		}
-		if in.StartProg < 0 || in.StartProg > 1 || in.EndProg < 0 || in.EndProg > 1 {
+		if in.StartProg == nil || in.EndProg == nil {
+			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": progression required")
+			return
+		}
+		// Negation of the in-range test so a NaN (both comparisons
+		// false) is rejected rather than let through.
+		sp, ep := *in.StartProg, *in.EndProg
+		if !(sp >= 0 && sp <= 1) || !(ep >= 0 && ep <= 1) {
 			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": progression out of range [0,1]")
 			return
 		}
@@ -86,8 +97,8 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 			DeviceID:   tok.DeviceID,
 			StartedAt:  started,
 			EndedAt:    ended,
-			StartProg:  in.StartProg,
-			EndProg:    in.EndProg,
+			StartProg:  sp,
+			EndProg:    ep,
 			IdleMs:     in.IdleMs,
 			Origin:     store.OriginNative,
 		}
