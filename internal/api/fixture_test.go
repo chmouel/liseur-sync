@@ -87,6 +87,7 @@ func newFolderFixture(t *testing.T) *folderFixture {
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
 		LoginLimiter: auth.NewRateLimiter(1000, time.Minute),
+		OPDSLimiter:  auth.NewRateLimiter(1000, time.Minute),
 		Files:        content.NewFiles(st),
 		Covers:       cache,
 	}

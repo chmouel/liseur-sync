@@ -100,6 +100,7 @@ func newBooksFixture(t *testing.T) *booksFixture {
 	apiSrv := &api.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
+		OPDSLimiter:  auth.NewRateLimiter(100, time.Minute),
 		Files:        content.NewFiles(st), Covers: cache,
 		Ingest: ingester, Removal: ingester,
 	}

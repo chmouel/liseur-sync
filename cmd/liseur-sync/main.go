@@ -163,6 +163,11 @@ func cmdServe(args []string) error {
 	// form and /v1/login share a per-IP budget instead of each
 	// offering an unthrottled way around the other.
 	loginLimiter := auth.NewRateLimiter(10, time.Minute)
+	// OPDS is read traffic wearing a password, not a password attempt:
+	// a folder feed's covers and a download are each their own request,
+	// so this budget is sized for browsing a shelf rather than for
+	// guessing a secret.
+	opdsLimiter := auth.NewRateLimiter(300, time.Minute)
 
 	// The reconciler is built before the API server because an upload
 	// hands its bytes straight to a pass (ADR-0023), and the watcher
@@ -180,6 +185,7 @@ func cmdServe(args []string) error {
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
 		LoginLimiter: loginLimiter,
+		OPDSLimiter:  opdsLimiter,
 		Files:        content.NewFiles(st),
 		Covers:       cache,
 		Ingest:       ingester,

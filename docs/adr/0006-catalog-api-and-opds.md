@@ -126,7 +126,9 @@ OPDS authenticates with HTTP Basic for broad client compatibility:
 - 401 includes `WWW-Authenticate`;
 - HTTPS enforcement follows the server's existing proxy and
   `insecure_http` rules;
-- authentication attempts share the bounded rate-limit infrastructure.
+- reads share a per-IP rate-limit budget sized for browsing — a folder
+  feed's covers and a download are each their own request — separate
+  from the budget that guards login, registration and token management.
 
 ## Consequences
 
