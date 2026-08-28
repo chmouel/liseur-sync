@@ -20,6 +20,13 @@ type Server struct {
 	Cfg  config.Config
 	// LoginLimiter rate-limits login and token-management endpoints.
 	LoginLimiter *auth.RateLimiter
+	// OPDSLimiter rate-limits the OPDS surface: feed, browse, search,
+	// covers and downloads. Kept separate from LoginLimiter (ADR-0006
+	// originally shared it) because one screen of a folder feed is a
+	// request per visible cover plus the feed itself, which routinely
+	// outnumbers a budget sized for password attempts before the reader
+	// gets anywhere near tapping download.
+	OPDSLimiter *auth.RateLimiter
 	// Files opens the bytes behind a catalog book. Nil disables the
 	// download and cover routes, which then report 503 rather than
 	// panicking.

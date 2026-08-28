@@ -451,9 +451,14 @@ func (s *Server) Routes() *http.ServeMux {
 	// feeds are deliberately catalog-only — they expose no sync state
 	// even when the token also carries `sync`, because a reader given a
 	// catalog credential should not be able to read reading history.
+	//
+	// Rate-limited on OPDSLimiter, not LoginLimiter: this surface covers
+	// covers and downloads as well as feeds, so one screen of a folder
+	// is a request per visible book plus the feed itself, routinely
+	// outnumbering a budget sized for password attempts.
 	opdsH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.LoginLimiter, s.Cfg,
+			auth.RateLimitIP(s.OPDSLimiter, s.Cfg,
 				auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead, h)))
 	}
 	mux.Handle("GET /opds/v1.2", opdsH(s.HandleOPDSRoot))

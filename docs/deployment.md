@@ -61,6 +61,32 @@ reader.example.com {
 }
 ```
 
+### Serving below a path prefix
+
+The UI can be served below a stripped prefix, but OPDS acquisition and
+cover links are rooted at `/opds/v1.2`. If a reverse proxy exposes the
+server below `/sync` with a path-stripping rule, also route the emitted
+`/opds*` links without stripping that prefix:
+
+```caddy
+reader.example.com {
+    redir /sync /sync/
+
+    handle /opds* {
+        reverse_proxy 127.0.0.1:8585
+    }
+
+    handle_path /sync* {
+        reverse_proxy 127.0.0.1:8585
+    }
+}
+```
+
+Use `handle`, rather than `handle_path`, for `/opds*`: liseur-sync
+expects the upstream request to retain `/opds/v1.2`. The root OPDS route
+is protected by liseur-sync's own HTTP Basic authentication, just like
+the prefixed route.
+
 nginx example: the koplugin capability URLs carry a secret in the path.
 The app redacts it from its own logs; do the same at the proxy:
 

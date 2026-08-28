@@ -34,6 +34,7 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 		Auth:         auth.NewService(st),
 		Cfg:          cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
+		OPDSLimiter:  auth.NewRateLimiter(100, time.Minute),
 	}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)

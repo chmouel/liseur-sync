@@ -56,6 +56,7 @@ func wholeServer(t *testing.T, f *booksFixture, ts *httptest.Server, readerOrigi
 	apiSrv := &api.Server{
 		St: f.st, Auth: auth.NewService(f.st), Cfg: cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
+		OPDSLimiter:  auth.NewRateLimiter(100, time.Minute),
 		Files:        content.NewFiles(f.st), Covers: f.cache,
 	}
 	apiSrv.WebUI = &webui.Server{
