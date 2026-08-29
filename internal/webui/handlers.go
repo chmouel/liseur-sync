@@ -506,7 +506,7 @@ func (s *Server) handlePairing(w http.ResponseWriter, r *http.Request, a store.A
 	code = code[:32]
 	id, _ := auth.NewSecret()
 	_ = s.St.CreatePairingCode(r.Context(), store.PairingCode{
-		ID: id, UserID: u.ID, CodeSHA256: auth.HashSecret(code),
+		ID: id, UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(code),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	})
 	s.renderDevices(w, r, a, u, Flash{Secret: code, SecretLabel: "kosync pairing code (15 min, single use)"})

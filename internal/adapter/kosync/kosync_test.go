@@ -38,7 +38,9 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 }
 
 // pairDevice runs the pairing flow and returns the x-auth headers
-// KOReader would use.
+// KOReader would use. It sends what a real kosync client sends --
+// md5(code), not the code -- so the conformance tests exercise the
+// wire protocol rather than a convenient fiction.
 func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot string) (user, key, pairingCode string) {
 	t.Helper()
 	// Admin generates a pairing code.
@@ -46,14 +48,15 @@ func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot 
 	pairingCode = pairingCode[:32]
 	id, _ := auth.NewSecret()
 	if err := st.CreatePairingCode(t.Context(), store.PairingCode{
-		ID: id, UserID: userID, CodeSHA256: auth.HashSecret(pairingCode),
+		ID: id, UserID: userID, CodeSHA256: auth.KosyncPairingHash(pairingCode),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// KOReader calls users/create with username=slot, password=code.
-	body, _ := json.Marshal(map[string]string{"username": slot, "password": pairingCode})
+	// KOReader derives MD5(password) and sends that as the password.
+	key = auth.KosyncUserKey(pairingCode)
+	body, _ := json.Marshal(map[string]string{"username": slot, "password": key})
 	resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -63,8 +66,7 @@ func pairDevice(t *testing.T, ts *httptest.Server, st store.Store, userID, slot 
 		t.Fatalf("users/create: %d", resp.StatusCode)
 	}
 
-	// KOReader derives MD5(password) as the auth key.
-	key = md5hex(pairingCode)
+	// The same derived key is presented as x-auth-key thereafter.
 	return slot, key, pairingCode
 }
 
@@ -113,7 +115,7 @@ func TestPairingFlow(t *testing.T) {
 	}
 
 	// Pairing code is single-use.
-	codeBody, _ := json.Marshal(map[string]string{"username": "other", "password": pairingCode})
+	codeBody, _ := json.Marshal(map[string]string{"username": "other", "password": auth.KosyncUserKey(pairingCode)})
 	resp, _ := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(codeBody))
 	if resp.StatusCode != 403 {
 		t.Fatalf("bad pairing code: want 403, got %d", resp.StatusCode)
@@ -126,10 +128,7 @@ func TestPairingFlow(t *testing.T) {
 }
 
 // TestPairingCodeWhitespaceTrimmed: a stray leading/trailing space or
-// newline is a common transcription artifact from manually copying a
-// pairing code out of the admin panel (the code display wraps on
-// screen and has no copy button in older builds). The server trims it
-// so the copy still succeeds.
+// newline in the transmitted key must not defeat redemption.
 func TestPairingCodeWhitespaceTrimmed(t *testing.T) {
 	ts, st := testServer(t)
 	hash, _ := auth.HashPassword("hunter2hunter")
@@ -141,14 +140,14 @@ func TestPairingCodeWhitespaceTrimmed(t *testing.T) {
 	pairingCode = pairingCode[:32]
 	id, _ := auth.NewSecret()
 	if err := st.CreatePairingCode(t.Context(), store.PairingCode{
-		ID: id, UserID: u.ID, CodeSHA256: auth.HashSecret(pairingCode),
+		ID: id, UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(pairingCode),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	body, _ := json.Marshal(map[string]string{
-		"username": "kobo-ws", "password": "  " + pairingCode + "\n",
+		"username": "kobo-ws", "password": "  " + auth.KosyncUserKey(pairingCode) + "\n",
 	})
 	resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -164,6 +163,66 @@ func TestPairingCodeWhitespaceTrimmed(t *testing.T) {
 	}
 }
 
+// TestClientSendsMD5DerivedKeyNotTheCode is the named regression test
+// for the pairing bug this adapter shipped with: users/create hashed
+// the value it received as if it were the pairing code the user typed,
+// but no kosync client sends that. KOReader's plugin computes
+// `userkey = md5(password)` and Readest's KOSyncClient does the same,
+// so registration could never match a stored code and every pairing
+// attempt returned 403 with the code left unredeemed.
+//
+// The code a human types must therefore never be accepted on the wire,
+// and the md5-derived key must be.
+func TestClientSendsMD5DerivedKeyNotTheCode(t *testing.T) {
+	ts, st := testServer(t)
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, KosyncEnabled: true, KopluginEnabled: true, CreatedAt: time.Now()}
+	if err := st.CreateUser(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+
+	mint := func(t *testing.T) string {
+		t.Helper()
+		code, _ := auth.NewSecret()
+		code = code[:32]
+		id, _ := auth.NewSecret()
+		if err := st.CreatePairingCode(t.Context(), store.PairingCode{
+			ID: id, UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(code),
+			ExpiresAt: time.Now().Add(15 * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return code
+	}
+	create := func(slot, sent string) int {
+		body, _ := json.Marshal(map[string]string{"username": slot, "password": sent})
+		resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// The plaintext code is not what a client sends: it must not pair.
+	if got := create("slot-plain", mint(t)); got != http.StatusForbidden {
+		t.Fatalf("plaintext pairing code: want 403, got %d", got)
+	}
+
+	// The md5-derived key is what every kosync client sends.
+	code := mint(t)
+	if got := create("slot-md5", auth.KosyncUserKey(code)); got != http.StatusCreated {
+		t.Fatalf("md5-derived key: want 201, got %d", got)
+	}
+
+	// And that same key is the credential presented thereafter.
+	status, out := kreq(t, "GET", ts.URL+"/adapter/kosync/users/auth",
+		"slot-md5", auth.KosyncUserKey(code), nil)
+	if status != 200 || out["authorized"] != "OK" {
+		t.Fatalf("auth with derived key: %d %v", status, out)
+	}
+}
+
 func TestAccountPasswordCannotRegisterOrPair(t *testing.T) {
 	ts, st := testServer(t)
 	password := "hunter2hunter"
@@ -174,14 +233,18 @@ func TestAccountPasswordCannotRegisterOrPair(t *testing.T) {
 	}
 
 	for _, username := range []string{"alice", "new-account"} {
-		body, _ := json.Marshal(map[string]string{"username": username, "password": password})
-		resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("account password for %q: want 403, got %d", username, resp.StatusCode)
+		// Both the raw account password and the md5-derived form a
+		// real client would send must be refused.
+		for _, sent := range []string{password, auth.KosyncUserKey(password)} {
+			body, _ := json.Marshal(map[string]string{"username": username, "password": sent})
+			resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("account password for %q: want 403, got %d", username, resp.StatusCode)
+			}
 		}
 	}
 	if _, err := st.UserByName(t.Context(), "new-account"); err == nil {

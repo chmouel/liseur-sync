@@ -887,7 +887,10 @@ Stock KOReader devices can join through the kosync adapter instead of
 this API: the user generates a pairing code in the web UI or with
 `liseur-sync admin pairing-code`, then sets kosync's server to
 `https://<host>/adapter/kosync`, username to a device name, password to
-the pairing code. Their positions land in the same per-user op log with
+the pairing code. The client hashes that password itself — KOReader
+sends `md5(password)` to `users/create` and reuses it as `x-auth-key` —
+so the code is typed in once and never transmitted. Their positions
+land in the same per-user op log with
 `origin: "kosync"`, so a native client sees them through `/v1/changes`
 like any other device; the xpointer rides in `foreign_pos` and
 round-trips verbatim to kosync pulls.
