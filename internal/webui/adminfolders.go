@@ -26,6 +26,12 @@ const adminFoldersPerPage = 50
 // adminFolderView is one folder as the page shows it.
 type adminFolderView struct {
 	Folder store.Folder
+	// Granted is whether any account at all can read this folder. A
+	// folder nobody is granted is catalogued, scanned and invisible, and
+	// nothing else on this page would say so (ADR-0029). It is a
+	// boolean, not a count: the page warns, it does not enumerate who
+	// reads what.
+	Granted bool
 }
 
 // Kind says in words what the disk said about this folder.
@@ -51,6 +57,12 @@ func (s *Server) renderAdminFolders(
 // usable root lives in internal/admin, so a folder added from a browser
 // is the same row as one added at a shell — and the errors it returns
 // are already sentences, which is why they are rendered as they are.
+//
+// The folder is granted to the administrator who added it, in the same
+// transaction (ADR-0029). Not because administering implies reading — it
+// still does not, and every other account still needs an explicit grant
+// — but because a form that reports success and then shows an empty
+// library is reporting the wrong thing.
 func (s *Server) handleAdminCreateFolder(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
@@ -61,7 +73,7 @@ func (s *Server) handleAdminCreateFolder(
 	name := strings.TrimSpace(r.FormValue("name"))
 	root := strings.TrimSpace(r.FormValue("root"))
 	folder, err := admin.NewFolder(r.Context(), s.St, name, root,
-		s.Cfg.Content.FolderRoots)
+		s.Cfg.Content.FolderRoots, u.ID)
 	logAdminAction(r, u, "add-folder", name, err)
 	if err != nil {
 		s.renderAdminFolders(w, r, a, u, Flash{Error: err.Error()})
@@ -76,7 +88,8 @@ func (s *Server) handleAdminCreateFolder(
 	}
 	s.renderAdminFolders(w, r, a, u, Flash{
 		Notice: "Watching " + folder.Name +
-			". Its books appear as the server reads them.",
+			". Its books appear in your library as the server reads them. " +
+			"Other accounts see it once you assign it to them from Users.",
 	})
 }
 

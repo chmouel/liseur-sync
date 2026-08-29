@@ -94,10 +94,14 @@ The store test suite is shared across backends in
 `LISEUR_PG_TEST_DSN` is set (a dev database lives on civuole; DSN is in
 the gitignored `.env`).
 
-This project **has never shipped**. There are no deployments to keep
-working, so nothing here owes backwards compatibility to an earlier
-version of itself: when a page, route or shape is replaced, replace it
-— no deprecation shims, no compatibility redirects, no migration UI.
+This project has **no released version**, so a page, route or shape may
+be replaced outright: no deprecation shims, no compatibility redirects,
+no migration UI. It does have users running published images, and their
+databases are real. Issue #13 is what that distinction costs when it is
+forgotten: migration 4 was correct and emptied working libraries. So a
+shipped migration is never edited, an upgrade path across published
+images is tested, and a migration that changes what an existing
+deployment can see says so in `docs/deployment.md` before it ships.
 (The compatibility that *does* matter is with other people's software:
 the kosync and koplugin wire protocols, and the EPUB and OPDS formats.
 Those are not ours to change.)
@@ -115,7 +119,9 @@ of them.
   per-user and must never be readable across users. Books, folders and
   catalog entities remain shared rows, but a real viewer ID sees only books
   supported by an explicit `user_folders` grant; administrator status never
-  implies a grant. Empty viewer IDs are reserved for reconciliation, watchers
+  implies a grant. Creating a folder writes exactly one grant, for the
+  account named as its grantee, in the same transaction (ADR-0029); a
+  route that creates a folder and grants nobody is issue #13 again. Empty viewer IDs are reserved for reconciliation, watchers
   and trusted administration. **Series,
   contributors and tags are library-wide, not folder-scoped**
   (ADR-0019): they are keyed by normalized name alone, one series held
@@ -217,10 +223,13 @@ of them.
   foreign_keys=ON`; both backends: deferrable FKs for split/merge).
 - Timestamps are UTC; SQLite encodes them as RFC3339Nano text.
 - New migrations are appended to the `migrations` slice in each
-  backend's `schema.go` — never edit a shipped migration. The slice
-  currently holds a single baseline: ADR-0017 squashed the previous 22,
-  because this project has never shipped. That was a one-off, not a
-  precedent.
+  backend's `schema.go` — never edit a shipped migration, including the
+  baseline at index 0 (`TestBaselineIsFrozen` pins its hash). ADR-0017
+  squashed 22 migrations into that baseline before anything was
+  published; that was a one-off and not a precedent. A migration that
+  changes what an existing deployment can read is a decision, not a
+  detail: state it in an ADR and warn about it in `docs/deployment.md`
+  (ADR-0029, migration 6).
 - Web UI mutations require the per-session CSRF token.
 - Error responses are JSON `{"error": "..."}` with a precise 4xx;
   malformed input never produces a 5xx.

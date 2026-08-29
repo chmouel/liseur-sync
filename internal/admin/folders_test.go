@@ -193,7 +193,7 @@ func TestFolderKindIsDetectedNotAsked(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	folder, err := NewFolder(t.Context(), st, "Calibre", root, nil)
+	folder, err := NewFolder(t.Context(), st, "Calibre", root, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestFolderRootMustExistAndBeADirectory(t *testing.T) {
 		{"blank", "  ", "must not be blank"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewFolder(t.Context(), st, "Books", tc.root, nil)
+			_, err := NewFolder(t.Context(), st, "Books", tc.root, nil, "")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want one mentioning %q", err, tc.want)
 			}
@@ -241,17 +241,17 @@ func TestFolderRootAllowlistBindsTheBrowserNotTheShell(t *testing.T) {
 	outside := t.TempDir()
 
 	if _, err := NewFolder(
-		t.Context(), st, "Inside", inside, []string{allowed},
+		t.Context(), st, "Inside", inside, []string{allowed}, "",
 	); err != nil {
 		t.Fatalf("a subdirectory of an allowed root was refused: %v", err)
 	}
-	_, err := NewFolder(t.Context(), st, "Outside", outside, []string{allowed})
+	_, err := NewFolder(t.Context(), st, "Outside", outside, []string{allowed}, "")
 	if err == nil || !strings.Contains(err.Error(), "not below any of the roots") {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 	// An empty allowlist is the default and means "anywhere the server
 	// can read", which is what the subcommand has always permitted.
-	if _, err := NewFolder(t.Context(), st, "Anywhere", outside, nil); err != nil {
+	if _, err := NewFolder(t.Context(), st, "Anywhere", outside, nil, ""); err != nil {
 		t.Fatalf("empty allowlist refused a readable root: %v", err)
 	}
 }
@@ -261,11 +261,11 @@ func TestFolderRootAllowlistBindsTheBrowserNotTheShell(t *testing.T) {
 func TestFolderNameIsBoundedAndNotBlank(t *testing.T) {
 	st := newAdminStore(t)
 	root := t.TempDir()
-	if _, err := NewFolder(t.Context(), st, "   ", root, nil); err != ErrFolderNameEmpty {
+	if _, err := NewFolder(t.Context(), st, "   ", root, nil, ""); err != ErrFolderNameEmpty {
 		t.Fatalf("err = %v, want %v", err, ErrFolderNameEmpty)
 	}
 	long := strings.Repeat("x", MaxFolderNameLength+1)
-	if _, err := NewFolder(t.Context(), st, long, root, nil); err != ErrFolderNameTooLong {
+	if _, err := NewFolder(t.Context(), st, long, root, nil, ""); err != ErrFolderNameTooLong {
 		t.Fatalf("err = %v, want %v", err, ErrFolderNameTooLong)
 	}
 }
@@ -280,7 +280,7 @@ func TestFolderRootIsStoredAbsolute(t *testing.T) {
 	if err := os.Mkdir("books", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	folder, err := NewFolder(t.Context(), st, "Books", "books", nil)
+	folder, err := NewFolder(t.Context(), st, "Books", "books", nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,5 +336,81 @@ func TestFolderUploadsIsOffUntilAskedFor(t *testing.T) {
 	// understood is not.
 	if _, err := capture(t, st, "folder-uploads", id, "maybe"); err == nil {
 		t.Fatal("folder-uploads accepted a word it does not know")
+	}
+}
+
+// TestAddFolderAssignsOrSaysItDidNot. Issue #13: a folder nobody is
+// granted is catalogued, scanned and invisible, and the only symptom is
+// a library page claiming the server watches nothing. The subcommand
+// either grants it or says out loud that it did not, and prints the
+// command that would.
+func TestAddFolderAssignsOrSaysItDidNot(t *testing.T) {
+	st := newAdminStore(t)
+	alice := addUser(t, st, "alice")
+
+	out, err := capture(t, st, "add-folder", "-assign", "alice", "Books", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted, err := st.ListUserFolders(t.Context(), alice.ID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(granted) != 1 || granted[0].Name != "Books" {
+		t.Fatalf("-assign granted %v, want the folder it just made", granted)
+	}
+	if !strings.Contains(out, `"alice" can read it`) {
+		t.Fatalf("output did not name the grantee:\n%s", out)
+	}
+
+	out, err = capture(t, st, "add-folder", "Alone", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "nobody can read it yet") ||
+		!strings.Contains(out, "assign-folder") {
+		t.Fatalf("a folder granted to nobody was not reported as such:\n%s", out)
+	}
+	// The grant went to the named account and to nobody else.
+	bob := addUser(t, st, "bob")
+	if got, err := st.ListUserFolders(t.Context(), bob.ID, "", 10); err != nil || len(got) != 0 {
+		t.Fatalf("bob sees %v (err %v), want nothing", got, err)
+	}
+}
+
+// TestAddFolderRefusesAnUnknownGranteeBeforeTouchingTheDisk. The
+// account is resolved first on purpose: a typo should not leave a
+// folder behind that somebody then has to find and remove.
+func TestAddFolderRefusesAnUnknownGranteeBeforeTouchingTheDisk(t *testing.T) {
+	st := newAdminStore(t)
+	_, err := capture(t, st, "add-folder", "-assign", "nobody", "Books", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "nobody") {
+		t.Fatalf("err = %v, want a refusal naming the unknown account", err)
+	}
+	folders, err := st.ListFolders(t.Context(), "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 0 {
+		t.Fatalf("a refused add left %d folders behind", len(folders))
+	}
+}
+
+// TestNewFolderGrantIsAtomic. The grant is part of the folder's
+// transaction, so a grantee that does not exist takes the folder down
+// with it rather than committing one nobody can read.
+func TestNewFolderGrantIsAtomic(t *testing.T) {
+	st := newAdminStore(t)
+	if _, err := NewFolder(
+		t.Context(), st, "Books", t.TempDir(), nil, "no-such-user",
+	); err == nil {
+		t.Fatal("a folder was created for an account that does not exist")
+	}
+	folders, err := st.ListFolders(t.Context(), "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 0 {
+		t.Fatalf("the folder survived a failed grant: %v", folders)
 	}
 }

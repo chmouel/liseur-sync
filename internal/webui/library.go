@@ -183,7 +183,25 @@ type LibraryView struct {
 	// guessed at, so a reader is never offered a form that would be
 	// refused.
 	CanUpload bool
+	// ServerHasFolders is whether this server watches anything at all,
+	// and is the one bit of the catalog a reader with no grant learns
+	// (ADR-0029). Without it the page had to guess, and guessed wrong:
+	// it told somebody whose account had simply not been assigned a
+	// folder that the server watched none, which is issue #13. It never
+	// carries a name, a path, an id or a count.
+	ServerHasFolders bool
 }
+
+// HasGrant is whether any folder is this reader's to browse. It is
+// separate from ServerHasFolders because the two say different things,
+// and saying the wrong one was the bug.
+func (v LibraryView) HasGrant() bool { return len(v.Folders) > 0 }
+
+// CatalogUnavailable is whether the catalog half of the union is empty
+// for structural reasons rather than because nothing matched. The
+// reading half is unaffected: a reader's own works are theirs whether or
+// not a folder is granted (ADR-0027, ADR-0029).
+func (v LibraryView) CatalogUnavailable() bool { return !v.HasGrant() }
 
 func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	folders, err := s.St.ListFolders(r.Context(), u.ID, "", folderPickerLimit)
@@ -191,15 +209,21 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	hasFolders, err := s.St.HasAnyFolder(r.Context())
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	p := readPrefs(r)
 	v := LibraryView{
-		Notice:      r.URL.Query().Get("notice"),
-		Problem:     r.URL.Query().Get("problem"),
-		View:        p.View,
-		GroupSeries: p.GroupSeries,
-		Filter:      normalizeFilter(r.URL.Query().Get("filter")),
-		Sort:        normalizeSort(r.URL.Query().Get("sort")),
-		Dir:         normalizeDir(r.URL.Query().Get("dir")),
+		Notice:           r.URL.Query().Get("notice"),
+		Problem:          r.URL.Query().Get("problem"),
+		View:             p.View,
+		GroupSeries:      p.GroupSeries,
+		ServerHasFolders: hasFolders,
+		Filter:           normalizeFilter(r.URL.Query().Get("filter")),
+		Sort:             normalizeSort(r.URL.Query().Get("sort")),
+		Dir:              normalizeDir(r.URL.Query().Get("dir")),
 	}
 	selected := r.URL.Query().Get("folder")
 	if selected != "" {
@@ -321,7 +345,6 @@ func (s *Server) workBookIDs(
 		mapped: make(map[string]bool, len(candidates)),
 	}
 	for workID, ids := range candidates {
-		links.mapped[workID] = true
 		for _, id := range ids {
 			if book, ok := books[id]; ok && book.Status == store.BookActive {
 				links.active[workID] = id
@@ -329,6 +352,27 @@ func (s *Server) workBookIDs(
 			}
 		}
 	}
+	// mapped is asked without the folder filter, because it decides
+	// whether a delete is offered and a delete is refused whenever a
+	// catalog book still maps the work (ADR-0024). WorkBookIDs above
+	// applies the grant filter, so a reader whose folder was revoked
+	// would look bookless and be offered a delete the store throws out
+	// (ADR-0029). Absence of a grant hides a book; it does not unmap it.
+	//
+	// A failure here says every work is mapped, which withholds a delete
+	// rather than offering one that cannot work.
+	ids := make([]string, 0, len(works))
+	for _, ws := range works {
+		ids = append(ids, ws.Work.ID)
+	}
+	mapped, err := s.St.WorksWithCatalogMappings(ctx, userID, ids)
+	if err != nil {
+		for _, id := range ids {
+			links.mapped[id] = true
+		}
+		return links
+	}
+	links.mapped = mapped
 	return links
 }
 

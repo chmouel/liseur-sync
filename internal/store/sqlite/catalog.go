@@ -535,6 +535,43 @@ func scanUserBookWork(row interface{ Scan(...any) error }) (store.UserBookWork, 
 	return out, err
 }
 
+// WorksWithCatalogMappings deliberately skips the grant filter that
+// WorkBookIDs applies. It answers whether a catalog book still maps this
+// work at all, which is what decides whether the reader may delete it
+// (ADR-0024): a folder that was revoked hides the book, it does not
+// unmap it, and offering a delete the write path would refuse is worse
+// than offering none.
+func (s *Store) WorksWithCatalogMappings(
+	ctx context.Context, userID string, workIDs []string,
+) (map[string]bool, error) {
+	mapped := make(map[string]bool, len(workIDs))
+	if userID == "" || len(workIDs) == 0 {
+		return mapped, nil
+	}
+	args := make([]any, 0, len(workIDs)+1)
+	args = append(args, userID)
+	for _, id := range workIDs {
+		mapped[id] = false
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT work_id FROM user_book_works
+		 WHERE user_id = ? AND work_id IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(args)-1), ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		mapped[id] = true
+	}
+	return mapped, rows.Err()
+}
+
 func (s *Store) WorkBookIDs(ctx context.Context, userID, workID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ubw.book_id FROM user_book_works ubw

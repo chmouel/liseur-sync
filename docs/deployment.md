@@ -435,6 +435,42 @@ Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
 
+### Folder grants, migration 4 and migration 6
+
+Read this before upgrading if you deliberately revoked folder access
+from everybody.
+
+Migration 4 made catalog visibility depend on a `user_folders` grant and
+created none, so a server upgraded across it showed every account an
+empty library and a Library page claiming no folders were watched. That
+is issue #13. Migration 6 repairs it: when no grant exists anywhere in
+the database, it grants every account every folder that exists at that
+moment. A database where anybody holds any grant is left exactly as it
+is.
+
+The consequence to check before you upgrade: if you emptied
+`user_folders` on purpose, migration 6 cannot tell your server from a
+broken one, and access widens on the next start. Re-revoke afterwards,
+from each account's page in the admin panel or with:
+
+```
+liseur-sync admin unassign-folder <user> <folder-id>
+```
+
+If you are already on migration 4 or 5 and stuck with an empty library,
+you do not have to wait for the upgrade:
+
+```
+liseur-sync admin assign-all-folders <user>
+```
+
+A folder created from the admin panel is granted to the administrator
+who added it. From the CLI, say who it is for:
+
+```
+liseur-sync admin add-folder -assign alice Books /srv/books
+```
+
 Compaction and session rollups delete old rows, and SQLite reuses those
 freed pages for future writes, so steady-state growth is bounded. The
 database file does not automatically shrink below its high-water size;

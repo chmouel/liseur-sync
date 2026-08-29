@@ -117,11 +117,15 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
   pairing-code <user>           generate a kosync pairing code (15 min TTL)
   koplugin-device <user> <name> create a statistics-plugin capability URL
 
-  add-folder <name> <root>      watch an existing directory; the server
+  add-folder [-assign <user>] <name> <root>
+                                watch an existing directory; the server
                                 reads it and never writes, renames or
                                 deletes anything below it. A tree holding
                                 a metadata.db is read as a Calibre
-                                library, anything else as plain files
+                                library, anything else as plain files.
+                                -assign grants the new folder to one
+                                account; without it nobody can read it
+                                and the command says so
   list-folders                  list the folders this server watches
   folder-uploads <folder-id> <on|off>
                                 let books be uploaded into a folder, or

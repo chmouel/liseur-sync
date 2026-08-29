@@ -1328,6 +1328,14 @@ type Store interface {
 	// -----------------------------------------------------------------
 
 	CreateFolder(ctx context.Context, folder Folder) error
+	// CreateFolderGranting inserts a folder and, when grantUserID is not
+	// empty, the grant that makes it visible to that one account — both
+	// in one transaction (ADR-0029). A folder created without a grant is
+	// a folder nobody can read, which is how this bug happened; the
+	// grantee is named rather than implied, because the CLI's -assign may
+	// name somebody other than the operator running it. An unknown
+	// grantee is ErrNotFound and leaves no folder behind.
+	CreateFolderGranting(ctx context.Context, folder Folder, grantUserID string) error
 	FolderByID(ctx context.Context, viewerID, folderID string) (Folder, error)
 	// SetFolderUploads turns a folder's upload permission on or off
 	// (ADR-0023). Returns ErrNotFound if the folder is gone.
@@ -1335,6 +1343,19 @@ type Store interface {
 	// ListFolders pages folders ordered by name then id. after is a
 	// FolderCursor, empty for the first page.
 	ListFolders(ctx context.Context, viewerID, after string, limit int) ([]Folder, error)
+	// HasAnyFolder reports whether this server watches anything at all.
+	//
+	// One global bit, and deliberately nothing else: it is what lets the
+	// library tell a reader with no grant that the folders exist but are
+	// not theirs, instead of the falsehood that the server watches none
+	// (ADR-0029). No name, root path, id or count crosses with it.
+	HasAnyFolder(ctx context.Context) (bool, error)
+	// FoldersWithGrants reports, for the folders on one administration
+	// page, which are granted to at least one account. It answers in one
+	// grouped query and returns existence booleans only — never a count,
+	// never a user id. A folder nobody granted and a folder that does not
+	// exist both answer false.
+	FoldersWithGrants(ctx context.Context, folderIDs []string) (map[string]bool, error)
 	AssignUserFolder(ctx context.Context, userID, folderID string) error
 	UnassignUserFolder(ctx context.Context, userID, folderID string) error
 	ListUserFolders(ctx context.Context, userID, after string, limit int) ([]Folder, error)
@@ -1589,6 +1610,16 @@ type Store interface {
 	UserBookWork(ctx context.Context, userID, bookID string) (UserBookWork, error)
 	// WorkBookIDs lists the caller's books mapped to one work.
 	WorkBookIDs(ctx context.Context, userID, workID string) ([]string, error)
+	// WorksWithCatalogMappings reports which of these works this account
+	// still has a user_book_works row for, ignoring folder grants.
+	//
+	// It exists because WorkBookIDs applies the grant filter, so a reader
+	// whose folder was revoked looks bookless — and a bookless work is
+	// offered a delete that DeleteWork then refuses, since a catalog book
+	// does still map it (ADR-0024, ADR-0029). This is the signal that
+	// affordance is drawn from. Existence booleans only: no book id, no
+	// folder id, no count.
+	WorksWithCatalogMappings(ctx context.Context, userID string, workIDs []string) (map[string]bool, error)
 
 	// Works / editions / aliases.
 	// ResolveWork atomically resolves identifiers ordered strongest-first,

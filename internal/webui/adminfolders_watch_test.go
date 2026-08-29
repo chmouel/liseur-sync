@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -200,5 +201,76 @@ func TestScanNowWithoutAWatcherSaysSo(t *testing.T) {
 		"/ui/admin/folders/"+folders[0].ID+"/scan", url.Values{"csrf": {csrf}})
 	if !strings.Contains(body, "without a folder watcher") {
 		t.Fatalf("a server with no watcher claimed a pass: %s", body)
+	}
+}
+
+// TestPanelFolderIsGrantedToItsCreator. Issue #13 was that a folder
+// added here was catalogued and then invisible, because visibility is a
+// row in user_folders (ADR-0027) and nothing wrote one. The grant goes
+// to the administrator who submitted the form and to nobody else:
+// administrator status still confers no reading access.
+func TestPanelFolderIsGrantedToItsCreator(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateUser(t.Context(), store.User{
+		ID: "u2", Name: "bob", Argon2Hash: "x", Timezone: "UTC",
+		IsAdmin: true, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+		"csrf": {extractCSRF(t, body)}, "name": {"Books"}, "root": {root},
+	})
+	if !strings.Contains(body, "Watching Books") {
+		t.Fatalf("the folder was not added: %s", body)
+	}
+
+	granted, err := st.ListUserFolders(t.Context(), "u1", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(granted) != 1 || granted[0].Name != "Books" {
+		t.Fatalf("the creator sees %+v, want the folder they just added", granted)
+	}
+	if got, err := st.ListUserFolders(t.Context(), "u2", "", 10); err != nil ||
+		len(got) != 0 {
+		t.Fatalf("another administrator was granted %+v, %v", got, err)
+	}
+}
+
+// TestFoldersPageMarksOneNobodyCanRead. A folder with no grant is
+// scanned, catalogued and invisible, and the only place that is
+// discoverable is this page. Marking it is what turns issue #13 from a
+// mystery into a two-click fix.
+func TestFoldersPageMarksOneNobodyCanRead(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateFolder(t.Context(), store.Folder{
+		ID: "lonely", Name: "Nobody's Books", RootPath: t.TempDir(),
+		Kind: store.FolderPlain,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if !strings.Contains(body, "No account can read this folder") {
+		t.Fatalf("an unreadable folder was not marked:\n%s", body)
+	}
+
+	if err := st.AssignUserFolder(t.Context(), "u1", "lonely"); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if strings.Contains(body, "No account can read this folder") {
+		t.Fatalf("a granted folder is still marked unreadable:\n%s", body)
 	}
 }

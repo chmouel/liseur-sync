@@ -178,3 +178,143 @@ func testFolderAccess(t *testing.T, open OpenFunc) {
 		t.Fatalf("folder cascade = %+v, %v", grants, err)
 	}
 }
+
+// testFolderGrantCreation covers what issue #13 turned out to be: a
+// folder is only ever visible because a row says so, so the three
+// pieces that put such a row there, notice it is missing, or refuse to
+// offer a delete on the strength of its absence, are all tested here.
+func testFolderGrantCreation(t *testing.T, open OpenFunc) {
+	t.Helper()
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if had, err := s.HasAnyFolder(ctx); err != nil || had {
+		t.Fatalf("a fresh database reports folders: %v, %v", had, err)
+	}
+	users := []store.User{
+		{ID: "creator", Name: "creator", Argon2Hash: "x", Timezone: "UTC", CreatedAt: now},
+		{ID: "bystander", Name: "bystander", Argon2Hash: "x", Timezone: "UTC",
+			IsAdmin: true, CreatedAt: now},
+	}
+	for _, u := range users {
+		if err := s.CreateUser(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mine := store.Folder{
+		ID: "gc-mine", Name: "Mine", RootPath: "/gc-mine",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.CreateFolderGranting(ctx, mine, "creator"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ListUserFolders(ctx, "creator", "", 10); err != nil ||
+		len(got) != 1 || got[0].ID != mine.ID {
+		t.Fatalf("the creator's grant = %+v, %v", got, err)
+	}
+	// Being an administrator is not a grant. ADR-0027 is unchanged on
+	// that point and this is what checks it stayed unchanged.
+	if got, err := s.ListUserFolders(ctx, "bystander", "", 10); err != nil || len(got) != 0 {
+		t.Fatalf("another administrator was granted %+v, %v", got, err)
+	}
+
+	// An empty grantee is the CLI's default and grants nobody.
+	ungranted := store.Folder{
+		ID: "gc-none", Name: "None", RootPath: "/gc-none",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.CreateFolderGranting(ctx, ungranted, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// A grantee that does not exist takes the folder with it, or an
+	// operator is left with a row they have to find and remove.
+	orphan := store.Folder{
+		ID: "gc-orphan", Name: "Orphan", RootPath: "/gc-orphan",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.CreateFolderGranting(ctx, orphan, "no-such-user"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("granting to an unknown account = %v, want ErrNotFound", err)
+	}
+	if _, err := s.FolderByID(ctx, "", orphan.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a folder survived its failed grant: %v", err)
+	}
+
+	if had, err := s.HasAnyFolder(ctx); err != nil || !had {
+		t.Fatalf("HasAnyFolder = %v, %v, want true", had, err)
+	}
+
+	// FoldersWithGrants answers presence and nothing else. A duplicate
+	// collapses, an id nobody granted and an id that does not exist are
+	// both false, and an empty request is an empty answer.
+	flags, err := s.FoldersWithGrants(ctx, []string{mine.ID, mine.ID, ungranted.ID, "gc-absent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !flags[mine.ID] || flags[ungranted.ID] || flags["gc-absent"] {
+		t.Fatalf("grant flags = %+v", flags)
+	}
+	if flags, err := s.FoldersWithGrants(ctx, nil); err != nil || len(flags) != 0 {
+		t.Fatalf("empty request = %+v, %v", flags, err)
+	}
+
+	// WorksWithCatalogMappings answers the question WorkBookIDs cannot,
+	// because that one is grant-filtered: is this work still mapped to a
+	// catalog book at all? A work whose book is merely hidden must not
+	// be offered a delete the store would refuse (ADR-0024).
+	if _, err := s.ReconcileFolder(ctx, mine.ID, []store.ObservedBook{{
+		RelativePath: "m.epub", SizeBytes: 1, MTime: now,
+		ContentSHA256: "sha-gc", OriginalFilename: "m.epub",
+		MediaType: "application/epub+zip", Title: "Mapped",
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	books, err := s.ListCatalogBooks(ctx, "creator", mine.ID, nil, 10)
+	if err != nil || len(books) != 1 {
+		t.Fatalf("catalog = %+v, %v", books, err)
+	}
+	mapped := store.Work{ID: "gc-mapped", UserID: "creator", Title: "Mapped", CreatedAt: now}
+	if _, err := s.ResolveCatalogBookWork(
+		ctx, "creator", books[0].ID, mapped, nil, nil, true, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	loose := store.Work{ID: "gc-loose", UserID: "creator", Title: "Loose", CreatedAt: now}
+	if err := s.CreateWork(ctx, loose, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	check := func(when string) {
+		t.Helper()
+		got, err := s.WorksWithCatalogMappings(ctx, "creator", []string{mapped.ID, loose.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got[mapped.ID] {
+			t.Fatalf("%s: a work a catalog book still maps looked unmapped", when)
+		}
+		if got[loose.ID] {
+			t.Fatalf("%s: a work no book maps looked mapped", when)
+		}
+	}
+	check("granted")
+	if err := s.UnassignUserFolder(ctx, "creator", mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.WorkBookIDs(ctx, "creator", mapped.ID); err != nil || len(ids) != 0 {
+		t.Fatalf("WorkBookIDs leaked a hidden book: %+v, %v", ids, err)
+	}
+	check("revoked")
+
+	// Another account's works are not this account's business.
+	if got, err := s.WorksWithCatalogMappings(
+		ctx, "bystander", []string{mapped.ID, loose.ID},
+	); err != nil || got[mapped.ID] || got[loose.ID] {
+		t.Fatalf("another account was told about these works: %+v, %v", got, err)
+	}
+	if got, err := s.WorksWithCatalogMappings(ctx, "creator", nil); err != nil || len(got) != 0 {
+		t.Fatalf("empty request = %+v, %v", got, err)
+	}
+}

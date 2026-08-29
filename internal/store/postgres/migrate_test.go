@@ -66,13 +66,98 @@ func TestMigrateUpgradesAnOlderDatabase(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_folders`).Scan(&grants); err != nil {
 		t.Fatal(err)
 	}
-	if grants != 0 {
-		t.Fatalf("migration granted existing accounts %d folders, want none", grants)
+	if grants != 1 {
+		t.Fatalf("migration 6 granted %d folders, want the one it found "+
+			"(one account, one folder, no grants: issue #13's state)", grants)
 	}
 
 	// Idempotent: a second start must not try to add the columns again.
 	if err := s.Migrate(ctx); err != nil {
 		t.Fatalf("migrating an already-current database: %v", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM user_folders`).Scan(&grants); err != nil {
+		t.Fatal(err)
+	}
+	if grants != 1 {
+		t.Fatalf("a second migration changed the grants to %d, want 1", grants)
+	}
+}
+
+// TestBackfillLeavesAConfiguredServerAlone. See the SQLite copy for the
+// argument: migration 6 repairs a server with no grants at all and has
+// no opinion about one somebody has configured.
+func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	ctx := context.Background()
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	for _, tc := range []struct {
+		name string
+		seed string
+		want int
+	}{
+		{name: "nothing assigned is the broken state and is repaired", want: 4},
+		{
+			name: "one deliberate grant means hands off",
+			seed: `INSERT INTO user_folders VALUES ('u1', 'f1')`,
+			want: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reset(t, s)
+			for i, m := range migrations[:len(migrations)-1] {
+				if _, err := s.db.ExecContext(ctx, m); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.db.ExecContext(ctx,
+					`INSERT INTO schema_migrations(version, applied_at) VALUES ($1, $2)`,
+					i+1, time.Now().UTC()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			now := time.Now().UTC()
+			for _, id := range []string{"u1", "u2"} {
+				if _, err := s.db.ExecContext(ctx, `INSERT INTO users
+					(id, name, argon2_hash, created_at) VALUES ($1, $1, 'x', $2)`,
+					id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.db.ExecContext(ctx,
+				`UPDATE users SET disabled_at = $1 WHERE id = 'u2'`, now); err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range []string{"f1", "f2"} {
+				if _, err := s.db.ExecContext(ctx, `INSERT INTO folders
+					(id, name, root_path, kind, created_at, updated_at)
+					VALUES ($1, $1, $2, 'plain', $3, $3)`, id, "/"+id, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.seed != "" {
+				if _, err := s.db.ExecContext(ctx, tc.seed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var grants int
+			if err := s.db.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM user_folders`).Scan(&grants); err != nil {
+				t.Fatal(err)
+			}
+			if grants != tc.want {
+				t.Fatalf("after the backfill there are %d grants, want %d", grants, tc.want)
+			}
+		})
 	}
 }
 

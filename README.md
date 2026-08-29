@@ -143,8 +143,13 @@ account becomes the administrator.
 Add a folder from Settings > Administration > Folders, or from a shell:
 
 ```sh
-liseur-sync admin add-folder Shelf /srv/books
+liseur-sync admin add-folder -assign alice Shelf /srv/books
 ```
+
+A folder is only in somebody's library when they have been granted it.
+Adding one from the panel grants it to you; from the shell, `-assign`
+says who it is for. Other accounts are granted folders from their page
+under Settings > Administration > Users.
 
 Use Settings or the `admin` CLI to manage users, folders, API tokens, and
 reader pairing.

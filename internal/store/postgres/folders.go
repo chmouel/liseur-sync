@@ -17,20 +17,46 @@ const folderColumns = `id, name, root_path, kind, accepts_uploads,
 	created_at, updated_at`
 
 func (s *Store) CreateFolder(ctx context.Context, folder store.Folder) error {
+	return s.CreateFolderGranting(ctx, folder, "")
+}
+
+// CreateFolderGranting writes the folder and its first grant together.
+//
+// Separating them would leave a window, and a failure in that window
+// leaves exactly the state issue #13 reported: a folder on disk that the
+// catalog knows about and nobody can read. So the grant is part of the
+// same transaction, and an unknown grantee takes the folder down with it
+// rather than committing a folder somebody has to notice is invisible.
+func (s *Store) CreateFolderGranting(
+	ctx context.Context, folder store.Folder, grantUserID string,
+) error {
 	if !folder.Kind.Valid() {
 		return fmt.Errorf("%w: folder kind %q", store.ErrInvalidInput, folder.Kind)
 	}
-	_, err := s.db.ExecContext(ctx, q(
-		`INSERT INTO folders
-		     (id, name, root_path, kind, accepts_uploads, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`),
-		folder.ID, folder.Name, folder.RootPath, string(folder.Kind),
-		folder.AcceptsUploads,
-		folder.CreatedAt.UTC(), folder.UpdatedAt.UTC())
-	if isUniqueErr(err) {
-		return store.ErrConflict
-	}
-	return err
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, q(
+			`INSERT INTO folders
+			     (id, name, root_path, kind, accepts_uploads, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`),
+			folder.ID, folder.Name, folder.RootPath, string(folder.Kind),
+			folder.AcceptsUploads,
+			folder.CreatedAt.UTC(), folder.UpdatedAt.UTC())
+		if isUniqueErr(err) {
+			return store.ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if grantUserID == "" {
+			return nil
+		}
+		if err := validateGrantTargets(ctx, tx, grantUserID, nil); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, q(`INSERT INTO user_folders
+			(user_id, folder_id) VALUES (?, ?)`), grantUserID, folder.ID)
+		return err
+	})
 }
 
 func scanFolder(row interface{ Scan(...any) error }) (store.Folder, error) {
@@ -131,6 +157,52 @@ func (s *Store) ListFolders(ctx context.Context, viewerID, after string, limit i
 		folders = append(folders, folder)
 	}
 	return folders, rows.Err()
+}
+
+// HasAnyFolder answers one question and returns one bit: does this
+// server watch anything? The library needs it to tell a reader with no
+// grant why their shelf is empty (ADR-0029), and a reader must learn
+// nothing else from it.
+func (s *Store) HasAnyFolder(ctx context.Context) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM folders LIMIT 1`).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// FoldersWithGrants marks the folders on one administration page that no
+// account can see. One grouped query rather than one query per folder,
+// and booleans rather than counts: the page needs to warn, not to
+// enumerate who reads what.
+func (s *Store) FoldersWithGrants(
+	ctx context.Context, folderIDs []string,
+) (map[string]bool, error) {
+	granted := make(map[string]bool, len(folderIDs))
+	if len(folderIDs) == 0 {
+		return granted, nil
+	}
+	for _, id := range folderIDs {
+		granted[id] = false
+	}
+	placeholders, args := inArgs(folderIDs)
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT DISTINCT folder_id FROM user_folders
+		 WHERE folder_id IN (`+placeholders+`)`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		granted[id] = true
+	}
+	return granted, rows.Err()
 }
 
 func (s *Store) AssignUserFolder(ctx context.Context, userID, folderID string) error {

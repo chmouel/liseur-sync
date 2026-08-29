@@ -36,7 +36,16 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Uploads</th><th>Added</th><th></th></tr>
 				for _, f := range folders {
 					<tr>
-						<td>{ f.Folder.Name }</td>
+						<td>
+							{ f.Folder.Name }
+							if !f.Granted {
+								<br/>
+								<small class="error">
+									No account can read this folder. Assign it from
+									<a href={ settingsAdminHref(prefix, settingsAdminUsers) }>Users</a>.
+								</small>
+							}
+						</td>
 						<td class="muted">{ f.Kind() }</td>
 						<td><code>{ f.Folder.RootPath }</code></td>
 						<td>
