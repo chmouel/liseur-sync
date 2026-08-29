@@ -54,4 +54,21 @@
     el.scrollLeft = el.scrollWidth;
   });
 
+  // A shown-once secret (token, pairing code, capability URL) is
+  // otherwise only recoverable by drag-selecting text that a long
+  // random string forces to wrap (word-break: break-all), which is
+  // exactly how a stray space or newline gets included in what a user
+  // pastes elsewhere. This copies the exact text content instead.
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest && e.target.closest('.copy-btn');
+    if (!btn) return;
+    const target = document.getElementById(btn.dataset.copyFor);
+    if (!target || !navigator.clipboard) return;
+    const original = btn.textContent;
+    navigator.clipboard.writeText(target.textContent).then(function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = original; }, 1500);
+    });
+  });
+
 })();

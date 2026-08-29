@@ -447,6 +447,8 @@ code {
 	font-size: .88em;
 }
 code.big { font-size: 1rem; display: inline-block; padding: .45rem .6rem; word-break: break-all; }
+.secret-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.secret-row .copy-btn { flex: none; }
 
 /* A field is a stack: label, control, then whatever the server has to
    say about it. Left to themselves these run into each other, because a

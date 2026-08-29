@@ -18,7 +18,10 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 	if flash.Secret != "" {
 		<div class="card secret">
 			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
-			<code class="big">{ flash.Secret }</code>
+			<p class="secret-row">
+				<code class="big" id="flash-secret-value">{ flash.Secret }</code>
+				<button type="button" class="copy-btn" data-copy-for="flash-secret-value">Copy</button>
+			</p>
 		</div>
 	}
 	if flash.Error != "" {
