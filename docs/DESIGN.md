@@ -109,7 +109,9 @@ already have.**
   `root_path`, and `kind` (`plain` or `calibre`). It has no owner or
   lease. Explicit `user_folders` grants decide whose library includes it;
   administrators manage all folders and grants without receiving implicit
-  reading access ([ADR-0027](adr/0027-explicit-per-user-folder-access.md)).
+  reading access ([ADR-0027](adr/0027-explicit-per-user-folder-access.md)),
+  though creating a folder writes one grant for the account that created
+  it ([ADR-0029](adr/0029-a-folder-somebody-can-read.md)).
 - **Adapters translate at the edge.** The kosync and koplugin
   endpoints parse the legacy wire formats and write native records
   tagged with their origin. Nothing downstream knows or cares which
@@ -448,7 +450,13 @@ books    id, folder_id, status, relative_path, calibre_id?, stat,
 ```
 
 There is no owner on `folders`. A reader sees a folder only through an
-explicit `user_folders` grant; new accounts and folders begin with none.
+explicit `user_folders` grant, and a new account begins with none. A new
+folder is granted to one named account in the transaction that inserts
+it: the administrator who submitted the form in the panel, or whoever
+`add-folder -assign` names on the command line
+([ADR-0029](adr/0029-a-folder-somebody-can-read.md)). That is a written
+row like any other grant, not something administrator status implies,
+and no second account receives it.
 Only administrators manage folders and grants because adding one names a path
 on the server. Administrator status grants management authority, not catalog
 visibility, so an administrator assigns a folder to themselves to read it.

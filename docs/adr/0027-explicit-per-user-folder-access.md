@@ -5,6 +5,10 @@
 - **Depends on:** [ADR-0017](0017-folders-not-pipelines.md)
 - **Amends:** ADR-0017's catalog visibility rule and sections 2, 3, 8,
   9 and 10 of [DESIGN.md](../DESIGN.md)
+- **Amended by:** [ADR-0029](0029-a-folder-somebody-can-read.md), which
+  grants a new folder to the account that creates it, backfills grants
+  on a database that holds none, and stops the Library page reporting a
+  missing grant as a server that watches nothing
 
 ## Context
 

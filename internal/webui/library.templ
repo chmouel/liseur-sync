@@ -15,28 +15,16 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	if v.Notice != "" {
 		<p class="notice" role="status">{ v.Notice }</p>
 	}
-	if len(v.Folders) == 0 {
-		<h1>Library</h1>
-		<section class="card">
-			if admin {
-				<p class="muted">
-					This server watches no folders yet. Point it at one from
-					<a href={ settingsAdminHref(prefix, "folders") }>Folders</a> in Settings
-					panel, or with <code>liseur-sync admin add-folder</code>.
-				</p>
-			} else {
-				<p class="muted">
-					This server watches no folders yet. An administrator points
-					it at one with <code>liseur-sync admin add-folder</code>.
-				</p>
-			}
-		</section>
-	} else {
-		<header class="libraryhead">
-			<div>
-				<p class="eyebrow">Your shelves</p>
-				<h1>Library</h1>
-			</div>
+	// The shelf is drawn whether or not a folder is granted. A reader's
+	// own works are theirs either way (ADR-0027), and hanging the whole
+	// page off the folder list is what made a revoked or never-assigned
+	// account look like an empty server — issue #13.
+	<header class="libraryhead">
+		<div>
+			<p class="eyebrow">Your shelves</p>
+			<h1>Library</h1>
+		</div>
+		if v.HasGrant() {
 			<form class="folderpick" method="get" action={ prefix + "library" }>
 				<label class="visually-hidden" for="folder-pick">Folder</label>
 				<select id="folder-pick" name="folder">
@@ -59,8 +47,44 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				}
 				<noscript><button type="submit">Show</button></noscript>
 			</form>
-		</header>
-		<div class="librarytools">
+		}
+	</header>
+	if !v.HasGrant() {
+		<section class="card">
+			if !v.ServerHasFolders {
+				if admin {
+					<p class="muted">
+						This server watches no folders yet. Point it at one from
+						<a href={ settingsAdminHref(prefix, settingsAdminFolders) }>Folders</a> in
+						the Settings panel, or with <code>liseur-sync admin add-folder</code>.
+					</p>
+				} else {
+					<p class="muted">
+						This server watches no folders yet. An administrator points
+						it at one with <code>liseur-sync admin add-folder</code>.
+					</p>
+				}
+			} else {
+				if admin {
+					<p class="muted">
+						This server watches folders, but none is assigned to your
+						account. Administering the server is not the same as reading
+						from it: assign one to yourself from
+						<a href={ settingsAdminHref(prefix, settingsAdminUsers) }>Users</a> in
+						the Settings panel, or with
+						<code>liseur-sync admin assign-all-folders</code>.
+					</p>
+				} else {
+					<p class="muted">
+						This server watches folders, but none is assigned to your
+						account yet. An administrator assigns one. Anything you have
+						already been reading is still below.
+					</p>
+				}
+			}
+		</section>
+	}
+	<div class="librarytools">
 			if v.Selected != "" {
 				@searchForm(prefix, SearchView{FolderID: v.Selected})
 			}
@@ -137,12 +161,11 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				}
 			}
 		</section>
-	}
 }
 
 // libraryEmpty says why the shelf is empty, which depends entirely on
-// what was asked for: an empty catalog and an empty filter are two
-// different problems with two different answers.
+// what was asked for: an empty catalog, an empty filter and a folder
+// nobody assigned are three problems with three different answers.
 templ libraryEmpty(v LibraryView) {
 	switch v.Filter {
 		case filterReading:
@@ -152,7 +175,15 @@ templ libraryEmpty(v LibraryView) {
 		case filterUnread:
 			@emptyState("Nothing unread", "Every book here has been opened at least once.", "", "")
 		case filterHere:
-			@emptyState("No files on this server", "Books appear here as this server reads the folders it watches.", "", "")
+			if v.CatalogUnavailable() {
+				if v.ServerHasFolders {
+					@emptyState("No folder is assigned to you", "This server watches folders. An administrator decides which of them are yours.", "", "")
+				} else {
+					@emptyState("This server watches no folders", "Books appear here once an administrator points the server at a directory.", "", "")
+				}
+			} else {
+				@emptyState("No files on this server", "Books appear here as this server reads the folders it watches.", "", "")
+			}
 		default:
 			@emptyState("Nothing here yet", "Add books to a watched folder, or sync reading progress from Liseur or KOReader.", "", "")
 	}

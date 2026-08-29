@@ -44,6 +44,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
 	t.Run("Folders", func(t *testing.T) { testFolders(t, open) })
 	t.Run("FolderAccess", func(t *testing.T) { testFolderAccess(t, open) })
+	t.Run("FolderGrantCreation", func(t *testing.T) { testFolderGrantCreation(t, open) })
 	t.Run("CatalogListingsPageAndIsolate", func(t *testing.T) {
 		testCatalogListingsPageAndIsolate(t, open)
 	})

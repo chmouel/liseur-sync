@@ -541,8 +541,12 @@ const folderUploads = `
 ALTER TABLE folders ADD COLUMN accepts_uploads BOOLEAN NOT NULL DEFAULT 0;
 `
 
-// folderAccess is migration 4. Grants are explicit and deliberately
-// empty for both existing and newly created accounts and folders.
+// folderAccess is migration 4. Grants are explicit: no account and no
+// folder receives one implicitly, and administrator status confers none
+// (ADR-0027). Migration 6 backfills the accounts this left stranded, and
+// ADR-0029 gives a new folder a grant for the account named when it was
+// created — neither of which changes the rule that a grant is written on
+// purpose or not at all.
 const folderAccess = `
 CREATE TABLE user_folders (
     user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -591,7 +595,41 @@ CREATE INDEX annotations_tombstones ON annotations(user_id, deleted_at)
     WHERE deleted_at IS NOT NULL;
 `
 
+// folderBackfill is migration 6 (ADR-0029). Migration 4 gave nobody a
+// grant, so every account on an upgraded server woke up to an empty
+// library and a page telling them this server watched no folders. This
+// gives those accounts back what they could see before.
+//
+// The guard is the whole design. It fires only when no grant exists
+// anywhere, so an installation where somebody has assigned anything —
+// one account, a deliberate split between two readers, a revocation that
+// left others alone — is not touched, and no account gains access it was
+// not already meant to have. Running the slice twice is a no-op for the
+// same reason.
+//
+// One state it cannot distinguish: an operator who revoked every grant
+// on purpose gets them all back. That is an accepted security risk
+// rather than an oversight, argued in ADR-0029 and warned about in
+// docs/deployment.md before the upgrade. Gating on the version the
+// upgrade started from would close it and would also skip every server
+// already broken by migration 4, which is every server this repairs.
+//
+// Disabled accounts are included. A disabled account is refused every
+// credential it holds, so the grant grants nothing while it stays
+// disabled, and leaving it out would mean re-enabling an account
+// produced an empty library months later for no visible reason. Folders
+// created after this runs are not covered: they get the grant their
+// creator asked for and nothing more.
+const folderBackfill = `
+INSERT INTO user_folders (user_id, folder_id)
+SELECT u.id, f.id FROM users u CROSS JOIN folders f
+WHERE NOT EXISTS (SELECT 1 FROM user_folders);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
-var migrations = []string{schema, claimRevisions, folderUploads, folderAccess, annotationSync}
+var migrations = []string{
+	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
+	folderBackfill,
+}

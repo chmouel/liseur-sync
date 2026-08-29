@@ -8,7 +8,9 @@ package admin
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,8 +62,15 @@ func ValidateFolderName(name string) error {
 // is a Calibre folder and everything else is a plain one. There is
 // nothing a person could usefully tell the server here that the disk
 // does not already say.
+//
+// grantUserID is the one account the new folder is visible to, written
+// in the same transaction as the folder itself (ADR-0029). Empty means
+// nobody, which is a folder no one can read: the panel always names the
+// administrator who submitted the form, and the subcommand names
+// whoever -assign did.
 func NewFolder(
 	ctx context.Context, st store.Store, name, root string, allowed []string,
+	grantUserID string,
 ) (store.Folder, error) {
 	if err := ValidateFolderName(name); err != nil {
 		return store.Folder{}, err
@@ -82,7 +91,7 @@ func NewFolder(
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := st.CreateFolder(ctx, folder); err != nil {
+	if err := st.CreateFolderGranting(ctx, folder, grantUserID); err != nil {
 		return store.Folder{}, err
 	}
 	return folder, nil
@@ -151,16 +160,37 @@ func ResolveFolderRoot(path string) (string, error) {
 }
 
 // addFolder registers an existing directory as a watched folder.
+//
+// -assign is not decoration. A folder nobody is granted is a folder
+// nobody can read, and the server gives no sign of it beyond an empty
+// library — which is how issue #13 happened. So the flag exists, and
+// without it the command says out loud what it did not do.
 func addFolder(ctx context.Context, st store.Store, args []string) error {
-	const usage = "usage: add-folder <name> <root>"
-	if len(args) != 2 {
+	const usage = "usage: add-folder [-assign <user>] <name> <root>"
+	fs := flag.NewFlagSet("add-folder", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	assign := fs.String("assign", "", "grant the new folder to this user")
+	if err := fs.Parse(args); err != nil {
 		return errors.New(usage)
+	}
+	if fs.NArg() != 2 {
+		return errors.New(usage)
+	}
+	// The account is resolved before the disk is touched: a typo in a
+	// name should not first create a folder and then fail to grant it.
+	var grantUserID, grantName string
+	if name := strings.TrimSpace(*assign); name != "" {
+		user, err := st.UserByName(ctx, name)
+		if err != nil {
+			return fmt.Errorf("assign to %q: %w", name, err)
+		}
+		grantUserID, grantName = user.ID, user.Name
 	}
 	// The subcommand is run by whoever can run the binary, so it is not
 	// bound by the config allowlist the browser form is: that allowlist
 	// exists to stop an administrator's session from naming any path on
 	// the machine, not to stop the operator from doing so at a shell.
-	folder, err := NewFolder(ctx, st, args[0], args[1], nil)
+	folder, err := NewFolder(ctx, st, fs.Arg(0), fs.Arg(1), nil, grantUserID)
 	if err != nil {
 		return err
 	}
@@ -169,6 +199,13 @@ func addFolder(ctx context.Context, st store.Store, args []string) error {
 	fmt.Println(
 		"the server reads this directory and never writes, renames or " +
 			"deletes anything below it")
+	if grantUserID != "" {
+		fmt.Printf("%q can read it; assign it to others with:\n", grantName)
+		fmt.Printf("  liseur-sync admin assign-folder <user> %s\n", folder.ID)
+	} else {
+		fmt.Println("nobody can read it yet; grant it with:")
+		fmt.Printf("  liseur-sync admin assign-folder <user> %s\n", folder.ID)
+	}
 	return nil
 }
 

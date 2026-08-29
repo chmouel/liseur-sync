@@ -289,8 +289,18 @@ func (s *Server) settingsAdmin(
 				"&after=" + url.QueryEscape(store.FolderCursor(folders[len(folders)-1]))
 		}
 		v.Folders = make([]adminFolderView, 0, len(folders))
+		ids := make([]string, 0, len(folders))
 		for _, folder := range folders {
-			v.Folders = append(v.Folders, adminFolderView{Folder: folder})
+			ids = append(ids, folder.ID)
+		}
+		granted, err := s.St.FoldersWithGrants(r.Context(), ids)
+		if err != nil {
+			return err
+		}
+		for _, folder := range folders {
+			v.Folders = append(v.Folders, adminFolderView{
+				Folder: folder, Granted: granted[folder.ID],
+			})
 		}
 		v.Roots = s.Cfg.Content.FolderRoots
 	case settingsAdminUsers:

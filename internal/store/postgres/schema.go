@@ -467,8 +467,11 @@ const folderUploads = `
 ALTER TABLE folders ADD COLUMN accepts_uploads BOOLEAN NOT NULL DEFAULT FALSE;
 `
 
-// folderAccess is migration 4. Grants are explicit and deliberately
-// empty for both existing and newly created accounts and folders.
+// folderAccess is migration 4. Grants are explicit: no account and no
+// folder receives one implicitly, and administrator status confers none
+// (ADR-0027). Migration 6 backfills the accounts this left stranded, and
+// ADR-0029 gives a new folder a grant for the account named when it was
+// created.
 const folderAccess = `
 CREATE TABLE user_folders (
     user_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -513,5 +516,17 @@ CREATE INDEX annotations_tombstones ON annotations(user_id, deleted_at)
     WHERE deleted_at IS NOT NULL;
 `
 
+// folderBackfill is migration 6 (ADR-0029); see the SQLite copy for the
+// argument. The guard fires only when no grant exists anywhere, so a
+// server where anybody has assigned anything is left alone.
+const folderBackfill = `
+INSERT INTO user_folders (user_id, folder_id)
+SELECT u.id, f.id FROM users u CROSS JOIN folders f
+WHERE NOT EXISTS (SELECT 1 FROM user_folders);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
-var migrations = []string{schema, claimRevisions, folderUploads, folderAccess, annotationSync}
+var migrations = []string{
+	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
+	folderBackfill,
+}
