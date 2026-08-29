@@ -406,7 +406,7 @@ func (s *Server) handleAdminPairingCode(
 				ttl = 15 * time.Minute
 			}
 			if err := s.St.CreatePairingCode(r.Context(), store.PairingCode{
-				ID: id, UserID: target.ID, CodeSHA256: auth.HashSecret(code),
+				ID: id, UserID: target.ID, CodeSHA256: auth.KosyncPairingHash(code),
 				ExpiresAt: time.Now().Add(ttl),
 			}); err != nil {
 				return "", "", err

@@ -375,7 +375,7 @@ func pairingCode(ctx context.Context, st store.Store, args []string) error {
 	}
 	expires := time.Now().Add(15 * time.Minute)
 	if err := st.CreatePairingCode(ctx, store.PairingCode{
-		ID: id, UserID: u.ID, CodeSHA256: auth.HashSecret(code), ExpiresAt: expires,
+		ID: id, UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(code), ExpiresAt: expires,
 	}); err != nil {
 		return err
 	}

@@ -334,7 +334,7 @@ Implements the four calls KOReader's kosync plugin makes:
 
 | kosync call | Translation |
 |---|---|
-| `POST /users/create` | Creates a device credential bound to an existing liseur-sync user via a valid, unexpired, single-use pairing code used as the kosync password. It never creates an account. |
+| `POST /users/create` | Creates a device credential bound to an existing liseur-sync user via a valid, unexpired, single-use pairing code used as the kosync password. The client sends `md5(code)`, never the code itself, so the code is stored as the hash of that derived key and the key becomes the slot's credential. It never creates an account. |
 | `GET /users/auth` | Validates the device credential. |
 | `PUT /syncs/progress` | Resolves `document` (a partialMD5) via the alias table, then appends a native op with `origin: kosync`, `foreign_pos` = the xpointer, `progression` = percentage. |
 | `GET /syncs/progress/:document` | Returns the newest op: `progress` = stored `foreign_pos` if the newest op has one, else the percentage string; `percentage`, `device`, `timestamp` filled natively. |
@@ -404,6 +404,11 @@ KOReader cannot do better. Containment:
   the account password.
 - `POST /adapter/kosync/users/create` accepts only a one-time pairing code;
   supplying an account password creates neither an account nor a device.
+  The code a human types never crosses the wire: every kosync client
+  transmits `md5(password)` and presents that digest as `x-auth-key`
+  thereafter, so the code is stored as the hash of the derived key. The
+  MD5 step is the protocol's, not ours (§7.3); what contains it is that
+  the code is 128 bits of entropy, single-use and short-lived.
 - Compromise of that key exposes exactly one
   revocable device slot with `sync` scope, not the account.
 - The kosync

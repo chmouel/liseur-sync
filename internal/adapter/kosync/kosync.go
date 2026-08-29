@@ -4,16 +4,16 @@
 //
 // Auth model: kosync's "username/password" is a dedicated pairing
 // credential, never the account password. The user generates a pairing
-// code (admin CLI / web UI) and enters it as the kosync password;
-// users/create redeems the code and binds a device slot whose key
-// (KOReader's MD5-derived key) is stored hashed. Every adapter request
-// authenticates with x-auth-user / x-auth-key headers.
+// code (admin CLI / web UI) and enters it as the kosync password. The
+// client never transmits that code: like KOReader's plugin, it sends
+// md5(code) and presents that same digest as x-auth-key on every later
+// request, so the code is stored as the hash of that derived key.
+// users/create redeems it and binds a device slot. Every adapter
+// request authenticates with x-auth-user / x-auth-key headers.
 package kosync
 
 import (
-	"crypto/md5"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -40,13 +40,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// md5hex mirrors KOReader's derivation: the kosync "password" entered
-// by the user is MD5'd to become the auth key.
-func md5hex(s string) string {
-	sum := md5.Sum([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
 // deviceFrom authenticates x-auth-user/x-auth-key. The key is
 // MD5(pairing code) as derived by KOReader, stored hashed (SHA-256);
 // it globally identifies the device slot. The username must match the
@@ -57,7 +50,7 @@ func (s *Server) deviceFrom(r *http.Request) (store.KosyncDevice, error) {
 	if user == "" || key == "" {
 		return store.KosyncDevice{}, errAuth
 	}
-	d, err := s.St.KosyncDeviceByKey(r.Context(), auth.HashSecret(key))
+	d, err := s.St.KosyncDeviceByKey(r.Context(), auth.HashSecret(strings.ToLower(key)))
 	if err != nil || d.RevokedAt != nil {
 		slog.Warn("kosync auth rejected", "reason", "unknown or revoked device", "slot", user, "ip", auth.ClientIP(r, s.Cfg))
 		return store.KosyncDevice{}, errAuth
@@ -93,9 +86,13 @@ func (s *Server) HandleAuth(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCreateUser implements POST /users/create. The kosync "password"
-// must be a valid pairing code; the code is redeemed and a device slot
-// created, keyed on MD5(pairing code) — the key KOReader will present on
-// future calls. This route never creates an account (ADR-0026).
+// is not the pairing code the user typed: every kosync client sends
+// md5(password) and then presents that same digest as x-auth-key
+// forever after (KOReader's `userkey = md5(password)`, and Readest's
+// KOSyncClient does likewise). So what arrives here is the derived key,
+// it is matched against the stored hash of that key, and it becomes the
+// device slot's credential directly. This route never creates an
+// account (ADR-0026).
 func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -105,11 +102,9 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	// A pairing code is a random opaque string with no meaningful
-	// surrounding whitespace; trimming here is defensive against a
-	// stray space/newline picked up when a user manually copies it out
-	// of the admin panel (the code display wraps on screen and has no
-	// copy button), which would otherwise silently fail as "invalid".
+	// The derived key is an opaque hex digest with no meaningful
+	// surrounding whitespace; trimming is defensive against a client
+	// or proxy that pads it.
 	req.Password = strings.TrimSpace(req.Password)
 	if req.Username == "" || req.Password == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
@@ -119,9 +114,10 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := time.Now()
 
-	// Pairing flow: password is a pairing code. KOReader will derive
-	// MD5(code) as its auth key, so the slot key is the hash of that.
-	p, err := s.St.RedeemPairingCode(ctx, auth.HashSecret(req.Password), now)
+	// The pairing code was stored as the hash of the key the client
+	// derives, so the value received here hashes to it directly.
+	userKey := strings.ToLower(req.Password)
+	p, err := s.St.RedeemPairingCode(ctx, auth.HashSecret(userKey), now)
 	if err != nil {
 		slog.Warn("kosync registration rejected", "reason", "invalid, expired or used pairing code", "slot", req.Username, "ip", auth.ClientIP(r, s.Cfg))
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired pairing code"})
@@ -130,7 +126,7 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	d := store.KosyncDevice{
 		UserID:     p.UserID,
 		DeviceSlot: req.Username, // kosync "username" names the device slot
-		KeySHA256:  auth.HashSecret(md5hex(req.Password)),
+		KeySHA256:  auth.HashSecret(userKey),
 		Label:      "kosync:" + req.Username,
 	}
 	if err := s.St.CreateKosyncDevice(ctx, d); err != nil {

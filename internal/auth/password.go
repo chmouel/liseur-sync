@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -79,4 +80,29 @@ func NewSecret() (string, error) {
 func HashSecret(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
+}
+
+// KosyncUserKey derives the credential a kosync client actually sends
+// from the pairing code a human types. Every kosync client hashes the
+// password locally and transmits only the digest: KOReader's plugin
+// does `local userkey = md5(password)` before calling users/create, and
+// Readest's KOSyncClient does the same. That digest is then presented
+// verbatim as x-auth-key on every later request.
+//
+// So the plaintext pairing code never reaches this server, and the
+// value a redemption can be compared against is the hash of this
+// derived key, not of the code itself. The protocol's use of MD5 is not
+// ours to change (design §7.3); containment is that the code is 128
+// bits of entropy, single-use, short-lived, and binds one revocable
+// device slot rather than the account (design §8.3).
+func KosyncUserKey(pairingCode string) string {
+	sum := md5.Sum([]byte(pairingCode))
+	return hex.EncodeToString(sum[:])
+}
+
+// KosyncPairingHash is what a pairing code is stored under: the hash of
+// the MD5-derived key the client will send, so users/create can match
+// what it actually receives.
+func KosyncPairingHash(pairingCode string) string {
+	return HashSecret(KosyncUserKey(pairingCode))
 }
