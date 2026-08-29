@@ -141,7 +141,7 @@ func extractCSRF(t *testing.T, html string) string {
 
 func secretFromPage(t *testing.T, html string) string {
 	t.Helper()
-	const marker = `<code class="big">`
+	const marker = `<code class="big" id="flash-secret-value">`
 	i := strings.Index(html, marker)
 	if i < 0 {
 		t.Fatalf("no shown-once secret in page: %s", html)
@@ -431,6 +431,12 @@ func TestAdminInvites(t *testing.T) {
 	secret := secretFromPage(t, body)
 	if len(secret) != 32 || strings.Count(body, secret) != 1 {
 		t.Fatalf("invite code should be shown exactly once: %q", secret)
+	}
+	// The secret is otherwise only recoverable by drag-selecting text
+	// that word-break:break-all forces to wrap, a common source of
+	// stray whitespace corrupting a copied code/token.
+	if !strings.Contains(body, `data-copy-for="flash-secret-value"`) {
+		t.Fatal("shown-once secret has no copy control")
 	}
 	invs, _ := st.ListInvites(t.Context(), "u1")
 	if len(invs) != 1 || invs[0].CodeSHA256 != auth.HashSecret(secret) {

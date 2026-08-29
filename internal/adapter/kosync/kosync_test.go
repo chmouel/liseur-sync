@@ -125,6 +125,45 @@ func TestPairingFlow(t *testing.T) {
 	}
 }
 
+// TestPairingCodeWhitespaceTrimmed: a stray leading/trailing space or
+// newline is a common transcription artifact from manually copying a
+// pairing code out of the admin panel (the code display wraps on
+// screen and has no copy button in older builds). The server trims it
+// so the copy still succeeds.
+func TestPairingCodeWhitespaceTrimmed(t *testing.T) {
+	ts, st := testServer(t)
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, KosyncEnabled: true, KopluginEnabled: true, CreatedAt: time.Now()}
+	if err := st.CreateUser(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+	pairingCode, _ := auth.NewSecret()
+	pairingCode = pairingCode[:32]
+	id, _ := auth.NewSecret()
+	if err := st.CreatePairingCode(t.Context(), store.PairingCode{
+		ID: id, UserID: u.ID, CodeSHA256: auth.HashSecret(pairingCode),
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]string{
+		"username": "kobo-ws", "password": "  " + pairingCode + "\n",
+	})
+	resp, err := http.Post(ts.URL+"/adapter/kosync/users/create", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("whitespace-wrapped pairing code: want 201, got %d", resp.StatusCode)
+	}
+	devices, err := st.ListKosyncDevices(t.Context(), u.ID)
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("device not created from whitespace-wrapped code: %+v err=%v", devices, err)
+	}
+}
+
 func TestAccountPasswordCannotRegisterOrPair(t *testing.T) {
 	ts, st := testServer(t)
 	password := "hunter2hunter"

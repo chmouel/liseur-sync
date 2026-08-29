@@ -15,6 +15,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -58,14 +59,17 @@ func (s *Server) deviceFrom(r *http.Request) (store.KosyncDevice, error) {
 	}
 	d, err := s.St.KosyncDeviceByKey(r.Context(), auth.HashSecret(key))
 	if err != nil || d.RevokedAt != nil {
+		slog.Warn("kosync auth rejected", "reason", "unknown or revoked device", "slot", user, "ip", auth.ClientIP(r, s.Cfg))
 		return store.KosyncDevice{}, errAuth
 	}
 	if subtle.ConstantTimeCompare([]byte(d.DeviceSlot), []byte(user)) != 1 {
+		slog.Warn("kosync auth rejected", "reason", "slot mismatch", "slot", user, "ip", auth.ClientIP(r, s.Cfg))
 		return store.KosyncDevice{}, errAuth
 	}
 	// Per-user adapter gate.
 	u, err := s.St.UserByID(r.Context(), d.UserID)
 	if err != nil || !u.KosyncEnabled {
+		slog.Warn("kosync auth rejected", "reason", "user missing or adapter disabled", "slot", user, "ip", auth.ClientIP(r, s.Cfg))
 		return store.KosyncDevice{}, errAuth
 	}
 	return d, nil
@@ -101,6 +105,12 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
+	// A pairing code is a random opaque string with no meaningful
+	// surrounding whitespace; trimming here is defensive against a
+	// stray space/newline picked up when a user manually copies it out
+	// of the admin panel (the code display wraps on screen and has no
+	// copy button), which would otherwise silently fail as "invalid".
+	req.Password = strings.TrimSpace(req.Password)
 	if req.Username == "" || req.Password == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
 		return
@@ -113,6 +123,7 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// MD5(code) as its auth key, so the slot key is the hash of that.
 	p, err := s.St.RedeemPairingCode(ctx, auth.HashSecret(req.Password), now)
 	if err != nil {
+		slog.Warn("kosync registration rejected", "reason", "invalid, expired or used pairing code", "slot", req.Username, "ip", auth.ClientIP(r, s.Cfg))
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired pairing code"})
 		return
 	}
@@ -123,6 +134,7 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Label:      "kosync:" + req.Username,
 	}
 	if err := s.St.CreateKosyncDevice(ctx, d); err != nil {
+		slog.Warn("kosync registration rejected", "reason", "device slot already paired", "slot", req.Username, "ip", auth.ClientIP(r, s.Cfg))
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "device slot already paired"})
 		return
 	}
