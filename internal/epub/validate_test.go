@@ -101,10 +101,19 @@ func TestValidateRejectsUnsafeAndMalformedArchives(t *testing.T) {
 		code    Code
 	}{
 		{
-			name: "mimetype not first",
-			entries: append(
-				[]zipEntry{{name: "other", body: "x", method: zip.Store}},
-				validEntries()...),
+			name: "missing mimetype",
+			entries: func() []zipEntry {
+				return validEntries()[1:]
+			}(),
+			code: CodeInvalidEPUB,
+		},
+		{
+			name: "wrong mimetype bytes",
+			entries: func() []zipEntry {
+				entries := validEntries()
+				entries[0].body = "application/zip"
+				return entries
+			}(),
 			code: CodeInvalidEPUB,
 		},
 		{
@@ -383,6 +392,23 @@ func setDirectoryUncompressedSize(
 	t *testing.T, data []byte, name string, size uint32,
 ) []byte {
 	t.Helper()
+	return patchDirectoryField(t, data, name, 24, size)
+}
+
+// setDirectoryCompressedSize does the same for the compressed size,
+// which is what says where an entry's bytes end and so which entries
+// overlap.
+func setDirectoryCompressedSize(
+	t *testing.T, data []byte, name string, size uint32,
+) []byte {
+	t.Helper()
+	return patchDirectoryField(t, data, name, 20, size)
+}
+
+func patchDirectoryField(
+	t *testing.T, data []byte, name string, field int, value uint32,
+) []byte {
+	t.Helper()
 	patched := append([]byte(nil), data...)
 	signature := []byte{0x50, 0x4b, 0x01, 0x02}
 	target := []byte(name)
@@ -395,11 +421,46 @@ func setDirectoryUncompressedSize(
 			!bytes.Equal(patched[i+46:i+46+nameLen], target) {
 			continue
 		}
-		binary.LittleEndian.PutUint32(patched[i+24:i+28], size)
+		binary.LittleEndian.PutUint32(patched[i+field:i+field+4], value)
 		return patched
 	}
 	t.Fatalf("central directory entry %q not found", name)
 	return nil
+}
+
+// TestValidateAcceptsMimetypeThatIsNotFirst covers the two real books
+// this was found on. OCF asks for mimetype first and uncompressed; every
+// reader in the world only cares about the second half, because the
+// first exists so a file(1) magic rule can work, not so a book can be
+// opened. Both files carry a perfectly good mimetype behind META-INF,
+// and refusing them meant a reader could never send them anywhere.
+func TestValidateAcceptsMimetypeThatIsNotFirst(t *testing.T) {
+	entries := validEntries()
+	shuffled := append([]zipEntry{entries[1]}, entries[0])
+	shuffled = append(shuffled, entries[2:]...)
+	result, err := validateBytes(makeEPUB(t, shuffled...), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PackagePath != "OPS/book.opf" {
+		t.Fatalf("validation result: %+v", result)
+	}
+}
+
+// TestValidateRejectsOverlappingEntries guards the scan that shares its
+// sorted slice with the ordering rule dropped above: two entries whose
+// bytes overlap are a way to have one file read as two, and that check
+// had to survive the ordering one going.
+func TestValidateRejectsOverlappingEntries(t *testing.T) {
+	data := makeEPUB(t, validEntries()...)
+	// mimetype is 20 bytes and stored; claiming far more of them runs
+	// its data straight over whatever was written next.
+	patched := setDirectoryCompressedSize(t, data, "mimetype", 200)
+	_, err := validateBytes(patched, DefaultLimits())
+	requireCode(t, err, CodeInvalidEPUB)
+	if !strings.Contains(err.Error(), "overlapping") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
 }
 
 // TestValidateAcceptsADoctype covers the other real book that was
