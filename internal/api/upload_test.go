@@ -4,13 +4,16 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -417,6 +420,65 @@ func TestUploadRefusesABodyOverTheBound(t *testing.T) {
 		makeEPUB(t, "Too Big", "Somebody", bytes.Repeat([]byte("x"), 4096)))
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+	assertRootIsEmpty(t, f.root)
+	assertNoSpool(t, f.srv.Cfg.Content.CacheDir)
+}
+
+// TestUploadDoesNotCall422OnACancelledRequest and its neighbour below
+// are about one distinction: a 422 is this server telling a client its
+// book is not readable, and a client that writes that down stops
+// offering the book. Anything that is this server's own problem — the
+// reader closing the app mid-upload, a limit set this server built
+// wrong — must not be spelled the same way, or a perfectly good book is
+// refused forever over a dropped connection.
+func TestUploadDoesNotCall422OnACancelledRequest(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", "a.epub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(makeEPUB(t, "Book", "Author", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost,
+		"/v1/folders/"+f.folder.ID+"/books", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	_, err = f.srv.ReceiveUpload(
+		httptest.NewRecorder(), req, f.folder, f.user.ID)
+	var refusal *WriteError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("error = %v, want a WriteError", err)
+	}
+	if refusal.Status == http.StatusUnprocessableEntity {
+		t.Fatalf("a cancelled upload was answered 422 (%q)", refusal.Message)
+	}
+	assertRootIsEmpty(t, f.root)
+	assertNoSpool(t, f.srv.Cfg.Content.CacheDir)
+}
+
+func TestUploadDoesNotCall422OnAValidatorItCalledWrong(t *testing.T) {
+	f := newFolderFixture(t)
+	f.allowUploads(t)
+	// Not a limit set epub.Validate will accept, so it answers
+	// ErrInvalidValidationInput: nothing whatever to do with the file.
+	f.srv.Cfg.Content.EPUBMaxEntries = 0
+	token := f.mintToken(t, f.user.ID, store.ScopeLibraryUpload)
+
+	resp, got := f.upload(t, token, "a.epub",
+		makeEPUB(t, "Book", "Author", nil))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (%v)", resp.StatusCode, got)
 	}
 	assertRootIsEmpty(t, f.root)
 	assertNoSpool(t, f.srv.Cfg.Content.CacheDir)

@@ -224,6 +224,18 @@ func (s *Server) receiveUpload(
 	}
 	spooled, err := s.spoolUpload(w, r)
 	if err != nil {
+		// The only record that an upload was refused. Without it a
+		// reader whose book the server will not take has nothing to
+		// show anyone, and the folder and the name are what turn "a
+		// client says it was refused" into something reproducible.
+		var refusal *WriteError
+		if errors.As(err, &refusal) {
+			slog.Info("upload: refused",
+				"folder", folder.ID,
+				"status", refusal.Status,
+				"reason", refusal.Message,
+				"user", userID)
+		}
 		return UploadResult{}, err
 	}
 	defer spooled.cleanup()
@@ -389,15 +401,37 @@ func (s *Server) spoolUpload(
 	result, err := epub.Validate(r.Context(), file, size, s.Cfg.EPUBLimits())
 	if err != nil {
 		spooled.cleanup()
-		code, _ := epub.ErrorCode(err)
-		return spooledUpload{}, uploadErr(http.StatusUnprocessableEntity,
-			"that file is not a readable EPUB: "+string(code))
+		// Only a ValidationError is a statement about the file. A
+		// cancelled request and a mistake in how this server called the
+		// validator are this server's business, and answering 422 to
+		// either tells the client its book was refused — which a client
+		// that writes refusals down will believe permanently.
+		code, ok := epub.ErrorCode(err)
+		switch {
+		case ok:
+			return spooledUpload{}, uploadErr(http.StatusUnprocessableEntity,
+				"that file is not a readable EPUB: "+string(code))
+		case errors.Is(err, context.Canceled),
+			errors.Is(err, context.DeadlineExceeded):
+			return spooledUpload{}, uploadErr(clientClosedRequest,
+				"the upload was cancelled")
+		default:
+			slog.Error("upload: could not validate", "err", err)
+			return spooledUpload{}, uploadErr(http.StatusInternalServerError,
+				"the upload could not be checked")
+		}
 	}
 	spooled.sha = hex.EncodeToString(digest.Sum(nil))
 	spooled.size = size
 	spooled.meta = result.Metadata
 	return spooled, nil
 }
+
+// clientClosedRequest is nginx's 499, for a request whose sender went
+// away. There is no client left to read it, so its only job is to keep
+// a cancellation out of the 4xx range a client treats as a verdict on
+// its file and out of the 5xx range that pages somebody.
+const clientClosedRequest = 499
 
 // oversizeOr answers 413 when the body ran past the bound and the
 // caller's own refusal otherwise.

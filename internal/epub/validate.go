@@ -192,16 +192,6 @@ func Validate(
 				CodeArchiveLimits, errors.New("expanded ZIP exceeds limit"))
 		}
 		total += int64(actual)
-		if index == 0 && name == "mimetype" {
-			if err := validateMimetype(
-				ctx, file, limits.MaxMetadataBytes); err != nil {
-				return Result{}, err
-			}
-		}
-	}
-	if archive.File[0].Name != "mimetype" {
-		return Result{}, validationError(
-			CodeInvalidEPUB, errors.New("mimetype must be the first ZIP entry"))
 	}
 	mimetype, ok := entries["mimetype"]
 	if !ok {
@@ -475,16 +465,16 @@ func preflightZIP(
 				CodeInvalidEPUB, errors.New("invalid ZIP entry data bounds"))
 		}
 	}
+	// Sorted by where the bytes actually live, so the scan below can
+	// look at neighbours. The order entries are *listed* in says
+	// nothing about whether the file is readable: OCF asks for
+	// mimetype first, and no reader in the wild insists on it, so
+	// neither does this. What must not happen is two entries claiming
+	// the same bytes.
 	ordered := append([]zipEntryLayout(nil), layout.entries...)
 	sort.Slice(ordered, func(i, j int) bool {
 		return ordered[i].localOffset < ordered[j].localOffset
 	})
-	if len(ordered) > 0 &&
-		layout.entries[0].localOffset != ordered[0].localOffset {
-		return zipLayout{}, validationError(
-			CodeInvalidEPUB,
-			errors.New("mimetype is not the first physical ZIP entry"))
-	}
 	for index := 1; index < len(ordered); index++ {
 		previousEnd := ordered[index-1].dataOffset +
 			int64(ordered[index-1].compressedSize)
