@@ -383,19 +383,31 @@ func buildMetadata(
 		}
 	}
 
-	cover := details.cover
-	if cover == nil {
-		if id := legacy["cover"]; id != "" {
-			if item, ok := details.manifestByID[id]; ok {
-				cover = &item
-			}
+	// In order: what EPUB 3 marks cover-image, what EPUB 2 points at,
+	// and only then what the file happens to be called. A declaration
+	// naming an entry the archive does not contain falls through to the
+	// next candidate rather than ending the search — the reader wants
+	// the cover, not an adjudication of the manifest.
+	candidates := make([]manifestItem, 0, 3)
+	if details.cover != nil {
+		candidates = append(candidates, *details.cover)
+	}
+	if id := legacy["cover"]; id != "" {
+		if item, ok := details.manifestByID[id]; ok {
+			candidates = append(candidates, item)
 		}
 	}
-	if cover != nil {
-		if file, ok := entries[cover.path]; ok && file.Mode().IsRegular() {
-			metadata.CoverPath = cover.path
-			metadata.CoverMediaType = cover.mediaType
+	if details.namedCover != nil {
+		candidates = append(candidates, *details.namedCover)
+	}
+	for _, candidate := range candidates {
+		file, ok := entries[candidate.path]
+		if !ok || !file.Mode().IsRegular() {
+			continue
 		}
+		metadata.CoverPath = candidate.path
+		metadata.CoverMediaType = candidate.mediaType
+		break
 	}
 	return metadata
 }

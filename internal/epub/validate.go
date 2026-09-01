@@ -678,6 +678,9 @@ type packageDetails struct {
 	manifest       map[string]string
 	manifestByID   map[string]manifestItem
 	cover          *manifestItem
+	// namedCover is the first manifest image that is a cover in every
+	// way except the one that counts. See coverByName.
+	namedCover *manifestItem
 }
 
 type manifestItem struct {
@@ -813,6 +816,15 @@ func parsePackage(
 				cover := item
 				details.cover = &cover
 			}
+			// Recorded here, in manifest order, rather than searched for
+			// later: manifestByID is a map, and picking a cover by
+			// ranging over one would hand a publication with two
+			// candidates a different cover on every process.
+			if details.namedCover == nil && coverByName(id, resolved) &&
+				strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				named := item
+				details.namedCover = &named
+			}
 			isNavigation := mediaType == "application/x-dtbncx+xml" ||
 				propertyToken(properties, "nav")
 			if !isNavigation || navigationSeen[resolved] {
@@ -851,6 +863,34 @@ func propertyToken(properties, token string) bool {
 		}
 	}
 	return false
+}
+
+// coverByName reports whether a manifest item is the publication's cover
+// in every way except the one that counts.
+//
+// A cover is normally declared: EPUB 3 marks the manifest item
+// cover-image, EPUB 2 points at it with <meta name="cover">. Plenty of
+// real books do neither and simply call the file cover.jpg, leaving the
+// image reachable only as an ordinary page of the book. A reader opening
+// such a book sees the cover, because the cover page is page one; a
+// server extracting metadata sees nothing and reports no cover at all.
+//
+// So the name is taken as the declaration when there is no other. It is
+// the last thing consulted, it only ever selects an image the manifest
+// already lists, and it changes no bounds: an item found this way is
+// read exactly like a declared one.
+func coverByName(id, archivePath string) bool {
+	return coverStem(id) ||
+		coverStem(archivePath[strings.LastIndex(archivePath, "/")+1:])
+}
+
+// coverStem reports whether a name is "cover" once any extension is
+// dropped, so that both an id of "cover" and one of "cover.jpg" count.
+func coverStem(name string) bool {
+	if dot := strings.LastIndex(name, "."); dot > 0 {
+		name = name[:dot]
+	}
+	return strings.EqualFold(name, "cover")
 }
 
 func resolveArchiveReference(basePath, reference string) (string, error) {
