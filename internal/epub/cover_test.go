@@ -89,6 +89,147 @@ func TestReadCoverWhenTheCoverIsMissing(t *testing.T) {
 	}
 }
 
+// A book that carries a cover and never says so. This is what a
+// repackager leaves behind: the image is in the manifest and the reader
+// sees it because the first page of the book *is* the cover page, but
+// nothing marks it cover-image and no <meta name="cover"> points at it.
+const undeclaredCoverManifest = `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata><dc:title>Book</dc:title></metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="cover.jpg" href="Images/cover.jpg" media-type="image/jpeg"/>
+ </manifest>
+</package>`
+
+// TestReadCoverFallsBackToTheCoversName: refusing to show a cover the
+// book plainly contains, because of a manifest attribute the reader
+// never sees, is a worse answer than guessing from the filename.
+func TestReadCoverFallsBackToTheCoversName(t *testing.T) {
+	data := epubWithPackage(t, undeclaredCoverManifest, zipEntry{
+		name: "OPS/Images/cover.jpg", body: "jpeg", method: zip.Deflate,
+	})
+	cover, err := readCoverBytes(t, data, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cover.Path != "OPS/Images/cover.jpg" || cover.MediaType != "image/jpeg" {
+		t.Fatalf("cover = %+v", cover)
+	}
+}
+
+// A guess never outranks a declaration. A book whose cover is named
+// something else entirely must still get the one it declared, or every
+// publication with a stray cover.jpg lying about gets the wrong image.
+func TestReadCoverPrefersTheDeclaredImageOverTheNamedOne(t *testing.T) {
+	const manifest = `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata><dc:title>Book</dc:title></metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="thumb" href="cover.jpg" media-type="image/jpeg"/>
+  <item id="real" href="9781958803684_cover.jpg" media-type="image/jpeg"
+    properties="cover-image"/>
+ </manifest>
+</package>`
+	data := epubWithPackage(t, manifest,
+		zipEntry{name: "OPS/cover.jpg", body: "wrong", method: zip.Deflate},
+		zipEntry{
+			name:   "OPS/9781958803684_cover.jpg",
+			body:   "right",
+			method: zip.Deflate,
+		})
+	cover, err := readCoverBytes(t, data, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cover.Data) != "right" {
+		t.Fatalf("cover = %+v", cover)
+	}
+}
+
+// The EPUB 2 pointer outranks the name for the same reason.
+func TestReadCoverPrefersTheLegacyPointerOverTheNamedOne(t *testing.T) {
+	const manifest = `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata>
+  <dc:title>Book</dc:title>
+  <meta name="cover" content="real"/>
+ </metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="thumb" href="cover.jpg" media-type="image/jpeg"/>
+  <item id="real" href="front.jpeg" media-type="image/jpeg"/>
+ </manifest>
+</package>`
+	data := epubWithPackage(t, manifest,
+		zipEntry{name: "OPS/cover.jpg", body: "wrong", method: zip.Deflate},
+		zipEntry{name: "OPS/front.jpeg", body: "right", method: zip.Deflate})
+	cover, err := readCoverBytes(t, data, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cover.Data) != "right" {
+		t.Fatalf("cover = %+v", cover)
+	}
+}
+
+// A declaration naming an entry that is not there is not an answer, so
+// the search carries on rather than reporting a book with a perfectly
+// good cover.jpg in it as having none.
+func TestReadCoverFallsThroughADeclarationThatPointsNowhere(t *testing.T) {
+	const manifest = `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata><dc:title>Book</dc:title></metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="gone" href="missing.jpg" media-type="image/jpeg"
+    properties="cover-image"/>
+  <item id="cover" href="cover.jpg" media-type="image/jpeg"/>
+ </manifest>
+</package>`
+	data := epubWithPackage(t, manifest, zipEntry{
+		name: "OPS/cover.jpg", body: "jpeg", method: zip.Deflate,
+	})
+	cover, err := readCoverBytes(t, data, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cover.Path != "OPS/cover.jpg" {
+		t.Fatalf("cover = %+v", cover)
+	}
+}
+
+// The name is only ever read as a declaration for an image. A cover page
+// is a document, and serving XHTML where a thumbnail is expected is not
+// a cover by any reading.
+func TestReadCoverIgnoresANamedEntryThatIsNotAnImage(t *testing.T) {
+	const manifest = `
+<package xmlns="http://www.idpf.org/2007/opf"
+ xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <metadata><dc:title>Book</dc:title></metadata>
+ <manifest>
+  <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
+    properties="nav"/>
+  <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+ </manifest>
+</package>`
+	data := epubWithPackage(t, manifest, zipEntry{
+		name: "OPS/cover.xhtml", body: "<html/>", method: zip.Deflate,
+	})
+	if _, err := readCoverBytes(t, data, 1<<20); !errors.Is(err, ErrNoCover) {
+		t.Fatalf("err = %v, want ErrNoCover", err)
+	}
+}
+
 // TestReadCoverRefusesAnOversizedCover: the cap is what stops one archive
 // entry from deciding how much memory the server spends on a thumbnail.
 func TestReadCoverRefusesAnOversizedCover(t *testing.T) {
