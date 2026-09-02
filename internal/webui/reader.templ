@@ -17,7 +17,7 @@ type ReaderView struct {
 	// IconURL is the tab icon. Same-origin it is the book's own cover
 	// at the icon size, which falls back to the placeholder card for a
 	// coverless book, so it is never empty there. On the detached
-	// origin a link to the API would be a credentialess cross-origin
+	// origin a link to the API would be a credentialless cross-origin
 	// fetch that can only fail, so it stays empty and the page links
 	// IconFallback instead — reader-app.js upgrades it to the cover
 	// once its bearer token is in hand.
