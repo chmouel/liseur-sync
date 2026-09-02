@@ -57,6 +57,7 @@ let token = null;
 let tokenExpiry = 0;
 let pending = null;
 let here = null;
+let faviconObjectURL = null;
 
 function say(message, isError) {
   status.textContent = message;
@@ -1129,14 +1130,22 @@ window.addEventListener("beforeunload", () => {
     // The detached page could not link the cover: it lives on the API
     // origin and a <link> fetch has no credential. Now that the token
     // is in hand, the icon is swapped for it; a book without a cover
-    // keeps the site icon the page started with. Same-origin pages
-    // linked the cover route from the start, so there is nothing to do.
+    // gets the placeholder response, so the icon is still swapped for
+    // it. Same-origin pages linked the cover route from the start, so
+    // there is nothing to do.
     if (cfg.detached) {
       api("v1/books/" + encodeURIComponent(cfg.bookID) + "/cover?size=icon")
         .then(async (resp) => {
           if (!resp.ok) return;
+          const nextFaviconObjectURL = URL.createObjectURL(await resp.blob());
           const link = document.querySelector("link[rel=icon]");
-          if (link) link.href = URL.createObjectURL(await resp.blob());
+          if (!link) {
+            URL.revokeObjectURL(nextFaviconObjectURL);
+            return;
+          }
+          if (faviconObjectURL) URL.revokeObjectURL(faviconObjectURL);
+          faviconObjectURL = nextFaviconObjectURL;
+          link.href = faviconObjectURL;
         })
         .catch(() => {});
     }
