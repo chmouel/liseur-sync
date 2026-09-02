@@ -420,6 +420,14 @@ Give the works endpoints the same span as the summary if the two are
 shown on one screen: a headline covering thirty days above rows covering
 a lifetime is a dashboard whose numbers cannot be added up.
 
+Each work carries `title` and `author` when the server has them. They
+are there so a client can list a work it holds no file for: reading done
+on another device is in the totals whether it can be named or not, and a
+list that silently omits it is smaller than the headline above it for no
+reason the reader can see. Both are absent rather than empty when the
+server has nothing to say, and a work you cannot name is better left out
+of a list than shown blank.
+
 `streak_days` is deliberately **not** narrowed by the span. It counts
 consecutive days ending today or yesterday, looking back up to ten
 years, so asking about the last week does not report a hundred-day run
