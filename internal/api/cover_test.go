@@ -659,3 +659,41 @@ func TestChosenCoverBeatsTheOneInsideTheBook(t *testing.T) {
 			config.Width, config.Height)
 	}
 }
+
+// An icon asker needs something to put in the hole: a tab with no icon
+// probes /favicon.ico instead, which is the same request by a longer
+// road. So the icon variant alone answers "no cover" with a drawn card
+// rather than a 404 — and the sizes that mean "does this book have a
+// cover" keep the honest answer.
+func TestCoverIconForACoverlessBookIsAPlaceholder(t *testing.T) {
+	f := newFolderFixture(t)
+	bookID, _ := f.publish(t, "plain", coverEPUB(t, 0, 0, ""))
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	resp, body := f.get(t, "/v1/books/"+bookID+"/cover?size=icon", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("icon for a coverless book: %d: %s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("Content-Type = %q, want the one type the variant serves", got)
+	}
+	config := decodeCover(t, body)
+	if config.Width != config.Height {
+		t.Fatalf("placeholder icon = %dx%d, want square", config.Width, config.Height)
+	}
+
+	// The answer must survive the negative marker: the second request
+	// takes the remembered-404 path, which has to give the same card.
+	resp, body = f.get(t, "/v1/books/"+bookID+"/cover?size=icon", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("remembered icon for a coverless book: %d: %s", resp.StatusCode, body)
+	}
+
+	// Every other size still says what is true.
+	for _, size := range []string{"", "?size=full"} {
+		resp, body := f.get(t, "/v1/books/"+bookID+"/cover"+size, read)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("cover%s = %d, want the honest 404: %s", size, resp.StatusCode, body)
+		}
+	}
+}
