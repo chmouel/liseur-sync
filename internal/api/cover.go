@@ -83,6 +83,9 @@ func (s *Server) ServeBookCover(
 		case errors.Is(err, content.ErrNoCover):
 			// Already established: this publication has no cover this
 			// server can serve. Answered without opening the book.
+			if s.writePlaceholderIcon(w, r, size) {
+				return
+			}
 			writeError(w, http.StatusNotFound, "no cover for this book")
 			return
 		}
@@ -95,7 +98,7 @@ func (s *Server) ServeBookCover(
 	// there would do so permanently.
 	rendered, renderedKey, err := s.renderCover(r.Context(), book, size)
 	if err != nil {
-		s.writeCoverError(r.Context(), w, renderedKey, err)
+		s.writeCoverError(r.Context(), w, r, size, book, renderedKey, err)
 		return
 	}
 	if s.Covers != nil {
@@ -185,7 +188,8 @@ func (s *Server) renderStoredCover(
 // decode, or is not a readable archive will never produce one, and the
 // blob cannot change: that answer is cacheable forever.
 func (s *Server) writeCoverError(
-	ctx context.Context, w http.ResponseWriter, digest string, err error,
+	ctx context.Context, w http.ResponseWriter, r *http.Request,
+	size cover.Size, book store.CatalogBook, digest string, err error,
 ) {
 	switch {
 	case errors.Is(err, content.ErrStageMissing),
@@ -205,10 +209,37 @@ func (s *Server) writeCoverError(
 		if s.Covers != nil {
 			_ = s.Covers.MarkCoverAbsent(ctx, digest)
 		}
+		if s.writePlaceholderIcon(w, r, size) {
+			return
+		}
 		writeError(w, http.StatusNotFound, "no cover for this book")
 	default:
 		writeError(w, http.StatusInternalServerError, "cover rendering failed")
 	}
+}
+
+// writePlaceholderIcon answers "no cover" with a drawn card when the
+// asker needed an icon rather than an answer. A tab with no icon probes
+// /favicon.ico instead, which is the same request by a longer road, so
+// the icon variant — and only it — degrades to a placeholder rather
+// than a 404. It reports whether it answered.
+func (s *Server) writePlaceholderIcon(
+	w http.ResponseWriter, r *http.Request, size cover.Size,
+) bool {
+	if size != cover.SizeIcon {
+		return false
+	}
+	body := cover.PlaceholderIcon()
+	if body == nil {
+		return false
+	}
+	// The placeholder is fixed, so the usual validators do not apply to
+	// it; a fresh fetch costs nothing at this size.
+	w.Header().Set("Content-Type", cover.MediaType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
+	return true
 }
 
 // isValidationFailure reports whether an archive was refused rather than

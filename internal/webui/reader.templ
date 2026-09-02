@@ -14,6 +14,16 @@ type ReaderView struct {
 	APIBase    string
 	StaticBase string
 
+	// IconURL is the tab icon. Same-origin it is the book's own cover
+	// at the icon size, which falls back to the placeholder card for a
+	// coverless book, so it is never empty there. On the detached
+	// origin a link to the API would be a credentialess cross-origin
+	// fetch that can only fail, so it stays empty and the page links
+	// IconFallback instead — reader-app.js upgrades it to the cover
+	// once its bearer token is in hand.
+	IconURL      string
+	IconFallback string
+
 	// ScriptNonce is the per-response CSP nonce for the one module tag
 	// this page carries. Everything else that executes is an import
 	// made by that module ('strict-dynamic'); nothing a publication
@@ -35,6 +45,11 @@ templ readerPage(v ReaderView, csrf string) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ readerTitle(v.Title) }</title>
+			if v.IconURL != "" {
+				<link rel="icon" href={ v.IconURL }/>
+			} else {
+				<link rel="icon" href={ v.IconFallback }/>
+			}
 			<link rel="stylesheet" href={ v.StaticBase + "style.css" }/>
 		</head>
 		<body class="reader-body">

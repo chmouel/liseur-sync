@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
@@ -169,6 +170,47 @@ func TestRenderAveragesInsteadOfSampling(t *testing.T) {
 	}
 }
 
+// TestRenderIconIsASmallSquare: the icon is drawn into a square hole a
+// handful of pixels across, so the variant crops a portrait cover to its
+// centre rather than letting the browser squish it, and caps the edge
+// well below the thumbnail's.
+func TestRenderIconIsASmallSquare(t *testing.T) {
+	source := encodePNG(t, checkerboard(t, 1600, 2400, 8))
+	out, err := Render(source, SizeIcon, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := decode(t, out).Bounds()
+	if bounds.Dx() != bounds.Dy() {
+		t.Fatalf("icon bounds = %v, want a square", bounds)
+	}
+	if bounds.Dx() != iconMaxDimension {
+		t.Fatalf("icon edge = %d, want %d", bounds.Dx(), iconMaxDimension)
+	}
+}
+
+// TestRenderIconCropsTheCentre: the square comes from the middle of the
+// cover — a white band down the left edge must be cropped away, not
+// scaled into the icon.
+func TestRenderIconCropsTheCentre(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 300, 300))
+	draw.Draw(img, image.Rect(0, 0, 100, 300),
+		&image.Uniform{C: color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}},
+		image.Point{}, draw.Src)
+	out, err := Render(encodePNG(t, img), SizeIcon, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The source is a white third and a black two-thirds; the centred
+	// square keeps the black middle, so a crop is all black and a
+	// squish is two-thirds black.
+	icon := decode(t, out)
+	r, _, _, _ := icon.At(icon.Bounds().Dx()/2, icon.Bounds().Dy()/2).RGBA()
+	if grey := int(r >> 8); grey > 48 {
+		t.Fatalf("icon centre grey = %d, want near black: the cover was squished, not cropped", grey)
+	}
+}
+
 // TestRenderDoesNotEnlarge: a 200-pixel cover blown up to 1000 costs
 // bytes and adds no detail.
 func TestRenderDoesNotEnlarge(t *testing.T) {
@@ -265,6 +307,7 @@ func TestParseSizeIsAnAllowlist(t *testing.T) {
 		"":          SizeThumbnail,
 		"thumbnail": SizeThumbnail,
 		"full":      SizeFull,
+		"icon":      SizeIcon,
 	} {
 		got, ok := ParseSize(value)
 		if !ok || got != want {
