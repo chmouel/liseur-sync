@@ -128,3 +128,18 @@ func TestReaderPageNeedsASessionAndARealBook(t *testing.T) {
 		t.Errorf("unknown book: want 404, got %d", resp.StatusCode)
 	}
 }
+
+// TestReaderPageLinksTheCoverAsItsIcon: the reading tab carries the
+// book's own cover at the icon size, served by the same cover route
+// that falls back to a placeholder for a coverless book, so the link
+// is always one a browser can fetch.
+func TestReaderPageLinksTheCoverAsItsIcon(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	want := `<link rel="icon" href="../../books/` + bookID + `/cover?size=icon">`
+	if !strings.Contains(page, want) {
+		t.Errorf("the reader page does not link the cover icon:\n%s", page)
+	}
+}

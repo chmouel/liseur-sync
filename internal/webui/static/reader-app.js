@@ -1126,6 +1126,20 @@ window.addEventListener("beforeunload", () => {
       titleText.textContent = title;
       document.title = title + " · liseur-sync";
     }
+    // The detached page could not link the cover: it lives on the API
+    // origin and a <link> fetch has no credential. Now that the token
+    // is in hand, the icon is swapped for it; a book without a cover
+    // keeps the site icon the page started with. Same-origin pages
+    // linked the cover route from the start, so there is nothing to do.
+    if (cfg.detached) {
+      api("v1/books/" + encodeURIComponent(cfg.bookID) + "/cover?size=icon")
+        .then(async (resp) => {
+          if (!resp.ok) return;
+          const link = document.querySelector("link[rel=icon]");
+          if (link) link.href = URL.createObjectURL(await resp.blob());
+        })
+        .catch(() => {});
+    }
 
     // Sync is best-effort: a book still opens on a server that has
     // lost its work mapping, it just opens at the beginning.

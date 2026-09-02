@@ -315,3 +315,44 @@ func coverSources(t *testing.T, html string) []string {
 	}
 	return found
 }
+
+// TestBooksUICoverIconVariantIsSquare: the reader page's tab icon is a
+// cover through the icon variant, which crops to a square rather than
+// letting the browser squish a portrait cover.
+func TestBooksUICoverIconVariantIsSquare(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "illustrated", coverEPUB(t, 300, 400))
+
+	resp, body := f.fetchCover(t, "/ui/books/"+bookID+"/cover?size=icon", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("icon cover: %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("the icon is not a decodable image: %v", err)
+	}
+	if config.Width != config.Height {
+		t.Fatalf("icon = %dx%d, want square", config.Width, config.Height)
+	}
+	if config.Width > 64 {
+		t.Fatalf("icon edge = %d, want at most 64", config.Width)
+	}
+
+	// A coverless book gets the drawn card rather than a 404, so the
+	// reader's tab icon never comes back empty.
+	plainID := f.addBook(t, "plain", []byte("not an epub at all"))
+	resp, body = f.fetchCover(t, "/ui/books/"+plainID+"/cover?size=icon", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("icon for a coverless book: %d", resp.StatusCode)
+	}
+	config, _, err = image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("the placeholder icon is not an image: %v", err)
+	}
+	if config.Width != config.Height {
+		t.Fatalf("placeholder icon = %dx%d, want square", config.Width, config.Height)
+	}
+}

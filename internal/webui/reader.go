@@ -38,6 +38,10 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 		TokenURL:    prefix + "reader/token",
 		APIBase:     prefix + "../",
 		StaticBase:  prefix + "static/",
+		// The tab icon is the book's own cover, shrunk and squared by
+		// the icon variant; a coverless book gets the placeholder card
+		// from the same route, so this link never 404s.
+		IconURL:     prefix + "books/" + escaped + "/cover?size=icon",
 		ScriptNonce: nonce,
 	}, csrfFor(a)).Render(r.Context(), w)
 }

@@ -1821,9 +1821,12 @@ paths:
           required: false
           description: |
             `thumbnail` is a catalog grid image and the default; `full` is
-            sized for a book page. Any other value is rejected rather than
-            treated as the default.
-          schema: { type: string, enum: [thumbnail, full], default: thumbnail }
+            sized for a book page; `icon` is a small square crop for a
+            browser tab. Any other value is rejected rather than
+            treated as the default. `icon` alone answers a coverless
+            book with a drawn placeholder rather than a `404`: the asker
+            there needs an image, not an answer.
+          schema: { type: string, enum: [thumbnail, full, icon], default: thumbnail }
         - { name: If-None-Match, in: header, required: false, schema: { type: string } }
       responses:
         "200":
@@ -2042,7 +2045,7 @@ paths:
         - name: size
           in: query
           required: false
-          schema: { type: string, enum: [thumbnail, full], default: thumbnail }
+          schema: { type: string, enum: [thumbnail, full, icon], default: thumbnail }
         - { name: If-None-Match, in: header, required: false, schema: { type: string } }
       responses:
         "200":

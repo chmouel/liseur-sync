@@ -538,11 +538,13 @@ such book. A `409` means the file behind the row changed on disk before
 a pass reconciled it.
 
 `GET /v1/books/{id}/cover` serves a JPEG cover. `?size=full` is sized
-for a book page; the default, `thumbnail`, is sized for a grid. Every
+for a book page; the default, `thumbnail`, is sized for a grid;
+`?size=icon` is a small square crop meant for a browser tab. Every
 book record carries a `cover_url`, and it is offered whether or not the
 book has one. A `404` is the answer for a book whose EPUB declares no
 cover, whose Calibre cover cannot be read, or whose cover cannot be
-decoded.
+decoded — except at `?size=icon`, which serves a drawn placeholder card
+instead, since an icon asker needs an image rather than an answer.
 
 All of these need a token with `library-read`.
 

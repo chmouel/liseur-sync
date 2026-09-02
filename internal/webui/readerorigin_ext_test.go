@@ -399,3 +399,21 @@ func TestReaderOriginMustBeAnOrigin(t *testing.T) {
 		t.Errorf("browser origins: got %v", got)
 	}
 }
+
+// TestDetachedReaderLinksTheSiteIconNotTheCover: on the reader origin
+// the cover route does not exist and the API origin is cross-origin
+// without credentials, so the page starts on the static site icon and
+// reader-app.js swaps in the cover once it holds the bearer token.
+func TestDetachedReaderLinksTheSiteIconNotTheCover(t *testing.T) {
+	o := readerFixture(t)
+	ts, bookID, readerHost := o.ts, o.book, o.reader
+
+	_, page := ask(t, ts, http.MethodGet, readerHost,
+		"/ui/books/"+bookID+"/read?api=http%3A%2F%2Fmain.example.test", nil)
+	if !strings.Contains(page, `<link rel="icon" href="../../static/icon.png">`) {
+		t.Errorf("the detached reader does not link the site icon:\n%s", page)
+	}
+	if strings.Contains(page, "/cover?size=icon") {
+		t.Error("the detached page links a cover it cannot fetch")
+	}
+}

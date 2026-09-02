@@ -173,7 +173,12 @@ func (s *Server) handleDetachedReaderPage(w http.ResponseWriter, r *http.Request
 		APIBase:     apiBase,
 		DownloadURL: apiBase + "v1/books/" + url.PathEscape(bookID) + "/download",
 		StaticBase:  relPrefix(r.URL.Path) + "static/",
-		ScriptNonce: nonce,
+		// No cover link here: the cover lives on the API origin, and a
+		// credentialess <link> to it can only fail. The page starts on
+		// the site icon and reader-app.js upgrades it once it holds the
+		// bearer token.
+		IconFallback: relPrefix(r.URL.Path) + "static/icon.png",
+		ScriptNonce:  nonce,
 	}, "").Render(r.Context(), w)
 }
 
