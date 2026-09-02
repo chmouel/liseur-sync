@@ -860,6 +860,8 @@ paths:
                   from: { type: string, format: date }
                   to: { type: string, format: date }
                   work_id: { type: string }
+                  title: { type: string, description: "The work's title; absent when the server has none" }
+                  author: { type: string, description: "The work's author; absent when the server has none" }
                   sessions: { type: integer }
                   total_active_minutes: { type: number }
                   total_pages: { type: number }
@@ -905,7 +907,8 @@ paths:
             Per-work aggregates, ordered by active time descending.
             `range_days` is always present, and `from`/`to` whenever the
             span was bounded; both must be checked before the rows are
-            labelled with a span.
+            labelled with a span. `title` and `author` name each work so
+            that a client can list one it holds no local file for.
           content:
             application/json:
               schema:
@@ -922,6 +925,8 @@ paths:
                       required: [work_id, sessions, total_active_minutes, total_pages, current_progression]
                       properties:
                         work_id: { type: string }
+                        title: { type: string, description: "The work's title; absent when the server has none" }
+                        author: { type: string, description: "The work's author; absent when the server has none" }
                         sessions: { type: integer }
                         total_active_minutes: { type: number }
                         total_pages: { type: number }

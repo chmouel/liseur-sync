@@ -488,7 +488,7 @@ func TestSessionsAndInsights(t *testing.T) {
 	roSecret, _, _ := svc.MintToken(ctx, u.ID, "ro", store.ScopeSet{store.ScopeReadInsights}, nil)
 
 	// Work with a known page count.
-	w := store.Work{ID: "w1", UserID: u.ID, CreatedAt: time.Now()}
+	w := store.Work{ID: "w1", UserID: u.ID, Title: "Dune", Author: "Frank Herbert", CreatedAt: time.Now()}
 	ed := &store.Edition{UserID: u.ID, SHA256: "abc123", WorkID: "w1", PageCount: ptrI64(300)}
 	if err := st.CreateWork(ctx, w, ed, []store.Identifier{{Kind: "sha256", Value: "abc123"}}); err != nil {
 		t.Fatal(err)
@@ -558,6 +558,12 @@ func TestSessionsAndInsights(t *testing.T) {
 	work := works[0].(map[string]any)
 	if work["work_id"] != "w1" || work["sessions"].(float64) != 2 || work["last_read_at"] == nil {
 		t.Fatalf("work aggregate: %v", work)
+	}
+	// The name travels with the figures, so a client can list a book it
+	// holds no file for rather than dropping it out of a list whose
+	// total already counts it.
+	if work["title"] != "Dune" || work["author"] != "Frank Herbert" {
+		t.Fatalf("work name: %v", work)
 	}
 
 	// Summary over 30d.
