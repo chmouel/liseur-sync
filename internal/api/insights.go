@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"time"
@@ -34,8 +35,19 @@ type dayStat struct {
 	Pages   float64 `json:"pages"`
 }
 
+// workInsight is one work's aggregate.
+//
+// Title and Author are here so that a client can name a book it has
+// never seen. A reader's dashboard lists what it can put a local file
+// against, and a work read only on another device falls out of that
+// list while still counting towards the total above it — a list that is
+// smaller than its own headline and gives no reason. The name is the
+// only thing needed to show the row; both are omitted when the server
+// has nothing to say rather than sent empty.
 type workInsight struct {
 	WorkID             string     `json:"work_id"`
+	Title              string     `json:"title,omitempty"`
+	Author             string     `json:"author,omitempty"`
 	Sessions           int        `json:"sessions"`
 	TotalActiveMinutes float64    `json:"total_active_minutes"`
 	TotalPages         float64    `json:"total_pages"`
@@ -298,8 +310,26 @@ func (s *Server) workInsightFrom(
 			}
 		}
 	}
+	// The name, when the server has one. A missing work is not an error
+	// here: the aggregate is built from sessions and rollups that name
+	// the work themselves, so a record that has gone stays a row with
+	// figures on it and no title, rather than failing the whole request.
+	// Any other failure is a real store problem and must propagate,
+	// rather than being swallowed into the same silent blank.
+	title, author := "", ""
+	work, err := s.St.WorkByID(ctx, userID, workID)
+	switch {
+	case err == nil:
+		title, author = work.Title, work.Author
+	case errors.Is(err, store.ErrNotFound):
+		// Nothing to do: title and author stay empty.
+	default:
+		return workInsight{}, err
+	}
 	return workInsight{
 		WorkID:             workID,
+		Title:              title,
+		Author:             author,
 		Sessions:           sessionCount,
 		TotalActiveMinutes: totalActive / 60,
 		TotalPages:         totalPages,
