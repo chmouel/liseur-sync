@@ -224,7 +224,7 @@ func (s *Server) handleSeriesShelf(
 	v.NextUp = nextUpVolume(v.Volumes)
 	v.Gaps = seriesGaps(v.Volumes)
 	if next != nil {
-		v.NextURL = "series/" + url.PathEscape(entity.ID) +
+		v.NextURL = uiEntity("series", entity.ID) +
 			"?cursor=" + url.QueryEscape(encodeBooksCursor(*next))
 	}
 	seriesShelfPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
