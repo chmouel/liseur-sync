@@ -105,10 +105,18 @@ mechanism.
   `foliate-js.LICENSE`. Updating is a deliberate re-copy, which for a
   security-sensitive component is a feature.
 - The user stylesheet the engine injects after the publication's own is
-  what reader appearance settings (theme, font, size, spacing, layout)
-  are built on. They are a browser preference in `localStorage`, applied
-  client-side, and never sent to the server; the default for every one
-  of them is the publisher's design, untouched.
+  what reader appearance settings (theme, font, size, spacing, layout,
+  and whether the bar and page-turn arrows hide themselves while you
+  read) are built on. They are a browser preference in `localStorage`,
+  applied client-side, and never sent to the server; the default for
+  every one of them is the publisher's design, untouched.
+- The chrome that hides has to leave a way to turn a page behind it, so
+  the sides of the window turn pages wherever they are clicked —
+  margin or text — and the middle brings the chrome back. Clicks on the
+  text are handled per chapter document, next to the reading keys,
+  because a chapter is a document of its own and nothing that happens
+  over it reaches the page. A drag, a selection or a control is not a
+  tap and is left alone.
 - The browser-test fixture now carries the `position:absolute` title
   page that defeated epub.js, so the failure that forced this ADR is
   pinned as a regression test.

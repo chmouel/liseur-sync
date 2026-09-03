@@ -86,6 +86,12 @@ a Calibre library, `metadata.db` is the catalog.
 
 `liseur-sync` includes a browser-based EPUB reader.
 
+The bar and the page-turn arrows step aside while you read and come
+back when you reach for them: move the pointer to the top or the sides,
+tap the middle of the page, or press `z`. Tapping or clicking the left
+and right edges of the page turns it, which is how a phone reads
+without any chrome at all. "Auto-hide bars" under Aa turns this off.
+
 The browser unpacks and renders EPUBs without exposing publisher content
 through application routes. Scripts inside EPUBs do not run.
 

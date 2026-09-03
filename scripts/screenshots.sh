@@ -262,10 +262,12 @@ READER=${BOOK_IDS[0]}
 # once the engine has a rendered chapter to show — in the dark theme,
 # which is a browser-local preference rather than something the server
 # knows, and clipped to the window, because a full-page capture resizes
-# the frame the book is in and gets a white rectangle. Everything else
-# is ready when the page is.
+# the frame the book is in and gets a white rectangle. Auto-hiding is
+# switched off in the same breath: the bar steps aside after a couple of
+# idle seconds, and a photograph of the reader with no bar in it says
+# nothing about the reader. Everything else is ready when the page is.
 WAIT=$'\n\n'"document.querySelector('foliate-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
-EVAL=$'\n\n'"(() => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); return 'dark' })()"$'\n\n'
+EVAL=$'\n\n'"(() => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); const a = document.querySelector('#reader-settings-form input[name=\"autohide\"]'); a.checked = false; a.dispatchEvent(new Event('input', { bubbles: true })); return 'dark' })()"$'\n\n'
 
 cd internal/webui
 SHOT_CHROME="$CHROME" \

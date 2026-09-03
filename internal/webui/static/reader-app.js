@@ -565,6 +565,7 @@ const SETTINGS_DEFAULTS = Object.freeze({
   flow: "paginated",
   columns: "auto",
   margin: "normal",
+  autohide: true,
 });
 const THEMES = {
   light: { bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light" },
@@ -691,6 +692,7 @@ function chapterCSS(s) {
 
 function applySettings() {
   document.body.dataset.readerTheme = settings.theme;
+  applyChrome();
   if (!view || !view.renderer) return;
   const renderer = view.renderer;
   renderer.setAttribute(
@@ -742,6 +744,7 @@ function readSettingsForm() {
     flow: String(data.get("flow") || SETTINGS_DEFAULTS.flow),
     columns: String(data.get("columns") || SETTINGS_DEFAULTS.columns),
     margin: String(data.get("margin") || SETTINGS_DEFAULTS.margin),
+    autohide: data.has("autohide"),
   };
   if (sizeOut) sizeOut.textContent = settings.size + "%";
 }
@@ -791,6 +794,357 @@ if (fullscreenBtn) {
       p.setAttribute("d", MAXIMIZE_PATH);
       fullscreenBtn.title = "Full screen (f)";
     }
+  });
+}
+
+// ---------------------------------------------- chrome and tap zones
+
+// The bar and the two arrows float over the book and step aside while
+// nobody is reaching for them. What replaces them is the tap model
+// here: the sides of the window turn pages wherever they are clicked —
+// blank margin or the text itself — and the middle asks for the chrome
+// back. A phone has no hover and no arrows to aim at once they have
+// faded, so without this there would be no way left to turn a page.
+//
+// The zones are a share of the window rather than a fixed ribbon: a
+// third of a phone is a thumb, a third of a desktop window is most of
+// the column.
+const CHROME_IDLE_MS = 2200;
+const CHROME_TOUCH_MS = 4000;
+const TAP_SLOP_PX = 10;
+
+let chromePinned = false;
+let chromeTimer = null;
+
+function chromeAuto() {
+  return !!settings.autohide && !chromePinned;
+}
+
+function chromeVisible() {
+  return document.body.dataset.readerChrome !== "hidden";
+}
+
+function setChrome(visible) {
+  document.body.dataset.readerChrome = visible ? "visible" : "hidden";
+}
+
+// chromeBusy is every reason the bar cannot be taken away right now:
+// something it owns is open, an error is on screen — a failure must
+// never hide behind an invisible bar — or the keyboard is in it.
+function chromeBusy() {
+  if (tocPanel && !tocPanel.hidden) return true;
+  if (settingsPanel && settingsPanel.open) return true;
+  if (status && !status.hidden) return true;
+  const help = document.getElementById("reader-help");
+  if (help && help.open) return true;
+  const active = document.activeElement;
+  return !!(
+    active &&
+    active.closest &&
+    active.closest(".reader-bar, .reader-turn")
+  );
+}
+
+function armChrome(delay) {
+  clearTimeout(chromeTimer);
+  if (!chromeAuto()) return;
+  chromeTimer = setTimeout(() => {
+    if (chromeBusy()) {
+      armChrome(delay);
+      return;
+    }
+    setChrome(false);
+  }, delay);
+}
+
+function revealChrome(delay) {
+  setChrome(true);
+  armChrome(delay || CHROME_IDLE_MS);
+}
+
+function applyChrome() {
+  if (!chromeAuto()) {
+    clearTimeout(chromeTimer);
+    setChrome(true);
+    return;
+  }
+  revealChrome();
+}
+
+function sideWidth() {
+  const w = window.innerWidth || 1;
+  return Math.max(64, Math.min(w * (w < 700 ? 0.3 : 0.22), 260));
+}
+
+function tapZone(x) {
+  const w = window.innerWidth || 1;
+  const side = sideWidth();
+  if (x <= side) return "prev";
+  if (x >= w - side) return "next";
+  return "chrome";
+}
+
+function inTopZone(y) {
+  return y <= Math.max(56, (window.innerHeight || 0) * 0.1);
+}
+
+// tapAt is the whole click model, in viewport coordinates: the stage,
+// the engine's margins and every chapter document funnel here so that
+// one rule covers the page whatever the click happened to land on.
+function tapAt(x, y) {
+  const zone = tapZone(x);
+  if (zone !== "chrome") {
+    turn(zone === "prev" ? -1 : 1);
+    if (chromeVisible()) armChrome(CHROME_IDLE_MS);
+    return true;
+  }
+  if (chromeVisible()) {
+    if (!chromeAuto()) return false;
+    clearTimeout(chromeTimer);
+    setChrome(false);
+  } else {
+    chromePinned = false;
+    revealChrome(CHROME_TOUCH_MS);
+  }
+  return true;
+}
+
+function toggleChrome() {
+  if (chromeVisible()) {
+    chromePinned = false;
+    clearTimeout(chromeTimer);
+    setChrome(false);
+  } else {
+    chromePinned = true;
+    clearTimeout(chromeTimer);
+    setChrome(true);
+  }
+}
+
+function pointerMoved(x, y, pointerType) {
+  if (pointerType === "touch") return; // a finger reveals by tapping
+  if (!chromeAuto()) return;
+  if (inTopZone(y) || tapZone(x) !== "chrome") revealChrome();
+  else if (chromeVisible()) armChrome(CHROME_IDLE_MS);
+}
+
+document.addEventListener(
+  "pointermove",
+  (e) => pointerMoved(e.clientX, e.clientY, e.pointerType),
+  { passive: true },
+);
+document.addEventListener("focusin", () => {
+  if (chromeAuto() && chromeBusy()) revealChrome();
+});
+
+// A chapter is a document of its own, so nothing that happens over the
+// text reaches this page: pointer and click handling has to be wired
+// per chapter, the way the reading keys already are. Its coordinates
+// are the frame's, and the frame knows where it sits.
+// A coordinate inside a chapter is the chapter's, and the reader thinks
+// in the window's. The frame says where it sits — and, for a
+// fixed-layout publication, how much the engine scaled it: those frames
+// carry a CSS transform, so the rectangle is in rendered pixels while
+// the coordinate inside it is in the document's own. A reflowable book
+// scales by 1 and passes through unchanged.
+function frameOffset(doc) {
+  try {
+    const el = doc.defaultView && doc.defaultView.frameElement;
+    if (el) {
+      const box = el.getBoundingClientRect();
+      const scale = el.offsetWidth ? box.width / el.offsetWidth : 1;
+      return { left: box.left, top: box.top, scale: scale || 1 };
+    }
+  } catch (err) {
+    /* the frame was replaced between events */
+  }
+  const box = stage.getBoundingClientRect();
+  return { left: box.left, top: box.top, scale: 1 };
+}
+
+function toViewport(doc, x, y) {
+  const box = frameOffset(doc);
+  return [box.left + x * box.scale, box.top + y * box.scale];
+}
+
+// Everything in a publication that is already something when it is
+// clicked: a control, a link, a media player, an image map, a frame.
+// Clicking one of those is doing that thing, not turning a page.
+const TAP_EXEMPT =
+  "a,button,input,textarea,select,summary,label,audio,video,area[href]," +
+  "iframe,embed,object,[contenteditable],[role='button'],[role='link']";
+// Long enough to cover the usual platform double-click intervals
+// (Windows and macOS both default to about half a second).
+const DOUBLE_CLICK_MS = 500;
+// How long after a tap the browser's synthesized click may still turn
+// up. It is the same tap, and it has already been answered.
+const TOUCH_CLICK_MS = 700;
+
+// overText answers the only question that makes a mouse click
+// ambiguous: is there a word under the pointer? A click on a line of
+// text might be the first half of a double-click that selects it, so it
+// has to wait; a click on a margin, a gutter or the space below the
+// last line cannot be selecting anything and turns the page at once.
+// caretRangeFromPoint alone is not enough — it answers with the
+// *nearest* caret position even when the point is nowhere near it — so
+// the character it names is measured and the point has to be inside it.
+function overText(doc, x, y) {
+  const find = doc.caretRangeFromPoint || doc.caretPositionFromPoint;
+  if (!find) return true; // no way to tell: assume the careful answer
+  try {
+    const hit = find.call(doc, x, y);
+    if (!hit) return false;
+    const node = hit.startContainer || hit.offsetNode;
+    const offset = hit.startOffset ?? hit.offset ?? 0;
+    if (!node || node.nodeType !== 3 || !node.length) return false;
+    const at = Math.min(offset, node.length - 1);
+    const range = doc.createRange();
+    range.setStart(node, at);
+    range.setEnd(node, at + 1);
+    const box = range.getBoundingClientRect();
+    return (
+      x >= box.left - 2 &&
+      x <= box.right + 2 &&
+      y >= box.top - 2 &&
+      y <= box.bottom + 2
+    );
+  } catch (err) {
+    return true;
+  }
+}
+
+// A gesture is one pointer, from its own down to its own up. A second
+// finger, a cancelled pointer or a stolen capture ends it: what happens
+// next is a pinch, a scroll or the browser's business, never a tap.
+function newGesture() {
+  return { id: null, x: 0, y: 0, spoiled: true, hadSelection: false };
+}
+
+function wireChapterPointer(doc) {
+  let gesture = newGesture();
+  let mouse = false;
+  let touchAt = 0;
+  let deferred = null;
+  const cancelDeferred = () => {
+    clearTimeout(deferred);
+    deferred = null;
+  };
+  const selected = () => {
+    const sel = doc.getSelection && doc.getSelection();
+    return !!(sel && sel.rangeCount && !sel.isCollapsed);
+  };
+  // Everything a tap has to not be, in one place: a drag, a gesture
+  // that was never ours to finish, a second click, a control — or a
+  // click that is putting a selection away rather than making one,
+  // which is why the selection is remembered from pointerdown: the
+  // browser collapses it before the click arrives, and by then the
+  // evidence is gone.
+  const isTap = (e) => {
+    if (gesture.spoiled) return false;
+    if (typeof e.button === "number" && e.button !== 0) return false;
+    if (e.detail > 1) return false;
+    if (gesture.hadSelection || selected()) return false;
+    return !(e.target && e.target.closest && e.target.closest(TAP_EXEMPT));
+  };
+  doc.addEventListener(
+    "pointermove",
+    (e) => {
+      pointerMoved(...toViewport(doc, e.clientX, e.clientY), e.pointerType);
+    },
+    { passive: true },
+  );
+  doc.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (gesture.id !== null && gesture.id !== e.pointerId) {
+        gesture.spoiled = true; // a second finger: not a tap any more
+        return;
+      }
+      mouse = e.pointerType !== "touch" && e.pointerType !== "pen";
+      gesture = {
+        id: e.pointerId,
+        x: e.clientX,
+        y: e.clientY,
+        spoiled: false,
+        hadSelection: selected(),
+      };
+    },
+    { passive: true },
+  );
+  const spoil = (e) => {
+    if (gesture.id === null || gesture.id === e.pointerId) gesture.spoiled = true;
+  };
+  doc.addEventListener("pointercancel", spoil, { passive: true });
+  doc.addEventListener("lostpointercapture", spoil, { passive: true });
+  // A finger is answered here rather than on the click that should
+  // follow it: the engine snaps the page on every touchend, and a
+  // scroll between touchend and the synthesized click cancels that
+  // click outright. Waiting for it would mean tapping a phone and
+  // watching nothing happen.
+  doc.addEventListener(
+    "pointerup",
+    (e) => {
+      if (gesture.id !== null && gesture.id !== e.pointerId) {
+        gesture.spoiled = true;
+        return;
+      }
+      if (
+        Math.abs(e.clientX - gesture.x) > TAP_SLOP_PX ||
+        Math.abs(e.clientY - gesture.y) > TAP_SLOP_PX
+      )
+        gesture.spoiled = true;
+      gesture.id = null;
+      if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+      touchAt = Date.now();
+      if (tocPanel && !tocPanel.hidden) {
+        toggleTOC(false); // the drawer cannot hear a tap inside the book
+        gesture.spoiled = true;
+        return;
+      }
+      if (!isTap(e)) return;
+      tapAt(...toViewport(doc, e.clientX, e.clientY));
+    },
+    { passive: true },
+  );
+  // Double-clicking a word selects it, and the reader who did that
+  // wants the word, not the next page — but the first click of the
+  // pair arrives while the selection is still empty and looks exactly
+  // like a tap. A mouse click *on a word* therefore waits out the
+  // double-click interval and is cancelled if a second click, a
+  // selection or a dblclick follows. A mouse click anywhere else, and
+  // any touch or pen tap, turns the page immediately: there is nothing
+  // there to select, so there is nothing to wait for. (Beyond a
+  // half-second double-click interval the first click does turn a
+  // page; the reader turns back, and nothing is lost.)
+  doc.addEventListener("dblclick", cancelDeferred);
+  doc.addEventListener("selectstart", cancelDeferred);
+  // A tap on the text turns the page; a drag, a selection, a link or
+  // any other control is not a tap and is left entirely alone.
+  doc.addEventListener("click", (e) => {
+    if (e.detail > 1) {
+      cancelDeferred();
+      return;
+    }
+    // The tap this click belongs to was already answered on pointerup.
+    if (Date.now() - touchAt < TOUCH_CLICK_MS) return;
+    if (tocPanel && !tocPanel.hidden) {
+      toggleTOC(false);
+      gesture.spoiled = true;
+      return;
+    }
+    if (!isTap(e)) return;
+    const [x, y] = toViewport(doc, e.clientX, e.clientY);
+    if (!mouse || !overText(doc, e.clientX, e.clientY)) {
+      tapAt(x, y);
+      return;
+    }
+    cancelDeferred();
+    deferred = setTimeout(() => {
+      deferred = null;
+      const live = doc.getSelection && doc.getSelection();
+      if (live && live.rangeCount && !live.isCollapsed) return;
+      tapAt(x, y);
+    }, DOUBLE_CLICK_MS);
   });
 }
 
@@ -876,6 +1230,9 @@ function toggleTOC(open) {
   const want = typeof open === "boolean" ? open : tocPanel.hidden;
   tocPanel.hidden = !want;
   if (want) {
+    // The drawer belongs to the button in the bar, so the bar comes
+    // back with it however the drawer was opened.
+    revealChrome();
     const current =
       tocList.querySelector("a.current") || tocList.querySelector("a");
     if (current) current.focus();
@@ -965,15 +1322,92 @@ document
 // Any blank margin is a page turn: a click that lands on the stage or
 // on the engine's own chrome (margins, gaps, header, footer — all of
 // which retarget to the foliate-view host from its closed shadow root)
-// turns toward whichever half of the stage it fell in. Clicks inside
-// the chapter itself belong to the chapter — text selection and links
-// stay untouched, because those land in the frame, not here.
+// goes through the same tap zones as the text, so the sides turn the
+// page and the middle brings the bar back. Clicks inside the chapter
+// itself are handled in that chapter's own document, where a link or a
+// live selection can still be told apart from a tap.
+// A tap on the margin, rather than on the text: the same rule, and the
+// same reason for handling touch on pointerup. The engine snaps the
+// page on every touchend, and a scroll between touchend and the click
+// the browser would have synthesized cancels that click — a finger
+// would tap and nothing would happen. When the click does arrive it is
+// the same tap arriving twice, so a short window swallows it.
+// A click on the margin while a passage is selected is putting the
+// selection away, the same as a click on the text: the selection lives
+// in the chapter, so the margin has to go and ask.
+function bookHasSelection() {
+  try {
+    const contents =
+      view && view.renderer && view.renderer.getContents
+        ? view.renderer.getContents()
+        : [];
+    for (const content of contents) {
+      const doc = content && content.doc;
+      const sel = doc && doc.getSelection && doc.getSelection();
+      if (sel && sel.rangeCount && !sel.isCollapsed) return true;
+    }
+  } catch (err) {
+    /* the chapter went away mid-gesture */
+  }
+  return false;
+}
+
+let stageTouchAt = 0;
+let stageGesture = newGesture();
+stage.addEventListener(
+  "pointerdown",
+  (e) => {
+    if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
+      stageGesture.spoiled = true;
+      return;
+    }
+    stageGesture = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      spoiled: false,
+      hadSelection: bookHasSelection(),
+    };
+  },
+  { passive: true },
+);
+const spoilStage = (e) => {
+  if (stageGesture.id === null || stageGesture.id === e.pointerId)
+    stageGesture.spoiled = true;
+};
+stage.addEventListener("pointercancel", spoilStage, { passive: true });
+stage.addEventListener("lostpointercapture", spoilStage, { passive: true });
+stage.addEventListener("pointerup", (e) => {
+  if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
+    stageGesture.spoiled = true;
+    return;
+  }
+  if (
+    Math.abs(e.clientX - stageGesture.x) > TAP_SLOP_PX ||
+    Math.abs(e.clientY - stageGesture.y) > TAP_SLOP_PX
+  )
+    stageGesture.spoiled = true; // a swipe: the engine's business
+  const clean = !stageGesture.spoiled;
+  stageGesture.id = null;
+  if (!view) return;
+  if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
+  stageTouchAt = Date.now();
+  if (tocPanel && !tocPanel.hidden) {
+    toggleTOC(false);
+    return;
+  }
+  if (!clean) return;
+  if (stageGesture.hadSelection || bookHasSelection()) return;
+  if (e.target !== stage && e.target !== view) return;
+  tapAt(e.clientX, e.clientY);
+});
 stage.addEventListener("click", (e) => {
   if (!view) return;
   if (tocPanel && !tocPanel.hidden) return; // the click puts the drawer away
   if (e.target !== stage && e.target !== view) return;
-  const box = stage.getBoundingClientRect();
-  turn(e.clientX < box.left + box.width / 2 ? -1 : 1);
+  if (Date.now() - stageTouchAt < TOUCH_CLICK_MS) return; // already handled
+  if (stageGesture.hadSelection || bookHasSelection()) return;
+  tapAt(e.clientX, e.clientY);
 });
 // The standard reading keys. Space is the one every reader agrees on
 // (Shift reverses it, as everywhere else); h/l and j/k are for hands
@@ -1052,6 +1486,10 @@ function handleKeys(e) {
       e.preventDefault();
       toggleFullscreen();
       break;
+    case "z":
+      e.preventDefault();
+      toggleChrome();
+      break;
     case "Home":
       if (view) view.goToFraction(0);
       break;
@@ -1096,8 +1534,11 @@ window.addEventListener("beforeunload", () => {
     // Each chapter document gets the reading keys: after a click in
     // the text, the frame owns the keyboard, and a listener on the
     // page alone would go deaf exactly when the reader looks focused.
+    // The pointer is wired there for the same reason — a tap on the
+    // text is how a phone turns a page once the arrows have faded.
     view.addEventListener("load", (e) => {
       e.detail.doc.addEventListener("keydown", handleKeys);
+      wireChapterPointer(e.detail.doc);
     });
     // Highlight drawing (ADR-0028): the engine asks how to draw each
     // annotation it anchors, and asks again for every chapter it

@@ -144,6 +144,9 @@ templ readerPage(v ReaderView, csrf string) {
 								<option value="wide">Wide</option>
 							</select>
 						</label>
+						<div class="row2">
+							<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
+						</div>
 						<button type="button" id="reader-settings-reset">Reset to defaults</button>
 					</form>
 				</details>
@@ -208,10 +211,16 @@ templ readerPage(v ReaderView, csrf string) {
 						<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Beginning / end of book</td></tr>
 						<tr><td><kbd>t</kbd></td><td>Table of contents</td></tr>
 						<tr><td><kbd>f</kbd></td><td>Full screen</td></tr>
+						<tr><td><kbd>z</kbd></td><td>Show or hide the bars</td></tr>
 						<tr><td><kbd>?</kbd></td><td>This help</td></tr>
 						<tr><td><kbd>Esc</kbd></td><td>Close help, contents or settings</td></tr>
 					</tbody>
 				</table>
+				<p class="reader-help-note">
+					Click or tap the left and right edges of the page to turn it, and
+					the middle to show or hide the bars. They step aside on their own
+					while you read; &ldquo;Auto-hide bars&rdquo; under Aa turns that off.
+				</p>
 				<form method="dialog"><button>Close</button></form>
 			</dialog>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
