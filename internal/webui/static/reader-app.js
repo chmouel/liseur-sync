@@ -900,7 +900,6 @@ function tapAt(x, y) {
     return true;
   }
   if (chromeVisible()) {
-    if (!chromeAuto()) return false;
     clearTimeout(chromeTimer);
     setChrome(false);
   } else {
