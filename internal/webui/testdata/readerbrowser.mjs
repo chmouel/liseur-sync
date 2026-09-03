@@ -17,6 +17,9 @@ const withAnnotations = process.env.SMOKE_ANNOTATIONS === '1';
 // NaN-guard mode (the position-jumps fix): synthetic relocate events
 // with a NaN then a finite fraction, watching whether the reader pushes.
 const nan = process.env.SMOKE_NAN === '1';
+// Session mode (ADR-0030): hides and shows the tab with a skewed clock,
+// watching what the reader posts to /v1/sessions.
+const sessions = process.env.SMOKE_SESSIONS === '1';
 
 const profile = mkdtempSync(join(tmpdir(), 'smoke-'));
 const proc = spawn(chrome, [
@@ -113,6 +116,12 @@ check('page loads', typeof title === 'string' && title.length > 0, title);
 // page-turn and annotation battery below, so it runs and exits here.
 if (nan) {
   await nanGuard(evalIn, check);
+  ws.close();
+  proc.kill();
+  process.exit(fail.length ? 1 : 0);
+}
+if (sessions) {
+  await sessionGuard(evalIn, check);
   ws.close();
   proc.kill();
   process.exit(fail.length ? 1 : 0);
@@ -1169,4 +1178,115 @@ async function nanGuard(evalIn, check) {
     } catch (e) { /* leaves prog null, the check below reports it */ }
   }
   check('the recovered push carries the finite progression', prog === 0.47, String(prog));
+}
+
+// sessionGuard proves that reading in the browser is counted (ADR-0030).
+// The reader opens a sitting once a position is measured and closes it
+// when the tab goes away, so the probe stands in for the tab: it skews
+// performance.now to make minutes pass, turns a page, then says the
+// document is hidden. The observable thing is the POST to /v1/sessions;
+// the Go side then checks the row reached the store with the figures
+// the page said.
+async function sessionGuard(evalIn, check) {
+  await evalIn(`(() => {
+    window.__pushedSessions = [];
+    const orig = window.fetch;
+    window.fetch = function (input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+      if (method === 'POST' && url.indexOf('v1/sessions') >= 0) {
+        window.__pushedSessions.push(String((init && init.body) || ''));
+      }
+      return orig.apply(this, arguments);
+    };
+    // A clock the probe can wind forward, and a visibility the probe
+    // can set: the page consults both through the usual names.
+    const base = performance.now.bind(performance);
+    window.__skew = 0;
+    performance.now = () => base() + window.__skew;
+    // Both clocks move together, as they would in a real sitting; the
+    // server refuses idle past the wall-clock span, so winding only
+    // the monotonic one would be refused as a lie.
+    const RealDate = Date;
+    window.Date = class extends RealDate {
+      constructor(...args) {
+        if (args.length) super(...args);
+        else super(RealDate.now() + window.__skew);
+      }
+      static now() { return RealDate.now() + window.__skew; }
+    };
+    window.__hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__hidden ? 'hidden' : 'visible' });
+    return true;
+  })()`);
+
+  const relocate = (frac) => `(() => {
+    document.querySelector('foliate-view').dispatchEvent(
+      new CustomEvent('relocate', { detail: {
+        fraction: ${frac},
+        cfi: 'epubcfi(/6/8!/4/2/1:0)',
+        section: { current: 1, total: 12 },
+        tocItem: { label: 'Chowder' },
+      } }));
+    return true;
+  })()`;
+  const setHidden = (hidden) => evalIn(`(() => {
+    window.__hidden = ${hidden};
+    document.dispatchEvent(new Event('visibilitychange'));
+    return true;
+  })()`);
+  const wind = (ms) => evalIn(`(() => { window.__skew += ${ms}; return true; })()`);
+  const pushed = async () =>
+    JSON.parse(await evalIn('JSON.stringify(window.__pushedSessions)')).flatMap((body) => {
+      try { return JSON.parse(body).sessions; } catch (e) { return []; }
+    });
+  const settle = () => new Promise((r) => setTimeout(r, 1500));
+
+  // The book opened with a real relocate, so a sitting is already open.
+  // Four minutes of reading with a TOC tap in the middle, then the tab
+  // is hidden. Past the three-minute cap without that tap, so a zero
+  // here proves navigation input resets the gap; the relocate alone
+  // must not, since the engine also relocates on a resize.
+  await wind(2 * 60000);
+  const tappedTOC = await evalIn(`(() => {
+    const link = document.querySelector('#reader-toc-list a[data-href]');
+    if (!link) return false;
+    link.click();
+    return true;
+  })()`);
+  check('the fixture has a TOC navigation tap', tappedTOC === true, String(tappedTOC));
+  await evalIn(relocate('0.47'));
+  await wind(2 * 60000);
+  await setHidden(true);
+  await settle();
+  let got = await pushed();
+  check('hiding the tab posts the sitting', got.length === 1, JSON.stringify(got));
+  const first = got[0] || {};
+  check('the sitting ends where the reader is', first.end_progression === 0.47, String(first.end_progression));
+  check('the sitting began before it ended',
+    typeof first.start_progression === 'number' && first.start_progression <= 0.47, String(first.start_progression));
+  check('a TOC tap resets the idle gap', first.idle_ms === 0, String(first.idle_ms));
+
+  // Back, and away again at once: too short to be a sitting.
+  await setHidden(false);
+  await setHidden(true);
+  await settle();
+  got = await pushed();
+  check('a glance is not a session', got.length === 1, JSON.stringify(got));
+
+  // Back for a long stare at one page: the threshold is credited and
+  // the rest is idle.
+  await setHidden(false);
+  await wind(10 * 60000);
+  await setHidden(true);
+  await settle();
+  got = await pushed();
+  check('a second sitting is a second session', got.length === 2, JSON.stringify(got));
+  const second = got[1] || {};
+  // Real milliseconds pass between the probe's steps, so within a second.
+  check('time past the idle threshold is idle',
+    Math.abs(second.idle_ms - 7 * 60000) < 1000, String(second.idle_ms));
+  check('the two sittings have distinct ids',
+    first.session_id && second.session_id && first.session_id !== second.session_id);
 }

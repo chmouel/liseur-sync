@@ -225,7 +225,9 @@ additions rather than migrations.
 
 The reader uses `/v1/ops`, `/v1/changes` and `/v1/sessions` exactly as the
 Android and desktop clients do. It is not given privileged access and
-gets no new sync surface.
+gets no new sync surface. (What a sitting is in a browser — when it
+opens, when it closes, what counts as idle — is decided in
+[ADR-0030](0030-web-reader-reading-sessions.md).)
 
 Its credential is minted from the web session it is already running
 under: a cookie-authenticated, CSRF-protected endpoint returns a token

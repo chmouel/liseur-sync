@@ -14,6 +14,7 @@
 
 import "./vendor/foliate/view.js";
 import { Overlayer } from "./vendor/foliate/overlayer.js";
+import { openSession } from "./reader-session.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -228,6 +229,7 @@ function buildAnnotationList() {
       entry.href = "#";
       entry.addEventListener("click", (e) => {
         e.preventDefault();
+        noteActivity();
         toggleTOC(false);
         if (!view) return;
         const fall = () => {
@@ -484,12 +486,107 @@ function schedulePush() {
   pending = setTimeout(push, 1500);
 }
 
+// ------------------------------------------------------- sessions
+
+// A sitting (ADR-0030) is bounded the way Android bounds one: it opens
+// when the book is on screen with a position measured, and closes when
+// the tab is hidden or unloaded, which is the last moment a browser
+// reliably lets a page speak. Coming back opens a new one. The
+// arithmetic — idle cap, minimum, clamps — lives in reader-session.js.
+let session = null;
+// Closed sittings the server has not yet confirmed. Each is kept whole
+// and replayed byte for byte, like retryOp: the server compares
+// payloads under the session id, and a figure that moved between
+// attempts would be refused as a different session wearing the same
+// name.
+let unsent = [];
+
+function beginSession() {
+  if (session || !workID || document.hidden) return;
+  if (!here || !finite(here.fraction)) return;
+  session = openSession({
+    id: opID(),
+    workID: workID,
+    startedAt: new Date(),
+    now: performance.now(),
+    fraction: here.fraction,
+  });
+}
+
+function noteActivity() {
+  if (session) {
+    session.activity(performance.now(), here && here.fraction);
+  } else {
+    beginSession();
+  }
+  if (unsent.length) pushSession();
+}
+
+// noteProgress follows a relocate. It is not activity: the engine
+// relocates on a resize or a font change too, and only a key, a tap or
+// a scroll says somebody was there.
+function noteProgress() {
+  if (session) session.progress(here && here.fraction);
+  else beginSession();
+}
+
+function endSession() {
+  if (!session) return;
+  const payload = session.close(
+    performance.now(),
+    new Date(),
+    here && here.fraction,
+  );
+  session = null;
+  if (payload) unsent.push(payload);
+  pushSession(true);
+}
+
+let sessionInFlight = false;
+
+// pushSession sends every unconfirmed sitting in one batch. A retry
+// prodded by activity waits for the request already out; a close does
+// not, because the page may not be here when that one comes back, and
+// the server holds the same payload twice as once.
+async function pushSession(closing) {
+  if (!unsent.length || (sessionInFlight && !closing)) return;
+  const batch = unsent.slice();
+  sessionInFlight = true;
+  try {
+    const resp = await api("v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify({ sessions: batch }),
+    });
+    // 2xx: filed (re-posting the same payload is idempotently a 2xx too).
+    // 409: this session_id was already used with a *different* payload —
+    // a collision, not a repeat of this sitting — and replaying the same
+    // batch cannot fix that. Any other 4xx is a payload the server will
+    // refuse however often it is sent — an unknown work, say. Only a
+    // server error or no answer at all leaves the batch to try again.
+    if (resp.ok || (resp.status >= 400 && resp.status < 500)) {
+      unsent = unsent.filter((p) => !batch.includes(p));
+    }
+  } catch (err) {
+    /* offline: the next activity or close replays these exact sittings */
+  } finally {
+    sessionInFlight = false;
+  }
+}
+
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && here && !finite(here.fraction)) {
+  if (document.hidden) {
+    endSession();
+    return;
+  }
+  beginSession();
+  if (here && !finite(here.fraction)) {
     fractionRetryAttempt = 0;
     scheduleFractionRetry();
   }
 });
+window.addEventListener("pagehide", endSession);
 
 function cfiOf(op) {
   const fragments =
@@ -1053,9 +1150,13 @@ function wireChapterPointer(doc) {
     },
     { passive: true },
   );
+  // A scroll is the one way to move through a book that is neither a
+  // key nor a tap, so it counts as activity for the sitting.
+  doc.addEventListener("wheel", noteActivity, { passive: true });
   doc.addEventListener(
     "pointerdown",
     (e) => {
+      noteActivity();
       if (gesture.id !== null && gesture.id !== e.pointerId) {
         gesture.spoiled = true; // a second finger: not a tap any more
         return;
@@ -1253,6 +1354,7 @@ tocList.addEventListener("click", (e) => {
   const a = e.target && e.target.closest && e.target.closest("a[data-href]");
   if (!a) return;
   e.preventDefault();
+  noteActivity();
   toggleTOC(false);
   if (view) view.goTo(a.dataset.href).catch(() => {});
 });
@@ -1380,6 +1482,7 @@ const spoilStage = (e) => {
 stageArea.addEventListener("pointercancel", spoilStage, { passive: true });
 stageArea.addEventListener("lostpointercapture", spoilStage, { passive: true });
 stageArea.addEventListener("pointerup", (e) => {
+  noteActivity();
   if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
     stageGesture.spoiled = true;
     return;
@@ -1419,6 +1522,7 @@ stageArea.addEventListener("click", (e) => {
 // alone goes deaf — the engine re-emits its load event per chapter, so
 // each document gets wired as it arrives.
 function handleKeys(e) {
+  noteActivity();
   const helpDialog = document.getElementById("reader-help");
   // Arrow keys inside the settings panel adjust its controls, not the
   // book; Escape puts the panel away from the keyboard.
@@ -1504,6 +1608,7 @@ document.addEventListener("keydown", handleKeys);
 window.addEventListener("beforeunload", () => {
   clearTimeout(pending);
   push();
+  endSession();
 });
 
 // ------------------------------------------------------------ open
@@ -1528,6 +1633,7 @@ window.addEventListener("beforeunload", () => {
       if (finite(e.detail.fraction)) {
         clearFractionRetry();
         schedulePush();
+        noteProgress();
       } else {
         cancelScheduledPush();
         scheduleFractionRetry();

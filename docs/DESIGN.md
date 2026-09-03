@@ -326,7 +326,9 @@ form an inferred session with `origin: "inferred"`, always
 distinguishable from measured ones and excluded from speed statistics by
 default. Better than nothing, honest about being so. KOReader's
 statistics plugin, where installed, reports measured sessions via the
-koplugin adapter instead.
+koplugin adapter instead. The web reader measures its own
+([ADR-0030](adr/0030-web-reader-reading-sessions.md)): a sitting bounded
+by the tab's visibility, with a three-minute idle cap per page.
 
 ## 7. Legacy adapters
 
