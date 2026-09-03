@@ -3,10 +3,14 @@
 package webui_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // The book page's Library organization card (ADR-0018). It used to be a
@@ -175,5 +179,38 @@ func TestSeriesResetWorksWithoutScripting(t *testing.T) {
 	}
 	if !strings.Contains(card, "This is what the folder says.") {
 		t.Errorf("the book did not go back to the folder's answer:\n%s", card)
+	}
+}
+
+// seriesLayersUnreadable is a store whose series layers never come back.
+// The card reads them separately from the chips in the hero, so it is
+// the one part of the page that can lose them on its own.
+type seriesLayersUnreadable struct{ store.Store }
+
+func (seriesLayersUnreadable) BookSeriesLayers(
+	context.Context, string, string,
+) (store.BookSeriesLayers, error) {
+	return store.BookSeriesLayers{}, errors.New("the layers did not come back")
+}
+
+func TestBookPageDoesNotClaimNoSeriesWhenItCouldNotLook(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := seriesBook(t, f, "first", "Foundation", 1)
+
+	f.ui.St = seriesLayersUnreadable{f.ui.St}
+
+	resp, page := f.get(t, "/ui/books/"+bookID, f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("book page: %d", resp.StatusCode)
+	}
+	card := organizationCard(t, page)
+	// Saying nothing is the honest answer. Saying "in no series" would
+	// be a read failure dressed up as a fact about the book, and the
+	// book is in Foundation.
+	if strings.Contains(card, "This book is in no series.") {
+		t.Errorf("a failed read told the reader the book is in no series:\n%s", card)
+	}
+	if !strings.Contains(card, "Change this book's series") {
+		t.Errorf("the card stopped offering the editor:\n%s", card)
 	}
 }
