@@ -67,102 +67,144 @@ templ readerPage(v ReaderView, csrf string) {
 				<button
 					type="button"
 					id="reader-toc-button"
-					class="reader-toc-button"
+					class="reader-icon-btn reader-toc-button"
 					title="Table of contents (t)"
 					aria-label="Table of contents"
-				>&#9776;</button>
-				<a class="reader-back" href={ templ.SafeURL(v.BackURL) }>&larr; Back</a>
+				>
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M4 6h16M4 12h16M4 18h16"></path>
+					</svg>
+				</button>
+				<a class="reader-back" href={ templ.SafeURL(v.BackURL) } title="Back">
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M19 12H5m7-7l-7 7 7 7"></path>
+					</svg>
+					<span class="reader-back-label">Back</span>
+				</a>
 				<div class="reader-title">
 					<strong id="reader-title-text">{ v.Title }</strong>
 				</div>
-				<div class="reader-meta">
-					<span id="reader-chapter"></span>
-					<span id="reader-progress-text"></span>
+				<div class="reader-actions">
+					// Appearance settings (ADR-0012): everything here is applied
+					// client-side through the engine's user stylesheet and layout
+					// attributes, and remembered in this browser only. The server
+					// never sees a font choice, which is why there is no form
+					// action and no CSRF token anywhere near it.
+					<details class="reader-settings" id="reader-settings">
+						<summary class="reader-icon-btn" title="Reader settings" aria-label="Reader settings">Aa</summary>
+						<form id="reader-settings-form" autocomplete="off">
+							<fieldset>
+								<legend>Theme</legend>
+								<label class="chip"><input type="radio" name="theme" value="original"/> Publisher</label>
+								<label class="chip"><input type="radio" name="theme" value="light"/> Light</label>
+								<label class="chip"><input type="radio" name="theme" value="sepia"/> Sepia</label>
+								<label class="chip"><input type="radio" name="theme" value="dark"/> Dark</label>
+								<label class="chip"><input type="radio" name="theme" value="tokyo-night"/> Tokyo Night</label>
+								<label class="chip"><input type="radio" name="theme" value="rose-pine"/> Rosé Pine</label>
+								<label class="chip"><input type="radio" name="theme" value="black"/> Black</label>
+							</fieldset>
+							<fieldset>
+								<legend>Font</legend>
+								<label class="chip"><input type="radio" name="font" value="publisher"/> Publisher</label>
+								<label class="chip"><input type="radio" name="font" value="serif"/> Serif</label>
+								<label class="chip"><input type="radio" name="font" value="sans"/> Sans-serif</label>
+							</fieldset>
+							<label class="row">
+								Font size
+								<input type="range" name="size" min="70" max="350" step="5"/>
+								<output id="reader-size-out"></output>
+							</label>
+							<label class="row">
+								Line spacing
+								<select name="spacing">
+									<option value="0">Publisher</option>
+									<option value="1.2">1.2</option>
+									<option value="1.35">1.35</option>
+									<option value="1.5">1.5</option>
+									<option value="1.7">1.7</option>
+									<option value="2">2</option>
+								</select>
+							</label>
+							<div class="row2">
+								<label class="chip"><input type="checkbox" name="justify"/> Justify</label>
+								<label class="chip"><input type="checkbox" name="hyphenate"/> Hyphenate</label>
+							</div>
+							<fieldset>
+								<legend>Layout</legend>
+								<label class="chip"><input type="radio" name="flow" value="paginated"/> Pages</label>
+								<label class="chip"><input type="radio" name="flow" value="scrolled"/> Scroll</label>
+							</fieldset>
+							<label class="row">
+								Columns
+								<select name="columns">
+									<option value="auto">Auto</option>
+									<option value="1">1</option>
+									<option value="2">2</option>
+								</select>
+							</label>
+							<label class="row">
+								Margins
+								<select name="margin">
+									<option value="narrow">Narrow</option>
+									<option value="normal">Normal</option>
+									<option value="wide">Wide</option>
+								</select>
+							</label>
+							<div class="row2">
+								<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
+							</div>
+							<fieldset>
+								<legend>Footer</legend>
+								<label class="chip"><input type="radio" name="footer" value="chapter"/> Chapter</label>
+								<label class="chip"><input type="radio" name="footer" value="time-chapter"/> Time left in chapter</label>
+								<label class="chip"><input type="radio" name="footer" value="time-book"/> Time left in book</label>
+								<label class="chip"><input type="radio" name="footer" value="empty"/> Empty</label>
+							</fieldset>
+							<button type="button" id="reader-settings-reset">Reset to defaults</button>
+						</form>
+					</details>
+					<button
+						type="button"
+						id="reader-fullscreen"
+						class="reader-icon-btn reader-fullscreen-btn"
+						title="Full screen (f)"
+						aria-label="Toggle full screen"
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3m10 0h3a2 2 0 002-2v-3"></path>
+						</svg>
+					</button>
 				</div>
-				// Appearance settings (ADR-0012): everything here is applied
-				// client-side through the engine's user stylesheet and layout
-				// attributes, and remembered in this browser only. The server
-				// never sees a font choice, which is why there is no form
-				// action and no CSRF token anywhere near it.
-				<details class="reader-settings" id="reader-settings">
-					<summary title="Reader settings" aria-label="Reader settings">Aa</summary>
-					<form id="reader-settings-form" autocomplete="off">
-						<fieldset>
-							<legend>Theme</legend>
-							<label class="chip"><input type="radio" name="theme" value="original"/> Publisher</label>
-							<label class="chip"><input type="radio" name="theme" value="light"/> Light</label>
-							<label class="chip"><input type="radio" name="theme" value="sepia"/> Sepia</label>
-							<label class="chip"><input type="radio" name="theme" value="dark"/> Dark</label>
-							<label class="chip"><input type="radio" name="theme" value="tokyo-night"/> Tokyo Night</label>
-							<label class="chip"><input type="radio" name="theme" value="rose-pine"/> Rosé Pine</label>
-							<label class="chip"><input type="radio" name="theme" value="black"/> Black</label>
-						</fieldset>
-						<fieldset>
-							<legend>Font</legend>
-							<label class="chip"><input type="radio" name="font" value="publisher"/> Publisher</label>
-							<label class="chip"><input type="radio" name="font" value="serif"/> Serif</label>
-							<label class="chip"><input type="radio" name="font" value="sans"/> Sans-serif</label>
-						</fieldset>
-						<label class="row">
-							Font size
-							<input type="range" name="size" min="70" max="350" step="5"/>
-							<output id="reader-size-out"></output>
-						</label>
-						<label class="row">
-							Line spacing
-							<select name="spacing">
-								<option value="0">Publisher</option>
-								<option value="1.2">1.2</option>
-								<option value="1.35">1.35</option>
-								<option value="1.5">1.5</option>
-								<option value="1.7">1.7</option>
-								<option value="2">2</option>
-							</select>
-						</label>
-						<div class="row2">
-							<label class="chip"><input type="checkbox" name="justify"/> Justify</label>
-							<label class="chip"><input type="checkbox" name="hyphenate"/> Hyphenate</label>
-						</div>
-						<fieldset>
-							<legend>Layout</legend>
-							<label class="chip"><input type="radio" name="flow" value="paginated"/> Pages</label>
-							<label class="chip"><input type="radio" name="flow" value="scrolled"/> Scroll</label>
-						</fieldset>
-						<label class="row">
-							Columns
-							<select name="columns">
-								<option value="auto">Auto</option>
-								<option value="1">1</option>
-								<option value="2">2</option>
-							</select>
-						</label>
-						<label class="row">
-							Margins
-							<select name="margin">
-								<option value="narrow">Narrow</option>
-								<option value="normal">Normal</option>
-								<option value="wide">Wide</option>
-							</select>
-						</label>
-						<div class="row2">
-							<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
-						</div>
-						<button type="button" id="reader-settings-reset">Reset to defaults</button>
-					</form>
-				</details>
-				<button
-					type="button"
-					id="reader-fullscreen"
-					class="reader-fullscreen-btn"
-					title="Full screen (f)"
-					aria-label="Toggle full screen"
-				>
-					<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-						stroke="currentColor" stroke-width="2" stroke-linecap="round"
-						stroke-linejoin="round">
-						<path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3m10 0h3a2 2 0 002-2v-3"></path>
-					</svg>
-				</button>
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
 			<p id="reader-status" class="reader-status">Loading…</p>
@@ -195,7 +237,29 @@ templ readerPage(v ReaderView, csrf string) {
 				// the transform in reader-app.js that strips scripts from
 				// every resource, is why the publication is displayed and
 				// none of it runs.
-				<div id="reader-view"></div>
+				<div id="reader-view">
+					// The reading footer, the way the Android app draws it: the
+					// percentage on the left, the page on the right, and a middle
+					// slot — the chapter's name, or the time left — that a click
+					// cycles. It sits in the bottom margin the engine already
+					// leaves under the text, so it is the one piece of chrome
+					// still there once the bars have stepped aside, and it never
+					// covers a line. Pages are the engine's own stable locations,
+					// like the app's Readium positions: the same number whatever
+					// the font size. Not a stage surface, so a click here never
+					// turns the page.
+					<div
+						id="reader-footer"
+						class="reader-footer"
+						role="button"
+						tabindex="0"
+						title="Click to change what the middle shows"
+					>
+						<span id="reader-progress-text" class="reader-footer-edge"></span>
+						<span id="reader-chapter" class="reader-footer-mid"></span>
+						<span id="reader-page" class="reader-footer-edge"></span>
+					</div>
+				</div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
 			</div>
 			// The keyboard help, summoned with "?" like everywhere else. A
