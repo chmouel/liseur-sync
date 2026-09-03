@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -550,5 +551,68 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 	}
 	if !recovered {
 		t.Error("the finite position pushed after the NaN never reached the op log")
+	}
+}
+
+// TestReaderRecordsReadingSessions is the browser side of ADR-0030: a
+// sitting in the web reader reaches /v1/sessions, and so the statistics,
+// which until then counted only what KOReader and the apps reported.
+// The page is driven with a wound-forward clock and a faked visibility
+// (testdata/readerbrowser.mjs, sessionGuard), and the rows are then read
+// back from the store, because the probe can only see the attempt.
+func TestReaderRecordsReadingSessions(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_SESSIONS=1",
+		"SMOKE_SHOT=",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the reader did not record its sittings: %v", err)
+	}
+
+	// Two sittings were closed with something to say and one was a
+	// glance; the store must hold exactly the two, with the figures the
+	// page computed rather than something the server made up.
+	rows, err := f.st.SessionsInRange(t.Context(), "u1",
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("sessions in store: got %d, want 2", len(rows))
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].StartedAt.Before(rows[j].StartedAt) })
+	if rows[0].EndProg != 0.47 || rows[0].IdleMs != 0 {
+		t.Errorf("first sitting: end %v idle %d, want 0.47 and 0", rows[0].EndProg, rows[0].IdleMs)
+	}
+	if d := rows[1].IdleMs - 7*60*1000; d < -1000 || d > 1000 {
+		t.Errorf("second sitting: idle %d, want about 7 minutes", rows[1].IdleMs)
+	}
+	for _, s := range rows {
+		if s.Origin != store.OriginNative || s.DeviceID == "" {
+			t.Errorf("session %s: origin %q device %q", s.SessionID, s.Origin, s.DeviceID)
+		}
 	}
 }
