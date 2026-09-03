@@ -84,3 +84,39 @@ func TestAbsoluteCacheDirIsLeftAlone(t *testing.T) {
 		t.Fatalf("cacheDirFor = %q, want /srv/cache", got)
 	}
 }
+
+func TestAdminUsageContainsScan(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runMain([]string{"admin", "-h"}, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain exited %d, want 0", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "scan [name|folder-id]") {
+		t.Fatalf("admin usage does not document scan:\n%s", out)
+	}
+}
+
+func TestTopUsageContainsScan(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runMain([]string{"-h"}, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain exited %d, want 0", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "scan [-config <file>]") {
+		t.Fatalf("top usage does not document scan:\n%s", out)
+	}
+}
+
+func TestTopScanHelpFlagExitsZero(t *testing.T) {
+	var stderr bytes.Buffer
+	code := runMain([]string{"scan", "-h"}, &stderr)
+	if code != 0 {
+		t.Fatalf("runMain exited %d, want 0", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "Usage of scan:") && !strings.Contains(out, "-config") {
+		t.Fatalf("scan -h output unexpected:\n%s", out)
+	}
+}

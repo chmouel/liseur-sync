@@ -25,7 +25,25 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 	</p>
 	@adminFlash(flash)
 	<section class="card">
-		<h2>Watched</h2>
+		<div class="cardhead">
+			<h2>Watched</h2>
+			if len(folders) > 0 {
+				<form
+					class="scanform"
+					method="post"
+					action={ prefix + "admin/folders/scan-all" }
+					hx-post={ prefix + "admin/folders/scan-all" }
+					hx-disabled-elt="find button"
+				>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<button type="submit" class="scanbtn" title="Scan all folders now">
+						<span class="scanicon" aria-hidden="true">↻</span>
+						<span class="scanlabel">Scan all</span>
+						<span class="scanspinner" aria-hidden="true"></span>
+					</button>
+				</form>
+			}
+		</div>
 		if len(folders) == 0 {
 			<p class="muted">
 				No folders yet. Add one below and its books appear as the
@@ -65,9 +83,18 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 									<button type="submit">Accept uploads</button>
 								}
 							</form>
-							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }>
+							<form
+								class="scanform"
+								method="post"
+								action={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }
+								hx-post={ prefix + "admin/folders/" + f.Folder.ID + "/scan" }
+								hx-disabled-elt="find button"
+							>
 								<input type="hidden" name="csrf" value={ csrf }/>
-								<button type="submit">Scan now</button>
+								<button type="submit" class="scanbtn">
+									<span class="scanicon" aria-hidden="true">↻</span>
+									<span>Scan now</span>
+								</button>
 							</form>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/delete" }
 								hx-confirm="Stop watching this folder? Its books stay on disk but leave the catalog."

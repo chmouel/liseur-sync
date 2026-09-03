@@ -98,6 +98,9 @@ type FolderWatcher interface {
 	// pass finishes: reading a large folder takes longer than a request
 	// should.
 	Scan(folderID string)
+	// ScanFolders runs a pass over the specified folders synchronously and
+	// returns the aggregated reconcile results.
+	ScanFolders(ctx context.Context, folders []store.Folder) (store.ReconcileResult, error)
 }
 
 const cookieName = "liseur_session"
@@ -292,6 +295,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
 	mux.Handle("POST /ui/library/upload", sec(s.requireAuth(s.handleLibraryUpload)))
+	mux.Handle("POST /ui/library/scan", sec(s.requireAuth(s.handleLibraryScan)))
 	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
 	mux.Handle("POST /ui/books/{id}/reading-status", sec(s.requireAuth(s.handleBookReadingStatus)))
 	// Deleting (ADR-0024). A work is the reader's own, so it is
@@ -353,6 +357,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/users/{id}/backfill",
 		sec(s.requireAdmin(s.handleAdminBackfillWorks)))
 	mux.Handle("POST /ui/admin/folders", sec(s.requireAdmin(s.handleAdminCreateFolder)))
+	mux.Handle("POST /ui/admin/folders/scan-all",
+		sec(s.requireAdmin(s.handleAdminScanAllFolders)))
 	mux.Handle("POST /ui/admin/folders/{id}/scan",
 		sec(s.requireAdmin(s.handleAdminScanFolder)))
 	mux.Handle("POST /ui/admin/folders/{id}/uploads",

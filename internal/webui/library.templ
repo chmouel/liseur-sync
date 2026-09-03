@@ -24,29 +24,34 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			<p class="eyebrow">Your shelves</p>
 			<h1>Library</h1>
 		</div>
-		if v.HasGrant() {
-			<form class="folderpick" method="get" action={ prefix + "library" }>
-				<label class="visually-hidden" for="folder-pick">Folder</label>
-				<select id="folder-pick" name="folder">
-					for _, f := range v.Folders {
-						if f.Selected {
-							<option value={ f.ID } selected>{ f.Name }</option>
-						} else {
-							<option value={ f.ID }>{ f.Name }</option>
+		if v.HasGrant() || (admin && v.ServerHasFolders) {
+			<div class="librarycontrols">
+				@scanButton(prefix, csrf, v.Back)
+				if v.HasGrant() {
+					<form class="folderpick" method="get" action={ prefix + "library" }>
+						<label class="visually-hidden" for="folder-pick">Folder</label>
+						<select id="folder-pick" name="folder">
+							for _, f := range v.Folders {
+								if f.Selected {
+									<option value={ f.ID } selected>{ f.Name }</option>
+								} else {
+									<option value={ f.ID }>{ f.Name }</option>
+								}
+							}
+						</select>
+						if v.Filter != filterAll {
+							<input type="hidden" name="filter" value={ v.Filter }/>
 						}
-					}
-				</select>
-				if v.Filter != filterAll {
-					<input type="hidden" name="filter" value={ v.Filter }/>
+						if v.Sort != sortRecent {
+							<input type="hidden" name="sort" value={ v.Sort }/>
+						}
+						if v.Dir != sortDirDesc {
+							<input type="hidden" name="dir" value={ v.Dir }/>
+						}
+						<noscript><button type="submit">Show</button></noscript>
+					</form>
 				}
-				if v.Sort != sortRecent {
-					<input type="hidden" name="sort" value={ v.Sort }/>
-				}
-				if v.Dir != sortDirDesc {
-					<input type="hidden" name="dir" value={ v.Dir }/>
-				}
-				<noscript><button type="submit">Show</button></noscript>
-			</form>
+			</div>
 		}
 	</header>
 	if !v.HasGrant() {
@@ -541,5 +546,29 @@ templ uploadForm(prefix, csrf, folder string) {
 		<label class="visually-hidden" for="upload-file">EPUB to add</label>
 		<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
 		<button type="submit">Send a book</button>
+	</form>
+}
+
+// scanButton asks for a pass over the libraries this reader can see and
+// waits for it, so the shelf that comes back is the one the pass made.
+//
+// back is where to land afterwards, written the way this page would
+// write it — relative, so it survives a proxy serving the UI under a
+// subpath, and carrying the folder, filter and sort the reader had.
+templ scanButton(prefix, csrf, back string) {
+	<form
+		class="scanform"
+		method="post"
+		action={ prefix + "library/scan" }
+		hx-post={ prefix + "library/scan" }
+		hx-disabled-elt="find button"
+	>
+		<input type="hidden" name="csrf" value={ csrf }/>
+		<input type="hidden" name="back" value={ back }/>
+		<button type="submit" class="scanbtn" title="Scan for new books">
+			<span class="scanicon" aria-hidden="true">↻</span>
+			<span class="scanlabel">Scan</span>
+			<span class="scanspinner" aria-hidden="true"></span>
+		</button>
 	</form>
 }
