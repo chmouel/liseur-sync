@@ -70,9 +70,11 @@ func (s *Server) handleEntities(
 		Problem:  r.URL.Query().Get("problem"),
 		View:     readPrefs(r).View,
 	}
-	// The view toggle returns here. A relative target is resolved by the
-	// browser against this URL, so the kind segment alone is this page.
-	v.Back = url.PathEscape(v.Kind)
+	// The view toggle returns here. The preference form posts to
+	// /ui/preferences and its redirect is resolved from the UI root, so
+	// this is the path relative to /ui/ — the whole route, not the kind
+	// segment the browser happens to be standing on.
+	v.Back = uiEntityList(v.Kind)
 	for _, row := range rows {
 		// A series nothing claims any more is a name and not a shelf.
 		// This became reachable rather than theoretical with ADR-0018:
@@ -89,7 +91,7 @@ func (s *Server) handleEntities(
 		})
 	}
 	if len(rows) == entityPageSize {
-		v.NextURL = url.PathEscape(v.Kind) + "?after=" +
+		v.NextURL = uiEntityList(v.Kind) + "?after=" +
 			url.QueryEscape(rows[len(rows)-1].NormalizedName)
 	}
 	entitiesPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).
@@ -134,7 +136,7 @@ func (s *Server) handleEntityBooks(
 		Heading:  entity.Name,
 		Singular: entityKindLabels[kind].One,
 		View:     readPrefs(r).View,
-		Back:     url.PathEscape(entityID),
+		Back:     uiEntity(r.PathValue("kind"), entityID),
 	}
 	for _, b := range books {
 		v.Books = append(v.Books, BookRow{
@@ -148,7 +150,7 @@ func (s *Server) handleEntityBooks(
 	// The store hands back the cursor for the next page, because the
 	// sort key depends on the kind and only the store knows it.
 	if next != nil {
-		v.NextURL = url.PathEscape(v.Kind) + "/" + url.PathEscape(entityID) +
+		v.NextURL = uiEntity(v.Kind, entityID) +
 			"?cursor=" + url.QueryEscape(encodeBooksCursor(*next))
 	}
 	entityBooksPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), v).

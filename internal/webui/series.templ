@@ -95,7 +95,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 		}
 		if v.NextURL != "" {
 			<div class="more">
-				<a href={ v.NextURL }>Next page</a>
+				<a href={ prefix + v.NextURL }>Next page</a>
 			</div>
 		}
 	</section>
