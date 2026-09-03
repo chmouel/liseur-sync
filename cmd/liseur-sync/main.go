@@ -416,6 +416,17 @@ func cmdTopScan(args []string) error {
 //
 // invocation is how the caller spelled it, so that the usage a mistake
 // prints is the command the person actually typed.
+// reconcileCounts renders what a pass changed. Every counter is named,
+// including the zeroes, so the per-folder lines and the total below them
+// say the same thing in the same order and one of them cannot quietly
+// fall behind the other when a counter is added.
+func reconcileCounts(res store.ReconcileResult) string {
+	return fmt.Sprintf(
+		"added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d",
+		res.Added, res.Updated, res.Replaced,
+		res.Missing, res.Returned, res.Purged, res.Rekeyed)
+}
+
 func cmdScan(cfg config.Config, st store.Store, invocation string, args []string) error {
 	needsFolder := strings.HasSuffix(invocation, "scan-folder")
 	usage := invocation + " [name|folder-id]"
@@ -513,24 +524,22 @@ func cmdScan(cfg config.Config, st store.Store, invocation string, args []string
 		total.Rekeyed += result.Rekeyed
 
 		if isTerm {
-			fmt.Printf("\033[32m✔\033[0m folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
-				folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
-				result.Missing, result.Returned, result.Purged, result.Rekeyed)
+			fmt.Printf("\033[32m✔\033[0m folder %s (%s) reconciled: %s\n",
+				folder.Name, folder.ID, reconcileCounts(result))
 		} else {
-			fmt.Printf("folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
-				folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
-				result.Missing, result.Returned, result.Purged, result.Rekeyed)
+			fmt.Printf("folder %s (%s) reconciled: %s\n",
+				folder.Name, folder.ID, reconcileCounts(result))
 		}
 	}
 
 	if len(targets) > 1 {
 		elapsed := time.Since(start).Round(time.Millisecond)
 		if isTerm {
-			fmt.Printf("\033[32m✔\033[0m Scanned %d folder(s) in %s: %d added, %d updated, %d missing, %d purged\n",
-				len(targets), elapsed, total.Added, total.Updated, total.Missing, total.Purged)
+			fmt.Printf("\033[32m✔\033[0m Scanned %d folder(s) in %s: %s\n",
+				len(targets), elapsed, reconcileCounts(total))
 		} else {
-			fmt.Printf("Scanned %d folder(s) in %s: %d added, %d updated, %d missing, %d purged\n",
-				len(targets), elapsed, total.Added, total.Updated, total.Missing, total.Purged)
+			fmt.Printf("Scanned %d folder(s) in %s: %s\n",
+				len(targets), elapsed, reconcileCounts(total))
 		}
 	}
 
