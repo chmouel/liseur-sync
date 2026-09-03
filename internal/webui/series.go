@@ -896,6 +896,31 @@ func folderSeriesSentence(rows []SeriesAssignRow) string {
 	return joinWithAnd(out)
 }
 
+// seriesFolderNote is what the folder says about a book. It is worth
+// saying only where a claim is in force over it, otherwise it repeats
+// what the reader is already looking at.
+func seriesFolderNote(folder []SeriesAssignRow) string {
+	if len(folder) == 0 {
+		return "The folder puts this book in no series."
+	}
+	return "The folder says: " + folderSeriesSentence(folder) + "."
+}
+
+// seriesSourceSentence names the layer a book's series came from
+// (ADR-0018). The book page and the dialog say it the same way, so a
+// reader who opens the editor is not told something new.
+func seriesSourceSentence(source string) string {
+	switch source {
+	case string(store.SeriesSourceFolder):
+		return "This is what the folder says."
+	case string(store.SeriesSourceShared):
+		return "An administrator arranged this. It is what everybody sees."
+	case string(store.SeriesSourcePersonal):
+		return "You arranged this. Only you see it."
+	}
+	return ""
+}
+
 func joinWithAnd(items []string) string {
 	switch len(items) {
 	case 0:

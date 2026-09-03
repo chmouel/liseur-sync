@@ -318,16 +318,9 @@ templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
 		if v.Problem != "" {
 			<p class="error" role="alert">{ v.Problem }</p>
 		}
-		<p class="muted">
-			if v.Source == "folder" {
-				This is what the folder says.
-			} else if v.Source == "shared" {
-				An administrator arranged this. It is what everybody sees.
-			} else {
-				You arranged this. Only you see it.
-			}
-		</p>
+		<p class="muted">{ seriesSourceSentence(v.Source) }</p>
 		<form
+			id="series-assign-form"
 			method="post"
 			action={ prefix + "books/" + v.BookID + "/series" }
 			hx-post={ prefix + "books/" + v.BookID + "/series" }
@@ -336,6 +329,10 @@ templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
 		>
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<datalist id="series-names"></datalist>
+			<div class="assignhead" aria-hidden="true">
+				<span>Series</span>
+				<span>Book no.</span>
+			</div>
 			<div class="assignrows">
 				for _, row := range v.Current {
 					@seriesAssignRowFields(prefix, row)
@@ -354,12 +351,27 @@ templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
 					Everybody sees this
 				</label>
 			}
-			<div class="cta">
+			if v.CanReset {
+				<p class="muted">{ seriesFolderNote(v.Folder) }</p>
+			}
+			<div class="assignactions">
 				<button class="btn primary" type="submit">Save</button>
+				if v.CanReset {
+					// The undo button sits here so it reads as the other
+					// half of one decision, and names the form below it.
+					<button class="btn" type="submit" form="series-reset-form">
+						if v.Shared {
+							Undo the shared arrangement
+						} else {
+							Back to what the folder says
+						}
+					</button>
+				}
 			</div>
 		</form>
 		if v.CanReset {
 			<form
+				id="series-reset-form"
 				method="post"
 				action={ prefix + "books/" + v.BookID + "/series/reset" }
 				hx-post={ prefix + "books/" + v.BookID + "/series/reset" }
@@ -370,25 +382,15 @@ templ seriesAssignForm(prefix, csrf string, v SeriesAssignView) {
 				if v.Shared && v.CanShare {
 					<input type="hidden" name="scope" value="shared"/>
 				}
-				<button class="btn" type="submit">
-					if v.Shared {
-						Undo the shared arrangement
-					} else {
-						Back to what the folder says
-					}
-				</button>
 			</form>
-			if len(v.Folder) > 0 {
-				<p class="muted">
-					{ "The folder says: " + folderSeriesSentence(v.Folder) }
-				</p>
-			} else {
-				<p class="muted">The folder puts this book in no series.</p>
-			}
 		}
 	</div>
 }
 
+// seriesAssignRowFields is one row: a series and this book's number in
+// it. The placeholders are a reminder, not the label — they vanish as
+// soon as there is anything to read, so the fields carry a name of their
+// own for anybody not looking at the column headings.
 templ seriesAssignRowFields(prefix string, row SeriesAssignRow) {
 	<p class="assignrow">
 		<input
@@ -396,6 +398,7 @@ templ seriesAssignRowFields(prefix string, row SeriesAssignRow) {
 			name="name"
 			value={ row.Name }
 			placeholder="Series"
+			aria-label="Series name"
 			list="series-names"
 			autocomplete="off"
 			hx-get={ prefix + "entities/series/suggest" }
@@ -408,6 +411,7 @@ templ seriesAssignRowFields(prefix string, row SeriesAssignRow) {
 			name="position"
 			value={ row.Position }
 			placeholder="#"
+			aria-label="Number in the series"
 			inputmode="decimal"
 			size="4"
 		/>

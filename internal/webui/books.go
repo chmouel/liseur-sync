@@ -170,6 +170,26 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 			})
 		}
 	}
+	// The organization card states the book's series rather than making
+	// a reader open the editor to find out. The layers are read here
+	// rather than taken from the relations above because the card also
+	// says which layer is in force, and what the folder said underneath
+	// a claim (ADR-0018) — neither of which survives into a chip.
+	if layers, err := s.St.BookSeriesLayers(
+		r.Context(), readerID(u), book.ID,
+	); err == nil {
+		v.SeriesSource = string(layers.Source)
+		for _, ser := range layers.Effective {
+			v.SeriesNow = append(v.SeriesNow, BookSeriesLine{
+				Name:     ser.Name,
+				Position: formatSeriesPosition(ser.Position),
+				URL:      entityURL(book.FolderID, "series", ser.SeriesID),
+			})
+		}
+		if layers.Source != store.SeriesSourceFolder {
+			v.SeriesFolderNote = seriesFolderNote(assignRows(layers.Folder))
+		}
+	}
 	return v, true
 }
 
