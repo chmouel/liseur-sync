@@ -85,8 +85,17 @@ func (s *Server) handleAdminCreateFolder(
 	// safety pass would mean an administrator adds a folder, is told it
 	// is being watched, and then stares at an empty shelf for half an
 	// hour.
+	//
+	// Add reconciles inline, and this is the one pass that is genuinely
+	// expensive: a folder nothing has read yet is hashed and parsed book
+	// by book. So it is bounded like the scan buttons are. Giving up
+	// costs nothing — the folder is registered and watched by then, so
+	// the safety pass finishes the reading, which is exactly what the
+	// notice below already promises.
 	if s.Watching != nil {
-		s.Watching.Add(r.Context(), folder)
+		ctx, cancel := context.WithTimeout(r.Context(), scanBudget)
+		defer cancel()
+		s.Watching.Add(ctx, folder)
 	}
 	s.renderAdminFolders(w, r, a, u, Flash{
 		Notice: "Watching " + folder.Name +
@@ -95,7 +104,8 @@ func (s *Server) handleAdminCreateFolder(
 	})
 }
 
-// handleAdminScanFolder asks for a pass over one folder now.
+// handleAdminScanFolder runs a pass over one folder now and waits for
+// it.
 //
 // The watcher already reconciles on filesystem events and on a slow
 // timer, so this is not how a folder normally stays current. It is here
@@ -103,6 +113,15 @@ func (s *Server) handleAdminCreateFolder(
 // pressure: in both cases the catalog is wrong and the alternative is
 // waiting half an hour for the safety pass. A pass is idempotent, so
 // pressing this twice is pressing it once.
+//
+// It waits, like the other two scan buttons, because the question a
+// person presses it with is "what is in there?" and "a pass was asked
+// for" is not an answer to it. It used to hand the folder id to the
+// watcher and return, on the grounds that a request should not wait for
+// a pass — but a repeat pass is a walk and one stat per file (see
+// unchanged() in internal/content), the wait is bounded by scanBudget,
+// and on a server watching one folder this button and "Scan all" were
+// the same act reported two different ways.
 func (s *Server) handleAdminScanFolder(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
@@ -114,21 +133,28 @@ func (s *Server) handleAdminScanFolder(
 	folder, err := s.St.FolderByID(r.Context(), "", folderID)
 	logAdminAction(r, u, "scan-folder", folderID, err)
 	if err != nil {
-		s.renderAdminFolders(w, r, a, u, Flash{Error: "no such folder"})
+		s.adminFoldersDone(w, r, a, u, Flash{Error: "no such folder"})
 		return
 	}
 	if s.Watching == nil {
 		// A server started without a watcher has nothing to ask. Saying
 		// so is better than a notice claiming a pass that will not run.
-		s.renderAdminFolders(w, r, a, u, Flash{
+		s.adminFoldersDone(w, r, a, u, Flash{
 			Error: "this server is running without a folder watcher",
 		})
 		return
 	}
-	s.Watching.Scan(folderID)
+	ctx, cancel := context.WithTimeout(r.Context(), scanBudget)
+	defer cancel()
+	res, err := s.Watching.ScanFolders(ctx, []store.Folder{folder})
+	if err != nil {
+		slog.ErrorContext(r.Context(), "scan failed",
+			"actor_id", u.ID, "folder", folder.ID, "error", err)
+		s.adminFoldersDone(w, r, a, u, Flash{Error: scanProblem(ctx, err, true)})
+		return
+	}
 	s.adminFoldersDone(w, r, a, u, Flash{
-		Notice: "Reading " + folder.Name +
-			" again. Any change appears as the pass finishes.",
+		Notice: scanNotice(res, folder.Name+" is up to date."),
 	})
 }
 

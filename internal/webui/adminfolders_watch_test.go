@@ -21,7 +21,6 @@ type recordingWatcher struct {
 	mu          sync.Mutex
 	added       []store.Folder
 	removed     []string
-	scanned     []string
 	scanFolders []store.Folder
 	scanResult  store.ReconcileResult
 	scanErr     error
@@ -32,12 +31,6 @@ func (w *recordingWatcher) ScanFolders(_ context.Context, folders []store.Folder
 	defer w.mu.Unlock()
 	w.scanFolders = append(w.scanFolders, folders...)
 	return w.scanResult, w.scanErr
-}
-
-func (w *recordingWatcher) Scan(folderID string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.scanned = append(w.scanned, folderID)
 }
 
 func (w *recordingWatcher) Add(_ context.Context, folder store.Folder) {
@@ -136,13 +129,14 @@ func TestAFolderCanBeAddedWithoutAWatcher(t *testing.T) {
 	}
 }
 
-// TestScanNowAsksTheWatcher: the button exists because inotify sees
-// nothing on NFS or SMB and drops events under pressure, so an operator
-// whose catalog is wrong has no other recourse but to wait half an hour.
-// If the press does not reach the watcher, the page tells a comfortable
-// lie and the wait happens anyway.
-func TestScanNowAsksTheWatcher(t *testing.T) {
-	watcher := &recordingWatcher{}
+// TestScanNowRunsAPassAndReportsIt: the button exists because inotify
+// sees nothing on NFS or SMB and drops events under pressure, so an
+// operator whose catalog is wrong has no other recourse but to wait half
+// an hour. If the press does not reach the watcher, the page tells a
+// comfortable lie and the wait happens anyway — so this pins both that
+// it ran and that the page says what it found.
+func TestScanNowRunsAPassAndReportsIt(t *testing.T) {
+	watcher := &recordingWatcher{scanResult: store.ReconcileResult{Added: 1}}
 	ts, st := testServerCfg(t, nil, func(s *Server) {
 		generousReauth(s)
 		s.Watching = watcher
@@ -166,14 +160,16 @@ func TestScanNowAsksTheWatcher(t *testing.T) {
 
 	_, body = postForm(t, ts, cookie,
 		"/ui/admin/folders/"+folders[0].ID+"/scan", url.Values{"csrf": {csrf}})
-	if !strings.Contains(body, "Reading Books again") {
-		t.Fatalf("the scan was not acknowledged: %s", body)
+	// The button waits, so the page says what the pass found rather
+	// than that one was asked for.
+	if !strings.Contains(body, "1 added") {
+		t.Fatalf("the scan did not report what it changed: %s", body)
 	}
 	watcher.mu.Lock()
-	scanned := append([]string(nil), watcher.scanned...)
+	scanned := append([]store.Folder(nil), watcher.scanFolders...)
 	watcher.mu.Unlock()
-	if len(scanned) != 1 || scanned[0] != folders[0].ID {
-		t.Fatalf("watcher was asked to scan %v, want [%s]", scanned, folders[0].ID)
+	if len(scanned) != 1 || scanned[0].ID != folders[0].ID {
+		t.Fatalf("watcher was asked to scan %v, want just %s", scanned, folders[0].ID)
 	}
 
 	// A folder that is not there cannot be scanned, and saying so beats
@@ -184,7 +180,7 @@ func TestScanNowAsksTheWatcher(t *testing.T) {
 		t.Fatalf("an unknown folder was accepted: %s", body)
 	}
 	watcher.mu.Lock()
-	count := len(watcher.scanned)
+	count := len(watcher.scanFolders)
 	watcher.mu.Unlock()
 	if count != 1 {
 		t.Fatalf("an unknown folder reached the watcher: %d calls", count)

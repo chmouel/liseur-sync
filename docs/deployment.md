@@ -283,23 +283,24 @@ A network mount is the case where this matters. NFS and SMB report
 nothing to inotify, so such a folder is only ever read by the periodic
 pass, which is up to half an hour behind.
 
-There are three buttons for this, and they differ only in what they cover
-and whether they wait:
+There are three buttons for this, and they differ only in what they
+cover. All of them run the passes and wait, so the page that comes back
+reports what those passes changed:
 
-- **Settings > Administration > Folders** has a *Scan now* per folder. It
-  asks for a pass and returns immediately, so the page says a pass was
-  asked for rather than what it found.
-- The same page has *Scan all*, which runs a pass over every watched
-  folder and waits for them, so the page that comes back is the one those
-  passes produced.
-- The library page has a *Scan* button for everybody, covering the
-  folders that reader has been granted (every folder, for an
-  administrator). It also waits.
+- **Settings > Administration > Folders** has a *Scan now* per folder.
+- The same page has *Scan all*, for every watched folder.
+- The library page has a *Scan* for everybody, covering the folders that
+  reader has been granted — every folder, for an administrator.
 
-The two that wait give up after two minutes and say so; the pass they
-started is not undone, and the watcher's periodic pass finishes the job.
-All of them are safe to press at any time and safe to press twice: a pass
-is idempotent, so asking again is asking once.
+A scan gives up after two minutes and says so. Nothing it managed is
+undone, and the watcher's periodic pass finishes the job. All of them are
+safe to press at any time and safe to press twice: a pass is idempotent,
+so asking again is asking once.
+
+Adding a folder is bounded the same way, and it is the pass that can
+actually reach the limit: a library nothing has read yet is hashed and
+parsed book by book. If it does, the folder is still watched and its
+books keep appearing as the periodic pass reads them.
 
 `scan_max_files` and `scan_max_depth` bound one pass. They are guards
 against pointing at too much, not tuning knobs. A pass that hits either

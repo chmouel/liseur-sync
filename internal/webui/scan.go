@@ -1,17 +1,22 @@
 package webui
 
-// Asking for a pass from the library page (the ↻ button).
+// Asking for a pass from a page: the library's ↻ button, and the two
+// buttons on the admin folders panel that share the vocabulary below.
 //
-// The admin page has had a per-folder "Scan now" since folders existed,
-// and it does not wait: it drops a signal in the watcher's channel and
-// says "reading it again". This one does wait, because it answers a
-// different question. A reader who just copied a book in wants the
-// shelf to have it when the page comes back, and a page that says
-// "asked for" and then shows the same shelf is not an answer.
+// All three wait. A person presses scan because the shelf disagrees
+// with the disk, and a page that says "asked for" and then shows the
+// same shelf has not answered them — it has only moved the question to
+// whether they should press it again. So a scan reports what it found,
+// which means holding the request until it has.
 //
-// Waiting is bounded (scanBudget) and every error is generalised before
-// it reaches the page: a reconcile failure names the folder's root path,
-// and root_path is an administrator's to see.
+// Waiting is bounded (scanBudget), which is safe because a pass checks
+// for cancellation before it reconciles: giving up early leaves the
+// catalog untouched rather than half-applied, and the pass is
+// idempotent, so the next one picks up where this one stopped.
+//
+// Every error is generalised before it reaches a page. A reconcile
+// failure names the folder's root path, and root_path is an
+// administrator's to see.
 
 import (
 	"context"
