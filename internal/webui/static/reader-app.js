@@ -47,6 +47,8 @@ const status = document.getElementById("reader-status");
 const progressBar = document.getElementById("reader-progress-bar");
 const progressText = document.getElementById("reader-progress-text");
 const chapterText = document.getElementById("reader-chapter");
+const pageText = document.getElementById("reader-page");
+const footer = document.getElementById("reader-footer");
 const titleText = document.getElementById("reader-title-text");
 const tocPanel = document.getElementById("reader-toc");
 const tocList = document.getElementById("reader-toc-list");
@@ -664,7 +666,11 @@ const SETTINGS_DEFAULTS = Object.freeze({
   columns: "auto",
   margin: "normal",
   autohide: true,
+  footer: "chapter",
 });
+// What the footer's middle slot shows; a click on the footer walks
+// this ring, the way a tap does in the app.
+const FOOTER_MODES = ["chapter", "time-chapter", "time-book", "empty"];
 const THEMES = {
   light: { bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light" },
   sepia: { bg: "#f6ecd9", fg: "#5b4636", link: "#8a5a2b", scheme: "light" },
@@ -790,7 +796,19 @@ function chapterCSS(s) {
 
 function applySettings() {
   document.body.dataset.readerTheme = settings.theme;
+  document.body.dataset.readerFlow =
+    settings.flow === "scrolled" ? "scrolled" : "paginated";
+  document.body.dataset.readerFooter = FOOTER_MODES.includes(settings.footer)
+    ? settings.footer
+    : SETTINGS_DEFAULTS.footer;
+  // The footer lives in the bottom margin the engine leaves under the
+  // text, so its height is that margin, whatever the setting says.
+  document.body.style.setProperty(
+    "--reader-margin",
+    MARGINS[settings.margin] || MARGINS.normal,
+  );
   applyChrome();
+  if (here) chapterText.textContent = footerMiddle(here);
   if (!view || !view.renderer) return;
   const renderer = view.renderer;
   renderer.setAttribute(
@@ -843,6 +861,7 @@ function readSettingsForm() {
     columns: String(data.get("columns") || SETTINGS_DEFAULTS.columns),
     margin: String(data.get("margin") || SETTINGS_DEFAULTS.margin),
     autohide: data.has("autohide"),
+    footer: String(data.get("footer") || SETTINGS_DEFAULTS.footer),
   };
   if (sizeOut) sizeOut.textContent = settings.size + "%";
 }
@@ -1264,19 +1283,82 @@ function paint(location) {
     progressBar.style.width = (fraction * 100).toFixed(1) + "%";
     progressText.textContent = Math.round(fraction * 100) + "%";
   }
-  // The chapter title the book itself gives this spot, falling back to
-  // a plain count when the navigation has no entry covering it.
-  const tocItem = location.tocItem;
-  if (tocItem && tocItem.label) {
-    chapterText.textContent = tocItem.label.trim();
-  } else {
-    const section = location.section || {};
-    if (typeof section.current === "number" && section.total) {
-      chapterText.textContent =
-        "Chapter " + (section.current + 1) + " of " + section.total;
+  // The page is the engine's location: a fixed slice of the book's
+  // text, so the count does not move when the font does. The same
+  // rule as the fraction — an unusable value leaves the last one up.
+  const loc = location.location || {};
+  if (finite(loc.current) && finite(loc.total) && loc.total > 0) {
+    const page = Math.min(Math.max(1, Math.floor(loc.current) + 1), loc.total);
+    pageText.textContent = page + " of " + loc.total;
+  }
+  chapterText.textContent = footerMiddle(location);
+  markTOC(location.tocItem);
+}
+
+// footerMiddle is what the middle slot says for this spot under the
+// chosen mode. A slot with nothing honest to say stays empty rather
+// than inventing something.
+function footerMiddle(location) {
+  const mode = FOOTER_MODES.includes(settings.footer)
+    ? settings.footer
+    : SETTINGS_DEFAULTS.footer;
+  const time = location.time || {};
+  switch (mode) {
+    case "time-chapter":
+      return finite(time.section)
+        ? durationText(time.section) + " left in chapter"
+        : "";
+    case "time-book":
+      return finite(time.total) ? durationText(time.total) + " left in book" : "";
+    case "empty":
+      return "";
+    default: {
+      // The chapter title the book itself gives this spot, falling back
+      // to a plain count when the navigation has no entry covering it.
+      const tocItem = location.tocItem;
+      if (tocItem && tocItem.label) return tocItem.label.trim();
+      const section = location.section || {};
+      if (typeof section.current === "number" && section.total) {
+        return "Chapter " + (section.current + 1) + " of " + section.total;
+      }
+      return "";
     }
   }
-  markTOC(tocItem);
+}
+
+// durationText spells minutes the way the app does: "45 mins",
+// "2 hrs 5 mins", or a friendly line for nearly nothing left.
+function durationText(minutes) {
+  const total = Math.round(minutes);
+  if (total < 1) return "Less than a minute";
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  const mins = rest + (rest === 1 ? " min" : " mins");
+  if (hours === 0) return mins;
+  const hrs = hours + (hours === 1 ? " hr" : " hrs");
+  return rest === 0 ? hrs : hrs + " " + mins;
+}
+
+// A click on the footer cycles the middle slot, and only that: the
+// footer is not a stage surface, so the page under it stays put.
+function cycleFooter() {
+  const i = FOOTER_MODES.indexOf(settings.footer);
+  settings = {
+    ...settings,
+    footer: FOOTER_MODES[(i + 1) % FOOTER_MODES.length],
+  };
+  saveSettings();
+  syncSettingsForm();
+  applySettings();
+}
+
+if (footer) {
+  footer.addEventListener("click", cycleFooter);
+  footer.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    cycleFooter();
+  });
 }
 
 // ------------------------------------------------------- contents

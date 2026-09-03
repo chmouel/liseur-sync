@@ -832,14 +832,66 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body{margin:0;height:100vh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
-  display:flex;align-items:center;gap:1rem;padding:.5rem .9rem;
-  border-bottom:1px solid var(--line);background:var(--surface);
+  display:flex;align-items:center;gap:.6rem;padding:.35rem .75rem;
+  border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--surface) 88%,transparent);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
   box-shadow:0 4px 18px rgba(0,0,0,.28);
   transition:opacity .18s ease,transform .18s ease}
-.reader-back{text-decoration:none;white-space:nowrap}
-.reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.reader-title span{opacity:.7;margin-left:.5rem}
-.reader-meta{display:flex;gap:.9rem;opacity:.75;font-size:.85rem;white-space:nowrap}
+.reader-back{display:inline-flex;align-items:center;gap:.3rem;
+  color:var(--muted);text-decoration:none;white-space:nowrap;
+  font-size:.9rem;padding:.25rem .45rem;border-radius:8px}
+.reader-back:hover{color:var(--ink);background:var(--surface-3)}
+.reader-back svg{flex:none}
+.reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:.95rem;letter-spacing:.005em}
+.reader-title strong{font-weight:600}
+.reader-actions{display:flex;align-items:center;gap:.35rem;flex:none}
+/* One shape for every control on the bar: TOC, Aa, full screen. */
+.reader-icon-btn{display:inline-flex;align-items:center;justify-content:center;
+  box-sizing:border-box;width:2rem;height:2rem;padding:0;
+  border:1px solid var(--line);border-radius:8px;background:transparent;
+  color:inherit;cursor:pointer;font:inherit;font-size:.85rem;font-weight:600;line-height:1}
+.reader-icon-btn:hover{background:var(--surface-3)}
+.reader-icon-btn:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
+.reader-icon-btn svg{display:block}
+@media (max-width:32em){
+  .reader-bar{gap:.4rem;padding:.4rem .55rem}
+  .reader-back-label{display:none}
+  .reader-back{padding:.25rem}
+}
+/* The reading footer: a quiet line in the bottom margin the engine
+   keeps under the text, the way the app draws it. Its height is that
+   margin (--reader-margin, set from the Margins setting), so it never
+   covers a line and never resizes the stage; it lives in the stage so
+   its edges are the text's; and it is not a stage surface, so a click
+   here changes the middle slot and turns nothing.
+   It is the one thing left on screen once the bars have gone. */
+.reader-footer{position:absolute;left:0;right:0;bottom:0;z-index:5;
+  height:var(--reader-margin,48px);box-sizing:border-box;
+  padding:0 var(--reader-margin,48px);
+  display:flex;align-items:center;justify-content:space-between;gap:.9rem;
+  font-size:min(.78rem,calc(var(--reader-margin,48px) * .7));
+  letter-spacing:.01em;line-height:1;
+  font-variant-numeric:tabular-nums;color:var(--reader-footer-fg,var(--ink));
+  opacity:.62;cursor:pointer;user-select:none;-webkit-user-select:none;
+  transition:opacity .18s ease}
+.reader-footer:hover{opacity:.9}
+.reader-footer:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;border-radius:4px}
+.reader-footer-edge{flex:none;white-space:nowrap}
+.reader-footer-mid{flex:1;min-width:0;text-align:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-footer-mid:empty{visibility:hidden}
+.reader-body[data-reader-flow="scrolled"] .reader-footer{display:none}
+/* The footer sits over the stage, so its ink follows the stage's
+   theme rather than the app's. */
+.reader-body[data-reader-theme="original"] .reader-footer{--reader-footer-fg:#1b1b1f}
+.reader-body[data-reader-theme="light"] .reader-footer{--reader-footer-fg:#1b1b1f}
+.reader-body[data-reader-theme="sepia"] .reader-footer{--reader-footer-fg:#5b4636}
+.reader-body[data-reader-theme="dark"] .reader-footer{--reader-footer-fg:#cfcfd4}
+.reader-body[data-reader-theme="tokyo-night"] .reader-footer{--reader-footer-fg:#c0caf5}
+.reader-body[data-reader-theme="rose-pine"] .reader-footer{--reader-footer-fg:#e0def4}
+.reader-body[data-reader-theme="black"] .reader-footer{--reader-footer-fg:#ababae}
 .reader-progress{position:fixed;top:0;left:0;right:0;z-index:70;
   height:3px;background:var(--surface-3)}
 #reader-progress-bar{height:100%;width:0;background:var(--primary);transition:width .2s}
@@ -860,7 +912,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body[data-reader-chrome="hidden"]:has(.reader-bar:focus-within) .reader-bar{
   opacity:1;transform:none;pointer-events:auto}
 @media (prefers-reduced-motion:reduce){
-  .reader-bar,.reader-turn{transition:none}
+  .reader-bar,.reader-turn,.reader-footer{transition:none}
 }
 .reader-help{background:var(--surface);color:inherit;border:1px solid var(--line);
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
@@ -874,13 +926,6 @@ button.linkish:hover, button.linkish:focus-visible {
   border-radius:4px;padding:.05rem .35rem;font-size:.8rem;font-family:inherit}
 .reader-help form{margin:.8rem 0 0;text-align:right}
 .reader-help-note{margin:.9rem 0 0;font-size:.85rem;opacity:.75;max-width:26rem}
-.reader-toc-button{border:1px solid var(--line);border-radius:6px;background:transparent;
-  color:inherit;cursor:pointer;padding:.1rem .55rem;font-size:1rem;line-height:1.4}
-.reader-toc-button:hover{background:var(--surface-3)}
-.reader-fullscreen-btn{border:1px solid var(--line);border-radius:6px;background:transparent;
-  color:inherit;cursor:pointer;padding:.1rem .55rem;font-size:1rem;line-height:1.4;
-  display:inline-flex;align-items:center}
-.reader-fullscreen-btn:hover{background:var(--surface-3)}
 .reader-toc{position:fixed;top:0;bottom:0;left:0;z-index:60;
   width:min(22rem,85vw);overflow-y:auto;padding:1rem 1.1rem;
   background:var(--surface);border-right:1px solid var(--line);
@@ -911,7 +956,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .ann-color-purple{border-left:4px solid #ba68c8}
 .ann-color-orange{border-left:4px solid #ffb74d}
 .reader-stage{flex:1;display:flex;min-height:0}
-#reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
+#reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden;position:relative}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;
   padding:0 .6rem;opacity:.35;color:inherit;transition:opacity .18s ease}
 .reader-turn:hover{opacity:.9}
@@ -920,11 +965,9 @@ button.linkish:hover, button.linkish:focus-visible {
    needed to open it and none to style it. The stage colour tracks the
    chosen theme so page gaps match the book instead of flashing white. */
 .reader-settings{position:relative}
-.reader-settings>summary{list-style:none;cursor:pointer;user-select:none;
-  border:1px solid var(--line);border-radius:6px;padding:.1rem .55rem;
-  font-weight:600;font-size:.9rem;line-height:1.4}
+.reader-settings>summary{list-style:none;user-select:none}
 .reader-settings>summary::-webkit-details-marker{display:none}
-.reader-settings>summary:hover,.reader-settings[open]>summary{background:var(--surface-3)}
+.reader-settings[open]>summary{background:var(--surface-3)}
 .reader-settings>form{position:absolute;right:0;top:calc(100% + .55rem);z-index:40;
   width:19rem;max-height:min(75vh,34rem);overflow:auto;
   background:var(--surface);border:1px solid var(--line);border-radius:10px;

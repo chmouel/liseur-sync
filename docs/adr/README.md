@@ -55,6 +55,7 @@ loose ends that must come before any of it, are in
 | [0028](0028-annotation-sync.md) | Annotations are mutable reading state, not history | Later | Accepted | Phase 1: the `annotations` table, second per-user counter and store methods in both backends, with the storetest suite |
 | [0029](0029-a-folder-somebody-can-read.md) | A folder somebody can read | MVP | Accepted; implemented | Creator grant in the folder's own transaction, guarded backfill migration 6, a Library page that names which situation it is in; amends [0027](0027-explicit-per-user-folder-access.md) |
 | [0030](0030-web-reader-reading-sessions.md) | The web reader counts its sittings | Later | Accepted; implemented | Visibility-bounded sittings, three-minute idle cap, ten-second minimum, no local persistence; amends [0007](0007-web-reader.md) |
+| [0031](0031-web-reader-footer.md) | The web reader's footer mirrors the app | Later | Accepted; implemented | Percent, middle slot, page in the engine's bottom margin; pages are engine locations, never fabricated; click cycles the middle; a browser preference; amends [0012](0012-reader-engine-foliate.md) |
 
 ## Convention
 

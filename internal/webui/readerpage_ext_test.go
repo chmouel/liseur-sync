@@ -166,3 +166,32 @@ func TestReaderPageOffersTheChromeControls(t *testing.T) {
 		}
 	}
 }
+
+// TestReaderPageCarriesTheReadingFooter: the figures moved out of the
+// top bar and into a footer the way the app draws them — percentage,
+// a middle slot, the page — and the footer's mode is a setting with a
+// home in the Aa panel as well as a click on the footer itself. The bar
+// must not keep a second copy.
+func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, want := range []string{
+		`id="reader-footer"`,
+		`id="reader-progress-text"`,
+		`id="reader-chapter"`,
+		`id="reader-page"`,
+		`name="footer" value="chapter"`,
+		`name="footer" value="time-chapter"`,
+		`name="footer" value="time-book"`,
+		`name="footer" value="empty"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the reader page is missing %q", want)
+		}
+	}
+	if strings.Contains(page, `class="reader-meta"`) {
+		t.Errorf("the reader bar still carries the meta block")
+	}
+}
