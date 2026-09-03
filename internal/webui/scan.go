@@ -97,7 +97,12 @@ func (s *Server) handleLibraryScan(
 // filesystem oracle a reader is never shown.
 func scanProblem(ctx context.Context, err error, admin bool) string {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "that scan is taking too long; it will finish in the background"
+		// The deadline cancels the pass rather than detaching it, so
+		// this must not promise that it carries on. A folder it did not
+		// finish is left exactly as it was, because a pass gives up
+		// before it writes anything; folders it did finish are saved.
+		return "that scan ran out of time and stopped; " +
+			"what it finished is saved, and the next pass picks up the rest"
 	}
 	if admin {
 		// A joined error is newline-separated, and this ends up in one
