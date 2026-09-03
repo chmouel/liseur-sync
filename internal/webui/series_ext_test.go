@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,8 +20,11 @@ import (
 // that only an admin writes the shared layer, and that the mutations are
 // CSRF-checked like every other web UI write.
 
-// postFragment is postForm that keeps the body, which every one of these
-// assertions is about: the assign dialog answers with itself.
+// postFragment is postForm as htmx sends it, and it keeps the body,
+// which most of these assertions are about: the assign dialog answers
+// with itself. The HX-Request header is what tells the server the
+// answer is going to be swapped into a page that already exists rather
+// than becoming one.
 func (f *booksFixture) postFragment(
 	t *testing.T, path string, cookie *http.Cookie, form url.Values,
 ) (*http.Response, string) {
@@ -28,6 +32,27 @@ func (f *booksFixture) postFragment(
 	req, _ := http.NewRequest(http.MethodPost, f.ts.URL+path,
 		strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	resp, err := noRedirectClient().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+// getFragment fetches the dialog the way htmx does. Plain f.get is the
+// reader with scripting off, and gets a whole page instead.
+func (f *booksFixture) getFragment(
+	t *testing.T, path string, cookie *http.Cookie,
+) (*http.Response, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, f.ts.URL+path, nil)
+	req.Header.Set("HX-Request", "true")
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
@@ -116,7 +141,7 @@ func TestSeriesShelfIsPerReader(t *testing.T) {
 	bob := f.login(t, "bob")
 
 	// Alice takes the book out of the series, for herself.
-	_, form := f.get(t, "/ui/books/"+bookID+"/series", f.cookie)
+	_, form := f.getFragment(t, "/ui/books/"+bookID+"/series", f.cookie)
 	csrf := csrfFrom(t, form)
 	resp, _ := f.postFragment(t, "/ui/books/"+bookID+"/series", f.cookie,
 		url.Values{"csrf": {csrf}, "name": {""}, "position": {""}})
@@ -151,7 +176,7 @@ func TestSeriesAssignAddsAndResets(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := seriesBook(t, f, "one", "Foundation", 1)
 
-	_, form := f.get(t, "/ui/books/"+bookID+"/series", f.cookie)
+	_, form := f.getFragment(t, "/ui/books/"+bookID+"/series", f.cookie)
 	if !strings.Contains(form, "Foundation") {
 		t.Fatalf("the dialog does not show what the folder said:\n%s", form)
 	}
@@ -196,12 +221,91 @@ func TestSeriesAssignAddsAndResets(t *testing.T) {
 	}
 }
 
+// TestSeriesDialogURLsResolveFromTheBookPage is the regression test for
+// a dialog whose links were built from its own route.
+//
+// The dialog is an htmx fragment served from /ui/books/{id}/series and
+// /ui/books/{id}/series/reset, one and two segments deeper than the
+// /ui/books/{id} page it is swapped into. A browser resolves the URLs
+// inside it against that page, so rendering them at the fragment's own
+// depth put one ../ too many in every one of them: the typeahead and
+// the save both climbed past the UI root and 404'd.
+func TestSeriesDialogURLsResolveFromTheBookPage(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := seriesBook(t, f, "one", "Foundation", 1)
+	page, err := url.Parse(f.ts.URL + "/ui/books/" + bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := map[string]bool{
+		"/ui/entities/series/suggest":           true,
+		"/ui/books/" + bookID + "/series":       true,
+		"/ui/books/" + bookID + "/series/reset": true,
+	}
+
+	// resolves states the browser's rule rather than matching a string:
+	// each URL is resolved against the page the fragment lives on, and
+	// has to land on a route this server answers.
+	resolves := func(what, body string) map[string]bool {
+		t.Helper()
+		seen := map[string]bool{}
+		for _, m := range seriesDialogURL.FindAllStringSubmatch(body, -1) {
+			ref, err := url.Parse(m[1])
+			if err != nil {
+				t.Fatalf("%s: unparseable URL %q", what, m[1])
+			}
+			got := page.ResolveReference(ref).Path
+			if !served[got] {
+				t.Errorf("%s: %q resolves to %s from the book page, "+
+					"which is not a route this server serves", what, m[1], got)
+			}
+			seen[got] = true
+		}
+		if len(seen) == 0 {
+			t.Fatalf("%s: the dialog asks the browser for nothing:\n%s", what, body)
+		}
+		return seen
+	}
+
+	_, form := f.getFragment(t, "/ui/books/"+bookID+"/series", f.cookie)
+	seen := resolves("the dialog", form)
+	if !seen["/ui/entities/series/suggest"] {
+		t.Error("the dialog offers no typeahead")
+	}
+	if !seen["/ui/books/"+bookID+"/series"] {
+		t.Error("the dialog has nowhere to save to")
+	}
+
+	// After a claim the reset form is there too, so the fragment carries
+	// every URL it ever renders.
+	csrf := csrfFrom(t, form)
+	_, after := f.postFragment(t, "/ui/books/"+bookID+"/series", f.cookie,
+		url.Values{"csrf": {csrf}, "name": {"The Robot Novels"}, "position": {"2"}})
+	if !resolves("the saved dialog", after)["/ui/books/"+bookID+"/series/reset"] {
+		t.Error("no reset offered after a claim")
+	}
+
+	// The refusal and the reset re-render the same fragment, and each
+	// used to get its prefix from its own deeper route.
+	_, bad := f.postFragment(t, "/ui/books/"+bookID+"/series", f.cookie,
+		url.Values{"csrf": {csrf}, "name": {"Foundation"}, "position": {"soon"}})
+	resolves("the refused dialog", bad)
+
+	_, reset := f.postFragment(t, "/ui/books/"+bookID+"/series/reset",
+		f.cookie, url.Values{"csrf": {csrf}})
+	resolves("the reset dialog", reset)
+}
+
+// seriesDialogURL pulls every URL the assign dialog asks a browser for:
+// the htmx attributes and the plain form actions behind them.
+var seriesDialogURL = regexp.MustCompile(`(?:hx-get|hx-post|action)="([^"]*)"`)
+
 // TestSeriesAssignRefusesBadPosition keeps the reader's typing on screen
 // rather than replacing the page with an error.
 func TestSeriesAssignRefusesBadPosition(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := seriesBook(t, f, "one", "Foundation", 1)
-	_, form := f.get(t, "/ui/books/"+bookID+"/series", f.cookie)
+	_, form := f.getFragment(t, "/ui/books/"+bookID+"/series", f.cookie)
 	csrf := csrfFrom(t, form)
 
 	resp, body := f.postFragment(t, "/ui/books/"+bookID+"/series", f.cookie,
@@ -219,7 +323,7 @@ func TestSeriesAssignRefusesBadPosition(t *testing.T) {
 func TestSeriesSharedLayerNeedsAdmin(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := seriesBook(t, f, "one", "Foundation", 1)
-	_, form := f.get(t, "/ui/books/"+bookID+"/series", f.cookie)
+	_, form := f.getFragment(t, "/ui/books/"+bookID+"/series", f.cookie)
 	csrf := csrfFrom(t, form)
 	// A non-admin is not even offered the choice.
 	if strings.Contains(form, `name="scope" value="shared"`) {
@@ -243,7 +347,7 @@ func TestSeriesSharedLayerNeedsAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	admin := f.login(t, "alice")
-	_, form = f.get(t, "/ui/books/"+bookID+"/series", admin)
+	_, form = f.getFragment(t, "/ui/books/"+bookID+"/series", admin)
 	if !strings.Contains(form, `name="scope" value="shared"`) {
 		t.Fatalf("an admin was not offered the shared layer:\n%s", form)
 	}
@@ -306,6 +410,95 @@ func TestSeriesSuggestOffersExistingNames(t *testing.T) {
 	_, html = f.get(t, "/ui/entities/series/suggest", f.cookie)
 	if strings.Contains(html, "Foundation") {
 		t.Error("an empty query listed the whole folder")
+	}
+}
+
+// TestSeriesFragmentsDeclareTheirType pins what the dialog and the
+// typeahead say they are.
+//
+// A page starts with a doctype and is sniffed correctly; a fragment is
+// a bare run of elements, and http.DetectContentType knows <div> but
+// not <option>. The typeahead's option list was therefore served as
+// text/plain, next to this UI's X-Content-Type-Options: nosniff, which
+// makes the declared type the last word.
+func TestSeriesFragmentsDeclareTheirType(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := seriesBook(t, f, "one", "Foundation", 1)
+
+	for _, path := range []string{
+		"/ui/entities/series/suggest?q=found",
+		// An empty answer is a fragment too, and sniffs to text/plain
+		// whatever it would have contained.
+		"/ui/entities/series/suggest?q=nothingmatchesthis",
+		"/ui/books/" + bookID + "/series",
+	} {
+		resp, _ := f.getFragment(t, path, f.cookie)
+		if got := resp.Header.Get("Content-Type"); got != "text/html; charset=utf-8" {
+			t.Errorf("%s: Content-Type %q, want text/html; charset=utf-8", path, got)
+		}
+	}
+}
+
+// TestSeriesAssignWorksWithoutScripting is the other half of the
+// dialog's promise.
+//
+// The placeholder on the book page is a plain link to the fragment
+// route, so a reader with scripting off lands on it directly. Answering
+// that with the bare fragment made an unstyled run of form controls the
+// whole document, and posting it did the same again. A request that did
+// not come from htmx gets a page: the book page with the dialog open,
+// and a redirect back to it once the claim is saved.
+func TestSeriesAssignWorksWithoutScripting(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := seriesBook(t, f, "one", "Foundation", 1)
+
+	// Following the link gives a whole page, not a fragment.
+	resp, page := f.get(t, "/ui/books/"+bookID+"/series", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("following the link: %d", resp.StatusCode)
+	}
+	if !strings.Contains(page, "<!doctype html>") {
+		t.Errorf("the link answered with a bare fragment:\n%s", page)
+	}
+	if !strings.Contains(page, `id="series-assign"`) {
+		t.Error("the page does not have the dialog open")
+	}
+	if strings.Contains(page, "Change this book's series") {
+		t.Error("the page shows the placeholder link as well as the dialog")
+	}
+
+	// Saving redirects back to the book page rather than answering with
+	// a fragment, so a reload does not save the same claim twice.
+	csrf := csrfFrom(t, page)
+	resp = f.postForm(t, "/ui/books/"+bookID+"/series", f.cookie,
+		url.Values{"csrf": {csrf}, "name": {"The Robot Novels"}, "position": {"2"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("saving without scripting: %d, want 303", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	here, err := url.Parse(f.ts.URL + "/ui/books/" + bookID + "/series")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("unparseable Location %q", loc)
+	}
+	if got := here.ResolveReference(ref).Path; got != "/ui/books/"+bookID {
+		t.Errorf("Location %q lands on %s, want the book page", loc, got)
+	}
+
+	// And the claim was really made.
+	_, book := f.get(t, "/ui/books/"+bookID, f.cookie)
+	if !strings.Contains(book, "The Robot Novels") {
+		t.Error("the book page does not show the claim saved without scripting")
+	}
+
+	// A refusal keeps the reader on a page, with the complaint on it.
+	resp = f.postForm(t, "/ui/books/"+bookID+"/series", f.cookie,
+		url.Values{"csrf": {csrf}, "name": {"Foundation"}, "position": {"soon"}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a position that is not a number: %d, want 400", resp.StatusCode)
 	}
 }
 
