@@ -299,6 +299,11 @@ main { grid-area: main; padding: 1.4rem 1.5rem 4rem; min-width: 0; }
 	margin: 0 0 var(--gap);
 	box-shadow: var(--shadow-sm);
 }
+.cardhead {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: 1rem; margin: 0 0 1rem;
+}
+.cardhead h2 { margin: 0; }
 details.card > summary {
 	cursor: pointer; font-weight: 600; color: var(--ink);
 	list-style: none; display: flex; align-items: center; gap: .5rem;
@@ -583,6 +588,7 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 }
 .libraryhead h1 { font-size: 2rem; line-height: 1.1; margin: 0; }
 .libraryhead .eyebrow { margin: 0 0 .15rem; }
+.librarycontrols { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .folderpick { margin: 0; }
 .folderpick select { min-width: min(18rem, 52vw); }
 .librarytools {
@@ -758,6 +764,7 @@ button.linkish:hover, button.linkish:focus-visible {
 
 @media (max-width: 38em) {
 	.libraryhead { align-items: flex-start; flex-direction: column; }
+	.librarycontrols { width: 100%; justify-content: space-between; }
 	.folderpick, .folderpick select { width: 100%; }
 	.librarytools { align-items: stretch; }
 	.librarytools form:first-child, .librarytools input[type="search"] { width: 100%; }
@@ -926,6 +933,36 @@ button.linkish:hover, button.linkish:focus-visible {
 .htmx-indicator { opacity: 0 }
 .htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
 .htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in }
+
+/* The scan buttons. htmx puts htmx-request on the element that made the
+   request — the form — for as long as the pass runs, which is what the
+   icon and the spinner hang off. There is no hx-indicator: naming one
+   would move the class onto that element instead, and the icon inside
+   the button would never see it. */
+.scanform { margin: 0; display: inline-flex; }
+.scanbtn {
+	display: inline-flex; align-items: center; gap: .35rem;
+	cursor: pointer;
+}
+.scanbtn:disabled { opacity: .6; cursor: not-allowed; }
+.scanicon {
+	display: inline-block; font-size: 1.05em; line-height: 1;
+	transition: transform 150ms ease;
+}
+.htmx-request .scanicon {
+	animation: spin 800ms linear infinite;
+}
+@keyframes spin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+.scanspinner {
+	display: none; width: .75rem; height: .75rem;
+	border: 2px solid currentColor; border-right-color: transparent;
+	border-radius: 50%;
+	animation: spin 600ms linear infinite;
+}
+.htmx-request .scanspinner { display: inline-block; }
 
 /* ------------------------------------------------------------- library */
 

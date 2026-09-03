@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -124,10 +126,84 @@ func (s *Server) handleAdminScanFolder(
 		return
 	}
 	s.Watching.Scan(folderID)
-	s.renderAdminFolders(w, r, a, u, Flash{
+	s.adminFoldersDone(w, r, a, u, Flash{
 		Notice: "Reading " + folder.Name +
 			" again. Any change appears as the pass finishes.",
 	})
+}
+
+// handleAdminScanAllFolders runs a pass over every watched folder and
+// waits for it, which is what makes the button worth pressing: the page
+// that comes back is the one the passes produced.
+//
+// It is bounded by scanBudget for the same reason the library button is
+// — a pass holds the watcher's reconcile lock — and it does not stop at
+// the first folder that fails, because one unreadable mount is not a
+// reason to leave every other folder unscanned.
+func (s *Server) handleAdminScanAllFolders(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
+) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	logAdminAction(r, u, "scan-all-folders", "", nil)
+	if s.Watching == nil {
+		s.adminFoldersDone(w, r, a, u, Flash{
+			Error: "this server is running without a folder watcher",
+		})
+		return
+	}
+	folders, err := s.allFolders(r.Context())
+	if err != nil {
+		s.adminFoldersDone(w, r, a, u, Flash{
+			Error: "could not list folders: " + err.Error(),
+		})
+		return
+	}
+	if len(folders) == 0 {
+		s.adminFoldersDone(w, r, a, u, Flash{Notice: "No watched folders to scan."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), scanBudget)
+	defer cancel()
+	res, err := s.Watching.ScanFolders(ctx, folders)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "scan-all failed", "actor_id", u.ID, "error", err)
+		s.adminFoldersDone(w, r, a, u, Flash{Error: scanProblem(ctx, err, true)})
+		return
+	}
+	s.adminFoldersDone(w, r, a, u, Flash{
+		Notice: scanNotice(res, "All folders are up to date."),
+	})
+}
+
+// adminFoldersDone finishes a folder mutation, for htmx and for a plain
+// form post.
+//
+// The two need different spellings of the same destination. A 303's
+// Location is resolved by the browser against the request URL, which is
+// what settingsRedirect writes; htmx assigns HX-Redirect to
+// location.href, which is resolved against the page the reader is on.
+// The admin views always live at /ui/settings, one segment under /ui/,
+// so the page-relative spelling is the bare href — and being relative is
+// what keeps it right behind a proxy serving this UI under a subpath.
+//
+// A flash carrying a one-time secret never travels in a URL, so it falls
+// through to being rendered in place, exactly as settingsRedirect does.
+func (s *Server) adminFoldersDone(
+	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash,
+) {
+	if isHTMXRequest(r) && flash.Secret == "" {
+		target := settingsAdminHref("", settingsAdminFolders)
+		if q := flashQuery(flash); q != "" {
+			target += "&" + q
+		}
+		w.Header().Set("HX-Redirect", target)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	s.renderAdminFolders(w, r, a, u, flash)
 }
 
 // handleAdminDeleteFolder forgets a folder and everything catalogued

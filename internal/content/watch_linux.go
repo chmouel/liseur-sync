@@ -4,6 +4,8 @@ package content
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -54,6 +56,7 @@ type Watcher struct {
 	notify      *fsnotify.Watcher
 	events      chan string
 	mu          sync.Mutex
+	reconcileMu sync.Mutex
 	watched     map[string]store.Folder
 	watchedDirs map[string]string
 }
@@ -140,7 +143,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			}
 			for _, folder := range folders {
 				w.Add(ctx, folder)
-				w.reconcile(ctx, folder)
+				_, _ = w.reconcile(ctx, folder)
 			}
 		}
 	}
@@ -156,7 +159,7 @@ func (w *Watcher) Add(ctx context.Context, folder store.Folder) {
 
 	w.watchTree(folder)
 	if !already {
-		w.reconcile(ctx, folder)
+		_, _ = w.reconcile(ctx, folder)
 	}
 }
 
@@ -305,22 +308,66 @@ func (w *Watcher) reconcileOne(ctx context.Context, folderID string) {
 	if !ok {
 		return
 	}
-	w.reconcile(ctx, folder)
+	_, _ = w.reconcile(ctx, folder)
+}
+
+// ScanFolders runs a pass over each of these folders in turn and waits
+// for all of them, returning what they changed between them.
+//
+// One folder that fails does not stop the rest: an unreachable mount is
+// exactly the situation somebody presses a scan button in, and leaving
+// every other folder unscanned because of it would be the wrong answer.
+// The failures come back joined, so the caller can still say so.
+func (w *Watcher) ScanFolders(
+	ctx context.Context, folders []store.Folder,
+) (store.ReconcileResult, error) {
+	var total store.ReconcileResult
+	var failures []error
+	for _, folder := range folders {
+		if err := ctx.Err(); err != nil {
+			return total, errors.Join(append(failures, err)...)
+		}
+		res, err := w.reconcile(ctx, folder)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", folder.Name, err))
+			continue
+		}
+		total.Added += res.Added
+		total.Updated += res.Updated
+		total.Replaced += res.Replaced
+		total.Missing += res.Missing
+		total.Returned += res.Returned
+		total.Purged += res.Purged
+		total.Rekeyed += res.Rekeyed
+	}
+	return total, errors.Join(failures...)
+}
+
+// ScanAll runs a pass over all watched folders synchronously and waits for all
+// passes to complete.
+func (w *Watcher) ScanAll(ctx context.Context) (store.ReconcileResult, error) {
+	folders, err := w.allFolders(ctx)
+	if err != nil {
+		return store.ReconcileResult{}, err
+	}
+	return w.ScanFolders(ctx, folders)
 }
 
 // reconcile runs one pass and logs what changed. A pass that changed
 // nothing is logged at debug, because the common case is a folder nobody
 // touched and a line per folder per half hour is noise.
-func (w *Watcher) reconcile(ctx context.Context, folder store.Folder) {
+func (w *Watcher) reconcile(ctx context.Context, folder store.Folder) (store.ReconcileResult, error) {
+	w.reconcileMu.Lock()
+	defer w.reconcileMu.Unlock()
 	result, err := w.reconciler.Reconcile(ctx, folder)
 	if err != nil {
 		w.log.Warn("folder pass failed",
 			"folder", folder.ID, "name", folder.Name, "error", err)
-		return
+		return store.ReconcileResult{}, err
 	}
 	if !result.Changed() {
 		w.log.Debug("folder unchanged", "folder", folder.ID, "name", folder.Name)
-		return
+		return result, nil
 	}
 	w.log.Info("folder reconciled",
 		"folder", folder.ID, "name", folder.Name,
@@ -328,6 +375,7 @@ func (w *Watcher) reconcile(ctx context.Context, folder store.Folder) {
 		"replaced", result.Replaced, "missing", result.Missing,
 		"returned", result.Returned,
 		"purged", result.Purged, "rekeyed", result.Rekeyed)
+	return result, nil
 }
 
 func (w *Watcher) allFolders(ctx context.Context) ([]store.Folder, error) {
