@@ -640,7 +640,43 @@ func (s *Server) handleSeriesAssignForm(
 		return
 	}
 	v.Problem = r.URL.Query().Get("problem")
-	seriesAssignForm(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
+	if !isHTMXRequest(r) {
+		// The placeholder's plain link, followed with scripting off.
+		// Answering it with the bare fragment would make an unstyled
+		// run of form controls the whole document, so the dialog is
+		// rendered into the book page it belongs to instead.
+		s.bookPageWithDialog(w, r, a, u, v)
+		return
+	}
+	fragmentHTML(w)
+	seriesAssignForm(bookPagePrefix(v.BookID), csrfFor(a), v).Render(r.Context(), w)
+}
+
+// bookPageWithDialog draws the whole book page with the series dialog
+// open in it, which is what these routes owe a request that did not
+// come from htmx: a page, not a piece of one.
+//
+// The prefix is the request's own, not the book page's, because this is
+// a whole document served at the fragment's URL — that is what the
+// address bar will say, and every link in the page is resolved against
+// it. The dialog inside inherits the same prefix for the same reason,
+// which is the opposite of what it needs when it is swapped into a page
+// already at /ui/books/{id}.
+func (s *Server) bookPageWithDialog(
+	w http.ResponseWriter, r *http.Request,
+	a store.AuthSession, u *store.User, v SeriesAssignView,
+) {
+	page, ok := s.bookView(r, u, v.BookID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	page.SeriesAssign = &v
+	if v.Problem != "" {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	bookPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), page).
+		Render(r.Context(), w)
 }
 
 func (s *Server) assignView(
@@ -723,7 +759,7 @@ func (s *Server) handleSeriesAssign(
 		s.assignProblem(w, r, u, a, bookID, "That could not be saved.")
 		return
 	}
-	s.renderAssign(w, r, u, a, bookID)
+	s.renderAssign(w, r, u, a, bookID, "series saved")
 }
 
 // handleSeriesReset drops a claim so the book goes back to what the
@@ -752,19 +788,30 @@ func (s *Server) handleSeriesReset(
 		s.assignProblem(w, r, u, a, bookID, "That could not be undone.")
 		return
 	}
-	s.renderAssign(w, r, u, a, bookID)
+	s.renderAssign(w, r, u, a, bookID, "back to what the folder says")
 }
 
 func (s *Server) renderAssign(
 	w http.ResponseWriter, r *http.Request,
-	u *store.User, a store.AuthSession, bookID string,
+	u *store.User, a store.AuthSession, bookID, notice string,
 ) {
 	v, ok := s.assignView(r, u, bookID)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	seriesAssignForm(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
+	if !isHTMXRequest(r) {
+		// A plain form post, so a plain redirect back to the book page:
+		// the reader gets a whole page, and reloading it does not save
+		// the same claim twice.
+		redirectRel(w,
+			relPrefix(r.URL.Path)+"books/"+url.PathEscape(bookID)+
+				"?notice="+url.QueryEscape(notice),
+			http.StatusSeeOther)
+		return
+	}
+	fragmentHTML(w)
+	seriesAssignForm(bookPagePrefix(bookID), csrfFor(a), v).Render(r.Context(), w)
 }
 
 // assignProblem re-renders the dialog carrying its complaint, rather
@@ -780,8 +827,13 @@ func (s *Server) assignProblem(
 		return
 	}
 	v.Problem = problem
+	if !isHTMXRequest(r) {
+		s.bookPageWithDialog(w, r, a, u, v)
+		return
+	}
+	fragmentHTML(w)
 	w.WriteHeader(http.StatusBadRequest)
-	seriesAssignForm(relPrefix(r.URL.Path), csrfFor(a), v).Render(r.Context(), w)
+	seriesAssignForm(bookPagePrefix(bookID), csrfFor(a), v).Render(r.Context(), w)
 }
 
 // handleSeriesSuggest is the typeahead behind the name field. It offers
@@ -818,6 +870,7 @@ func (s *Server) handleSeriesSuggest(
 			}
 		}
 	}
+	fragmentHTML(w)
 	seriesSuggestions(out).Render(r.Context(), w)
 }
 
