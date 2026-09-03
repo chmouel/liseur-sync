@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -162,11 +161,11 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	if rel, err := s.St.CatalogBookRelationsForBooks(
 		r.Context(), readerID(u), []string{book.ID},
 	); err == nil {
-		v.Authors, v.Byline = contributorChips(book.FolderID, rel.Contributors[book.ID])
+		v.Authors, v.Byline = contributorChips(rel.Contributors[book.ID])
 		for _, ser := range rel.Series[book.ID] {
 			v.Series = append(v.Series, ChipLink{
 				Name: ser.Name,
-				URL:  entityURL(book.FolderID, "series", ser.SeriesID),
+				URL:  uiEntity("series", ser.SeriesID),
 			})
 		}
 	}
@@ -183,7 +182,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 			v.SeriesNow = append(v.SeriesNow, BookSeriesLine{
 				Name:     ser.Name,
 				Position: formatSeriesPosition(ser.Position),
-				URL:      entityURL(book.FolderID, "series", ser.SeriesID),
+				URL:      uiEntity("series", ser.SeriesID),
 			})
 		}
 		if layers.Source != store.SeriesSourceFolder {
@@ -193,17 +192,11 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	return v, true
 }
 
-// entityURL is the page listing everything else that claims an entity.
-func entityURL(folderID, kind, entityID string) string {
-	return "folders/" + url.PathEscape(folderID) + "/" + kind + "/" +
-		url.PathEscape(entityID)
-}
-
 // contributorChips returns the links and the byline. The byline names
 // authors only when the file said who they are, and falls back to every
 // contributor when it did not: a book credited solely to a translator
 // should still say so rather than say nothing.
-func contributorChips(folderID string, rows []store.BookContributor) ([]ChipLink, string) {
+func contributorChips(rows []store.BookContributor) ([]ChipLink, string) {
 	chips := make([]ChipLink, 0, len(rows))
 	var authors []string
 	var everyone []string
@@ -217,7 +210,7 @@ func contributorChips(folderID string, rows []store.BookContributor) ([]ChipLink
 		if _, seen := seenContributors[key]; !seen {
 			chips = append(chips, ChipLink{
 				Name: c.Name,
-				URL:  entityURL(folderID, "contributors", c.ContributorID),
+				URL:  uiEntity("contributors", c.ContributorID),
 			})
 			everyone = append(everyone, c.Name)
 			seenContributors[key] = struct{}{}
