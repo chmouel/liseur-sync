@@ -94,12 +94,14 @@ func (s *Server) generateSecret() (string, error) {
 type FolderWatcher interface {
 	Add(ctx context.Context, folder store.Folder)
 	Remove(folderID string)
-	// Scan asks for a pass over one folder now. It returns before the
-	// pass finishes: reading a large folder takes longer than a request
-	// should.
-	Scan(folderID string)
-	// ScanFolders runs a pass over the specified folders synchronously and
-	// returns the aggregated reconcile results.
+	// ScanFolders runs a pass over each of these folders and waits for
+	// all of them, returning what they changed between them.
+	//
+	// Every scan this UI offers waits. A pass asked for and not waited
+	// on cannot say what it found, and "a pass was asked for" is not an
+	// answer to the question the button is pressed with. The wait is
+	// bounded by the caller (scanBudget), which is what makes it safe to
+	// do from a request.
 	ScanFolders(ctx context.Context, folders []store.Folder) (store.ReconcileResult, error)
 }
 
