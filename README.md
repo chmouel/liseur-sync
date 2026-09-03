@@ -1,143 +1,158 @@
 # liseur-sync
 
-A self-hosted server for book and reading-progress sync.
+Self-hosted server for book libraries and reading-position synchronization.
 
-[Liseur](https://github.com/chmouel/liseur)'s companion server. It also
-works with stock KOReader through a kosync-compatible API.
+`liseur-sync` is the companion server for [Liseur](https://github.com/chmouel/liseur). It also provides a kosync-compatible API for KOReader.
 
-It is a single Go binary with SQLite by default, optional PostgreSQL,
-and multi-user support.
+The server is a single Go binary with SQLite by default, optional PostgreSQL, and multi-user support.
 
-![The dashboard](docs/screenshots/dashboard.png)
+![Dashboard](docs/screenshots/dashboard.png)
 
-![The reader-first library](docs/screenshots/library.png)
+![Library](docs/screenshots/library.png)
 
-## Why liseur-sync
+## Interfaces
 
-Komga and calibre-web both cover part of the job.
+`liseur-sync` provides:
 
-Komga has full Readium locator sync and a clean REST API. Its
-filesystem-first design means clients cannot upload or delete books; you
-put books in library folders by other means. Its JVM footprint is also
-large for a Raspberry Pi or small VPS (about 600 MB on disk).
+* reading-position synchronization using full locators
+* a native REST API
+* a kosync-compatible API for KOReader
+* OPDS 1.2
+* EPUB library indexing and search
+* EPUB upload and deletion for writable folders
+* a browser EPUB reader
+* per-user reading statistics and sessions
+* per-user series claims
 
-calibre-web has a rich web UI and can delete books. Its Kobo-protocol
-sync carries percentages rather than exact reading positions. Upload and
-delete use browser forms behind sessions and CSRF tokens, which makes
-them a poor fit for another client.
+API documentation is available in [docs/openapi.yaml](docs/openapi.yaml).
 
-Neither server syncs a book opened outside its catalog, such as one from
-a file manager. Neither offers personal series claims or an append-only
-sync log for deterministic conflict resolution.
+Client implementation notes and the synchronization protocol are documented in [docs/integrating.md](docs/integrating.md).
 
-liseur-sync combines those missing pieces: full-locator sync, including
-books resolved by hash; REST API upload and delete; personal series
-claims; and an append-only sync log. It stays small enough for a
-Raspberry Pi, at about 30 MB on disk.
+## Reading synchronization
 
-| Capability         | Komga            | calibre-web       | liseur-sync      |
-|--------------------|------------------|-------------------|------------------|
-| Catalog and search | REST API         | OPDS              | REST API + OPDS  |
-| File download      | REST API         | OPDS              | REST API         |
-| Position sync      | Full locators    | Percentages only  | Full locators    |
-| Book upload        | Not possible     | Web UI form only  | REST API         |
-| Book delete        | Not possible     | Web UI form only  | REST API         |
-| Series management  | Read-only        | None              | Personal claims  |
-| Footprint          | ~600 MB (JVM)    | ~200 MB (Python)  | ~30 MB (Go)      |
+Reading-position updates are stored as an append-only log rather than replacing the previous position.
 
-## Features
+This allows the server to resolve updates from multiple devices without an older client blindly replacing newer state. The same history is used to derive reading sessions and statistics.
 
-### Reading progress sync
+Book identity is independent of its filesystem path. Clients can resolve books using content and metadata identifiers, including hashes, before exchanging reading state.
 
-`liseur-sync` records each user's reading positions from every device.
+## Library
 
-It keeps every update, not only the latest one. A stale device cannot
-overwrite newer progress, and the history drives reading sessions and
-statistics.
+`liseur-sync` can index either:
 
-It matches books by content rather than filename, so a rename, move, or
-re-encoded EPUB can retain its reading position.
+* a directory containing EPUB files
+* a Calibre library using `metadata.db`
 
-### Watched folders and OPDS
+Plain directories derive series information from their directory structure. Calibre libraries use `metadata.db` as the catalog source.
 
-Point `liseur-sync` at a directory of EPUBs or a Calibre library. It
-watches the folder, reads metadata, and serves books through the web UI,
-native catalog API, and OPDS 1.2.
+Catalogs are exposed through the web UI, REST API, and OPDS.
 
-Folders are read-only until an administrator enables uploads. Books stay
-where they are: the server does not modify, rename, or delete files below
-the folder root. An upload-enabled folder accepts a new file or Calibre
-entry from the library page or a client with the `library-upload` scope.
-The cover cache is the only other location where the server writes files.
+![Book details](docs/screenshots/book.png)
 
+### Folder access
+
+Folders are granted to accounts individually. Adding a folder does not automatically make it visible to every account.
+
+From the CLI:
+
+```sh
+liseur-sync admin add-folder -assign alice Shelf /srv/books
 ```
+
+Folders can also be configured under:
+
+```text
+Settings > Administration > Folders
+```
+
+Account folder grants are managed under:
+
+```text
+Settings > Administration > Users
+```
+
+### Writable folders
+
+Folders are read-only by default.
+
+Uploads and deletions are only allowed for folders explicitly configured to accept uploads:
+
+```sh
 liseur-sync admin folder-uploads <folder-id> on
 ```
 
-Browse by series, contributor, or tag, and search within the selected
-folder. In a plain folder, subdirectories form the series structure. In
-a Calibre library, `metadata.db` is the catalog.
+For API clients:
 
-![Book details and reading status](docs/screenshots/book.png)
+* `library-upload` permits adding books to writable folders
+* `library-delete` permits removing books from writable folders
+
+These are separate token scopes.
+
+Deleting through the web UI requires an administrator account.
+
+A folder that does not accept uploads remains read-only: the server indexes its contents but does not add or remove files from it.
+
+See:
+
+* [ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)
+* [ADR-0025](docs/adr/0025-deleting-a-book.md)
 
 ## Web reader
 
-![The reader](docs/screenshots/reader.png)
-
 `liseur-sync` includes a browser-based EPUB reader.
 
-The bar and the page-turn arrows step aside while you read and come
-back when you reach for them: move the pointer to the top or the sides,
-tap the middle of the page, or press `z`. Tapping or clicking the left
-and right edges of the page turns it, which is how a phone reads
-without any chrome at all. "Auto-hide bars" under Aa turns this off.
+![Reader](docs/screenshots/reader.png)
 
-What stays is a quiet line under the text, the way the Android app
-draws it: the percentage on the left, the page on the right, and in
-the middle the chapter's name or the time left. Clicking the line
-cycles what the middle shows. Pages are the engine's own fixed slices
-of the book, so the number does not change with the font size.
+The reader uses the same synchronization API as other clients, so reading state is shared with Liseur, KOReader, and other compatible clients.
 
-The browser unpacks and renders EPUBs without exposing publisher content
-through application routes. Scripts inside EPUBs do not run.
+EPUB content is unpacked and rendered without exposing publisher files through normal application routes. Scripts embedded in EPUBs are not executed.
 
-The reader syncs through the same API as other clients. Switch between
-it, Liseur, KOReader, and other apps without losing your place.
+The reader design and security model are documented in [ADR-0007](docs/adr/0007-web-reader.md), including support for running the reader on a separate hostname.
 
-See [ADR-0007](docs/adr/0007-web-reader.md) for the design and security
-model, including the optional separate hostname for the reader.
+## Installation
 
-## Quick start
+### Install script
 
-The installer detects Docker or configures rootless Podman with a systemd
-user service. It then asks you to choose a database, starts the server,
-and creates the first account.
+The installer supports Docker and rootless Podman.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/chmouel/liseur-sync/main/scripts/install.sh | bash
 ```
 
-If you prefer not to pipe a remote script directly into a shell, clone
-the repository and run:
+Alternatively:
 
 ```sh
+git clone https://github.com/chmouel/liseur-sync.git
+cd liseur-sync
 scripts/install.sh
 ```
 
-You can install a specific release with:
+To install a specific version:
 
 ```sh
 LISEUR_VERSION=vX.Y.Z scripts/install.sh
 ```
 
+The installer configures the database, starts the server, and creates the initial account.
+
 ### Docker Compose
 
-Pick a database profile:
+SQLite:
 
 ```sh
-docker compose --profile sqlite up -d        # SQLite
-docker compose --profile postgres up -d      # bundled PostgreSQL
-docker compose --profile external up -d      # existing PostgreSQL server
+docker compose --profile sqlite up -d
+```
+
+Bundled PostgreSQL:
+
+```sh
+docker compose --profile postgres up -d
+```
+
+External PostgreSQL:
+
+```sh
+docker compose --profile external up -d
 ```
 
 ### Build from source
@@ -147,51 +162,40 @@ go build ./cmd/liseur-sync
 ./liseur-sync serve
 ```
 
-Once the server is running, open `/ui/`.
+## Initial setup
 
-When no accounts exist, the setup page opens automatically. The first
-account becomes the administrator.
+The web interface is available at:
 
-Add a folder from Settings > Administration > Folders, or from a shell:
-
-```sh
-liseur-sync admin add-folder -assign alice Shelf /srv/books
+```text
+/ui/
 ```
 
-A folder is only in somebody's library when they have been granted it.
-Adding one from the panel grants it to you; from the shell, `-assign`
-says who it is for. Other accounts are granted folders from their page
-under Settings > Administration > Users.
+When the database contains no accounts, the setup page creates the initial administrator account.
 
-Use Settings or the `admin` CLI to manage users, folders, API tokens, and
-reader pairing.
+Users, folders, API tokens, folder grants, and reader pairing can be managed from the administration interface or with the `admin` CLI.
 
-![The administration section](docs/screenshots/admin.png)
-
-See [docs/deployment.md](docs/deployment.md) for KOReader pairing, TLS,
-watched folders, Calibre integration, and backups.
+Deployment details, including TLS, KOReader pairing, Calibre integration, watched folders, and backups, are documented in [docs/deployment.md](docs/deployment.md).
 
 ## Client integration
 
-[Liseur](https://github.com/chmouel/liseur) is the reference client.
+[Liseur](https://github.com/chmouel/liseur) uses the native API.
 
-If you are building another client,
-[docs/integrating.md](docs/integrating.md) covers the synchronization
-model and protocol.
+Protocol and synchronization details:
 
-Full API spec: [docs/openapi.yaml](docs/openapi.yaml).
+[docs/integrating.md](docs/integrating.md)
+
+OpenAPI specification:
+
+[docs/openapi.yaml](docs/openapi.yaml)
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for reporting security issues.
+Security issues should be reported according to [SECURITY.md](SECURITY.md).
 
-Please do not report security vulnerabilities through public GitHub
-issues.
+Do not report security vulnerabilities through public GitHub issues.
 
 ## License
 
 MIT.
 
-The screenshots use public-domain editions from [Standard
-Ebooks](https://standardebooks.org) and are generated by
-`scripts/screenshots.sh`.
+The screenshots use public-domain editions from [Standard Ebooks](https://standardebooks.org) and are generated by `scripts/screenshots.sh`.
