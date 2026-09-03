@@ -41,6 +41,7 @@ if (cfg.detached) {
   history.replaceState(null, "", location.pathname + location.search);
 }
 const stage = document.getElementById("reader-view");
+const stageArea = stage.closest(".reader-stage") || stage;
 const status = document.getElementById("reader-status");
 const progressBar = document.getElementById("reader-progress-bar");
 const progressText = document.getElementById("reader-progress-text");
@@ -1354,7 +1355,9 @@ function bookHasSelection() {
 
 let stageTouchAt = 0;
 let stageGesture = newGesture();
-stage.addEventListener(
+const stageSurface = (target) =>
+  target === stageArea || target === stage || target === view;
+stageArea.addEventListener(
   "pointerdown",
   (e) => {
     if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
@@ -1375,9 +1378,9 @@ const spoilStage = (e) => {
   if (stageGesture.id === null || stageGesture.id === e.pointerId)
     stageGesture.spoiled = true;
 };
-stage.addEventListener("pointercancel", spoilStage, { passive: true });
-stage.addEventListener("lostpointercapture", spoilStage, { passive: true });
-stage.addEventListener("pointerup", (e) => {
+stageArea.addEventListener("pointercancel", spoilStage, { passive: true });
+stageArea.addEventListener("lostpointercapture", spoilStage, { passive: true });
+stageArea.addEventListener("pointerup", (e) => {
   if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
     stageGesture.spoiled = true;
     return;
@@ -1398,13 +1401,13 @@ stage.addEventListener("pointerup", (e) => {
   }
   if (!clean) return;
   if (stageGesture.hadSelection || bookHasSelection()) return;
-  if (e.target !== stage && e.target !== view) return;
+  if (!stageSurface(e.target)) return;
   tapAt(e.clientX, e.clientY);
 });
-stage.addEventListener("click", (e) => {
+stageArea.addEventListener("click", (e) => {
   if (!view) return;
   if (tocPanel && !tocPanel.hidden) return; // the click puts the drawer away
-  if (e.target !== stage && e.target !== view) return;
+  if (!stageSurface(e.target)) return;
   if (Date.now() - stageTouchAt < TOUCH_CLICK_MS) return; // already handled
   if (stageGesture.hadSelection || bookHasSelection()) return;
   tapAt(e.clientX, e.clientY);
