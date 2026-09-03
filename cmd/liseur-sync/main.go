@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -314,6 +315,11 @@ func cmdAdmin(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
+	// scan-folder needs the reconciler, which lives in internal/content
+	// and is Linux-only; internal/admin is not, so it is wired here.
+	if rest[0] == "scan-folder" {
+		return cmdScanFolder(cfg, st, rest[1:])
+	}
 	if err := admin.Run(st, rest); err != nil {
 		var usage admin.UsageError
 		if errors.As(err, &usage) {
@@ -321,5 +327,67 @@ func cmdAdmin(args []string) error {
 		}
 		return err
 	}
+	return nil
+}
+
+// cmdScanFolder runs the watcher's pass over one folder on demand. It is
+// the same code path, so it can do nothing the watcher could not, and it
+// is the only way to reconcile from a shell or a cron job (the other
+// trigger is the web UI's scan button).
+func cmdScanFolder(cfg config.Config, st store.Store, args []string) error {
+	if len(args) != 1 {
+		return usageExit{text: "usage: liseur-sync admin scan-folder <name|folder-id>\n" + admin.Usage, code: 2}
+	}
+	ctx := context.Background()
+	// An id wins outright; a name is accepted only when exactly one
+	// folder bears it, because names are not unique and a pass over the
+	// wrong folder is a real write.
+	var byID *store.Folder
+	var byName []store.Folder
+	cursor := ""
+	for {
+		page, err := st.ListFolders(ctx, "", cursor, 200)
+		if err != nil {
+			return fmt.Errorf("list folders: %w", err)
+		}
+		for i := range page {
+			switch args[0] {
+			case page[i].ID:
+				byID = &page[i]
+			case page[i].Name:
+				byName = append(byName, page[i])
+			}
+		}
+		if len(page) < 200 {
+			break
+		}
+		cursor = store.FolderCursor(page[len(page)-1])
+	}
+	folder := byID
+	switch {
+	case folder != nil:
+	case len(byName) == 1:
+		folder = &byName[0]
+	case len(byName) > 1:
+		ids := make([]string, 0, len(byName))
+		for _, f := range byName {
+			ids = append(ids, f.ID)
+		}
+		return fmt.Errorf("%d folders are named %q; use an id: %s",
+			len(byName), args[0], strings.Join(ids, " "))
+	default:
+		return fmt.Errorf("no folder named %q", args[0])
+	}
+	reconciler := content.NewReconciler(st, content.ScanLimits{
+		MaxFiles: cfg.Content.ScanMaxFiles,
+		MaxDepth: cfg.Content.ScanMaxDepth,
+	}, cfg.EPUBLimits(), slog.Default())
+	result, err := reconciler.Reconcile(ctx, *folder)
+	if err != nil {
+		return fmt.Errorf("reconcile %s: %w", folder.Name, err)
+	}
+	fmt.Printf("folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
+		folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
+		result.Missing, result.Returned, result.Purged, result.Rekeyed)
 	return nil
 }

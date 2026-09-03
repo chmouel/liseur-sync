@@ -127,6 +127,9 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 account; without it nobody can read it
                                 and the command says so
   list-folders                  list the folders this server watches
+  scan-folder <name|folder-id>  run one reconcile pass over a folder now,
+                                the same pass the watcher runs, and print
+                                what it changed (Linux only)
   folder-uploads <folder-id> <on|off>
                                 let books be uploaded into a folder, or
                                 stop letting them. Off until asked for:
