@@ -94,6 +94,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 								<button type="submit" class="scanbtn">
 									<span class="scanicon" aria-hidden="true">↻</span>
 									<span>Scan now</span>
+									<span class="scanspinner" aria-hidden="true"></span>
 								</button>
 							</form>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/delete" }

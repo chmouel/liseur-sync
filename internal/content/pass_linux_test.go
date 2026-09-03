@@ -429,13 +429,16 @@ func TestWatcherReconcilesAFolderAddedAtRuntime(t *testing.T) {
 	}
 }
 
-// TestScanRunsAPassWithoutAnEvent. The watcher's other two triggers are
-// inotify and a half-hourly timer, and inotify is not the whole truth:
-// it reports nothing at all on NFS or SMB. On such a share the only way
-// a person can make the catalog current is to ask, so asking has to
-// work — this test drives it with notifications deliberately unhooked,
-// which is what a network mount looks like from here.
-func TestScanRunsAPassWithoutAnEvent(t *testing.T) {
+// TestQueuedFolderRunsOnePassPerBurst covers the debounced queue: the
+// channel every inotify notification lands in, and the ticker that turns
+// a burst of them into one pass.
+//
+// It drives the queue directly, with notifications deliberately unhooked
+// — which is also what a network mount looks like from here, since
+// inotify reports nothing at all on NFS or SMB. What matters is the
+// collapsing: copying a book in is many events, and a pass per event
+// would read the same half-written file over and over.
+func TestQueuedFolderRunsOnePassPerBurst(t *testing.T) {
 	folder := plainFolder(t)
 	writeBook(t, folder.RootPath, "one.epub", "One")
 	catalog := newFakeCatalog()
@@ -454,13 +457,13 @@ func TestScanRunsAPassWithoutAnEvent(t *testing.T) {
 
 	// Nothing here can tell the server this happened.
 	writeBook(t, folder.RootPath, "two.epub", "Two")
-	w.Scan(folder.ID)
+	w.events <- folder.ID
 	waitForObserved(t, catalog, 2)
 
-	// Asking again is free: a pass is idempotent, so a person leaning on
-	// the button gets one more pass, not a queue of them.
-	w.Scan(folder.ID)
-	w.Scan(folder.ID)
+	// A burst collapses: a pass is idempotent, so three notifications
+	// about one folder are one more pass, not a queue of them.
+	w.events <- folder.ID
+	w.events <- folder.ID
 	waitForReconcile(t, catalog)
 
 	cancel()
