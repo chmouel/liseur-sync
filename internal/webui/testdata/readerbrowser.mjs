@@ -445,6 +445,593 @@ check("the slider lifts the publication's own width caps",
   sized.wrapMaxWidth === 'none' && sized.wrapWidth !== '480px',
   `max-width ${sized.wrapMaxWidth}, width ${sized.wrapWidth}`);
 
+// The chrome (top bar and the two arrows) steps aside while nobody is
+// reaching for it, and what replaces it is the tap model: the sides of
+// the window turn the page wherever they are clicked — including on the
+// text, which is the only thing a phone has left once the arrows have
+// faded — and the middle brings the bar back.
+const chromeState = () => evalIn(`JSON.stringify({
+  state: document.body.dataset.readerChrome || 'visible',
+  bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
+  arrow: getComputedStyle(document.getElementById('reader-next')).opacity,
+})`);
+const idle = () => new Promise((r) => setTimeout(r, 3000));
+// Tap the chapter document itself, the way a pointer really does it:
+// pointerdown, pointerup, then the click, in the frame's own
+// coordinates, so the page turned on is the one the reader is looking
+// at. A mouse tap waits out the double-click interval before it counts,
+// which is why every check below settles for longer than that.
+const tapChapter = (where, kind = 'mouse', drift = 0) => evalIn(`(() => {
+  const view = document.querySelector('foliate-view');
+  const doc = view.renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const xs = { left: 6, middle: window.innerWidth / 2, right: window.innerWidth - 6 };
+  const x = xs['${where}'] - box.left, y = window.innerHeight / 2 - box.top;
+  const at = (type, extra) => doc.body.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, button: 0, pointerType: '${kind}', clientX: x, clientY: y, ...extra,
+  }));
+  at('pointerdown');
+  at('pointerup', { clientX: x + ${drift} });
+  doc.body.dispatchEvent(new win.MouseEvent('click', {
+    bubbles: true, button: 0, detail: 1, clientX: x + ${drift}, clientY: y,
+  }));
+  return true;
+})()`);
+const settle = () => new Promise((r) => setTimeout(r, 1200));
+
+await idle();
+const parked = JSON.parse(await chromeState());
+check('the chrome steps aside while reading',
+  parked.state === 'hidden' && parked.bar === '0' && parked.arrow === '0',
+  JSON.stringify(parked));
+
+await evalIn(`(() => {
+  document.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: window.innerWidth / 2, clientY: 4,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400)); // the bar fades in
+const reached = JSON.parse(await chromeState());
+check('reaching for the top of the window brings the chrome back',
+  reached.state === 'visible' && reached.bar === '1', JSON.stringify(reached));
+
+await idle();
+const beforeTap = JSON.parse(await evalIn(probe));
+await tapChapter('right');
+await settle();
+const tappedForward = JSON.parse(await evalIn(probe));
+check('a tap on the right of the text turns the page',
+  tappedForward.fraction > beforeTap.fraction,
+  `${beforeTap.fraction} -> ${tappedForward.fraction}`);
+await tapChapter('left');
+await settle();
+const tappedBack = JSON.parse(await evalIn(probe));
+check('a tap on the left of the text turns it back',
+  tappedBack.fraction < tappedForward.fraction,
+  `${tappedForward.fraction} -> ${tappedBack.fraction}`);
+
+// A finger has no double-click to wait for, so it turns at once.
+await tapChapter('right', 'touch');
+await new Promise((r) => setTimeout(r, 900));
+const touched = JSON.parse(await evalIn(probe));
+check('a touch tap turns the page without waiting',
+  touched.fraction > tappedBack.fraction,
+  `${tappedBack.fraction} -> ${touched.fraction}`);
+await tapChapter('left', 'touch');
+await settle();
+const touchedBack = JSON.parse(await evalIn(probe));
+
+await idle();
+await tapChapter('middle');
+await settle();
+const middled = JSON.parse(await chromeState());
+const stillThere = JSON.parse(await evalIn(probe));
+check('a tap in the middle of the text asks for the chrome',
+  middled.state === 'visible', JSON.stringify(middled));
+check('the middle of the text never turns the page',
+  stillThere.fraction === touchedBack.fraction,
+  `${touchedBack.fraction} -> ${stillThere.fraction}`);
+
+// A tap is only a tap when it is nothing else: a drag, a double-click
+// on a word, a control, or a live selection all mean the reader is
+// doing something with the text, and the page must stay where it is.
+await tapChapter('right', 'mouse', 40);
+await settle();
+const afterDrag = JSON.parse(await evalIn(probe));
+check('a drag across the text is not a page turn',
+  afterDrag.fraction === stillThere.fraction,
+  `${stillThere.fraction} -> ${afterDrag.fraction}`);
+
+await evalIn(`(() => {
+  const view = document.querySelector('foliate-view');
+  const doc = view.renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const x = window.innerWidth - 6 - box.left, y = window.innerHeight / 2 - box.top;
+  const opts = { bubbles: true, button: 0, clientX: x, clientY: y };
+  doc.body.dispatchEvent(new win.PointerEvent('pointerdown', { ...opts, pointerType: 'mouse' }));
+  doc.body.dispatchEvent(new win.PointerEvent('pointerup', { ...opts, pointerType: 'mouse' }));
+  doc.body.dispatchEvent(new win.MouseEvent('click', { ...opts, detail: 1 }));
+  doc.body.dispatchEvent(new win.MouseEvent('dblclick', { ...opts, detail: 2 }));
+  return true;
+})()`);
+await settle();
+const afterDouble = JSON.parse(await evalIn(probe));
+check('a double-click on a word is not a page turn',
+  afterDouble.fraction === afterDrag.fraction,
+  `${afterDrag.fraction} -> ${afterDouble.fraction}`);
+
+await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const button = doc.createElement('button');
+  button.id = 'tap-guard';
+  button.textContent = 'not a page turn';
+  doc.body.append(button);
+  const box = doc.defaultView.frameElement.getBoundingClientRect();
+  button.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, button: 0, detail: 1,
+    clientX: window.innerWidth - 6 - box.left,
+    clientY: window.innerHeight / 2 - box.top,
+  }));
+  return true;
+})()`);
+await settle();
+const afterControl = JSON.parse(await evalIn(probe));
+check('a click on a control in the text is not a page turn',
+  afterControl.fraction === afterDouble.fraction,
+  `${afterDouble.fraction} -> ${afterControl.fraction}`);
+
+await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  doc.getSelection().selectAllChildren(doc.body);
+  const box = doc.defaultView.frameElement.getBoundingClientRect();
+  doc.body.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, button: 0, detail: 1,
+    clientX: window.innerWidth - 6 - box.left,
+    clientY: window.innerHeight / 2 - box.top,
+  }));
+  return true;
+})()`);
+await settle();
+const afterSelection = JSON.parse(await evalIn(probe));
+check('a click while text is selected is not a page turn',
+  afterSelection.fraction === afterControl.fraction,
+  `${afterControl.fraction} -> ${afterSelection.fraction}`);
+await evalIn(`(() => {
+  document.querySelector('foliate-view').renderer.getContents()[0]
+    .doc.getSelection().removeAllRanges();
+  return true;
+})()`);
+
+// Everything above dispatched its own events. Untrusted events skip the
+// browser's real input pipeline — no native selection, no synthesized
+// dblclick, no touch-to-pointer translation, and none of the engine's
+// own swipe handling. The checks below therefore go through CDP's
+// Input domain, which is the same path a hand takes.
+const mouse = (type, x, y, clickCount = 1) => S('Input.dispatchMouseEvent', {
+  type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount,
+});
+const realClick = async (x, y, clickCount = 1) => {
+  await mouse('mousePressed', x, y, clickCount);
+  await mouse('mouseReleased', x, y, clickCount);
+};
+const selectionText = () => evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  return String(doc.getSelection());
+})()`);
+const clearSelection = () => evalIn(`(() => {
+  document.querySelector('foliate-view').renderer.getContents()[0]
+    .doc.getSelection().removeAllRanges();
+  return true;
+})()`);
+// Two points in the page-turning ribbon on the right: one on a word,
+// which a double-click could be selecting, and one in the blank between
+// lines, which it cannot. The reader treats them differently on
+// purpose, so the harness has to find both for real.
+const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
+  const view = document.querySelector('foliate-view');
+  const doc = view.renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const w = window.innerWidth, h = window.innerHeight;
+  const side = Math.max(64, Math.min(w * (w < 700 ? 0.3 : 0.22), 260));
+  // The page-turn arrows are real buttons sitting in this same ribbon,
+  // and a real pointer reveals them as it moves. A point behind one of
+  // them would test the button, not the tap zones.
+  const arrows = [...document.querySelectorAll('.reader-turn')]
+    .map((b) => b.getBoundingClientRect());
+  const behindAnArrow = (top, bottom, left, right) => arrows.some((a) =>
+    bottom > a.top - 8 && top < a.bottom + 8 && right > a.left - 8 && left < a.right + 8);
+  const lines = [];
+  const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (!n.data.trim()) continue;
+    const r = doc.createRange();
+    r.selectNodeContents(n);
+    for (const rect of r.getClientRects()) {
+      if (rect.width < 4 || rect.height < 4) continue;
+      const left = rect.left + box.left, right = rect.right + box.left;
+      const top = rect.top + box.top, bottom = rect.bottom + box.top;
+      // Needs room for a click that is both inside the ribbon and
+      // inside a word rather than past the last glyph.
+      if (right < w - side + 40 || left > w) continue;
+      if (top < 0 || bottom > h) continue;          // not on this page
+      if (behindAnArrow(top, bottom, left, right)) continue;
+      lines.push({ left, right, top, bottom });
+    }
+  }
+  lines.sort((a, b) => a.top - b.top);
+  const word = lines[Math.floor(lines.length / 2)];
+  // Somewhere in the ribbon with no word under it and no button over
+  // it: between two lines, in a paragraph margin, or past the last one.
+  const all = [];
+  const everything = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  for (let n = everything.nextNode(); n; n = everything.nextNode()) {
+    if (!n.data.trim()) continue;
+    const r = doc.createRange();
+    r.selectNodeContents(n);
+    for (const rect of r.getClientRects()) {
+      if (rect.width < 4 || rect.height < 4) continue;
+      all.push({
+        top: rect.top + box.top, bottom: rect.bottom + box.top,
+        left: rect.left + box.left, right: rect.right + box.left,
+      });
+    }
+  }
+  // The arrows are full-height strips at both edges, so a point in the
+  // ribbon has to sit inboard of them.
+  const arrowEdge = arrows.length
+    ? Math.min(...arrows.filter((a) => a.left > w / 2).map((a) => a.left)) - 10
+    : w - 6;
+  const bx = Math.max(w - side + 8, Math.min(arrowEdge, w - 8));
+  let blank = null;
+  for (let y = 40; y < h - 40 && !blank; y += 8) {
+    if (behindAnArrow(y, y, bx, bx)) continue;
+    if (all.some((r) => y > r.top - 3 && y < r.bottom + 3 && bx > r.left - 3 && bx < r.right + 3))
+      continue;
+    blank = { x: bx, y };
+  }
+  return JSON.stringify({
+    frame: { left: box.left, right: box.right, width: box.width },
+    window: w,
+    lines: lines.length,
+    word: word ? {
+      x: Math.max(Math.min(word.right - 14, w - 8), w - side + 4),
+      y: (word.top + word.bottom) / 2,
+    } : null,
+    blank,
+  });
+})()`));
+
+await idle();
+const spots = await ribbonPoints();
+check('the harness found real text in the page-turning ribbon',
+  spots.lines > 0 && !!spots.word, JSON.stringify(spots));
+
+if (spots.word) {
+  // A real double-click selects a word. The first of its two clicks is
+  // indistinguishable from a tap when it arrives, so this is the case
+  // the deferral exists for — and 350ms apart it is slower than a
+  // synthetic pair, which is the point of testing it for real.
+  const before = JSON.parse(await evalIn(probe));
+  await realClick(spots.word.x, spots.word.y, 1);
+  await new Promise((r) => setTimeout(r, 350));
+  await realClick(spots.word.x, spots.word.y, 2);
+  const picked = await selectionText();
+  await settle();
+  const afterReal = JSON.parse(await evalIn(probe));
+  // What is asserted is the reader's part: the deferred first click was
+  // cancelled, so the pair selected rather than navigated. Whether the
+  // browser also left a word highlighted is the browser's business, and
+  // a headless build does not always bother.
+  check('a real double-click does not turn the page',
+    afterReal.fraction === before.fraction,
+    `${before.fraction} -> ${afterReal.fraction}, selected ${JSON.stringify(picked.slice(0, 20))}`);
+  await clearSelection();
+
+  // A real drag is a selection, never a page turn.
+  await mouse('mousePressed', spots.word.x, spots.word.y, 1);
+  await mouse('mouseMoved', spots.word.x - 120, spots.word.y, 1);
+  await mouse('mouseReleased', spots.word.x - 120, spots.word.y, 1);
+  const dragged = await selectionText();
+  await settle();
+  const afterRealDrag = JSON.parse(await evalIn(probe));
+  check('a real drag across the text does not turn the page',
+    afterRealDrag.fraction === before.fraction,
+    `${before.fraction} -> ${afterRealDrag.fraction}, selected ${JSON.stringify(dragged.slice(0, 20))}`);
+  await clearSelection();
+
+  // A single real click on a word still turns, once the double-click
+  // window has passed.
+  await realClick(spots.word.x, spots.word.y, 1);
+  await settle();
+  const afterRealClick = JSON.parse(await evalIn(probe));
+  check('a real click on a word still turns the page',
+    afterRealClick.fraction > before.fraction,
+    `${before.fraction} -> ${afterRealClick.fraction}`);
+  await realClick(6, spots.word.y, 1);
+  await settle();
+}
+
+if (spots.blank) {
+  // Nothing to select here, so nothing to wait for: the page turns
+  // well inside the double-click window.
+  const before = JSON.parse(await evalIn(probe));
+  await realClick(spots.blank.x, spots.blank.y, 1);
+  await new Promise((r) => setTimeout(r, 250));
+  const quick = JSON.parse(await evalIn(probe));
+  check('a real click between the lines turns the page at once',
+    quick.fraction > before.fraction, `${before.fraction} -> ${quick.fraction}`);
+  await settle();
+  await realClick(6, spots.blank.y, 1);
+  await settle();
+} else {
+  console.log('note: no blank gap found in the ribbon on this page');
+}
+
+// A finger is the engine's business as much as ours: foliate-js pans
+// and snaps on a swipe. If both it and the reader acted on the same
+// gesture the book would jump two pages, so the measure here is one
+// page's worth of progress, taken from a page turn immediately before.
+const innerWidthGuess = Number(await evalIn('window.innerWidth'));
+const innerHeightGuess = Number(await evalIn('window.innerHeight'));
+const beforeStep = JSON.parse(await evalIn(probe));await evalIn(`document.getElementById('reader-next').click()`);
+await settle();
+const afterStep = JSON.parse(await evalIn(probe));
+const pageStep = afterStep.fraction - beforeStep.fraction;
+await evalIn(`document.getElementById('reader-prev').click()`);
+await settle();
+
+const touchable = await S('Input.dispatchTouchEvent', {
+  type: 'touchStart', touchPoints: [{ x: Math.round(innerWidthGuess * 0.7), y: 200 }],
+}).then(() => true, () => false);
+if (touchable) {
+  await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const beforeSwipe = JSON.parse(await evalIn(probe));
+  const y = Math.round(spots.word ? spots.word.y : innerHeightGuess / 2);
+  const from = Math.round(innerWidthGuess * 0.75);
+  await S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from, y }] });
+  for (const step of [0.2, 0.4, 0.6, 0.8, 1]) {
+    await S('Input.dispatchTouchEvent', {
+      type: 'touchMove', touchPoints: [{ x: Math.round(from - 300 * step), y }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await settle();
+  const afterSwipe = JSON.parse(await evalIn(probe));
+  const moved = afterSwipe.fraction - beforeSwipe.fraction;
+  check('a swipe never turns more than one page',
+    pageStep > 0 && moved <= pageStep * 1.6 + 1e-9,
+    `${beforeSwipe.fraction} -> ${afterSwipe.fraction} (one page is ${pageStep.toFixed(4)})`);
+
+  // A tap has no gesture to disambiguate from, so it must not wait.
+  const beforeTouchTap = JSON.parse(await evalIn(probe));
+  await S('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x: Math.round(spots.word ? spots.word.x : innerWidthGuess - 6), y }],
+  });
+  await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await new Promise((r) => setTimeout(r, 250));
+  const afterTouchTap = JSON.parse(await evalIn(probe));
+  check('a real touch tap turns the page without waiting',
+    afterTouchTap.fraction > beforeTouchTap.fraction,
+    `${beforeTouchTap.fraction} -> ${afterTouchTap.fraction}`);
+  await settle();
+} else {
+  console.log('note: this browser build refused synthetic touch events');
+}
+
+// A second finger is a pinch or a scroll, never a page turn, and a
+// pointer the browser takes back mid-gesture is not one either.
+await idle();
+const beforeFingers = JSON.parse(await evalIn(probe));
+await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const x = window.innerWidth - 6 - box.left, y = window.innerHeight / 2 - box.top;
+  const at = (type, id, extra) => doc.body.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, button: 0, pointerType: 'touch', pointerId: id,
+    clientX: x, clientY: y, ...extra,
+  }));
+  at('pointerdown', 1);
+  at('pointerdown', 2, { clientX: x - 60 });
+  at('pointerup', 1);
+  at('pointerup', 2, { clientX: x - 60 });
+  return true;
+})()`);
+await settle();
+const afterFingers = JSON.parse(await evalIn(probe));
+check('a second finger cancels the tap',
+  afterFingers.fraction === beforeFingers.fraction,
+  `${beforeFingers.fraction} -> ${afterFingers.fraction}`);
+
+await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const x = window.innerWidth - 6 - box.left, y = window.innerHeight / 2 - box.top;
+  const at = (type) => doc.body.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, button: 0, pointerType: 'touch', pointerId: 7, clientX: x, clientY: y,
+  }));
+  at('pointerdown');
+  at('pointercancel');
+  at('pointerup');
+  return true;
+})()`);
+await settle();
+const afterCancel = JSON.parse(await evalIn(probe));
+check('a cancelled pointer turns nothing',
+  afterCancel.fraction === beforeFingers.fraction,
+  `${beforeFingers.fraction} -> ${afterCancel.fraction}`);
+
+// A click that puts a selection away is not a tap — and by the time it
+// arrives the browser has already collapsed the selection, so the only
+// place the evidence still exists is the pointerdown before it.
+// A few words on the page this reader is looking at, not the whole
+// body: a selection running past the end of the page makes the engine
+// itself follow it forward, which would prove nothing about taps.
+const live = Number(await evalIn(`(() => {
+  const view = document.querySelector('foliate-view');
+  const doc = view.renderer.getContents()[0].doc;
+  const box = doc.defaultView.frameElement.getBoundingClientRect();
+  const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.data.trim().length < 12) continue;
+    const range = doc.createRange();
+    range.setStart(n, 0);
+    range.setEnd(n, 10);
+    const rect = range.getBoundingClientRect();
+    if (rect.top + box.top < 0 || rect.bottom + box.top > window.innerHeight) continue;
+    const left = rect.left + box.left;
+    if (left < 0 || left > window.innerWidth) continue;
+    const sel = doc.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return String(sel).length;
+  }
+  return 0;
+})()`));
+await realClick(spots.word.x, spots.word.y, 1);
+await settle();
+const afterClearing = JSON.parse(await evalIn(probe));
+check('a real click that clears a selection turns nothing',
+  live > 0 && afterClearing.fraction === beforeFingers.fraction,
+  `${live} characters selected, ${beforeFingers.fraction} -> ${afterClearing.fraction}`);
+await clearSelection();
+
+// A fixed-layout publication is scaled by the engine with a CSS
+// transform, so a coordinate inside the chapter is not a coordinate in
+// the window. Scaling the frame by hand proves the conversion without
+// needing a second book: the same viewport point must still be the
+// page-turning ribbon.
+// Turning a page scrolls the frame under the window, so the local
+// coordinates are taken fresh for every tap rather than once.
+const scaledLocal = async (share) => JSON.parse(await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const frame = doc.defaultView.frameElement;
+  frame.style.transformOrigin = 'top left';
+  frame.style.transform = 'scale(0.8)';
+  const box = frame.getBoundingClientRect();
+  const vx = ${'SHARE'} === 1 ? window.innerWidth - 6 : window.innerWidth * ${'SHARE'};
+  const vy = window.innerHeight / 2;
+  return JSON.stringify({
+    scale: box.width / frame.offsetWidth,
+    x: (vx - box.left) / 0.8,
+    y: (vy - box.top) / 0.8,
+  });
+})()`.replaceAll('SHARE', String(share))));
+const scaledTap = (x, y) => evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const at = (type) => doc.body.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, button: 0, pointerType: 'touch', pointerId: 3,
+    clientX: ${x}, clientY: ${y},
+  }));
+  at('pointerdown');
+  at('pointerup');
+  return true;
+})()`);
+const beforeScaled = JSON.parse(await evalIn(probe));
+const rightSpot = await scaledLocal(1);
+check("the frame reports the engine's scale",
+  Math.abs(rightSpot.scale - 0.8) < 0.01, String(rightSpot.scale));
+await scaledTap(rightSpot.x, rightSpot.y);
+await settle();
+const afterScaledRight = JSON.parse(await evalIn(probe));
+check('a tap in a scaled chapter lands where the reader aimed it',
+  afterScaledRight.fraction > beforeScaled.fraction,
+  `${beforeScaled.fraction} -> ${afterScaledRight.fraction}`);
+const middleSpot = await scaledLocal(0.5);
+await scaledTap(middleSpot.x, middleSpot.y);
+await settle();
+const afterScaledMiddle = JSON.parse(await evalIn(probe));
+check('the middle of a scaled chapter is still the middle',
+  afterScaledMiddle.fraction === afterScaledRight.fraction,
+  `${afterScaledRight.fraction} -> ${afterScaledMiddle.fraction}`);
+await evalIn(`(() => {
+  const frame = document.querySelector('foliate-view').renderer
+    .getContents()[0].doc.defaultView.frameElement;
+  frame.style.transform = '';
+  return true;
+})()`);
+
+// The contents drawer cannot hear a tap that happened inside the book,
+// so the book has to tell it.
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const beforeDrawerTap = JSON.parse(await evalIn(probe));
+await tapChapter('right', 'touch');
+await settle();
+const afterDrawerTap = JSON.parse(await evalIn(probe));
+const drawerShut = await evalIn(`document.getElementById('reader-toc').hidden`);
+check('a tap in the book puts the contents drawer away', drawerShut === true,
+  String(drawerShut));
+check('the tap that closed the drawer did not also turn the page',
+  afterDrawerTap.fraction === beforeDrawerTap.fraction,
+  `${beforeDrawerTap.fraction} -> ${afterDrawerTap.fraction}`);
+
+// "z" is the keyboard's way of putting the chrome away and getting it
+// back, and the contents drawer brings its own button back with it.
+await evalIn(`(() => {
+  document.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: window.innerWidth / 2, clientY: 4,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const zHidden = JSON.parse(await chromeState());
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const zShown = JSON.parse(await chromeState());
+check('"z" puts the chrome away', zHidden.state === 'hidden', JSON.stringify(zHidden));
+check('"z" brings it back and pins it', zShown.state === 'visible' && zShown.bar === '1',
+  JSON.stringify(zShown));
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const withDrawer = JSON.parse(await chromeState());
+check('the contents drawer brings the bar back with it',
+  withDrawer.state === 'visible' && withDrawer.bar === '1', JSON.stringify(withDrawer));
+await evalIn(`(() => {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  return true;
+})()`);
+
+// Switching the setting off is what a reader who wants the bar there
+// does, and it has to stick.
+await evalIn(`(() => {
+  const box = document.querySelector('#reader-settings-form input[name="autohide"]');
+  box.checked = false;
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await idle();
+const pinned = JSON.parse(await chromeState());
+const savedChrome = await evalIn(`localStorage.getItem('liseur.reader.settings')`);
+check('the chrome stays put once auto-hiding is switched off',
+  pinned.state === 'visible' && pinned.bar === '1', JSON.stringify(pinned));
+check('the auto-hide choice persists in the browser',
+  typeof savedChrome === 'string' && savedChrome.includes('"autohide":false'),
+  String(savedChrome));
+
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.
 const unexpected = consoleErrors.filter((e) =>

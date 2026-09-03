@@ -25,7 +25,7 @@ const at = (s) => { step = s; };
 setTimeout(() => {
   console.error('firefox harness stuck at: ' + step);
   process.exit(2);
-}, 90000);
+}, 120000);
 
 const profile = mkdtempSync(join(tmpdir(), 'ffsmoke-'));
 // Firefox will not resolve a made-up hostname, and unlike Chromium it
@@ -221,6 +221,92 @@ await new Promise((r) => setTimeout(r, 700));
 const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the publisher styling',
   unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
+
+// A risk-focused slice of the Chromium chrome/tap matrix. Gecko is
+// where this can differ: frameElement coordinates, PointerEvent
+// delivery inside a blob chapter, `:has()` in the chrome CSS, and
+// caretPositionFromPoint standing in for Blink's caretRangeFromPoint
+// when the reader decides whether a click landed on a word.
+at('auto-hiding chrome');
+const chromeState = () => evalIn(`JSON.stringify({
+  state: document.body.dataset.readerChrome,
+  bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
+})`);
+const ffTap = (where, kind) => evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const win = doc.defaultView;
+  const box = win.frameElement.getBoundingClientRect();
+  const xs = { left: 6, right: window.innerWidth - 6 };
+  const x = xs['${where}'] - box.left, y = window.innerHeight / 2 - box.top;
+  const at = (type, extra) => doc.body.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, button: 0, pointerType: '${kind}', clientX: x, clientY: y, ...extra,
+  }));
+  at('pointerdown');
+  at('pointerup');
+  doc.body.dispatchEvent(new win.MouseEvent('click', {
+    bubbles: true, button: 0, detail: 1, clientX: x, clientY: y,
+  }));
+  return true;
+})()`);
+
+await new Promise((r) => setTimeout(r, 2600));
+const ffParked = JSON.parse(await chromeState());
+check('the chrome steps aside while reading',
+  ffParked.state === 'hidden' && ffParked.bar === '0', JSON.stringify(ffParked));
+
+await evalIn(`(() => {
+  document.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: window.innerWidth / 2, clientY: 4,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const ffReached = JSON.parse(await chromeState());
+check('reaching for the top of the window brings the chrome back',
+  ffReached.state === 'visible' && ffReached.bar === '1', JSON.stringify(ffReached));
+
+await new Promise((r) => setTimeout(r, 2600));
+const ffBefore = JSON.parse(await evalIn(probe));
+await ffTap('right', 'touch');
+await new Promise((r) => setTimeout(r, 900));
+const ffForward = JSON.parse(await evalIn(probe));
+check('a tap on the right of the text turns the page',
+  ffForward.fraction > ffBefore.fraction,
+  `${ffBefore.fraction} -> ${ffForward.fraction}`);
+
+// The mouse path is the one that has to ask Gecko where the caret is.
+await ffTap('right', 'mouse');
+await new Promise((r) => setTimeout(r, 1200));
+const ffMouse = JSON.parse(await evalIn(probe));
+check('a mouse click on the right of the text turns the page',
+  ffMouse.fraction > ffForward.fraction,
+  `${ffForward.fraction} -> ${ffMouse.fraction}`);
+
+await evalIn(`(() => {
+  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  doc.getSelection().selectAllChildren(doc.body);
+  const box = doc.defaultView.frameElement.getBoundingClientRect();
+  doc.body.dispatchEvent(new MouseEvent('click', {
+    bubbles: true, button: 0, detail: 1,
+    clientX: window.innerWidth - 6 - box.left,
+    clientY: window.innerHeight / 2 - box.top,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 1200));
+const ffSelected = JSON.parse(await evalIn(probe));
+check('a click while text is selected is not a page turn',
+  ffSelected.fraction === ffMouse.fraction,
+  `${ffMouse.fraction} -> ${ffSelected.fraction}`);
+await evalIn(`(() => {
+  document.querySelector('foliate-view').renderer.getContents()[0]
+    .doc.getSelection().removeAllRanges();
+  document.getElementById('reader-settings-form').autohide.checked = false;
+  document.getElementById('reader-settings-form').autohide
+    .dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
 
 // The same hostile battery as the Chromium harness, judged by Firefox.
 at('hostile chapter');

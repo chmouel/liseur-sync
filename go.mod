@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/a-h/templ v0.3.1020
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	golang.org/x/crypto v0.54.0
@@ -22,7 +23,6 @@ require (
 	github.com/cli/browser v1.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.16.0 // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

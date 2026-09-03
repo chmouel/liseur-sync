@@ -143,3 +143,26 @@ func TestReaderPageLinksTheCoverAsItsIcon(t *testing.T) {
 		t.Errorf("the reader page does not link the cover icon:\n%s", page)
 	}
 }
+
+// TestReaderPageOffersTheChromeControls: the bar and the page-turn
+// arrows step aside while somebody reads, so the two ways of getting
+// them back — the "z" key and the setting that turns the behaviour off
+// — have to be on the page that says what the reader can do. So does
+// the sentence about the tap zones: once the arrows have faded, tapping
+// the sides of the page is how a phone turns it, and nothing else on
+// screen says so.
+func TestReaderPageOffersTheChromeControls(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, want := range []string{
+		`name="autohide"`,
+		`<kbd>z</kbd>`,
+		`reader-help-note`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the reader page is missing %q", want)
+		}
+	}
+}

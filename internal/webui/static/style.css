@@ -822,18 +822,46 @@ button.linkish:hover, button.linkish:focus-visible {
 .dev-desktop { color: var(--ink); background: var(--surface-1); opacity: .75; }
 
 /* The reader (ADR-0007): a book wants the window, so this page drops
-   the usual chrome and gives the sandboxed frame everything left. */
-.reader-body{margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
-.reader-bar{display:flex;align-items:center;gap:1rem;padding:.5rem .9rem;
-  border-bottom:1px solid var(--line);background:var(--surface)}
+   the usual chrome and gives the sandboxed frame everything left.
+
+   The bar, the progress line and the status float over the stage
+   rather than sitting in the column above it. That is what lets the
+   chrome be taken away and brought back without resizing the stage:
+   a stage that changes height makes the engine repaginate, which
+   would move the page out from under whoever is reading it. */
+.reader-body{margin:0;height:100vh;box-sizing:border-box;padding-top:3px;
+  display:flex;flex-direction:column;overflow:hidden}
+.reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
+  display:flex;align-items:center;gap:1rem;padding:.5rem .9rem;
+  border-bottom:1px solid var(--line);background:var(--surface);
+  box-shadow:0 4px 18px rgba(0,0,0,.28);
+  transition:opacity .18s ease,transform .18s ease}
 .reader-back{text-decoration:none;white-space:nowrap}
 .reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .reader-title span{opacity:.7;margin-left:.5rem}
 .reader-meta{display:flex;gap:.9rem;opacity:.75;font-size:.85rem;white-space:nowrap}
-.reader-progress{height:3px;background:var(--surface-3)}
+.reader-progress{position:fixed;top:0;left:0;right:0;z-index:70;
+  height:3px;background:var(--surface-3)}
 #reader-progress-bar{height:100%;width:0;background:var(--primary);transition:width .2s}
-.reader-status{margin:0;padding:.5rem .9rem;font-size:.9rem;opacity:.8}
+/* The status is only on screen while the book is loading or when it
+   failed to; centred, it can say so whether or not the bar is up. */
+.reader-status{position:fixed;z-index:45;top:50%;left:50%;transform:translate(-50%,-50%);
+  margin:0;padding:.5rem .9rem;font-size:.9rem;opacity:.8;
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .reader-status.problem{color:var(--danger);opacity:1}
+/* Chrome that has stepped aside is invisible and untouchable, never
+   absent: a click at the edge falls through to the page-turn zones,
+   and the buttons stay where a script (or a test) can reach them. */
+.reader-body[data-reader-chrome="hidden"] .reader-bar{
+  opacity:0;transform:translateY(-100%);pointer-events:none}
+.reader-body[data-reader-chrome="hidden"] .reader-turn{opacity:0;pointer-events:none}
+/* Tab is a way of reaching for the bar like any other. */
+.reader-body[data-reader-chrome="hidden"]:has(.reader-bar:focus-within) .reader-bar{
+  opacity:1;transform:none;pointer-events:auto}
+@media (prefers-reduced-motion:reduce){
+  .reader-bar,.reader-turn{transition:none}
+}
 .reader-help{background:var(--surface);color:inherit;border:1px solid var(--line);
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
   min-width:20rem;font-size:.9rem}
@@ -845,6 +873,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-help kbd{background:var(--surface-3);border:1px solid var(--line);
   border-radius:4px;padding:.05rem .35rem;font-size:.8rem;font-family:inherit}
 .reader-help form{margin:.8rem 0 0;text-align:right}
+.reader-help-note{margin:.9rem 0 0;font-size:.85rem;opacity:.75;max-width:26rem}
 .reader-toc-button{border:1px solid var(--line);border-radius:6px;background:transparent;
   color:inherit;cursor:pointer;padding:.1rem .55rem;font-size:1rem;line-height:1.4}
 .reader-toc-button:hover{background:var(--surface-3)}
@@ -884,7 +913,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-stage{flex:1;display:flex;min-height:0}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden}
 .reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;
-  padding:0 .6rem;opacity:.35;color:inherit}
+  padding:0 .6rem;opacity:.35;color:inherit;transition:opacity .18s ease}
 .reader-turn:hover{opacity:.9}
 
 /* Reader appearance settings (ADR-0012): a details popover, no script
