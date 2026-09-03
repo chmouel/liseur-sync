@@ -197,7 +197,7 @@ func (s *Server) streakFor(
 // continueReadingLimit is a shelf, not a list: the point is to get back
 // into the book you put down, and a wall of half-read books is a guilt
 // trip rather than a shortcut.
-const continueReadingLimit = 4
+const continueReadingLimit = 6
 
 // continueReading is the works that are started and not finished, newest
 // first. It reads nothing extra — the dashboard has already listed the
