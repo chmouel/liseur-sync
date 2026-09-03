@@ -644,7 +644,16 @@ const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
     .map((b) => b.getBoundingClientRect());
   const behindAnArrow = (top, bottom, left, right) => arrows.some((a) =>
     bottom > a.top - 8 && top < a.bottom + 8 && right > a.left - 8 && left < a.right + 8);
-  const lines = [];
+  const leftLines = [];
+  const rightLines = [];
+  const leftWords = [];
+  const rightWords = [];
+  const addRect = (target, rect) => {
+    const left = rect.left + box.left, right = rect.right + box.left;
+    const top = rect.top + box.top, bottom = rect.bottom + box.top;
+    if (top < 0 || bottom > h || behindAnArrow(top, bottom, left, right)) return;
+    target.push({ left, right, top, bottom });
+  };
   const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
     if (!n.data.trim()) continue;
@@ -653,17 +662,39 @@ const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
     for (const rect of r.getClientRects()) {
       if (rect.width < 4 || rect.height < 4) continue;
       const left = rect.left + box.left, right = rect.right + box.left;
-      const top = rect.top + box.top, bottom = rect.bottom + box.top;
-      // Needs room for a click that is both inside the ribbon and
-      // inside a word rather than past the last glyph.
-      if (right < w - side + 40 || left > w) continue;
-      if (top < 0 || bottom > h) continue;          // not on this page
-      if (behindAnArrow(top, bottom, left, right)) continue;
-      lines.push({ left, right, top, bottom });
+      if (right > 0 && left < side) addRect(leftLines, rect);
+      if (right > w - side && left < w) addRect(rightLines, rect);
+    }
+    const words = /\S+/g;
+    let match;
+    while ((match = words.exec(n.data))) {
+      const wordRange = doc.createRange();
+      wordRange.setStart(n, match.index);
+      wordRange.setEnd(n, match.index + match[0].length);
+      for (const rect of wordRange.getClientRects()) {
+        if (rect.width < 4 || rect.height < 4) continue;
+        const left = rect.left + box.left, right = rect.right + box.left;
+        if (right > 0 && left < side) addRect(leftWords, rect);
+        if (right > w - side && left < w) addRect(rightWords, rect);
+      }
     }
   }
-  lines.sort((a, b) => a.top - b.top);
-  const word = lines[Math.floor(lines.length / 2)];
+  const lines = [...rightLines, ...leftLines].sort((a, b) => a.top - b.top);
+  const edge = (rect, sideName) => ({
+    x: sideName === 'right'
+      ? (Math.max(rect.left, w - side + 4) + Math.min(rect.right, w - 8)) / 2
+      : (Math.max(rect.left, 8) + Math.min(rect.right, side - 4)) / 2,
+    y: (rect.top + rect.bottom) / 2,
+    side: sideName,
+  });
+  const wordRect = leftWords[Math.floor(leftWords.length / 2)] ||
+    leftLines[Math.floor(leftLines.length / 2)] ||
+    rightWords[Math.floor(rightWords.length / 2)] ||
+    rightLines[Math.floor(rightLines.length / 2)];
+  const wordSide = leftWords.length || leftLines.length ? 'left' : 'right';
+  const word = wordRect
+    ? edge(wordRect, wordSide)
+    : null;
   // Somewhere in the ribbon with no word under it and no button over
   // it: between two lines, in a paragraph margin, or past the last one.
   const all = [];
@@ -685,9 +716,14 @@ const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
   const arrowEdge = arrows.length
     ? Math.min(...arrows.filter((a) => a.left > w / 2).map((a) => a.left)) - 10
     : w - 6;
-  const bx = Math.max(w - side + 8, Math.min(arrowEdge, w - 8));
+  const readerRight = document.getElementById('reader-view')
+    .getBoundingClientRect().right;
+  const bx = Math.max(
+    w - side + 8,
+    Math.min(arrowEdge - 12, readerRight - 12, w - 8),
+  );
   let blank = null;
-  for (let y = 40; y < h - 40 && !blank; y += 8) {
+  for (let y = 80; y < h - 40 && !blank; y += 8) {
     if (behindAnArrow(y, y, bx, bx)) continue;
     if (all.some((r) => y > r.top - 3 && y < r.bottom + 3 && bx > r.left - 3 && bx < r.right + 3))
       continue;
@@ -697,10 +733,7 @@ const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
     frame: { left: box.left, right: box.right, width: box.width },
     window: w,
     lines: lines.length,
-    word: word ? {
-      x: Math.max(Math.min(word.right - 14, w - 8), w - side + 4),
-      y: (word.top + word.bottom) / 2,
-    } : null,
+    word,
     blank,
   });
 })()`));
@@ -748,10 +781,13 @@ if (spots.word) {
   await realClick(spots.word.x, spots.word.y, 1);
   await settle();
   const afterRealClick = JSON.parse(await evalIn(probe));
+  const wordDirection = spots.word.side === 'right' ? 1 : -1;
   check('a real click on a word still turns the page',
-    afterRealClick.fraction > before.fraction,
+    wordDirection > 0
+      ? afterRealClick.fraction > before.fraction
+      : afterRealClick.fraction < before.fraction,
     `${before.fraction} -> ${afterRealClick.fraction}`);
-  await realClick(6, spots.word.y, 1);
+  await realClick(wordDirection > 0 ? 6 : spots.window - 6, spots.word.y, 1);
   await settle();
 }
 
@@ -811,7 +847,7 @@ if (touchable) {
   const beforeTouchTap = JSON.parse(await evalIn(probe));
   await S('Input.dispatchTouchEvent', {
     type: 'touchStart',
-    touchPoints: [{ x: Math.round(spots.word ? spots.word.x : innerWidthGuess - 6), y }],
+    touchPoints: [{ x: Math.round(innerWidthGuess - 6), y }],
   });
   await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await new Promise((r) => setTimeout(r, 250));
