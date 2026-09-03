@@ -215,7 +215,15 @@ liseur-sync admin -config liseur-sync.toml assign-folder alice <folder-id>
 liseur-sync admin -config liseur-sync.toml unassign-folder alice <folder-id>
 liseur-sync admin -config liseur-sync.toml list-user-folders alice
 liseur-sync admin -config liseur-sync.toml assign-all-folders alice
+liseur-sync admin -config liseur-sync.toml scan-folder <folder-id>
 ```
+
+`scan-folder` runs one reconcile pass over a folder right now, the same
+pass the watcher runs, and prints what it changed. It takes a folder id,
+or a name when exactly one folder bears it. It is the shell
+equivalent of the Scan button and the way to make a cron job or a repair
+script (see [Auditing a Calibre library](#auditing-a-calibre-library))
+finish with a catalog that agrees with the disk.
 
 The per-account checkboxes under Settings > Administration > Users submit
 the account's complete grant set, so the page lists every watched folder
@@ -309,18 +317,62 @@ can disagree with the disk in either direction: a row whose file is gone
 produces a warning on every pass, and a book directory Calibre has
 forgotten is invisible here however plainly it sits on the disk.
 
-`scripts/calibre-audit.sh` reports both, plus stale format rows and
-books claiming a cover that is not there:
+`scripts/calibre-audit.py` reports both, plus stale format rows, books
+claiming a cover that is not there, and Syncthing conflict files. It
+runs with [uv](https://docs.astral.sh/uv/) and needs no install:
 
 ```
-scripts/calibre-audit.sh /path/to/Calibre
+uv run scripts/calibre-audit.py /path/to/Calibre
+uv run scripts/calibre-audit.py /path/to/Calibre --apply
+uv run scripts/calibre-audit.py /path/to/Calibre --liseur-db liseur-sync.db
+uv run scripts/calibre-audit.py /path/to/Calibre --liseur-db "$LISEUR_DATABASE_URL"
 ```
 
-It is read-only: the database is opened immutable, so it is safe to run
-against a library Calibre has open. It exits non-zero when it finds
-something, so it can be run from cron. It prints the `calibredb` command
-that fixes each finding but never runs it: `metadata.db` belongs to
-Calibre, and Calibre should be the only thing that writes to it.
+Detection is read-only: `metadata.db` is opened immutable, so it is safe
+to run against a library Calibre has open. It exits `1` when it finds
+something and `0` when clean, so it can be run from cron. Cron has no
+TTY, so it only reports. On a terminal, a dirty audit offers to repair;
+`--apply` skips the question.
+
+With `--liseur-db` (a SQLite path or a `postgres://` URL; the
+`LISEUR_DATABASE_URL` variable is the default) it also compares Calibre's
+`books.id` with this server's `calibre_id` column for the Calibre folder
+(`--folder` picks one when there are several) and reports a book that has
+a file but no catalog row, and a row whose Calibre book is gone. That
+database is never written by the script: the only fix on this side is a
+pass, and the script ends by running
+`liseur-sync admin scan-folder <folder-id>` when `LISEUR_SYNC` names the
+command that reaches the binary (for instance
+`docker exec liseur-sync liseur-sync`), or prints it otherwise.
+
+Repair snapshots `metadata.db` into `.audit-snapshots/` inside the
+library (through SQLite's backup API, so the copy is whole even while
+Calibre has the database open), then works through the findings.
+Syncthing conflict files are resolved first: a conflict copy becomes the
+real file when that is absent, is deleted when identical, and when the
+two differ the newer wins and the loser is parked in `.audit-conflicts/`
+under a name that never overwrites an earlier parked copy. A
+`metadata.sync-conflict-*.db` is parked too, never swapped in: the losing
+database is where the forgotten rows went, and the directories they
+described are still on the disk to be re-added. The library is then
+audited again, so a format a conflict copy just restored is not removed
+as stale. Then `calibredb` (`CALIBREDB` overrides the command): `remove`
+for a row whose directory holds nothing but `cover.jpg` and
+`metadata.opf` — a directory holding anything else is reported and left
+alone, because `remove` deletes the directory — `remove_format` when
+other formats remain, and `add --one-book-per-directory` for a directory
+Calibre forgot, staged under `.audit-staging/`. Of the staged copy only
+the files Calibre confirms it imported are deleted; a file it did not
+take, or a whole directory it declined (usually a title-and-author
+duplicate), stays in `.audit-staging/` and is reported on every later run
+until you deal with it. Covers are reported, never guessed. `metadata.db`
+still belongs to Calibre.
+
+The pass on this server's side runs only as part of a repair you agreed
+to, never from a report-only run, and a pass that fails is exit `2`.
+After it, the audit runs once more and the exit status says what is
+actually left. Symlinks under the library are skipped, and nothing is
+moved or deleted unless it resolves inside the library.
 
 Run it against the machine that owns the library, not necessarily the
 one running this server. If the library reaches the server over a file
