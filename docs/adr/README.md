@@ -54,6 +54,7 @@ loose ends that must come before any of it, are in
 | [0027](0027-explicit-per-user-folder-access.md) | Explicit per-user folder access | MVP | Accepted; implemented | Folder grants across storage, catalog surfaces, administration and CLI; amends [0017](0017-folders-not-pipelines.md) |
 | [0028](0028-annotation-sync.md) | Annotations are mutable reading state, not history | Later | Accepted | Phase 1: the `annotations` table, second per-user counter and store methods in both backends, with the storetest suite |
 | [0029](0029-a-folder-somebody-can-read.md) | A folder somebody can read | MVP | Accepted; implemented | Creator grant in the folder's own transaction, guarded backfill migration 6, a Library page that names which situation it is in; amends [0027](0027-explicit-per-user-folder-access.md) |
+| [0030](0030-web-reader-reading-sessions.md) | The web reader counts its sittings | Later | Accepted; implemented | Visibility-bounded sittings, three-minute idle cap, ten-second minimum, no local persistence; amends [0007](0007-web-reader.md) |
 
 ## Convention
 
