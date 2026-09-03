@@ -68,17 +68,33 @@ type BookView struct {
 	Problem   string
 	// SeriesAssign is the assign dialog rendered into the page rather
 	// than fetched. It is nil in the ordinary case: with scripting on,
-	// htmx swaps the dialog in where the placeholder sits, and building
-	// it costs three store reads a reader who is not editing does not
-	// need. It is set when the fragment route is reached without htmx,
-	// which is what the placeholder's plain link does.
+	// htmx swaps the dialog in where the section sits. It is set when
+	// the fragment route is reached without htmx, which is what that
+	// section's plain link does.
 	SeriesAssign *SeriesAssignView
 	// Chips are the book's entities as links: the fastest way from one
 	// book to the rest of its author or its series.
 	Authors []ChipLink
 	Series  []ChipLink
+	// SeriesNow is what the organization card states before anybody
+	// opens the editor, with this book's number in each series.
+	SeriesNow []BookSeriesLine
+	// SeriesSource names the layer SeriesNow came from (ADR-0018).
+	SeriesSource string
+	// SeriesFolderNote is what the folder says, and is set only when a
+	// claim is in force over it: a reader who arranged their own shelf
+	// should be able to see what they arranged it away from.
+	SeriesFolderNote string
 	// Byline is the authors as one line, for the hero and the title tag.
 	Byline string
+}
+
+// BookSeriesLine is one series the organization card names: the shelf it
+// links to and where this book sits on it.
+type BookSeriesLine struct {
+	Name     string
+	Position string
+	URL      string
 }
 
 templ bookPage(prefix string, u userCtx, csrf string, b BookView) {
@@ -176,15 +192,38 @@ templ bookBody(prefix, csrf string, b BookView) {
 	}
 	<details class="card bookorganization">
 		<summary>Library organization</summary>
-		// The dialog is fetched rather than rendered: it is three store
-		// reads a reader who is not editing does not need, and htmx swaps it
-		// in where this placeholder sits. With scripting off the link is a
-		// plain link that comes back here with the dialog already open.
+		// The editor is fetched rather than rendered: it is a store read
+		// a reader who is not editing does not need, and htmx swaps it in
+		// where this section sits. What the section says without it comes
+		// from the page's own read, so the current series is legible
+		// before anybody decides to change it. With scripting off the
+		// link is a plain link that comes back here with the editor
+		// already open.
 		if b.SeriesAssign != nil {
 			@seriesAssignForm(prefix, csrf, *b.SeriesAssign)
 		} else {
 			<div id="series-assign" class="book-organization-section">
 				<h2>Series</h2>
+				if len(b.SeriesNow) > 0 {
+					<p class="seriesnow">
+						for _, s := range b.SeriesNow {
+							<a class="chip" href={ prefix + s.URL }>
+								{ s.Name }
+								if s.Position != "" {
+									<span class="num">{ " #" + s.Position }</span>
+								}
+							</a>
+						}
+					</p>
+				} else {
+					<p>This book is in no series.</p>
+				}
+				if b.SeriesSource != "" {
+					<p class="muted">{ seriesSourceSentence(b.SeriesSource) }</p>
+				}
+				if b.SeriesFolderNote != "" {
+					<p class="muted">{ b.SeriesFolderNote }</p>
+				}
 				<p>
 					<a
 						class="btn"
