@@ -1067,6 +1067,18 @@ check('the chrome stays put once auto-hiding is switched off',
 check('the auto-hide choice persists in the browser',
   typeof savedChrome === 'string' && savedChrome.includes('"autohide":false'),
   String(savedChrome));
+await tapChapter('middle', 'touch');
+await new Promise((r) => setTimeout(r, 500));
+const manuallyHidden = JSON.parse(await chromeState());
+check('a middle tap can still hide fixed chrome',
+  manuallyHidden.state === 'hidden' && manuallyHidden.bar === '0',
+  JSON.stringify(manuallyHidden));
+await tapChapter('middle', 'touch');
+await new Promise((r) => setTimeout(r, 500));
+const manuallyShown = JSON.parse(await chromeState());
+check('a second middle tap restores fixed chrome',
+  manuallyShown.state === 'visible' && manuallyShown.bar === '1',
+  JSON.stringify(manuallyShown));
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.
