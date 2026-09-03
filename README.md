@@ -92,6 +92,12 @@ tap the middle of the page, or press `z`. Tapping or clicking the left
 and right edges of the page turns it, which is how a phone reads
 without any chrome at all. "Auto-hide bars" under Aa turns this off.
 
+What stays is a quiet line under the text, the way the Android app
+draws it: the percentage on the left, the page on the right, and in
+the middle the chapter's name or the time left. Clicking the line
+cycles what the middle shows. Pages are the engine's own fixed slices
+of the book, so the number does not change with the font size.
+
 The browser unpacks and renders EPUBs without exposing publisher content
 through application routes. Scripts inside EPUBs do not run.
 

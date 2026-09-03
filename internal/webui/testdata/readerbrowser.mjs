@@ -156,6 +156,14 @@ const probe = `(() => {
     status: document.getElementById('reader-status')?.textContent,
     chapter: document.getElementById('reader-chapter')?.textContent,
     progress: document.getElementById('reader-progress-text')?.textContent,
+    page: document.getElementById('reader-page')?.textContent,
+    footerShown: (() => {
+      const f = document.getElementById('reader-footer');
+      if (!f) return false;
+      const cs = getComputedStyle(f);
+      return cs.display !== 'none' && cs.visibility !== 'hidden' && f.getClientRects().length > 0;
+    })(),
+    footerMode: document.body.dataset.readerFooter,
     title: document.getElementById('reader-title-text')?.textContent,
     hasDoc: !!doc,
     frameReachable: !!document.querySelector('#reader-view iframe'),
@@ -195,6 +203,16 @@ check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
 check('reader shows the book: own chapter label',
   diag.chapter === 'Title Page', diag.chapter);
+// The footer's page is the engine's location, "n of m", and it is a
+// page of the book, not a fabrication: n is within m.
+const pageOf = (t) => {
+  const m = /^(\d+) of (\d+)$/.exec(t || '');
+  return m ? { n: +m[1], of: +m[2] } : null;
+};
+check('the footer shows a page of the book',
+  pageOf(diag.page) && pageOf(diag.page).n >= 1 && pageOf(diag.page).n <= pageOf(diag.page).of,
+  diag.page);
+check('the footer is on screen with the book', diag.footerShown, String(diag.footerShown));
 // The chapter frame lives in a closed shadow root: nothing on the
 // page — including anything a publication managed to smuggle onto it —
 // can reach in by DOM query.
@@ -260,7 +278,7 @@ for (let i = 0; i < 10; i++) {
   await evalIn(`document.getElementById('reader-next').click()`);
   await new Promise((r) => setTimeout(r, 900));
   const now = JSON.parse(await evalIn(probe));
-  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi });
+  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi, loc: now.page });
 }
 console.log('page turns:', JSON.stringify(seen, null, 1));
 
@@ -273,6 +291,40 @@ check('the book pages past page 2', distinct >= 6,
 check('the reader leaves the first chapter',
   seen.some((p) => p.chapter !== diag.chapter),
   seen.map((p) => p.chapter).join(' '));
+// Turning forward never sends the page number backwards, and it does
+// move: a counter that stays put is not counting pages.
+const locs = seen.map((p) => pageOf(p.loc)).filter(Boolean);
+check('the page number counts forward with the turns',
+  locs.length === seen.length &&
+    locs.every((l, i) => i === 0 || l.n >= locs[i - 1].n) &&
+    locs[locs.length - 1].n > locs[0].n &&
+    locs.every((l) => l.of === locs[0].of),
+  seen.map((p) => p.loc).join(' '));
+
+// A click on the footer changes what its middle says and nothing else:
+// it is not a stage surface, so the page under it stays where it was.
+{
+  const before = JSON.parse(await evalIn(probe));
+  await evalIn(`document.getElementById('reader-footer').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const after = JSON.parse(await evalIn(probe));
+  check('a click on the footer cycles the middle slot',
+    before.footerMode === 'chapter' && after.footerMode === 'time-chapter' &&
+      /left in chapter$/.test(after.chapter || ''),
+    `${before.footerMode} -> ${after.footerMode}: ${JSON.stringify(after.chapter)}`);
+  check('a click on the footer turns no page',
+    before.cfi === after.cfi && before.fraction === after.fraction && before.page === after.page,
+    `${before.page} -> ${after.page}`);
+  // Twice more and it is back to the chapter's name.
+  await evalIn(`document.getElementById('reader-footer').click()`);
+  await evalIn(`document.getElementById('reader-footer').click()`);
+  await evalIn(`document.getElementById('reader-footer').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const round = JSON.parse(await evalIn(probe));
+  check('the footer ring comes back round to the chapter',
+    round.footerMode === 'chapter' && round.chapter === before.chapter,
+    `${round.footerMode}: ${JSON.stringify(round.chapter)}`);
+}
 
 // Going back has to work too, or the reader is a one-way trip.
 await evalIn(`document.getElementById('reader-prev').click()`);
@@ -316,6 +368,29 @@ await new Promise((r) => setTimeout(r, 700));
 const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the publisher styling',
   unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
+
+// In scroll mode the text runs under the bottom edge, so the footer
+// goes: a line drawn there would print itself over the book. It is back
+// the moment the pages are.
+{
+  const setFlow = (value) => evalIn(`(() => {
+    const radio = document.querySelector(
+      '#reader-settings-form input[name="flow"][value="${value}"]',
+    );
+    radio.checked = true;
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await setFlow('scrolled');
+  await new Promise((r) => setTimeout(r, 700));
+  const scrolled = JSON.parse(await evalIn(probe));
+  check('the footer leaves in scroll mode', !scrolled.footerShown,
+    String(scrolled.footerShown));
+  await setFlow('paginated');
+  await new Promise((r) => setTimeout(r, 900));
+  const paged = JSON.parse(await evalIn(probe));
+  check('the footer returns with the pages', paged.footerShown && pageOf(paged.page),
+    `${paged.footerShown} ${paged.page}`);
+}
 
 // A click on any blank margin is a page turn: aimed at the right edge
 // of the stage — which the engine's own margin occupies, retargeted to
@@ -463,6 +538,7 @@ const chromeState = () => evalIn(`JSON.stringify({
   state: document.body.dataset.readerChrome || 'visible',
   bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
   arrow: getComputedStyle(document.getElementById('reader-next')).opacity,
+  footer: getComputedStyle(document.getElementById('reader-footer')).display,
 })`);
 const idle = () => new Promise((r) => setTimeout(r, 3000));
 // Tap the chapter document itself, the way a pointer really does it:
@@ -494,6 +570,10 @@ const parked = JSON.parse(await chromeState());
 check('the chrome steps aside while reading',
   parked.state === 'hidden' && parked.bar === '0' && parked.arrow === '0',
   JSON.stringify(parked));
+// The footer is the one piece of chrome that stays: the figures are
+// what a reader glances at mid-page, bars or no bars.
+check('the footer stays while the chrome is hidden',
+  parked.footer !== 'none', JSON.stringify(parked));
 
 await evalIn(`(() => {
   document.dispatchEvent(new PointerEvent('pointermove', {
