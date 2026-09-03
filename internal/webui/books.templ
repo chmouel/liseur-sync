@@ -66,6 +66,13 @@ type BookView struct {
 	Deletable bool
 	Notice    string
 	Problem   string
+	// SeriesAssign is the assign dialog rendered into the page rather
+	// than fetched. It is nil in the ordinary case: with scripting on,
+	// htmx swaps the dialog in where the placeholder sits, and building
+	// it costs three store reads a reader who is not editing does not
+	// need. It is set when the fragment route is reached without htmx,
+	// which is what the placeholder's plain link does.
+	SeriesAssign *SeriesAssignView
 	// Chips are the book's entities as links: the fastest way from one
 	// book to the rest of its author or its series.
 	Authors []ChipLink
@@ -172,19 +179,23 @@ templ bookBody(prefix, csrf string, b BookView) {
 		// The dialog is fetched rather than rendered: it is three store
 		// reads a reader who is not editing does not need, and htmx swaps it
 		// in where this placeholder sits. With scripting off the link is a
-		// plain link to the same fragment.
-		<div id="series-assign" class="book-organization-section">
-			<h2>Series</h2>
-			<p>
-				<a
-					class="btn"
-					href={ prefix + "books/" + b.ID + "/series" }
-					hx-get={ prefix + "books/" + b.ID + "/series" }
-					hx-target="#series-assign"
-					hx-swap="outerHTML"
-				>Change this book's series</a>
-			</p>
-		</div>
+		// plain link that comes back here with the dialog already open.
+		if b.SeriesAssign != nil {
+			@seriesAssignForm(prefix, csrf, *b.SeriesAssign)
+		} else {
+			<div id="series-assign" class="book-organization-section">
+				<h2>Series</h2>
+				<p>
+					<a
+						class="btn"
+						href={ prefix + "books/" + b.ID + "/series" }
+						hx-get={ prefix + "books/" + b.ID + "/series" }
+						hx-target="#series-assign"
+						hx-swap="outerHTML"
+					>Change this book's series</a>
+				</p>
+			</div>
+		}
 		<div class="book-organization-section">
 			<h2>File</h2>
 		if !b.Present {

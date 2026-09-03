@@ -28,6 +28,32 @@ func relPrefix(p string) string {
 	return strings.Repeat("../", strings.Count(rest, "/")+1)
 }
 
+// bookPagePrefix is relPrefix for the book page at /ui/books/{id}.
+//
+// An htmx fragment has to be rendered with the prefix of the page it is
+// swapped into, not of the route that served it: the browser resolves
+// the URLs inside it against the page's own URL. The series dialog is
+// served from /ui/books/{id}/series and /ui/books/{id}/series/reset,
+// one and two segments deeper than the page it lands on, so using its
+// own request path would climb past the UI root.
+func bookPagePrefix(bookID string) string {
+	return relPrefix("/ui/books/" + url.PathEscape(bookID))
+}
+
+// fragmentHTML declares an htmx fragment as HTML before it is written.
+//
+// A full page needs no such thing: it starts with a doctype and Go
+// sniffs it correctly. A fragment is a bare run of elements, and
+// http.DetectContentType only recognises a short list of tags — a
+// fragment opening with <div> is called text/html, one opening with
+// <option> is called text/plain. The typeahead's <option> list is the
+// second kind, and this UI also sends X-Content-Type-Options: nosniff,
+// which makes whatever is declared the browser's final answer. So the
+// fragments say what they are rather than hoping to be guessed right.
+func fragmentHTML(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+}
+
 // userCtx carries the signed-in user and everything the shell needs to
 // draw itself: which palette to render, which browse view to use, which
 // rail entry is the current one, and where a preference form should
