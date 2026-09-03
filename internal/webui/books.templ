@@ -215,7 +215,12 @@ templ bookBody(prefix, csrf string, b BookView) {
 							</a>
 						}
 					</p>
-				} else {
+				} else if b.SeriesSource != "" {
+					// Only a read that succeeded can say a book is in no
+					// series. SeriesSource is set on every success, so an
+					// unset one means the layers did not come back, and
+					// the section says nothing rather than something
+					// false about somebody's shelf.
 					<p>This book is in no series.</p>
 				}
 				if b.SeriesSource != "" {
