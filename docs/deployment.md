@@ -216,14 +216,24 @@ liseur-sync admin -config liseur-sync.toml unassign-folder alice <folder-id>
 liseur-sync admin -config liseur-sync.toml list-user-folders alice
 liseur-sync admin -config liseur-sync.toml assign-all-folders alice
 liseur-sync admin -config liseur-sync.toml scan-folder <folder-id>
+liseur-sync admin -config liseur-sync.toml scan [name|folder-id]
+liseur-sync -config liseur-sync.toml scan [name|folder-id]
 ```
 
-`scan-folder` runs one reconcile pass over a folder right now, the same
-pass the watcher runs, and prints what it changed. It takes a folder id,
-or a name when exactly one folder bears it. It is the shell
-equivalent of the Scan button and the way to make a cron job or a repair
-script (see [Auditing a Calibre library](#auditing-a-calibre-library))
-finish with a catalog that agrees with the disk.
+`scan` runs a reconcile pass right now — the same pass the watcher runs —
+and prints what it changed. Named with a folder id, or a name when
+exactly one folder bears it, it does that one folder; with no argument it
+does every watched folder in turn and prints a total. `scan-folder` is
+the older spelling of the one-folder case and still works. The top-level
+`liseur-sync scan` is the same command without the `admin` word, for a
+cron job or a repair script (see
+[Auditing a Calibre library](#auditing-a-calibre-library)) that only ever
+wants this.
+
+On a terminal it draws a spinner per folder; piped to a file or run from
+cron it writes plain lines and no escape sequences. A folder that fails
+does not stop the rest — every failure is reported and the exit status is
+non-zero.
 
 The per-account checkboxes under Settings > Administration > Users submit
 the account's complete grant set, so the page lists every watched folder
@@ -271,11 +281,25 @@ start and the folder does not become unusable.
 
 A network mount is the case where this matters. NFS and SMB report
 nothing to inotify, so such a folder is only ever read by the periodic
-pass, which is up to half an hour behind. **Settings > Administration > Folders**
-has a
-*Scan now* for each folder that runs a pass immediately. It is safe to
-press at any time and safe to press twice: a pass is idempotent, so
-asking again is asking once.
+pass, which is up to half an hour behind.
+
+There are three buttons for this, and they differ only in what they cover
+and whether they wait:
+
+- **Settings > Administration > Folders** has a *Scan now* per folder. It
+  asks for a pass and returns immediately, so the page says a pass was
+  asked for rather than what it found.
+- The same page has *Scan all*, which runs a pass over every watched
+  folder and waits for them, so the page that comes back is the one those
+  passes produced.
+- The library page has a *Scan* button for everybody, covering the
+  folders that reader has been granted (every folder, for an
+  administrator). It also waits.
+
+The two that wait give up after two minutes and say so; the pass they
+started is not undone, and the watcher's periodic pass finishes the job.
+All of them are safe to press at any time and safe to press twice: a pass
+is idempotent, so asking again is asking once.
 
 `scan_max_files` and `scan_max_depth` bound one pass. They are guards
 against pointing at too much, not tuning knobs. A pass that hits either

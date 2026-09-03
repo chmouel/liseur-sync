@@ -67,8 +67,16 @@ func noRedirect() *http.Client {
 
 func loginCookie(t *testing.T, ts *httptest.Server) *http.Cookie {
 	t.Helper()
+	return loginCookieAs(t, ts, "alice", "hunter2hunter")
+}
+
+// loginCookieAs signs in as somebody other than the account
+// testServerCfg makes, which is what a test about what a reader may see
+// needs: alice is usually the administrator.
+func loginCookieAs(t *testing.T, ts *httptest.Server, name, password string) *http.Cookie {
+	t.Helper()
 	resp, err := noRedirect().PostForm(ts.URL+"/ui/login", url.Values{
-		"username": {"alice"}, "password": {"hunter2hunter"},
+		"username": {name}, "password": {password},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +87,7 @@ func loginCookie(t *testing.T, ts *httptest.Server) *http.Cookie {
 			return c
 		}
 	}
-	t.Fatal("no session cookie")
+	t.Fatalf("no session cookie for %s", name)
 	return nil
 }
 
@@ -262,7 +270,7 @@ func TestAuthFlowAndPages(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
-		"/ui/admin/folders/f1/scan",
+		"/ui/admin/folders/f1/scan", "/ui/admin/folders/scan-all",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
 	} {
@@ -624,11 +632,12 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/admin/users/u1/tokens/t1/revoke", "/ui/admin/users/u1/kosync/s1/revoke",
 		"/ui/admin/users/u1/koplugin/k1/revoke",
 		"/ui/admin/folders", "/ui/admin/folders/f1/delete",
-		"/ui/admin/folders/f1/scan",
+		"/ui/admin/folders/f1/scan", "/ui/admin/folders/scan-all",
 		"/ui/admin/users/u1/tokens", "/ui/admin/users/u1/pairing",
 		"/ui/admin/users/u1/koplugin", "/ui/admin/users/u1/backfill",
 		"/ui/reader/token",
 		"/ui/preferences",
+		"/ui/library/scan",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
 			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)

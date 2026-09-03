@@ -127,6 +127,9 @@ const Usage = `usage: liseur-sync admin [-config <file>] <subcommand>
                                 account; without it nobody can read it
                                 and the command says so
   list-folders                  list the folders this server watches
+  scan [name|folder-id]         run a reconcile pass now; scans all folders
+                                if none specified, or the named folder
+                                (Linux only)
   scan-folder <name|folder-id>  run one reconcile pass over a folder now,
                                 the same pass the watcher runs, and print
                                 what it changed (Linux only)

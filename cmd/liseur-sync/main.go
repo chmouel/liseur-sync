@@ -18,6 +18,8 @@ import (
 
 	_ "time/tzdata" // IANA timezones in FROM scratch images
 
+	"golang.org/x/term"
+
 	"github.com/chmouel/liseur-sync/internal/adapter/koplugin"
 	"github.com/chmouel/liseur-sync/internal/adapter/kosync"
 	"github.com/chmouel/liseur-sync/internal/admin"
@@ -86,6 +88,7 @@ func runMain(args []string, stderr io.Writer) int {
 const topUsage = `usage: liseur-sync <command> [flags]
 
   serve [-config <file>]   run the sync and content server
+  scan [-config <file>]    scan watched folders now
   admin [-config <file>]   manage users, tokens, and folders;
                            run "liseur-sync admin help" for subcommands
 `
@@ -99,11 +102,13 @@ func run(args []string) error {
 		return usageExit{text: topUsage, code: 0}
 	case "serve":
 		return cmdServe(args[1:])
+	case "scan":
+		return cmdTopScan(args[1:])
 	case "admin":
 		return cmdAdmin(args[1:])
 	default:
 		return usageExit{
-			text: fmt.Sprintf("unknown subcommand %q (want serve|admin)\n%s",
+			text: fmt.Sprintf("unknown subcommand %q (want serve|scan|admin)\n%s",
 				args[0], topUsage),
 			code: 1,
 		}
@@ -315,10 +320,10 @@ func cmdAdmin(args []string) error {
 	if err := st.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
-	// scan-folder needs the reconciler, which lives in internal/content
+	// scan and scan-folder need the reconciler, which lives in internal/content
 	// and is Linux-only; internal/admin is not, so it is wired here.
-	if rest[0] == "scan-folder" {
-		return cmdScanFolder(cfg, st, rest[1:])
+	if rest[0] == "scan" || rest[0] == "scan-folder" {
+		return cmdScan(cfg, st, "liseur-sync admin "+rest[0], rest[1:])
 	}
 	if err := admin.Run(st, rest); err != nil {
 		var usage admin.UsageError
@@ -330,64 +335,207 @@ func cmdAdmin(args []string) error {
 	return nil
 }
 
-// cmdScanFolder runs the watcher's pass over one folder on demand. It is
-// the same code path, so it can do nothing the watcher could not, and it
-// is the only way to reconcile from a shell or a cron job (the other
-// trigger is the web UI's scan button).
-func cmdScanFolder(cfg config.Config, st store.Store, args []string) error {
-	if len(args) != 1 {
-		return usageExit{text: "usage: liseur-sync admin scan-folder <name|folder-id>\n" + admin.Usage, code: 2}
+type cliSpinner struct {
+	msg    string
+	stopCh chan struct{}
+	doneCh chan struct{}
+	isTerm bool
+}
+
+func startSpinner(msg string, isTerm bool) *cliSpinner {
+	s := &cliSpinner{
+		msg:    msg,
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
+		isTerm: isTerm,
+	}
+	if !isTerm {
+		fmt.Printf("%s...\n", msg)
+		close(s.doneCh)
+		return s
+	}
+	go func() {
+		defer close(s.doneCh)
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		i := 0
+		ticker := time.NewTicker(80 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stopCh:
+				fmt.Print("\r\033[K")
+				return
+			case <-ticker.C:
+				fmt.Printf("\r\033[K%s %s...", frames[i%len(frames)], s.msg)
+				i++
+			}
+		}
+	}()
+	return s
+}
+
+func (s *cliSpinner) stop() {
+	if !s.isTerm {
+		return
+	}
+	close(s.stopCh)
+	<-s.doneCh
+}
+
+func cmdTopScan(args []string) error {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfgPath := fs.String("config", defaultConfigPath(),
+		"path to TOML config file (default liseur-sync.toml, override with LISEUR_CONFIG)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return usageExit{text: flagUsage(fs), code: 0}
+		}
+		return usageExit{text: err.Error() + "\n" + flagUsage(fs), code: 1}
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	st, err := openStore(cfg)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer st.Close()
+	if err := st.Migrate(context.Background()); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	return cmdScan(cfg, st, "liseur-sync scan", fs.Args())
+}
+
+// cmdScan runs a reconcile pass on demand over one folder or all of
+// them. It is the same code path the watcher runs, so it can do nothing
+// the watcher could not, and it is the only way to reconcile from a
+// shell or a cron job (the other triggers are the web UI's scan
+// buttons).
+//
+// invocation is how the caller spelled it, so that the usage a mistake
+// prints is the command the person actually typed.
+func cmdScan(cfg config.Config, st store.Store, invocation string, args []string) error {
+	needsFolder := strings.HasSuffix(invocation, "scan-folder")
+	usage := invocation + " [name|folder-id]"
+	if needsFolder {
+		usage = invocation + " <name|folder-id>"
+	}
+	if needsFolder && len(args) != 1 {
+		return usageExit{text: "usage: " + usage + "\n" + admin.Usage, code: 2}
+	}
+	if len(args) > 1 {
+		return usageExit{text: "usage: " + usage + "\n" + admin.Usage, code: 2}
 	}
 	ctx := context.Background()
-	// An id wins outright; a name is accepted only when exactly one
-	// folder bears it, because names are not unique and a pass over the
-	// wrong folder is a real write.
-	var byID *store.Folder
-	var byName []store.Folder
+	var allFolders []store.Folder
 	cursor := ""
 	for {
 		page, err := st.ListFolders(ctx, "", cursor, 200)
 		if err != nil {
 			return fmt.Errorf("list folders: %w", err)
 		}
-		for i := range page {
-			switch args[0] {
-			case page[i].ID:
-				byID = &page[i]
-			case page[i].Name:
-				byName = append(byName, page[i])
-			}
-		}
+		allFolders = append(allFolders, page...)
 		if len(page) < 200 {
 			break
 		}
 		cursor = store.FolderCursor(page[len(page)-1])
 	}
-	folder := byID
-	switch {
-	case folder != nil:
-	case len(byName) == 1:
-		folder = &byName[0]
-	case len(byName) > 1:
-		ids := make([]string, 0, len(byName))
-		for _, f := range byName {
-			ids = append(ids, f.ID)
+
+	var targets []store.Folder
+	if len(args) == 1 {
+		targetName := args[0]
+		var byID *store.Folder
+		var byName []store.Folder
+		for i := range allFolders {
+			switch targetName {
+			case allFolders[i].ID:
+				byID = &allFolders[i]
+			case allFolders[i].Name:
+				byName = append(byName, allFolders[i])
+			}
 		}
-		return fmt.Errorf("%d folders are named %q; use an id: %s",
-			len(byName), args[0], strings.Join(ids, " "))
-	default:
-		return fmt.Errorf("no folder named %q", args[0])
+		switch {
+		case byID != nil:
+			targets = []store.Folder{*byID}
+		case len(byName) == 1:
+			targets = []store.Folder{byName[0]}
+		case len(byName) > 1:
+			ids := make([]string, 0, len(byName))
+			for _, f := range byName {
+				ids = append(ids, f.ID)
+			}
+			return fmt.Errorf("%d folders are named %q; use an id: %s",
+				len(byName), targetName, strings.Join(ids, " "))
+		default:
+			return fmt.Errorf("no folder named %q", targetName)
+		}
+	} else {
+		targets = allFolders
+		if len(targets) == 0 {
+			fmt.Println("no watched folders found to scan")
+			return nil
+		}
 	}
+
+	isTerm := term.IsTerminal(int(os.Stdout.Fd())) && os.Getenv("TERM") != "dumb"
 	reconciler := content.NewReconciler(st, content.ScanLimits{
 		MaxFiles: cfg.Content.ScanMaxFiles,
 		MaxDepth: cfg.Content.ScanMaxDepth,
 	}, cfg.EPUBLimits(), slog.Default())
-	result, err := reconciler.Reconcile(ctx, *folder)
-	if err != nil {
-		return fmt.Errorf("reconcile %s: %w", folder.Name, err)
+
+	start := time.Now()
+	var total store.ReconcileResult
+	var scanErrors []string
+
+	for _, folder := range targets {
+		sp := startSpinner(fmt.Sprintf("Scanning folder %q", folder.Name), isTerm)
+		result, err := reconciler.Reconcile(ctx, folder)
+		sp.stop()
+
+		if err != nil {
+			scanErrors = append(scanErrors, fmt.Sprintf("%s: %v", folder.Name, err))
+			if isTerm {
+				fmt.Printf("\033[31m✖\033[0m folder %s (%s) failed: %v\n", folder.Name, folder.ID, err)
+			} else {
+				fmt.Printf("folder %s (%s) failed: %v\n", folder.Name, folder.ID, err)
+			}
+			continue
+		}
+
+		total.Added += result.Added
+		total.Updated += result.Updated
+		total.Replaced += result.Replaced
+		total.Missing += result.Missing
+		total.Returned += result.Returned
+		total.Purged += result.Purged
+		total.Rekeyed += result.Rekeyed
+
+		if isTerm {
+			fmt.Printf("\033[32m✔\033[0m folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
+				folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
+				result.Missing, result.Returned, result.Purged, result.Rekeyed)
+		} else {
+			fmt.Printf("folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
+				folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
+				result.Missing, result.Returned, result.Purged, result.Rekeyed)
+		}
 	}
-	fmt.Printf("folder %s (%s) reconciled: added=%d updated=%d replaced=%d missing=%d returned=%d purged=%d rekeyed=%d\n",
-		folder.Name, folder.ID, result.Added, result.Updated, result.Replaced,
-		result.Missing, result.Returned, result.Purged, result.Rekeyed)
+
+	if len(targets) > 1 {
+		elapsed := time.Since(start).Round(time.Millisecond)
+		if isTerm {
+			fmt.Printf("\033[32m✔\033[0m Scanned %d folder(s) in %s: %d added, %d updated, %d missing, %d purged\n",
+				len(targets), elapsed, total.Added, total.Updated, total.Missing, total.Purged)
+		} else {
+			fmt.Printf("Scanned %d folder(s) in %s: %d added, %d updated, %d missing, %d purged\n",
+				len(targets), elapsed, total.Added, total.Updated, total.Missing, total.Purged)
+		}
+	}
+
+	if len(scanErrors) > 0 {
+		return fmt.Errorf("%d scan(s) failed: %s", len(scanErrors), strings.Join(scanErrors, "; "))
+	}
 	return nil
 }
