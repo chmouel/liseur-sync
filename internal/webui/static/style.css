@@ -1106,12 +1106,39 @@ button.linkish:hover, button.linkish:focus-visible {
 }
 
 /* The assign dialog. Each row is a name and a position, and the position
-   stays narrow so the name gets the width it needs. */
-.assignrows { display: flex; flex-direction: column; gap: .4rem; margin: .8rem 0; }
-.assignrow { display: flex; gap: .5rem; margin: 0; }
-.assignrow input[type="text"] { min-width: 0; }
-.assignrow input[name="name"] { flex: 1; }
-.assignrow input[name="position"] { flex: 0 0 5rem; }
+   stays narrow so the name gets the width it needs.
+   The row selector is doubled on purpose. A row is a <p> inside a card
+   form, so `.card form p` matches it, and that rule stacks a label over
+   its field with `flex-direction: column`. Being more specific than one
+   class it won, and a flex-basis written to mean "5rem wide" was read as
+   "5rem tall". Hence two classes here, and widths rather than a basis on
+   the fields, so no surrounding direction can flip them again. */
+.assignrows { display: flex; flex-direction: column; gap: .4rem; margin: .2rem 0 .8rem; }
+.assignrows .assignrow {
+	display: flex; flex-direction: row; align-items: center;
+	gap: .5rem; margin: 0; max-width: 40rem;
+}
+.assignrows .assignrow > input[type="text"] { min-width: 0; }
+.assignrows .assignrow > input[name="name"] { flex: 1 1 auto; width: auto; }
+.assignrows .assignrow > input[name="position"] { flex: 0 0 auto; width: 5rem; }
+
+/* The headings for those two columns, held to the same two widths. */
+.assignhead {
+	display: flex; gap: .5rem; max-width: 40rem; margin: .8rem 0 0;
+	font-size: .8rem; color: var(--muted);
+}
+.assignhead > :first-child { flex: 1 1 auto; min-width: 0; }
+.assignhead > :last-child { flex: 0 0 auto; width: 5rem; }
+
+/* Saving and undoing are two forms, so left alone they stack into a pile
+   of buttons. The undo button sits in the first form and names the
+   second one, which is what the form attribute is for. */
+.assignactions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .8rem 0 0; }
+
+/* The series a book is in, stated on the book page before the editor is
+   opened. */
+.seriesnow { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 .4rem; }
+.seriesnow .num { color: var(--muted); }
 
 /* The names a merge or a split made lead to a shelf (ADR-0021). Each is
    a statement and the button that takes it back, so they sit on one
