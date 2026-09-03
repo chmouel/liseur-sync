@@ -549,3 +549,32 @@ func TestScanNoticeNamesEveryCounter(t *testing.T) {
 		t.Fatalf("notice %q dropped a counter", got)
 	}
 }
+
+// TestScanProblemDoesNotPromiseABackgroundScan. The budget cancels the
+// pass; it does not detach it. A message saying the scan carries on
+// would tell a reader to wait for something that is not running, and
+// the honest answer is that it stopped and the periodic pass will
+// finish. This pins the distinction, because it is easy to write the
+// reassuring version by accident.
+func TestScanProblemDoesNotPromiseABackgroundScan(t *testing.T) {
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("test setup: context error is %v", ctx.Err())
+	}
+
+	for _, admin := range []bool{true, false} {
+		got := scanProblem(ctx, errors.New("root unavailable: /srv/books"), admin)
+		if strings.Contains(got, "background") || strings.Contains(got, "will finish") {
+			t.Errorf("timeout message promises a background scan (admin=%v): %q", admin, got)
+		}
+		if !strings.Contains(got, "stopped") {
+			t.Errorf("timeout message does not say it stopped (admin=%v): %q", admin, got)
+		}
+		// A timeout is reported before the error is, so the root path
+		// never reaches the page by this route either.
+		if strings.Contains(got, "/srv/books") {
+			t.Errorf("timeout message leaked the root path (admin=%v): %q", admin, got)
+		}
+	}
+}
