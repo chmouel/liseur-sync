@@ -933,10 +933,12 @@ export class EPUB {
     parser = new DOMParser()
     #loader
     #encryption
-    constructor({ loadText, loadBlob, getSize, sha1 }) {
+    constructor({ loadText, loadBlob, getSize, getCompressedSize, sha1 }) {
         this.loadText = loadText
         this.loadBlob = loadBlob
         this.getSize = getSize
+        // liseur-sync patch: see `compressedSize` on each section below.
+        this.getCompressedSize = getCompressedSize ?? getSize
         this.#encryption = new Encryption(deobfuscators(sha1))
     }
     async #loadXML(uri) {
@@ -989,6 +991,11 @@ ${doc.querySelector('parsererror').innerText}`)
                 unload: () => this.#loader.unloadItem(item),
                 createDocument: () => this.loadDocument(item),
                 size: this.getSize(item.href),
+                // liseur-sync patch: the length of this section as it
+                // is stored in the archive. `size` is what the engine
+                // measures progress with; this is what the footer
+                // counts Readium's positions from.
+                compressedSize: this.getCompressedSize(item.href),
                 cfi: this.resources.cfis[index],
                 linear,
                 pageSpread: getPageSpread(properties),

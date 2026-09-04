@@ -39,7 +39,13 @@ const makeZipLoader = async file => {
     const loadText = load(entry => entry.getData(new TextWriter()))
     const loadBlob = load((entry, type) => entry.getData(new BlobWriter(type)))
     const getSize = name => map.get(name)?.uncompressedSize ?? 0
-    return { entries, loadText, loadBlob, getSize }
+    // liseur-sync patch: the archive entry's stored length, which is
+    // what Readium's positions are counted from. A STORED entry has no
+    // compressed length of its own and reports the uncompressed one,
+    // which is the fallback Readium takes as well.
+    const getCompressedSize = name =>
+        map.get(name)?.compressedSize ?? map.get(name)?.uncompressedSize ?? 0
+    return { entries, loadText, loadBlob, getSize, getCompressedSize }
 }
 
 const getFileEntries = async entry => entry.isFile ? entry
@@ -62,7 +68,10 @@ const makeDirectoryLoader = async entry => {
     const loadText = async name => decode(await getBuffer(name))
     const loadBlob = name => map.get(name)
     const getSize = name => map.get(name)?.size ?? 0
-    return { loadText, loadBlob, getSize }
+    // liseur-sync patch: a loose directory has no archive at all, so
+    // the entry length is the file length — the same fallback Readium
+    // takes for a resource with no archive properties.
+    return { loadText, loadBlob, getSize, getCompressedSize: getSize }
 }
 
 export class ResponseError extends Error {}
@@ -331,7 +340,11 @@ export class View extends HTMLElement {
         const tocItem = this.#tocProgress?.getProgress(index, range)
         const pageItem = this.#pageProgress?.getProgress(index, range)
         const cfi = this.getCFI(index, range)
-        this.lastLocation = { ...progress, tocItem, pageItem, cfi, range }
+        // liseur-sync patch: `sectionFraction` is how far into this
+        // section the reader is. The engine has it in hand here and
+        // nowhere else; the footer's page number is counted from it.
+        this.lastLocation = { ...progress, tocItem, pageItem, cfi, range,
+            sectionFraction: fraction }
         if (reason === 'snap' || reason === 'page' || reason === 'scroll')
             this.history.replaceState(cfi)
         this.#emit('relocate', this.lastLocation)
