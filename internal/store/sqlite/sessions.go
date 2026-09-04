@@ -9,12 +9,13 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// AppendSessions inserts a batch of sessions. Idempotent on
-// (user_id, session_id): identical re-uploads are skipped; same id with
-// a different payload is ErrIDMismatch for that item (reported per-item
-// by the caller layer; here the whole batch fails atomically with
-// per-item status returned via SessionResult in a later milestone —
-// sessions arrive in M3, the store path exists now).
+// AppendSessions inserts a batch of sessions atomically. Idempotent on
+// (user_id, session_id): identical re-uploads are skipped; the same id
+// with a different payload, live or archived as a tombstone, fails the
+// batch with a *store.ItemError wrapping ErrIDMismatch that names the
+// item; a new session naming a work this user lacks fails it with one
+// wrapping ErrNotFound. Replays are judged before the work check, so a
+// duplicate stays a duplicate after its work is gone.
 func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Session) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -31,14 +32,14 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 }
 
 func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now string) error {
-	for _, ses := range ss {
+	for i, ses := range ss {
 		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx,
 			`SELECT fingerprint FROM session_tombstones WHERE user_id = ? AND session_id = ?`,
 			userID, ses.SessionID).Scan(&archivedFingerprint)
 		if err == nil {
 			if archivedFingerprint != store.SessionFingerprint(ses) {
-				return store.ErrIDMismatch
+				return store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue
 		}
@@ -58,9 +59,14 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 				return err
 			}
 			if !same {
-				return store.ErrIDMismatch
+				return store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue // idempotent duplicate
+		}
+		if ok, err := workExistsTx(ctx, tx, userID, ses.WorkID); err != nil {
+			return err
+		} else if !ok {
+			return store.UnknownWork("session", ses.SessionID, i, ses.WorkID)
 		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,

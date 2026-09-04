@@ -26,6 +26,17 @@ func lockWorkGraph(ctx context.Context, tx *sql.Tx, userID string) error {
 	return err
 }
 
+// workExistsTx: see the SQLite implementation.
+func workExistsTx(ctx context.Context, tx *sql.Tx, userID, workID string) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, q(
+		`SELECT 1 FROM works WHERE user_id = ? AND id = ?`), userID, workID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // lockAllWorkGraphs excludes per-user work-graph mutations for a transaction
 // that can affect an unknown number of readers.
 func lockAllWorkGraphs(ctx context.Context, tx *sql.Tx) error {
