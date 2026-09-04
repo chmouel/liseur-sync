@@ -230,6 +230,8 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("AtomicWorkResolution", func(t *testing.T) { testAtomicWorkResolution(t, open) })
 	t.Run("AppendOpsIdempotencyAndConflict", func(t *testing.T) { testAppendOps(t, open) })
 	t.Run("ChangesPaginationAndHeads", func(t *testing.T) { testChangesAndHeads(t, open) })
+	t.Run("CompactionHorizon", func(t *testing.T) { testCompactionHorizon(t, open) })
+	t.Run("ChangesIsASnapshot", func(t *testing.T) { testChangesIsASnapshot(t, open) })
 	t.Run("SplitAndMerge", func(t *testing.T) { testSplitAndMerge(t, open) })
 	t.Run("SessionsAppendOnly", func(t *testing.T) { testSessionsAppendOnly(t, open) })
 	t.Run("SessionRollups", func(t *testing.T) { testSessionRollups(t, open) })
