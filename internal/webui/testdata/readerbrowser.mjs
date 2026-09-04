@@ -336,6 +336,42 @@ check('the page number counts forward with the turns',
     `${round.footerMode}: ${JSON.stringify(round.chapter)}`);
 }
 
+// Clicking percentage opens the go-to dialog and lets the reader jump to a percentage.
+{
+  await evalIn(`document.getElementById('reader-progress-text').click()`);
+  const dialogOpen = await evalIn(`document.getElementById('reader-goto')?.open`);
+  check('clicking percentage opens the goto dialog', dialogOpen === true);
+  const title = await evalIn(`document.getElementById('reader-goto-title')?.textContent`);
+  check('dialog title is percentage', title === 'Go to percentage');
+  // Jump to 50%
+  await evalIn(`(() => {
+    const input = document.getElementById('reader-goto-input');
+    input.value = '50';
+    document.getElementById('reader-goto-form').dispatchEvent(new Event('submit', { cancelable: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const jumped = JSON.parse(await evalIn(probe));
+  check('percentage jump reached ~50%', Math.abs(jumped.fraction - 0.5) < 0.15, `${jumped.fraction}`);
+}
+
+// Clicking page number opens the go-to dialog and lets the reader jump to a page.
+{
+  await evalIn(`document.getElementById('reader-page').click()`);
+  const dialogOpen = await evalIn(`document.getElementById('reader-goto')?.open`);
+  check('clicking page opens the goto dialog', dialogOpen === true);
+  const title = await evalIn(`document.getElementById('reader-goto-title')?.textContent`);
+  check('dialog title is page', title === 'Go to page');
+  // Jump to page 1
+  await evalIn(`(() => {
+    const input = document.getElementById('reader-goto-input');
+    input.value = '1';
+    document.getElementById('reader-goto-form').dispatchEvent(new Event('submit', { cancelable: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const jumped = JSON.parse(await evalIn(probe));
+  check('page jump reached page 1', /^(1 of|1\b)/.test(jumped.page || ''), `${jumped.page}`);
+}
+
 // Going back has to work too, or the reader is a one-way trip.
 await evalIn(`document.getElementById('reader-prev').click()`);
 await new Promise((r) => setTimeout(r, 900));

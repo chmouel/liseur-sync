@@ -15,7 +15,7 @@
 import "./vendor/foliate/view.js";
 import { Overlayer } from "./vendor/foliate/overlayer.js";
 import { openSession } from "./reader-session.js";
-import { positionTable, pageAt } from "./reader-positions.js";
+import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -50,6 +50,14 @@ const progressText = document.getElementById("reader-progress-text");
 const chapterText = document.getElementById("reader-chapter");
 const pageText = document.getElementById("reader-page");
 const footer = document.getElementById("reader-footer");
+const gotoDialog = document.getElementById("reader-goto");
+const gotoForm = document.getElementById("reader-goto-form");
+const gotoTitle = document.getElementById("reader-goto-title");
+const gotoLabel = document.getElementById("reader-goto-label");
+const gotoInput = document.getElementById("reader-goto-input");
+const gotoUnit = document.getElementById("reader-goto-unit");
+const gotoCancel = document.getElementById("reader-goto-cancel");
+let gotoKind = "percent";
 const titleText = document.getElementById("reader-title-text");
 const tocPanel = document.getElementById("reader-toc");
 const tocList = document.getElementById("reader-toc-list");
@@ -954,6 +962,7 @@ function setChrome(visible) {
 // something it owns is open, an error is on screen — a failure must
 // never hide behind an invisible bar — or the keyboard is in it.
 function chromeBusy() {
+  if (gotoDialog && gotoDialog.open) return true;
   if (tocPanel && !tocPanel.hidden) return true;
   if (settingsPanel && settingsPanel.open) return true;
   if (status && !status.hidden) return true;
@@ -1295,6 +1304,11 @@ function paint(location) {
   // rule as the fraction — an unusable value leaves the last one up.
   const page = readerPage(location);
   if (page) pageText.textContent = page;
+  const hasPageTotal = !!(
+    (positions && positions.total > 0) ||
+    (location.location && finite(location.location.total) && location.location.total > 0)
+  );
+  pageText.disabled = !hasPageTotal;
   chapterText.textContent = footerMiddle(location);
   markTOC(location.tocItem);
 }
@@ -1373,12 +1387,119 @@ function cycleFooter() {
   applySettings();
 }
 
+async function goToPage(page) {
+  if (!view) return;
+  if (positions) {
+    const loc = pageLocation(positions, page);
+    if (loc && view.renderer) {
+      await view.renderer.goTo(loc);
+      const landedIndex = view.lastLocation?.section?.current;
+      const state =
+        landedIndex === loc.index && view.lastLocation?.cfi
+          ? view.lastLocation.cfi
+          : loc.index;
+      if (view.history && view.history.pushState) {
+        view.history.pushState(state);
+      }
+      return;
+    }
+  }
+  const loc = here && here.location;
+  if (loc && finite(loc.total) && loc.total > 0) {
+    const frac = Math.min(Math.max((page - 0.5) / loc.total, 0), 1);
+    await view.goToFraction(frac).catch(() => {});
+  }
+}
+
+function openGoto(kind) {
+  if (!gotoDialog || !gotoInput) return;
+  gotoKind = kind;
+  if (kind === "percent") {
+    if (gotoTitle) gotoTitle.textContent = "Go to percentage";
+    if (gotoLabel) gotoLabel.textContent = "Percentage";
+    gotoInput.min = "0";
+    gotoInput.max = "100";
+    gotoInput.step = "1";
+    gotoInput.value =
+      here && finite(here.fraction) ? String(Math.round(here.fraction * 100)) : "";
+    if (gotoUnit) gotoUnit.textContent = "%";
+  } else {
+    const total = positions
+      ? positions.total
+      : here && here.location && finite(here.location.total) && here.location.total > 0
+        ? here.location.total
+        : null;
+    if (!total) return;
+    if (gotoTitle) gotoTitle.textContent = "Go to page";
+    if (gotoLabel) gotoLabel.textContent = "Page number";
+    gotoInput.min = "1";
+    gotoInput.max = String(total);
+    gotoInput.step = "1";
+    let current = null;
+    if (positions && here && here.section) {
+      current = pageAt(positions, here.section.current, here.sectionFraction);
+    } else if (
+      here &&
+      here.location &&
+      finite(here.location.current) &&
+      finite(here.location.total)
+    ) {
+      current = Math.min(
+        Math.max(1, Math.floor(here.location.current) + 1),
+        here.location.total,
+      );
+    }
+    gotoInput.value = current !== null ? String(current) : "";
+    if (gotoUnit) gotoUnit.textContent = "of " + total;
+  }
+  gotoDialog.showModal();
+  gotoInput.select();
+}
+
 if (footer) {
-  footer.addEventListener("click", cycleFooter);
-  footer.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
+  footer.addEventListener("click", (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest("button") : null;
+    if (btn === progressText) {
+      openGoto("percent");
+    } else if (btn === pageText) {
+      openGoto("page");
+    } else {
+      cycleFooter();
+    }
+  });
+}
+
+if (gotoForm) {
+  gotoForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    cycleFooter();
+    const val = parseFloat(gotoInput.value);
+    if (!Number.isFinite(val)) return;
+    if (gotoKind === "percent") {
+      const pct = Math.min(Math.max(val, 0), 100);
+      if (view) await view.goToFraction(pct / 100).catch(() => {});
+    } else {
+      await goToPage(val);
+    }
+    if (gotoDialog && gotoDialog.open) gotoDialog.close();
+  });
+}
+
+if (gotoCancel) {
+  gotoCancel.addEventListener("click", () => {
+    if (gotoDialog && gotoDialog.open) gotoDialog.close();
+  });
+}
+
+if (gotoDialog) {
+  gotoDialog.addEventListener("click", (e) => {
+    if (e.target !== gotoDialog) return;
+    const rect = gotoDialog.getBoundingClientRect();
+    const inDialog =
+      rect.top <= e.clientY &&
+      e.clientY <= rect.top + rect.height &&
+      rect.left <= e.clientX &&
+      e.clientX <= rect.left + rect.width;
+    if (!inDialog) gotoDialog.close();
   });
 }
 
@@ -1626,6 +1747,7 @@ stageArea.addEventListener("click", (e) => {
 // each document gets wired as it arrives.
 function handleKeys(e) {
   noteActivity();
+  if (gotoDialog && gotoDialog.open) return;
   const helpDialog = document.getElementById("reader-help");
   // Arrow keys inside the settings panel adjust its controls, not the
   // book; Escape puts the panel away from the keyboard.
@@ -1690,6 +1812,11 @@ function handleKeys(e) {
     case "t":
       e.preventDefault();
       toggleTOC(true);
+      break;
+    case "g":
+      e.preventDefault();
+      revealChrome();
+      openGoto("percent");
       break;
     case "f":
       e.preventDefault();

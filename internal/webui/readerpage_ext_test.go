@@ -159,6 +159,7 @@ func TestReaderPageOffersTheChromeControls(t *testing.T) {
 	for _, want := range []string{
 		`name="autohide"`,
 		`<kbd>z</kbd>`,
+		`<kbd>g</kbd>`,
 		`reader-help-note`,
 	} {
 		if !strings.Contains(page, want) {
@@ -182,6 +183,8 @@ func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
 		`id="reader-progress-text"`,
 		`id="reader-chapter"`,
 		`id="reader-page"`,
+		`id="reader-goto"`,
+		`id="reader-goto-input"`,
 		`name="footer" value="chapter"`,
 		`name="footer" value="time-chapter"`,
 		`name="footer" value="time-book"`,

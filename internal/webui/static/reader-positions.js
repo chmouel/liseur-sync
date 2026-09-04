@@ -90,6 +90,29 @@ export function pageAt(table, index, fractionInSection) {
   return clamp(starts[index] + within + 1, 1, total);
 }
 
+/**
+ * pageLocation is the inverse of pageAt: given a 1-based page number, it
+ * returns the { index, anchor } section target for the reader engine, or
+ * null when the page cannot be mapped.
+ */
+export function pageLocation(table, page) {
+  if (!table || !finite(page) || !table.total || table.total <= 0) return null;
+  const p = clamp(Math.round(page), 1, table.total);
+  const { counts, starts } = table;
+  if (!Array.isArray(counts) || !Array.isArray(starts)) return null;
+  for (let i = 0; i < counts.length; i++) {
+    const count = counts[i];
+    if (count <= 0) continue;
+    const start = starts[i];
+    if (p >= start + 1 && p <= start + count) {
+      const within = p - start - 1;
+      const anchor = (within + 0.5) / count;
+      return { index: i, anchor };
+    }
+  }
+  return null;
+}
+
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
