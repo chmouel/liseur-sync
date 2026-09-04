@@ -6,7 +6,7 @@
 // shows have to be the same page.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { positionTable, pageAt, PAGE_LENGTH } from '../static/reader-positions.js';
+import { positionTable, pageAt, pageLocation, PAGE_LENGTH } from '../static/reader-positions.js';
 
 const section = (compressedSize, extra = {}) => ({ compressedSize, ...extra });
 const table = (...sections) => positionTable(sections);
@@ -110,4 +110,50 @@ test('a real book comes out at the number the app shows', () => {
   assert.equal(t.total, 578);
   assert.equal(pageAt(t, 0, 0), 1);
   assert.equal(pageAt(t, stored.length - 1, 1), 578);
+});
+
+test('pageLocation round-trips exactly through pageAt for every page', () => {
+  const t = table(section(1024), section(2048), section(4096));
+  for (let p = 1; p <= t.total; p++) {
+    const loc = pageLocation(t, p);
+    assert.ok(loc, `expected location for page ${p}`);
+    assert.equal(pageAt(t, loc.index, loc.anchor), p);
+  }
+});
+
+test('pageLocation skips non-linear sections properly', () => {
+  const t = table(
+    section(2048, { linear: 'no' }),
+    section(4096),
+    section(1024, { linear: 'no' }),
+    section(2048),
+  );
+  // Total is 4 + 2 = 6 pages
+  assert.equal(t.total, 6);
+  // Page 1 is in section 1
+  const loc1 = pageLocation(t, 1);
+  assert.equal(loc1.index, 1);
+  assert.equal(pageAt(t, loc1.index, loc1.anchor), 1);
+  // Page 5 is in section 3
+  const loc5 = pageLocation(t, 5);
+  assert.equal(loc5.index, 3);
+  assert.equal(pageAt(t, loc5.index, loc5.anchor), 5);
+});
+
+test('pageLocation clamps out-of-range pages and rounds floats', () => {
+  const t = table(section(4096));
+  assert.equal(pageLocation(t, 0).anchor, pageLocation(t, 1).anchor);
+  assert.equal(pageLocation(t, -10).anchor, pageLocation(t, 1).anchor);
+  assert.equal(pageLocation(t, 999).anchor, pageLocation(t, t.total).anchor);
+  assert.equal(pageLocation(t, 2.2).anchor, pageLocation(t, 2).anchor);
+});
+
+test('pageLocation returns null for invalid inputs', () => {
+  const t = table(section(4096));
+  assert.equal(pageLocation(null, 1), null);
+  assert.equal(pageLocation(t, NaN), null);
+  assert.equal(pageLocation(t, Infinity), null);
+  assert.equal(pageLocation(t, -Infinity), null);
+  assert.equal(pageLocation(t, 'not a number'), null);
+  assert.equal(pageLocation({ total: 0 }, 1), null);
 });

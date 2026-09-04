@@ -874,10 +874,15 @@ button.linkish:hover, button.linkish:focus-visible {
   font-size:min(.78rem,calc(var(--reader-margin,48px) * .7));
   letter-spacing:.01em;line-height:1;
   font-variant-numeric:tabular-nums;color:var(--reader-footer-fg,var(--ink));
-  opacity:.62;cursor:pointer;user-select:none;-webkit-user-select:none;
+  opacity:.62;user-select:none;-webkit-user-select:none;
   transition:opacity .18s ease}
 .reader-footer:hover{opacity:.9}
-.reader-footer:focus-visible{outline:2px solid var(--primary);outline-offset:-2px;border-radius:4px}
+.reader-footer button{background:none;border:none;padding:0;font:inherit;
+  letter-spacing:inherit;line-height:inherit;font-variant-numeric:inherit;
+  color:inherit;cursor:pointer;display:inline-block;border-radius:3px}
+.reader-footer button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.reader-footer button:hover{text-decoration:underline}
+.reader-footer button[disabled]{opacity:.5;cursor:default;text-decoration:none}
 .reader-footer-edge{flex:none;white-space:nowrap}
 .reader-footer-mid{flex:1;min-width:0;text-align:center;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -926,6 +931,18 @@ button.linkish:hover, button.linkish:focus-visible {
   border-radius:4px;padding:.05rem .35rem;font-size:.8rem;font-family:inherit}
 .reader-help form{margin:.8rem 0 0;text-align:right}
 .reader-help-note{margin:.9rem 0 0;font-size:.85rem;opacity:.75;max-width:26rem}
+.reader-goto{background:var(--surface);color:inherit;border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
+  min-width:18rem;font-size:.9rem}
+.reader-goto::backdrop{background:rgba(0,0,0,.55)}
+.reader-goto h2{margin:0 0 .7rem;font-size:1rem}
+.reader-goto-row{display:flex;align-items:center;gap:.5rem;margin:.6rem 0}
+.reader-goto-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.reader-goto-input{flex:1;min-width:0;padding:.4rem .6rem;border:1px solid var(--line);
+  border-radius:6px;background:var(--surface-2);color:inherit;font-size:1rem;
+  font-variant-numeric:tabular-nums}
+.reader-goto-unit{font-size:.85rem;opacity:.75;font-variant-numeric:tabular-nums;white-space:nowrap}
+.reader-goto-actions{margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end}
 .reader-toc{position:fixed;top:0;bottom:0;left:0;z-index:60;
   width:min(22rem,85vw);overflow-y:auto;padding:1rem 1.1rem;
   background:var(--surface);border-right:1px solid var(--line);
