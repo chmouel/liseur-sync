@@ -194,16 +194,22 @@ func (w *Watcher) Remove(folderID string) {
 // which is a slower answer rather than no answer.
 //
 // The periodic pass registers its folders again every half hour, so
-// almost every call here finds the tree already watched and has nothing
-// to add. A folder is on the periodic pass only when nothing under it is
-// watched at all, and then the warning names the failure: an operator
-// told a folder is unwatched, without a reason, has nowhere to look.
+// almost every call here finds its own tree already watched and has
+// nothing to add. A folder is on the periodic pass only when no
+// directory of its own is watched, and then the warning names the
+// failure: an operator told a folder is unwatched, without a reason, has
+// nowhere to look.
+//
+// A directory belongs to one folder. If somebody watches a directory and
+// then watches a directory inside it, the inner folder owns none of its
+// own tree and its events are delivered to the outer folder, so it is on
+// the periodic pass whatever inotify thinks, and it says so.
 func (w *Watcher) watchTree(folder store.Folder) {
 	if w.notify == nil {
 		return
 	}
 	covered := 0
-	var walkErr, addErr error
+	var walkErr, addErr, overlapErr error
 	err := filepath.WalkDir(folder.RootPath, func(pathname string, entry os.DirEntry, err error) error {
 		if err != nil {
 			if walkErr == nil {
@@ -215,10 +221,16 @@ func (w *Watcher) watchTree(folder store.Folder) {
 			return nil
 		}
 		w.mu.Lock()
-		_, have := w.watchedDirs[pathname]
+		owner, have := w.watchedDirs[pathname]
 		w.mu.Unlock()
 		if have {
-			covered++
+			switch {
+			case owner == folder.ID:
+				covered++
+			case overlapErr == nil:
+				overlapErr = fmt.Errorf(
+					"%s is already watched as part of folder %s", pathname, owner)
+			}
 			return nil
 		}
 		if err := w.notify.Add(pathname); err != nil {
@@ -237,11 +249,15 @@ func (w *Watcher) watchTree(folder store.Folder) {
 		return
 	}
 	if err == nil {
-		// A tree can be unreadable and inotify can refuse it. Name what
-		// inotify said first: it is the more actionable of the two.
-		if addErr != nil {
+		// Name what inotify said first, then an overlapping folder, then
+		// a directory nobody could read: that is the order an operator
+		// can do something about them in.
+		switch {
+		case addErr != nil:
 			err = addErr
-		} else {
+		case overlapErr != nil:
+			err = overlapErr
+		default:
 			err = walkErr
 		}
 	}
