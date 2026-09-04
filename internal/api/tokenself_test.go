@@ -262,6 +262,48 @@ func TestTokenSelfReadIsReadOnly(t *testing.T) {
 	}
 }
 
+// TestTokenAccountIDIsStableAcrossTokens: a replacement credential on
+// the same account says so, and a token on another account does not,
+// which is what lets a client keep its mirrors and cursor through a
+// reconnect (ADR-0016, phase 3).
+func TestTokenAccountIDIsStableAcrossTokens(t *testing.T) {
+	url, svc, userID, _ := tokenSelfFixture(t)
+	ctx := t.Context()
+	first, _, err := svc.MintToken(ctx, userID, "phone", store.ScopeSet{store.ScopeSync}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := svc.MintToken(ctx, userID, "phone again", store.ScopeSet{store.ScopeSync}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.St.CreateUser(ctx, store.User{ID: "u2", Name: "bob", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	stranger, _, err := svc.MintToken(ctx, "u2", "bob's", store.ScopeSet{store.ScopeSync}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	account := func(secret string) string {
+		code, out := get(t, url+"/v1/token", secret)
+		if code != http.StatusOK {
+			t.Fatalf("self-read: %d %v", code, out)
+		}
+		id, _ := out["account_id"].(string)
+		if id == "" {
+			t.Fatalf("account_id missing: %v", out)
+		}
+		return id
+	}
+	if a, b := account(first), account(second); a != b {
+		t.Fatalf("two tokens on one account disagree: %q vs %q", a, b)
+	}
+	if a, c := account(first), account(stranger); a == c {
+		t.Fatalf("different accounts share account_id %q", a)
+	}
+}
+
 type headResult struct {
 	code int
 	body int
