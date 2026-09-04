@@ -192,13 +192,23 @@ func (w *Watcher) Remove(folderID string) {
 // A root that cannot be watched — an inotify limit, an NFS mount — is a
 // warning and not a failure. The folder still gets its periodic pass,
 // which is a slower answer rather than no answer.
+//
+// The periodic pass registers its folders again every half hour, so
+// almost every call here finds the tree already watched and has nothing
+// to add. A folder is on the periodic pass only when nothing under it is
+// watched at all, and then the warning names the failure: an operator
+// told a folder is unwatched, without a reason, has nowhere to look.
 func (w *Watcher) watchTree(folder store.Folder) {
 	if w.notify == nil {
 		return
 	}
-	added := 0
+	covered := 0
+	var walkErr, addErr error
 	err := filepath.WalkDir(folder.RootPath, func(pathname string, entry os.DirEntry, err error) error {
 		if err != nil {
+			if walkErr == nil {
+				walkErr = err
+			}
 			return nil
 		}
 		if !entry.IsDir() {
@@ -208,21 +218,35 @@ func (w *Watcher) watchTree(folder store.Folder) {
 		_, have := w.watchedDirs[pathname]
 		w.mu.Unlock()
 		if have {
+			covered++
 			return nil
 		}
 		if err := w.notify.Add(pathname); err != nil {
+			if addErr == nil {
+				addErr = err
+			}
 			return nil
 		}
 		w.mu.Lock()
 		w.watchedDirs[pathname] = folder.ID
 		w.mu.Unlock()
-		added++
+		covered++
 		return nil
 	})
-	if err != nil || added == 0 {
-		w.log.Warn("watching folder by periodic pass only",
-			"folder", folder.ID, "root", folder.RootPath, "error", err)
+	if err == nil && covered > 0 {
+		return
 	}
+	if err == nil {
+		// A tree can be unreadable and inotify can refuse it. Name what
+		// inotify said first: it is the more actionable of the two.
+		if addErr != nil {
+			err = addErr
+		} else {
+			err = walkErr
+		}
+	}
+	w.log.Warn("watching folder by periodic pass only",
+		"folder", folder.ID, "root", folder.RootPath, "error", err)
 }
 
 // forwardEvents translates filesystem events into folder ids. A
