@@ -42,6 +42,36 @@ Use `PATCH /v1/tokens/{id}` with the same `scope`/`scopes` shape to
 change capabilities without changing the token secret, device id, or
 retry identity.
 
+### Keeping one device identity across reconnects
+
+Every mint draws a fresh `device_id`, and the server compares
+`device_id` when it decides whether a replayed `op_id` or `session_id`
+is a duplicate. So a client that reconnects with a new token after a
+lost acknowledgement would replay its stored records as `conflict`
+(ops) or `409` (sessions), not `duplicate`.
+
+To stay one device, store the `device_id` the first mint returned and
+send it back on every later mint for the same server:
+
+```json
+POST /v1/tokens
+{"name": "Boox Palma", "scopes": ["sync"], "device_id": "dev_9c21"}
+```
+
+The server honours it when any token of the same account — live,
+expired or revoked — already carries that id. If none does (the
+predecessor was deleted, or the id belongs to another account) it
+answers `400` with `code: unknown_device`; retry once without the field
+and store the fresh id. An older server ignores the field and mints a
+new id: compare the `device_id` in the response with the one you sent,
+and treat a mismatch as "not inherited", nothing more. Never offer a
+device id to a different server.
+
+A device id is a label in the op log, not a credential: two live tokens
+that share one are one device in `GET /v1/heads` and in the statistics.
+Only a mint through `/v1/login` can ask for one; a bearer secret pasted
+from elsewhere carries whatever device id it was minted with.
+
 The scopes are `sync`, `read-insights`, `library-read`,
 `library-manage`, `library-upload`, `library-delete`, and `admin`. `admin` implies every scope and is not
 self-grantable: requesting it returns `403` unless the account is

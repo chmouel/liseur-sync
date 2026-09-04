@@ -68,6 +68,7 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Scope     *store.Scope    `json:"scope,omitempty"`
 		Scopes    *store.ScopeSet `json:"scopes,omitempty"`
 		ExpiresIn int             `json:"expires_in_seconds,omitempty"`
+		DeviceID  string          `json:"device_id,omitempty"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -75,6 +76,10 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" {
 		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if len(req.DeviceID) > 64 {
+		writeError(w, http.StatusBadRequest, "device_id too long")
 		return
 	}
 	scopes, err := requestedScopes(req.Scope, req.Scopes)
@@ -87,10 +92,20 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		t := time.Now().Add(time.Duration(req.ExpiresIn) * time.Second)
 		expires = &t
 	}
-	secret, tok, err := s.Auth.CreateToken(r.Context(), mustLoginSecret(r), req.Name, scopes, expires)
+	secret, tok, err := s.Auth.CreateToken(r.Context(), mustLoginSecret(r), req.Name, scopes, expires, req.DeviceID)
 	if err != nil {
 		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
 			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		if errors.Is(err, auth.ErrUnknownDevice) {
+			// Structured so a client can tell "start over with a fresh
+			// device" from any other refusal of the mint.
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":     "device_id names no device of this account",
+				"code":      "unknown_device",
+				"device_id": req.DeviceID,
+			})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "token creation failed")
