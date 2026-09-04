@@ -73,10 +73,15 @@ func (s *Server) handleAdminCreateFolder(
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Only decides where a successful add lands the browser, so a
+	// failure here must not block the add itself: fall back to the
+	// existing behavior (stay on the Folders page) rather than
+	// aborting a mutation this check has nothing to do with validating.
 	hadFolders, err := s.St.HasAnyFolder(r.Context())
 	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
+		slog.Error("could not determine whether this is the first folder",
+			"error", err)
+		hadFolders = true
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	root := strings.TrimSpace(r.FormValue("root"))
