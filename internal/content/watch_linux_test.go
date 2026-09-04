@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // captureWatcher builds a watcher that logs where the test can read it.
@@ -107,6 +109,33 @@ func TestAnUnwatchableTreeWarnsWithACause(t *testing.T) {
 		}
 		if !strings.Contains(got[0], "no such file") {
 			t.Fatalf("cause did not name the missing root: %q", got[0])
+		}
+	})
+
+	t.Run("an inner folder is watched as part of an outer one", func(t *testing.T) {
+		w, logged := captureWatcher(t)
+		outer := plainFolder(t)
+		inner := store.Folder{
+			ID: "f2", Name: "Literature", Kind: store.FolderPlain,
+			RootPath: filepath.Join(outer.RootPath, "literature"),
+		}
+		if err := os.Mkdir(inner.RootPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		w.watchTree(outer)
+		logged.Reset()
+		w.watchTree(inner)
+
+		// The outer folder owns those directories, so the inner folder's
+		// events are delivered to the outer one and the inner folder
+		// really is on the periodic pass.
+		got := periodicPassWarnings(t, logged)
+		if len(got) != 1 {
+			t.Fatalf("warnings: %q", got)
+		}
+		if !strings.Contains(got[0], outer.ID) {
+			t.Fatalf("cause did not name the folder holding the watch: %q", got[0])
 		}
 	})
 
