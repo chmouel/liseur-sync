@@ -157,9 +157,12 @@ func (s *Server) HandleListTokens(w http.ResponseWriter, r *http.Request) {
 // resources with different credentials, and the URL says so.
 //
 // The field names are the ones GET /v1/tokens already uses for the same
-// things, so a client parses one token shape. Nothing else is returned:
-// not the secret, not its hash, not the other tokens on the account, not
-// the user's identity beyond what the caller already proved.
+// things, so a client parses one token shape. account_id is the one
+// addition: an opaque, stable name for the account the token belongs to,
+// the same for every token minted on it, so a client can tell a replaced
+// credential from a different account without discarding its mirrors and
+// cursors. Nothing else is returned: not the secret, not its hash, not
+// the other tokens on the account.
 func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 	tok, ok := auth.TokenFrom(r)
 	if !ok {
@@ -167,13 +170,14 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		ID       string         `json:"id"`
-		DeviceID string         `json:"device_id"`
-		Name     string         `json:"name"`
-		Scope    *store.Scope   `json:"scope,omitempty"`
-		Scopes   store.ScopeSet `json:"scopes"`
+		ID        string         `json:"id"`
+		AccountID string         `json:"account_id"`
+		DeviceID  string         `json:"device_id"`
+		Name      string         `json:"name"`
+		Scope     *store.Scope   `json:"scope,omitempty"`
+		Scopes    store.ScopeSet `json:"scopes"`
 	}{
-		ID: tok.ID, DeviceID: tok.DeviceID, Name: tok.Name,
+		ID: tok.ID, AccountID: tok.UserID, DeviceID: tok.DeviceID, Name: tok.Name,
 		Scope: legacyScope(tok.Scopes), Scopes: tok.Scopes,
 	})
 }

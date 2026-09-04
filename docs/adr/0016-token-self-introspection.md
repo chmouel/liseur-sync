@@ -112,8 +112,9 @@ provided the tests pin the fact that it never reveals a second token.
    tells a client to call this before drawing a menu.
 3. **Stable account identity.** Return `account_id` from `GET /v1/token`,
    document its comparison rules, and cover replacement tokens for the same
-   account and tokens belonging to different accounts. This phase remains to
-   be implemented.
+   account and tokens belonging to different accounts. Implemented: the
+   value is the account's opaque user id, pinned by
+   `TestTokenAccountIDIsStableAcrossTokens`.
 
 ## Acceptance criteria
 
