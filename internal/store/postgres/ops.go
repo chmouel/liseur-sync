@@ -147,14 +147,26 @@ func sameOp(ctx context.Context, tx *sql.Tx, userID string, o store.Op, deviceID
 	return true, nil
 }
 
+// snapshotTx is the read transaction the changes feed and heads use.
+// Postgres defaults to READ COMMITTED, where every statement sees its
+// own snapshot; REPEATABLE READ is what makes the high water, horizon
+// and page agree with each other.
+var snapshotTx = &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
+
+// Changes: see the SQLite implementation's doc comment.
 func (s *Store) Changes(ctx context.Context, userID string, since int64, limit int) (store.ChangesPage, error) {
 	var page store.ChangesPage
-	if err := s.db.QueryRowContext(ctx, q(
+	tx, err := s.db.BeginTx(ctx, snapshotTx)
+	if err != nil {
+		return page, err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRowContext(ctx, q(
 		`SELECT COALESCE(MAX(seq), 0) FROM ops WHERE user_id = ?`), userID).Scan(&page.HighWater); err != nil {
 		return page, err
 	}
 	var horizon int64
-	err := s.db.QueryRowContext(ctx, q(
+	err = tx.QueryRowContext(ctx, q(
 		`SELECT horizon FROM compaction_state WHERE user_id = ?`), userID).Scan(&horizon)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return page, err
@@ -163,7 +175,7 @@ func (s *Store) Changes(ctx context.Context, userID string, since int64, limit i
 		page.ResyncNeeded = true
 		return page, nil
 	}
-	rows, err := s.db.QueryContext(ctx, q(
+	rows, err := tx.QueryContext(ctx, q(
 		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?`),
 		userID, since, limit+1)
 	if err != nil {
@@ -207,7 +219,7 @@ func (s *Store) Positions(ctx context.Context, userID, workID string, limit int)
 }
 
 func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginTx(ctx, snapshotTx)
 	if err != nil {
 		return store.Heads{}, err
 	}
