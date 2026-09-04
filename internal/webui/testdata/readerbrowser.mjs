@@ -20,6 +20,10 @@ const nan = process.env.SMOKE_NAN === '1';
 // Session mode (ADR-0030): hides and shows the tab with a skewed clock,
 // watching what the reader posts to /v1/sessions.
 const sessions = process.env.SMOKE_SESSIONS === '1';
+// How many pages the fixture has, counted from the archive by the Go
+// side with Readium's recipe (ADR-0032). The footer has to agree, or the
+// browser and the app are naming different pages again.
+const expectedPages = Number(process.env.SMOKE_PAGES) || 0;
 
 const profile = mkdtempSync(join(tmpdir(), 'smoke-'));
 const proc = spawn(chrome, [
@@ -203,8 +207,9 @@ check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
 check('reader shows the book: own chapter label',
   diag.chapter === 'Title Page', diag.chapter);
-// The footer's page is the engine's location, "n of m", and it is a
-// page of the book, not a fabrication: n is within m.
+// The footer's page is a Readium position — the same page the app names
+// for the same spot (ADR-0032) — and it is a page of the book, not a
+// fabrication: n is within m.
 const pageOf = (t) => {
   const m = /^(\d+) of (\d+)$/.exec(t || '');
   return m ? { n: +m[1], of: +m[2] } : null;
@@ -212,6 +217,11 @@ const pageOf = (t) => {
 check('the footer shows a page of the book',
   pageOf(diag.page) && pageOf(diag.page).n >= 1 && pageOf(diag.page).n <= pageOf(diag.page).of,
   diag.page);
+if (expectedPages) {
+  check('the page count is the book\'s positions, as the app counts them',
+    pageOf(diag.page)?.of === expectedPages,
+    `${diag.page} want m=${expectedPages}`);
+}
 check('the footer is on screen with the book', diag.footerShown, String(diag.footerShown));
 // The chapter frame lives in a closed shadow root: nothing on the
 // page — including anything a publication managed to smuggle onto it —

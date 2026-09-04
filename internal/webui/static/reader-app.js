@@ -15,6 +15,7 @@
 import "./vendor/foliate/view.js";
 import { Overlayer } from "./vendor/foliate/overlayer.js";
 import { openSession } from "./reader-session.js";
+import { positionTable, pageAt } from "./reader-positions.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -62,6 +63,10 @@ let tokenExpiry = 0;
 let pending = null;
 let here = null;
 let faviconObjectURL = null;
+// The book's positions, counted once when it opens. Null for a book
+// this recipe cannot measure, which leaves the engine's own locations
+// to say what page it is.
+let positions = null;
 
 function say(message, isError) {
   status.textContent = message;
@@ -1283,16 +1288,32 @@ function paint(location) {
     progressBar.style.width = (fraction * 100).toFixed(1) + "%";
     progressText.textContent = Math.round(fraction * 100) + "%";
   }
-  // The page is the engine's location: a fixed slice of the book's
-  // text, so the count does not move when the font does. The same
+  // The page is a Readium position: a fixed slice of the book as it is
+  // stored, so the count does not move when the font does and it is the
+  // same number the app shows for the same spot. A book the recipe
+  // cannot measure falls back to the engine's own locations. The same
   // rule as the fraction — an unusable value leaves the last one up.
-  const loc = location.location || {};
-  if (finite(loc.current) && finite(loc.total) && loc.total > 0) {
-    const page = Math.min(Math.max(1, Math.floor(loc.current) + 1), loc.total);
-    pageText.textContent = page + " of " + loc.total;
-  }
+  const page = readerPage(location);
+  if (page) pageText.textContent = page;
   chapterText.textContent = footerMiddle(location);
   markTOC(location.tocItem);
+}
+
+// readerPage is the footer's "n of m" for this spot, or null when
+// neither the positions nor the engine can name one.
+function readerPage(location) {
+  const section = location.section || {};
+  const n = pageAt(positions, section.current, location.sectionFraction);
+  if (n) return n + " of " + positions.total;
+  const loc = location.location || {};
+  if (finite(loc.current) && finite(loc.total) && loc.total > 0) {
+    return (
+      Math.min(Math.max(1, Math.floor(loc.current) + 1), loc.total) +
+      " of " +
+      loc.total
+    );
+  }
+  return null;
 }
 
 // footerMiddle is what the middle slot says for this spot under the
@@ -1748,6 +1769,9 @@ window.addEventListener("beforeunload", () => {
       new File([blob], "book.epub", { type: "application/epub+zip" }),
     );
     stripScripts(view.book);
+    // Counted before the first relocate paints a footer, so the very
+    // first page the reader sees is already the app's number.
+    positions = positionTable(view.book.sections);
     buildTOC(view.book.toc);
     // The renderer exists once the book is open; settings applied here
     // shape the very first page rather than repainting it.
