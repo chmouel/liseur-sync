@@ -160,14 +160,25 @@ const opCols = `user_id, seq, op_id, work_id, edition_sha, device_id, client_ts,
 
 // Changes returns ops with seq > since, paginated, plus high-water mark
 // and compaction-horizon signaling.
+//
+// High water, horizon and the page come from one read transaction. Read
+// separately, a compaction committing in between could pass the horizon
+// check and then delete rows out of the page, handing the client a
+// cursor past a gap it will never learn about — the exact thing the
+// horizon exists to prevent.
 func (s *Store) Changes(ctx context.Context, userID string, since int64, limit int) (store.ChangesPage, error) {
 	var page store.ChangesPage
-	if err := s.db.QueryRowContext(ctx,
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return page, err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(seq), 0) FROM ops WHERE user_id = ?`, userID).Scan(&page.HighWater); err != nil {
 		return page, err
 	}
 	var horizon int64
-	if err := s.db.QueryRowContext(ctx,
+	if err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(horizon, 0) FROM compaction_state WHERE user_id = ?`, userID).Scan(&horizon); err != nil &&
 		!errors.Is(err, sql.ErrNoRows) {
 		return page, err
@@ -176,7 +187,7 @@ func (s *Store) Changes(ctx context.Context, userID string, since int64, limit i
 		page.ResyncNeeded = true
 		return page, nil
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
 		userID, since, limit+1)
 	if err != nil {
