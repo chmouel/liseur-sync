@@ -6,6 +6,10 @@
 - **Supersedes:** the renderer choice in ADR-0007. Everything else in
   that record — client-side unzip, the CSP, the token lifecycle, the
   locator envelope — stands unchanged.
+- **Amended by:** [ADR-0031](0031-web-reader-footer.md), which moved the
+  figures out of the top bar;
+  [ADR-0032](0032-reader-pages-are-readium-positions.md), which patches
+  the vendored engine in three places
 
 ## Context
 
@@ -103,7 +107,10 @@ mechanism.
   loaders are dynamic imports that are simply absent.
 - Upstream has no releases; the pin is a commit hash recorded in
   `foliate-js.LICENSE`. Updating is a deliberate re-copy, which for a
-  security-sensitive component is a feature.
+  security-sensitive component is a feature. A re-copy must reapply the
+  three additive patches listed in
+  [ADR-0032](0032-reader-pages-are-readium-positions.md); each is
+  marked `liseur-sync patch` in the vendored source.
 - The user stylesheet the engine injects after the publication's own is
   what reader appearance settings (theme, font, size, spacing, layout,
   and whether the bar and page-turn arrows hide themselves while you

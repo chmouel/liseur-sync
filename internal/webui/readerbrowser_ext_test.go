@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,50 @@ func browserTestEPUB(t *testing.T) []byte {
 // its first section is obvious rather than borderline.
 const browserTestChapters = 12
 
+// browserTestPages is how many pages the footer must show for the
+// fixture: Readium's positions, which is what the reader now counts
+// (ADR-0032) so that the browser and the app name the same page.
+//
+// It is computed from the archive rather than written down because the
+// fixture is deflated by whatever Go is compiling the test, and a
+// hard-coded total would be a test of Go's compressor. The recipe is
+// Readium's: per linear spine item, its stored length over 1024 rounded
+// up, at least one, summed.
+func browserTestPages(t *testing.T, epub []byte) int {
+	t.Helper()
+	spine := []string{"OEBPS/pagetitre.xhtml", "OEBPS/chapter1.xhtml"}
+	for i := 2; i <= browserTestChapters; i++ {
+		spine = append(spine, fmt.Sprintf("OEBPS/chapter%d.xhtml", i))
+	}
+	r, err := zip.NewReader(bytes.NewReader(epub), int64(len(epub)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := make(map[string]uint64, len(r.File))
+	for _, f := range r.File {
+		// A stored entry has no compressed length of its own, which is
+		// where Readium falls back to the resource's own length.
+		if f.Method == zip.Store {
+			stored[f.Name] = f.UncompressedSize64
+			continue
+		}
+		stored[f.Name] = f.CompressedSize64
+	}
+	total := 0
+	for _, name := range spine {
+		length, ok := stored[name]
+		if !ok {
+			t.Fatalf("fixture has no spine entry %q", name)
+		}
+		pages := (length + 1023) / 1024
+		if pages < 1 {
+			pages = 1
+		}
+		total += int(pages)
+	}
+	return total
+}
+
 // seededStaleOpID names the op the test plants before the browser
 // opens: a stored position whose CFI has a valid spine step for this
 // book but a garbage path inside the chapter. The engine only walks
@@ -341,7 +386,8 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+	epub := browserTestEPUB(t)
+	bookID := f.addBook(t, "novel", epub)
 
 	// The API is mounted beside the UI, as it is in the binary, so the
 	// reader's sync calls are real and their failures are visible.
@@ -358,6 +404,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"SMOKE_CHROME="+chrome,
 		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
 		"SMOKE_ANNOTATIONS=1",
@@ -400,7 +447,8 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+	epub := browserTestEPUB(t)
+	bookID := f.addBook(t, "novel", epub)
 	ts, readerHost := splitOriginServer(t, f)
 	cookie := f.loginTo(t, ts, "alice")
 
@@ -411,6 +459,7 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"SMOKE_CHROME="+chrome,
 		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
 		"SMOKE_MAP="+readerHost,
@@ -515,7 +564,8 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+	epub := browserTestEPUB(t)
+	bookID := f.addBook(t, "novel", epub)
 
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")
@@ -526,6 +576,7 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"SMOKE_CHROME="+chrome,
 		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
 		"SMOKE_NAN=1",
@@ -571,7 +622,8 @@ func TestReaderRecordsReadingSessions(t *testing.T) {
 	}
 
 	f := newBooksFixture(t)
-	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+	epub := browserTestEPUB(t)
+	bookID := f.addBook(t, "novel", epub)
 
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")
@@ -581,6 +633,7 @@ func TestReaderRecordsReadingSessions(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"SMOKE_CHROME="+chrome,
 		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
 		"SMOKE_SESSIONS=1",

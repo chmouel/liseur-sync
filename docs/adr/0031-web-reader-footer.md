@@ -4,6 +4,9 @@
 - **Date:** 2026-09-03
 - **Amends:** [ADR-0012](0012-reader-engine-foliate.md), which put the
   chapter name and the percentage in the top bar
+- **Amended by:** [ADR-0032](0032-reader-pages-are-readium-positions.md),
+  which replaces the engine's locations with Readium's positions so that
+  the page here is the page the app shows
 
 ## Context
 
@@ -47,6 +50,14 @@ server's edition page count, which the web reader does not have. The
 "never fabricate page numbers" rule in the design is about
 *statistics*; nothing here is sent anywhere, and a locations counter
 is the engine's honest measure of the book, not a guess.
+
+> **Amended by [ADR-0032](0032-reader-pages-are-readium-positions.md).**
+> The same idea as the app's positions turned out not to be the same
+> number: foliate's locations are 1500 uncompressed bytes and Readium's
+> positions are 1024 stored ones, so the two clients showed different
+> pages for the same paragraph. The reader now counts Readium's
+> positions. Everything else in this section stands — including why it
+> is neither the print page-list nor the server's edition count.
 
 **The middle slot cycles.** Chapter title by default, then time left
 in chapter, then time left in book, then empty, then round again. A
