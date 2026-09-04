@@ -33,16 +33,18 @@
     openDialog(trigger.dataset.dialogOpen);
   });
 
-  document.querySelectorAll('dialog[data-auto-open]').forEach(function (dialog) {
-    openDialog(dialog.id);
-    if (window.history && window.history.replaceState) {
-      const url = new URL(window.location.href);
-      if (url.searchParams.get('onboarding') === 'folder') {
-        url.searchParams.delete('onboarding');
-        window.history.replaceState({}, document.title, url);
+  if (dialogSupported) {
+    document.querySelectorAll('dialog[data-auto-open]').forEach(function (dialog) {
+      openDialog(dialog.id);
+      if (window.history && window.history.replaceState && window.URL) {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('onboarding') === 'folder') {
+          url.searchParams.delete('onboarding');
+          window.history.replaceState({}, document.title, url.toString());
+        }
       }
-    }
-  });
+    });
+  }
 
   // "/" puts the cursor in the search box, Escape closes the mobile nav.
   document.addEventListener('keydown', function (e) {
