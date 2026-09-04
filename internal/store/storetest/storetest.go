@@ -4,6 +4,7 @@ package storetest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -766,6 +767,23 @@ func testAppendOps(t *testing.T, open OpenFunc) {
 	if res[0].Seq != 2 || res[1].Seq != 3 {
 		t.Fatalf("want seq 2,3 got %+v", res)
 	}
+
+	// A new op naming a work the user lacks fails the batch by item, and
+	// nothing before it in the batch was stored.
+	op5 := op
+	op5.OpID = "018e6f1a-0000-7000-8000-000000000005"
+	orphan := op
+	orphan.OpID = "018e6f1a-0000-7000-8000-000000000006"
+	orphan.WorkID = "no-such-work"
+	_, err = s.AppendOps(ctx, u.ID, "d-phone", []store.Op{op5, orphan})
+	var item *store.ItemError
+	if !errors.As(err, &item) || !errors.Is(err, store.ErrNotFound) ||
+		item.Kind != "op" || item.ID != orphan.OpID || item.Index != 1 || item.WorkID != "no-such-work" {
+		t.Fatalf("unknown work: got %#v", err)
+	}
+	if page, _ := s.Changes(ctx, u.ID, 0, 10); len(page.Ops) != 3 {
+		t.Fatalf("a refused batch stored something: %+v", page.Ops)
+	}
 }
 
 func testChangesAndHeads(t *testing.T, open OpenFunc) {
@@ -896,8 +914,46 @@ func testSessionsAppendOnly(t *testing.T, open OpenFunc) {
 	}
 	ses2 := ses
 	ses2.EndProg = 0.9
-	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses2}); err != store.ErrIDMismatch {
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses2}); !errors.Is(err, store.ErrIDMismatch) {
 		t.Fatalf("want ErrIDMismatch, got %v", err)
+	}
+
+	// A refusal names the item, by position: the same id twice in one
+	// batch, identical then changed, must point at the second.
+	err := s.AppendSessions(ctx, u.ID, []store.Session{ses, ses2})
+	var item *store.ItemError
+	if !errors.As(err, &item) || !errors.Is(err, store.ErrIDMismatch) ||
+		item.Kind != "session" || item.ID != "s1" || item.Index != 1 {
+		t.Fatalf("want ItemError{session s1 #1} wrapping ErrIDMismatch, got %#v", err)
+	}
+	// A conflict in the middle of a batch is still named, and nothing
+	// around it was stored.
+	fresh := ses
+	fresh.SessionID = "s-fresh"
+	err = s.AppendSessions(ctx, u.ID, []store.Session{fresh, ses2, fresh})
+	if !errors.As(err, &item) || item.Index != 1 {
+		t.Fatalf("mid-batch conflict: got %#v", err)
+	}
+	if got, _ := s.SessionsForWork(ctx, u.ID, w.ID, 10); len(got) != 1 {
+		t.Fatalf("a refused batch stored something: %+v", got)
+	}
+
+	// A new session naming a work the user lacks is refused by name;
+	// a replay of an accepted one is a duplicate even once its work is
+	// gone.
+	orphan := fresh
+	orphan.SessionID = "s-orphan"
+	orphan.WorkID = "no-such-work"
+	err = s.AppendSessions(ctx, u.ID, []store.Session{fresh, orphan})
+	if !errors.As(err, &item) || !errors.Is(err, store.ErrNotFound) ||
+		item.Index != 1 || item.ID != "s-orphan" || item.WorkID != "no-such-work" {
+		t.Fatalf("unknown work: got %#v", err)
+	}
+	if err := s.DeleteWork(ctx, u.ID, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("session for a deleted work: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -945,8 +1001,12 @@ func testSessionRollups(t *testing.T, open OpenFunc) {
 	}
 	changed := ses
 	changed.EndProg = 0.3
-	if err := s.AppendSessions(ctx, u.ID, []store.Session{changed}); err != store.ErrIDMismatch {
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{changed}); !errors.Is(err, store.ErrIDMismatch) {
 		t.Fatalf("archived mismatch: want ErrIDMismatch, got %v", err)
+	}
+	var item *store.ItemError
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{changed}); !errors.As(err, &item) || item.ID != "old-s1" || item.Index != 0 {
+		t.Fatalf("archived mismatch names its item: got %#v", err)
 	}
 	MkWork(t, s, u, "rollup-target", "rollup-target-sha")
 	if err := s.SplitWork(ctx, u.ID, w.ID, "rollup-sha", nil,

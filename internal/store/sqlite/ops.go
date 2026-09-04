@@ -70,6 +70,15 @@ func (s *Store) appendOpsTx(ctx context.Context, tx *sql.Tx, userID, deviceID st
 			continue
 		}
 
+		// Only a genuinely new op needs its work to exist right now; a
+		// replay was judged above, so a duplicate stays a duplicate even
+		// after its work was deleted.
+		if ok, err := workExistsTx(ctx, tx, userID, o.WorkID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, store.UnknownWork("op", o.OpID, i, o.WorkID)
+		}
+
 		// Assign next seq atomically.
 		var seq int64
 		err = tx.QueryRowContext(ctx,

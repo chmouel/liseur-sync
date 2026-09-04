@@ -203,8 +203,8 @@ Positions are an **append-only operation log per work per user**:
 {
   "op_id":        "client-generated deterministic opaque id",
   "work_id":      "…",
-  "edition_sha":  "sha256:…",
-  "device_id":    "…",
+  "edition_sha":  "<hex sha256 of the exact file>",
+  "device_id":    "<server-side, from the token; never sent by a client>",
   "client_ts":    "2026-08-10T12:58:04Z",
   "progression":  0.4137,
   "locator":      { "…Readium Locator JSON, opaque to server…" },
@@ -222,7 +222,11 @@ Positions are an **append-only operation log per work per user**:
   kosync pulls, never parsed.
 - `op_id` is a client-generated opaque
   deterministic string. The same local fact must produce the same ID and
-  payload on retry.
+  payload on retry. The server compares the whole stored payload,
+  `device_id` included, when it decides between `duplicate` and
+  `conflict`; a client that wants its replays recognised after a
+  credential lapse keeps its device identity
+  ([ADR-0033](adr/0033-a-device-outlives-its-token.md)).
 
 The server assigns each accepted op a **per-user monotonic `seq`**.
 
@@ -254,7 +258,11 @@ undo, session inference for legacy devices (§6.3), and trust: users can
 see what each device claimed and when.
 
 Retention: ops older than a configurable window (default 180 days) are
-compacted to daily last-op-per-device snapshots.
+compacted to daily last-op-per-device snapshots. The newest op per
+(work, device) is kept whatever its age, and a kosync op not yet
+materialised into an inferred session (§6.3) is kept until it is. The
+horizon is the newest seq compaction removed; a cursor below it gets
+`410 resync_required` and rebuilds from `GET /v1/heads`.
 
 ### 5.4 Conflicts are resolved by clients
 

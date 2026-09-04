@@ -961,7 +961,7 @@ func TestUnknownWorkRefusal(t *testing.T) {
 	if out["error"] != "op op-gone: unknown work" {
 		t.Fatalf("error message changed: %v", out)
 	}
-	if out["code"] != "unknown_work" || out["work_id"] != "w-gone" || out["op_id"] != "op-gone" {
+	if out["code"] != "unknown_work" || out["work_id"] != "w-gone" || out["op_id"] != "op-gone" || out["item_index"] != 1.0 {
 		t.Fatalf("structured fields: %v", out)
 	}
 
@@ -1002,16 +1002,18 @@ func TestUnknownWorkRefusal(t *testing.T) {
 		t.Fatalf("re-push after rejection: %d %v", code, out)
 	}
 
-	// Every other 400 keeps its old shape: the message, and nothing a
-	// client could mistake for a recoverable refusal.
+	// Every item-level 400 keeps its message and now also names itself:
+	// a code, the item's position, and its id when it had one. A
+	// batch-level refusal has no item to name.
 	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{"ops": []map[string]any{}})
 	if code != 400 || out["error"] != "ops required" || out["code"] != nil {
 		t.Fatalf("empty batch: %d %v", code, out)
 	}
 	code, out = post(t, ts.URL+"/v1/ops", devTok, map[string]any{
-		"ops": []map[string]any{op("op-bad", "")},
+		"ops": []map[string]any{op("op-fine", "w-real"), op("op-bad", "")},
 	})
-	if code != 400 || out["error"] != "op op-bad: work_id required" || out["code"] != nil {
+	if code != 400 || out["error"] != "op op-bad: work_id required" ||
+		out["code"] != "missing_field" || out["item_index"] != 1.0 || out["op_id"] != "op-bad" {
 		t.Fatalf("missing work_id: %d %v", code, out)
 	}
 	bad := sess("s-bad", "w-real")
@@ -1019,7 +1021,8 @@ func TestUnknownWorkRefusal(t *testing.T) {
 	code, out = post(t, ts.URL+"/v1/sessions", devTok, map[string]any{
 		"sessions": []map[string]any{bad},
 	})
-	if code != 400 || out["error"] != "session s-bad: ended_at before started_at" || out["code"] != nil {
+	if code != 400 || out["error"] != "session s-bad: ended_at before started_at" ||
+		out["code"] != "bad_time" || out["item_index"] != 0.0 || out["session_id"] != "s-bad" {
 		t.Fatalf("inverted session: %d %v", code, out)
 	}
 }
