@@ -153,7 +153,11 @@ opens the first-folder form. Point it at the directory that already holds
 the books; the server detects whether it is a plain folder or a Calibre
 library, reads it immediately and keeps watching it. Closing the form or
 using a browser without JavaScript leaves the same form available on the
-Folders page.
+Folders page. Submitting it goes straight to the library rather than back
+to Folders — watching that first folder was the whole point of the trip.
+The same is true any other time a folder is added while the server had
+none: the admin panel is otherwise unchanged, so a folder added after
+one already exists still lands back on Folders with its usual notice.
 
 You can also add the books from a shell:
 

@@ -78,14 +78,33 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 		t.Fatalf("a refused add created %d folders", len(folders))
 	}
 
-	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+	// The very first folder ever watched sends the browser straight to
+	// the library — there is nothing left worth stopping at on a
+	// Folders page that just went from empty to one entry.
+	req, _ := http.NewRequest("POST", ts.URL+"/ui/admin/folders", strings.NewReader(url.Values{
 		"csrf": {csrf}, "name": {"Shelf"}, "root": {root},
-	})
-	if !strings.Contains(body, "Watching Shelf") {
-		t.Fatalf("add: %s", body)
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	resp, err := noRedirect().Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(body, `data-auto-open="true"`) {
-		t.Fatalf("a successful folder add left the dialog marked for auto-open: %s", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add: got %d", resp.StatusCode)
+	}
+	landed, err := req.URL.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landed.Path != "/ui/library" || landed.Query().Get("notice") == "" {
+		t.Fatalf("first folder add landed at %q, want the library with a notice",
+			resp.Header.Get("Location"))
+	}
+	_, body = page(t, ts, cookie, landed.RequestURI())
+	if !strings.Contains(body, "Watching Shelf") {
+		t.Fatalf("library after first folder add: %s", body)
 	}
 	folders, err := st.ListFolders(ctx, "", "", 10)
 	if err != nil || len(folders) != 1 {
@@ -155,12 +174,47 @@ func TestAdminFolderHonoursTheAllowlist(t *testing.T) {
 	if folders, _ := st.ListFolders(t.Context(), "", "", 10); len(folders) != 0 {
 		t.Fatalf("a refused root still created %d folders", len(folders))
 	}
-	// A directory below an allowed root is allowed.
+	// A directory below an allowed root is allowed. It is also this
+	// store's first folder, so postForm follows the redirect to the
+	// library rather than back to the Folders page (pinned exactly in
+	// TestAdminWatchesAndForgetsAFolder).
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
 		"csrf": {csrf}, "name": {"Shelf"}, "root": {inside},
 	})
 	if !strings.Contains(body, "Watching Shelf") {
 		t.Fatalf("a root below an allowed one was refused: %s", body)
+	}
+}
+
+// TestAdminSecondFolderStaysOnFoldersPage pins the other half: once the
+// server already watches something, adding another folder still lands
+// back on the Folders admin page with its usual notice, exactly as
+// before this behavior existed for the very first folder.
+func TestAdminSecondFolderStaysOnFoldersPage(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	ctx := t.Context()
+	if err := st.SetUserAdmin(ctx, "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateFolder(ctx, store.Folder{
+		ID: "existing", Name: "Existing", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	csrf := extractCSRF(t, body)
+
+	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+		"csrf": {csrf}, "name": {"Second"}, "root": {t.TempDir()},
+	})
+	if !strings.Contains(body, "Watching Second") {
+		t.Fatalf("add: %s", body)
+	}
+	if strings.Contains(body, `data-auto-open="true"`) {
+		t.Fatalf("a successful folder add left the dialog marked for auto-open: %s", body)
 	}
 }
 
