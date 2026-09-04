@@ -232,6 +232,19 @@ const chromeState = () => evalIn(`JSON.stringify({
   state: document.body.dataset.readerChrome,
   bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
 })`);
+const defaultChrome = JSON.parse(await chromeState());
+const defaultAutoHide = await evalIn(
+  `document.querySelector('#reader-settings-form input[name="autohide"]').checked`,
+);
+check('the chrome stays visible by default',
+  defaultAutoHide === false && defaultChrome.state === 'visible' && defaultChrome.bar === '1',
+  JSON.stringify({ defaultAutoHide, ...defaultChrome }));
+await evalIn(`(() => {
+  const box = document.querySelector('#reader-settings-form input[name="autohide"]');
+  box.checked = true;
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
 const ffTap = (where, kind) => evalIn(`(() => {
   const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
   const win = doc.defaultView;
@@ -253,6 +266,17 @@ await new Promise((r) => setTimeout(r, 2600));
 const ffParked = JSON.parse(await chromeState());
 check('the chrome steps aside while reading',
   ffParked.state === 'hidden' && ffParked.bar === '0', JSON.stringify(ffParked));
+
+await evalIn(`(() => {
+  document.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: window.innerWidth - 4, clientY: window.innerHeight / 2,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const ffPassedSide = JSON.parse(await chromeState());
+check('moving along the side leaves the chrome hidden',
+  ffPassedSide.state === 'hidden' && ffPassedSide.bar === '0', JSON.stringify(ffPassedSide));
 
 await evalIn(`(() => {
   document.dispatchEvent(new PointerEvent('pointermove', {
