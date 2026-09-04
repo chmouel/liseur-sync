@@ -336,6 +336,16 @@ devices, and the last op you acknowledged as baseline. Liseur's
 implementation (`domain/ReadingStateMerge.kt`) is the reference; the
 protocol is shaped so that logic transfers unchanged.
 
+The merge is only half of what makes two clients land on the same page.
+Liseur also pushes every persisted page turn as it happens, queues a
+backstop push when the reader leaves the book, and on open or resume
+*offers* a place another device has read further to rather than
+jumping there. A client that does the same converges with it; one that
+pushes only on close, or that takes the furthest position outright,
+will be seen by Liseur as a device that keeps moving backwards. The
+behaviour is written out, against Kindle Whispersync as the yardstick,
+in [Liseur's ADR-0023](https://github.com/chmouel/liseur/blob/main/docs/adr/0023-position-sync-versus-whispersync.md).
+
 ## Annotations
 
 Highlights, notes and bookmarks sync too (ADR-0028), and they are the
