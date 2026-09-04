@@ -3,8 +3,10 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -84,17 +86,115 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // work id.
 const errCodeUnknownWork = "unknown_work"
 
-// writeUnknownWork answers a batch item that named a work the server
-// does not hold. The message stays what it always was; the extra fields
-// let a client recover without parsing it: which work is gone, and
-// which item of the batch blamed it ("op_id" or "session_id").
-func writeUnknownWork(w http.ResponseWriter, msg, itemField, itemID, workID string) {
-	writeJSON(w, http.StatusBadRequest, map[string]string{
-		"error":   msg,
-		"code":    errCodeUnknownWork,
-		"work_id": workID,
-		itemField: itemID,
+// Item-level refusal codes shared by POST /v1/ops and POST /v1/sessions.
+// A batch is appended atomically, so a refusal must name the item that
+// caused it well enough for a client to set that one aside and send the
+// rest again without parsing prose.
+const (
+	errCodeMissingField   = "missing_field"
+	errCodeBadTime        = "bad_time"
+	errCodeTimeInFuture   = "time_in_future"
+	errCodeProgression    = "progression_out_of_range"
+	errCodeLocatorTooBig  = "locator_too_large"
+	errCodeIdleOutOfRange = "idle_out_of_range"
+	errCodeIDReused       = "id_reused"
+	errCodeBatchTooLarge  = "batch_too_large"
+)
+
+// itemRefusal is the body of an item-level 4xx. item_index is always
+// set; the id field ("op_id" or "session_id") only when the item had
+// one — a missing_field about the id itself cannot name it.
+type itemRefusal struct {
+	status  int
+	code    string
+	msg     string
+	idField string
+	id      string
+	index   int
+	workID  string
+	limit   int
+}
+
+func (e itemRefusal) write(w http.ResponseWriter) {
+	body := map[string]any{
+		"error":      e.msg,
+		"code":       e.code,
+		"item_index": e.index,
+	}
+	if e.id != "" {
+		body[e.idField] = e.id
+	}
+	if e.workID != "" {
+		body["work_id"] = e.workID
+	}
+	if e.limit > 0 {
+		body["limit"] = e.limit
+	}
+	writeJSON(w, e.status, body)
+}
+
+// writeItemRefusal answers a validation failure on one item of a batch.
+func writeItemRefusal(w http.ResponseWriter, code, kind, idField, id string, index int, what string, limit int) {
+	label := kind + " " + id
+	if id == "" {
+		label = kind + " " + strconv.Itoa(index)
+	}
+	itemRefusal{
+		status: http.StatusBadRequest, code: code, msg: label + ": " + what,
+		idField: idField, id: id, index: index, limit: limit,
+	}.write(w)
+}
+
+// writeStoreItemError maps a *store.ItemError from an append into the
+// same shape: unknown_work for a work the user lacks, id_reused (409)
+// for an idempotency key replayed with a different payload. Anything
+// else is a genuine failure. Reports whether it answered.
+func writeStoreItemError(w http.ResponseWriter, err error, kind, idField string) bool {
+	var item *store.ItemError
+	if !errors.As(err, &item) {
+		return false
+	}
+	label := kind + " " + item.ID
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		itemRefusal{
+			status: http.StatusBadRequest, code: errCodeUnknownWork, msg: label + ": unknown work",
+			idField: idField, id: item.ID, index: item.Index, workID: item.WorkID,
+		}.write(w)
+	case errors.Is(err, store.ErrIDMismatch):
+		itemRefusal{
+			status: http.StatusConflict, code: errCodeIDReused,
+			msg:     label + ": " + idField + " reused with a different payload",
+			idField: idField, id: item.ID, index: item.Index,
+		}.write(w)
+	default:
+		return false
+	}
+	return true
+}
+
+// writeBatchTooLarge is the batch-level refusal; limit says how many
+// items a request may carry.
+func writeBatchTooLarge(w http.ResponseWriter, limit int) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": "batch too large", "code": errCodeBatchTooLarge, "limit": limit,
 	})
+}
+
+// decodeBatch reads a JSON batch body under the configured byte bound.
+// A body over the bound is 413, like the annotations route; anything
+// else that fails to decode is 400. Reports whether it answered.
+func decodeBatch(w http.ResponseWriter, r *http.Request, maxBytes int64, into any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes)).Decode(into); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		}
+		return true
+	}
+	return false
 }
 
 // LogServerErrors wraps a handler and logs every 5xx response, so a

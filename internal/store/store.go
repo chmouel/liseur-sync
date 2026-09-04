@@ -51,6 +51,46 @@ var (
 	ErrRefreshLeaseLost = errors.New("store: refresh lease lost")
 )
 
+// ItemError names which item of a batch a refusal is about. Batches are
+// appended atomically, so a client that is told "no" needs to know which
+// record to fix or set aside before sending the rest again; a bare
+// sentinel cannot tell it, and searching the batch for the id would pick
+// the wrong occurrence when the same id appears twice.
+type ItemError struct {
+	// Kind is "op" or "session".
+	Kind string
+	// ID is the item's op_id or session_id; empty if the item had none.
+	ID string
+	// Index is the item's zero-based position in the batch.
+	Index int
+	// WorkID is set when the refusal is about the work the item names.
+	WorkID string
+	// Err is the sentinel this wraps: ErrIDMismatch or ErrNotFound.
+	Err error
+}
+
+func (e *ItemError) Error() string {
+	return fmt.Sprintf("%s %q (item %d): %v", e.Kind, e.ID, e.Index, e.Err)
+}
+
+// Unwrap keeps errors.Is(err, ErrIDMismatch) and errors.Is(err,
+// ErrNotFound) true for callers that only care which rule was broken.
+func (e *ItemError) Unwrap() error { return e.Err }
+
+// IDMismatch is the item-level form of ErrIDMismatch.
+func IDMismatch(kind, id string, index int) error {
+	return &ItemError{Kind: kind, ID: id, Index: index, Err: ErrIDMismatch}
+}
+
+// UnknownWork is a new op or session naming a work this user does not
+// have. Decided inside the append transaction, so a work deleted between
+// a handler's check and the insert is still this and never a foreign-key
+// failure. A replay of an already accepted item is judged before this,
+// so a duplicate stays a duplicate even after its work is gone.
+func UnknownWork(kind, id string, index int, workID string) error {
+	return &ItemError{Kind: kind, ID: id, Index: index, WorkID: workID, Err: ErrNotFound}
+}
+
 // TokenPurgeGrace is how long expired or revoked tokens remain listed
 // (for the UI) before Housekeep deletes them.
 const TokenPurgeGrace = 30 * 24 * time.Hour

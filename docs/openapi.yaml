@@ -526,13 +526,25 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/OpResult" }
         "400":
-          $ref: "#/components/responses/Error"
           description: |
-            Malformed batch, or one item naming a work the server no
-            longer holds. The whole batch is rejected atomically. An
-            unknown work comes back as `code: unknown_work` with the
-            `work_id` and the offending `op_id`: re-resolve the book to
-            refresh its cached identity, then retry.
+            The batch was refused as a whole; nothing was stored. A
+            batch-level refusal (`ops required`, `code: batch_too_large`
+            with `limit`) has no item to name. An item-level refusal
+            names the first bad item: `code`, its zero-based `item_index`,
+            and its `op_id` when it had one. `unknown_work` is the one a
+            client recovers from by re-resolving the book and retrying
+            under the fresh `work_id`; `locator_too_large` carries the
+            byte `limit` and the op may be retried under the same
+            `op_id` without its locator, since the original batch was
+            never stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchItemError" }
+        "413":
+          description: Request body over `ops.max_body_bytes`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/changes:
     get:
@@ -540,11 +552,14 @@ paths:
       summary: Delta-sync every op after a seq
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
-        - { name: since, in: query, schema: { type: integer, default: 0 } }
+        - { name: since, in: query, schema: { type: integer, default: 0, minimum: 0 } }
         - { name: limit, in: query, schema: { type: integer, default: 500, maximum: 500 } }
       responses:
         "200":
-          description: Page of ops with the new high-water mark
+          description: |
+            Page of ops with the new high-water mark. The page, the mark
+            and the compaction check come from one snapshot: a page you
+            were not told to resync from has no holes in it.
           content:
             application/json:
               schema:
@@ -555,8 +570,15 @@ paths:
                     items: { $ref: "#/components/schemas/Op" }
                   high_water: { type: integer }
                   has_more: { type: boolean }
+        "400":
+          description: "`since` is not a non-negative integer"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "410":
-          description: Cursor below the compaction horizon
+          description: |
+            Cursor below the compaction horizon. Fetch `heads_endpoint`
+            and resume from its `snapshot_seq`.
           content:
             application/json:
               schema:
@@ -565,6 +587,7 @@ paths:
                   error: { type: string, enum: [resync_required] }
                   high_water: { type: integer }
                   heads_endpoint: { type: string }
+                  message: { type: string }
 
   /v1/heads:
     get:
@@ -642,14 +665,30 @@ paths:
                 type: object
                 properties: { accepted: { type: integer } }
         "400":
-          $ref: "#/components/responses/Error"
           description: |
-            Malformed batch, or one item naming a work the server no
-            longer holds. The whole batch is rejected atomically. An
-            unknown work comes back as `code: unknown_work` with the
-            `work_id` and the offending `session_id`: re-resolve the book
-            to refresh its cached identity, then retry.
-        "409": { $ref: "#/components/responses/Error", description: "session_id reused with different payload" }
+            The batch was refused as a whole; nothing was stored. Same
+            shape as `POST /v1/ops`: a batch-level refusal (`sessions
+            required`, `code: batch_too_large` with `limit`) names no
+            item; an item-level one names the first bad item by `code`,
+            `item_index` and `session_id` when it had one. `unknown_work`
+            is recoverable by re-resolving the book and retrying.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchItemError" }
+        "409":
+          description: |
+            A `session_id` in the batch was already accepted with a
+            different payload (live, or archived as a rollup tombstone).
+            `code: id_reused`, with the `session_id` and its `item_index`;
+            the batch was refused as a whole.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchItemError" }
+        "413":
+          description: Request body over `ops.max_body_bytes`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/annotations:
     post:
@@ -2130,33 +2169,12 @@ components:
       description: |
         Error with a human-readable reason. Most failures carry only
         `error`; a refusal a client can act on also carries a
-        machine-readable `code` and the identifiers that explain it.
-        Clients must key any recovery off `code`, never off the message
-        text.
+        machine-readable `code` and the identifiers that explain it
+        (see `BatchItemError` for the batch routes). Clients must key
+        any recovery off `code`, never off the message text.
       content:
         application/json:
-          schema:
-            type: object
-            required: [error]
-            properties:
-              error: { type: string }
-              code:
-                type: string
-                enum: [unknown_work]
-                description: |
-                  Present when the refusal is recoverable. `unknown_work`
-                  means a batch item named a work the server no longer
-                  holds — refresh the cached work identity (re-resolve the
-                  book) and retry the batch.
-              work_id:
-                type: string
-                description: The work the server no longer holds.
-              op_id:
-                type: string
-                description: The op that named the unknown work.
-              session_id:
-                type: string
-                description: The session that named the unknown work.
+          schema: { $ref: "#/components/schemas/Error" }
     StatusOK:
       description: OK
       content:
@@ -2166,6 +2184,60 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+    BatchItemError:
+      type: object
+      description: |
+        A refusal of a batch (`POST /v1/ops`, `POST /v1/sessions`). The
+        batch is appended atomically, so a refusal means nothing was
+        stored, and it names the first item that caused it well enough
+        for a client to set that item aside and send the rest again:
+        `item_index` is always present for an item-level refusal;
+        `op_id`/`session_id` when the item had one (a `missing_field`
+        about the id itself cannot name it). Batch-level refusals
+        (`batch_too_large`) have no `item_index`.
+      required: [error]
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum:
+            - unknown_work
+            - missing_field
+            - bad_time
+            - time_in_future
+            - progression_out_of_range
+            - locator_too_large
+            - idle_out_of_range
+            - id_reused
+            - batch_too_large
+          description: |
+            `unknown_work`: the item named a work the server no longer
+            holds; re-resolve the book and retry under the new id.
+            `locator_too_large`: retry that op under the same `op_id`
+            without its locator. `id_reused` (409): the id was already
+            accepted with a different payload; that item will never be
+            taken as is. The validation codes are permanent for that
+            payload. Unrecognised codes should be treated as permanent
+            for the item but reported, not silently dropped.
+        item_index:
+          type: integer
+          description: Zero-based position of the item in the batch.
+        op_id: { type: string }
+        session_id: { type: string }
+        work_id:
+          type: string
+          description: With `unknown_work`, the work the server lacks.
+        limit:
+          type: integer
+          description: |
+            With `locator_too_large`, the byte bound; with
+            `batch_too_large`, the item bound.
     CatalogResolution:
       type: object
       description: |
@@ -2731,7 +2803,15 @@ components:
       type: object
       properties:
         op_id: { type: string }
-        status: { type: string, enum: [applied, duplicate, conflict, invalid] }
+        status:
+          type: string
+          enum: [applied, duplicate, conflict]
+          description: |
+            `applied`: new, with its `seq`. `duplicate`: this `op_id`
+            was already accepted with this exact payload; `seq` is the
+            original. `conflict`: this `op_id` was already accepted with
+            a different payload (or from a different device); the item
+            was not stored and never will be under this id.
         seq: { type: integer }
         reason: { type: string }
     SessionInput:

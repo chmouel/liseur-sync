@@ -31,13 +31,20 @@ type opReqJSON struct {
 // HandlePushOps implements POST /v1/ops — batch, idempotent on op_id.
 // The token's server-side device_id stamps every op; a client-supplied
 // device_id is ignored.
+//
+// Validation stops at the first bad item and refuses the whole batch:
+// the append is atomic, so partial state is never an option, and the
+// refusal names the item (code, item_index, op_id) so the client can
+// set it aside and send the rest again. Whether the work exists is
+// decided by the store inside the append transaction, not here — a
+// check before the transaction could pass and the work be deleted
+// before the insert, turning a recoverable refusal into a 500.
 func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	var body struct {
 		Ops []opReqJSON `json:"ops"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if decodeBatch(w, r, s.Cfg.Ops.MaxBodyBytes, &body) {
 		return
 	}
 	if len(body.Ops) == 0 {
@@ -45,50 +52,46 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body.Ops) > s.Cfg.Ops.MaxBatch {
-		writeError(w, http.StatusBadRequest, "batch too large")
+		writeBatchTooLarge(w, s.Cfg.Ops.MaxBatch)
 		return
 	}
 
-	// Validate all items up front; any invalid item fails the batch with
-	// per-item reasons (native clients are expected to be well-formed;
-	// failing loudly beats partial state).
 	ops := make([]store.Op, len(body.Ops))
 	for i, in := range body.Ops {
+		refuse := func(code, what string, limit int) {
+			writeItemRefusal(w, code, "op", "op_id", in.OpID, i, what, limit)
+		}
 		if in.OpID == "" || len(in.OpID) > 64 {
-			writeError(w, http.StatusBadRequest, "op "+strconv.Itoa(i)+": op_id required")
+			in.OpID = ""
+			refuse(errCodeMissingField, "op_id required", 0)
 			return
 		}
 		if in.WorkID == "" {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": work_id required")
+			refuse(errCodeMissingField, "work_id required", 0)
 			return
 		}
 		if in.Progression == nil {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": progression required")
+			refuse(errCodeMissingField, "progression required", 0)
 			return
 		}
 		// Written as the negation of the in-range test so a NaN (both
 		// comparisons false) is rejected rather than let through, which
 		// the naive `p < 0 || p > 1` would do.
 		if p := *in.Progression; !(p >= 0 && p <= 1) {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": progression out of range [0,1]")
+			refuse(errCodeProgression, "progression out of range [0,1]", 0)
 			return
 		}
 		if len(in.Locator) > s.Cfg.Ops.MaxLocatorBytes {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": locator too large")
+			refuse(errCodeLocatorTooBig, "locator too large", s.Cfg.Ops.MaxLocatorBytes)
 			return
 		}
 		ts, err := time.Parse(time.RFC3339Nano, in.ClientTS)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": bad client_ts")
+			refuse(errCodeBadTime, "bad client_ts", 0)
 			return
 		}
 		if ts.After(time.Now().Add(24 * time.Hour)) {
-			writeError(w, http.StatusBadRequest, "op "+in.OpID+": client_ts in the future")
-			return
-		}
-		// Verify the work belongs to the user.
-		if _, err := s.St.WorkByID(r.Context(), tok.UserID, in.WorkID); err != nil {
-			writeUnknownWork(w, "op "+in.OpID+": unknown work", "op_id", in.OpID, in.WorkID)
+			refuse(errCodeTimeInFuture, "client_ts in the future", 0)
 			return
 		}
 		ops[i] = store.Op{
@@ -105,6 +108,9 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.St.AppendOps(r.Context(), tok.UserID, tok.DeviceID, ops)
 	if err != nil {
+		if writeStoreItemError(w, err, "op", "op_id") {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "append failed")
 		return
 	}
@@ -124,9 +130,21 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleChanges implements GET /v1/changes?since=<seq>&limit=<n>.
+//
+// A cursor that does not parse, or is negative, is refused rather than
+// read as zero: zero means "replay everything", and a client that sent
+// garbage should hear so, not silently get a full history.
 func (s *Server) HandleChanges(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
-	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	var since int64
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || v < 0 {
+			writeError(w, http.StatusBadRequest, "since must be a non-negative integer")
+			return
+		}
+		since = v
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 500 {
 		limit = 500
@@ -141,7 +159,7 @@ func (s *Server) HandleChanges(w http.ResponseWriter, r *http.Request) {
 			"error":          "resync_required",
 			"high_water":     page.HighWater,
 			"heads_endpoint": "/v1/heads",
-			"message":        "since is below the compaction horizon; fetch /v1/heads and resume from high_water",
+			"message":        "since is below the compaction horizon; fetch /v1/heads and resume from its snapshot_seq",
 		})
 		return
 	}
@@ -168,8 +186,11 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 200 {
+	switch {
+	case limit <= 0:
 		limit = 50
+	case limit > 200:
+		limit = 200
 	}
 	ops, err := s.St.Positions(r.Context(), tok.UserID, workID, limit)
 	if err != nil {

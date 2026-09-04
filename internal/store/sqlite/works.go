@@ -26,6 +26,19 @@ func lockWorkGraph(ctx context.Context, tx *sql.Tx, userID string) error {
 	return nil
 }
 
+// workExistsTx reports whether this user has the work, inside the
+// caller's transaction, so an append decides "unknown work" against the
+// same state it inserts into.
+func workExistsTx(ctx context.Context, tx *sql.Tx, userID, workID string) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM works WHERE user_id = ? AND id = ?`, userID, workID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func resolveMatches(ctx context.Context, tx *sql.Tx, userID string, ids []store.Identifier) (map[string]string, error) {
 	out := make(map[string]string, len(ids))
 	for _, id := range ids {

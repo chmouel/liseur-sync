@@ -1,9 +1,7 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -28,66 +26,69 @@ type sessionReqJSON struct {
 
 // HandlePushSessions implements POST /v1/sessions — batch, idempotent
 // on session_id, append-only. The token's device_id stamps each row.
+// Refusals follow the same shape as POST /v1/ops: the first bad item
+// names itself (code, item_index, session_id) and the whole batch is
+// refused; the work check and the idempotency check live in the store,
+// inside the append transaction.
 func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	var body struct {
 		Sessions []sessionReqJSON `json:"sessions"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if decodeBatch(w, r, s.Cfg.Ops.MaxBodyBytes, &body) {
 		return
 	}
 	if len(body.Sessions) == 0 {
 		writeError(w, http.StatusBadRequest, "sessions required")
 		return
 	}
-	if len(body.Sessions) > 1000 {
-		writeError(w, http.StatusBadRequest, "batch too large")
+	if len(body.Sessions) > maxSessionBatch {
+		writeBatchTooLarge(w, maxSessionBatch)
 		return
 	}
 
 	sessions := make([]store.Session, len(body.Sessions))
 	for i, in := range body.Sessions {
+		refuse := func(code, what string) {
+			writeItemRefusal(w, code, "session", "session_id", in.SessionID, i, what, 0)
+		}
 		if in.SessionID == "" || len(in.SessionID) > 64 {
-			writeError(w, http.StatusBadRequest, "session "+strconv.Itoa(i)+": session_id required")
+			in.SessionID = ""
+			refuse(errCodeMissingField, "session_id required")
 			return
 		}
 		if in.WorkID == "" {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": work_id required")
+			refuse(errCodeMissingField, "work_id required")
 			return
 		}
 		started, err := time.Parse(time.RFC3339Nano, in.StartedAt)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": bad started_at")
+			refuse(errCodeBadTime, "bad started_at")
 			return
 		}
 		ended, err := time.Parse(time.RFC3339Nano, in.EndedAt)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": bad ended_at")
+			refuse(errCodeBadTime, "bad ended_at")
 			return
 		}
 		if ended.Before(started) {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": ended_at before started_at")
+			refuse(errCodeBadTime, "ended_at before started_at")
 			return
 		}
 		if in.StartProg == nil || in.EndProg == nil {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": progression required")
+			refuse(errCodeMissingField, "progression required")
 			return
 		}
 		// Negation of the in-range test so a NaN (both comparisons
 		// false) is rejected rather than let through.
 		sp, ep := *in.StartProg, *in.EndProg
 		if !(sp >= 0 && sp <= 1) || !(ep >= 0 && ep <= 1) {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": progression out of range [0,1]")
+			refuse(errCodeProgression, "progression out of range [0,1]")
 			return
 		}
 		durMs := ended.Sub(started).Milliseconds()
 		if in.IdleMs < 0 || in.IdleMs > durMs {
-			writeError(w, http.StatusBadRequest, "session "+in.SessionID+": idle_ms out of range")
-			return
-		}
-		if _, err := s.St.WorkByID(r.Context(), tok.UserID, in.WorkID); err != nil {
-			writeUnknownWork(w, "session "+in.SessionID+": unknown work", "session_id", in.SessionID, in.WorkID)
+			refuse(errCodeIdleOutOfRange, "idle_ms out of range")
 			return
 		}
 		sessions[i] = store.Session{
@@ -105,8 +106,7 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.St.AppendSessions(r.Context(), tok.UserID, sessions); err != nil {
-		if err == store.ErrIDMismatch {
-			writeError(w, http.StatusConflict, "session_id reused with a different payload")
+		if writeStoreItemError(w, err, "session", "session_id") {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "append failed")
@@ -114,3 +114,6 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": len(sessions)})
 }
+
+// maxSessionBatch is how many sessions one request may carry.
+const maxSessionBatch = 1000

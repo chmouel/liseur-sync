@@ -64,6 +64,12 @@ func appendOpsTx(ctx context.Context, tx *sql.Tx, userID, deviceID string, ops [
 			continue
 		}
 
+		if ok, err := workExistsTx(ctx, tx, userID, o.WorkID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, store.UnknownWork("op", o.OpID, i, o.WorkID)
+		}
+
 		var seq int64
 		err = tx.QueryRowContext(ctx, q(
 			`INSERT INTO seq_counters (user_id, next_seq) VALUES (?, 2)

@@ -248,25 +248,54 @@ POST /v1/ops
 `op_id` is the idempotency key: generate it once per position event and
 keep it until the server acknowledges it. A network retry then reports
 the original `seq` instead of writing twice. Never reuse an `op_id` for
-a different position; the server rejects it as a conflict.
+a different position; the server rejects it as a conflict. The device
+is part of what "the same op" means: a replay from a token with a
+different `device_id` is a `conflict`, which is why a reconnecting
+client should keep its device identity (see *Keeping one device
+identity across reconnects*).
 
-One refusal is recoverable. Orphan cleanup can delete a work that has
-no catalog mapping and no reading history, and a batch naming it then
-fails (atomically, nothing is stored) with `400` and a structured
-body:
+The per-item `results` are `applied`, `duplicate` or `conflict`. A
+`conflict` is a result, not a refusal: the other items in the batch are
+stored. Treat it as a permanent answer for that `op_id` — report it and
+send that position again under a fresh id; sending the same op again
+will only conflict again.
+
+#### When a batch is refused
+
+The batch is appended atomically, so a `400` means nothing in it was
+stored. The body names the first item that caused it:
 
 ```json
-{ "error": "op <op-id>: unknown work", "code": "unknown_work",
-  "work_id": "…", "op_id": "…" }
+{ "error": "op <op-id>: locator too large", "code": "locator_too_large",
+  "item_index": 3, "op_id": "…", "limit": 16384 }
 ```
 
-`POST /v1/sessions` answers the same shape keyed by `session_id`. Key
-the recovery off `code`, never off the message text: re-resolve the
-book (`POST /v1/works/resolve`, or `/v1/books/{id}/resolve` for a
-catalog book), reseed from the fresh work's positions, rebuild the
-batch under the new `work_id` (the `op_id` derives from it) and
-retry. Any other `400` is malformed input and will never be accepted
-as-is.
+`item_index` is always present for an item-level refusal; `op_id` when
+the item had one (a `missing_field` about the id itself cannot name
+it). Key the recovery off `code`, never off the message text:
+
+- `unknown_work` (with `work_id`): orphan cleanup deleted a work that
+  had no catalog mapping and no reading history. Re-resolve the book
+  (`POST /v1/works/resolve`, or `/v1/books/{id}/resolve` for a catalog
+  book), reseed from the fresh work's positions, rebuild the batch under
+  the new `work_id` and retry.
+- `locator_too_large` (with `limit`): the server's `ops.max_locator_bytes`
+  is configurable and may be smaller than you assumed. Retry that op
+  under the same `op_id` without its locator; the progression still
+  syncs.
+- `batch_too_large` (with `limit`, no `item_index`): split the batch.
+- Anything else (`missing_field`, `bad_time`, `time_in_future`,
+  `progression_out_of_range`) is malformed input and will never be
+  accepted as is. Set that item aside and send the rest.
+
+A body over `ops.max_body_bytes` is `413`; halve the batch and retry.
+
+`POST /v1/sessions` answers the same shape keyed by `session_id`, plus
+`409 {"code": "id_reused", "session_id": …, "item_index": …}` when a
+session id was already accepted with a different payload. Never mark a
+whole refused batch as sent: only the named item is the problem, and
+an hour of reading dropped because a neighbour was malformed is an hour
+that never happened.
 
 `progression` is the lingua franca every device understands. `locator`
 is your reader's exact position: a Readium locator, a CFI, whatever
@@ -284,12 +313,20 @@ GET /v1/changes?since=<cursor>&limit=500
 
 Apply the ops, then set your cursor to the last returned `seq`, or to
 `high_water` when the page is empty. While `has_more` is true, request
-the next page immediately.
+the next page immediately. The page, `high_water` and the compaction
+check are read from one snapshot, so a page you were not told to resync
+from has no holes in it. A `since` that is not a non-negative integer
+is `400`, not a replay from zero.
 
 If the server answers `410 {"error": "resync_required"}`, your cursor
 fell behind the compaction horizon. Fetch `GET /v1/heads`, rebuild your
-local state from those heads, set your cursor to `snapshot_seq`, and
+local state from those heads, set your cursor to its `snapshot_seq`, and
 resume normal delta sync.
+
+A work can also disappear from under a cursor: a reader deleting a work
+(ADR-0024) removes its ops without a tombstone in this feed. A client
+that holds ops for a work the server no longer knows learns so on its
+next push (`unknown_work`), not on pull.
 
 ### Conflicts
 

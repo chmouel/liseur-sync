@@ -25,14 +25,14 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 }
 
 func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now time.Time) error {
-	for _, ses := range ss {
+	for i, ses := range ss {
 		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx, q(
 			`SELECT fingerprint FROM session_tombstones WHERE user_id = ? AND session_id = ?`),
 			userID, ses.SessionID).Scan(&archivedFingerprint)
 		if err == nil {
 			if archivedFingerprint != store.SessionFingerprint(ses) {
-				return store.ErrIDMismatch
+				return store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue
 		}
@@ -51,9 +51,14 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 				return err
 			}
 			if !same {
-				return store.ErrIDMismatch
+				return store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue
+		}
+		if ok, err := workExistsTx(ctx, tx, userID, ses.WorkID); err != nil {
+			return err
+		} else if !ok {
+			return store.UnknownWork("session", ses.SessionID, i, ses.WorkID)
 		}
 		_, err = tx.ExecContext(ctx, q(
 			`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
