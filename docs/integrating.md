@@ -83,6 +83,7 @@ GET /v1/token
 ```json
 {
   "id": "tok_7f3a",
+  "account_id": "usr_31b0",
   "device_id": "dev_9c21",
   "name": "Boox Palma",
   "scopes": ["sync", "library-read"]
@@ -95,6 +96,14 @@ when `library-manage` is present, and the reading statistics when
 `read-insights` is. Probing routes and reading `403`s works, but it
 means the first thing the user sees is an error the client could have
 avoided.
+
+`account_id` is the stable name of the account. Every token minted on
+the account carries the same value, so when the user pastes a new
+secret or reconnects, compare it with the one you stored: equal means
+the same account, keep your catalog mirror, aliases and sync cursor;
+different means an account switch, clear them. Neither `id` nor
+`device_id` is suitable for that comparison: both change with every
+minted token.
 
 The route needs no particular scope (the narrowest token can ask about
 itself) but it is still authenticated: an absent, revoked or expired

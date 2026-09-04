@@ -2638,9 +2638,17 @@ components:
         uses for the same things; `created_at` and `revoked` are absent
         because a caller that reaches this route is neither revoked nor
         expired.
-      required: [id, device_id, name, scopes]
+      required: [id, account_id, device_id, name, scopes]
       properties:
         id: { type: string }
+        account_id:
+          type: string
+          description: |
+            Opaque, stable name for the account the token belongs to.
+            Every token minted on one account carries the same value;
+            compare it, not `device_id` or `id`, to decide whether a
+            replaced credential is the same account (keep mirrors and
+            cursors) or a different one (clear them).
         device_id: { type: string }
         name: { type: string }
         scope:
