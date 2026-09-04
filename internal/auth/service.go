@@ -370,17 +370,3 @@ func (s *Service) tokenByHashGlobal(ctx context.Context, hash string) (store.Tok
 	}
 	return store.Token{}, errors.New("store does not support global token lookup")
 }
-
-// dummyHash is a valid argon2id encoding used to equalize timing when
-// the username does not exist. Password "dummy".
-const dummyHash = "$argon2id$v=19$m=65536,t=3,p=2$c2FsdHNhbHRzYWx0c2FsdA$M2DdlP2yhB+CZCm2lp3DKbT8NYDMv0hWQRdnJP0bLcU"
-
-// CheckDummyPassword burns the same work a real password check would,
-// so an unknown username and a wrong password take comparable time.
-// Argon2id at 64 MiB is slow enough that skipping it is a plainly
-// measurable signal, which turns any login form into a user
-// enumeration oracle. Every path that verifies a password must call
-// this when the user is not found.
-func CheckDummyPassword(password string) {
-	_, _ = CheckPassword(password, dummyHash)
-}
