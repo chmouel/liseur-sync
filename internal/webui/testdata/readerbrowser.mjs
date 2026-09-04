@@ -587,6 +587,19 @@ const chromeState = () => evalIn(`JSON.stringify({
   footer: getComputedStyle(document.getElementById('reader-footer')).display,
 })`);
 const idle = () => new Promise((r) => setTimeout(r, 3000));
+const defaultChrome = JSON.parse(await chromeState());
+const defaultAutoHide = await evalIn(
+  `document.querySelector('#reader-settings-form input[name="autohide"]').checked`,
+);
+check('the chrome stays visible by default',
+  defaultAutoHide === false && defaultChrome.state === 'visible' && defaultChrome.bar === '1',
+  JSON.stringify({ defaultAutoHide, ...defaultChrome }));
+await evalIn(`(() => {
+  const box = document.querySelector('#reader-settings-form input[name="autohide"]');
+  box.checked = true;
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
 // Tap the chapter document itself, the way a pointer really does it:
 // pointerdown, pointerup, then the click, in the frame's own
 // coordinates, so the page turned on is the one the reader is looking
@@ -611,6 +624,17 @@ const tapChapter = (where, kind = 'mouse', drift = 0) => evalIn(`(() => {
 })()`);
 const settle = () => new Promise((r) => setTimeout(r, 1200));
 
+const settingsOpened = await evalIn(`(() => {
+  const panel = document.getElementById('reader-settings');
+  panel.querySelector('summary').click();
+  return panel.open;
+})()`);
+check('the Aa menu opens', settingsOpened === true, String(settingsOpened));
+await tapChapter('middle', 'touch');
+await new Promise((r) => setTimeout(r, 400));
+const settingsClosed = await evalIn(`!document.getElementById('reader-settings').open`);
+check('clicking the book closes the Aa menu', settingsClosed === true, String(settingsClosed));
+
 await idle();
 const parked = JSON.parse(await chromeState());
 check('the chrome steps aside while reading',
@@ -620,6 +644,17 @@ check('the chrome steps aside while reading',
 // what a reader glances at mid-page, bars or no bars.
 check('the footer stays while the chrome is hidden',
   parked.footer !== 'none', JSON.stringify(parked));
+
+await evalIn(`(() => {
+  document.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, clientX: window.innerWidth - 4, clientY: window.innerHeight / 2,
+  }));
+  return true;
+})()`);
+await new Promise((r) => setTimeout(r, 400));
+const passedSide = JSON.parse(await chromeState());
+check('moving along the side leaves the chrome hidden',
+  passedSide.state === 'hidden' && passedSide.bar === '0', JSON.stringify(passedSide));
 
 await evalIn(`(() => {
   document.dispatchEvent(new PointerEvent('pointermove', {
@@ -1204,16 +1239,10 @@ check('the auto-hide choice persists in the browser',
   String(savedChrome));
 await tapChapter('middle', 'touch');
 await new Promise((r) => setTimeout(r, 500));
-const manuallyHidden = JSON.parse(await chromeState());
-check('a middle tap can still hide fixed chrome',
-  manuallyHidden.state === 'hidden' && manuallyHidden.bar === '0',
-  JSON.stringify(manuallyHidden));
-await tapChapter('middle', 'touch');
-await new Promise((r) => setTimeout(r, 500));
-const manuallyShown = JSON.parse(await chromeState());
-check('a second middle tap restores fixed chrome',
-  manuallyShown.state === 'visible' && manuallyShown.bar === '1',
-  JSON.stringify(manuallyShown));
+const fixedAfterTap = JSON.parse(await chromeState());
+check('a middle tap does not hide fixed chrome',
+  fixedAfterTap.state === 'visible' && fixedAfterTap.bar === '1',
+  JSON.stringify(fixedAfterTap));
 
 // The browser refusing to run the publication's script is verified by
 // confirming the script did not run and no unexpected errors occurred.

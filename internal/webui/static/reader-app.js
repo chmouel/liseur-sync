@@ -678,7 +678,7 @@ const SETTINGS_DEFAULTS = Object.freeze({
   flow: "paginated",
   columns: "auto",
   margin: "normal",
-  autohide: true,
+  autohide: false,
   footer: "chapter",
 });
 // What the footer's middle slot shows; a click on the footer walks
@@ -1029,6 +1029,10 @@ function tapAt(x, y) {
     if (chromeVisible()) armChrome(CHROME_IDLE_MS);
     return true;
   }
+  if (!settings.autohide) {
+    setChrome(true);
+    return true;
+  }
   if (chromeVisible()) {
     clearTimeout(chromeTimer);
     setChrome(false);
@@ -1054,7 +1058,7 @@ function toggleChrome() {
 function pointerMoved(x, y, pointerType) {
   if (pointerType === "touch") return; // a finger reveals by tapping
   if (!chromeAuto()) return;
-  if (inTopZone(y) || tapZone(x) !== "chrome") revealChrome();
+  if (inTopZone(y)) revealChrome();
   else if (chromeVisible()) armChrome(CHROME_IDLE_MS);
 }
 
@@ -1190,6 +1194,7 @@ function wireChapterPointer(doc) {
     "pointerdown",
     (e) => {
       noteActivity();
+      if (settingsPanel && settingsPanel.open) settingsPanel.open = false;
       if (gesture.id !== null && gesture.id !== e.pointerId) {
         gesture.spoiled = true; // a second finger: not a tap any more
         return;
