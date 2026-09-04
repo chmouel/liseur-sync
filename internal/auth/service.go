@@ -102,9 +102,22 @@ func (s *Service) AuthenticateLogin(ctx context.Context, secret string) (string,
 	return a.UserID, nil
 }
 
+// ErrUnknownDevice is a device id offered for inheritance that no token of
+// this account has ever carried.
+var ErrUnknownDevice = errors.New("unknown device_id")
+
 // CreateToken mints a per-device token for a user authenticated via the
 // login credential. Returns the plaintext secret once.
-func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, scopes store.ScopeSet, expiresAt *time.Time) (plaintext string, tok store.Token, err error) {
+//
+// A non-empty deviceID asks the new token to inherit an existing device
+// identity instead of drawing a fresh one. It is honoured only when a
+// token of this same account — live, expired or revoked — already carries
+// it: the id is a label in the op log, so a client that stored it and
+// comes back after its credential lapsed stays one device and its replays
+// stay duplicates. Deleted predecessors are gone for good, hence
+// ErrUnknownDevice rather than a silent fresh mint. Another account's ids
+// are unknown here by construction.
+func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, scopes store.ScopeSet, expiresAt *time.Time, deviceID string) (plaintext string, tok store.Token, err error) {
 	userID, err := s.AuthenticateLogin(ctx, loginSecret)
 	if err != nil {
 		return "", tok, err
@@ -112,7 +125,23 @@ func (s *Service) CreateToken(ctx context.Context, loginSecret, name string, sco
 	if err := s.CheckScopeGrant(ctx, userID, scopes); err != nil {
 		return "", tok, err
 	}
-	return s.MintToken(ctx, userID, name, scopes, expiresAt)
+	if deviceID != "" {
+		existing, err := s.St.ListTokens(ctx, userID)
+		if err != nil {
+			return "", tok, fmt.Errorf("list tokens: %w", err)
+		}
+		known := false
+		for _, t := range existing {
+			if t.DeviceID == deviceID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return "", tok, ErrUnknownDevice
+		}
+	}
+	return s.mintToken(ctx, userID, name, scopes, expiresAt, deviceID)
 }
 
 // MintToken creates a token for a known user (admin CLI path).

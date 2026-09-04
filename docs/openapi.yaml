@@ -226,6 +226,22 @@ paths:
                   description: "Legacy singleton form."
                 scopes: { $ref: "#/components/schemas/ScopeSet" }
                 expires_in_seconds: { type: integer }
+                device_id:
+                  type: string
+                  maxLength: 64
+                  description: |
+                    Ask the new token to carry an existing device identity
+                    instead of a fresh one. Accepted only if a token of
+                    the same account — live, expired or revoked — already
+                    carries it; a client that stored the id from a lapsed
+                    credential stays one device in the op log and its
+                    replays stay `duplicate`. An id this account never
+                    carried (a deleted predecessor, or another account's)
+                    is refused with `400` and `code: unknown_device`.
+                    A device id is a label, not a credential: two live
+                    tokens may share one and are then one device. Older
+                    servers ignore the field; compare the `device_id` in
+                    the response with the one you asked for.
       responses:
         "201":
           description: Token created; secret shown once
@@ -246,7 +262,20 @@ paths:
                   scopes: { $ref: "#/components/schemas/ScopeSet" }
                   secret: { type: string, description: "Bearer secret, returned exactly once" }
                   expires_at: { type: [string, "null"], format: date-time }
-        "400": { $ref: "#/components/responses/Error" }
+        "400":
+          description: |
+            Malformed request, or `device_id` names no device of this
+            account (body carries `code: unknown_device` and echoes
+            `device_id`).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [unknown_device] }
+                  device_id: { type: string }
         "401": { $ref: "#/components/responses/Error" }
         "403":
           description: |
