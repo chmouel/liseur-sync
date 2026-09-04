@@ -248,3 +248,11 @@ of them.
   `internal/webui`; extend them when adding routes.
 - Adapter changes must not break the conformance tests in
   `internal/adapter/*/`.
+- **A test binary hashes passwords at a reduced argon2id cost.**
+  `internal/auth` selects its cost with `testing.Testing()`: 64 MiB /
+  t=3 / p=2 in a real build, 8 MiB / t=1 / p=1 under `go test`. The
+  parameters travel inside every encoded hash, so a password an existing
+  deployment stored still verifies at the cost it was written with, and
+  nothing about production changes. `TestProductionPasswordParamsPinned`
+  holds the production baseline in place. Use `auth.HashPassword` in
+  fixtures rather than a hardcoded encoding, so the saving applies.

@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"testing"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -26,16 +28,50 @@ const (
 	saltLen      = 16
 )
 
+// argon2Params is the cost a new hash is written with. The values a
+// stored hash was written with travel inside its encoding, so this
+// choice only ever affects hashes this process creates: a password
+// hashed by a real deployment still verifies at the cost that
+// deployment used.
+type argon2Params struct {
+	time    uint32
+	memory  uint32
+	threads uint8
+}
+
+var productionParams = argon2Params{time: argonTime, memory: argonMemory, threads: argonThreads}
+
+// testParams is the cost used when the binary was built by `go test`.
+// Argon2id is deliberately slow, and almost every test in this
+// repository needs an account, so at the production cost the suites
+// spend most of their wall clock inside the one function they are not
+// trying to measure (issue #31). The reduced cost exercises the same
+// code path — same algorithm, same encoding, same verify — at a price
+// that does not dominate a run. It is unreachable outside a test
+// binary, and productionParams is pinned by a test.
+var testParams = argon2Params{time: 1, memory: 8 * 1024, threads: 1}
+
+var hashingParams = sync.OnceValue(func() argon2Params {
+	if testing.Testing() {
+		return testParams
+	}
+	return productionParams
+})
+
 // HashPassword hashes a password with argon2id, returning the standard
 // encoded form: $argon2id$v=19$m=...,t=...,p=...$salt$hash
 func HashPassword(password string) (string, error) {
+	return hashPasswordWith(hashingParams(), password)
+}
+
+func hashPasswordWith(p argon2Params, password string) (string, error) {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key := argon2.IDKey([]byte(password), salt, p.time, p.memory, p.threads, argonKeyLen)
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argonMemory, argonTime, argonThreads,
+		argon2.Version, p.memory, p.time, p.threads,
 		base64.RawStdEncoding.EncodeToString(salt),
 		base64.RawStdEncoding.EncodeToString(key)), nil
 }
@@ -63,6 +99,36 @@ func CheckPassword(password, encoded string) (bool, error) {
 	}
 	got := argon2.IDKey([]byte(password), salt, time, mem, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
+}
+
+// dummyHash is a valid argon2id encoding used to equalize timing when
+// the username does not exist. Password "dummy".
+const dummyHash = "$argon2id$v=19$m=65536,t=3,p=2$c2FsdHNhbHRzYWx0c2FsdA$M2DdlP2yhB+CZCm2lp3DKbT8NYDMv0hWQRdnJP0bLcU"
+
+// dummyHashForParams is the encoding CheckDummyPassword actually
+// verifies against. It must carry the same cost as a real hash this
+// process would write, otherwise the burn is no longer equal to the
+// work it stands in for. In production that is dummyHash verbatim;
+// under `go test`, where new hashes are cheap, the same salt and digest
+// are re-encoded at the reduced cost. The compare fails either way —
+// what matters is that both paths run one argon2id derivation.
+var dummyHashForParams = sync.OnceValue(func() string {
+	p := hashingParams()
+	if p == productionParams {
+		return dummyHash
+	}
+	rest := strings.SplitN(dummyHash, "$", 5)[4]
+	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s", argon2.Version, p.memory, p.time, p.threads, rest)
+})
+
+// CheckDummyPassword burns the same work a real password check would,
+// so an unknown username and a wrong password take comparable time.
+// Argon2id at 64 MiB is slow enough that skipping it is a plainly
+// measurable signal, which turns any login form into a user
+// enumeration oracle. Every path that verifies a password must call
+// this when the user is not found.
+func CheckDummyPassword(password string) {
+	_, _ = CheckPassword(password, dummyHashForParams())
 }
 
 // NewSecret generates a random 256-bit secret, hex-encoded (64 chars).

@@ -3,6 +3,8 @@ package auth
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -23,6 +25,51 @@ func TestPasswordRoundTrip(t *testing.T) {
 	}
 	if _, err := CheckPassword("x", "not-a-hash"); err == nil {
 		t.Fatal("want error on malformed hash")
+	}
+}
+
+// TestProductionPasswordParamsPinned guards the parameters that
+// protect stored passwords. Test binaries hash at a reduced cost
+// (issue #31) so that suites which need an account per fixture do not
+// spend their run inside argon2id; nothing else may lower it, and the
+// production baseline stays where OWASP puts it.
+func TestProductionPasswordParamsPinned(t *testing.T) {
+	want := argon2Params{time: 3, memory: 64 * 1024, threads: 2}
+	if productionParams != want {
+		t.Fatalf("production argon2id cost changed: got %+v want %+v", productionParams, want)
+	}
+	if argonKeyLen != 32 || saltLen != 16 {
+		t.Fatalf("key/salt length changed: key=%d salt=%d", argonKeyLen, saltLen)
+	}
+	if got := hashingParams(); got != testParams {
+		t.Fatalf("a test binary must hash at the reduced cost, got %+v", got)
+	}
+
+	// A hash written at the production cost still round-trips: the
+	// parameters travel in the encoding, so the reduced test cost can
+	// never invalidate a password a real deployment stored.
+	encoded, err := hashPasswordWith(productionParams, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(encoded, "$m=65536,t=3,p=2$") {
+		t.Fatalf("production encoding lost its parameters: %s", encoded)
+	}
+	ok, err := CheckPassword("correct horse battery staple", encoded)
+	if err != nil || !ok {
+		t.Fatalf("want match, got ok=%v err=%v", ok, err)
+	}
+
+	// The dummy burn must cost what a real check on this process costs,
+	// or an unknown username becomes distinguishable by the clock.
+	if !strings.Contains(dummyHashForParams(), fmt.Sprintf("$m=%d,t=%d,p=%d$", testParams.memory, testParams.time, testParams.threads)) {
+		t.Fatalf("dummy hash does not track the hashing cost: %s", dummyHashForParams())
+	}
+	if _, err := CheckPassword("dummy", dummyHashForParams()); err != nil {
+		t.Fatalf("dummy hash is not verifiable: %v", err)
+	}
+	if _, err := CheckPassword("dummy", dummyHash); err != nil {
+		t.Fatalf("production dummy hash is not verifiable: %v", err)
 	}
 }
 
