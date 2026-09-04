@@ -130,11 +130,11 @@ test('pageLocation skips non-linear sections properly', () => {
   );
   // Total is 4 + 2 = 6 pages
   assert.equal(t.total, 6);
-  // Page 1 is in section 1
+  // Page 1 is in the second section (index 1)
   const loc1 = pageLocation(t, 1);
   assert.equal(loc1.index, 1);
   assert.equal(pageAt(t, loc1.index, loc1.anchor), 1);
-  // Page 5 is in section 3
+  // Page 5 is in the fourth section (index 3)
   const loc5 = pageLocation(t, 5);
   assert.equal(loc5.index, 3);
   assert.equal(pageAt(t, loc5.index, loc5.anchor), 5);

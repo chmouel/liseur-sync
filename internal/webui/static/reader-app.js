@@ -1392,16 +1392,20 @@ async function goToPage(page) {
   if (positions) {
     const loc = pageLocation(positions, page);
     if (loc && view.renderer) {
-      await view.renderer.goTo(loc);
-      const landedIndex = view.lastLocation?.section?.current;
-      const state =
-        landedIndex === loc.index && view.lastLocation?.cfi
-          ? view.lastLocation.cfi
-          : loc.index;
-      if (view.history && view.history.pushState) {
-        view.history.pushState(state);
+      try {
+        await view.renderer.goTo(loc);
+        const landedIndex = view.lastLocation?.section?.current;
+        const state =
+          landedIndex === loc.index && view.lastLocation?.cfi
+            ? view.lastLocation.cfi
+            : loc.index;
+        if (view.history && view.history.pushState) {
+          view.history.pushState(state);
+        }
+        return;
+      } catch (e) {
+        /* fall through to engine fraction fallback */
       }
-      return;
     }
   }
   const loc = here && here.location;
