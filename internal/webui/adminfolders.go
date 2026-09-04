@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -72,6 +73,11 @@ func (s *Server) handleAdminCreateFolder(
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	hadFolders, err := s.St.HasAnyFolder(r.Context())
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	root := strings.TrimSpace(r.FormValue("root"))
 	folder, err := admin.NewFolder(r.Context(), s.St, name, root,
@@ -100,11 +106,18 @@ func (s *Server) handleAdminCreateFolder(
 		defer cancel()
 		s.Watching.Add(ctx, folder)
 	}
-	s.renderAdminFolders(w, r, a, u, Flash{
-		Notice: "Watching " + folder.Name +
-			". Its books appear in your library as the server reads them. " +
-			"Other accounts see it once you assign it to them from Users.",
-	})
+	notice := "Watching " + folder.Name +
+		". Its books appear in your library as the server reads them. " +
+		"Other accounts see it once you assign it to them from Users."
+	// Nothing on the Folders page is worth stopping at once the server
+	// has gone from no folders to one: the point of that first folder
+	// was to see books, so go see them.
+	if !hadFolders {
+		redirectRel(w, relPrefix(r.URL.Path)+"library?notice="+url.QueryEscape(notice),
+			http.StatusSeeOther)
+		return
+	}
+	s.renderAdminFolders(w, r, a, u, Flash{Notice: notice})
 }
 
 // handleAdminScanFolder runs a pass over one folder now and waits for
