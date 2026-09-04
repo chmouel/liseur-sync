@@ -50,7 +50,14 @@ jobs:
       - name: Test (SQLite + PostgreSQL, race detector)
         env:
           LISEUR_PG_TEST_DSN: postgres://liseur:ci@localhost:5432/liseur_test?sslmode=disable
-        run: go test -race -timeout 300s ./...
+        # The timeout is a guard against a hung test, not a speed budget.
+        # It applies per package binary, and internal/webui already spends
+        # most of five minutes here: argon2id is deliberately expensive and
+        # the suite logs in many times, under the race detector, on a
+        # two-core runner. At 300s a normal run was one slow scheduler away
+        # from failing, so a package that merely grew a few tests would
+        # start "timing out" without anything being wrong.
+        run: go test -race -timeout 900s ./...
 
   lint-openapi:
     runs-on: ubuntu-latest
