@@ -18,12 +18,28 @@ func findFirefox() string {
 	if named := os.Getenv("LISEUR_FIREFOX"); named != "" {
 		return named
 	}
+	// Hosted CI images ship Firefox, and this is an opt-in browser
+	// check like the Chromium one: a preinstalled browser must not turn
+	// it into a gate that fails whenever the runner's Firefox is slow to
+	// announce its remote-control port. LISEUR_FIREFOX is the opt-in.
+	if os.Getenv("CI") != "" {
+		return ""
+	}
 	for _, name := range []string{"firefox", "firefox-esr", "firefox-bin"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path
 		}
 	}
 	return ""
+}
+
+func TestFindFirefoxDoesNotAutoDiscoverInCI(t *testing.T) {
+	t.Setenv("CI", "1")
+	t.Setenv("LISEUR_FIREFOX", "")
+
+	if got := findFirefox(); got != "" {
+		t.Fatalf("findFirefox() = %q in CI without explicit opt-in, want empty", got)
+	}
 }
 
 // TestReaderOpensInFirefox runs the same judgement as the Chromium check
