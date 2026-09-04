@@ -147,7 +147,15 @@ promotes and demotes accounts. The role lives on the account, so
 granting it hands nobody a secret, and the last enabled administrator
 cannot be demoted.
 
-Now add the books:
+When the first administrator is created from the web setup page, a fresh
+instance with no folders goes straight to Administration → Folders and
+opens the first-folder form. Point it at the directory that already holds
+the books; the server detects whether it is a plain folder or a Calibre
+library, reads it immediately and keeps watching it. Closing the form or
+using a browser without JavaScript leaves the same form available on the
+Folders page.
+
+You can also add the books from a shell:
 
 ```
 liseur-sync admin -config liseur-sync.toml add-folder Shelf /srv/books

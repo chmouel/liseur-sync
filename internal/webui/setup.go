@@ -88,7 +88,15 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, prefix+"login", http.StatusSeeOther)
 		return
 	}
-	redirectRel(w, "./", http.StatusSeeOther)
+	destination := "./"
+	hasFolders, err := s.St.HasAnyFolder(r.Context())
+	if err != nil {
+		slog.Error("could not determine whether first-run setup has a folder",
+			"error", err)
+	} else if !hasFolders {
+		destination = settingsAdminFoldersOnboardingHref(prefix)
+	}
+	redirectRel(w, destination, http.StatusSeeOther)
 }
 
 // isUserError reports whether err is one of the validation refusals
