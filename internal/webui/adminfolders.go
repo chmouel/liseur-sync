@@ -78,7 +78,10 @@ func (s *Server) handleAdminCreateFolder(
 		s.Cfg.Content.FolderRoots, u.ID)
 	logAdminAction(r, u, "add-folder", name, err)
 	if err != nil {
-		s.renderAdminFolders(w, r, a, u, Flash{Error: err.Error()})
+		s.renderAdminFolders(w, r, a, u, Flash{
+			Error:          err.Error(),
+			OpenFolderForm: true,
+		})
 		return
 	}
 	// Tell the running watcher at once. Waiting for the periodic

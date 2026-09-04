@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
@@ -121,6 +122,18 @@ func TestFirstRunSetupOnboarding(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("setup: got %d", resp.StatusCode)
 	}
+	base, _ := url.Parse(ts.URL + "/ui/setup")
+	landed, err := base.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landed.Path != "/ui/settings" ||
+		landed.Query().Get("section") != settingsAdmin ||
+		landed.Query().Get("view") != settingsAdminFolders ||
+		landed.Query().Get(folderOnboardingQuery) != folderOnboardingValue {
+		t.Fatalf("setup landed at %q, want the first-folder onboarding view",
+			resp.Header.Get("Location"))
+	}
 	var cookie *http.Cookie
 	for _, c := range resp.Cookies() {
 		if c.Name == cookieName {
@@ -142,6 +155,44 @@ func TestFirstRunSetupOnboarding(t *testing.T) {
 	// Signed in, and the admin section is open to them.
 	if code, _ := page(t, ts, cookie, "/ui/settings?section=admin"); code != http.StatusOK {
 		t.Fatalf("admin overview after setup: got %d", code)
+	}
+	code, body = page(t, ts, cookie,
+		"/ui/settings?section=admin&view=folders&onboarding=folder")
+	if code != http.StatusOK ||
+		!strings.Contains(body, `id="folder-dialog"`) ||
+		!strings.Contains(body, `data-auto-open="true"`) ||
+		!strings.Contains(body, "Add your book folder") {
+		t.Fatalf("first-folder onboarding view is incomplete: %d\n%s", code, body)
+	}
+}
+
+func TestFirstRunSetupWithExistingFolderKeepsDashboard(t *testing.T) {
+	ts, st := emptyServer(t)
+	if err := st.CreateFolder(t.Context(), store.Folder{
+		ID: "existing-folder", Name: "Existing", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := noRedirect().PostForm(ts.URL+"/ui/setup", url.Values{
+		"username": {"founder"}, "password": {"hunter2hunter"},
+		"repeat": {"hunter2hunter"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("setup: got %d", resp.StatusCode)
+	}
+	base, _ := url.Parse(ts.URL + "/ui/setup")
+	landed, err := base.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landed.Path != "/ui/" {
+		t.Fatalf("setup landed at %q, want the dashboard", resp.Header.Get("Location"))
 	}
 }
 
