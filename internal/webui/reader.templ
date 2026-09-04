@@ -251,13 +251,25 @@ templ readerPage(v ReaderView, csrf string) {
 					<div
 						id="reader-footer"
 						class="reader-footer"
-						role="button"
-						tabindex="0"
-						title="Click to change what the middle shows"
 					>
-						<span id="reader-progress-text" class="reader-footer-edge"></span>
-						<span id="reader-chapter" class="reader-footer-mid"></span>
-						<span id="reader-page" class="reader-footer-edge"></span>
+						<button
+							type="button"
+							id="reader-progress-text"
+							class="reader-footer-edge"
+							title="Go to percentage"
+						></button>
+						<button
+							type="button"
+							id="reader-chapter"
+							class="reader-footer-mid"
+							title="Click to change what the middle shows"
+						></button>
+						<button
+							type="button"
+							id="reader-page"
+							class="reader-footer-edge"
+							title="Go to page"
+						></button>
 					</div>
 				</div>
 				<button id="reader-next" class="reader-turn" type="button" aria-label="Next page">&rsaquo;</button>
@@ -274,6 +286,7 @@ templ readerPage(v ReaderView, csrf string) {
 						<tr><td><kbd>l</kbd> <kbd>h</kbd>, <kbd>j</kbd> <kbd>k</kbd></td><td>Next / previous page</td></tr>
 						<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Beginning / end of book</td></tr>
 						<tr><td><kbd>t</kbd></td><td>Table of contents</td></tr>
+						<tr><td><kbd>g</kbd></td><td>Go to page or percentage</td></tr>
 						<tr><td><kbd>f</kbd></td><td>Full screen</td></tr>
 						<tr><td><kbd>z</kbd></td><td>Show or hide the bars</td></tr>
 						<tr><td><kbd>?</kbd></td><td>This help</td></tr>
@@ -286,6 +299,26 @@ templ readerPage(v ReaderView, csrf string) {
 					while you read; &ldquo;Auto-hide bars&rdquo; under Aa turns that off.
 				</p>
 				<form method="dialog"><button>Close</button></form>
+			</dialog>
+			<dialog id="reader-goto" class="reader-goto" aria-labelledby="reader-goto-title">
+				<form id="reader-goto-form" method="dialog">
+					<h2 id="reader-goto-title">Go to</h2>
+					<div class="reader-goto-row">
+						<label for="reader-goto-input" id="reader-goto-label" class="reader-goto-label">Location</label>
+						<input
+							type="number"
+							id="reader-goto-input"
+							class="reader-goto-input"
+							required
+							autocomplete="off"
+						/>
+						<span id="reader-goto-unit" class="reader-goto-unit"></span>
+					</div>
+					<div class="reader-goto-actions">
+						<button type="button" id="reader-goto-cancel">Cancel</button>
+						<button type="submit" id="reader-goto-submit" class="btn primary">Go</button>
+					</div>
+				</form>
 			</dialog>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>
