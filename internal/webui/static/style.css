@@ -321,6 +321,61 @@ details.advanced > summary {
 details.advanced > summary::before { content: "+"; }
 details.advanced[open] > summary::before { content: "−"; }
 
+/* --------------------------------------------------------- folder setup */
+
+.folder-heading {
+	display: flex; align-items: end; justify-content: space-between;
+	gap: 1rem; margin: 0 0 .55rem; flex-wrap: wrap;
+}
+.folder-heading h2 { font-size: 2rem; line-height: 1.1; margin: 0; }
+.folder-actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.folder-actions .scanform { margin: 0; }
+.folder-intro { max-width: 52rem; margin: 0 0 1.1rem; }
+.onboarding-card {
+	display: flex; align-items: flex-start; gap: 1.1rem;
+	padding: clamp(1.25rem, 4vw, 2.2rem);
+	border-color: color-mix(in srgb, var(--primary) 45%, var(--line));
+	background:
+		linear-gradient(135deg, color-mix(in srgb, var(--primary) 13%, var(--surface)), var(--surface));
+}
+.onboarding-icon {
+	display: flex; align-items: center; justify-content: center;
+	flex: 0 0 2.8rem; height: 2.8rem; border-radius: 50%;
+	background: var(--primary); color: var(--on-primary);
+	font-size: 1.7rem; font-weight: 700; line-height: 1;
+}
+.onboarding-copy { max-width: 43rem; }
+.onboarding-copy h2 { font-size: 1.35rem; margin-bottom: .55rem; }
+.onboarding-copy p { margin: .45rem 0; }
+.onboarding-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: 1rem; }
+.folder-form-fallback { margin-top: 1.2rem; }
+.dialog-supported .folder-form-fallback { display: none; }
+.folder-form-fallback .cardhead { align-items: flex-start; }
+.folder-form-fallback .cardhead p { margin: .25rem 0 0; max-width: 42rem; }
+.folder-form { max-width: 42rem; }
+.folder-form .folder-roots { margin: .2rem 0 .8rem; }
+.folder-form .folder-roots code { overflow-wrap: anywhere; }
+.folder-form .form-actions { margin-top: .9rem; }
+.folder-dialog {
+	display: none;
+	width: min(34rem, calc(100% - 2rem)); max-width: 100%;
+	margin: auto; padding: 1.25rem 1.35rem;
+	background: var(--surface); color: inherit;
+	border: 1px solid var(--line); border-radius: var(--radius);
+	box-shadow: var(--shadow); font-size: .95rem;
+}
+.folder-dialog[open] { display: block; }
+.folder-dialog::backdrop { background: rgb(0 0 0 / .58); }
+.dialog-head {
+	display: flex; align-items: flex-start; justify-content: space-between;
+	gap: 1rem; margin: 0 0 .7rem;
+}
+.dialog-head h2 { font-size: 1.25rem; margin: 0; }
+.dialog-head .eyebrow { margin: 0 0 .15rem; }
+.dialog-head form { margin: 0; }
+.dialog-close { color: var(--muted); }
+.dialog-close:hover { color: var(--ink); }
+
 /* The add-library form: the folder fields only matter once "a folder on
    this server" is picked. Hidden with :has() so it needs no script; a
    browser without :has() shows the whole form, which still works. */
@@ -372,6 +427,11 @@ details.advanced[open] > summary::before { content: "−"; }
 	font-weight: 600;
 }
 .settings-card > form { max-width: 48rem; }
+
+@media (max-width: 42em) {
+	.onboarding-card { flex-direction: column; }
+	.folder-dialog { padding: 1rem; }
+}
 
 /* The admin section's own navigation: one rail entry, several pages. */
 .subnav {

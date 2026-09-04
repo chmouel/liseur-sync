@@ -12,6 +12,38 @@
 (function () {
   'use strict';
 
+  // Native dialogs provide focus trapping and Escape handling without
+  // adding another UI dependency. Keep the inline form visible when a
+  // browser cannot provide that primitive.
+  const dialogSupported = typeof HTMLDialogElement !== 'undefined' &&
+    typeof HTMLDialogElement.prototype.showModal === 'function';
+  if (dialogSupported) document.documentElement.classList.add('dialog-supported');
+
+  function openDialog(id) {
+    const dialog = document.getElementById(id);
+    if (!dialog) return;
+    if (typeof dialog.showModal === 'function') {
+      if (!dialog.open) dialog.showModal();
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    const trigger = e.target.closest && e.target.closest('[data-dialog-open]');
+    if (!trigger) return;
+    openDialog(trigger.dataset.dialogOpen);
+  });
+
+  document.querySelectorAll('dialog[data-auto-open]').forEach(function (dialog) {
+    openDialog(dialog.id);
+    if (window.history && window.history.replaceState) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('onboarding') === 'folder') {
+        url.searchParams.delete('onboarding');
+        window.history.replaceState({}, document.title, url);
+      }
+    }
+  });
+
   // "/" puts the cursor in the search box, Escape closes the mobile nav.
   document.addEventListener('keydown', function (e) {
     const active = document.activeElement;

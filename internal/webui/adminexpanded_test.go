@@ -45,6 +45,14 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if !strings.Contains(body, "Watch a folder") {
 		t.Fatalf("the add form is not on the page:\n%s", body)
 	}
+	if !strings.Contains(body, `id="folder-dialog"`) ||
+		!strings.Contains(body, "Add your book folder") ||
+		!strings.Contains(body, `data-dialog-open="folder-dialog"`) {
+		t.Fatalf("the empty folder page is missing its onboarding UI:\n%s", body)
+	}
+	if strings.Contains(body, `data-auto-open="true"`) {
+		t.Fatalf("a normal folders visit unexpectedly opened onboarding:\n%s", body)
+	}
 
 	// A blank name is refused, and refused by the same rule the CLI
 	// uses rather than by a second copy of it.
@@ -53,6 +61,9 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	})
 	if !strings.Contains(body, "a folder name is required") {
 		t.Fatalf("a blank name was accepted: %s", body)
+	}
+	if !strings.Contains(body, `data-auto-open="true"`) {
+		t.Fatalf("folder validation did not reopen the add dialog: %s", body)
 	}
 
 	// A path that is not a directory is refused before a row exists.
@@ -72,6 +83,9 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	})
 	if !strings.Contains(body, "Watching Shelf") {
 		t.Fatalf("add: %s", body)
+	}
+	if strings.Contains(body, `data-auto-open="true"`) {
+		t.Fatalf("a successful folder add left the dialog marked for auto-open: %s", body)
 	}
 	folders, err := st.ListFolders(ctx, "", "", 10)
 	if err != nil || len(folders) != 1 {

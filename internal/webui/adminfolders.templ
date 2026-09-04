@@ -4,29 +4,13 @@ package webui
 // is the only page whose subject is the disk rather than a book
 // (ADR-0017).
 
-templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, flash Flash) {
-	<h2>Folders</h2>
-	<p class="muted">
-		Directories this server reads. It never moves, renames or deletes
-		anything under a root, and removing a folder here forgets this
-		server's record of it while leaving every file where it is.
-	</p>
-	<p class="muted">
-		A folder that accepts uploads is the one exception: a reader can
-		send a book to it and the server writes that one new file. It is
-		off until you turn it on, and a folder whose disk is mounted
-		read-only cannot take it.
-	</p>
-	<p class="muted">
-		A folder is read when it changes and again on a slow timer, so
-		this page is not usually where books come from. Scan now is for
-		when it is: a network share, where the kernel tells this server
-		nothing at all about what changed.
-	</p>
-	@adminFlash(flash)
-	<section class="card">
-		<div class="cardhead">
-			<h2>Watched</h2>
+templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, openFolderForm bool, flash Flash) {
+	<header class="folder-heading">
+		<div>
+			<p class="eyebrow">Library sources</p>
+			<h2>Folders</h2>
+		</div>
+		<div class="folder-actions">
 			if len(folders) > 0 {
 				<form
 					class="scanform"
@@ -43,13 +27,64 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 					</button>
 				</form>
 			}
+			<button
+				type="button"
+				class="btn primary"
+				data-dialog-open="folder-dialog"
+				aria-controls="folder-dialog"
+				aria-haspopup="dialog"
+			>Add folder</button>
 		</div>
-		if len(folders) == 0 {
+	</header>
+	<p class="muted folder-intro">
+		Folders are directories this server reads. It never moves, renames or
+		deletes anything under a root, and removing a folder here only forgets
+		this server's record of it.
+	</p>
+	@adminFlash(flash)
+	if len(folders) == 0 {
+		<section class="card onboarding-card">
+			<div class="onboarding-icon" aria-hidden="true">+</div>
+			<div class="onboarding-copy">
+				<p class="eyebrow">First step</p>
+				<h2>Add your book folder</h2>
+				<p>
+					Point liseur-sync at the directory where your books already
+					live. The server will detect the folder type, read its books,
+					and keep the library up to date.
+				</p>
+				<p class="muted">
+					Nothing on disk is changed. Uploads stay off until you
+					explicitly enable them for a folder.
+				</p>
+				<div class="onboarding-actions">
+					<button
+						type="button"
+						class="btn primary"
+						data-dialog-open="folder-dialog"
+						aria-controls="folder-dialog"
+						aria-haspopup="dialog"
+					>
+						Choose a folder
+					</button>
+					<a class="btn" href={ prefix + "." }>Back to dashboard</a>
+				</div>
+			</div>
+		</section>
+	} else {
+		<section class="card">
+			<div class="cardhead">
+				<h2>Watched</h2>
+			</div>
 			<p class="muted">
-				No folders yet. Add one below and its books appear as the
-				server reads them.
+				A folder is read when it changes and again on a slow timer. Scan
+				now is useful for network shares where the kernel tells this
+				server nothing about what changed.
 			</p>
-		} else {
+			<p class="muted">
+				Uploads are off by default. Enabling them is the only time this
+				server writes a new book file under a folder.
+			</p>
 			<table>
 				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Uploads</th><th>Added</th><th></th></tr>
 				for _, f := range folders {
@@ -110,17 +145,64 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 			if next != "" {
 				<p><a href={ next }>Next page →</a></p>
 			}
-		}
+		</section>
+	}
+	@adminFolderDialog(prefix, csrf, roots, openFolderForm)
+	<section class="card folder-form-fallback">
+		<div class="cardhead">
+			<div>
+				<h2>Watch a folder</h2>
+				<p class="muted">
+					Give a directory on this machine. Whether it is an ordinary
+					tree of books or a Calibre library is read off the disk.
+				</p>
+			</div>
+			<button
+				type="button"
+				class="btn"
+				data-dialog-open="folder-dialog"
+				aria-controls="folder-dialog"
+				aria-haspopup="dialog"
+			>Add folder</button>
+		</div>
+		@adminFolderForm(prefix, csrf, roots)
 	</section>
-	<section class="card">
-		<h2>Watch a folder</h2>
-		<p class="muted">
-			Give a directory on this machine. Whether it is an ordinary tree
-			of books or a Calibre library is read off the disk, not chosen
-			here.
-		</p>
+}
+
+templ adminFolderDialog(prefix string, csrf string, roots []string, openFolderForm bool) {
+	if openFolderForm {
+		<dialog id="folder-dialog" class="folder-dialog" data-auto-open="true" aria-labelledby="folder-dialog-title">
+			@adminFolderDialogBody(prefix, csrf, roots)
+		</dialog>
+	} else {
+		<dialog id="folder-dialog" class="folder-dialog" aria-labelledby="folder-dialog-title">
+			@adminFolderDialogBody(prefix, csrf, roots)
+		</dialog>
+	}
+}
+
+templ adminFolderDialogBody(prefix string, csrf string, roots []string) {
+	<div class="dialog-head">
+		<div>
+			<p class="eyebrow">Add to your library</p>
+			<h2 id="folder-dialog-title">Watch a folder</h2>
+		</div>
+		<form method="dialog">
+			<button type="submit" class="dialog-close">Close</button>
+		</form>
+	</div>
+	<p class="muted">
+		Choose an existing directory. liseur-sync reads it without changing
+		the files inside.
+	</p>
+	@adminFolderForm(prefix, csrf, roots)
+}
+
+templ adminFolderForm(prefix string, csrf string, roots []string) {
+	<form class="folder-form" method="post" action={ prefix + "admin/folders" }>
+		<input type="hidden" name="csrf" value={ csrf }/>
 		if len(roots) > 0 {
-			<p class="muted">
+			<p class="muted folder-roots">
 				This server accepts roots under:
 				for i, root := range roots {
 					if i > 0 {
@@ -130,17 +212,16 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				}
 			</p>
 		}
-		<form method="post" action={ prefix + "admin/folders" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>
-				Name
-				<input type="text" name="name" required maxlength="120"/>
-			</label>
-			<label>
-				Root path
-				<input type="text" name="root" required placeholder="/srv/books"/>
-			</label>
-			<button type="submit">Watch it</button>
-		</form>
-	</section>
+		<label>
+			Name
+			<input type="text" name="name" required maxlength="120" autocomplete="off"/>
+		</label>
+		<label>
+			Root path
+			<input type="text" name="root" required placeholder="/srv/books" autocomplete="off"/>
+		</label>
+		<div class="form-actions">
+			<button type="submit" class="primary">Watch this folder</button>
+		</div>
+	</form>
 }

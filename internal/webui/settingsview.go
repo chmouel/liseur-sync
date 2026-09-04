@@ -23,6 +23,20 @@ const (
 	settingsAdminMaintenance = "maintenance"
 )
 
+const (
+	folderOnboardingQuery = "onboarding"
+	folderOnboardingValue = "folder"
+)
+
+func settingsAdminFoldersOnboardingHref(prefix string) string {
+	return settingsAdminHref(prefix, settingsAdminFolders) +
+		"&" + folderOnboardingQuery + "=" + folderOnboardingValue
+}
+
+func folderOnboardingRequested(r *http.Request) bool {
+	return r.URL.Query().Get(folderOnboardingQuery) == folderOnboardingValue
+}
+
 type settingsDevicesView struct {
 	Tokens   []store.Token
 	Browsers []browserSession
@@ -38,9 +52,10 @@ type settingsAdminView struct {
 	Build  buildinfo.Info
 	Config configFacts
 
-	Folders     []adminFolderView
-	FoldersNext string
-	Roots       []string
+	Folders        []adminFolderView
+	FoldersNext    string
+	Roots          []string
+	OpenFolderForm bool
 
 	Users     []store.User
 	UsersNext string
@@ -142,22 +157,28 @@ func settingsRedirect(
 }
 
 // flashQuery encodes what a redirect has to carry across. It uses the
-// same notice/problem pair the library and reader pages already use.
+// same notice/problem pair the library and reader pages already use,
+// plus the folder dialog marker when a folder form needs reopening.
 func flashQuery(flash Flash) string {
+	var query []string
 	switch {
 	case flash.Error != "":
-		return "problem=" + url.QueryEscape(flash.Error)
+		query = append(query, "problem="+url.QueryEscape(flash.Error))
 	case flash.Notice != "":
-		return "notice=" + url.QueryEscape(flash.Notice)
+		query = append(query, "notice="+url.QueryEscape(flash.Notice))
 	}
-	return ""
+	if flash.OpenFolderForm {
+		query = append(query, folderOnboardingQuery+"="+folderOnboardingValue)
+	}
+	return strings.Join(query, "&")
 }
 
 // flashFromQuery reads back what settingsRedirect sent.
 func flashFromQuery(r *http.Request) Flash {
 	return Flash{
-		Notice: r.URL.Query().Get("notice"),
-		Error:  r.URL.Query().Get("problem"),
+		Notice:         r.URL.Query().Get("notice"),
+		Error:          r.URL.Query().Get("problem"),
+		OpenFolderForm: folderOnboardingRequested(r),
 	}
 }
 
@@ -283,6 +304,7 @@ func (s *Server) settingsAdmin(
 		if err != nil {
 			return err
 		}
+		v.OpenFolderForm = folderOnboardingRequested(r)
 		if len(folders) > adminFoldersPerPage {
 			folders = folders[:adminFoldersPerPage]
 			v.FoldersNext = settingsAdminHref(relPrefix("/ui/settings"), settingsAdminFolders) +

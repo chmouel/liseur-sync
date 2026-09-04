@@ -107,7 +107,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMaintenance), "Maintenance", v.Admin.View == settingsAdminMaintenance)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
-		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Flash)
+		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
 	} else if v.Admin.View == settingsAdminUsers {
 		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Flash)
 	} else if v.Admin.View == settingsAdminUser && v.Admin.HasUser {
