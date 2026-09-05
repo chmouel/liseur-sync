@@ -43,10 +43,6 @@ export async function uploadSessions(sessions, {
     const batch = queue.shift();
     const response = await send(JSON.stringify({ sessions: batch }));
     if (!responseCurrent(response)) return;
-    if (!response.ok && ![400, 409, 413].includes(response.status)) {
-      deferred(response.status);
-      return;
-    }
     let body;
     try {
       body = await response.json();
@@ -55,6 +51,10 @@ export async function uploadSessions(sessions, {
     }
     if (!responseCurrent(response)) return;
     body = body && typeof body === "object" ? body : {};
+    if (!response.ok && ![400, 409, 413].includes(response.status)) {
+      deferred(response.status, body.code);
+      return;
+    }
     if (response.ok) {
       if (body.accepted !== batch.length) {
         deferred(response.status, "malformed_acknowledgement");
