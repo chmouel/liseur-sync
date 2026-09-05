@@ -92,6 +92,25 @@ test("jitter is bounded, capped and Retry-After is a minimum", () => {
   assert.equal(retryDelay(0, "nonsense", 0, () => 0), 500);
 });
 
+test("SSE retry advice is also a minimum, alongside Retry-After", () => {
+  assert.equal(retryDelay(0, null, 0, () => 0, 5000), 5000);
+  // Retry-After (seconds) and the stream's own retry advice (ms) both
+  // floor the delay; the larger of the two wins.
+  assert.equal(retryDelay(0, "1", 0, () => 0, 5000), 5000);
+  assert.equal(retryDelay(0, "10", 0, () => 0, 5000), 10000);
+  // A brief backoff cap can still exceed a small retry advice.
+  assert.equal(retryDelay(100, "0", 0, () => 1, 1), 60000);
+});
+
+test("the retry field is parsed independently of any invalidate frame", () => {
+  const got = [];
+  let retryMS = null;
+  const parser = eventParser((topics) => got.push(topics), undefined, (ms) => { retryMS = ms; });
+  parser.feed(encode("retry: 5000\n\n" + frame));
+  assert.equal(retryMS, 5000);
+  assert.deepEqual(got, [["positions", "annotations"]]);
+});
+
 function socket(signal) {
   let controller;
   const body = new ReadableStream({

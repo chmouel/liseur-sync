@@ -1,7 +1,7 @@
 // Live events are hints. Neither this parser nor the reconnect loop keeps a cursor.
 export const MAX_FRAME_BYTES = 64 * 1024;
 
-export function eventParser(onTopics, limit = MAX_FRAME_BYTES) {
+export function eventParser(onTopics, limit = MAX_FRAME_BYTES, onRetry = () => {}) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let line = "", event = "", data = [], bytes = 0, cr = false;
   const finishLine = () => {
@@ -22,6 +22,9 @@ export function eventParser(onTopics, limit = MAX_FRAME_BYTES) {
       if (value.startsWith(" ")) value = value.slice(1);
       if (field === "event") event = value;
       if (field === "data") data.push(value);
+      // The retry directive takes effect on its own, independent of any
+      // frame it happens to share a blank-line boundary with.
+      if (field === "retry" && /^\d+$/.test(value)) onRetry(Number(value));
     }
     line = "";
   };
@@ -52,13 +55,17 @@ export function eventParser(onTopics, limit = MAX_FRAME_BYTES) {
   };
 }
 
-export function retryDelay(attempt, retryAfter, now = Date.now(), random = Math.random) {
+export function retryDelay(attempt, retryAfter, now = Date.now(), random = Math.random, retryAdviceMS = null) {
   const cap = Math.min(60000, 1000 * 2 ** Math.min(attempt, 6));
   const jitter = cap * (0.5 + random() * 0.5);
-  if (!retryAfter) return jitter;
-  const seconds = /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter) : NaN;
-  const wait = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - now;
-  return Math.max(jitter, Number.isFinite(wait) ? Math.max(0, wait) : 0);
+  let floor = 0;
+  if (retryAfter) {
+    const seconds = /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter) : NaN;
+    const wait = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - now;
+    floor = Math.max(floor, Number.isFinite(wait) ? Math.max(0, wait) : 0);
+  }
+  if (Number.isFinite(retryAdviceMS) && retryAdviceMS >= 0) floor = Math.max(floor, retryAdviceMS);
+  return floor ? Math.max(jitter, floor) : jitter;
 }
 
 export function liveStream({
@@ -70,7 +77,7 @@ export function liveStream({
   const connect = async (run) => {
     const abort = new AbortController();
     controller = abort;
-    let watchdog = null, reader = null, retryAfter = null;
+    let watchdog = null, reader = null, retryAfter = null, retryAdviceMS = null;
     const valid = () => active && generation === run && !abort.signal.aborted;
     const touch = () => {
       clearTimer(watchdog);
@@ -98,7 +105,7 @@ export function liveStream({
       }
       const parser = eventParser((topics) => {
         if (valid() && current(resp)) onTopics(topics);
-      });
+      }, undefined, (ms) => { retryAdviceMS = ms; });
       reader = resp.body.getReader();
       for (;;) {
         const { value, done } = await reader.read();
@@ -124,7 +131,7 @@ export function liveStream({
       if (active && generation === run && supported) {
         // A quick 200 followed by EOF is still a failure, not a recovery.
         if (healthy) attempts = 0;
-        const delay = retryDelay(attempts++, retryAfter, now(), random);
+        const delay = retryDelay(attempts++, retryAfter, now(), random, retryAdviceMS);
         // Long Retry-After values must not overflow the platform's timer.
         const deadline = now() + delay;
         const wait = () => {
