@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -32,6 +33,7 @@ type fakeCatalog struct {
 	calls    int
 	observed []store.ObservedBook
 	complete bool
+	fail     bool
 	changed  chan struct{}
 }
 
@@ -65,17 +67,39 @@ func (c *fakeCatalog) ReconcileFolder(
 	c.calls++
 	c.observed = observed
 	c.complete = complete
+	if c.fail {
+		return store.ReconcileResult{}, errors.New("the catalog was told to reject this pass")
+	}
 	// Only a pass allowed to conclude anything gets to rewrite what is
-	// known, which is the same rule the real store enforces.
+	// known, which is the same rule the real store enforces — including
+	// its treatment of an unservable observation: an existing row is
+	// marked missing and kept, a book that has never been servable gets
+	// no row at all.
 	if complete && len(observed) > 0 {
+		prior := map[int64]store.KnownBook{}
+		for _, b := range c.known[folderID] {
+			if b.CalibreID != nil {
+				prior[*b.CalibreID] = b
+			}
+		}
 		books := make([]store.KnownBook, 0, len(observed))
 		for _, o := range observed {
+			if o.Unservable {
+				if o.CalibreID != nil {
+					if b, ok := prior[*o.CalibreID]; ok {
+						b.Status = store.BookMissing
+						books = append(books, b)
+					}
+				}
+				continue
+			}
 			books = append(books, store.KnownBook{
 				ID:            folderID + "-" + o.RelativePath,
 				RelativePath:  o.RelativePath,
 				SizeBytes:     o.SizeBytes,
 				MTime:         o.MTime,
 				ContentSHA256: o.ContentSHA256,
+				CalibreID:     o.CalibreID,
 				Status:        store.BookActive,
 			})
 		}
