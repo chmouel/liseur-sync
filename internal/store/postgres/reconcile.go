@@ -204,7 +204,7 @@ func (s *Store) ReconcileFolder(
 				}
 			}
 
-			relationsChanged, err := replaceRelationsTx(ctx, tx, folderID, bookID, obs, at)
+			relationsChanged, err := replaceRelationsTx(ctx, tx, folderID, bookID, obs, at, refreshing)
 			if err != nil {
 				return err
 			}
@@ -354,11 +354,12 @@ func existingBooksTx(
 			id, path, sha string
 			calibreID     sql.NullInt64
 			cover         sql.NullString
+			coverSHA      sql.NullString
 			facts         store.BookFacts
 		)
 		if err := rows.Scan(&id, &path, &calibreID, &sha,
 			&facts.SizeBytes, &facts.MTime, &facts.OriginalFilename,
-			&facts.MediaType, &cover, &facts.CoverSHA256,
+			&facts.MediaType, &cover, &coverSHA,
 			&facts.Title, &facts.Subtitle, &facts.Description,
 			&facts.Publisher, &facts.PublishedDate); err != nil {
 			return nil, err
@@ -366,6 +367,7 @@ func existingBooksTx(
 		facts.RelativePath = path
 		facts.ContentSHA256 = sha
 		facts.CoverRelativePath = cover.String
+		facts.CoverSHA256 = coverSHA.String
 		prior := priorBook{id: id, path: path, sha256: sha, facts: facts}
 		switch {
 		case byCalibreID && calibreID.Valid:
@@ -711,11 +713,17 @@ func primaryAuthorOf(obs store.ObservedBook) string {
 // itself — is what a pass counts as an update.
 func replaceRelationsTx(
 	ctx context.Context, tx *sql.Tx, folderID, bookID string,
-	obs store.ObservedBook, at time.Time,
+	obs store.ObservedBook, at time.Time, detectChange bool,
 ) (bool, error) {
-	before, err := relationsFingerprintTx(ctx, tx, folderID, bookID)
-	if err != nil {
-		return false, err
+	// The fingerprints cost ten SELECTs per book, so only the refresh
+	// path — the one that reports Updated — pays for them; an insert
+	// already counted as Added.
+	var before string
+	if detectChange {
+		var err error
+		if before, err = relationsFingerprintTx(ctx, tx, folderID, bookID); err != nil {
+			return false, err
+		}
 	}
 	for _, table := range []string{
 		"book_identifiers", "book_languages", "book_tags",
@@ -806,6 +814,9 @@ func replaceRelationsTx(
 			folderID, bookID, contributorID, role, c.Position); err != nil {
 			return false, err
 		}
+	}
+	if !detectChange {
+		return false, nil
 	}
 	after, err := relationsFingerprintTx(ctx, tx, folderID, bookID)
 	if err != nil {
