@@ -346,6 +346,71 @@ will be seen by Liseur as a device that keeps moving backwards. The
 behaviour is written out, against Kindle Whispersync as the yardstick,
 in [Liseur's ADR-0023](https://github.com/chmouel/liseur/blob/main/docs/adr/0023-position-sync-versus-whispersync.md).
 
+## Live notifications
+
+`GET /v1/events` opens a bearer-authenticated SSE stream under the same
+transport, origin and path-prefix rules as other native endpoints. Keep
+the credential in the `Authorization` header, never in the URL.
+
+```text
+event: invalidate
+data: {"topics":["positions","annotations"]}
+
+```
+
+The `sync` scope permits `positions` and `annotations`; `read-insights`
+permits `insights`. A token with no permitted topic gets `403`. Web reader
+tokens keep their existing scopes and receive no insights.
+
+The server registers the subscriber before sending an opening
+invalidation for its permitted topics. A write before registration is
+covered by the opening refresh; a write during that refresh can leave
+another notification pending. There is no `since` parameter, event ID or
+replay store. Notifications contain no sequence number: the position and
+annotation feeds have independent cursors, and sessions have no feed.
+
+Refresh only the affected topics. For `positions`, read the existing
+changes feed and preserve its transactional cursor and `410` recovery.
+A browser reading one book can use that work's position snapshot instead.
+For `annotations`, use the annotation feed and reconciliation rules, or
+replace the current book's live set when using snapshots. Remove deleted
+or changed overlays before drawing the replacement. For `insights`,
+re-fetch the queries currently displayed; do not upload sessions or run
+position sync. A remote position should not turn an open book's page.
+Present a catch-up choice on resume and bind acceptance to the position
+actually offered.
+
+Coalesce repeated events by union of topics. An event received while a
+refresh runs still requires a follow-up unless that refresh demonstrably
+covered it. Retain failed refreshes for retry without waiting for another
+event. Ignore unknown topic names. Avoid full library sync per event:
+hashing files and uploading sessions adds unrelated work.
+
+The server sends comment heartbeats every 20 seconds. Treat 60 seconds
+without bytes as a stalled stream. Respect SSE retry advice (milliseconds)
+and `429 Retry-After` (seconds), with bounded backoff and jitter; a brief
+`200` followed by a disconnect should not reset the backoff. The current
+limit is eight streams per account. Expiry or revoked authority closes an
+open stream; the next connection receives the normal authentication
+error. Only clients that retain a credential-minting mechanism can renew
+automatically.
+
+Connect while the client is in use, and cancel old subscriptions and
+queued work when its account changes. A short background grace period on
+Android avoids reopening the stream on every app switch. An older server
+may return `404` or `501`: keep ordinary sync working and re-probe at a
+later foreground boundary. `403` requires an eligible credential rather
+than a tight reconnect loop. `503` and transport failures can be retried.
+Missing live support is not evidence that ordinary sync failed or that a
+refresh succeeded.
+
+Notifications come from committed store writes, including legacy adapter
+writes. Duplicate-only batches and rejected writes produce no event;
+clients can receive notifications caused by their own successful writes.
+This process-local stream does not cover live catalog updates or recovery
+from structural work merge/split/delete operations, and cannot wake a
+closed app. See [ADR-0034](adr/0034-live-notifications-say-only-that-something-changed.md).
+
 ## Annotations
 
 Highlights, notes and bookmarks sync too (ADR-0028), and they are the

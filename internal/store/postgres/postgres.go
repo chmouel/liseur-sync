@@ -16,6 +16,7 @@ import (
 
 // Store is the Postgres backend.
 type Store struct {
+	store.Notifications
 	db *sql.DB
 }
 

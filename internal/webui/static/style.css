@@ -1298,3 +1298,22 @@ button.linkish:hover, button.linkish:focus-visible {
   padding: .3rem 0; border-bottom: 1px solid var(--line);
 }
 .bindings li form { margin: 0 0 0 auto; }
+.reader-catchup {
+  position: fixed;
+  z-index: 40;
+  bottom: 4rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.6rem;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 0.25rem 1rem #0003;
+}
+.reader-catchup[hidden] { display: none; }
+.reader-catchup p { margin: 0 0 0.75rem; }
+.reader-catchup > div { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.reader-catchup button { min-height: 2.75rem; }
+.reader-catchup button:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }

@@ -24,6 +24,7 @@ const anyReader = ""
 
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
+	t.Run("Notifications", func(t *testing.T) { testNotifications(t, open) })
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("AdminRole", func(t *testing.T) { testAdminRole(t, open) })
 	t.Run("ConcurrentAdminDemotion", func(t *testing.T) {

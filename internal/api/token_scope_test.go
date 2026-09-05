@@ -140,6 +140,7 @@ const (
 	gateResolveBoth                    // bearer, library-read AND sync
 	gateOPDS                           // HTTP Basic, scope library-read
 	gateTokenSelf                      // bearer, no scope beyond authenticating
+	gateLiveEvents                     // bearer, authenticated then filtered per topic
 	gateLoginCred                      // the short-lived login credential, not a device token
 )
 
@@ -222,6 +223,8 @@ var registeredRouteGates = map[string]routeGate{
 	"HEAD /opds/v1.2/books/{id}/cover":           gateOPDS,
 
 	"GET /v1/token": gateTokenSelf,
+
+	"GET /v1/events": gateLiveEvents,
 
 	"POST /v1/tokens":        gateLoginCred,
 	"GET /v1/tokens":         gateLoginCred,
@@ -476,6 +479,27 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				// what it is — that is the entire point of the route.
 				if got := bearer(method, path, syncOnly); got != http.StatusOK {
 					t.Errorf("a scoped token describing itself: %d, want 200", got)
+				}
+			case gateLiveEvents:
+				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
+					t.Errorf("no token: %d, want 401", got)
+				}
+				// ADR-0034: one authentication, then a per-topic
+				// filter. A credential that could receive nothing is
+				// refused rather than parked on a silent stream.
+				if got := bearer(method, path, libraryReadOnly); got != http.StatusForbidden {
+					t.Errorf("a catalog-only token on the event stream: %d, want 403", got)
+				}
+				// This server has no hub, so a credential that passes
+				// the gate meets a 503 instead of an open stream. That
+				// is what keeps this matrix from hanging on a route
+				// designed never to answer.
+				for name, secret := range map[string]string{
+					"sync": syncOnly, "read-insights": insightsOnly,
+				} {
+					if got := bearer(method, path, secret); got == http.StatusUnauthorized || got == http.StatusForbidden {
+						t.Errorf("a %s token on the event stream: %d, should have passed the gate", name, got)
+					}
 				}
 			case gateLoginCred:
 				if got := bearer(method, path, ""); got != http.StatusUnauthorized {

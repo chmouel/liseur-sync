@@ -18,13 +18,28 @@ func (s *Store) AppendSessions(ctx context.Context, userID string, ss []store.Se
 	if err := lockWorkGraph(ctx, tx, userID); err != nil {
 		return err
 	}
-	if err := appendSessionsTx(ctx, tx, userID, ss, time.Now().UTC()); err != nil {
+	inserted, err := appendSessionsTx(ctx, tx, userID, ss, time.Now().UTC())
+	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commitSessions(tx, userID, inserted > 0)
 }
 
-func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now time.Time) error {
+// commitSessions: see the SQLite implementation's doc comment.
+func (s *Store) commitSessions(tx *sql.Tx, userID string, changed bool) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if changed {
+		s.Notify(userID, store.TopicInsights)
+	}
+	return nil
+}
+
+// appendSessionsTx returns how many sessions it stored; the rest were
+// idempotent replays.
+func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store.Session, now time.Time) (int, error) {
+	inserted := 0
 	for i, ses := range ss {
 		var archivedFingerprint string
 		err := tx.QueryRowContext(ctx, q(
@@ -32,33 +47,33 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 			userID, ses.SessionID).Scan(&archivedFingerprint)
 		if err == nil {
 			if archivedFingerprint != store.SessionFingerprint(ses) {
-				return store.IDMismatch("session", ses.SessionID, i)
+				return inserted, store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
-			return err
+			return inserted, err
 		}
 		var found int
 		if err = tx.QueryRowContext(ctx, q(
 			`SELECT COUNT(1) FROM sessions WHERE user_id = ? AND session_id = ?`),
 			userID, ses.SessionID).Scan(&found); err != nil {
-			return err
+			return inserted, err
 		}
 		if found > 0 {
 			same, err := sameSession(ctx, tx, userID, ses)
 			if err != nil {
-				return err
+				return inserted, err
 			}
 			if !same {
-				return store.IDMismatch("session", ses.SessionID, i)
+				return inserted, store.IDMismatch("session", ses.SessionID, i)
 			}
 			continue
 		}
 		if ok, err := workExistsTx(ctx, tx, userID, ses.WorkID); err != nil {
-			return err
+			return inserted, err
 		} else if !ok {
-			return store.UnknownWork("session", ses.SessionID, i, ses.WorkID)
+			return inserted, store.UnknownWork("session", ses.SessionID, i, ses.WorkID)
 		}
 		_, err = tx.ExecContext(ctx, q(
 			`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
@@ -70,10 +85,11 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 			ses.StartProg, ses.EndProg, ses.IdleMs,
 			string(ses.Origin), ses.OriginAlias, ses.SourceKey, now)
 		if err != nil {
-			return err
+			return inserted, err
 		}
+		inserted++
 	}
-	return nil
+	return inserted, nil
 }
 
 func (s *Store) AppendInferredSession(ctx context.Context, userID string, group store.InferredSessionGroup) error {
@@ -103,8 +119,9 @@ func (s *Store) AppendInferredSession(ctx context.Context, userID string, group 
 			return store.ErrConflict
 		}
 	}
-	if err := appendSessionsTx(ctx, tx, userID,
-		[]store.Session{group.Session}, time.Now().UTC()); err != nil {
+	inserted, err := appendSessionsTx(ctx, tx, userID,
+		[]store.Session{group.Session}, time.Now().UTC())
+	if err != nil {
 		return err
 	}
 	for _, op := range group.Ops {
@@ -123,7 +140,8 @@ func (s *Store) AppendInferredSession(ctx context.Context, userID string, group 
 			return store.ErrConflict
 		}
 	}
-	return tx.Commit()
+	// Stamping ops for a session already stored changes no statistics.
+	return s.commitSessions(tx, userID, inserted > 0)
 }
 
 func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Session) (bool, error) {
