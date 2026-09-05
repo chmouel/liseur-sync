@@ -354,6 +354,14 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))
 	mux.Handle("GET /v1/works/{id}/annotations", syncH(s.HandleWorkAnnotations))
 
+	// Live notifications (ADR-0034). Authenticated like every other
+	// route, then filtered by topic rather than gated on one scope: the
+	// reader token carries sync, an insights dashboard carries
+	// read-insights, and each gets what it can already read.
+	mux.Handle("GET /v1/events",
+		auth.RequireSecureTransport(s.Cfg,
+			auth.RequireToken(s.Auth, http.HandlerFunc(s.HandleEvents))))
+
 	// read-insights scope.
 	insH := func(h http.HandlerFunc) http.Handler {
 		return auth.RequireSecureTransport(s.Cfg,

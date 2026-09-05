@@ -217,15 +217,15 @@ before vendoring, because a CSP hole for a convenience path would have
 been a real cost — and the same check was repeated on foliate-js, with
 the same answer.
 
-What the reader still does not do: no full-text search inside a book, no
-annotations, no read-aloud. The locator envelope means those remain
-additions rather than migrations.
+The reader displays annotations written by other clients, including
+highlights over the text and notes in the sidebar. Annotation editing,
+full-text search inside a book and read-aloud remain out of scope.
 
 ### The reader is an ordinary API client with a derived, short-lived token
 
-The reader uses `/v1/ops`, `/v1/changes` and `/v1/sessions` exactly as the
-Android and desktop clients do. It is not given privileged access and
-gets no new sync surface. (What a sitting is in a browser — when it
+The reader writes `/v1/ops` and `/v1/sessions` and reads the current
+work's position and annotation endpoints. It keeps no browser-wide
+changes cursor and gets no privileged access. (What a sitting is in a browser — when it
 opens, when it closes, what counts as idle — is decided in
 [ADR-0030](0030-web-reader-reading-sessions.md).)
 
@@ -240,7 +240,10 @@ hour. Four properties make this safe and workable:
 - **Short-lived, and refreshed by asking again.** There is no refresh
   token. The page re-mints with the cookie it already has. This is the
   same shape as the one-hour login credential, and it means expiry is the
-  only revocation mechanism the reader needs to implement.
+  ordinary renewal boundary. Concurrent calls share one mint; a 401
+  retries once with a replacement. A second refusal stops sync and asks
+  the reader to reopen the book from the library. The detached origin
+  cannot mint and stops on its first refusal.
 - **One web device per user, not one per tab.** The op log's heads are
   per work *and device*, so a device identity per tab would multiply heads
   and make "where did I stop reading" ambiguous between two windows of one
@@ -264,6 +267,60 @@ something a person made or can manage — it is replaced before they could
 finish reading its name — so the Devices page counts browsers instead,
 one row per device id, with a single button that ends browser reading
 everywhere.
+
+### Visible readers subscribe to live invalidations
+
+While the document is visible, the reader opens `GET /v1/events` with a
+Bearer-authenticated streaming fetch. Hiding the tab aborts the fetch
+and any reconnect timer. Only `visibilitychange` drives resuming:
+focusing a publication frame or switching focus within a visible window
+does not open another connection or show an offer.
+
+The stream carries the topic hints defined in
+[ADR-0034](0034-live-notifications-say-only-that-something-changed.md).
+The opening invalidation and later events enter the same coalescing
+queue. A positions hint reads this work's current position; an
+annotations hint replaces this work's complete live set. An event during
+a read owes one follow-up, and a failed read remains owed. The reader
+neither requests insights nor adds a dashboard subscription.
+
+Frames are limited to 64 KiB, including unterminated lines. The parser
+handles split UTF-8 and CRLF without treating EOF as an event delimiter.
+Any received bytes, including heartbeat comments, reset a 60-second
+watchdog. Transport failures back off with jitter, and 429 responses
+honour `Retry-After`. A brief 200 response does not reset the backoff.
+403, 404 and 501 stop live attempts until the next visibility boundary;
+ordinary position writes and resume reads still work against an older
+server without a new warning.
+
+`GET /v1/token` identifies the credential's account and device.
+Replacement credentials invalidate queued reads, offers and annotation
+draws. Responses remain bound to the credential, work and lifecycle
+that requested them. A replacement naming another account stops this
+page's sync before it can send that account the previous reader's data.
+
+### A remote position waits for the reader to return
+
+A notification never moves the open book. The reader holds a candidate
+while visible and offers it after a hidden-to-visible transition, once
+the resume snapshot succeeds. “Continue there” and “Stay here” are
+keyboard-accessible buttons; Escape dismisses the offer. A newer remote
+op cannot change the target of an offer already on screen. Acceptance
+requires the same account, work, op and device, with no intervening local
+reading movement. It uses the stored locator, trying the existing CFI,
+progression and resource fallback.
+
+Web tabs share a server device identity, so that identity alone cannot
+identify this tab's own writes. The reader remembers its actual op ids
+alongside their device ids. A restore paints the destination without
+recording a page turn, minting a position op or crediting activity. The
+next reading input resumes normal position and session accounting.
+
+Annotation refreshes remove the previous overlays before drawing the
+replacement set, including recoloured highlights. Replacement clears
+the colour and failed-CFI caches. Overlay mutations run serially, with
+work and credential checks around asynchronous draws, so a superseded
+draw cannot recreate a deleted highlight.
 
 ## Consequences
 

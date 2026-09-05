@@ -275,6 +275,26 @@ For non-interactive clients, the kosync adapter applies the only safe
 default: `GET` returns the newest op's `foreign_pos`/`progression`,
 which is exactly kosync's semantics today.
 
+### 5.5 Live invalidations
+
+`GET /v1/events` sends topic-only SSE notifications after committed
+position, annotation and session writes. Each subscriber has a bounded
+pending topic set; registering before the opening invalidation covers
+changes made while a client connects. Clients refresh through the
+existing feeds or per-book snapshots and retain their normal cursor,
+merge and retry rules.
+
+The `sync` scope authorizes positions and annotations; `read-insights`
+authorizes insight refreshes. Sessions have no delta feed, so an insight
+notification asks the client to re-fetch displayed statistics. Notifications
+carry no sequence, work or device identity, and duplicate-only writes
+remain silent.
+
+Delivery currently spans one server process. It does not add catalog
+convergence or position-feed recovery for work merges and deletions.
+[ADR-0034](adr/0034-live-notifications-say-only-that-something-changed.md)
+defines the wire and lifecycle contract.
+
 ## 6. Reading statistics
 
 ### 6.1 Sessions are facts, not derived state

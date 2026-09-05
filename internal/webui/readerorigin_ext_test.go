@@ -13,6 +13,8 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/live"
+	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/webui"
 )
 
@@ -52,9 +54,14 @@ func wholeServer(t *testing.T, f *booksFixture, ts *httptest.Server, readerOrigi
 	cfg := f.cfg
 	cfg.ReaderOrigin = readerOrigin
 	cfg.InsecureHTTP = true
+	hub := live.NewHub(8)
+	if notifying, ok := f.st.(store.ChangeNotifying); ok {
+		notifying.SetChangeNotifier(hub)
+	}
 
 	apiSrv := &api.Server{
 		St: f.st, Auth: auth.NewService(f.st), Cfg: cfg,
+		Live:         hub,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		OPDSLimiter:  auth.NewRateLimiter(100, time.Minute),
 		Files:        content.NewFiles(f.st), Covers: f.cache,
@@ -66,7 +73,10 @@ func wholeServer(t *testing.T, f *booksFixture, ts *httptest.Server, readerOrigi
 	}
 	ts.Config = &http.Server{Handler: apiSrv.Handler(), ReadHeaderTimeout: time.Minute}
 	ts.Start()
-	t.Cleanup(ts.Close)
+	t.Cleanup(func() {
+		hub.Close()
+		ts.Close()
+	})
 }
 
 // ask sends a request to ts pretending it arrived at host, which is the

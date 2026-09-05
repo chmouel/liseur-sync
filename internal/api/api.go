@@ -12,6 +12,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/live"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -67,6 +68,13 @@ type Server struct {
 	WebUI interface {
 		Mount(mux *http.ServeMux, secure func(http.Handler) http.Handler)
 	}
+	// Live fans committed changes out to connected clients (ADR-0034).
+	// Nil disables GET /v1/events, which then reports 503: a client
+	// treats that as "no live events here" and keeps its own schedule.
+	Live *live.Hub
+	// Events bounds a live stream. The zero value takes
+	// DefaultEventsPolicy.
+	Events EventsPolicy
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -241,6 +249,12 @@ func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
+
+// Unwrap lets http.ResponseController reach the real writer through
+// this one. Without it a streaming handler cannot flush, and
+// GET /v1/events would hold every frame until the connection closed
+// while a direct handler test passed happily.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // opJSON is the wire shape of an op (design §5.1).
 type opJSON struct {

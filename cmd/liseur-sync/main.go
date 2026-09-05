@@ -27,11 +27,17 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/live"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 	"github.com/chmouel/liseur-sync/internal/webui"
 )
+
+// maxLiveStreamsPerAccount bounds concurrent /v1/events subscriptions
+// for one account: a phone, a couple of tabs and a spare, which is a
+// reader rather than a way to hold file descriptors open.
+const maxLiveStreamsPerAccount = 8
 
 func openStore(cfg config.Config) (store.Store, error) {
 	switch cfg.Database.Driver {
@@ -186,6 +192,14 @@ func cmdServe(args []string) error {
 	// One Ingester is both halves of ADR-0023 and ADR-0025: it is the
 	// only thing that writes under a folder root, in either direction.
 	ingester := content.NewIngester(reconciler)
+	// Live notifications (ADR-0034). The hub is process-local, which is
+	// what this deployment is; several replicas would want PostgreSQL
+	// LISTEN/NOTIFY here instead. A backend that cannot take the hook
+	// simply never notifies, and clients keep their own schedules.
+	hub := live.NewHub(maxLiveStreamsPerAccount)
+	if n, ok := st.(store.ChangeNotifying); ok {
+		n.SetChangeNotifier(hub)
+	}
 	apiSrv := &api.Server{
 		St:           st,
 		Auth:         auth.NewService(st),
@@ -196,6 +210,7 @@ func cmdServe(args []string) error {
 		Covers:       cache,
 		Ingest:       ingester,
 		Removal:      ingester,
+		Live:         hub,
 		Kosync: &kosync.Server{
 			St:          st,
 			Cfg:         cfg,
@@ -267,6 +282,10 @@ func cmdServe(args []string) error {
 	}
 
 	bgStop()
+	// Streams are long-lived by design, so Shutdown would wait for
+	// every reader to close a tab. Ending them first is what lets the
+	// ten seconds below mean anything.
+	hub.Close()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	slog.Info("shutting down")

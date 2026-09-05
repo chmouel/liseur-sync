@@ -28,6 +28,9 @@ func (s *Store) AppendOps(ctx context.Context, userID, deviceID string, ops []st
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if store.AnyOpApplied(results) {
+		s.Notify(userID, store.TopicPositions)
+	}
 	return results, nil
 }
 
@@ -115,6 +118,9 @@ func (s *Store) AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID
 	}
 	if err := tx.Commit(); err != nil {
 		return store.OpResult{}, err
+	}
+	if store.AnyOpApplied(results) {
+		s.Notify(userID, store.TopicPositions)
 	}
 	return results[0], nil
 }

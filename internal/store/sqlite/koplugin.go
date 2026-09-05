@@ -68,7 +68,7 @@ func (s *Store) UpsertKopluginSession(ctx context.Context, userID string, ses st
 	if err != nil {
 		return "", err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSessions(tx, userID, status != "duplicate"); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -92,7 +92,7 @@ func (s *Store) UpsertKopluginSessionByAlias(ctx context.Context, userID, partia
 	if err != nil {
 		return "", err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commitSessions(tx, userID, status != "duplicate"); err != nil {
 		return "", err
 	}
 	return status, nil
