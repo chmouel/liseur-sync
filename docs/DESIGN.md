@@ -309,41 +309,119 @@ defines the wire and lifecycle contract.
   "start_progression": 0.401,
   "end_progression":   0.413,
   "idle_ms":           30000,
-  "origin":            "native | koplugin"
+  "active_ms":         120000,
+  "origin":            "native | koplugin | inferred"
 }
 ```
 
 `POST /v1/sessions` accepts batches, idempotent on `session_id`. Rows
 are never updated in place; a session is a historical fact. Immutable
 native and inferred sessions older than the configurable retention
-window are reduced to per-work, timezone-local daily totals, then their
-raw rows are removed. A compact fingerprint preserves the original
-idempotency and conflict behavior. Mutable koplugin supersession chains
-stay raw because a later revision may replace them.
+window become v2 per-work daily totals, attributed wholly to their end
+day in the account timezone. The rollup transaction removes the raw rows
+and stores each session's fingerprint and exact archived contribution.
+Measured duration and progression stay separate from inferred totals
+so retention does not change pace or ETA. Mutable koplugin supersession
+chains stay raw because a later revision may replace them.
+
+`active_ms` is optional, including an explicit zero, and accepts integers
+from 0 through 9007199254740991. It carries monotonic measured duration,
+independent of wall-clock span and `idle_ms`; the server does not clamp
+it to either. Without it, active duration is wall-clock span minus idle.
+End time must still be at or after start time, and idle must lie within
+that span. Clients negotiate support through insights capabilities or
+`GET /v1/token` (`session_active_ms: true`) before including the field.
+An accepted payload must not gain or lose it on retry.
+
+Existing split-day `session_rollups` remain unchanged. Migration 7 adds
+separate `session_rollups_v2` and archive proof; it does not reconstruct
+old sessions, backfill measured duration, or reinterpret old buckets.
+Archived days keep their original timezone. Changing the account
+timezone cannot recover historical end instants from daily totals.
 
 The design principle, learned from the Liseur/KoInsight investigation:
 **never fabricate resolution you didn't measure.** liseur-sync requires
-`start/end_progression` and derives everything else server-side:
+`start/end_progression` and derives aggregates server-side:
 
-- pages read = progression delta × edition page count, when known
-- reading speed = progression delta / active duration, per work and
-  rolling
+- pages read = positive progression delta × edition page count, when known;
+  koplugin's reported page contribution is retained as source-specific data,
+  not a universal pagination scheme
+- reading speed = measured positive progression delta / measured active
+  duration in the selected window; inferred sessions never supply pace
 - streaks, per-book time, calendar heatmaps: raw sessions plus
   daily rollups
 
 ### 6.2 Insight API
 
-Read-only aggregation endpoints, all per-user:
+Read-only aggregation endpoints, all per-user and requiring `read-insights`:
 
 ```
 GET /v1/insights/summary?range=30d      totals, streak, speed trend
 GET /v1/insights/works                  all per-book aggregates
 GET /v1/insights/works/{id}             per-book: time, sessions, pace, ETA
 GET /v1/insights/calendar?year=2026     daily minutes for heatmaps
+GET /v1/insights/capabilities          protocol and attribution versions, limits
+POST /v1/insights/snapshot             coherent totals and actual local overlap
 ```
 
-ETA = remaining progression / rolling speed, the same estimator Liseur
-ships on-device, now computable across all devices' sessions combined.
+The API and web dashboard use `insights.Build` over a single transactional
+`StatisticsSnapshot`: effective sessions, rollups, positions, editions,
+work metadata, timezone and revision. There is no 10000-row cap on server
+history. Raw sessions and v2 rollups use the same end-day attribution in
+totals and calendars. ETA uses current remaining progression and measured
+pace in the selected window; it is null without usable pace. Legacy
+rollups with unknown measured contributions suppress pace and ETA.
+
+A snapshot request carries a client `snapshot_id`, account timezone,
+aggregate bounds, full original native session candidates with their
+original `device_id`, and local positive-activity days. The answer echoes
+account, id, timezone, bounds and protocol/attribution versions, with a
+decimal-string `stats_revision`. It returns server summary/work/day totals,
+actual overlap with those candidates, and an all-history combined streak.
+The candidate and local-day arrays each allow at most 10000 entries;
+`ops.max_body_bytes` still bounds the body.
+
+Clients may combine additive totals as server + captured local - actual
+overlap only after checking the response identity, bounds and `complete`.
+An upload acknowledgement, receipt or op cursor is not proof that this
+snapshot contains a session. Payload mismatch, unknown archived proof,
+legacy buckets or incompatible archived timezone make it incomplete.
+Legacy servers and incomplete responses require a local-only fallback.
+
+Calendar chunks contain at most 4000 inclusive days. Explicit calendar
+bounds filter only daily output, never summary, works or streak. For
+`range: all`, the default calendar runs from the server's earliest positive
+activity day through today, clipped to the latest 4000 days; no activity
+means today alone. Clients requesting older chunks must keep the captured
+local evidence fixed and require the same revision and response identity
+across chunks. The full wire contract is in `openapi.yaml` and
+`integrating.md`.
+
+#### Statistics read cost
+
+`internal/insights/statistics_benchmark_test.go` compares the former
+summary-plus-works read path with `StatisticsSnapshot` plus `Build`.
+The former works handler already batched session reads; repeated edition
+lookups and per-work metadata/position reads caused the N+1 cost.
+The snapshot uses six SELECTs plus `ceil(candidate_count / 500)` archive
+lookups, with no reads in `Build`. For the lifetime fixture, the former
+path used 20216 helper reads. These counts come from source and helper
+calls, not SQL tracing, and exclude transaction control.
+
+A local synthetic run on 2026-09-05 used 12000 raw sessions across 24
+works and 1500 days, three warm iterations without the race detector:
+
+| Window | Backend | Former summary + works (ms) | Snapshot + Build (ms) |
+| --- | --- | ---: | ---: |
+| Lifetime | SQLite | 472.54 | 57.36 |
+| Lifetime | PostgreSQL | 2038.20 | 38.68 |
+| 30 days | SQLite | 82.41 | 54.50 |
+| 30 days | PostgreSQL | 102.81 | 35.99 |
+
+Timing excludes setup and HTTP/JSON overhead. The fixture has no rollups;
+`Build` also produces calendar/coverage data absent from the former
+comparison outputs. These measurements are not a production latency
+guarantee.
 
 ### 6.3 Sessions inferred for position-only devices
 
@@ -351,8 +429,8 @@ A stock KOReader device syncing via the kosync adapter sends positions
 but no sessions. The server can infer coarse sessions from its op log:
 consecutive ops from one device with gaps below the configured threshold
 form an inferred session with `origin: "inferred"`, always
-distinguishable from measured ones and excluded from speed statistics by
-default. Better than nothing, honest about being so. KOReader's
+distinguishable from measured ones and excluded from pace and ETA,
+including after rollup. KOReader's
 statistics plugin, where installed, reports measured sessions via the
 koplugin adapter instead. The web reader measures its own
 ([ADR-0030](adr/0030-web-reader-reading-sessions.md)): a sitting bounded
@@ -626,7 +704,14 @@ aliases            user_id, kind, value, work_id
 ops                user_id, seq, op_id, work_id, edition_sha?, device_id,
                    client_ts, progression, locator_json?, foreign_pos?, origin
 sessions           user_id, session_id, work_id, device_id, started_at,
-                   ended_at, start_prog, end_prog, idle_ms, origin
+                   ended_at, start_prog, end_prog, idle_ms, active_ms?,
+                   reported_pages?, origin
+session_rollups    user_id, work_id, day, legacy split-day totals
+session_rollups_v2 user_id, work_id, day, timezone, attribution_version,
+                   totals, measured_active_seconds, measured_prog_delta
+session_tombstones user_id, session_id, fingerprint, work_id?, day?,
+                   timezone?, attribution_version, present, contributions
+stats_revisions    user_id, revision
 folders            id, name, root_path, kind
 user_folders        user_id, folder_id
 books              id, folder_id, status, relative_path, calibre_id?,

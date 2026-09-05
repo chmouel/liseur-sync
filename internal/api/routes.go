@@ -185,15 +185,17 @@ func (s *Server) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, struct {
-		ID        string         `json:"id"`
-		AccountID string         `json:"account_id"`
-		DeviceID  string         `json:"device_id"`
-		Name      string         `json:"name"`
-		Scope     *store.Scope   `json:"scope,omitempty"`
-		Scopes    store.ScopeSet `json:"scopes"`
+		ID              string         `json:"id"`
+		AccountID       string         `json:"account_id"`
+		SessionActiveMs bool           `json:"session_active_ms"`
+		DeviceID        string         `json:"device_id"`
+		Name            string         `json:"name"`
+		Scope           *store.Scope   `json:"scope,omitempty"`
+		Scopes          store.ScopeSet `json:"scopes"`
 	}{
 		ID: tok.ID, AccountID: tok.UserID, DeviceID: tok.DeviceID, Name: tok.Name,
-		Scope: legacyScope(tok.Scopes), Scopes: tok.Scopes,
+		SessionActiveMs: true,
+		Scope:           legacyScope(tok.Scopes), Scopes: tok.Scopes,
 	})
 }
 
@@ -371,6 +373,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/insights/works", insH(s.HandleInsightsWorks))
 	mux.Handle("GET /v1/insights/works/{id}", insH(s.HandleInsightsWork))
 	mux.Handle("GET /v1/insights/calendar", insH(s.HandleInsightsCalendar))
+	mux.Handle("GET /v1/insights/capabilities", insH(s.HandleInsightsCapabilities))
+	mux.Handle("POST /v1/insights/snapshot", insH(s.HandleInsightsSnapshot))
 
 	// library-read scope: the catalog. Folder grants select the shared
 	// catalog rows this account may see (ADR-0027), while reading state

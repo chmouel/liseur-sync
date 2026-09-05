@@ -26,78 +26,60 @@ import (
 // no way to ask.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	now := time.Now()
-	loc := userLoc(u)
-	span := dashboardSpan(w, r)
-	win := span.Window(now, loc)
-
-	from, to := win.SessionBounds(now, loc)
-	stored, err := s.St.SessionsInRange(r.Context(), u.ID, from, to)
+	snapshot, err := s.St.StatisticsSnapshot(r.Context(), u.ID, nil)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	// SessionsInRange asks for an overlap, so it also answers with a
-	// sitting that began inside the span and ran out the far end of
-	// it. The window decides membership by the day a sitting ended,
-	// and it has to decide it here too or the totals count reading
-	// that has not happened yet.
-	sessions := make([]store.Session, 0, len(stored))
-	for _, ses := range stored {
+	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
+	span := dashboardSpan(w, r)
+	win := span.Window(now, loc)
+	stats, err := insights.Build(snapshot, win, now)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+
+	sessions := make([]store.Session, 0, len(snapshot.Sessions))
+	for _, ses := range snapshot.Sessions {
 		if win.HoldsSession(ses) {
 			sessions = append(sessions, ses)
 		}
 	}
-	works, _ := s.St.ListWorks(r.Context(), u.ID)
+	works, err := s.St.ListWorks(r.Context(), u.ID)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	titles := map[string]string{}
-	for _, ws := range works {
-		titles[ws.Work.ID] = orPlaceholder(ws.Work.Title)
+	for _, work := range snapshot.Works {
+		titles[work.ID] = orPlaceholder(work.Title)
 	}
 
 	sum := SummaryData{
 		Span: span, RangeDays: win.Days(),
-		Bars: span.SuitsDailyBars(now, loc),
+		Bars:          span.SuitsDailyBars(now, loc),
+		ActiveMinutes: stats.Summary.TotalActiveMinutes,
+		Sessions:      stats.Summary.Sessions,
+		Pages:         stats.Summary.TotalPages,
+		StreakDays:    stats.Summary.StreakDays,
 	}
 	dayMin := map[string]float64{}
-	pages := newPageCounter(s.St)
-	for _, ses := range sessions {
-		active := insights.ActiveSeconds(ses)
-		sum.ActiveMinutes += active / 60
-		sum.Sessions++
-		sum.Pages += pages.of(r.Context(), ses)
-		// By the day it ended, which is where the app puts it and
-		// where the window draws its own edges. A sitting read across
-		// midnight belongs to one day, and the reader should find it
-		// on the same one wherever they look.
-		//
-		// A rollup is the exception, and knowingly: the materializer
-		// divides a crossing sitting between the days it touched, so
-		// once retention compacts that evening its minutes move off
-		// the end day. Making the two agree means changing how
-		// rollups are allocated, which is a change to stored data and
-		// to what the API answers, not to this page.
-		dayMin[ses.EndedAt.In(loc).Format(insights.DayFormat)] += active / 60
+	for _, day := range stats.Days {
+		dayMin[day.Date] = day.Minutes
 	}
-	fromDay, toDay := win.DayBounds(now, loc)
-	if rollups, err := s.St.RollupsInRange(r.Context(), u.ID, fromDay, toDay); err == nil {
-		for _, ru := range rollups {
-			sum.ActiveMinutes += ru.ActiveSeconds / 60
-			sum.Sessions += int(ru.SessionCount)
-			sum.Pages += ru.Pages
-			dayMin[ru.Day] += ru.ActiveSeconds / 60
-		}
-	}
-	// The streak is answered from further back than the span on
-	// purpose: asking about the last week must not report a
-	// months-long run as seven days.
-	sum.StreakDays = s.streakFor(r, u.ID, loc, now, win, dayMin)
 
-	links := s.workBookIDs(r.Context(), u.ID, works)
+	reading, err := s.linkReadingWorks(r, u.ID, continueReading(works, nil, loc))
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	labels := deviceLabels(r.Context(), s.St, u.ID)
 	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum,
 		daySeries(win, dayMin, now, loc),
 		recentSessions(sessions, titles, loc, labels),
-		s.markReadable(r, u.ID, continueReading(works, links.active, loc))).
+		reading).
 		Render(r.Context(), w)
 }
 
@@ -151,49 +133,6 @@ func recentSessions(sessions []store.Session, titles map[string]string, loc *tim
 	return rows
 }
 
-// streakFor counts the reader's current run of days.
-//
-// It looks back over the whole lookback rather than over the span,
-// because a streak is a fact about the reader and not about the
-// question: narrowing it to the chosen span would report a
-// months-long run as seven days to anybody looking at their week.
-// The days already counted for the span are passed in so the common
-// case — a span that reaches back further than the run — needs no
-// second read.
-func (s *Server) streakFor(
-	r *http.Request, userID string, loc *time.Location, now time.Time,
-	win insights.Window, known map[string]float64,
-) int {
-	days := make(map[string]bool, len(known))
-	for day, minutes := range known {
-		if minutes > 0 {
-			days[day] = true
-		}
-	}
-	// An unbounded span has already read everything there is, so the
-	// lookback would be the same two queries over the same rows.
-	if win.Unbounded() {
-		return insights.StreakDays(days, loc, now)
-	}
-	from := now.AddDate(0, 0, -insights.StreakLookbackDays)
-	if sessions, err := s.St.SessionsInRange(r.Context(), userID, from, now); err == nil {
-		for _, ses := range sessions {
-			if insights.ActiveSeconds(ses) > 0 {
-				days[ses.EndedAt.In(loc).Format(insights.DayFormat)] = true
-			}
-		}
-	}
-	if rollups, err := s.St.RollupsInRange(r.Context(), userID,
-		from.In(loc).Format(insights.DayFormat), now.In(loc).Format(insights.DayFormat)); err == nil {
-		for _, ru := range rollups {
-			if ru.ActiveSeconds > 0 {
-				days[ru.Day] = true
-			}
-		}
-	}
-	return insights.StreakDays(days, loc, now)
-}
-
 // continueReadingLimit is a shelf, not a list: the point is to get back
 // into the book you put down, and a wall of half-read books is a guilt
 // trip rather than a shortcut.
@@ -240,72 +179,75 @@ func userLoc(u *store.User) *time.Location {
 
 // --- works ---
 
-// markReadable says which of these works' books the browser reader can
-// open. The shelf it answers for is bounded (continueReadingLimit), so
-// it is a handful of book lookups rather than the wall of them a whole
-// catalog page would be.
-func (s *Server) markReadable(r *http.Request, userID string, rows []WorkRow) []WorkRow {
-	ids := make([]string, 0, len(rows))
-	for _, row := range rows {
-		if row.BookID != "" {
-			ids = append(ids, row.BookID)
+// Resolve catalog links only after selecting the six displayed works.
+// The dashboard needs neither the rest of the library nor deletion eligibility.
+func (s *Server) linkReadingWorks(r *http.Request, userID string, rows []WorkRow) ([]WorkRow, error) {
+	for i := range rows {
+		ids, err := s.St.WorkBookIDs(r.Context(), userID, rows[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			book, err := s.St.CatalogBookByID(r.Context(), userID, id)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if book.Status == store.BookActive {
+				rows[i].BookID = id
+				rows[i].CanRead = bookReadable(book)
+				break
+			}
 		}
 	}
-	books := s.booksByID(r.Context(), userID, ids)
-	for i := range rows {
-		book, ok := books[rows[i].BookID]
-		rows[i].CanRead = ok && bookReadable(book)
-	}
-	return rows
+	return rows, nil
 }
 
 func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	workID := r.PathValue("id")
-	wk, err := s.St.WorkByID(r.Context(), u.ID, workID)
+	snapshot, err := s.St.StatisticsSnapshot(r.Context(), u.ID, nil)
 	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	var wk store.Work
+	for _, work := range snapshot.Works {
+		if work.ID == workID {
+			wk = work
+			break
+		}
+	}
+	if wk.ID == "" {
 		http.NotFound(w, r)
 		return
 	}
-	sessions, _ := s.St.CurrentSessionsForWork(r.Context(), u.ID, workID, 10_000)
-	var d WorkDetail
-	d.Work = wk
-	d.Sessions = len(sessions)
-	var progDelta float64
-	for _, ses := range sessions {
-		d.Minutes += insights.ActiveSeconds(ses) / 60
-		if delta := ses.EndProg - ses.StartProg; delta > 0 {
-			progDelta += delta
-			if ses.EditionSHA != nil {
-				if ed, err := s.St.EditionBySHA(r.Context(), u.ID, *ses.EditionSHA); err == nil && ed.PageCount != nil {
-					d.Pages += delta * float64(*ed.PageCount)
-				}
-			}
+	sessions := make([]store.Session, 0)
+	for _, ses := range snapshot.Sessions {
+		if ses.WorkID == workID {
+			sessions = append(sessions, ses)
 		}
 	}
-	// Once, not once per sitting. A work old enough for its early
-	// sessions to have been compacted counted its rolled-up totals
-	// again for every session it still holds in full, so the longer a
-	// book had been read the more wrong this page was about it.
-	if rollups, err := s.St.RollupsForWork(r.Context(), u.ID, workID); err == nil {
-		for _, ru := range rollups {
-			d.Sessions += int(ru.SessionCount)
-			d.Minutes += ru.ActiveSeconds / 60
-			d.Pages += ru.Pages
-			progDelta += ru.ProgDelta
-		}
+	stats, err := insights.Build(snapshot, insights.Window{}, time.Now())
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
 	}
-	ops, _ := s.St.Positions(r.Context(), u.ID, workID, 50)
-	if len(ops) > 0 {
-		d.CurrentProg = ops[0].Progression
-		if progDelta > 0 && d.Minutes > 0 {
-			speed := progDelta / (d.Minutes * 60)
-			if remaining := 1 - d.CurrentProg; remaining > 0 && speed > 0 {
-				eta := time.Duration(remaining/speed) * time.Second
-				d.ETAHuman = humanDuration(eta)
-			}
-		}
+	stat := stats.ByWork[workID]
+	d := WorkDetail{
+		Work: wk, Sessions: stat.Sessions, Minutes: stat.TotalActiveMinutes,
+		Pages: stat.TotalPages, CurrentProg: stat.CurrentProgression,
 	}
-	loc := userLoc(u)
+	if seconds := stat.ETASeconds; seconds != nil && *seconds <= float64((1<<63-1)/int64(time.Second)) {
+		d.ETAHuman = humanDuration(time.Duration(*seconds) * time.Second)
+	}
+	ops, err := s.St.Positions(r.Context(), u.ID, workID, 50)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
 	// The work's own book, when it has one: it makes this page a way
 	// back into the reading rather than only a report about it.
 	if ids, err := s.St.WorkBookIDs(r.Context(), u.ID, workID); err == nil && len(ids) > 0 {
@@ -319,8 +261,9 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	// Newest first, and only the sessions still held one by one — the
 	// aged ones live on as the daily totals counted in the statistics
 	// above, which is why this list can be shorter than that count.
-	sessionRows := make([]SessionRow, 0, len(sessions))
-	for i := len(sessions) - 1; i >= 0; i-- {
+	const sessionLogLimit = 10_000
+	sessionRows := make([]SessionRow, 0, min(len(sessions), sessionLogLimit))
+	for i := len(sessions) - 1; i >= 0 && len(sessionRows) < sessionLogLimit; i-- {
 		ses := sessions[i]
 		sessionRows = append(sessionRows, SessionRow{
 			When:      ses.StartedAt.In(loc).Format("Jan 2 15:04"),

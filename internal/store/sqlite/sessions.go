@@ -89,12 +89,12 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 		}
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
-			                       started_at, ended_at, start_prog, end_prog, idle_ms,
+			                       started_at, ended_at, start_prog, end_prog, idle_ms, active_ms, reported_pages,
 			                       origin, origin_alias, source_key, received_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			userID, ses.SessionID, ses.WorkID, nullStr(ses.EditionSHA), ses.DeviceID,
 			formatTime(ses.StartedAt), formatTime(ses.EndedAt),
-			ses.StartProg, ses.EndProg, ses.IdleMs,
+			ses.StartProg, ses.EndProg, ses.IdleMs, ses.ActiveMs, ses.ReportedPages,
 			string(ses.Origin), nullStr(ses.OriginAlias), nullStr(ses.SourceKey), now)
 		if err != nil {
 			return inserted, err
@@ -162,19 +162,23 @@ func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Sessi
 		started, ended        string
 		sp, ep                float64
 		idle                  int64
+		active                sql.NullInt64
+		pages                 sql.NullFloat64
 		edSHA, oalias, skey   sql.NullString
 	)
 	err := tx.QueryRowContext(ctx,
 		`SELECT work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key
 		 FROM sessions WHERE user_id = ? AND session_id = ?`, userID, ses.SessionID).
-		Scan(&workID, &edSHA, &devID, &started, &ended, &sp, &ep, &idle, &origin, &oalias, &skey)
+		Scan(&workID, &edSHA, &devID, &started, &ended, &sp, &ep, &idle, &active, &pages, &origin, &oalias, &skey)
 	if err != nil {
 		return false, err
 	}
 	return workID == ses.WorkID && devID == ses.DeviceID &&
 		started == formatTime(ses.StartedAt) && ended == formatTime(ses.EndedAt) &&
 		sp == ses.StartProg && ep == ses.EndProg && idle == ses.IdleMs &&
+		active.Valid == (ses.ActiveMs != nil) && (!active.Valid || active.Int64 == *ses.ActiveMs) &&
+		pages.Valid == (ses.ReportedPages != nil) && (!pages.Valid || pages.Float64 == *ses.ReportedPages) &&
 		origin == string(ses.Origin) &&
 		edSHA.Valid == (ses.EditionSHA != nil) && (!edSHA.Valid || edSHA.String == *ses.EditionSHA) &&
 		oalias.Valid == (ses.OriginAlias != nil) && (!oalias.Valid || oalias.String == *ses.OriginAlias) &&
@@ -184,7 +188,7 @@ func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Sessi
 func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions WHERE user_id = ? AND work_id = ? ORDER BY started_at DESC LIMIT ?`,
 		userID, workID, limit)
 	if err != nil {
@@ -206,7 +210,7 @@ func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limi
 func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions s WHERE user_id = ? AND work_id = ?
 		   AND (source_key IS NULL OR session_id = (
 		       SELECT ss.session_id FROM session_supersessions ss
@@ -237,7 +241,9 @@ func (s *Store) WorkIDsWithInsights(ctx context.Context, userID string) ([]strin
 		`SELECT work_id FROM sessions WHERE user_id = ?
 		 UNION
 		 SELECT work_id FROM session_rollups WHERE user_id = ?
-		 ORDER BY work_id`, userID, userID)
+		 UNION
+		 SELECT work_id FROM session_rollups_v2 WHERE user_id = ?
+		 ORDER BY work_id`, userID, userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -253,13 +259,27 @@ func (s *Store) WorkIDsWithInsights(ctx context.Context, userID string) ([]strin
 	return out, rows.Err()
 }
 
+func scanSessions(rows *sql.Rows) ([]store.Session, error) {
+	var out []store.Session
+	for rows.Next() {
+		ses, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ses)
+	}
+	return out, rows.Err()
+}
+
 func scanSession(row interface{ Scan(...any) error }) (store.Session, error) {
 	var ses store.Session
 	var edSHA, oalias, skey sql.NullString
+	var active sql.NullInt64
+	var pages sql.NullFloat64
 	var started, ended, received string
 	err := row.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &edSHA, &ses.DeviceID,
 		&started, &ended, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
-		&ses.Origin, &oalias, &skey, &received)
+		&active, &pages, &ses.Origin, &oalias, &skey, &received)
 	if err != nil {
 		return ses, err
 	}
@@ -271,6 +291,12 @@ func scanSession(row interface{ Scan(...any) error }) (store.Session, error) {
 	}
 	if skey.Valid {
 		ses.SourceKey = &skey.String
+	}
+	if active.Valid {
+		ses.ActiveMs = &active.Int64
+	}
+	if pages.Valid {
+		ses.ReportedPages = &pages.Float64
 	}
 	if ses.StartedAt, err = parseTime(started); err != nil {
 		return ses, err
@@ -289,7 +315,7 @@ var _ = errors.Is // keep import used if helpers change
 func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions
 		 WHERE user_id = ? AND ended_at > ? AND started_at < ?
 		   AND (source_key IS NULL OR session_id = (

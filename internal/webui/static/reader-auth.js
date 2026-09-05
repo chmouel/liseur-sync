@@ -61,6 +61,7 @@ export function readerAuth({
         expires: Date.parse(got.expires_at) || (detached ? Infinity : now() + 3600000),
         account: info.account_id || "credential:" + (generation + 1),
         device: info.device_id || got.device_id || null,
+        supportsActiveMs: info.session_active_ms === true,
         generation: ++generation,
       };
       handed = null;

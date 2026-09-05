@@ -79,6 +79,10 @@ func (s *Store) UpsertKopluginSessionByAlias(ctx context.Context, userID, partia
 }
 
 func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session) (string, error) {
+	if ses.ReportedPages == nil {
+		one := 1.0
+		ses.ReportedPages = &one
+	}
 	now := time.Now().UTC()
 
 	var cnt int
@@ -121,13 +125,13 @@ func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses
 func insertSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session, now time.Time) error {
 	_, err := tx.ExecContext(ctx, q(
 		`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
-		                       started_at, ended_at, start_prog, end_prog, idle_ms,
+		                       started_at, ended_at, start_prog, end_prog, idle_ms, active_ms, reported_pages,
 		                       origin, origin_alias, source_key, received_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (user_id, session_id) DO NOTHING`),
 		userID, ses.SessionID, ses.WorkID, ses.EditionSHA, ses.DeviceID,
 		ses.StartedAt.UTC(), ses.EndedAt.UTC(),
-		ses.StartProg, ses.EndProg, ses.IdleMs,
+		ses.StartProg, ses.EndProg, ses.IdleMs, ses.ActiveMs, ses.ReportedPages,
 		string(ses.Origin), ses.OriginAlias, ses.SourceKey, now)
 	return err
 }

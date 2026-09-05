@@ -169,10 +169,12 @@ var registeredRouteGates = map[string]routeGate{
 	"DELETE /v1/annotations/{id}":    gateSync,
 	"GET /v1/works/{id}/annotations": gateSync,
 
-	"GET /v1/insights/summary":    gateInsights,
-	"GET /v1/insights/works":      gateInsights,
-	"GET /v1/insights/works/{id}": gateInsights,
-	"GET /v1/insights/calendar":   gateInsights,
+	"GET /v1/insights/summary":      gateInsights,
+	"GET /v1/insights/works":        gateInsights,
+	"GET /v1/insights/works/{id}":   gateInsights,
+	"GET /v1/insights/calendar":     gateInsights,
+	"GET /v1/insights/capabilities": gateInsights,
+	"POST /v1/insights/snapshot":    gateInsights,
 
 	"GET /v1/folders":                        gateLibraryRead,
 	"GET /v1/folders/{folder}/books":         gateLibraryRead,

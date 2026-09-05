@@ -1,12 +1,10 @@
 package webui
 
 import (
-	"context"
 	"fmt"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/insights"
-	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // Laying out the dashboard's two charts.
@@ -221,41 +219,4 @@ func chartLabel(days []DayCell) string {
 	}
 	return fmt.Sprintf("daily reading minutes, %s to %s: %s minutes over %d days with reading",
 		days[0].Date, days[len(days)-1].Date, f0(total), active)
-}
-
-// pageCounter turns a sitting's progress into a number of pages.
-//
-// The same arithmetic the API and the per-work page do: how far through
-// the book the reader got, times how many pages the edition has. It is
-// an approximation and says so, but a page count is what a reader
-// recognises and a progression fraction is not.
-//
-// The editions are remembered for the length of one request because a
-// dashboard is a few books read many times over: without the map, a
-// year of reading is a year of lookups for the same handful of rows.
-type pageCounter struct {
-	st       store.Store
-	editions map[string]*int64
-}
-
-func newPageCounter(st store.Store) *pageCounter {
-	return &pageCounter{st: st, editions: map[string]*int64{}}
-}
-
-func (p *pageCounter) of(ctx context.Context, ses store.Session) float64 {
-	delta := ses.EndProg - ses.StartProg
-	if delta <= 0 || ses.EditionSHA == nil {
-		return 0
-	}
-	count, seen := p.editions[*ses.EditionSHA]
-	if !seen {
-		if ed, err := p.st.EditionBySHA(ctx, ses.UserID, *ses.EditionSHA); err == nil {
-			count = ed.PageCount
-		}
-		p.editions[*ses.EditionSHA] = count
-	}
-	if count == nil {
-		return 0
-	}
-	return delta * float64(*count)
 }

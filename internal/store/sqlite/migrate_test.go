@@ -125,7 +125,7 @@ func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
 			t.Cleanup(func() { s.Close() })
 			// Everything up to but not including the backfill, which is
 			// where a server running the broken image sits.
-			for i, m := range migrations[:len(migrations)-1] {
+			for i, m := range migrations[:len(migrations)-2] {
 				if _, err := s.db.ExecContext(ctx, m); err != nil {
 					t.Fatal(err)
 				}

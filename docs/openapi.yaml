@@ -697,6 +697,10 @@ paths:
         `end_progression`); never derive page numbers yourself — the
         server derives pages from edition metadata when known. Same
         `session_id` with a different payload is a 409.
+        Optional `active_ms` is authoritative measured duration, including
+        zero, independent of wall-clock span and idle. Negotiate it through
+        insights capabilities or `GET /v1/token` (`session_active_ms: true`)
+        before sending it. Preserve its presence and value on retry.
       security: [{ deviceToken: [] }]  # requires sync scope
       requestBody:
         required: true
@@ -881,6 +885,84 @@ paths:
                     items: { $ref: "#/components/schemas/Annotation" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /v1/insights/capabilities:
+    get:
+      tags: [insights]
+      summary: Negotiate statistics snapshot support
+      description: |
+        Requires `read-insights`. Returns the account id and timezone,
+        protocol and attribution versions, all-history support and request limits.
+        A sync-only client can negotiate session duration through
+        `GET /v1/token` instead; browser tokens do not need wider scopes.
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      responses:
+        "200":
+          description: Supported statistics protocol
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InsightsCapabilities" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
+  /v1/insights/snapshot:
+    post:
+      tags: [insights]
+      summary: Read coherent statistics and actual local-session overlap
+      description: |
+        Requires `read-insights`, not `sync`; candidates are evidence,
+        never uploaded. Reads effective sessions, rollups, archived proof,
+        positions, metadata, timezone and revision in one transaction.
+        Server history has no 10000-session cap.
+        The byte limit covers the entire body, including trailing whitespace.
+        Send one JSON value only; trailing JSON or garbage is invalid.
+
+        Candidates must contain the original native payload and original
+        device id, not the current token's device id. Only matching
+        contributions present in these aggregates count as overlap.
+        Upload acknowledgements, receipts and op cursors are not proof.
+        On a complete response, additive totals can be combined as
+        server + captured local - actual overlap. Keep the local capture
+        fixed and check account, snapshot id, timezone, versions and bounds.
+        Use local-only statistics if negotiation or complete proof is
+        unavailable, including on legacy servers.
+
+        Explicit calendar bounds affect only `days` and `overlap.days`.
+        Across chunks require the same decimal-string `stats_revision`
+        and response identity; do not sum repeated summary/work totals.
+      security: [{ deviceToken: [] }]  # requires read-insights scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InsightsSnapshotInput" }
+      responses:
+        "200":
+          description: |
+            Coherent aggregates and overlap. An incomplete result still
+            returns totals, but cannot certify an exact local/server union.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InsightsSnapshot" }
+        "400":
+          description: Invalid payload, duplicate candidate id, excessive evidence or invalid bounds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409":
+          description: Requested timezone differs from the account's current timezone.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: Request body exceeds `ops.max_body_bytes`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
   /v1/insights/summary:
     get:
       tags: [insights]
@@ -924,16 +1006,14 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
-                  from: { type: string, format: date }
-                  to: { type: string, format: date }
-                  total_active_minutes: { type: number }
-                  total_pages: { type: number }
-                  sessions: { type: integer }
-                  streak_days: { type: integer }
-                  speed_prog_per_hour: { type: number }
+                allOf:
+                  - { $ref: "#/components/schemas/InsightsSummary" }
+                  - { $ref: "#/components/schemas/InsightsWindow" }
+                  - { $ref: "#/components/schemas/InsightsRevision" }
+                  - type: object
+                    required: [first_activity_day]
+                    properties:
+                      first_activity_day: { $ref: "#/components/schemas/InsightsFirstActivityDay" }
 
   /v1/insights/works/{id}:
     get:
@@ -963,9 +1043,9 @@ paths:
             The older spelling of a span: a whole number of calendar days
             from 1 through 3660, or `all`. Omitted, the aggregate covers
             the work's whole history, which is what this endpoint
-            answered before spans existed. `current_progression` and
-            `eta_seconds` are never narrowed: where the reader is in a
-            book is true now, whatever span the totals beside it cover.
+            answered before spans existed. `current_progression` is
+            always current; ETA uses that position and measured pace
+            within the selected window.
           schema: { type: string }
       responses:
         "200":
@@ -976,20 +1056,13 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
-                  from: { type: string, format: date }
-                  to: { type: string, format: date }
-                  work_id: { type: string }
-                  title: { type: string, description: "The work's title; absent when the server has none" }
-                  author: { type: string, description: "The work's author; absent when the server has none" }
-                  sessions: { type: integer }
-                  total_active_minutes: { type: number }
-                  total_pages: { type: number }
-                  current_progression: { type: number }
-                  eta_seconds: { type: [number, "null"] }
-                  last_read_at: { type: [string, "null"], format: date-time }
+                allOf:
+                  - { $ref: "#/components/schemas/InsightsWork" }
+                  - { $ref: "#/components/schemas/InsightsWindow" }
+                  - type: object
+                    required: [timezone]
+                    properties:
+                      timezone: { type: string }
         "404": { $ref: "#/components/responses/Error" }
 
   /v1/insights/works:
@@ -1034,27 +1107,15 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [works, range_days]
-                properties:
-                  range_days: { type: integer, description: "Days covered; 0 when unbounded" }
-                  from: { type: string, format: date }
-                  to: { type: string, format: date }
-                  works:
-                    type: array
-                    items:
-                      type: object
-                      required: [work_id, sessions, total_active_minutes, total_pages, current_progression]
-                      properties:
-                        work_id: { type: string }
-                        title: { type: string, description: "The work's title; absent when the server has none" }
-                        author: { type: string, description: "The work's author; absent when the server has none" }
-                        sessions: { type: integer }
-                        total_active_minutes: { type: number }
-                        total_pages: { type: number }
-                        current_progression: { type: number }
-                        eta_seconds: { type: [number, "null"] }
-                        last_read_at: { type: [string, "null"], format: date-time }
+                allOf:
+                  - { $ref: "#/components/schemas/InsightsWindow" }
+                  - { $ref: "#/components/schemas/InsightsRevision" }
+                  - type: object
+                    required: [works]
+                    properties:
+                      works:
+                        type: array
+                        items: { $ref: "#/components/schemas/InsightsWork" }
 
   /v1/insights/calendar:
     get:
@@ -1081,7 +1142,9 @@ paths:
       responses:
         "200":
           description: |
-            Days with activity; midnight-crossing sessions are split.
+            Days with recorded contributions. Raw sessions and v2 rollups
+            count wholly on their end day; legacy split-day buckets retain
+            their original attribution.
             `from`, `to` and `range_days` are echoed back only when
             `from`/`to` were honoured, so a client can tell this server
             from one that predates them, ignored them, and answered with
@@ -1089,22 +1152,20 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  year: { type: integer }
-                  from: { type: string, format: date }
-                  to: { type: string, format: date }
-                  range_days:
-                    type: integer
-                    description: Calendar days the answer covers, present only when `from`/`to` were honoured.
-                  days:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        date: { type: string, format: date }
-                        minutes: { type: number }
-                        pages: { type: number }
+                allOf:
+                  - { $ref: "#/components/schemas/InsightsRevision" }
+                  - type: object
+                    required: [year, days]
+                    properties:
+                      year: { type: integer }
+                      from: { type: string, format: date }
+                      to: { type: string, format: date }
+                      range_days:
+                        type: integer
+                        description: Calendar days covered; present only when `from`/`to` were honoured.
+                      days:
+                        type: array
+                        items: { $ref: "#/components/schemas/InsightsDay" }
         "400": { $ref: "#/components/responses/Error" }
 
   /v1/folders:
@@ -2268,6 +2329,7 @@ components:
             - progression_out_of_range
             - locator_too_large
             - idle_out_of_range
+            - active_out_of_range
             - id_reused
             - batch_too_large
           description: |
@@ -2793,7 +2855,7 @@ components:
         uses for the same things; `created_at` and `revoked` are absent
         because a caller that reaches this route is neither revoked nor
         expired.
-      required: [id, account_id, device_id, name, scopes]
+      required: [id, account_id, device_id, name, scopes, session_active_ms]
       properties:
         id: { type: string }
         account_id:
@@ -2804,6 +2866,14 @@ components:
             compare it, not `device_id` or `id`, to decide whether a
             replaced credential is the same account (keep mirrors and
             cursors) or a different one (clear them).
+        session_active_ms:
+          type: boolean
+          const: true
+          description: |
+            Supports optional authoritative `active_ms` on native sessions.
+            Available without `read-insights`, including to browser tokens
+            with only `sync` and `library-read`. Older servers omit this;
+            omission or false means send the legacy payload without it.
         device_id: { type: string }
         name: { type: string }
         scope:
@@ -2868,6 +2938,267 @@ components:
             was not stored and never will be under this id.
         seq: { type: integer }
         reason: { type: string }
+    InsightsCapabilities:
+      type: object
+      required: [version, account_id, all_time, active_ms, attribution_version, timezone, max_candidates, max_local_active_days, max_calendar_days, max_body_bytes]
+      properties:
+        version: { type: integer, const: 1 }
+        account_id:
+          type: string
+          description: Stable account id of the authenticated caller; must match the client's captured account.
+        all_time:
+          type: boolean
+          const: true
+          description: Supports range all without a total-history row cap.
+        active_ms: { type: boolean, const: true }
+        attribution_version: { type: integer, const: 2 }
+        timezone: { type: string, description: "Account IANA timezone", example: Europe/Paris }
+        max_candidates: { type: integer, const: 10000 }
+        max_local_active_days:
+          type: integer
+          const: 10000
+          description: Maximum entries in snapshot local_active_days evidence.
+        max_calendar_days: { type: integer, const: 4000 }
+        max_body_bytes:
+          type: integer
+          format: int64
+          description: |
+            Configured `ops.max_body_bytes` request limit, default 1 MiB
+            (1048576 bytes). Clients check the complete serialized UTF-8
+            snapshot body against this bound before requesting a proof.
+          example: 1048576
+    InsightsWindow:
+      type: object
+      required: [range_days]
+      properties:
+        range_days:
+          type: integer
+          minimum: 0
+          description: Inclusive aggregate calendar days; 0 for unbounded history through today.
+        from: { type: string, format: date, description: "First aggregate day; absent when unbounded" }
+        to: { type: string, format: date, description: "Last aggregate day; absent when unbounded" }
+    InsightsRevision:
+      type: object
+      required: [timezone, stats_revision, attribution_version]
+      properties:
+        timezone: { type: string, description: Account IANA timezone }
+        stats_revision:
+          type: string
+          pattern: '^[0-9]+$'
+          example: "42"
+          description: |
+            Per-account monotonic statistics revision encoded as a decimal
+            string, never a JSON number or op cursor. It covers aggregate
+            inputs and archive proof. Require equality across calendar
+            chunks before combining them.
+        attribution_version:
+          type: integer
+          const: 2
+          description: |
+            Raw sessions and new rollups use whole end-day attribution.
+            This does not certify legacy history; check snapshot `complete`.
+    InsightsFirstActivityDay:
+      type: [string, "null"]
+      format: date
+      description: |
+        Earliest server day with positive active duration, across all
+        history through today, or null. Local evidence does not alter it.
+    InsightsSummary:
+      type: object
+      required: [total_active_minutes, total_pages, sessions, streak_days, speed_prog_per_hour]
+      properties:
+        total_active_minutes: { type: number }
+        total_pages:
+          type: number
+          description: Edition-derived or source-reported pages; not universal pagination.
+        sessions: { type: integer }
+        streak_days:
+          type: integer
+          description: |
+            Consecutive server days with positive active duration ending
+            today or yesterday, over all history, independent of bounds.
+        speed_prog_per_hour:
+          type: number
+          description: |
+            Measured positive progression divided by measured active hours
+            in the aggregate window. Inferred sessions never supply pace.
+            Zero without measured duration or with unknown legacy pace.
+    InsightsWork:
+      type: object
+      required: [work_id, sessions, total_active_minutes, total_pages, current_progression, eta_seconds, last_read_at]
+      properties:
+        work_id: { type: string }
+        title: { type: string, description: Absent when unknown }
+        author: { type: string, description: Absent when unknown }
+        sessions: { type: integer }
+        total_active_minutes: { type: number }
+        total_pages: { type: number }
+        current_progression:
+          type: number
+          description: Latest position regardless of window; 0 when none is known.
+        eta_seconds:
+          type: [number, "null"]
+          description: |
+            Current remaining progression divided by measured pace in the
+            selected window. Null without usable pace or position, with
+            unknown legacy pace, or when progression is already 1.
+        last_read_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            Latest contributing session end in the window, or local
+            midnight for a rollup whose raw timestamp is no longer kept.
+    InsightsDay:
+      type: object
+      required: [date, minutes, pages, sessions]
+      properties:
+        date: { type: string, format: date }
+        minutes: { type: number }
+        pages: { type: number }
+        sessions: { type: integer }
+    InsightsCandidate:
+      allOf:
+        - { $ref: "#/components/schemas/SessionInput" }
+        - type: object
+          required: [device_id]
+          properties:
+            device_id:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: Original upload device id, not the current token's; at most 64 UTF-8 bytes.
+      description: |
+        Full original native session payload, including original optional
+        duration and edition fields, plus its original device id.
+        Evidence only; the snapshot endpoint never stores this session.
+    InsightsSnapshotInput:
+      type: object
+      required: [snapshot_id, timezone]
+      oneOf:
+        - required: [range]
+        - required: [from, to]
+      description: |
+        Choose `range` or a complete `from`/`to` pair, not both.
+        Capture local totals and evidence together; do not truncate the
+        evidence to fit the limits and then treat the union as complete.
+        The body is also bounded by `ops.max_body_bytes`.
+      properties:
+        snapshot_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Client-local capture identifier, echoed unchanged; at most 128 UTF-8 bytes.
+        timezone:
+          type: string
+          description: Account IANA timezone from capabilities; a mismatch returns 409.
+        range:
+          type: string
+          pattern: '^(all|[1-9][0-9]*d)$'
+          description: All history through today, or 1 through 3660 calendar days ending today.
+          example: all
+        from: { type: string, format: date, description: "First aggregate day, inclusive; requires to" }
+        to: { type: string, format: date, description: "Last aggregate day, inclusive; not before from" }
+        candidates:
+          type: array
+          maxItems: 10000
+          description: Original native sessions; session ids must be unique within this request.
+          items: { $ref: "#/components/schemas/InsightsCandidate" }
+        local_active_days:
+          type: array
+          maxItems: 10000
+          description: |
+            All-history account-local days with positive captured local
+            activity, including outside the aggregate window. Future dates
+            after server today are refused. Used only for combined streak.
+          items: { type: string, format: date }
+        calendar_from:
+          type: string
+          format: date
+          description: |
+            First daily-output day; requires calendar_to. At most 4000
+            inclusive days, within the aggregate window when bounded.
+            Without explicit calendar bounds, bounded requests use the
+            aggregate window. For all history, start at earliest positive
+            server activity, clipped to the latest 4000 days (today alone
+            when no positive activity exists).
+        calendar_to:
+          type: string
+          format: date
+          description: |
+            Last daily-output day, inclusive; requires calendar_from and
+            must not precede it. Defaults to aggregate end, or today for all.
+            Calendar bounds do not narrow summary, works or streaks.
+    InsightsOverlap:
+      type: object
+      required: [total_active_minutes, sessions, works, days]
+      description: |
+        Contributions of matching original candidates actually present in
+        this snapshot, including exact v2 archive proof. Absent candidates
+        contribute zero. There is no top-level total_pages; pages are in
+        works/days. Merge only additive metrics, not position or ETA fields.
+      properties:
+        total_active_minutes: { type: number }
+        sessions: { type: integer }
+        works:
+          type: array
+          description: |
+            Same row shape as server works, but current_progression is 0
+            and eta_seconds is null because overlap has no positions.
+          items: { $ref: "#/components/schemas/InsightsWork" }
+        days:
+          type: array
+          description: Daily overlap within the echoed calendar bounds, ordered by date.
+          items: { $ref: "#/components/schemas/InsightsDay" }
+    InsightsSnapshot:
+      allOf:
+        - { $ref: "#/components/schemas/InsightsWindow" }
+        - { $ref: "#/components/schemas/InsightsRevision" }
+        - type: object
+          required: [version, account_id, snapshot_id, complete, first_activity_day, today, calendar_from, calendar_to, summary, works, days, combined_streak_days, overlap]
+          properties:
+            version: { type: integer, const: 1 }
+            account_id: { type: string, description: Stable account id of the authenticated caller }
+            snapshot_id: { type: string, description: Echoed client-local capture identifier }
+            complete:
+              type: boolean
+              description: |
+                False when legacy or timezone-incompatible rollups, a
+                candidate payload mismatch, or unknown archived proof
+                prevent an exact union. Check this before using overlap.
+            incomplete_reason:
+              type: string
+              description: Present only when complete is false; unknown reasons also require fallback.
+              enum:
+                - legacy_or_different_timezone_rollups
+                - candidate_payload_mismatch
+                - unknown_archived_contribution
+                - archived_timezone_mismatch
+                - archived_work_missing
+            first_activity_day: { $ref: "#/components/schemas/InsightsFirstActivityDay" }
+            today: { type: string, format: date, description: Today in the account timezone }
+            calendar_from: { type: string, format: date }
+            calendar_to: { type: string, format: date }
+            summary: { $ref: "#/components/schemas/InsightsSummary" }
+            works:
+              type: array
+              description: |
+                Server works with contributions in the aggregate window,
+                including works the client does not hold. Sorted by active
+                minutes descending, then work id.
+              items: { $ref: "#/components/schemas/InsightsWork" }
+            days:
+              type: array
+              description: |
+                Server daily contributions within the echoed calendar
+                bounds, ordered by date. Missing dates contribute zero.
+              items: { $ref: "#/components/schemas/InsightsDay" }
+            combined_streak_days:
+              type: integer
+              description: |
+                All-history streak over server positive-activity days
+                unioned with local_active_days, ending today or yesterday.
+                Independent of aggregate and calendar bounds.
+            overlap: { $ref: "#/components/schemas/InsightsOverlap" }
     SessionInput:
       type: object
       required: [session_id, work_id, started_at, ended_at, start_progression, end_progression]
@@ -2882,12 +3213,33 @@ components:
             hour that never happened. Send only sessions that have
             ended, so the payload behind the id can never change.
         work_id: { type: string }
-        edition_sha: { type: string }
+        edition_sha: { type: [string, "null"] }
         started_at: { type: string, format: date-time }
-        ended_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, description: Must not precede started_at }
         start_progression: { type: number, minimum: 0, maximum: 1 }
         end_progression: { type: number, minimum: 0, maximum: 1 }
-        idle_ms: { type: integer, minimum: 0, description: "Reader-visible idle time, excluded from speed" }
+        idle_ms:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+          description: |
+            Idle milliseconds; must not exceed the wall-clock span even
+            when active_ms is supplied. Subtracted only when active_ms
+            is absent or null.
+        active_ms:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: |
+            Optional monotonic measured duration. Explicit 0 is zero
+            active time; absent or null uses wall-clock span minus idle.
+            Authoritative independently of the span and idle_ms, never
+            capped to the span or reduced by idle again. Negotiate support
+            through insights capabilities (active_ms) or token introspection
+            (session_active_ms). Presence/value participates in immutable
+            payload identity; do not change it on retries.
     AnnotationInput:
       type: object
       required: [id, base_rev, work_id, kind, client_ts]
