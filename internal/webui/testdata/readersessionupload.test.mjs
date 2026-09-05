@@ -176,6 +176,16 @@ test('unknown refusals report why reading remains queued', async () => {
   assert.equal(pending.length, 1);
 });
 
+test('an unhandled status with a JSON refusal code forwards that code', async () => {
+  const pending = [item('a')];
+  const deferred = [];
+  await run(pending, [reply(429, { code: 'rate_limited' })], {
+    deferred: (...reason) => deferred.push(reason),
+  });
+  assert.deepEqual(deferred, [[429, 'rate_limited']]);
+  assert.equal(pending.length, 1);
+});
+
 test('a flush reports its request budget only when it leaves batches pending', async () => {
   const pending = Array.from({ length: 33 }, (_, i) => ({
     ...item(String(i)), work_id: 'w'.repeat(40000),
