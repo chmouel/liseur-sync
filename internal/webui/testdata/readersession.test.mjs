@@ -105,6 +105,34 @@ test('a wall clock corrected forward lands in idle, not in reading', () => {
   assert.equal(span - out.idle_ms, MIN);
 });
 
+test('negotiated active time survives a backward wall-clock correction', () => {
+  const s = openSession({
+    id: 'measured', workID: 'w1', startedAt: t0, now: 0,
+    fraction: 0.1, supportsActiveMs: true,
+  });
+  for (let m = 1; m <= 30; m++) s.activity(m * MIN, 0.1 + m / 100);
+  const out = s.close(30 * MIN, wall(10 * MIN), 0.4);
+  assert.equal(out.active_ms, 30 * MIN);
+  assert.equal(Date.parse(out.ended_at) - Date.parse(out.started_at), 10 * MIN);
+  assert.equal(out.idle_ms, 0);
+});
+
+test('measured time retains idle accounting and does not fabricate timestamps', () => {
+  const s = openSession({
+    id: 'idle', workID: 'w1', startedAt: t0, now: 0,
+    fraction: 0.1, supportsActiveMs: true,
+  });
+  const out = s.close(30 * MIN, wall(-MIN), 0.1);
+  assert.equal(out.active_ms, IDLE_AFTER_MS);
+  assert.equal(out.ended_at, out.started_at);
+  assert.equal(out.idle_ms, 0);
+});
+
+test('a legacy payload never gains active_ms without capability negotiation', () => {
+  const out = open().close(1000 + MIN, wall(MIN), 0.2);
+  assert.equal(Object.hasOwn(out, 'active_ms'), false);
+});
+
 test('a relocate the reader did not cause is not activity', () => {
   const s = open();
   // Twenty minutes of the engine re-anchoring on resizes, no input.

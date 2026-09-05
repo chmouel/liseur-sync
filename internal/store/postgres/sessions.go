@@ -77,12 +77,12 @@ func appendSessionsTx(ctx context.Context, tx *sql.Tx, userID string, ss []store
 		}
 		_, err = tx.ExecContext(ctx, q(
 			`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
-			                       started_at, ended_at, start_prog, end_prog, idle_ms,
+			                       started_at, ended_at, start_prog, end_prog, idle_ms, active_ms, reported_pages,
 			                       origin, origin_alias, source_key, received_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			userID, ses.SessionID, ses.WorkID, ses.EditionSHA, ses.DeviceID,
 			ses.StartedAt.UTC(), ses.EndedAt.UTC(),
-			ses.StartProg, ses.EndProg, ses.IdleMs,
+			ses.StartProg, ses.EndProg, ses.IdleMs, ses.ActiveMs, ses.ReportedPages,
 			string(ses.Origin), ses.OriginAlias, ses.SourceKey, now)
 		if err != nil {
 			return inserted, err
@@ -150,19 +150,23 @@ func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Sessi
 		started, ended        time.Time
 		sp, ep                float64
 		idle                  int64
+		active                *int64
+		pages                 *float64
 		edSHA, oalias, skey   *string
 	)
 	err := tx.QueryRowContext(ctx, q(
 		`SELECT work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key
 		 FROM sessions WHERE user_id = ? AND session_id = ?`), userID, ses.SessionID).
-		Scan(&workID, &edSHA, &devID, &started, &ended, &sp, &ep, &idle, &origin, &oalias, &skey)
+		Scan(&workID, &edSHA, &devID, &started, &ended, &sp, &ep, &idle, &active, &pages, &origin, &oalias, &skey)
 	if err != nil {
 		return false, err
 	}
 	return workID == ses.WorkID && devID == ses.DeviceID &&
 		tsEqual(started, ses.StartedAt) && tsEqual(ended, ses.EndedAt) &&
 		sp == ses.StartProg && ep == ses.EndProg && idle == ses.IdleMs &&
+		(active == nil) == (ses.ActiveMs == nil) && (active == nil || *active == *ses.ActiveMs) &&
+		(pages == nil) == (ses.ReportedPages == nil) && (pages == nil || *pages == *ses.ReportedPages) &&
 		origin == string(ses.Origin) &&
 		(edSHA == nil) == (ses.EditionSHA == nil) && (edSHA == nil || *edSHA == *ses.EditionSHA) &&
 		(oalias == nil) == (ses.OriginAlias == nil) && (oalias == nil || *oalias == *ses.OriginAlias) &&
@@ -172,7 +176,7 @@ func sameSession(ctx context.Context, tx *sql.Tx, userID string, ses store.Sessi
 func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions WHERE user_id = ? AND work_id = ? ORDER BY started_at DESC LIMIT ?`),
 		userID, workID, limit)
 	if err != nil {
@@ -185,7 +189,7 @@ func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limi
 		var origin string
 		if err := rows.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
 			&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
-			&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
+			&ses.ActiveMs, &ses.ReportedPages, &origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
 			return nil, err
 		}
 		ses.Origin = store.Origin(origin)
@@ -198,7 +202,7 @@ func (s *Store) SessionsForWork(ctx context.Context, userID, workID string, limi
 func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions s WHERE user_id = ? AND work_id = ?
 		   AND (source_key IS NULL OR session_id = (
 		       SELECT ss.session_id FROM session_supersessions ss
@@ -216,7 +220,7 @@ func (s *Store) CurrentSessionsForWork(ctx context.Context, userID, workID strin
 		var origin string
 		if err := rows.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
 			&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
-			&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
+			&ses.ActiveMs, &ses.ReportedPages, &origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt); err != nil {
 			return nil, err
 		}
 		ses.Origin = store.Origin(origin)
@@ -233,7 +237,9 @@ func (s *Store) WorkIDsWithInsights(ctx context.Context, userID string) ([]strin
 		`SELECT work_id FROM sessions WHERE user_id = ?
 		 UNION
 		 SELECT work_id FROM session_rollups WHERE user_id = ?
-		 ORDER BY work_id`), userID, userID)
+		 UNION
+		 SELECT work_id FROM session_rollups_v2 WHERE user_id = ?
+		 ORDER BY work_id`), userID, userID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +259,7 @@ func (s *Store) WorkIDsWithInsights(ctx context.Context, userID string) ([]strin
 func (s *Store) SessionsInRange(ctx context.Context, userID string, from, to time.Time) ([]store.Session, error) {
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
-		        start_prog, end_prog, idle_ms, origin, origin_alias, source_key, received_at
+		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions
 		 WHERE user_id = ? AND ended_at > ? AND started_at < ?
 		   AND (source_key IS NULL OR session_id = (
@@ -285,7 +291,7 @@ func scanSession(row interface{ Scan(...any) error }) (store.Session, error) {
 	var origin string
 	err := row.Scan(&ses.UserID, &ses.SessionID, &ses.WorkID, &ses.EditionSHA, &ses.DeviceID,
 		&ses.StartedAt, &ses.EndedAt, &ses.StartProg, &ses.EndProg, &ses.IdleMs,
-		&origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt)
+		&ses.ActiveMs, &ses.ReportedPages, &origin, &ses.OriginAlias, &ses.SourceKey, &ses.ReceivedAt)
 	ses.Origin = store.Origin(origin)
 	return ses, err
 }

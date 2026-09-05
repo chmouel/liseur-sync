@@ -626,10 +626,181 @@ SELECT u.id, f.id FROM users u CROSS JOIN folders f
 WHERE NOT EXISTS (SELECT 1 FROM user_folders);
 `
 
+const statisticsStorage = `
+ALTER TABLE sessions ADD COLUMN active_ms INTEGER;
+ALTER TABLE sessions ADD COLUMN reported_pages REAL;
+
+CREATE TABLE stats_revisions (
+    user_id  TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO stats_revisions (user_id, revision)
+SELECT id, 0 FROM users;
+
+CREATE TABLE session_rollups_v2 (
+    user_id                 TEXT NOT NULL,
+    work_id                 TEXT NOT NULL,
+    day                     TEXT NOT NULL,
+    timezone                TEXT NOT NULL,
+    attribution_version     INTEGER NOT NULL DEFAULT 2 CHECK (attribution_version = 2),
+    active_seconds          REAL NOT NULL DEFAULT 0,
+    pages                   REAL NOT NULL DEFAULT 0,
+    prog_delta              REAL NOT NULL DEFAULT 0,
+    session_count           INTEGER NOT NULL DEFAULT 0,
+    measured_active_seconds REAL NOT NULL DEFAULT 0,
+    measured_prog_delta     REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, work_id, day, timezone),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX session_rollups_v2_user_day ON session_rollups_v2(user_id, day);
+
+ALTER TABLE session_tombstones ADD COLUMN work_id TEXT;
+ALTER TABLE session_tombstones ADD COLUMN day TEXT;
+ALTER TABLE session_tombstones ADD COLUMN timezone TEXT;
+ALTER TABLE session_tombstones ADD COLUMN attribution_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN present INTEGER NOT NULL DEFAULT 0 CHECK (present IN (0, 1));
+ALTER TABLE session_tombstones ADD COLUMN active_seconds REAL NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN pages REAL NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN prog_delta REAL NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN measured_active_seconds REAL NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN measured_prog_delta REAL NOT NULL DEFAULT 0;
+CREATE INDEX session_tombstones_user_work ON session_tombstones(user_id, work_id);
+
+CREATE TRIGGER stats_revisions_users_insert
+AFTER INSERT ON users
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.id, 0);
+END;
+
+CREATE TRIGGER stats_revisions_users_timezone_update
+AFTER UPDATE OF timezone ON users
+WHEN OLD.timezone IS NOT NEW.timezone
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.id;
+END;
+
+CREATE TRIGGER stats_revisions_sessions_insert AFTER INSERT ON sessions BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_sessions_update AFTER UPDATE ON sessions BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_sessions_delete AFTER DELETE ON sessions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_supersessions_insert AFTER INSERT ON session_supersessions BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_supersessions_delete AFTER DELETE ON session_supersessions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_rollups_insert AFTER INSERT ON session_rollups BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_rollups_update AFTER UPDATE ON session_rollups BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_rollups_delete AFTER DELETE ON session_rollups
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_rollups_v2_insert AFTER INSERT ON session_rollups_v2 BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_rollups_v2_update AFTER UPDATE ON session_rollups_v2 BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_rollups_v2_delete AFTER DELETE ON session_rollups_v2
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_tombstones_insert AFTER INSERT ON session_tombstones BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_tombstones_update AFTER UPDATE ON session_tombstones BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_tombstones_delete AFTER DELETE ON session_tombstones
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_ops_insert AFTER INSERT ON ops BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_ops_update AFTER UPDATE ON ops BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_ops_delete AFTER DELETE ON ops
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_works_insert AFTER INSERT ON works BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_works_update AFTER UPDATE ON works BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_works_delete AFTER DELETE ON works
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+CREATE TRIGGER stats_revisions_editions_insert AFTER INSERT ON editions BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_editions_update AFTER UPDATE ON editions BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (NEW.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+CREATE TRIGGER stats_revisions_editions_delete AFTER DELETE ON editions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT OR IGNORE INTO stats_revisions (user_id, revision) VALUES (OLD.user_id, 0);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
-	folderBackfill,
+	folderBackfill, statisticsStorage,
 }

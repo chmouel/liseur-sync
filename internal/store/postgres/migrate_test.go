@@ -112,7 +112,7 @@ func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reset(t, s)
-			for i, m := range migrations[:len(migrations)-1] {
+			for i, m := range migrations[:len(migrations)-2] {
 				if _, err := s.db.ExecContext(ctx, m); err != nil {
 					t.Fatal(err)
 				}

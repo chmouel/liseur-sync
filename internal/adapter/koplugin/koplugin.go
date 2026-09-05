@@ -151,16 +151,18 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// payload yields a new session (supersession) and an identical
 		// re-upload is a duplicate.
 		payloadHash := sha256hex(fmt.Sprintf("%d|%d|%d|%d", rw.StartTime, rw.Duration, rw.Page, rw.TotalPages))
+		reportedPages := 1.0
 		ses := store.Session{
-			SessionID:   sessionIDFor(key, payloadHash),
-			DeviceID:    d.DeviceID,
-			StartedAt:   time.Unix(rw.StartTime, 0),
-			EndedAt:     time.Unix(rw.StartTime+rw.Duration, 0),
-			StartProg:   float64(rw.Page-1) / float64(rw.TotalPages),
-			EndProg:     float64(rw.Page) / float64(rw.TotalPages),
-			Origin:      store.OriginKoplugin,
-			OriginAlias: strPtr("partial-md5:" + md5v),
-			SourceKey:   strPtr(key),
+			SessionID:     sessionIDFor(key, payloadHash),
+			DeviceID:      d.DeviceID,
+			StartedAt:     time.Unix(rw.StartTime, 0),
+			EndedAt:       time.Unix(rw.StartTime+rw.Duration, 0),
+			StartProg:     float64(rw.Page-1) / float64(rw.TotalPages),
+			EndProg:       float64(rw.Page) / float64(rw.TotalPages),
+			ReportedPages: &reportedPages,
+			Origin:        store.OriginKoplugin,
+			OriginAlias:   strPtr("partial-md5:" + md5v),
+			SourceKey:     strPtr(key),
 		}
 		status, err := s.St.UpsertKopluginSessionByAlias(ctx, d.UserID, md5v, ses)
 		if err != nil {

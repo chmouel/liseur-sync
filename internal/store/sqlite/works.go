@@ -350,8 +350,9 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 	}
 	var rollupCount int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?`,
-		userID, workID).Scan(&rollupCount); err != nil {
+		`SELECT (SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?) +
+		        (SELECT COUNT(1) FROM session_rollups_v2 WHERE user_id = ? AND work_id = ?)`,
+		userID, workID, userID, workID).Scan(&rollupCount); err != nil {
 		return err
 	}
 	if rollupCount > 0 {
@@ -495,8 +496,9 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	}
 	var rollupCount int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?`,
-		userID, fromWorkID).Scan(&rollupCount); err != nil {
+		`SELECT (SELECT COUNT(1) FROM session_rollups WHERE user_id = ? AND work_id = ?) +
+		        (SELECT COUNT(1) FROM session_rollups_v2 WHERE user_id = ? AND work_id = ?)`,
+		userID, fromWorkID, userID, fromWorkID).Scan(&rollupCount); err != nil {
 		return err
 	}
 	if rollupCount > 0 {

@@ -124,15 +124,6 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 	}
 	cutoff := time.Now().Add(-retention)
 	for _, userID := range users {
-		u, err := s.St.UserByID(ctx, userID)
-		if err != nil {
-			slog.Warn("session rollup: user", "user", userID, "err", err)
-			continue
-		}
-		loc, err := time.LoadLocation(u.Timezone)
-		if err != nil {
-			loc = time.UTC
-		}
 		sessions, err := s.St.SessionsEndedBefore(ctx, userID, cutoff)
 		if err != nil {
 			slog.Warn("session rollup: sessions", "user", userID, "err", err)
@@ -141,38 +132,59 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 		if len(sessions) == 0 {
 			continue
 		}
+		ids := make([]string, 0, len(sessions))
+		var aggregateErr error
+		for _, ses := range sessions {
+			ids = append(ids, ses.SessionID)
+		}
+		snap, err := s.St.StatisticsSnapshot(ctx, userID, ids)
+		if err != nil {
+			slog.Warn("session rollup: snapshot", "user", userID, "err", err)
+			continue
+		}
+		timezone := snap.Timezone
+		loc, err := time.LoadLocation(timezone)
+		if err != nil {
+			slog.Warn("session rollup: timezone", "user", userID, "err", err)
+			continue
+		}
 
 		type key struct{ workID, day string }
 		byDay := make(map[key]*store.SessionRollup)
 		for _, ses := range sessions {
-			parts := s.splitDaysFull(ctx, ses, loc)
-			activeTotal := insights.ActiveSeconds(ses)
-			progDelta := ses.EndProg - ses.StartProg
-			if progDelta < 0 {
-				progDelta = 0
+			day := ses.EndedAt.In(loc).Format(insights.DayFormat)
+			k := key{ses.WorkID, day}
+			ru := byDay[k]
+			if ru == nil {
+				ru = &store.SessionRollup{
+					UserID:             userID,
+					WorkID:             ses.WorkID,
+					Day:                day,
+					Timezone:           timezone,
+					AttributionVersion: 2,
+				}
+				byDay[k] = ru
 			}
-			for i, part := range parts {
-				k := key{ses.WorkID, part.date}
-				ru := byDay[k]
-				if ru == nil {
-					ru = &store.SessionRollup{
-						UserID: userID,
-						WorkID: ses.WorkID,
-						Day:    part.date,
-					}
-					byDay[k] = ru
-				}
-				ru.ActiveSeconds += part.activeSec
-				ru.Pages += part.pages
-				if activeTotal > 0 {
-					ru.ProgDelta += progDelta * part.activeSec / activeTotal
-				} else if i == 0 {
-					ru.ProgDelta += progDelta
-				}
-				if i == 0 {
-					ru.SessionCount++
-				}
+
+			active := insights.ActiveSeconds(ses)
+			progDelta := positiveProgDelta(ses)
+			pages, err := insights.Pages(ses, snap.Editions)
+			if err != nil {
+				aggregateErr = err
+				break
 			}
+			ru.ActiveSeconds += active
+			ru.Pages += pages
+			ru.ProgDelta += progDelta
+			ru.SessionCount++
+			if ses.Origin != store.OriginInferred {
+				ru.MeasuredActiveSeconds += active
+				ru.MeasuredProgDelta += progDelta
+			}
+		}
+		if aggregateErr != nil {
+			slog.Warn("session rollup: aggregate", "user", userID, "err", aggregateErr)
+			continue
 		}
 		rollups := make([]store.SessionRollup, 0, len(byDay))
 		for _, ru := range byDay {
@@ -182,4 +194,12 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 			slog.Warn("session rollup", "user", userID, "err", err)
 		}
 	}
+}
+
+func positiveProgDelta(ses store.Session) float64 {
+	delta := ses.EndProg - ses.StartProg
+	if delta < 0 {
+		return 0
+	}
+	return delta
 }

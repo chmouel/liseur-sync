@@ -34,7 +34,7 @@ function clamp01(v) {
 // compares payloads under; `now` is monotonic ms; `startedAt` is the
 // wall-clock Date; `fraction` may be non-finite, in which case the start
 // progression is the first finite one progress() or activity() reports.
-export function openSession({ id, workID, startedAt, now, fraction }) {
+export function openSession({ id, workID, startedAt, now, fraction, supportsActiveMs = false }) {
   let last = now;
   let idle = 0;
   let startProg = finite(fraction) ? clamp01(fraction) : null;
@@ -91,7 +91,7 @@ export function openSession({ id, workID, startedAt, now, fraction }) {
       // server refuses anything else.
       const span = ended - started;
       const idleMs = Math.max(0, Math.min(Math.round(span - active), span));
-      return {
+      const payload = {
         session_id: id,
         work_id: workID,
         started_at: new Date(started).toISOString(),
@@ -100,6 +100,10 @@ export function openSession({ id, workID, startedAt, now, fraction }) {
         end_progression: endProg,
         idle_ms: idleMs,
       };
+      // Capability is captured at open: renewing a token cannot change
+      // the payload of a sitting already queued for an immutable retry.
+      if (supportsActiveMs) payload.active_ms = Math.round(active);
+      return payload;
     },
   };
 }

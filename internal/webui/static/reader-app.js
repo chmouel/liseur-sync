@@ -15,6 +15,7 @@
 import "./vendor/foliate/view.js";
 import { Overlayer } from "./vendor/foliate/overlayer.js";
 import { openSession } from "./reader-session.js";
+import { uploadSessions } from "./reader-session-upload.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
 import { liveStream } from "./reader-live.js";
@@ -630,6 +631,7 @@ function beginSession() {
     startedAt: new Date(),
     now: performance.now(),
     fraction: here.fraction,
+    supportsActiveMs: auth.identity()?.supportsActiveMs === true,
   });
 }
 
@@ -672,39 +674,44 @@ function endSession() {
   pushSession(true);
 }
 
-let sessionInFlight = false;
+let sessionsInFlight = 0;
 
 // pushSession sends every unconfirmed sitting in one batch. A retry
 // prodded by activity waits for the request already out; a close does
 // not, because the page may not be here when that one comes back, and
 // the server holds the same payload twice as once.
 async function pushSession(closing) {
-  if (!unsent.length || (sessionInFlight && !closing)) return;
+  if (!unsent.length || (sessionsInFlight && !closing)) return;
   const batch = unsent.slice();
   const stamp = snapshot();
-  sessionInFlight = true;
+  sessionsInFlight++;
   try {
-    const resp = await api("v1/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      keepalive: true,
-      body: JSON.stringify({ sessions: batch }),
+    await uploadSessions(batch, {
+      canSend: () => current(stamp),
+      send: async (body) => {
+        const resp = await api("v1/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          keepalive: true,
+          body,
+        });
+        stamp.identity = auth.responseIdentity(resp) || stamp.identity;
+        return resp;
+      },
+      responseCurrent: (resp) => current(stamp) && auth.responseCurrent(resp),
+      accepted: (sent) => { unsent = unsent.filter((p) => !sent.includes(p)); },
+      deferred: (status, code) => console.warn("Reading sessions are waiting to sync:", status, code),
+      refused: (item, code) => {
+        unsent = unsent.filter((p) => p !== item);
+        console.warn("Reading session refused:", code);
+        say("A reading session could not be saved; other reading will still sync.", true);
+      },
     });
-    stamp.identity = auth.responseIdentity(resp) || stamp.identity;
-    // 2xx: filed (re-posting the same payload is idempotently a 2xx too).
-    // 409: this session_id was already used with a *different* payload —
-    // a collision, not a repeat of this sitting — and replaying the same
-    // batch cannot fix that. Any other 4xx is a payload the server will
-    // refuse however often it is sent — an unknown work, say. Only a
-    // server error or no answer at all leaves the batch to try again.
-    if (current(stamp) && auth.responseCurrent(resp) &&
-        (resp.ok || (resp.status >= 400 && resp.status < 500))) {
-      unsent = unsent.filter((p) => !batch.includes(p));
-    }
   } catch (err) {
-    /* offline: the next activity or close replays these exact sittings */
+    // The next activity or close retries the unchanged pending sittings.
+    if (!err.terminal) console.warn("Reading sessions are waiting to sync:", err);
   } finally {
-    sessionInFlight = false;
+    sessionsInFlight--;
   }
 }
 

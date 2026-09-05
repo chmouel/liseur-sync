@@ -11,3 +11,7 @@ import (
 func TestReaderSessionAccounting(t *testing.T) {
 	runNodeTests(t, "readersession.test.mjs")
 }
+
+func TestReaderSessionUploads(t *testing.T) {
+	runNodeTests(t, "readersessionupload.test.mjs")
+}

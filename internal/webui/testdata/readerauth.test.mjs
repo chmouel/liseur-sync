@@ -12,6 +12,18 @@ const deferred = () => {
 const options = { apiBase: "/proxy/", tokenURL: "/proxy/ui/reader/token", csrf: "csrf" };
 const metadata = (account = "a", device = "browser") => json({ account_id: account, device_id: device });
 
+test("measured session duration requires an explicit server capability", async () => {
+  for (const advertised of [undefined, false, "true", true]) {
+    const auth = readerAuth({
+      ...options,
+      fetcher: async (url) => url === options.tokenURL ? json({ token: "one" }) :
+        json({ account_id: "a", device_id: "browser", session_active_ms: advertised }),
+    });
+    const identity = await auth.acquire();
+    assert.equal(identity.supportsActiveMs, advertised === true);
+  }
+});
+
 test("concurrent streaming and API calls mint a single credential with Bearer headers", async () => {
   const mint = deferred();
   let mints = 0, inspections = 0;

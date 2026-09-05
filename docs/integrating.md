@@ -114,6 +114,7 @@ GET /v1/token
 {
   "id": "tok_7f3a",
   "account_id": "usr_31b0",
+  "session_active_ms": true,
   "device_id": "dev_9c21",
   "name": "Boox Palma",
   "scopes": ["sync", "library-read"]
@@ -143,6 +144,12 @@ cheapest way to check that a stored credential is still live.
 
 `HEAD /v1/token` is the same check without the body. It returns `200` if
 the secret is still good and `401` if it is not.
+
+`session_active_ms: true` advertises explicit measured duration on
+`POST /v1/sessions`. Missing or false means send the legacy payload
+without `active_ms`. This flag needs no `read-insights` scope, so the
+browser reader can negotiate duration while keeping its restricted
+`sync` and `library-read` scopes.
 
 ### A credential for code running in the browser
 
@@ -502,117 +509,209 @@ POST /v1/sessions
     "started_at": "…", "ended_at": "…",
     "start_progression": 0.401,
     "end_progression": 0.413,
-    "idle_ms": 30000
+    "idle_ms": 30000,
+    "active_ms": 120000
   }]
 }
 ```
 
 The same rules as ops: `session_id` is the idempotency key, batch
 freely, same id with another payload is a 409. Sessions are never
-updated after acceptance. Raw immutable sessions are retained for 180
-days by default, then reduced to daily totals. Insights remain complete;
-raw session history beyond the retention horizon is intentionally not
-available.
+updated after acceptance. Preserve the original payload and device id
+for retries and overlap candidates; adding `active_ms` to an already
+accepted session changes its identity and returns `409`.
 
-Do not send page numbers. The server derives pages from progression ×
-the edition's page count, and speed from progression delta over active
-time (duration minus `idle_ms`). If you only know pages, convert through
-`page / total_pages` yourself and say so in the fractions.
+Before sending `active_ms`, require `session_active_ms: true` from
+`GET /v1/token`, or `active_ms: true` from insights capabilities.
+It is an optional integer from 0 through 9007199254740991. Explicit zero
+means zero active time; omission or null uses wall-clock duration minus
+`idle_ms`. Measure it with a monotonic clock. The value is authoritative,
+even when wall-clock adjustments make it exceed the session span, and
+idle is not subtracted again. Start/end timestamps must still be ordered,
+and `idle_ms` must be nonnegative and no greater than their span.
+Out-of-range duration gets `active_out_of_range`; the batch stores nothing.
+
+Raw immutable sessions are retained for 180 days by default. New rollups
+keep their whole end-day contribution, measured pace and per-session
+overlap proof. Existing legacy split-day rollups remain visible but cannot
+certify a complete snapshot. Raw history beyond retention is unavailable.
+
+The native payload has no page-number field. The server derives pages
+from positive progression delta times an edition page count when known.
+The koplugin adapter also retains its reported page contribution, which
+is specific to that source, not pagination shared by other readers.
 
 ## Insights
 
-With a `read-insights` token:
+All `/v1/insights/*` routes require `read-insights`. The API and web
+dashboard share an aggregator over a coherent database transaction;
+server totals are not capped at 10000 sessions. The 10000 limit below
+applies only to request evidence.
 
-- `GET /v1/insights/summary?from=2026-07-13&to=2026-08-11`: totals,
-  streak, speed trend
-- `GET /v1/insights/works?from=…&to=…`: aggregates for every work with
-  reading history
-- `GET /v1/insights/works/{id}?from=…&to=…`: per-work time, pace, ETA
-- `GET /v1/insights/calendar?year=2026`: daily minutes for heatmaps
-- `GET /v1/insights/calendar?from=2025-04-01&to=2026-03-31`: the same,
-  over an arbitrary span
+### Combining local and server reading
 
-Every endpoint takes a span the same way: a `from`/`to` pair of
-`YYYY-MM-DD` days, **both inclusive**, resolved in the user's configured
-timezone. The older `range=Nd` (up to `3660d`) and `range=all` spellings
-still work, and `Nd` now means the last N *calendar* days ending today
-rather than N × 24 hours ending at the moment of the request — the
-difference is a partial extra day at the far end, which no client could
-reconcile against days it had counted for itself.
+First request `GET /v1/insights/capabilities`:
 
-Prefer `from`/`to`. A count of days is resolved against the server's
-clock; a pair of dates says exactly what was meant and comes back in the
-answer.
+```json
+{
+  "version": 1,
+  "account_id": "usr_31b0",
+  "all_time": true,
+  "active_ms": true,
+  "attribution_version": 2,
+  "timezone": "Europe/Paris",
+  "max_candidates": 10000,
+  "max_local_active_days": 10000,
+  "max_calendar_days": 4000,
+  "max_body_bytes": 1048576
+}
+```
 
-The summary and the works endpoints name the span they covered:
-`range_days` always, plus `from` and `to` when the span is bounded. The
-calendar echoes `from`, `to` and `range_days` only when it honoured an
-explicit `from`/`to` pair; a `year=` request comes back with `year` and
-`days` alone. **Check it.** A server too old to
-understand the parameters ignores them and answers about some other
-span, and the aggregates give no sign of it: thirty days of reading and
-ten years of it are both just a number of minutes. An answer that does
-not name back the days you asked about is not an answer to your
-question.
+Require the supported versions, `all_time: true`, and an `account_id`
+matching the captured account before using snapshots. Both evidence
+limits are explicit: `max_candidates` bounds session candidates and
+`max_local_active_days` bounds local activity dates. These fields are
+part of capability negotiation, not optional hints.
 
-Check an unbounded request too, against `range_days == 0`. An older
-server answers `range=all` with the ten-year horizon it used to apply,
-and an older one still does not know the word at all — and the summary,
-given nothing it understands, falls back on thirty days.
+Capture local totals and their evidence together, then send
+`POST /v1/insights/snapshot`:
 
-A span is optional on the works endpoints, where absent means everything
-on record — which is what they answered before spans existed. The
-summary defaults to `30d` instead, for the same reason. Say `range=all`
-rather than leaving it out if you mean a lifetime. A `range` that cannot
-be parsed is treated as absent, so a malformed span gets the endpoint's
-default rather than its whole history.
+```json
+{
+  "snapshot_id": "local-capture-42",
+  "timezone": "Europe/Paris",
+  "from": "2026-08-01",
+  "to": "2026-08-31",
+  "candidates": [{
+    "session_id": "sitting-42",
+    "work_id": "work-7",
+    "device_id": "original-device",
+    "started_at": "2026-08-12T20:00:00Z",
+    "ended_at": "2026-08-12T20:02:30Z",
+    "start_progression": 0.401,
+    "end_progression": 0.413,
+    "idle_ms": 30000,
+    "active_ms": 120000
+  }],
+  "local_active_days": ["2026-08-12"]
+}
+```
 
-Give the works endpoints the same span as the summary if the two are
-shown on one screen: a headline covering thirty days above rows covering
-a lifetime is a dashboard whose numbers cannot be added up.
+Each candidate is the full original native session payload plus its
+original `device_id`, including the original edition and duration fields
+when present. Do not substitute the current token's device id or rebuild
+an old upload from newer local metadata. Candidates are evidence only:
+this endpoint never uploads them and does not require `sync`.
+Session ids must be unique within the request. `snapshot_id` is a
+nonempty client identifier of at most 128 bytes; `device_id` is nonempty
+and at most 64 bytes.
 
-Each work carries `title` and `author` when the server has them. They
-are there so a client can list a work it holds no file for: reading done
-on another device is in the totals whether it can be named or not, and a
-list that silently omits it is smaller than the headline above it for no
-reason the reader can see. Both are absent rather than empty when the
-server has nothing to say, and a work you cannot name is better left out
-of a list than shown blank.
+Send either inclusive `from`/`to` dates or `range: "all"` / `"Nd"`
+(1 through 3660 calendar days ending today), not both. The snapshot route
+rejects missing or invalid aggregate bounds. Dates use the account's
+IANA timezone; a timezone different from the current account gets `409`.
+`local_active_days` contains positive local activity across all history,
+including outside the aggregate window, with no dates after server today.
+Each evidence array allows at most 10000 entries. Capabilities advertise
+`max_body_bytes`, the configured `ops.max_body_bytes` limit (1 MiB by
+default). Compare it with the complete serialized UTF-8 request size and
+reject oversized requests locally. Missing required capabilities mean
+local-only statistics; oversized HTTP requests get `413`. Do not truncate
+evidence and then claim a complete union.
+The limit covers the entire body, including trailing whitespace. Send
+one JSON value only; trailing JSON or garbage gets `400` within the limit.
 
-`streak_days` is deliberately **not** narrowed by the span. It counts
-consecutive days ending today or yesterday, looking back up to ten
-years, so asking about the last week does not report a hundred-day run
-as seven.
+The response contains:
 
-`range_days` reports how many days the answer covers, and is `0` for an
-unbounded one.
+| Field | Meaning |
+| --- | --- |
+| `version`, `attribution_version` | Snapshot protocol 1, end-day attribution 2. |
+| `account_id`, `snapshot_id`, `timezone` | Account identity, captured-local id and account timezone. |
+| `stats_revision` | Per-account decimal **string**, for example `"42"`, never a JSON number or op cursor. |
+| `range_days`, `from`, `to` | Aggregate bounds; `range_days: 0` and absent dates for `all`. |
+| `today`, `first_activity_day` | Account-local today and earliest server day with positive active time, or null. |
+| `calendar_from`, `calendar_to` | Inclusive bounds of this daily chunk. |
+| `complete`, `incomplete_reason` | Whether exact combination is supported; reason is present only when false. |
+| `summary` | Server `total_active_minutes`, `total_pages`, `sessions`, `streak_days`, `speed_prog_per_hour`. |
+| `works` | Server work rows, including works absent from the local library. |
+| `days` | Server daily rows: `date`, `minutes`, `pages`, `sessions`. Missing dates contribute zero. |
+| `overlap` | Actual included candidates: `total_active_minutes`, `sessions`, `works`, `days`. No top-level page total. |
+| `combined_streak_days` | Streak from all server positive-activity days unioned with `local_active_days`. |
 
-A sitting that straddles the first morning of the span counts, whole, on
-the day it *ended* — both in the summary and in the per-work rows, so
-the two cannot disagree. The calendar splits such a sitting across the
-midnight it crosses, because a day-by-day answer that did not would
-attribute an hour to a day it was not read on.
+Work rows carry `work_id`, `sessions`, `total_active_minutes`,
+`total_pages`, `current_progression`, nullable `eta_seconds` and
+`last_read_at`, plus `title`/`author` when known. They are sorted by active
+time descending, then work id. Overlap uses the same row shape, but its
+position/ETA fields are placeholders, not values to merge.
 
-The calendar additionally accepts `year`, and falls back to the current
-year when no usable span is given — which is what makes the echo the
-only way to tell an honoured request from an ignored one. A single
-calendar may not span more than 4000 days; a longer one is refused with
-`400` rather than served.
+For additive totals, use **server + captured local - actual overlap**.
+Do this only after checking `complete: true`, supported versions,
+account, timezone, snapshot id and both sets of bounds. Use the captured
+local values, not a live local query that may have changed during the
+request. An upload acknowledgement, receipt or op cursor proves no
+overlap with these totals. Use `combined_streak_days` for the union;
+streaks cannot be added or combined by maximum.
 
-All day boundaries are computed in the user's configured timezone.
-Rereading counts time but never negative pages. ETA is `null` until the
-user has enough speed history on the work.
+The server compares complete payload fingerprints within the same
+transaction as the aggregates. Absent candidates contribute zero overlap.
+For archived candidates it requires matching v2 proof, original timezone,
+and a contribution still present in the aggregate. Legacy rollups,
+timezone-incompatible archives or unknown proof make `complete` false;
+payload mismatches do too. Reasons are
+`legacy_or_different_timezone_rollups`, `candidate_payload_mismatch`,
+`unknown_archived_contribution`, `archived_timezone_mismatch` or
+`archived_work_missing`. Treat an unknown reason as incomplete too.
+Use local-only statistics when negotiation is unavailable or the response
+cannot certify the requested union. Do not guess a merge with legacy
+summary/calendar endpoints.
 
-`current_progression` and `eta_seconds` are never narrowed by the span
-either. Where the reader is in a book is true now, whatever span the
-totals beside it cover.
+Calendar bounds are independent of aggregate bounds: optional
+`calendar_from`/`calendar_to` filter only `days` and `overlap.days`,
+not summary, works or either streak. Both dates are required together,
+the inclusive span must be at most 4000 days, and for bounded aggregates
+it must lie inside their window. Without them, a bounded request uses
+its aggregate window. `range: "all"` defaults to the earliest positive
+server activity day through today, clipped to the latest 4000 days;
+an empty history defaults to today alone. `first_activity_day` still
+reports the earlier date when clipping occurs.
 
-`total_pages` will be `0` unless the work has a page count on its
-edition, and nothing in the native API sets one. A reflowable EPUB has
-no inherent number of pages, and one derived from a particular device's
-font size would make the total depend on which device synced. Report
-minutes and progression, which mean the same thing everywhere, and treat
-pages as something you may not have.
+For older history, request explicit calendar chunks and keep the same
+local capture, candidates and aggregate bounds. Require matching
+`stats_revision` strings, account, timezone, versions, snapshot id and
+aggregate bounds across all chunks; each must echo its requested calendar
+bounds. Restart the capture if any identity or revision changes. Do not
+sum the repeated summary/work totals across chunks.
+
+### Standalone aggregate queries
+
+`GET /v1/insights/summary`, `/works` and `/works/{id}` accept inclusive
+`from`/`to` or `range=Nd` / `range=all`. A valid date pair takes precedence.
+Summary defaults to `30d`; works defaults to all history. Invalid ranges
+use that endpoint's default. Responses echo `range_days`, plus `from` and
+`to` when bounded, and `timezone`. Summary and the works list also return
+`stats_revision` and `attribution_version`; the individual work route
+does not. Summary includes nullable `first_activity_day`.
+
+`GET /v1/insights/calendar` accepts a `from`/`to` pair of at most 4000
+days, or `year` (1971 through 2999, default current year). It returns
+`year`, `days`, timezone and revision/attribution metadata. It echoes
+aggregate bounds only for a valid explicit pair. Always check bounds:
+older servers may ignore parameters they do not understand.
+
+Raw sessions and v2 rollups count wholly on their account-local **end
+day**, in totals and calendars alike. Existing legacy split-day buckets
+keep their original dates; they are not backfilled or reinterpreted.
+Archived dates remain fixed if the account timezone changes, so exact
+rebucketing of historical totals is unavailable.
+
+Streaks use all positive-activity days, ending today or yesterday,
+independent of the selected window and without a ten-year cutoff.
+Rereads count time but never negative progression. Pace excludes inferred
+sessions, even after rollup. Current progression comes from the newest
+position regardless of window; ETA uses that position and measured pace
+inside the window. Unknown legacy pace suppresses speed and ETA.
+Pages may be zero without edition metadata; koplugin-reported pages
+retain that source's meaning.
 
 ## Browsing and downloading books
 

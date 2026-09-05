@@ -1,8 +1,12 @@
 package webui
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -260,6 +264,7 @@ func TestWorkCountsRollupsOnce(t *testing.T) {
 		at := base.Add(time.Duration(i) * time.Hour)
 		seedSession(t, st, "recent-"+string(rune('a'+i)), ed, at, at.Add(10*time.Minute))
 	}
+
 	// And an hour of reading from before the compaction cut-off.
 	err := st.ApplyRollups(t.Context(), "u1", []store.SessionRollup{{
 		UserID: "u1", WorkID: ed.WorkID, Day: "2024-01-01",
@@ -277,6 +282,130 @@ func TestWorkCountsRollupsOnce(t *testing.T) {
 	// Three sittings plus the two the rollup stands for.
 	if !strings.Contains(body, ">5<") {
 		t.Error("sessions are not 3 raw + 2 rolled up, counted once")
+	}
+}
+
+func TestWorkSessionsAreNewestFirst(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ed := seedWork(t, st, "ordered", "Two sittings")
+	old := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	newer := old.Add(time.Hour)
+	seedSession(t, st, "old", ed, old, old.Add(10*time.Minute))
+	seedSession(t, st, "new", ed, newer, newer.Add(10*time.Minute))
+	_, body := page(t, ts, cookie, "/ui/works/"+ed.WorkID)
+	oldIndex, newIndex := strings.Index(body, "Aug 1 09:00"), strings.Index(body, "Aug 1 10:00")
+	if oldIndex < 0 || newIndex < 0 || newIndex >= oldIndex {
+		t.Fatal("the recent session log did not put the newest sitting first")
+	}
+}
+
+func TestWorkTotalsIncludeAllSessions(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ed := seedWork(t, st, "many-sittings", "Many short sittings")
+	base := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	sessions := make([]store.Session, 10_001)
+	for i := range sessions {
+		at := base.Add(time.Duration(i) * time.Minute)
+		sessions[i] = store.Session{
+			SessionID: fmt.Sprintf("s-%d", i), WorkID: ed.WorkID, DeviceID: "reader",
+			StartedAt: at, EndedAt: at.Add(time.Minute), Origin: store.OriginNative,
+		}
+	}
+	if err := st.AppendSessions(t.Context(), "u1", sessions); err != nil {
+		t.Fatal(err)
+	}
+	_, body := page(t, ts, cookie, "/ui/works/"+ed.WorkID)
+	if !strings.Contains(body, ">10001<") {
+		t.Fatal("the work total was truncated to the session log's limit")
+	}
+}
+
+type failedStatsStore struct {
+	store.Store
+}
+
+func (*failedStatsStore) StatisticsSnapshot(context.Context, string, []string) (store.StatsSnapshot, error) {
+	return store.StatsSnapshot{}, errors.New("statistics read failed")
+}
+
+func TestDashboardAndWorkRefusePartialStatistics(t *testing.T) {
+	s := &Server{St: &failedStatsStore{}}
+	for _, path := range []string{"/ui", "/ui/works/w"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.SetPathValue("id", "w")
+		w := httptest.NewRecorder()
+		if path == "/ui" {
+			s.handleDashboard(w, req, store.AuthSession{}, &store.User{ID: "u1"})
+		} else {
+			s.handleWork(w, req, store.AuthSession{}, &store.User{ID: "u1"})
+		}
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("%s: got %d, want an explicit failure", path, w.Code)
+		}
+	}
+}
+
+type dashboardLinksStore struct {
+	store.Store
+	lookups []string
+	err     error
+}
+
+func (s *dashboardLinksStore) WorkBookIDs(_ context.Context, _, workID string) ([]string, error) {
+	s.lookups = append(s.lookups, workID)
+	return nil, s.err
+}
+
+func TestDashboardResolvesOnlyDisplayedWorks(t *testing.T) {
+	works := make([]store.WorkSummary, 100)
+	progression := 0.5
+	for i := range works {
+		at := time.Now().Add(-time.Duration(i) * time.Hour)
+		works[i] = store.WorkSummary{
+			Work:        store.Work{ID: fmt.Sprintf("w-%d", i)},
+			Progression: &progression, LastActive: &at,
+		}
+	}
+	st := &dashboardLinksStore{}
+	s := &Server{St: st}
+	rows, err := s.linkReadingWorks(httptest.NewRequest(http.MethodGet, "/ui", nil), "u1",
+		continueReading(works, nil, time.UTC))
+	if err != nil || len(rows) != continueReadingLimit || len(st.lookups) != continueReadingLimit {
+		t.Fatalf("rows=%d lookups=%d err=%v", len(rows), len(st.lookups), err)
+	}
+	for i, id := range st.lookups {
+		if id != fmt.Sprintf("w-%d", i) {
+			t.Fatalf("resolved an undisplayed work: %s", id)
+		}
+	}
+}
+
+func TestDashboardLinkErrorsPropagate(t *testing.T) {
+	failed := errors.New("store unavailable")
+	s := &Server{St: &dashboardLinksStore{err: failed}}
+	if _, err := s.linkReadingWorks(httptest.NewRequest(http.MethodGet, "/ui", nil), "u1",
+		[]WorkRow{{ID: "w"}}); !errors.Is(err, failed) {
+		t.Fatalf("got %v, want store failure", err)
+	}
+}
+
+func TestDashboardStreakRequiresPositiveActivity(t *testing.T) {
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	snapshot := store.StatsSnapshot{Timezone: "UTC", Sessions: []store.Session{{
+		StartedAt: now.Add(-time.Hour), EndedAt: now, IdleMs: int64(time.Hour / time.Millisecond),
+	}}}
+	got, err := insights.Build(snapshot, insights.Window{}, now)
+	if err != nil || got.Summary.StreakDays != 0 {
+		t.Fatalf("idle-only sitting created streak %d: %v", got.Summary.StreakDays, err)
+	}
+}
+
+func TestDashboardUsesReportedPagesWithoutEdition(t *testing.T) {
+	pages := 1.0
+	if got, err := insights.Pages(store.Session{ReportedPages: &pages}, nil); err != nil || got != 1 {
+		t.Fatalf("reported page count lost: %f: %v", got, err)
 	}
 }
 

@@ -252,12 +252,18 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-// ActiveSeconds returns a session's length minus its idle time, clamped
-// at nought. The device counts reading off a monotonic clock that stops
-// when the app leaves the foreground and reports the difference, so a
-// book left open while the reader answered the door spans more time
-// than it counted.
+// ActiveSeconds returns a session's explicit active time when the
+// device supplied it, otherwise the wall-clock length minus idle time,
+// clamped at nought. Explicit active time is already foreground reading
+// time, so idle is not subtracted from it again and it is not capped to
+// the wall span.
 func ActiveSeconds(ses store.Session) float64 {
+	if ses.ActiveMs != nil {
+		if *ses.ActiveMs < 0 {
+			return 0
+		}
+		return float64(*ses.ActiveMs) / 1000
+	}
 	d := ses.EndedAt.Sub(ses.StartedAt).Seconds() - float64(ses.IdleMs)/1000
 	if d < 0 {
 		return 0

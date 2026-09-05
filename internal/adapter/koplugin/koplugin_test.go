@@ -113,13 +113,24 @@ func TestUploadInsertDuplicateSupersede(t *testing.T) {
 	if len(ss) != 2 { // both revisions stored, append-only
 		t.Fatalf("want 2 session rows, got %d", len(ss))
 	}
-	// Progression conversion: page 42/300 -> [41/300, 42/300].
+	// Progression conversion: page 42/300 -> [41/300, 42/300],
+	// with exactly one reported page from the actual row.
 	for _, s := range ss {
 		wantStart := 41.0 / 300.0
 		wantEnd := 42.0 / 300.0
 		if s.StartProg != wantStart || s.EndProg != wantEnd {
 			t.Fatalf("bad progression: %v %v", s.StartProg, s.EndProg)
 		}
+		if s.ReportedPages == nil || *s.ReportedPages != 1 {
+			t.Fatalf("reported pages should be exactly the uploaded page row: %+v", s.ReportedPages)
+		}
+	}
+	snap, err := st.StatisticsSnapshot(t.Context(), "u1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Editions) != 0 {
+		t.Fatalf("koplugin must not synthesize editions: %+v", snap.Editions)
 	}
 }
 
