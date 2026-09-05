@@ -168,13 +168,16 @@ func testReconcileMissingAndReturning(t *testing.T, open OpenFunc) {
 	}
 
 	returnedAt := missingAt.Add(time.Hour)
+	// The file is back with the same stat, so the pass recognises it
+	// without a re-read: the return travels the Unchanged fast path,
+	// which is the one touch that must still move updated_at — the book
+	// visibly changed from missing to active even though no fact did.
 	returning := store.ObservedBook{
-		RelativePath: "gone.epub", SizeBytes: 10, MTime: now,
-		ContentSHA256: "sha-gone", Title: "Comes And Goes",
+		RelativePath: "gone.epub", SizeBytes: 10, MTime: now, Unchanged: true,
 	}
 	result = doReconcile(t, s, folder.ID, []store.ObservedBook{returning}, true, returnedAt)
-	if result.Returned != 1 {
-		t.Fatalf("want one returned book, got %+v", result)
+	if result.Returned != 1 || result.Updated != 0 {
+		t.Fatalf("want one returned book and nothing updated, got %+v", result)
 	}
 	got, err = s.CatalogBookByID(ctx, "", bookID)
 	if err != nil {
@@ -185,6 +188,12 @@ func testReconcileMissingAndReturning(t *testing.T, open OpenFunc) {
 	}
 	if got.AbsentAt != nil {
 		t.Fatalf("AbsentAt not cleared: %+v", got.AbsentAt)
+	}
+	if got.SeenAt == nil || !got.SeenAt.UTC().Equal(returnedAt) {
+		t.Fatalf("the return did not refresh seen_at: %+v", got.SeenAt)
+	}
+	if !got.UpdatedAt.UTC().Equal(returnedAt) {
+		t.Fatalf("the return did not move updated_at: %+v", got.UpdatedAt)
 	}
 }
 
@@ -346,6 +355,92 @@ func testReconcileUnchangedKeepsMetadata(t *testing.T, open OpenFunc) {
 	}
 	if len(relations.Series[bookID]) != 1 || relations.Series[bookID][0].Name != "Terra Ignota" {
 		t.Fatalf("series blanked by an unchanged observation: %+v", relations.Series[bookID])
+	}
+}
+
+// testReconcileRepeatPassCountsNoUpdates covers the honesty of
+// Updated. A Calibre pass re-reads every row of metadata.db every time
+// (ADR-0022), so it re-submits full observations for books nothing
+// touched; counting those writes would report a whole library as
+// updated twice an hour and bury the pass that actually changed
+// something. Updated therefore counts differences, in the row's facts
+// or in its relations, and a pass over an untouched folder reports
+// that nothing happened.
+func testReconcileRepeatPassCountsNoUpdates(t *testing.T, open OpenFunc) {
+	s := open(t)
+	folder := MkFolder(t, s, "calibre-repeat", store.FolderCalibre)
+	now := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC)
+
+	calibreID := int64(30)
+	observe := func(title string, tags []string) store.ObservedBook {
+		return store.ObservedBook{
+			CalibreID: &calibreID, RelativePath: "A Writer/Book (30)/book.epub",
+			SizeBytes: 100, MTime: now, ContentSHA256: "sha-repeat",
+			Title: title, Tags: tags,
+			Contributors: []store.ObservedContributor{
+				{Name: "A Writer", Role: store.ContributorRoleAuthor},
+			},
+			Series: []store.ObservedSeries{{Name: "A Series", Position: Ptr(1.0)}},
+		}
+	}
+
+	first := doReconcile(t, s, folder.ID,
+		[]store.ObservedBook{observe("Book", []string{"history"})}, true, now)
+	if first.Added != 1 {
+		t.Fatalf("first pass: %+v", first)
+	}
+	bookID := knownByCalibreID(t, s, folder.ID)[calibreID].ID
+
+	// The same observation again, as every safety-timer pass submits it.
+	second := doReconcile(t, s, folder.ID,
+		[]store.ObservedBook{observe("Book", []string{"history"})},
+		true, now.Add(30*time.Minute))
+	if second.Updated != 0 || second.Changed() {
+		t.Fatalf("an untouched book was reported updated: %+v", second)
+	}
+	// The pass proved the file present, so seen_at advances — but
+	// updated_at is the modification time clients see, and nothing was
+	// modified.
+	afterRepeat, err := s.CatalogBookByID(context.Background(), "", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !afterRepeat.UpdatedAt.Equal(now) {
+		t.Fatalf("an untouched book's updated_at moved: %v", afterRepeat.UpdatedAt)
+	}
+	if afterRepeat.SeenAt == nil || !afterRepeat.SeenAt.Equal(now.Add(30*time.Minute)) {
+		t.Fatalf("the repeat pass did not refresh seen_at: %v", afterRepeat.SeenAt)
+	}
+
+	// A metadata edit in the row's own columns.
+	third := doReconcile(t, s, folder.ID,
+		[]store.ObservedBook{observe("Book, Revised", []string{"history"})},
+		true, now.Add(time.Hour))
+	if third.Updated != 1 {
+		t.Fatalf("a title edit was not counted: %+v", third)
+	}
+	afterEdit, err := s.CatalogBookByID(context.Background(), "", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !afterEdit.UpdatedAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("a real edit did not move updated_at: %v", afterEdit.UpdatedAt)
+	}
+
+	// An edit that only moves relations: same row facts, one more tag.
+	fourth := doReconcile(t, s, folder.ID,
+		[]store.ObservedBook{observe("Book, Revised", []string{"history", "essays"})},
+		true, now.Add(2*time.Hour))
+	if fourth.Updated != 1 {
+		t.Fatalf("a tag-only edit was not counted: %+v", fourth)
+	}
+
+	// And the edited state, resubmitted, is quiet again.
+	fifth := doReconcile(t, s, folder.ID,
+		[]store.ObservedBook{observe("Book, Revised", []string{"history", "essays"})},
+		true, now.Add(3*time.Hour))
+	if fifth.Updated != 0 || fifth.Changed() {
+		t.Fatalf("the settled state was reported updated: %+v", fifth)
 	}
 }
 

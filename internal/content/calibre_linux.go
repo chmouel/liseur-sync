@@ -72,8 +72,33 @@ func (r *Reconciler) reconcileCalibre(
 	}
 	defer root.Close()
 
+	// What the catalog already holds, so a book that has been unservable
+	// for weeks does not say so again on every half-hourly pass: the
+	// interesting moments are becoming missing and coming back, and the
+	// prior status is what tells them apart from staying gone.
+	known, err := r.catalog.BooksInFolder(ctx, folder.ID)
+	if err != nil {
+		return store.ReconcileResult{}, err
+	}
+	priorStatus := make(map[int64]store.BookStatus, len(known))
+	for _, b := range known {
+		if b.CalibreID != nil {
+			priorStatus[*b.CalibreID] = b.Status
+		}
+	}
+
 	observed := make([]store.ObservedBook, 0, len(books))
 	complete := true
+	// Transitions are worth an INFO line, but only once the store has
+	// committed them: a line written during the scan would claim a
+	// change a failed reconcile never made, then claim it again on the
+	// retry that did.
+	type transition struct {
+		msg       string
+		calibreID int64
+		title     string
+	}
+	var transitions []transition
 	for _, book := range books {
 		if err := ctx.Err(); err != nil {
 			return store.ReconcileResult{}, err
@@ -103,8 +128,28 @@ func (r *Reconciler) reconcileCalibre(
 			// of it survive, and so one such book does not declare the
 			// whole pass blind and stop it concluding anything.
 			if errors.Is(err, fs.ErrNotExist) {
-				r.log.Info("calibre book has no file on disk",
-					"folder", folder.ID, "calibre_id", book.ID)
+				// Say it once, when it happens: only a book the catalog
+				// held as active has just vanished. One it already
+				// carries as missing has been reported, and one it never
+				// held stays a debug line too — the store keeps no row
+				// for a book that has never been servable, so an INFO
+				// here would repeat every pass, forever. A half-hourly
+				// reminder is noise an operator learns to ignore, which
+				// is worse than silence.
+				switch priorStatus[book.ID] {
+				case store.BookActive:
+					transitions = append(transitions, transition{
+						"calibre book has no file on disk",
+						book.ID, book.Title})
+				case store.BookMissing:
+					r.log.Debug("calibre book still has no file on disk",
+						"folder", folder.ID, "calibre_id", book.ID,
+						"title", book.Title)
+				default:
+					r.log.Debug("calibre book has never had a file on disk",
+						"folder", folder.ID, "calibre_id", book.ID,
+						"title", book.Title)
+				}
 				calibreID := book.ID
 				observed = append(observed, store.ObservedBook{
 					CalibreID:  &calibreID,
@@ -117,9 +162,25 @@ func (r *Reconciler) reconcileCalibre(
 			complete = false
 			continue
 		}
+		// The other half of the transition: the file is back, so the
+		// store will return the row to active, and the log says which
+		// book that was rather than leaving a bare returned=1 counter.
+		if priorStatus[book.ID] == store.BookMissing {
+			transitions = append(transitions, transition{
+				"calibre book has a file on disk again",
+				book.ID, book.Title})
+		}
 		observed = append(observed, obs)
 	}
-	return r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, r.now())
+	result, err := r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, r.now())
+	if err != nil {
+		return store.ReconcileResult{}, err
+	}
+	for _, tr := range transitions {
+		r.log.Info(tr.msg, "folder", folder.ID,
+			"calibre_id", tr.calibreID, "title", tr.title)
+	}
+	return result, nil
 }
 
 // readCalibreBookFormats reads the first of a book's formats that is

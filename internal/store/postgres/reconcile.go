@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/metadata"
@@ -147,6 +148,13 @@ func (s *Store) ReconcileFolder(
 			}
 
 			var bookID string
+			// refreshing marks the update path, where Updated is only
+			// counted if the row's facts or its relations actually
+			// moved — a pass that re-read everything and found it as
+			// recorded changed nothing worth a log line.
+			refreshing := false
+			factsChanged := false
+			statusReturned := false
 			switch {
 			case had && obs.Unchanged:
 				// The pass recognised this file by its stat and did not
@@ -172,6 +180,7 @@ func (s *Store) ReconcileFolder(
 				}
 				if returned {
 					result.Returned++
+					statusReturned = true
 				}
 				// The same book with different bytes: a Calibre metadata
 				// edit rewrites the publication in place. Whoever was
@@ -183,7 +192,8 @@ func (s *Store) ReconcileFolder(
 					return err
 				}
 				result.Rekeyed += rekeyed
-				result.Updated++
+				refreshing = true
+				factsChanged = prior.facts.DiffersFrom(obs)
 			default:
 				bookID = store.NewID()
 				if err := insertBookTx(ctx, tx, folderID, bookID, obs, at); err != nil {
@@ -194,8 +204,24 @@ func (s *Store) ReconcileFolder(
 				}
 			}
 
-			if err := replaceRelationsTx(ctx, tx, folderID, bookID, obs, at); err != nil {
+			relationsChanged, err := replaceRelationsTx(ctx, tx, folderID, bookID, obs, at)
+			if err != nil {
 				return err
+			}
+			if refreshing && (factsChanged || relationsChanged) {
+				result.Updated++
+			}
+			// updated_at is a modification time clients see (catalog
+			// JSON, OPDS, conditional GETs), so a pass that merely
+			// re-read the book must not advance it. A return counts:
+			// missing→active is a visible change even when every fact
+			// matches.
+			if refreshing && (factsChanged || relationsChanged || statusReturned) {
+				if _, err := tx.ExecContext(ctx, q(
+					`UPDATE books SET updated_at = ? WHERE id = ? AND folder_id = ?`),
+					at.UTC(), bookID, folderID); err != nil {
+					return err
+				}
 			}
 			if err := reindexBookTx(ctx, tx, bookID); err != nil {
 				return err
@@ -295,21 +321,28 @@ func observationKey(obs store.ObservedBook, byCalibreID bool) (string, error) {
 }
 
 // priorBook is what the catalog already holds for one identity key: the
-// row's id, and the digest it was last written with. The digest is
-// carried because a book whose bytes changed while keeping its identity
-// — the shape of every Calibre metadata edit — is the one case where a
-// reader's work graph has to be told something.
+// row's id, its material facts, and the digest it was last written
+// with. The digest is carried because a book whose bytes changed while
+// keeping its identity — the shape of every Calibre metadata edit — is
+// the one case where a reader's work graph has to be told something.
+// The facts are read here, before a Calibre pass parks every path, so
+// they describe the row as the last pass left it rather than the parked
+// intermediate state.
 type priorBook struct {
 	id     string
 	path   string
 	sha256 string
+	facts  store.BookFacts
 }
 
 func existingBooksTx(
 	ctx context.Context, tx *sql.Tx, folderID string, byCalibreID bool,
 ) (map[string]priorBook, error) {
 	rows, err := tx.QueryContext(ctx, q(
-		`SELECT id, relative_path, calibre_id, content_sha256
+		`SELECT id, relative_path, calibre_id, content_sha256,
+		        size_bytes, mtime, original_filename, media_type,
+		        cover_relative_path, cover_sha256,
+		        title, subtitle, description, publisher, published_date
 		 FROM books WHERE folder_id = ?`), folderID)
 	if err != nil {
 		return nil, err
@@ -320,11 +353,20 @@ func existingBooksTx(
 		var (
 			id, path, sha string
 			calibreID     sql.NullInt64
+			cover         sql.NullString
+			facts         store.BookFacts
 		)
-		if err := rows.Scan(&id, &path, &calibreID, &sha); err != nil {
+		if err := rows.Scan(&id, &path, &calibreID, &sha,
+			&facts.SizeBytes, &facts.MTime, &facts.OriginalFilename,
+			&facts.MediaType, &cover, &facts.CoverSHA256,
+			&facts.Title, &facts.Subtitle, &facts.Description,
+			&facts.Publisher, &facts.PublishedDate); err != nil {
 			return nil, err
 		}
-		prior := priorBook{id: id, path: path, sha256: sha}
+		facts.RelativePath = path
+		facts.ContentSHA256 = sha
+		facts.CoverRelativePath = cover.String
+		prior := priorBook{id: id, path: path, sha256: sha, facts: facts}
 		switch {
 		case byCalibreID && calibreID.Valid:
 			out[fmt.Sprintf("c:%d", calibreID.Int64)] = prior
@@ -383,13 +425,13 @@ func updateBookTx(
 			original_filename = ?, media_type = ?, calibre_id = ?,
 			cover_relative_path = ?, cover_sha256 = ?,
 			title = ?, subtitle = ?, description = ?, publisher = ?,
-			published_date = ?, updated_at = ?, seen_at = ?, absent_at = NULL
+			published_date = ?, seen_at = ?, absent_at = NULL
 		 WHERE id = ? AND folder_id = ?`),
 		obs.RelativePath, obs.SizeBytes, obs.MTime.UTC(), obs.ContentSHA256,
 		obs.OriginalFilename, mediaTypeOf(obs), nullInt64(obs.CalibreID),
 		nullStr(obs.CoverRelativePath), obs.CoverSHA256,
 		obs.Title, obs.Subtitle, obs.Description, obs.Publisher, obs.PublishedDate,
-		at.UTC(), at.UTC(),
+		at.UTC(),
 		bookID, folderID)
 	return store.BookStatus(status) == store.BookMissing, err
 }
@@ -664,11 +706,17 @@ func primaryAuthorOf(obs store.ObservedBook) string {
 // replaceRelationsTx rewrites a book's metadata sets wholesale. With no
 // manual editing and no external providers there is one source per
 // folder and nothing to merge, so "what the folder says now" simply
-// replaces "what it said last time".
+// replaces "what it said last time". It reports whether the rewrite
+// left different rows behind, because that difference — not the rewrite
+// itself — is what a pass counts as an update.
 func replaceRelationsTx(
 	ctx context.Context, tx *sql.Tx, folderID, bookID string,
 	obs store.ObservedBook, at time.Time,
-) error {
+) (bool, error) {
+	before, err := relationsFingerprintTx(ctx, tx, folderID, bookID)
+	if err != nil {
+		return false, err
+	}
 	for _, table := range []string{
 		"book_identifiers", "book_languages", "book_tags",
 		"book_series", "book_contributors",
@@ -676,7 +724,7 @@ func replaceRelationsTx(
 		if _, err := tx.ExecContext(ctx, q(
 			`DELETE FROM `+table+` WHERE folder_id = ? AND book_id = ?`),
 			folderID, bookID); err != nil {
-			return err
+			return false, err
 		}
 	}
 
@@ -688,7 +736,7 @@ func replaceRelationsTx(
 			`INSERT INTO book_identifiers (folder_id, book_id, scheme, value)
 			 VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`),
 			folderID, bookID, id.Scheme, id.Value); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, lang := range obs.Languages {
@@ -699,14 +747,14 @@ func replaceRelationsTx(
 			`INSERT INTO book_languages (folder_id, book_id, language)
 			 VALUES (?, ?, ?) ON CONFLICT DO NOTHING`),
 			folderID, bookID, lang); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, tag := range obs.Tags {
 		tagID, err := resolveEntityTx(ctx, tx, "tags", tag, at)
 		if err != nil || tagID == "" {
 			if err != nil {
-				return err
+				return false, err
 			}
 			continue
 		}
@@ -714,14 +762,14 @@ func replaceRelationsTx(
 			`INSERT INTO book_tags (folder_id, book_id, tag_id)
 			 VALUES (?, ?, ?) ON CONFLICT DO NOTHING`),
 			folderID, bookID, tagID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, sr := range obs.Series {
 		seriesID, err := resolveSeriesTx(ctx, tx, folderID, sr.Name, at)
 		if err != nil || seriesID == "" {
 			if err != nil {
-				return err
+				return false, err
 			}
 			continue
 		}
@@ -734,14 +782,14 @@ func replaceRelationsTx(
 			 VALUES (?, ?, ?, ?)
 			 ON CONFLICT (book_id, series_id) DO UPDATE SET position = excluded.position`),
 			folderID, bookID, seriesID, position); err != nil {
-			return err
+			return false, err
 		}
 	}
 	for _, c := range obs.Contributors {
 		contributorID, err := resolveEntityTx(ctx, tx, "contributors", c.Name, at)
 		if err != nil || contributorID == "" {
 			if err != nil {
-				return err
+				return false, err
 			}
 			continue
 		}
@@ -756,10 +804,63 @@ func replaceRelationsTx(
 			 ON CONFLICT (book_id, contributor_id, role)
 			 DO UPDATE SET position = excluded.position`),
 			folderID, bookID, contributorID, role, c.Position); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	after, err := relationsFingerprintTx(ctx, tx, folderID, bookID)
+	if err != nil {
+		return false, err
+	}
+	return before != after, nil
+}
+
+// relationsFingerprintQueries canonicalize one book's relation rows,
+// one line per row, so before-and-after strings compare a rewrite for
+// effect. Ordering is fixed and every query carries (folderID, bookID).
+var relationsFingerprintQueries = []string{
+	`SELECT scheme || ':' || value FROM book_identifiers
+	  WHERE folder_id = ? AND book_id = ? ORDER BY scheme, value`,
+	`SELECT language FROM book_languages
+	  WHERE folder_id = ? AND book_id = ? ORDER BY language`,
+	`SELECT tag_id FROM book_tags
+	  WHERE folder_id = ? AND book_id = ? ORDER BY tag_id`,
+	`SELECT series_id || '@' || COALESCE(CAST(position AS TEXT), '')
+	   FROM book_series
+	  WHERE folder_id = ? AND book_id = ? ORDER BY series_id`,
+	`SELECT contributor_id || '#' || role || '#' || CAST(position AS TEXT)
+	   FROM book_contributors
+	  WHERE folder_id = ? AND book_id = ?
+	  ORDER BY contributor_id, role`,
+}
+
+// relationsFingerprintTx reads one book's relations into a canonical
+// string. It only ever compares a book with itself within one
+// transaction on one backend, so the text of a REAL cast never has to
+// agree across engines — only with itself.
+func relationsFingerprintTx(
+	ctx context.Context, tx *sql.Tx, folderID, bookID string,
+) (string, error) {
+	var out strings.Builder
+	for i, query := range relationsFingerprintQueries {
+		rows, err := tx.QueryContext(ctx, q(query), folderID, bookID)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				rows.Close()
+				return "", err
+			}
+			fmt.Fprintf(&out, "%d:%s\n", i, line)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return "", err
+		}
+		rows.Close()
+	}
+	return out.String(), nil
 }
 
 // resolveSeriesTx resolves an observed series name to the series it
@@ -855,11 +956,23 @@ func touchBookTx(
 		bookID, folderID).Scan(&status); err != nil {
 		return false, err
 	}
+	returned := store.BookStatus(status) == store.BookMissing
+	// A return is a visible change even though no fact moved, so it is
+	// the one touch that advances the client-facing updated_at.
+	if returned {
+		_, err := tx.ExecContext(ctx, q(
+			`UPDATE books SET status = 'active', relative_path = ?, size_bytes = ?,
+			        mtime = ?, seen_at = ?, updated_at = ?, absent_at = NULL
+			 WHERE id = ? AND folder_id = ?`),
+			obs.RelativePath, obs.SizeBytes, obs.MTime.UTC(), at.UTC(),
+			at.UTC(), bookID, folderID)
+		return true, err
+	}
 	_, err := tx.ExecContext(ctx, q(
 		`UPDATE books SET status = 'active', relative_path = ?, size_bytes = ?,
 		        mtime = ?, seen_at = ?, absent_at = NULL
 		 WHERE id = ? AND folder_id = ?`),
 		obs.RelativePath, obs.SizeBytes, obs.MTime.UTC(), at.UTC(),
 		bookID, folderID)
-	return store.BookStatus(status) == store.BookMissing, err
+	return false, err
 }
