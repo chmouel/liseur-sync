@@ -886,7 +886,13 @@ type ObservedContributor struct {
 // persisted: a pass holds no state, and running it twice is running it
 // once.
 type ReconcileResult struct {
-	Added    int
+	Added int
+	// Updated counts books whose stored facts or relations materially
+	// changed, not books a pass merely re-read. A Calibre pass re-reads
+	// every row of metadata.db every time (ADR-0022), so counting
+	// writes would report the whole library as updated twice an hour;
+	// counting differences is what lets a pass over an untouched folder
+	// say, honestly, that nothing happened.
 	Updated  int
 	Replaced int
 	Missing  int
@@ -909,6 +915,57 @@ type ReconcileResult struct {
 func (r ReconcileResult) Changed() bool {
 	return r.Added+r.Updated+r.Replaced+r.Missing+
 		r.Returned+r.Purged+r.Rekeyed > 0
+}
+
+// BookFacts is the material state of one catalog row: the columns a
+// pass writes that are about the book rather than about the pass
+// (seen_at, updated_at and status are about the pass). A backend
+// compares them with an observation to tell a write that changed the
+// book from one that merely refreshed it, which is the difference
+// ReconcileResult.Updated reports.
+type BookFacts struct {
+	RelativePath      string
+	SizeBytes         int64
+	MTime             time.Time
+	ContentSHA256     string
+	OriginalFilename  string
+	MediaType         string
+	CoverRelativePath string // empty when the row has none
+	CoverSHA256       string
+	Title             string
+	Subtitle          string
+	Description       string
+	Publisher         string
+	PublishedDate     string
+}
+
+// DiffersFrom reports whether writing this observation would change the
+// row's material columns. MTime is compared at microsecond precision,
+// the finest both backends round-trip.
+func (f BookFacts) DiffersFrom(obs ObservedBook) bool {
+	cover := ""
+	if obs.CoverRelativePath != nil {
+		cover = *obs.CoverRelativePath
+	}
+	mediaType := obs.MediaType
+	if mediaType == "" {
+		mediaType = "application/epub+zip"
+	}
+	sameMTime := f.MTime.UTC().Truncate(time.Microsecond).
+		Equal(obs.MTime.UTC().Truncate(time.Microsecond))
+	return f.RelativePath != obs.RelativePath ||
+		f.SizeBytes != obs.SizeBytes ||
+		!sameMTime ||
+		f.ContentSHA256 != obs.ContentSHA256 ||
+		f.OriginalFilename != obs.OriginalFilename ||
+		f.MediaType != mediaType ||
+		f.CoverRelativePath != cover ||
+		f.CoverSHA256 != obs.CoverSHA256 ||
+		f.Title != obs.Title ||
+		f.Subtitle != obs.Subtitle ||
+		f.Description != obs.Description ||
+		f.Publisher != obs.Publisher ||
+		f.PublishedDate != obs.PublishedDate
 }
 
 // KnownBook is what ReconcileFolder's caller already has on record for
