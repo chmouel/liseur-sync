@@ -102,7 +102,6 @@ const auth = readerAuth({
   ...cfg,
   handed: cfg.handed,
   onChange(identity, previous) {
-    lifecycle++;
     catchup.bind(identity.account, workID, identity.device);
     hideCatchup();
     if (!previous) return;
@@ -110,6 +109,11 @@ const auth = readerAuth({
     live.stop();
     annotationDrawing.clear().catch(() => {});
     if (previous.account !== identity.account) {
+      // A same-account renewal already invalidates old-credential
+      // responses through auth.current(); only an actual account
+      // switch needs the page lifecycle to advance, or a write settled
+      // under the fresh token would be requeued as if it never landed.
+      lifecycle++;
       auth.stop(); // A page opened for one account never writes under another.
       return;
     }
@@ -242,6 +246,10 @@ catchupAccept?.addEventListener("click", async () => {
   if (!shown || !view) return;
   cancelScheduledPush();
   await settlePosition();
+  // A failed flush leaves the local page dirty on purpose, so adopting
+  // the remote offer now would lose it for good the moment retryOp and
+  // readingDirty are cleared below.
+  if (readingDirty) return;
   const stamp = snapshot();
   const op = current(stamp) ? catchup.accept(shown) : null;
   if (!op || !view) return;
@@ -1906,6 +1914,15 @@ function handleKeys(e) {
       e.preventDefault();
       toggleTOC(false);
     }
+    return;
+  }
+  // The catch-up offer never takes focus, so Escape typed in the
+  // publication (a separate document) or on the page must still reach
+  // it, the same as the drawer above.
+  if (catchupPanel && !catchupPanel.hidden && e.key === "Escape") {
+    e.preventDefault();
+    catchup.dismiss();
+    hideCatchup();
     return;
   }
   // "?" summons the help from anywhere, including from inside a
