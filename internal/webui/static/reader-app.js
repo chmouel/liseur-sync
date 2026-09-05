@@ -237,12 +237,14 @@ catchupPanel?.addEventListener("keydown", (event) => {
 });
 catchupAccept?.addEventListener("click", async () => {
   const shown = catchup.shown();
-  const stamp = snapshot();
-  const op = current(stamp) ? catchup.accept(shown) : null;
   const activity = activityGeneration;
   hideCatchup();
-  if (!op || !view) return;
+  if (!shown || !view) return;
   cancelScheduledPush();
+  await settlePosition();
+  const stamp = snapshot();
+  const op = current(stamp) ? catchup.accept(shown) : null;
+  if (!op || !view) return;
   retryOp = null;
   readingDirty = false;
   interactionPending = false;
@@ -451,6 +453,7 @@ function sectionProgression(location) {
 // has it, and "conflict" means this id already belongs to another
 // payload, where replaying is the one thing that cannot help.
 let retryOp = null;
+let positionInFlight = null;
 let fractionRetryTimer = null;
 let fractionRetryAttempt = 0;
 const FRACTION_RETRY_DELAYS = [250, 750, 1500, 3000, 6000];
@@ -525,8 +528,7 @@ async function push() {
         };
   retryOp = { key, op };
   catchup.wrote(op);
-  try {
-    const resp = await api("v1/ops", {
+  const request = api("v1/ops", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // keepalive lets the final flush outlive the page: without it a
@@ -534,6 +536,9 @@ async function push() {
       keepalive: true,
       body: JSON.stringify({ ops: [op] }),
     });
+  positionInFlight = request;
+  try {
+    const resp = await request;
     stamp.identity = auth.responseIdentity(resp) || stamp.identity;
     if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
@@ -558,7 +563,14 @@ async function push() {
     }
   } catch (err) {
     /* offline: the next page turn replays this exact op */
+  } finally {
+    if (positionInFlight === request) positionInFlight = null;
   }
+}
+
+async function settlePosition() {
+  if (readingDirty && !restoring && !positionInFlight) await push();
+  if (positionInFlight) await positionInFlight;
 }
 
 // opID is a v4 UUID. crypto.randomUUID exists only in a secure
