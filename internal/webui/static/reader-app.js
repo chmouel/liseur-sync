@@ -534,6 +534,7 @@ async function push() {
       keepalive: true,
       body: JSON.stringify({ ops: [op] }),
     });
+    stamp.identity = auth.responseIdentity(resp) || stamp.identity;
     if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
     if (!current(stamp) || !auth.responseCurrent(resp)) return;
@@ -669,6 +670,7 @@ async function pushSession(closing) {
       keepalive: true,
       body: JSON.stringify({ sessions: batch }),
     });
+    stamp.identity = auth.responseIdentity(resp) || stamp.identity;
     // 2xx: filed (re-posting the same payload is idempotently a 2xx too).
     // 409: this session_id was already used with a *different* payload —
     // a collision, not a repeat of this sitting — and replaying the same
