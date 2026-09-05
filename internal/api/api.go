@@ -4,6 +4,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -193,7 +194,11 @@ func writeBatchTooLarge(w http.ResponseWriter, limit int) {
 // A body over the bound is 413, like the annotations route; anything
 // else that fails to decode is 400. Reports whether it answered.
 func decodeBatch(w http.ResponseWriter, r *http.Request, maxBytes int64, into any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes)).Decode(into); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBytes))
+	if err == nil {
+		err = json.Unmarshal(body, into)
+	}
+	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")

@@ -99,6 +99,10 @@ func (s *Store) UpsertKopluginSessionByAlias(ctx context.Context, userID, partia
 }
 
 func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session) (string, error) {
+	if ses.ReportedPages == nil {
+		one := 1.0
+		ses.ReportedPages = &one
+	}
 	now := formatTime(time.Now())
 
 	// Does this exact session_id already exist? -> identical re-upload.
@@ -143,12 +147,12 @@ func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses
 func insertSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session, now string) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO sessions (user_id, session_id, work_id, edition_sha, device_id,
-		                       started_at, ended_at, start_prog, end_prog, idle_ms,
+		                       started_at, ended_at, start_prog, end_prog, idle_ms, active_ms, reported_pages,
 		                       origin, origin_alias, source_key, received_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID, ses.SessionID, ses.WorkID, nullStr(ses.EditionSHA), ses.DeviceID,
 		formatTime(ses.StartedAt), formatTime(ses.EndedAt),
-		ses.StartProg, ses.EndProg, ses.IdleMs,
+		ses.StartProg, ses.EndProg, ses.IdleMs, ses.ActiveMs, ses.ReportedPages,
 		string(ses.Origin), nullStr(ses.OriginAlias), nullStr(ses.SourceKey), now)
 	if isUniqueErr(err) {
 		// Same session_id inserted before: treat as duplicate of that

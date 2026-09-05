@@ -53,6 +53,12 @@ func deleteWorkTx(ctx context.Context, tx *sql.Tx, userID, workID string) error 
 	if mapped == 1 {
 		return errWorkStillMapped
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE session_tombstones
+		   SET present = 0
+		 WHERE user_id = ? AND work_id = ? AND attribution_version = 2 AND present = 1`,
+		userID, workID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM works WHERE user_id = ? AND id = ?`, userID, workID)
 	if err != nil {

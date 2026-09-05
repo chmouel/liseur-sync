@@ -205,6 +205,25 @@ of them.
   (`foreign_pos` is stored verbatim but is a payload, not a shape).
 - **Never fabricate page numbers.** Statistics come from progression
   fractions; pages derive from edition page counts when known.
+  Koplugin's reported page contribution is source-specific, not a
+  universal pagination scheme.
+- Statistics API and web totals share `insights.Build` over one coherent
+  `StatisticsSnapshot`; do not add a total-history row cap. Native
+  `active_ms` is optional and authoritative, including zero, independent
+  of wall-clock span or idle. Negotiate through insights capabilities or
+  token introspection's `session_active_ms`; browser credentials must
+  not gain `read-insights` just to upload measured duration.
+- Raw sessions and v2 rollups use account-local end-day attribution.
+  Preserve measured pace separately from inferred totals, and write
+  exact archived contributions with fingerprints in the rollup
+  transaction. Keep legacy split-day buckets unchanged; never invent a
+  backfill or rebucket archived dates after a timezone change.
+- Snapshot overlap requires full original native payloads and device
+  ids read against the same revision as the aggregates. An upload
+  acknowledgement is not proof. Return `complete: false` for unknown
+  archive proof or incompatible legacy/timezone history. Encode
+  `stats_revision` as a decimal string. Calendar chunks filter daily
+  output only; clients must match revisions before combining chunks.
 - **No redirects on API routes.** `301`s exist only under `/ui`.
 - **Content change is not identity transfer.** A file whose bytes
   changed at a path is a new catalog book: delete the old row and its

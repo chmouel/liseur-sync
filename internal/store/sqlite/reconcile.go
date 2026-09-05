@@ -560,6 +560,8 @@ func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
 		    AND NOT EXISTS (SELECT 1 FROM sessions s
 		                     WHERE s.user_id = works.user_id AND s.work_id = works.id)
 		    AND NOT EXISTS (SELECT 1 FROM session_rollups r
+		                     WHERE r.user_id = works.user_id AND r.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM session_rollups_v2 r
 		                     WHERE r.user_id = works.user_id AND r.work_id = works.id)`)
 	return err
 }

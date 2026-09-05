@@ -1071,20 +1071,22 @@ type Op struct {
 
 // Session is one reading session fact.
 type Session struct {
-	UserID      string
-	SessionID   string
-	WorkID      string
-	EditionSHA  *string
-	DeviceID    string
-	StartedAt   time.Time
-	EndedAt     time.Time
-	StartProg   float64
-	EndProg     float64
-	IdleMs      int64
-	Origin      Origin
-	OriginAlias *string
-	SourceKey   *string // koplugin legacy upsert key
-	ReceivedAt  time.Time
+	UserID        string
+	SessionID     string
+	WorkID        string
+	EditionSHA    *string
+	DeviceID      string
+	StartedAt     time.Time
+	EndedAt       time.Time
+	StartProg     float64
+	EndProg       float64
+	IdleMs        int64
+	ActiveMs      *int64
+	ReportedPages *float64
+	Origin        Origin
+	OriginAlias   *string
+	SourceKey     *string // koplugin legacy upsert key
+	ReceivedAt    time.Time
 }
 
 // SessionFingerprint identifies the immutable client payload. It is
@@ -1111,6 +1113,16 @@ func SessionFingerprint(s Session) string {
 		s.WorkID, edition, s.DeviceID, s.StartedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano),
 		s.EndedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), s.SessionID, s.StartProg, s.EndProg,
 		s.IdleMs, s.Origin, alias, source)
+	if s.ActiveMs != nil || s.ReportedPages != nil {
+		active, pages := "", ""
+		if s.ActiveMs != nil {
+			active = fmt.Sprintf("%d", *s.ActiveMs)
+		}
+		if s.ReportedPages != nil {
+			pages = fmt.Sprintf("%.17g", *s.ReportedPages)
+		}
+		raw += fmt.Sprintf("\x00v2\x00%s\x00%s", active, pages)
+	}
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
@@ -1121,16 +1133,47 @@ func SessionFingerprint(s Session) string {
 // timezone at rollup time and are not re-bucketed if the user later
 // changes timezone.
 type SessionRollup struct {
-	UserID        string
-	WorkID        string
-	Day           string // YYYY-MM-DD
-	ActiveSeconds float64
-	Pages         float64
-	ProgDelta     float64
-	SessionCount  int64
+	UserID                string
+	WorkID                string
+	Day                   string // YYYY-MM-DD
+	ActiveSeconds         float64
+	Pages                 float64
+	ProgDelta             float64
+	SessionCount          int64
+	Timezone              string
+	AttributionVersion    int
+	MeasuredActiveSeconds float64
+	MeasuredProgDelta     float64
 }
 
 // OpResult is the per-item outcome of a batch push.
+// ArchivedSession is retained contribution proof for a compacted session.
+type ArchivedSession struct {
+	Fingerprint           string
+	WorkID                string
+	Day                   string
+	Timezone              string
+	AttributionVersion    int
+	Present               bool
+	ActiveSeconds         float64
+	Pages                 float64
+	ProgDelta             float64
+	MeasuredActiveSeconds float64
+	MeasuredProgDelta     float64
+}
+
+// StatsSnapshot is the coherent store input for statistics aggregation.
+type StatsSnapshot struct {
+	Timezone  string
+	Revision  int64
+	Sessions  []Session
+	Rollups   []SessionRollup
+	Works     []Work
+	Positions map[string]Op
+	Editions  map[string]Edition
+	Archived  map[string]ArchivedSession
+}
+
 type OpResult struct {
 	OpID   string
 	Status string // "applied" | "duplicate" | "conflict" | "invalid"
@@ -1823,6 +1866,7 @@ type Store interface {
 	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	WorkIDsWithInsights(ctx context.Context, userID string) ([]string, error)
 	EditionBySHA(ctx context.Context, userID, sha256 string) (Edition, error)
+	StatisticsSnapshot(ctx context.Context, userID string, candidateIDs []string) (StatsSnapshot, error)
 
 	// Session rollups (retention). SessionsEndedBefore feeds the rollup
 	// job; ApplyRollups additively upserts daily aggregates and deletes

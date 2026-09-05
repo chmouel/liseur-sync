@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"math"
 	"net/http"
 	"time"
 
@@ -22,6 +24,77 @@ type sessionReqJSON struct {
 	StartProg  *float64 `json:"start_progression"`
 	EndProg    *float64 `json:"end_progression"`
 	IdleMs     int64    `json:"idle_ms"`
+	ActiveMs   *int64   `json:"active_ms"`
+}
+
+// MaxSessionActiveMs is the largest explicit active_ms the native
+// sessions endpoint accepts. It is the largest JavaScript-safe integer,
+// comfortably below int64's bound and therefore safe for downstream
+// millisecond-to-second conversions.
+const MaxSessionActiveMs int64 = 9007199254740991
+
+const errCodeActiveOutOfRange = "active_out_of_range"
+
+type sessionRequestError struct {
+	code      string
+	what      string
+	sessionID string
+}
+
+func (e sessionRequestError) Error() string { return e.what }
+
+func parseSessionRequest(in sessionReqJSON, deviceID string) (store.Session, error) {
+	refuse := func(code, what string) (store.Session, error) {
+		return store.Session{}, sessionRequestError{code: code, what: what, sessionID: in.SessionID}
+	}
+	if in.SessionID == "" || len(in.SessionID) > 64 {
+		return store.Session{}, sessionRequestError{
+			code: errCodeMissingField, what: "session_id required",
+		}
+	}
+	if in.WorkID == "" {
+		return refuse(errCodeMissingField, "work_id required")
+	}
+	started, err := time.Parse(time.RFC3339Nano, in.StartedAt)
+	if err != nil {
+		return refuse(errCodeBadTime, "bad started_at")
+	}
+	ended, err := time.Parse(time.RFC3339Nano, in.EndedAt)
+	if err != nil {
+		return refuse(errCodeBadTime, "bad ended_at")
+	}
+	if ended.Before(started) {
+		return refuse(errCodeBadTime, "ended_at before started_at")
+	}
+	if in.StartProg == nil || in.EndProg == nil {
+		return refuse(errCodeMissingField, "progression required")
+	}
+	sp, ep := *in.StartProg, *in.EndProg
+	if math.IsNaN(sp) || math.IsInf(sp, 0) ||
+		math.IsNaN(ep) || math.IsInf(ep, 0) ||
+		!(sp >= 0 && sp <= 1) || !(ep >= 0 && ep <= 1) {
+		return refuse(errCodeProgression, "progression out of range [0,1]")
+	}
+	durMs := ended.Sub(started).Milliseconds()
+	if in.IdleMs < 0 || in.IdleMs > durMs {
+		return refuse(errCodeIdleOutOfRange, "idle_ms out of range")
+	}
+	if in.ActiveMs != nil && (*in.ActiveMs < 0 || *in.ActiveMs > MaxSessionActiveMs) {
+		return refuse(errCodeActiveOutOfRange, "active_ms out of range")
+	}
+	return store.Session{
+		SessionID:  in.SessionID,
+		WorkID:     in.WorkID,
+		EditionSHA: in.EditionSHA,
+		DeviceID:   deviceID,
+		StartedAt:  started,
+		EndedAt:    ended,
+		StartProg:  sp,
+		EndProg:    ep,
+		IdleMs:     in.IdleMs,
+		ActiveMs:   in.ActiveMs,
+		Origin:     store.OriginNative,
+	}, nil
 }
 
 // HandlePushSessions implements POST /v1/sessions — batch, idempotent
@@ -49,60 +122,18 @@ func (s *Server) HandlePushSessions(w http.ResponseWriter, r *http.Request) {
 
 	sessions := make([]store.Session, len(body.Sessions))
 	for i, in := range body.Sessions {
-		refuse := func(code, what string) {
-			writeItemRefusal(w, code, "session", "session_id", in.SessionID, i, what, 0)
-		}
-		if in.SessionID == "" || len(in.SessionID) > 64 {
-			in.SessionID = ""
-			refuse(errCodeMissingField, "session_id required")
-			return
-		}
-		if in.WorkID == "" {
-			refuse(errCodeMissingField, "work_id required")
-			return
-		}
-		started, err := time.Parse(time.RFC3339Nano, in.StartedAt)
+		ses, err := parseSessionRequest(in, tok.DeviceID)
 		if err != nil {
-			refuse(errCodeBadTime, "bad started_at")
+			var reqErr sessionRequestError
+			if errors.As(err, &reqErr) {
+				writeItemRefusal(w, reqErr.code, "session", "session_id",
+					reqErr.sessionID, i, reqErr.what, 0)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "append failed")
 			return
 		}
-		ended, err := time.Parse(time.RFC3339Nano, in.EndedAt)
-		if err != nil {
-			refuse(errCodeBadTime, "bad ended_at")
-			return
-		}
-		if ended.Before(started) {
-			refuse(errCodeBadTime, "ended_at before started_at")
-			return
-		}
-		if in.StartProg == nil || in.EndProg == nil {
-			refuse(errCodeMissingField, "progression required")
-			return
-		}
-		// Negation of the in-range test so a NaN (both comparisons
-		// false) is rejected rather than let through.
-		sp, ep := *in.StartProg, *in.EndProg
-		if !(sp >= 0 && sp <= 1) || !(ep >= 0 && ep <= 1) {
-			refuse(errCodeProgression, "progression out of range [0,1]")
-			return
-		}
-		durMs := ended.Sub(started).Milliseconds()
-		if in.IdleMs < 0 || in.IdleMs > durMs {
-			refuse(errCodeIdleOutOfRange, "idle_ms out of range")
-			return
-		}
-		sessions[i] = store.Session{
-			SessionID:  in.SessionID,
-			WorkID:     in.WorkID,
-			EditionSHA: in.EditionSHA,
-			DeviceID:   tok.DeviceID,
-			StartedAt:  started,
-			EndedAt:    ended,
-			StartProg:  sp,
-			EndProg:    ep,
-			IdleMs:     in.IdleMs,
-			Origin:     store.OriginNative,
-		}
+		sessions[i] = ses
 	}
 
 	if err := s.St.AppendSessions(r.Context(), tok.UserID, sessions); err != nil {

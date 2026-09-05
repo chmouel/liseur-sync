@@ -539,6 +539,38 @@ Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
 
+### Reading statistics, migration 7
+
+Both SQLite and PostgreSQL append `statisticsStorage` as migration 7,
+after the folder-grant repair in migration 6. It adds nullable
+`sessions.active_ms` and `sessions.reported_pages`, per-account
+`stats_revisions`, separate `session_rollups_v2`, and contribution fields
+on `session_tombstones`. Revision triggers cover changes to statistics
+inputs, including timezone, positions and metadata.
+
+The upgrade leaves existing session payloads, legacy split-day rollups
+and fingerprints intact. There is no duration backfill or conversion of
+old daily buckets. Retained raw sessions now count on their end day in
+both totals and calendars; future compaction writes that same attribution
+with measured pace and exact archived overlap proof. Older tombstones
+still enforce idempotency but cannot prove their original contribution.
+
+Legacy rollups remain visible in server totals. They make the new
+snapshot response `complete: false`, so clients requiring an exact union
+with local sessions must fall back to local-only statistics. Upgrading
+cannot recover already discarded session timestamps or source-specific
+pace. A later account timezone change likewise cannot rebucket archived
+days; v2 records retain their original timezone and incompatible history
+also makes snapshots incomplete.
+
+Clients should negotiate `active_ms` before sending it, through
+`GET /v1/insights/capabilities` with `read-insights`, or the
+`session_active_ms` field on authenticated `GET /v1/token` without that
+scope. No additional configuration enables the snapshot endpoint;
+`ops.max_body_bytes` bounds its requests. Calendar chunks are limited to
+4000 days and each evidence array to 10000 entries, not the server's
+total retained history.
+
 ### Folder grants, migration 4 and migration 6
 
 Read this before upgrading if you deliberately revoked folder access

@@ -200,6 +200,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ReconcileCalibreCollectsExistingEmptyWorks", func(t *testing.T) {
 		testReconcileCalibreCollectsExistingEmptyWorks(t, open)
 	})
+	t.Run("ReconcileCalibrePreservesV2RollupHistoryAndArchiveProof", func(t *testing.T) {
+		testReconcileCalibrePreservesV2RollupHistoryAndArchiveProof(t, open)
+	})
 	t.Run("ReconcilePlainFolderNeverPurges", func(t *testing.T) {
 		testReconcilePlainFolderNeverPurges(t, open)
 	})
@@ -239,7 +242,14 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ChangesIsASnapshot", func(t *testing.T) { testChangesIsASnapshot(t, open) })
 	t.Run("SplitAndMerge", func(t *testing.T) { testSplitAndMerge(t, open) })
 	t.Run("SessionsAppendOnly", func(t *testing.T) { testSessionsAppendOnly(t, open) })
+	t.Run("SessionRangeAndCompactionReadsPreserveOptionalMeasurements", func(t *testing.T) {
+		testSessionRangeAndCompactionReadsPreserveOptionalMeasurements(t, open)
+	})
 	t.Run("SessionRollups", func(t *testing.T) { testSessionRollups(t, open) })
+	t.Run("StatisticsStorage", func(t *testing.T) { testStatisticsStorage(t, open) })
+	t.Run("V2RollupsRejectMismatchedContributions", func(t *testing.T) {
+		testV2RollupsRejectMismatchedContributions(t, open)
+	})
 	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
 	t.Run("AnnotationPushIdempotencyAndRevConflict", func(t *testing.T) {

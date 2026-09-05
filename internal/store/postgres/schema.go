@@ -525,8 +525,134 @@ SELECT u.id, f.id FROM users u CROSS JOIN folders f
 WHERE NOT EXISTS (SELECT 1 FROM user_folders);
 `
 
+const statisticsStorage = `
+ALTER TABLE sessions ADD COLUMN active_ms BIGINT;
+ALTER TABLE sessions ADD COLUMN reported_pages DOUBLE PRECISION;
+
+CREATE TABLE stats_revisions (
+    user_id  TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    revision BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO stats_revisions (user_id, revision)
+SELECT id, 0 FROM users
+ON CONFLICT (user_id) DO NOTHING;
+
+CREATE TABLE session_rollups_v2 (
+    user_id                 TEXT NOT NULL,
+    work_id                 TEXT NOT NULL,
+    day                     TEXT NOT NULL,
+    timezone                TEXT NOT NULL,
+    attribution_version     BIGINT NOT NULL DEFAULT 2 CHECK (attribution_version = 2),
+    active_seconds          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    pages                   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    prog_delta              DOUBLE PRECISION NOT NULL DEFAULT 0,
+    session_count           BIGINT NOT NULL DEFAULT 0,
+    measured_active_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    measured_prog_delta     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, work_id, day, timezone),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX session_rollups_v2_user_day ON session_rollups_v2(user_id, day);
+
+ALTER TABLE session_tombstones ADD COLUMN work_id TEXT;
+ALTER TABLE session_tombstones ADD COLUMN day TEXT;
+ALTER TABLE session_tombstones ADD COLUMN timezone TEXT;
+ALTER TABLE session_tombstones ADD COLUMN attribution_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN present BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE session_tombstones ADD COLUMN active_seconds DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN pages DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN prog_delta DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN measured_active_seconds DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE session_tombstones ADD COLUMN measured_prog_delta DOUBLE PRECISION NOT NULL DEFAULT 0;
+CREATE INDEX session_tombstones_user_work ON session_tombstones(user_id, work_id);
+
+CREATE OR REPLACE FUNCTION ensure_stats_revision_row()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision) VALUES (NEW.id, 0)
+    ON CONFLICT (user_id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION bump_stats_revision(p_user_id TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT p_user_id, 1 WHERE EXISTS (SELECT 1 FROM users WHERE id = p_user_id)
+    ON CONFLICT (user_id) DO UPDATE SET revision = stats_revisions.revision + 1;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION bump_stats_revision_new()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM bump_stats_revision(NEW.user_id);
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION bump_stats_revision_old()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM bump_stats_revision(OLD.user_id);
+    RETURN OLD;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION bump_stats_revision_user_timezone()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM bump_stats_revision(NEW.id);
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER stats_revisions_users_insert
+AFTER INSERT ON users
+FOR EACH ROW EXECUTE FUNCTION ensure_stats_revision_row();
+CREATE TRIGGER stats_revisions_users_timezone_update
+AFTER UPDATE OF timezone ON users
+FOR EACH ROW WHEN (OLD.timezone IS DISTINCT FROM NEW.timezone)
+EXECUTE FUNCTION bump_stats_revision_user_timezone();
+
+CREATE TRIGGER stats_revisions_sessions_insert AFTER INSERT ON sessions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_sessions_update AFTER UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_sessions_delete AFTER DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_supersessions_insert AFTER INSERT ON session_supersessions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_supersessions_delete AFTER DELETE ON session_supersessions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_rollups_insert AFTER INSERT ON session_rollups FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_rollups_update AFTER UPDATE ON session_rollups FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_rollups_delete AFTER DELETE ON session_rollups FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_rollups_v2_insert AFTER INSERT ON session_rollups_v2 FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_rollups_v2_update AFTER UPDATE ON session_rollups_v2 FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_rollups_v2_delete AFTER DELETE ON session_rollups_v2 FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_tombstones_insert AFTER INSERT ON session_tombstones FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_tombstones_update AFTER UPDATE ON session_tombstones FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_tombstones_delete AFTER DELETE ON session_tombstones FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_ops_insert AFTER INSERT ON ops FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_ops_update AFTER UPDATE ON ops FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_ops_delete AFTER DELETE ON ops FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_works_insert AFTER INSERT ON works FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_works_update AFTER UPDATE ON works FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_works_delete AFTER DELETE ON works FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+CREATE TRIGGER stats_revisions_editions_insert AFTER INSERT ON editions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_editions_update AFTER UPDATE ON editions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_new();
+CREATE TRIGGER stats_revisions_editions_delete AFTER DELETE ON editions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
-	folderBackfill,
+	folderBackfill, statisticsStorage,
 }
