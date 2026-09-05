@@ -208,6 +208,13 @@ templ readerPage(v ReaderView, csrf string) {
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
 			<p id="reader-status" class="reader-status">Loading…</p>
+			<aside id="reader-catchup" class="reader-catchup" aria-label="Reading position on another device" hidden>
+				<p id="reader-catchup-text" role="status" aria-live="polite"></p>
+				<div>
+					<button type="button" id="reader-catchup-accept">Continue there</button>
+					<button type="button" id="reader-catchup-dismiss">Stay here</button>
+				</div>
+			</aside>
 			// The table of contents, filled in from the publication's own
 			// navigation once the book is open. A drawer over the left
 			// edge, the way Komga does it: every entry is the book's, so

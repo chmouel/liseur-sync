@@ -48,6 +48,60 @@ tags:
   - name: opds
 
 paths:
+  /v1/events:
+    get:
+      tags: [sync]
+      security: [{ deviceToken: [] }]
+      summary: Subscribe to live reading-state invalidations
+      description: |
+        Opens an authenticated Server-Sent Events stream for this account.
+        The `sync` scope permits `positions` and `annotations`;
+        `read-insights` permits `insights`. A credential with no eligible
+        topic is refused. Reader tokens do not need insight authority.
+
+        Registration precedes an opening invalidation of all permitted
+        topics. Later invalidations coalesce topics by union. There is no
+        event ID, sequence number, `since` parameter or replay history.
+        Unknown topics should be ignored. Read the affected topic through
+        its existing feed or snapshot endpoint; keep durable cursors there.
+
+        Comment heartbeats arrive every 20 seconds; clients should reconnect
+        after 60 seconds without bytes, using bounded backoff and jitter.
+        The stream ends at token expiry or when revalidation finds revoked
+        authority. After headers have been sent, these conditions close
+        the connection rather than returning a new HTTP status.
+        The current limit is eight concurrent streams per account.
+      responses:
+        "200":
+          description: |
+            SSE frames containing topic invalidations, comment heartbeats
+            and retry advice in milliseconds. Each event ends with a blank
+            line. The stream carries no book, device or reading position.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Accel-Buffering:
+              schema: { type: string, const: "no" }
+          content:
+            text/event-stream:
+              schema: { type: string }
+              example: "retry: 5000\n\nevent: invalidate\ndata: {\"topics\":[\"positions\",\"annotations\"]}\n\n: ping\n\n"
+        "401": { $ref: "#/components/responses/Error", description: "Missing, invalid, revoked or expired token" }
+        "403": { $ref: "#/components/responses/Error", description: "No eligible topic, or HTTPS required" }
+        "429":
+          description: Too many concurrent streams for this account
+          headers:
+            Retry-After:
+              description: Reconnect delay in seconds
+              schema: { type: integer, example: 5 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+        "503": { $ref: "#/components/responses/Error", description: "Live events are not enabled" }
+
   /healthz:
     get:
       summary: Liveness probe (unauthenticated)

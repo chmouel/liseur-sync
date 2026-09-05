@@ -14,6 +14,7 @@ import (
 
 // Store is the SQLite backend.
 type Store struct {
+	store.Notifications
 	db *sql.DB
 }
 

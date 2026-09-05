@@ -375,11 +375,43 @@ func seedStalePosition(t *testing.T, base string, cookie *http.Cookie, bookID st
 // developer's check rather than a gate. That is the right trade: the
 // alternative is either a browser in CI for one test or shipping a
 // renderer nobody ever ran.
+func TestReaderLiveInARealBrowser(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "live-novel", browserTestEPUB(t))
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+	seedStalePosition(t, ts.URL, cookie, bookID)
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_LIVE=1",
+		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("live reader did not work in a browser: %v", err)
+	}
+}
+
 func TestReaderOpensInARealBrowser(t *testing.T) {
 	chrome := findChrome()
 	if chrome == "" {
 		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
 	}
+
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("no node to drive the browser with")

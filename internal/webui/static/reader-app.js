@@ -16,6 +16,10 @@ import "./vendor/foliate/view.js";
 import { Overlayer } from "./vendor/foliate/overlayer.js";
 import { openSession } from "./reader-session.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
+import { readerAuth } from "./reader-auth.js";
+import { liveStream } from "./reader-live.js";
+import { catchupState, topicRefresh } from "./reader-sync.js";
+import { annotationCFI, annotationRenderer } from "./reader-annotations.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -66,11 +70,21 @@ const fullscreenBtn = document.getElementById("reader-fullscreen");
 
 let view = null;
 let workID = null;
-let token = null;
-let tokenExpiry = 0;
 let pending = null;
 let here = null;
 let faviconObjectURL = null;
+let ready = false;
+let readingDirty = false;
+let interactionPending = false;
+let restoring = true;
+let lifecycle = 0;
+let activityGeneration = 0;
+let syncExpired = false;
+const catchup = catchupState();
+const catchupPanel = document.getElementById("reader-catchup");
+const catchupText = document.getElementById("reader-catchup-text");
+const catchupAccept = document.getElementById("reader-catchup-accept");
+const catchupDismiss = document.getElementById("reader-catchup-dismiss");
 // The book's positions, counted once when it opens. Null for a book
 // this recipe cannot measure, which leaves the engine's own locations
 // to say what page it is.
@@ -84,55 +98,50 @@ function say(message, isError) {
 
 // ------------------------------------------------------------ auth
 
-// credential keeps a live reader token. It re-mints rather than
-// refreshes, because there is no refresh token to steal: the session
-// cookie is the thing that proves the browser may ask.
-async function credential() {
-  if (token && Date.now() < tokenExpiry - 60000) return token;
-  if (cfg.detached) {
-    // Nothing on this origin can prove who the reader is, so there is
-    // no re-minting here: the token was handed over once and when it
-    // is gone the reader has to be opened from the library again. That
-    // is the price of a hostname with no session on it.
-    if (!cfg.handed)
-      throw new Error(
-        "this reading session has expired; open the book from your library again",
-      );
-    token = cfg.handed;
-    // Once it has been refused there is no second one to ask for, so
-    // the next attempt reports that plainly instead of looping.
-    cfg.handed = null;
-    tokenExpiry = Date.now() + 86400000;
-    return token;
-  }
-  const resp = await fetch(cfg.tokenURL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf: cfg.csrf }),
-  });
-  if (!resp.ok) throw new Error("could not obtain a reading credential");
-  const got = await resp.json();
-  token = got.token;
-  tokenExpiry = Date.parse(got.expires_at) || Date.now() + 3600000;
-  return token;
-}
+const auth = readerAuth({
+  ...cfg,
+  handed: cfg.handed,
+  onChange(identity, previous) {
+    lifecycle++;
+    catchup.bind(identity.account, workID, identity.device);
+    hideCatchup();
+    if (!previous) return;
+    refreshes.reset();
+    live.stop();
+    annotationDrawing.clear().catch(() => {});
+    if (previous.account !== identity.account) {
+      auth.stop(); // A page opened for one account never writes under another.
+      return;
+    }
+    if (ready && !document.hidden) startLive();
+  },
+  onExhausted(err) {
+    syncExpired = true;
+    ready = false;
+    lifecycle++;
+    workID = null;
+    session = null;
+    unsent = [];
+    retryOp = null;
+    readingDirty = false;
+    cancelScheduledPush();
+    refreshes.stop();
+    live.stop();
+    catchup.bind(null, null, null);
+    hideCatchup();
+    annotationDrawing.clear().catch(() => {});
+    say(err.message, true);
+  },
+});
+cfg.handed = null;
+const api = (path, options) => auth.request(path, options);
 
-// api retries once on 401, which is the whole of the token lifecycle a
-// client has to implement: expired means ask again, not sign in again.
-async function api(path, options = {}, retry = true) {
-  const secret = await credential();
-  const resp = await fetch(cfg.apiBase + path, {
-    ...options,
-    headers: {
-      ...(options.headers || {}),
-      Authorization: "Bearer " + secret,
-    },
-  });
-  if (resp.status === 401 && retry) {
-    token = null;
-    return api(path, options, false);
-  }
-  return resp;
+function snapshot() {
+  return { identity: auth.identity(), work: workID, view, lifecycle };
+}
+function current(stamp) {
+  return stamp && auth.current(stamp.identity) && stamp.work === workID &&
+    stamp.view === view && stamp.lifecycle === lifecycle;
 }
 
 // ------------------------------------------------------------ sync
@@ -147,18 +156,116 @@ async function resolveWork() {
     },
   );
   if (!resp.ok) return null;
-  return (await resp.json()).work_id || null;
+  const data = await resp.json();
+  return auth.responseCurrent(resp) ? data.work_id || null : null;
 }
 
 async function lastPosition() {
-  if (!workID) return null;
+  if (!workID) return { ok: false };
+  const work = workID;
+  const stamp = snapshot();
   const resp = await api(
-    "v1/works/" + encodeURIComponent(workID) + "/positions?limit=1",
+    "v1/works/" + encodeURIComponent(work) + "/positions?limit=1",
   );
-  if (!resp.ok) return null;
+  if (!resp.ok) return { ok: false };
+  stamp.identity = auth.responseIdentity(resp);
   const ops = (await resp.json()).ops || [];
-  return ops.length ? ops[0] : null;
+  if (work !== workID || !current(stamp)) return { ok: false };
+  return { ok: true, op: ops.length ? ops[0] : null };
 }
+
+// ------------------------------------------------------------- live
+
+function hideCatchup() {
+  if (!catchupPanel) return;
+  const focused = catchupPanel.contains(document.activeElement);
+  catchupPanel.hidden = true;
+  if (focused) {
+    stage.tabIndex = -1;
+    stage.focus({ preventScroll: true });
+  }
+}
+
+function showCatchup() {
+  const offer = catchup.offer();
+  if (!offer || !catchupPanel) return;
+  const fraction = offer.op.progression;
+  catchupText.textContent = finite(fraction)
+    ? `Continue from ${Math.round(fraction * 100)}% read on another device?`
+    : "Continue from the position read on another device?";
+  catchupPanel.hidden = false;
+}
+
+const refreshes = topicRefresh({
+  async refresh(topic) {
+    if (!ready || document.hidden || !workID) return false;
+    const run = lifecycle;
+    const activity = activityGeneration;
+    if (topic === "annotations") return loadAnnotations();
+    const result = await lastPosition();
+    if (!result.ok || document.hidden || run !== lifecycle ||
+        activity !== activityGeneration) return false;
+    catchup.observe(result.op);
+    showCatchup(); // The state allows this only after hidden -> visible.
+    return true;
+  },
+});
+const live = liveStream({
+  request: api,
+  current: (resp) => ready && !document.hidden && auth.responseCurrent(resp),
+  onTopics: (topics) => refreshes.owe(topics),
+});
+
+function startLive() {
+  if (!workID) return;
+  refreshes.start();
+  // This also refreshes on resume against a server without /v1/events.
+  refreshes.owe(["positions", "annotations"]);
+  live.start();
+}
+
+catchupDismiss?.addEventListener("click", () => {
+  catchup.dismiss();
+  hideCatchup();
+});
+catchupPanel?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    catchup.dismiss();
+    hideCatchup();
+  }
+});
+catchupAccept?.addEventListener("click", async () => {
+  const shown = catchup.shown();
+  const stamp = snapshot();
+  const op = current(stamp) ? catchup.accept(shown) : null;
+  const activity = activityGeneration;
+  hideCatchup();
+  if (!op || !view) return;
+  cancelScheduledPush();
+  retryOp = null;
+  readingDirty = false;
+  interactionPending = false;
+  // Close the old sitting at its actual page, not at the remote destination.
+  endSession();
+  restoring = true;
+  try {
+    for (const target of startCandidates(op)) {
+      if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
+      try {
+        const resolved = await view.resolveNavigation(target);
+        if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
+        // goTo catches anchor failures internally; use the renderer so a stale
+        // CFI actually descends to the existing fraction/href fallback.
+        await view.renderer.goTo(resolved);
+        break;
+      } catch { /* try the coarser locator */ }
+    }
+  } finally {
+    restoring = false;
+    // A restored page starts accounting only when the reader next interacts.
+  }
+});
 
 // ------------------------------------------------------ annotations
 
@@ -183,53 +290,20 @@ const ANNOTATION_COLORS = {
   orange: "#ffb74d",
 };
 
-let annotations = []; // the live set, in the server's progression order
-const annColorByCFI = new Map(); // overlayer key -> validated palette token
-const annFailed = new Set(); // annotation ids whose CFI did not anchor
-
-function annotationCFI(a) {
-  const fragments =
-    (a && a.locator && a.locator.locations && a.locator.locations.fragments) ||
-    [];
-  for (const fragment of fragments) {
-    if (typeof fragment === "string" && fragment.indexOf("epubcfi(") === 0) {
-      return fragment;
-    }
-  }
-  return null;
-}
-
-// drawAnnotations (re)offers every drawable highlight to the engine.
-// addAnnotation draws into any chapter that is on screen and is a
-// no-op for the ones that are not, so this runs once after the fetch
-// and again on every create-overlay as chapters arrive. A CFI that
-// fails to anchor moves its annotation to the sidebar instead.
-async function drawAnnotations() {
-  if (!view) return;
-  let degraded = false;
-  for (const a of annotations) {
-    if (a.kind !== "highlight" || annFailed.has(a.id)) continue;
-    const cfi = annotationCFI(a);
-    if (!cfi) continue;
-    annColorByCFI.set(cfi, a.color);
-    try {
-      await view.addAnnotation({ value: cfi });
-    } catch (err) {
-      annFailed.add(a.id);
-      degraded = true;
-    }
-  }
-  if (degraded) buildAnnotationList();
-}
+const annotationDrawing = annotationRenderer({
+  getView: () => view,
+  current,
+  changed: buildAnnotationList,
+});
 
 // buildAnnotationList fills the sidebar with the entries that do not
 // draw over the text. Excerpts and bodies are set as text nodes only.
 function buildAnnotationList() {
   if (!annPanel || !annList) return;
   annList.textContent = "";
-  const listed = annotations.filter(
+  const listed = annotationDrawing.annotations().filter(
     (a) =>
-      a.kind !== "highlight" || !annotationCFI(a) || annFailed.has(a.id),
+      a.kind !== "highlight" || !annotationCFI(a) || annotationDrawing.failed(a.id),
   );
   annPanel.hidden = !listed.length;
   if (!listed.length) return;
@@ -244,7 +318,7 @@ function buildAnnotationList() {
       entry.href = "#";
       entry.addEventListener("click", (e) => {
         e.preventDefault();
-        noteActivity();
+        if (!noteNavigation()) return;
         toggleTOC(false);
         if (!view) return;
         const fall = () => {
@@ -278,18 +352,19 @@ function buildAnnotationList() {
 // loadAnnotations is best-effort like every other sync call: a reader
 // on a server without the routes, or offline, still reads the book.
 async function loadAnnotations() {
-  if (!workID || !view) return;
-  try {
-    const resp = await api(
-      "v1/works/" + encodeURIComponent(workID) + "/annotations",
-    );
-    if (!resp.ok) return;
-    annotations = (await resp.json()).annotations || [];
-  } catch (err) {
-    return; /* offline: the book reads without its annotations */
-  }
-  buildAnnotationList();
-  await drawAnnotations();
+  if (!workID || !view) return false;
+  const work = workID;
+  const stamp = snapshot();
+  const resp = await api("v1/works/" + encodeURIComponent(work) + "/annotations");
+  // An old server without annotation support is not a failing refresh.
+  if ([404, 501].includes(resp.status)) return true;
+  if (!resp.ok) return false;
+  stamp.identity = auth.responseIdentity(resp);
+  const data = await resp.json();
+  if (!current(stamp) || work !== workID || document.hidden) return false;
+  if (!Array.isArray(data.annotations)) return false;
+  await annotationDrawing.replace(data.annotations, stamp);
+  return current(stamp);
 }
 
 // bookTitle is read from the package document rather than from the
@@ -423,7 +498,8 @@ function scheduleFractionRetry() {
 }
 
 async function push() {
-  if (!workID || !here) return;
+  if (!workID || !here || !readingDirty || restoring) return;
+  const stamp = snapshot();
   const locator = locatorFor(here);
   // A non-finite fraction has no position to record. Return without
   // touching retryOp; the layout retry below will prod the engine for
@@ -448,6 +524,7 @@ async function push() {
           locator: locator,
         };
   retryOp = { key, op };
+  catchup.wrote(op);
   try {
     const resp = await api("v1/ops", {
       method: "POST",
@@ -457,8 +534,9 @@ async function push() {
       keepalive: true,
       body: JSON.stringify({ ops: [op] }),
     });
-    if (!resp.ok) return;
+    if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
+    if (!current(stamp) || !auth.responseCurrent(resp)) return;
     const status =
       out && out.results && out.results[0] && out.results[0].status;
     if (
@@ -471,7 +549,12 @@ async function push() {
     // Only this op's own outcome may clear it: a slower response
     // arriving after the reader has moved on must not discard the op
     // a newer push is still responsible for.
-    if (retryOp && retryOp.op === op) retryOp = null;
+    if (retryOp && retryOp.op === op) {
+      retryOp = null;
+      // A newer local page still needs its own push.
+      if (locatorFor(here)?.locations.fragments[0] === locator.locations.fragments[0] &&
+          here.fraction === locator.locations.totalProgression) readingDirty = false;
+    }
   } catch (err) {
     /* offline: the next page turn replays this exact op */
   }
@@ -497,6 +580,7 @@ function opID() {
 }
 
 function schedulePush() {
+  if (!readingDirty || restoring) return;
   cancelScheduledPush();
   pending = setTimeout(push, 1500);
 }
@@ -529,6 +613,9 @@ function beginSession() {
 }
 
 function noteActivity() {
+  activityGeneration++;
+  if (document.hidden || restoring) return;
+  interactionPending = true;
   if (session) {
     session.activity(performance.now(), here && here.fraction);
   } else {
@@ -537,12 +624,19 @@ function noteActivity() {
   if (unsent.length) pushSession();
 }
 
+function noteNavigation() {
+  if (!view || restoring || document.hidden) return false;
+  noteActivity();
+  catchup.moved();
+  hideCatchup();
+  return true;
+}
+
 // noteProgress follows a relocate. It is not activity: the engine
 // relocates on a resize or a font change too, and only a key, a tap or
 // a scroll says somebody was there.
 function noteProgress() {
   if (session) session.progress(here && here.fraction);
-  else beginSession();
 }
 
 function endSession() {
@@ -566,6 +660,7 @@ let sessionInFlight = false;
 async function pushSession(closing) {
   if (!unsent.length || (sessionInFlight && !closing)) return;
   const batch = unsent.slice();
+  const stamp = snapshot();
   sessionInFlight = true;
   try {
     const resp = await api("v1/sessions", {
@@ -580,7 +675,8 @@ async function pushSession(closing) {
     // batch cannot fix that. Any other 4xx is a payload the server will
     // refuse however often it is sent — an unknown work, say. Only a
     // server error or no answer at all leaves the batch to try again.
-    if (resp.ok || (resp.status >= 400 && resp.status < 500)) {
+    if (current(stamp) && auth.responseCurrent(resp) &&
+        (resp.ok || (resp.status >= 400 && resp.status < 500))) {
       unsent = unsent.filter((p) => !batch.includes(p));
     }
   } catch (err) {
@@ -591,17 +687,33 @@ async function pushSession(closing) {
 }
 
 document.addEventListener("visibilitychange", () => {
+  lifecycle++;
   if (document.hidden) {
+    live.stop();
+    refreshes.stop();
+    catchup.hide();
+    hideCatchup();
+    cancelScheduledPush();
+    push();
     endSession();
     return;
   }
+  catchup.resume();
+  if (ready) startLive();
   beginSession();
   if (here && !finite(here.fraction)) {
     fractionRetryAttempt = 0;
     scheduleFractionRetry();
   }
 });
-window.addEventListener("pagehide", endSession);
+window.addEventListener("pagehide", () => {
+  lifecycle++;
+  live.stop();
+  refreshes.stop();
+  catchup.hide();
+  hideCatchup();
+  endSession();
+});
 
 function cfiOf(op) {
   const fragments =
@@ -651,7 +763,7 @@ function startCandidates(op) {
     typeof locations.totalProgression === "number"
       ? locations.totalProgression
       : op.progression;
-  if (typeof fraction === "number" && fraction > 0) {
+  if (finite(fraction) && fraction >= 0) {
     out.push({ fraction: Math.min(0.999, fraction) });
   }
   const href = op.locator && op.locator.href;
@@ -1189,7 +1301,7 @@ function wireChapterPointer(doc) {
   );
   // A scroll is the one way to move through a book that is neither a
   // key nor a tap, so it counts as activity for the sitting.
-  doc.addEventListener("wheel", noteActivity, { passive: true });
+  doc.addEventListener("wheel", () => noteNavigation(), { passive: true });
   doc.addEventListener(
     "pointerdown",
     (e) => {
@@ -1483,6 +1595,7 @@ if (gotoForm) {
     e.preventDefault();
     const val = parseFloat(gotoInput.value);
     if (!Number.isFinite(val)) return;
+    if (!noteNavigation()) return;
     if (gotoKind === "percent") {
       const pct = Math.min(Math.max(val, 0), 100);
       if (view) await view.goToFraction(pct / 100).catch(() => {});
@@ -1587,7 +1700,7 @@ tocList.addEventListener("click", (e) => {
   const a = e.target && e.target.closest && e.target.closest("a[data-href]");
   if (!a) return;
   e.preventDefault();
-  noteActivity();
+  if (!noteNavigation()) return;
   toggleTOC(false);
   if (view) view.goTo(a.dataset.href).catch(() => {});
 });
@@ -1646,7 +1759,7 @@ function stripScripts(book) {
 }
 
 function turn(direction) {
-  if (!view) return undefined;
+  if (!noteNavigation()) return undefined;
   return direction > 0 ? view.goRight() : view.goLeft();
 }
 
@@ -1755,6 +1868,9 @@ stageArea.addEventListener("click", (e) => {
 // alone goes deaf — the engine re-emits its load event per chapter, so
 // each document gets wired as it arrives.
 function handleKeys(e) {
+  // Native buttons own Space/Enter; the reading shortcuts must not turn the
+  // publication or invalidate the offer while its controls have keyboard focus.
+  if (catchupPanel?.contains(e.target)) return;
   noteActivity();
   if (gotoDialog && gotoDialog.open) return;
   const helpDialog = document.getElementById("reader-help");
@@ -1836,10 +1952,10 @@ function handleKeys(e) {
       toggleChrome();
       break;
     case "Home":
-      if (view) view.goToFraction(0);
+      if (noteNavigation()) view.goToFraction(0);
       break;
     case "End":
-      if (view) view.goToFraction(1);
+      if (noteNavigation()) view.goToFraction(1);
       break;
   }
 }
@@ -1871,8 +1987,16 @@ window.addEventListener("beforeunload", () => {
       paint(e.detail);
       if (finite(e.detail.fraction)) {
         clearFractionRetry();
-        schedulePush();
-        noteProgress();
+        if (!restoring) {
+          if (interactionPending) {
+            interactionPending = false;
+            readingDirty = true;
+            catchup.moved();
+            hideCatchup();
+          }
+          schedulePush();
+          noteProgress();
+        }
       } else {
         cancelScheduledPush();
         scheduleFractionRetry();
@@ -1887,6 +2011,9 @@ window.addEventListener("beforeunload", () => {
       e.detail.doc.addEventListener("keydown", handleKeys);
       wireChapterPointer(e.detail.doc);
     });
+    view.addEventListener("link", (e) => {
+      if (!noteNavigation()) e.preventDefault();
+    });
     // Highlight drawing (ADR-0028): the engine asks how to draw each
     // annotation it anchors, and asks again for every chapter it
     // creates an overlay for. The color is resolved from the palette
@@ -1894,12 +2021,12 @@ window.addEventListener("beforeunload", () => {
     view.addEventListener("draw-annotation", (e) => {
       const { draw, annotation } = e.detail;
       const color =
-        ANNOTATION_COLORS[annColorByCFI.get(annotation.value)] ||
+        ANNOTATION_COLORS[annotationDrawing.color(annotation.value)] ||
         ANNOTATION_COLORS.yellow;
       draw(Overlayer.highlight, { color });
     });
     view.addEventListener("create-overlay", () => {
-      drawAnnotations().catch(() => {});
+      annotationDrawing.draw().catch(() => {});
     });
     await view.open(
       new File([blob], "book.epub", { type: "application/epub+zip" }),
@@ -1928,7 +2055,9 @@ window.addEventListener("beforeunload", () => {
       api("v1/books/" + encodeURIComponent(cfg.bookID) + "/cover?size=icon")
         .then(async (resp) => {
           if (!resp.ok) return;
-          const nextFaviconObjectURL = URL.createObjectURL(await resp.blob());
+          const cover = await resp.blob();
+          if (!auth.responseCurrent(resp)) return;
+          const nextFaviconObjectURL = URL.createObjectURL(cover);
           const link = document.querySelector("link[rel=icon]");
           if (!link) {
             URL.revokeObjectURL(nextFaviconObjectURL);
@@ -1946,7 +2075,11 @@ window.addEventListener("beforeunload", () => {
     let op = null;
     try {
       workID = await resolveWork();
-      op = await lastPosition();
+      const identity = auth.identity();
+      catchup.bind(identity?.account, workID, identity?.device);
+      const result = await lastPosition();
+      if (result.ok) op = result.op;
+      catchup.baseline(op);
     } catch (err) {
       /* read on without sync */
     }
@@ -1969,10 +2102,14 @@ window.addEventListener("beforeunload", () => {
       }
     }
     if (!opened) await view.init({ lastLocation: null });
+    restoring = false;
+    ready = !syncExpired;
+    beginSession();
     // The annotations arrive after the book is on screen: they are
     // decoration on the text, never the reason the text waits.
-    loadAnnotations().catch(() => {});
-    say("");
+    if (ready && !document.hidden) startLive();
+    if (document.hidden) catchup.hide();
+    if (!syncExpired) say("");
   } catch (err) {
     say((err && err.message) || "this book could not be opened", true);
   }

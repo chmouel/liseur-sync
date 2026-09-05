@@ -20,6 +20,7 @@ const nan = process.env.SMOKE_NAN === '1';
 // Session mode (ADR-0030): hides and shows the tab with a skewed clock,
 // watching what the reader posts to /v1/sessions.
 const sessions = process.env.SMOKE_SESSIONS === '1';
+const liveMode = process.env.SMOKE_LIVE === '1';
 // How many pages the fixture has, counted from the archive by the Go
 // side with Readium's recipe (ADR-0032). The footer has to agree, or the
 // browser and the app are naming different pages again.
@@ -92,6 +93,32 @@ await S('Network.enable');
 const [name, value] = cookie.split('=');
 await S('Network.setCookie', { name, value, domain: host.split(':')[0], path: '/' });
 
+if (liveMode) {
+  await S('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    const original = window.fetch;
+    window.__liveReads = 0;
+    window.__liveStreams = [];
+    window.__liveOwnOps = [];
+    window.fetch = async function(input, init = {}) {
+      const url = typeof input === 'string' ? input : input.url;
+      if (init.headers?.Authorization) window.__liveBearer = init.headers.Authorization;
+      if (url.endsWith('v1/events')) window.__liveStreams.push(init.signal);
+      if (url.endsWith('v1/ops') && init.body) {
+        const ops = JSON.parse(init.body).ops || [];
+        window.__liveOwnOps.push(...ops.filter((op) => !op.op_id.startsWith('live-test-')));
+      }
+      const resp = await original.call(this, input, init);
+      if (url.includes('/positions?') && resp.ok) {
+        await resp.clone().json();
+        window.__liveReads++;
+      }
+      if (url.endsWith('/resolve') && resp.ok) {
+        window.__liveWork = (await resp.clone().json()).work_id;
+      }
+      return resp;
+    };
+  })()` });
+}
 await S('Page.navigate', { url });
 await new Promise((r) => setTimeout(r, 8000));
 
@@ -126,6 +153,12 @@ if (nan) {
 }
 if (sessions) {
   await sessionGuard(evalIn, check);
+  ws.close();
+  proc.kill();
+  process.exit(fail.length ? 1 : 0);
+}
+if (liveMode) {
+  await liveGuard(evalIn, check, S);
   ws.close();
   proc.kill();
   process.exit(fail.length ? 1 : 0);
@@ -1261,6 +1294,123 @@ ws.close();
 proc.kill();
 process.exit(fail.length ? 1 : 0);
 
+async function liveGuard(evalIn, check, S) {
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const wait = async (expression) => {
+    for (let i = 0; i < 50; i++) {
+      if (await evalIn(expression)) return true;
+      await pause(200);
+    }
+    return false;
+  };
+  const position = () => evalIn("document.querySelector('foliate-view').lastLocation.fraction");
+  const overlay = `(() => {
+    const content = document.querySelector('foliate-view').renderer.getContents()[0];
+    const group = content?.overlayer?.element?.querySelector('g');
+    return group?.getAttribute('fill') || null;
+  })()`;
+  const original = await position();
+  check('opening restore creates no position op', await evalIn('window.__liveOwnOps.length === 0'));
+  check('one live stream is open', await evalIn('window.__liveStreams.length === 1 && !window.__liveStreams[0].aborted'));
+  await evalIn(`(() => {
+    window.__liveCall = async (path, method = 'GET', body) => {
+      const base = document.getElementById('reader-config').dataset.apiBase;
+      const resp = await fetch(base + path, {
+        method, headers: { Authorization: window.__liveBearer, 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (!resp.ok) throw new Error(path + ': ' + resp.status);
+      return resp.status === 204 ? null : resp.json();
+    };
+    return true;
+  })()`);
+  // Recolour and delete the seeded range while remaining on its chapter.
+  const recoloured = await evalIn(`(async () => {
+    const page = await window.__liveCall('v1/works/' + window.__liveWork + '/annotations');
+    const a = page.annotations.find((a) => a.id.endsWith('a1'));
+    const out = await window.__liveCall('v1/annotations', 'POST', { annotations: [{
+      id: a.id, base_rev: a.rev, work_id: window.__liveWork, kind: a.kind,
+      color: 'pink', excerpt: a.excerpt, progression: a.progression,
+      locator: a.locator, client_ts: new Date().toISOString(),
+    }] });
+    return out.results[0].status;
+  })()`);
+  check('remote recolour commits', recoloured === 'applied', recoloured);
+  check('recolour reaches the open chapter without a page turn', await wait(`(${overlay}) === '#f06292'`));
+  await evalIn(`(async () => {
+    const page = await window.__liveCall('v1/works/' + window.__liveWork + '/annotations');
+    const a = page.annotations.find((a) => a.id.endsWith('a1'));
+    await window.__liveCall('v1/annotations/' + a.id + '?rev=' + a.rev, 'DELETE');
+    return true;
+  })()`);
+  check('remote deletion removes its overlay without a page turn', await wait(`(${overlay}) === null`));
+  check('annotation refresh does not move the book', await position() === original);
+
+  const remote = (id, fraction) => evalIn(`(async () => {
+    const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
+      op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
+      client_ts: new Date().toISOString(), progression: ${fraction},
+      locator: { locations: { totalProgression: ${fraction}, fragments: ['epubcfi(/6/9998!/4/2)'] } },
+    }] });
+    return out.results[0].status;
+  })()`);
+  let before = await evalIn('window.__liveReads');
+  check('remote position commits', await remote('first', 0.7) === 'applied');
+  check('a live position triggers the work snapshot', await wait(`window.__liveReads > ${before}`));
+  await pause(300);
+  check('live position does not move the visible book', await position() === original);
+  check('live position does not show an offer while reading', await evalIn("document.getElementById('reader-catchup').hidden"));
+  await evalIn(`(() => {
+    window.__liveHidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__liveHidden });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__liveHidden ? 'hidden' : 'visible' });
+    return true;
+  })()`);
+  const visibility = (hidden) => evalIn(`(() => {
+    window.__liveHidden = ${hidden};
+    document.dispatchEvent(new Event('visibilitychange'));
+    return true;
+  })()`);
+  await visibility(true);
+  check('hidden closes the stream', await evalIn('window.__liveStreams.at(-1).aborted'));
+  await visibility(false);
+  check('resume offers the remote page', await wait("!document.getElementById('reader-catchup').hidden"));
+  const offered = await evalIn("document.getElementById('reader-catchup-text').textContent");
+  check('offer names the held position', offered.includes('70%'), offered);
+  before = await evalIn('window.__liveReads');
+  await remote('second', 0.8);
+  await wait(`window.__liveReads > ${before}`);
+  await pause(300);
+  check('new remote position does not retarget the shown offer',
+    await evalIn("document.getElementById('reader-catchup-text').textContent") === offered);
+  await evalIn("document.getElementById('reader-catchup-accept').click()");
+  await pause(300);
+  check('stale offer acceptance cannot navigate', await position() === original);
+
+  await visibility(true); await visibility(false);
+  check('next resume offers the newer snapshot', await wait("!document.getElementById('reader-catchup').hidden && document.getElementById('reader-catchup-text').textContent.includes('80%')"));
+  if (process.env.SMOKE_SHOT) {
+    const shot = await S('Page.captureScreenshot', { format: 'png' });
+    (await import('node:fs')).writeFileSync(process.env.SMOKE_SHOT, Buffer.from(shot.data, 'base64'));
+  }
+  await evalIn("document.getElementById('reader-catchup-accept').focus()");
+  check('the offer button can receive keyboard focus',
+    await evalIn("document.activeElement.id === 'reader-catchup-accept'"));
+  await S('Input.dispatchKeyEvent', {
+    type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
+    text: '\r', unmodifiedText: '\r',
+  });
+  await S('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  check('keyboard acceptance uses fraction fallback from a stale CFI',
+    await wait("document.querySelector('foliate-view').lastLocation.fraction > 0.75"),
+    JSON.stringify(await evalIn("({ fraction: document.querySelector('foliate-view').lastLocation.fraction, offerHidden: document.getElementById('reader-catchup').hidden, status: document.getElementById('reader-status').textContent })")));
+  await pause(2000);
+  check('accepted restore does not echo a position op', await evalIn('window.__liveOwnOps.length === 0'));
+  await evalIn("document.getElementById('reader-next').click()");
+  check('a genuine page turn still syncs', await wait('window.__liveOwnOps.length > 0'));
+  await visibility(true);
+}
+
 // nanGuard proves the position-jumps fix from the page's own side. The
 // server now rejects a null progression whatever the client does, so a
 // test that only inspected the op log would be vacuous: the observable
@@ -1313,6 +1463,9 @@ async function nanGuard(evalIn, check) {
   const settle = () => new Promise((r) => setTimeout(r, 2500));
 
   await evalIn('(() => { window.__pushedOps = []; return true; })()');
+  // A layout correction should sync a page the reader actually reached,
+  // not manufacture activity merely because a relocate was emitted.
+  await evalIn("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }))");
   await evalIn(relocate('NaN'));
   await settle();
   const afterNaN = await pushed();
@@ -1321,6 +1474,7 @@ async function nanGuard(evalIn, check) {
   check('a skipped NaN schedules a layout retry',
     afterNaN.length >= 1, JSON.stringify(afterNaN));
 
+  await evalIn("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }))");
   await evalIn(relocate('0.47'));
   await settle();
   const afterFinite = await pushed();

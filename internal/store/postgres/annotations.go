@@ -86,6 +86,9 @@ func (s *Store) PushAnnotations(ctx context.Context, userID, deviceID string, it
 	if err != nil {
 		return nil, err
 	}
+	if store.AnyAnnotationApplied(results) {
+		s.Notify(userID, store.TopicAnnotations)
+	}
 	return results, nil
 }
 
@@ -266,6 +269,9 @@ func (s *Store) DeleteAnnotation(ctx context.Context, userID, id string, rev int
 	})
 	if err != nil {
 		return store.AnnotationResult{}, err
+	}
+	if r.Status == "applied" {
+		s.Notify(userID, store.TopicAnnotations)
 	}
 	return r, nil
 }

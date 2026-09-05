@@ -113,6 +113,21 @@ becomes `content.insecure_http`. The server refuses to start on an
 unrecognized key rather than ignoring one, so a misplaced setting is
 reported instead of silently doing nothing.
 
+### Live event streams
+
+`GET /v1/events` holds an authenticated `text/event-stream` connection.
+Caddy flushes this content type without extra configuration. For nginx,
+the application sends `X-Accel-Buffering: no`; do not configure the proxy
+to ignore that header. Keep proxy idle timeouts above the 20-second
+heartbeat interval. Clients treat 60 seconds without bytes as a stalled
+connection.
+
+The server admits up to eight streams per account and returns `429` with
+`Retry-After` when that limit is reached. Each frame has a bounded write
+deadline, and shutdown closes streams before waiting for HTTP requests.
+Delivery is process-local: multiple replicas would need shared
+notification delivery before they could provide the same guarantee.
+
 ### Optional: extra auth at the proxy
 
 The API is fully authenticated by design, but you can put an extra
