@@ -50,11 +50,12 @@ func (s *Store) StatisticsSnapshot(ctx context.Context, userID string, candidate
 
 	rows, err = tx.QueryContext(ctx,
 		`SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta
+		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta,
+		        NULL AS comparison_active_ms
 		   FROM session_rollups WHERE user_id = ?
 		  UNION ALL
 		 SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        timezone, attribution_version, measured_active_seconds, measured_prog_delta
+		        timezone, attribution_version, measured_active_seconds, measured_prog_delta, comparison_active_ms
 		   FROM session_rollups_v2 WHERE user_id = ?
 		  ORDER BY day, work_id, attribution_version, timezone`, userID, userID)
 	if err != nil {
@@ -171,7 +172,8 @@ func loadArchivedSnapshot(ctx context.Context, tx *sql.Tx, userID string, ids []
 		}
 		rows, err := tx.QueryContext(ctx,
 			`SELECT session_id, fingerprint, work_id, day, timezone, attribution_version, present,
-			        active_seconds, pages, prog_delta, measured_active_seconds, measured_prog_delta
+			        active_seconds, pages, prog_delta, measured_active_seconds, measured_prog_delta,
+			        comparison_active_ms
 			   FROM session_tombstones WHERE user_id = ? AND session_id IN (`+placeholders+`)`, args...)
 		if err != nil {
 			return err
@@ -180,10 +182,11 @@ func loadArchivedSnapshot(ctx context.Context, tx *sql.Tx, userID string, ids []
 			var id string
 			var a store.ArchivedSession
 			var workID, day, timezone sql.NullString
+			var comparisonActiveMs sql.NullInt64
 			var present int
 			if err := rows.Scan(&id, &a.Fingerprint, &workID, &day, &timezone, &a.AttributionVersion,
 				&present, &a.ActiveSeconds, &a.Pages, &a.ProgDelta, &a.MeasuredActiveSeconds,
-				&a.MeasuredProgDelta); err != nil {
+				&a.MeasuredProgDelta, &comparisonActiveMs); err != nil {
 				rows.Close()
 				return err
 			}
@@ -197,6 +200,9 @@ func loadArchivedSnapshot(ctx context.Context, tx *sql.Tx, userID string, ids []
 				a.Timezone = timezone.String
 			}
 			a.Present = present != 0
+			if comparisonActiveMs.Valid {
+				a.ComparisonActiveMs = &comparisonActiveMs.Int64
+			}
 			out[id] = a
 		}
 		if err := rows.Err(); err != nil {

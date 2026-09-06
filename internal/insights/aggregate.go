@@ -92,7 +92,7 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 	for _, w := range snap.Works {
 		out.ByWork[w.ID] = Work{WorkID: w.ID, Title: w.Title, Author: w.Author}
 	}
-	add := func(workID, day string, seconds, pages float64, count int, last time.Time, measuredSeconds, delta float64, legacy bool) {
+	recordActiveDay := func(day string, seconds float64) {
 		if seconds > 0 && day <= today {
 			out.ActiveDays[day] = true
 			if out.FirstActivityDay == nil || day < *out.FirstActivityDay {
@@ -100,6 +100,9 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 				out.FirstActivityDay = &date
 			}
 		}
+	}
+	add := func(workID, day string, seconds, pages float64, count int, last time.Time, measuredSeconds, delta float64, legacy bool) {
+		recordActiveDay(day, seconds)
 		if day < from || day > to {
 			return
 		}
@@ -142,15 +145,29 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 			ses.EndedAt, measured, delta, false)
 	}
 	for _, ru := range snap.Rollups {
-		day, err := time.ParseInLocation(DayFormat, ru.Day, loc)
+		day, err := time.Parse(DayFormat, ru.Day)
 		if err != nil {
 			return out, err
 		}
-		if ru.AttributionVersion != 2 || ru.Timezone != snap.Timezone {
+		recordActiveDay(ru.Day, ru.ActiveSeconds)
+		if ru.AttributionVersion != 2 && win.HoldsDay(ru.Day) {
 			out.Complete = false
 			out.IncompleteReason = "legacy_or_different_timezone_rollups"
 		}
-		add(ru.WorkID, ru.Day, ru.ActiveSeconds, ru.Pages, int(ru.SessionCount), day,
+		if ru.AttributionVersion == 2 && ru.Timezone != snap.Timezone {
+			intersects, err := rollupDayIntersectsWindow(ru, win, now)
+			if err != nil {
+				return out, err
+			}
+			if intersects {
+				out.Complete = false
+				out.IncompleteReason = "legacy_or_different_timezone_rollups"
+			} else {
+				continue
+			}
+		}
+		dayStart, _ := DayWindow(day, day, loc).SessionBounds(now, loc)
+		add(ru.WorkID, ru.Day, ru.ActiveSeconds, ru.Pages, int(ru.SessionCount), dayStart,
 			ru.MeasuredActiveSeconds, ru.MeasuredProgDelta, ru.AttributionVersion != 2)
 	}
 	var totalPace pace
@@ -198,4 +215,21 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		return out.Works[i].TotalActiveMinutes > out.Works[j].TotalActiveMinutes
 	})
 	return out, nil
+}
+
+func rollupDayIntersectsWindow(rollup store.SessionRollup, win Window, now time.Time) (bool, error) {
+	loc, err := time.LoadLocation(rollup.Timezone)
+	if err != nil {
+		return false, err
+	}
+	day, err := time.Parse(DayFormat, rollup.Day)
+	if err != nil {
+		return false, err
+	}
+	rollupWindow := DayWindow(day, day, loc)
+	from, to := rollupWindow.SessionBounds(now, loc)
+	if win.Unbounded() {
+		return true, nil
+	}
+	return from.Before(win.to) && to.After(win.from), nil
 }

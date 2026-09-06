@@ -103,6 +103,8 @@ func testReconcileCalibrePreservesV2RollupHistoryAndArchiveProof(t *testing.T, o
 		AttributionVersion: 2, ActiveSeconds: 300, Pages: 12.5, ProgDelta: 0.25,
 		SessionCount: 1, MeasuredActiveSeconds: 300, MeasuredProgDelta: 0.25,
 	}
+	exactActiveMs := int64(300000)
+	rollup.ComparisonActiveMs = &exactActiveMs
 	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup}, []store.Session{ses}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +113,7 @@ func testReconcileCalibrePreservesV2RollupHistoryAndArchiveProof(t *testing.T, o
 		Timezone: rollup.Timezone, AttributionVersion: 2, Present: true,
 		ActiveSeconds: 300, Pages: 12.5, ProgDelta: 0.25,
 		MeasuredActiveSeconds: 300, MeasuredProgDelta: 0.25,
+		ComparisonActiveMs: &exactActiveMs,
 	}
 	assertHistory := func() {
 		t.Helper()
@@ -118,10 +121,10 @@ func testReconcileCalibrePreservesV2RollupHistoryAndArchiveProof(t *testing.T, o
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(snap.Sessions) != 0 || len(snap.Rollups) != 1 || snap.Rollups[0] != rollup {
+		if len(snap.Sessions) != 0 || len(snap.Rollups) != 1 || !reflect.DeepEqual(snap.Rollups[0], rollup) {
 			t.Fatalf("want only the intact v2 rollup, got raw=%+v rollups=%+v", snap.Sessions, snap.Rollups)
 		}
-		if proof, ok := snap.Archived[ses.SessionID]; !ok || proof != wantProof {
+		if proof, ok := snap.Archived[ses.SessionID]; !ok || !reflect.DeepEqual(proof, wantProof) {
 			t.Fatalf("archive proof changed: got %+v (exists=%v), want %+v", proof, ok, wantProof)
 		}
 		if _, err := s.WorkByID(ctx, user.ID, work.ID); err != nil {
