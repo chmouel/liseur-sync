@@ -201,7 +201,8 @@ func loadArchivedSnapshot(ctx context.Context, tx *sql.Tx, userID string, ids []
 			}
 			a.Present = present != 0
 			if comparisonActiveMs.Valid {
-				a.ComparisonActiveMs = &comparisonActiveMs.Int64
+				value := comparisonActiveMs.Int64
+				a.ComparisonActiveMs = &value
 			}
 			out[id] = a
 		}
