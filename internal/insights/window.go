@@ -173,13 +173,21 @@ func (w Window) EachDay(earliest string, now time.Time, loc *time.Location, fn f
 // DayWindow builds the window covering firstDay through lastDay
 // inclusive, in loc.
 func DayWindow(firstDay, lastDay time.Time, loc *time.Location) Window {
-	from := time.Date(firstDay.Year(), firstDay.Month(), firstDay.Day(), 0, 0, 0, 0, loc)
-	last := time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 0, 0, 0, 0, loc)
+	firstDate := time.Date(firstDay.Year(), firstDay.Month(), firstDay.Day(), 0, 0, 0, 0, time.UTC)
+	lastDate := time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 0, 0, 0, 0, time.UTC)
+	from, ok := resolveWallTime(firstDate, 0, 0, 0, 0, loc)
+	if !ok {
+		from = time.Date(firstDay.Year(), firstDay.Month(), firstDay.Day(), 0, 0, 0, 0, loc)
+	}
+	to, ok := resolveWallTime(lastDate.AddDate(0, 0, 1), 0, 0, 0, 0, loc)
+	if !ok {
+		to = time.Date(lastDay.Year(), lastDay.Month(), lastDay.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
+	}
 	return Window{
 		from:    from,
-		to:      last.AddDate(0, 0, 1),
-		fromDay: from.Format(DayFormat),
-		toDay:   last.Format(DayFormat),
+		to:      to,
+		fromDay: firstDate.Format(DayFormat),
+		toDay:   lastDate.Format(DayFormat),
 	}
 }
 
@@ -200,8 +208,8 @@ func DayWindow(firstDay, lastDay time.Time, loc *time.Location) Window {
 // the caller never asked for either way.
 func ParseWindow(rawFrom, rawTo, rawRange, def string, loc *time.Location, now time.Time) Window {
 	if rawFrom != "" && rawTo != "" {
-		from, errFrom := time.ParseInLocation(DayFormat, rawFrom, loc)
-		to, errTo := time.ParseInLocation(DayFormat, rawTo, loc)
+		from, errFrom := time.Parse(DayFormat, rawFrom)
+		to, errTo := time.Parse(DayFormat, rawTo)
 		if errFrom == nil && errTo == nil && !to.Before(from) {
 			return DayWindow(from, to, loc)
 		}

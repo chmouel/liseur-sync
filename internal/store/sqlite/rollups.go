@@ -67,25 +67,35 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 		}
 	}
 	if len(v2) > 0 {
-		if err := store.ValidateRollupContributions(v2, proofs); err != nil {
+		if err := store.PrepareRollupContributions(v2, proofs); err != nil {
 			return err
 		}
 	}
+	exact := make(map[string]*int64, len(v2))
+	for _, r := range v2 {
+		exact[r.WorkID+"\x00"+r.Day+"\x00"+r.Timezone] = r.ComparisonActiveMs
+	}
 	for _, r := range rollups {
 		if rollupAttributionVersion(r) == 2 {
+			comparisonActiveMs := exact[r.WorkID+"\x00"+r.Day+"\x00"+r.Timezone]
 			if _, err := tx.ExecContext(ctx, `INSERT INTO session_rollups_v2 (user_id, work_id, day, timezone, attribution_version,
 				                              active_seconds, pages, prog_delta, session_count,
-				                              measured_active_seconds, measured_prog_delta)
-				 VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?)
+				                              measured_active_seconds, measured_prog_delta, comparison_active_ms)
+				 VALUES (?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(user_id, work_id, day, timezone) DO UPDATE SET
 				     active_seconds          = session_rollups_v2.active_seconds + excluded.active_seconds,
 				     pages                   = session_rollups_v2.pages + excluded.pages,
 				     prog_delta              = session_rollups_v2.prog_delta + excluded.prog_delta,
 				     session_count           = session_rollups_v2.session_count + excluded.session_count,
 				     measured_active_seconds = session_rollups_v2.measured_active_seconds + excluded.measured_active_seconds,
-				     measured_prog_delta     = session_rollups_v2.measured_prog_delta + excluded.measured_prog_delta`,
+				     measured_prog_delta     = session_rollups_v2.measured_prog_delta + excluded.measured_prog_delta,
+				     comparison_active_ms    = CASE
+				         WHEN session_rollups_v2.comparison_active_ms IS NULL OR excluded.comparison_active_ms IS NULL THEN NULL
+				         WHEN session_rollups_v2.comparison_active_ms > 9223372036854775807 - excluded.comparison_active_ms THEN NULL
+				         ELSE session_rollups_v2.comparison_active_ms + excluded.comparison_active_ms
+				     END`,
 				userID, r.WorkID, r.Day, r.Timezone, r.ActiveSeconds, r.Pages, r.ProgDelta,
-				r.SessionCount, r.MeasuredActiveSeconds, r.MeasuredProgDelta); err != nil {
+				r.SessionCount, r.MeasuredActiveSeconds, r.MeasuredProgDelta, comparisonActiveMs); err != nil {
 				return err
 			}
 			continue
@@ -106,12 +116,13 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 			archived := proofs[i]
 			if _, err := tx.ExecContext(ctx, `INSERT INTO session_tombstones (user_id, session_id, fingerprint, work_id, day, timezone,
 				                                attribution_version, present, active_seconds, pages,
-				                                prog_delta, measured_active_seconds, measured_prog_delta)
-				 VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?)
+				                                prog_delta, measured_active_seconds, measured_prog_delta, comparison_active_ms)
+				 VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(user_id, session_id) DO NOTHING`,
 				userID, ses.SessionID, store.SessionFingerprint(ses), archived.WorkID, archived.Day,
 				archived.Timezone, b2i(archived.Present), archived.ActiveSeconds, archived.Pages,
-				archived.ProgDelta, archived.MeasuredActiveSeconds, archived.MeasuredProgDelta); err != nil {
+				archived.ProgDelta, archived.MeasuredActiveSeconds, archived.MeasuredProgDelta,
+				archived.ComparisonActiveMs); err != nil {
 				return err
 			}
 		} else {
@@ -177,6 +188,14 @@ func archivedContribution(ctx context.Context, tx *sql.Tx, userID string, ses st
 			ActiveSeconds:      sessionActiveSeconds(ses),
 			ProgDelta:          sessionProgDelta(ses),
 		}
+		exact := ses.EndedAt.UnixMilli() - ses.StartedAt.UnixMilli() - ses.IdleMs
+		if ses.ActiveMs != nil {
+			exact = *ses.ActiveMs
+		}
+		if exact < 0 {
+			exact = 0
+		}
+		proof.ComparisonActiveMs = &exact
 		pages, err := sessionPages(ctx, tx, userID, ses, proof.ProgDelta, pageCounts)
 		if err != nil {
 			return store.ArchivedSession{}, err
@@ -237,11 +256,12 @@ func sessionPages(ctx context.Context, tx *sql.Tx, userID string, ses store.Sess
 
 func (s *Store) RollupsInRange(ctx context.Context, userID, fromDay, toDay string) ([]store.SessionRollup, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta
+		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta,
+		        NULL AS comparison_active_ms
 		 FROM session_rollups WHERE user_id = ? AND day >= ? AND day <= ?
 		 UNION ALL
 		 SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        timezone, attribution_version, measured_active_seconds, measured_prog_delta
+		        timezone, attribution_version, measured_active_seconds, measured_prog_delta, comparison_active_ms
 		 FROM session_rollups_v2 WHERE user_id = ? AND day >= ? AND day <= ?
 		 ORDER BY day, work_id, attribution_version`, userID, fromDay, toDay, userID, fromDay, toDay)
 	if err != nil {
@@ -253,11 +273,12 @@ func (s *Store) RollupsInRange(ctx context.Context, userID, fromDay, toDay strin
 
 func (s *Store) RollupsForWork(ctx context.Context, userID, workID string) ([]store.SessionRollup, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta
+		        '' AS timezone, 0 AS attribution_version, 0 AS measured_active_seconds, 0 AS measured_prog_delta,
+		        NULL AS comparison_active_ms
 		 FROM session_rollups WHERE user_id = ? AND work_id = ?
 		 UNION ALL
 		 SELECT user_id, work_id, day, active_seconds, pages, prog_delta, session_count,
-		        timezone, attribution_version, measured_active_seconds, measured_prog_delta
+		        timezone, attribution_version, measured_active_seconds, measured_prog_delta, comparison_active_ms
 		 FROM session_rollups_v2 WHERE user_id = ? AND work_id = ?
 		 ORDER BY day, attribution_version`, userID, workID, userID, workID)
 	if err != nil {
@@ -271,10 +292,14 @@ func scanRollups(rows *sql.Rows) ([]store.SessionRollup, error) {
 	var out []store.SessionRollup
 	for rows.Next() {
 		var r store.SessionRollup
+		var comparisonActiveMs sql.NullInt64
 		if err := rows.Scan(&r.UserID, &r.WorkID, &r.Day, &r.ActiveSeconds, &r.Pages, &r.ProgDelta,
 			&r.SessionCount, &r.Timezone, &r.AttributionVersion, &r.MeasuredActiveSeconds,
-			&r.MeasuredProgDelta); err != nil {
+			&r.MeasuredProgDelta, &comparisonActiveMs); err != nil {
 			return nil, err
+		}
+		if comparisonActiveMs.Valid {
+			r.ComparisonActiveMs = &comparisonActiveMs.Int64
 		}
 		out = append(out, r)
 	}

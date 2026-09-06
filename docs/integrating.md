@@ -558,6 +558,7 @@ First request `GET /v1/insights/capabilities`:
   "account_id": "usr_31b0",
   "all_time": true,
   "active_ms": true,
+  "comparison": true,
   "attribution_version": 2,
   "timezone": "Europe/Paris",
   "max_candidates": 10000,
@@ -567,7 +568,7 @@ First request `GET /v1/insights/capabilities`:
 }
 ```
 
-Require the supported versions, `all_time: true`, and an `account_id`
+Require the supported versions, `all_time: true`, `comparison: true`, and an `account_id`
 matching the captured account before using snapshots. Both evidence
 limits are explicit: `max_candidates` bounds session candidates and
 `max_local_active_days` bounds local activity dates. These fields are
@@ -582,6 +583,13 @@ Capture local totals and their evidence together, then send
   "timezone": "Europe/Paris",
   "from": "2026-08-01",
   "to": "2026-08-31",
+  "comparison": {
+    "current_from": "2026-08-01",
+    "current_to": "2026-08-31",
+    "previous_from": "2026-07-01",
+    "previous_to": "2026-07-31",
+    "through": "08:48:42.375"
+  },
   "candidates": [{
     "session_id": "sitting-42",
     "work_id": "work-7",
@@ -621,6 +629,16 @@ evidence and then claim a complete union.
 The limit covers the entire body, including trailing whitespace. Send
 one JSON value only; trailing JSON or garbage gets `400` within the limit.
 
+`comparison` is optional and is never sent for `range: "all"`. Its current
+dates must exactly match the bounded headline `from`/`to`, `current_to`
+must be account-local today, and `previous_to` must be before
+`current_from`. Each inclusive span may contain at most 4000 days.
+`through` accepts `HH:mm` or seconds with zero through three fractional
+digits; it is normalized and echoed as `HH:mm:ss.SSS`. The cutoff is the
+same wall-clock time on each span's last day. A repeated DST time uses the
+earlier occurrence, while a skipped time moves forward by the size of the
+gap, matching Java/Kotlin `LocalDateTime.atZone`.
+
 The response contains:
 
 | Field | Meaning |
@@ -637,6 +655,9 @@ The response contains:
 | `days` | Server daily rows: `date`, `minutes`, `pages`, `sessions`. Missing dates contribute zero. |
 | `overlap` | Actual included candidates: `total_active_minutes`, `sessions`, `works`, `days`. No top-level page total. |
 | `combined_streak_days` | Streak from all server positive-activity days unioned with `local_active_days`. |
+| `comparison` | Optional server `current_active_minutes` and `previous_active_minutes`, with the four echoed dates and normalized `through`. |
+| `overlap.comparison` | Optional `current_active_minutes` and `previous_active_minutes` overlap totals for the top-level comparison's echoed spans. |
+| `comparison_incomplete_reason` | Present only when comparison was requested but both comparison blocks were omitted. It never changes headline `complete`. |
 
 Work rows carry `work_id`, `sessions`, `total_active_minutes`,
 `total_pages`, `current_progression`, nullable `eta_seconds` and
@@ -664,6 +685,35 @@ payload mismatches do too. Reasons are
 Use local-only statistics when negotiation is unavailable or the response
 cannot certify the requested union. Do not guess a merge with legacy
 summary/calendar endpoints.
+
+Comparison totals use raw timestamps up to the wall-clock cutoff. A session
+ending at or before the cutoff contributes its whole active duration; one
+that starts before and ends after it contributes
+`active_ms * elapsed_wall_time / total_wall_time`, rounded per session to
+the nearest millisecond with the same positive tie behavior as Kotlin
+`roundToLong`. When `active_ms` is absent, wall-clock milliseconds minus
+`idle_ms` are used. A session may end after midnight and still contribute
+the portion before the cutoff.
+
+A v2 rollup on a whole day before a span's last day contributes in full.
+A positive rollup on the partial last day, or on any later day that could
+hide a session crossing the cutoff, lacks the timestamps needed to prorate
+and refuses the comparison. Legacy and different-timezone rollups also
+refuse it. V2 rollups written before the server began retaining the exact
+sum of per-session comparison milliseconds likewise refuse rather than
+rounding an old floating-point aggregate and claiming it is exact. In these
+cases the response keeps the valid headline, omits
+both `comparison` and `overlap.comparison`, and sets
+`comparison_incomplete_reason: "comparison_history_incomplete"`.
+Candidate payload or archive-proof failures use the corresponding existing
+reason. Clients fall back to a local-only comparison for any reason they do
+not recognize.
+
+Headline and comparison evidence are scoped separately. A baseline-only
+candidate or work cannot set headline `complete: false`; conversely, an
+unverifiable comparison never turns a valid all-device headline into a
+local one. Both comparison totals and both overlap totals still come from
+the same database snapshot and `stats_revision`.
 
 Calendar bounds are independent of aggregate bounds: optional
 `calendar_from`/`calendar_to` filter only `days` and `overlap.days`,

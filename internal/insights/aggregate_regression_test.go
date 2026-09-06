@@ -146,6 +146,7 @@ func TestAggregateLegacyAndForeignTimezoneRollupsRemainVisible(t *testing.T) {
 					SessionCount: 2, ProgDelta: 0.2, Timezone: tc.zone, AttributionVersion: tc.version,
 				}},
 			}
+
 			got, err := Build(snap, Window{}, now)
 			if err != nil {
 				t.Fatal(err)
@@ -161,6 +162,88 @@ func TestAggregateLegacyAndForeignTimezoneRollupsRemainVisible(t *testing.T) {
 				t.Errorf("fallback loses totals or fabricates pace: %+v", got)
 			}
 		})
+	}
+}
+
+func TestAggregateIgnoresOldTimezoneRollupOutsideBoundedWindow(t *testing.T) {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	snap := store.StatsSnapshot{
+		Timezone: "UTC",
+		Works:    []store.Work{{ID: "book"}},
+		Rollups: []store.SessionRollup{
+			{WorkID: "book", Day: "2025-01-01", Timezone: "Europe/Paris", AttributionVersion: 2, ActiveSeconds: 600, SessionCount: 1},
+			{WorkID: "book", Day: "2026-03-30", ActiveSeconds: 300, SessionCount: 1, Timezone: "UTC", AttributionVersion: 2},
+		},
+	}
+
+	got, err := Build(snap, DayWindow(now, now, time.UTC), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Complete || got.IncompleteReason != "" || got.Summary.TotalActiveMinutes != 5 {
+		t.Fatalf("out-of-window legacy history invalidated a bounded headline: %+v", got)
+	}
+}
+
+func TestAggregateIgnoresLegacyRollupOutsideBoundedWindow(t *testing.T) {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	snap := store.StatsSnapshot{
+		Timezone: "UTC",
+		Works:    []store.Work{{ID: "book"}},
+		Rollups: []store.SessionRollup{
+			{WorkID: "book", Day: "2025-01-01", ActiveSeconds: 600, SessionCount: 1},
+			{WorkID: "book", Day: "2026-03-30", Timezone: "UTC", AttributionVersion: 2, ActiveSeconds: 300, SessionCount: 1},
+		},
+	}
+	got, err := Build(snap, DayWindow(now, now, time.UTC), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Complete || got.IncompleteReason != "" || got.Summary.TotalActiveMinutes != 5 {
+		t.Fatalf("out-of-window legacy history invalidated a bounded headline: %+v", got)
+	}
+}
+
+func TestAggregateDetectsOldTimezoneDayCrossingBoundedWindow(t *testing.T) {
+	kiritimati := mustLoad("Pacific/Kiritimati")
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, kiritimati)
+	win := DayWindow(now, now, kiritimati)
+	snap := store.StatsSnapshot{
+		Timezone: "Pacific/Kiritimati",
+		Works:    []store.Work{{ID: "book"}},
+		Rollups: []store.SessionRollup{{
+			WorkID: "book", Day: "2026-09-01", Timezone: "UTC",
+			AttributionVersion: 2, ActiveSeconds: 600, SessionCount: 1,
+		}},
+	}
+	got, err := Build(snap, win, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Complete || got.IncompleteReason != "legacy_or_different_timezone_rollups" {
+		t.Fatalf("old-timezone day intersecting the requested instants claimed complete: %+v", got)
+	}
+}
+
+func TestAggregateSkippedForeignTimezoneRollupStillDecoratesStreak(t *testing.T) {
+	honolulu := mustLoad("Pacific/Honolulu")
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, honolulu)
+	snap := store.StatsSnapshot{
+		Timezone: "Pacific/Honolulu",
+		Works:    []store.Work{{ID: "book"}},
+		Rollups: []store.SessionRollup{{
+			WorkID: "book", Day: "2026-03-30", Timezone: "Pacific/Kiritimati",
+			AttributionVersion: 2, ActiveSeconds: 600, SessionCount: 1,
+		}},
+	}
+	got, err := Build(snap, DayWindow(now, now, honolulu), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Complete || got.Summary.TotalActiveMinutes != 0 || len(got.Days) != 0 ||
+		got.Summary.StreakDays != 1 || !got.ActiveDays["2026-03-30"] ||
+		got.FirstActivityDay == nil || *got.FirstActivityDay != "2026-03-30" {
+		t.Fatalf("skipped old-timezone rollup lost all-history activity: %+v", got)
 	}
 }
 

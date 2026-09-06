@@ -64,6 +64,8 @@ func RollupsRejectStaleEditionPageCount(t *testing.T, s store.Store, updatePages
 				AttributionVersion: 2, ActiveSeconds: 960, Pages: pages, ProgDelta: 0.625,
 				SessionCount: 3, MeasuredActiveSeconds: 360, MeasuredProgDelta: 0.5,
 			}
+			exactActiveMs := int64(960000)
+			rollup.ComparisonActiveMs = &exactActiveMs
 			if err := updatePages(user.ID, edition.SHA256, tc.fresh); err != nil {
 				t.Fatal(err)
 			}
@@ -104,7 +106,7 @@ func RollupsRejectStaleEditionPageCount(t *testing.T, s store.Store, updatePages
 				t.Fatalf("fresh bucket differs from archived contributions: %v", err)
 			}
 			got := after.Rollups[len(after.Rollups)-1]
-			if got != rollup {
+			if !reflect.DeepEqual(got, rollup) {
 				t.Fatalf("fresh bucket: got %+v, want %+v", got, rollup)
 			}
 			now = now.Add(24 * time.Hour)
@@ -113,6 +115,21 @@ func RollupsRejectStaleEditionPageCount(t *testing.T, s store.Store, updatePages
 }
 
 func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
+	first, second := int64(math.MaxInt64-1), int64(2)
+	overflowing := []store.SessionRollup{{
+		WorkID: "work", Day: "2026-09-04", Timezone: "UTC",
+		AttributionVersion: 2, SessionCount: 2,
+	}}
+	if err := store.PrepareRollupContributions(overflowing, []store.ArchivedSession{
+		{WorkID: "work", Day: "2026-09-04", Timezone: "UTC", ComparisonActiveMs: &first},
+		{WorkID: "work", Day: "2026-09-04", Timezone: "UTC", ComparisonActiveMs: &second},
+	}); err != nil {
+		t.Fatalf("overflowing optional evidence blocked compaction: %v", err)
+	}
+	if overflowing[0].ComparisonActiveMs != nil {
+		t.Fatalf("overflowing exact evidence was retained: %+v", overflowing[0])
+	}
+
 	s := open(t)
 	ctx := t.Context()
 	user := MkUser(t, s, "rollup-contributions")
@@ -183,5 +200,17 @@ func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 	}
 	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup}, []store.Session{ses}); err != nil {
 		t.Fatalf("matching contributions must compact: %v", err)
+	}
+	after, err := s.StatisticsSnapshot(ctx, user.ID, []string{ses.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Rollups) != 1 || after.Rollups[0].ComparisonActiveMs == nil ||
+		*after.Rollups[0].ComparisonActiveMs != 9 {
+		t.Fatalf("rollup lost per-session millisecond evidence: %+v", after.Rollups)
+	}
+	proof := after.Archived[ses.SessionID]
+	if proof.ComparisonActiveMs == nil || *proof.ComparisonActiveMs != 9 {
+		t.Fatalf("archive proof lost per-session millisecond evidence: %+v", proof)
 	}
 }

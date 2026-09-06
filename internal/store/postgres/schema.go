@@ -651,8 +651,13 @@ CREATE TRIGGER stats_revisions_editions_update AFTER UPDATE ON editions FOR EACH
 CREATE TRIGGER stats_revisions_editions_delete AFTER DELETE ON editions FOR EACH ROW EXECUTE FUNCTION bump_stats_revision_old();
 `
 
+const comparisonRollupEvidence = `
+ALTER TABLE session_rollups_v2 ADD COLUMN comparison_active_ms BIGINT;
+ALTER TABLE session_tombstones ADD COLUMN comparison_active_ms BIGINT;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
-	folderBackfill, statisticsStorage,
+	folderBackfill, statisticsStorage, comparisonRollupEvidence,
 }

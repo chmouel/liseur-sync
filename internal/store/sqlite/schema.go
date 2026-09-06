@@ -797,10 +797,15 @@ BEGIN
 END;
 `
 
+const comparisonRollupEvidence = `
+ALTER TABLE session_rollups_v2 ADD COLUMN comparison_active_ms INTEGER;
+ALTER TABLE session_tombstones ADD COLUMN comparison_active_ms INTEGER;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
-	folderBackfill, statisticsStorage,
+	folderBackfill, statisticsStorage, comparisonRollupEvidence,
 }
