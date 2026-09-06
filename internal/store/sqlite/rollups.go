@@ -299,7 +299,8 @@ func scanRollups(rows *sql.Rows) ([]store.SessionRollup, error) {
 			return nil, err
 		}
 		if comparisonActiveMs.Valid {
-			r.ComparisonActiveMs = &comparisonActiveMs.Int64
+			value := comparisonActiveMs.Int64
+			r.ComparisonActiveMs = &value
 		}
 		out = append(out, r)
 	}
