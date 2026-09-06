@@ -117,16 +117,39 @@ type snapshotReply struct {
 	Revision           string           `json:"stats_revision"`
 	Complete           bool             `json:"complete"`
 	IncompleteReason   string           `json:"incomplete_reason"`
+	ComparisonReason   string           `json:"comparison_incomplete_reason"`
 	CombinedStreakDays int              `json:"combined_streak_days"`
 	Summary            insights.Summary `json:"summary"`
 	Works              []insights.Work  `json:"works"`
 	Days               []insights.Day   `json:"days"`
+	Comparison         *comparisonReply `json:"comparison"`
 	Overlap            struct {
-		Minutes  float64         `json:"total_active_minutes"`
-		Sessions int             `json:"sessions"`
-		Works    []insights.Work `json:"works"`
-		Days     []insights.Day  `json:"days"`
+		Minutes    float64                `json:"total_active_minutes"`
+		Sessions   int                    `json:"sessions"`
+		Works      []insights.Work        `json:"works"`
+		Days       []insights.Day         `json:"days"`
+		Comparison *comparisonTotalsReply `json:"comparison"`
 	} `json:"overlap"`
+}
+
+type comparisonTotalsReply struct {
+	CurrentMinutes  float64 `json:"current_active_minutes"`
+	PreviousMinutes float64 `json:"previous_active_minutes"`
+	CurrentFrom     string  `json:"current_from"`
+	CurrentTo       string  `json:"current_to"`
+	PreviousFrom    string  `json:"previous_from"`
+	PreviousTo      string  `json:"previous_to"`
+	Through         string  `json:"through"`
+}
+
+type comparisonReply struct {
+	CurrentMinutes  float64 `json:"current_active_minutes"`
+	PreviousMinutes float64 `json:"previous_active_minutes"`
+	CurrentFrom     string  `json:"current_from"`
+	CurrentTo       string  `json:"current_to"`
+	PreviousFrom    string  `json:"previous_from"`
+	PreviousTo      string  `json:"previous_to"`
+	Through         string  `json:"through"`
 }
 
 func readSnapshot(t *testing.T, url, token string, body map[string]any) snapshotReply {
@@ -169,6 +192,24 @@ func snapshotNear(t *testing.T, label string, got, want float64) {
 	if math.IsNaN(got) || math.IsInf(got, 0) || math.Abs(got-want) > 1e-9 {
 		t.Errorf("%s: got %v, want %v", label, got, want)
 	}
+}
+
+func comparisonBody(now time.Time, sessions ...store.Session) map[string]any {
+	today := now.UTC()
+	currentFrom := today.AddDate(0, 0, -1).Format(insights.DayFormat)
+	currentTo := today.Format(insights.DayFormat)
+	previousFrom := today.AddDate(0, 0, -3).Format(insights.DayFormat)
+	previousTo := today.AddDate(0, 0, -2).Format(insights.DayFormat)
+	body := snapshotBody(sessions...)
+	delete(body, "range")
+	body["from"], body["to"] = currentFrom, currentTo
+	body["calendar_from"], body["calendar_to"] = currentFrom, currentTo
+	body["comparison"] = map[string]any{
+		"current_from": currentFrom, "current_to": currentTo,
+		"previous_from": previousFrom, "previous_to": previousTo,
+		"through": "12:00:00",
+	}
+	return body
 }
 
 func requireSnapshotError(t *testing.T, code int, out map[string]any, want int) {
@@ -381,12 +422,13 @@ func TestInsightsSnapshotAuthScopesAndTenantIsolation(t *testing.T) {
 	code, caps := get(t, f.ts.URL+"/v1/insights/capabilities", f.reader)
 	if code != http.StatusOK || caps["version"] != float64(1) || caps["active_ms"] != true ||
 		caps["attribution_version"] != float64(2) || caps["timezone"] != "UTC" ||
-		caps["account_id"] != f.user.ID || caps["all_time"] != true ||
+		caps["account_id"] != f.user.ID || caps["all_time"] != true || caps["comparison"] != true ||
 		caps["max_candidates"] != float64(10_000) || caps["max_calendar_days"] != float64(4000) ||
 		caps["max_local_active_days"] != float64(10_000) ||
 		caps["max_body_bytes"] != float64(config.Default().Ops.MaxBodyBytes) {
 		t.Errorf("capability contract: %d %v", code, caps)
 	}
+
 	other := store.User{ID: "other-user", Name: "other-reader", Argon2Hash: f.user.Argon2Hash, Timezone: "Europe/Paris", CreatedAt: time.Now()}
 	if err := f.st.CreateUser(t.Context(), other); err != nil {
 		t.Fatal(err)
@@ -923,6 +965,202 @@ func TestInsightsSnapshotTokenAdvertisesMeasuredSessionsWithoutInsightsScope(t *
 	got := readSnapshot(t, f.ts.URL, f.reader, snapshotBody(ses))
 	if !got.Complete || got.Summary.TotalActiveMinutes != 30 || got.Overlap.Minutes != 30 {
 		t.Errorf("advertised measured session was not preserved: %+v", got)
+	}
+}
+
+func TestInsightsSnapshotComparisonTotalsAndOverlapShareOneSnapshot(t *testing.T) {
+	f := newSnapshotFixture(t)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	current, remote, previous := f.session("comparison-current"), f.session("comparison-remote"), f.session("comparison-previous")
+	current.StartedAt, current.EndedAt = today.Add(10*time.Hour), today.Add(14*time.Hour)
+	currentActive := int64(120 * 60 * 1000)
+	current.ActiveMs = &currentActive
+	remote.StartedAt, remote.EndedAt = today.Add(9*time.Hour), today.Add(10*time.Hour)
+	remoteActive := int64(60 * 60 * 1000)
+	remote.ActiveMs, remote.DeviceID = &remoteActive, "other-device"
+	previousDay := today.AddDate(0, 0, -2)
+	previous.StartedAt, previous.EndedAt = previousDay.Add(10*time.Hour), previousDay.Add(14*time.Hour)
+	previousActive := int64(240 * 60 * 1000)
+	previous.ActiveMs = &previousActive
+	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{current, remote, previous}); err != nil {
+		t.Fatal(err)
+	}
+	body := comparisonBody(now, current, previous)
+	got := readSnapshot(t, f.ts.URL, f.reader, body)
+	if !got.Complete || got.Comparison == nil || got.Overlap.Comparison == nil || got.ComparisonReason != "" {
+		t.Fatalf("comparison missing from complete snapshot: %+v", got)
+	}
+	if got.Comparison.Through != "12:00:00.000" {
+		t.Fatalf("cutoff was not normalized: server=%+v", got.Comparison)
+	}
+	requested := body["comparison"].(map[string]any)
+	if got.Comparison.CurrentFrom != requested["current_from"] || got.Comparison.CurrentTo != requested["current_to"] ||
+		got.Comparison.PreviousFrom != requested["previous_from"] || got.Comparison.PreviousTo != requested["previous_to"] {
+		t.Fatalf("comparison bounds were not echoed: request=%v server=%+v", requested, got.Comparison)
+	}
+	if got.Overlap.Comparison.CurrentFrom != "" || got.Overlap.Comparison.CurrentTo != "" ||
+		got.Overlap.Comparison.PreviousFrom != "" || got.Overlap.Comparison.PreviousTo != "" ||
+		got.Overlap.Comparison.Through != "" {
+		t.Fatalf("overlap comparison must contain totals only: %+v", got.Overlap.Comparison)
+	}
+	snapshotNear(t, "current server comparison", got.Comparison.CurrentMinutes, 120)
+	snapshotNear(t, "previous server comparison", got.Comparison.PreviousMinutes, 120)
+	snapshotNear(t, "current overlap comparison", got.Overlap.Comparison.CurrentMinutes, 60)
+	snapshotNear(t, "previous overlap comparison", got.Overlap.Comparison.PreviousMinutes, 120)
+	snapshotNear(t, "whole-day headline remains unchanged", got.Summary.TotalActiveMinutes, 180)
+}
+
+func TestInsightsSnapshotComparisonRefusalDoesNotInvalidateHeadline(t *testing.T) {
+	f := newSnapshotFixture(t)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	current, previous := f.session("current"), f.session("previous")
+	current.StartedAt, current.EndedAt = today.Add(9*time.Hour), today.Add(10*time.Hour)
+	currentActive := int64(60 * 60 * 1000)
+	current.ActiveMs = &currentActive
+	previousDay := today.AddDate(0, 0, -2)
+	previous.StartedAt, previous.EndedAt = previousDay.Add(9*time.Hour), previousDay.Add(10*time.Hour)
+	previousActive := int64(60 * 60 * 1000)
+	previous.ActiveMs = &previousActive
+	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{current, previous}); err != nil {
+		t.Fatal(err)
+	}
+	changed := previous
+	changedActive := int64(30 * 60 * 1000)
+	changed.ActiveMs = &changedActive
+	got := readSnapshot(t, f.ts.URL, f.reader, comparisonBody(now, changed))
+	if !got.Complete || got.IncompleteReason != "" || got.Comparison != nil ||
+		got.Overlap.Comparison != nil || got.ComparisonReason != "candidate_payload_mismatch" {
+		t.Fatalf("baseline-only mismatch damaged the headline or produced a comparison: %+v", got)
+	}
+	snapshotNear(t, "valid headline survives", got.Summary.TotalActiveMinutes, 60)
+}
+
+func TestInsightsSnapshotComparisonRefusesCompactedBoundaryOnly(t *testing.T) {
+	f := newSnapshotFixture(t)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	current := f.session("current")
+	current.StartedAt, current.EndedAt = today.Add(9*time.Hour), today.Add(10*time.Hour)
+	active := int64(60 * 60 * 1000)
+	current.ActiveMs = &active
+	previousTo := today.AddDate(0, 0, -2).Format(insights.DayFormat)
+	snap := store.StatsSnapshot{
+		Timezone: "UTC", Revision: 19, Works: []store.Work{f.work}, Sessions: []store.Session{current},
+		Rollups: []store.SessionRollup{{
+			WorkID: f.work.ID, Day: previousTo, Timezone: "UTC",
+			AttributionVersion: 2, ActiveSeconds: 3600, SessionCount: 1,
+		}},
+	}
+	st := &snapshotReadStore{Store: f.st, read: func(context.Context, string, []string) (store.StatsSnapshot, error) {
+		return snap, nil
+	}}
+	ts := snapshotTestServer(t, f, st, 0)
+	got := readSnapshot(t, ts.URL, f.reader, comparisonBody(now))
+	if !got.Complete || got.IncompleteReason != "" || got.Comparison != nil ||
+		got.ComparisonReason != "comparison_history_incomplete" {
+		t.Fatalf("comparison-only rollup refusal damaged the headline: %+v", got)
+	}
+	snapshotNear(t, "headline current raw session", got.Summary.TotalActiveMinutes, 60)
+}
+
+func TestInsightsSnapshotComparisonAcceptsArchivedBaselineOnlyWork(t *testing.T) {
+	f := newSnapshotFixture(t)
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	current := f.session("current")
+	current.StartedAt, current.EndedAt = today.Add(9*time.Hour), today.Add(10*time.Hour)
+	active := int64(60 * 60 * 1000)
+	current.ActiveMs = &active
+	baselineWork := store.Work{ID: "baseline-work", UserID: f.user.ID}
+	baseline := f.session("baseline")
+	baseline.WorkID = baselineWork.ID
+	baselineDay := today.AddDate(0, 0, -3)
+	baseline.StartedAt, baseline.EndedAt = baselineDay.Add(9*time.Hour), baselineDay.Add(10*time.Hour)
+	baseline.ActiveMs = &active
+	baselineExact := active
+	snap := store.StatsSnapshot{
+		Timezone: "UTC", Revision: 20, Works: []store.Work{f.work, baselineWork},
+		Sessions: []store.Session{current},
+		Rollups: []store.SessionRollup{{
+			WorkID: baselineWork.ID, Day: baselineDay.Format(insights.DayFormat), Timezone: "UTC",
+			AttributionVersion: 2, ActiveSeconds: 3600, SessionCount: 1,
+			ComparisonActiveMs: &baselineExact,
+		}},
+		Archived: map[string]store.ArchivedSession{
+			baseline.SessionID: {
+				Fingerprint: store.SessionFingerprint(baseline), WorkID: baselineWork.ID,
+				Day: baselineDay.Format(insights.DayFormat), Timezone: "UTC",
+				AttributionVersion: 2, Present: true, ActiveSeconds: 3600,
+				ComparisonActiveMs: &baselineExact,
+			},
+		},
+	}
+	st := &snapshotReadStore{Store: f.st, read: func(context.Context, string, []string) (store.StatsSnapshot, error) {
+		return snap, nil
+	}}
+	ts := snapshotTestServer(t, f, st, 0)
+	got := readSnapshot(t, ts.URL, f.reader, comparisonBody(now, baseline))
+	if !got.Complete || got.Comparison == nil || got.Overlap.Comparison == nil || got.ComparisonReason != "" {
+		t.Fatalf("baseline-only archived work was refused: %+v", got)
+	}
+	snapshotNear(t, "baseline server", got.Comparison.PreviousMinutes, 60)
+	snapshotNear(t, "baseline overlap", got.Overlap.Comparison.PreviousMinutes, 60)
+}
+
+func TestInsightsSnapshotRejectsInvalidComparisonWindows(t *testing.T) {
+	f := newSnapshotFixture(t)
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name string
+		edit func(map[string]any, map[string]any)
+	}{
+		{"all-time headline", func(body, comparison map[string]any) {
+			delete(body, "from")
+			delete(body, "to")
+			body["range"] = "all"
+		}},
+		{"missing comparison date", func(_ map[string]any, comparison map[string]any) {
+			delete(comparison, "previous_from")
+		}},
+		{"invalid comparison date", func(_ map[string]any, comparison map[string]any) {
+			comparison["previous_from"] = "2026-02-30"
+		}},
+		{"overlapping spans", func(_ map[string]any, comparison map[string]any) {
+			comparison["previous_to"] = comparison["current_from"]
+		}},
+		{"headline mismatch", func(_ map[string]any, comparison map[string]any) {
+			comparison["current_from"] = now.AddDate(0, 0, -2).Format(insights.DayFormat)
+		}},
+		{"current does not end today", func(body, comparison map[string]any) {
+			yesterday := now.AddDate(0, 0, -1).Format(insights.DayFormat)
+			body["to"], body["calendar_to"], comparison["current_to"] = yesterday, yesterday, yesterday
+		}},
+		{"malformed through", func(_ map[string]any, comparison map[string]any) {
+			comparison["through"] = "noon"
+		}},
+		{"sub-millisecond through", func(_ map[string]any, comparison map[string]any) {
+			comparison["through"] = "12:00:00.0001"
+		}},
+		{"excessive previous span", func(_ map[string]any, comparison map[string]any) {
+			previousTo, _ := time.Parse(insights.DayFormat, comparison["previous_to"].(string))
+			comparison["previous_from"] = previousTo.AddDate(0, 0, -4000).Format(insights.DayFormat)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := comparisonBody(now)
+			comparison := body["comparison"].(map[string]any)
+			tc.edit(body, comparison)
+			code, out := post(t, f.ts.URL+"/v1/insights/snapshot", f.reader, body)
+			requireSnapshotError(t, code, out, http.StatusBadRequest)
+		})
+	}
+	body := comparisonBody(now)
+	delete(body, "comparison")
+	got := readSnapshot(t, f.ts.URL, f.reader, body)
+	if !got.Complete || got.Comparison != nil || got.ComparisonReason != "" || got.Overlap.Comparison != nil {
+		t.Fatalf("absent comparison changed the existing response: %+v", got)
 	}
 }
 

@@ -142,8 +142,8 @@ func calendarBounds(r *http.Request, loc *time.Location) (insights.Window, bool,
 	q := r.URL.Query()
 	rawFrom, rawTo := q.Get("from"), q.Get("to")
 	if rawFrom != "" && rawTo != "" {
-		from, errFrom := time.ParseInLocation(insights.DayFormat, rawFrom, loc)
-		to, errTo := time.ParseInLocation(insights.DayFormat, rawTo, loc)
+		from, errFrom := time.Parse(insights.DayFormat, rawFrom)
+		to, errTo := time.Parse(insights.DayFormat, rawTo)
 		if errFrom == nil && errTo == nil && !to.Before(from) {
 			win := insights.DayWindow(from, to, loc)
 			return win, true, win.Days() <= maxCalendarDays

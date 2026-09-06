@@ -1144,6 +1144,7 @@ type SessionRollup struct {
 	AttributionVersion    int
 	MeasuredActiveSeconds float64
 	MeasuredProgDelta     float64
+	ComparisonActiveMs    *int64
 }
 
 // OpResult is the per-item outcome of a batch push.
@@ -1160,6 +1161,7 @@ type ArchivedSession struct {
 	ProgDelta             float64
 	MeasuredActiveSeconds float64
 	MeasuredProgDelta     float64
+	ComparisonActiveMs    *int64
 }
 
 // StatsSnapshot is the coherent store input for statistics aggregation.

@@ -891,7 +891,8 @@ paths:
       summary: Negotiate statistics snapshot support
       description: |
         Requires `read-insights`. Returns the account id and timezone,
-        protocol and attribution versions, all-history support and request limits.
+        protocol and attribution versions, all-history and period-comparison
+        support, and request limits.
         A sync-only client can negotiate session duration through
         `GET /v1/token` instead; browser tokens do not need wider scopes.
       security: [{ deviceToken: [] }]  # requires read-insights scope
@@ -927,6 +928,15 @@ paths:
         Use local-only statistics if negotiation or complete proof is
         unavailable, including on legacy servers.
 
+        An optional `comparison` asks for current and previous date spans
+        stopped at the same account-local wall-clock time. Its current dates
+        must equal the bounded headline dates and end today; comparison is
+        unavailable for `range: all`. Both server totals and overlap totals
+        come from this same snapshot. If raw timestamps or candidate evidence
+        cannot prove all four values, the response omits both comparison
+        objects and sets `comparison_incomplete_reason`; headline `complete`
+        and its totals are unaffected by comparison-only evidence.
+
         Explicit calendar bounds affect only `days` and `overlap.days`.
         Across chunks require the same decimal-string `stats_revision`
         and response identity; do not sum repeated summary/work totals.
@@ -939,8 +949,10 @@ paths:
       responses:
         "200":
           description: |
-            Coherent aggregates and overlap. An incomplete result still
+            Coherent aggregates and overlap. An incomplete headline still
             returns totals, but cannot certify an exact local/server union.
+            A refused optional comparison is reported separately and never
+            invalidates an otherwise complete headline.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/InsightsSnapshot" }
@@ -2940,7 +2952,7 @@ components:
         reason: { type: string }
     InsightsCapabilities:
       type: object
-      required: [version, account_id, all_time, active_ms, attribution_version, timezone, max_candidates, max_local_active_days, max_calendar_days, max_body_bytes]
+      required: [version, account_id, all_time, active_ms, comparison, attribution_version, timezone, max_candidates, max_local_active_days, max_calendar_days, max_body_bytes]
       properties:
         version: { type: integer, const: 1 }
         account_id:
@@ -2951,6 +2963,10 @@ components:
           const: true
           description: Supports range all without a total-history row cap.
         active_ms: { type: boolean, const: true }
+        comparison:
+          type: boolean
+          const: true
+          description: Supports one-snapshot current/previous period comparison.
         attribution_version: { type: integer, const: 2 }
         timezone: { type: string, description: "Account IANA timezone", example: Europe/Paris }
         max_candidates: { type: integer, const: 10000 }
@@ -3128,6 +3144,50 @@ components:
             Last daily-output day, inclusive; requires calendar_from and
             must not precede it. Defaults to aggregate end, or today for all.
             Calendar bounds do not narrow summary, works or streaks.
+        comparison: { $ref: "#/components/schemas/InsightsComparisonInput" }
+    InsightsComparisonInput:
+      type: object
+      required: [current_from, current_to, previous_from, previous_to, through]
+      description: |
+        Optional current/previous comparison inside the same statistics
+        snapshot. Both spans are inclusive, ordered and at most 4000 days.
+        The previous span must end before the current span starts. The current
+        dates must equal the bounded headline dates and current_to must be
+        account-local today; range all cannot carry a comparison.
+
+        `through` is a local wall-clock cutoff with optional seconds and up
+        to millisecond precision. The response normalizes it to HH:mm:ss.SSS.
+        A repeated DST time uses its earlier occurrence; a skipped time moves
+        forward by the size of the gap.
+      properties:
+        current_from: { type: string, format: date }
+        current_to: { type: string, format: date }
+        previous_from: { type: string, format: date }
+        previous_to: { type: string, format: date }
+        through:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]{1,3})?)?$'
+          example: "08:48:42.375"
+    InsightsComparison:
+      type: object
+      required: [current_active_minutes, previous_active_minutes, current_from, current_to, previous_from, previous_to, through]
+      properties:
+        current_active_minutes: { type: number, minimum: 0 }
+        previous_active_minutes: { type: number, minimum: 0 }
+        current_from: { type: string, format: date }
+        current_to: { type: string, format: date }
+        previous_from: { type: string, format: date }
+        previous_to: { type: string, format: date }
+        through:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\.[0-9]{3}$'
+          description: Millisecond-normalized account-local cutoff echoed from the request.
+    InsightsComparisonTotals:
+      type: object
+      required: [current_active_minutes, previous_active_minutes]
+      properties:
+        current_active_minutes: { type: number, minimum: 0 }
+        previous_active_minutes: { type: number, minimum: 0 }
     InsightsOverlap:
       type: object
       required: [total_active_minutes, sessions, works, days]
@@ -3149,6 +3209,13 @@ components:
           type: array
           description: Daily overlap within the echoed calendar bounds, ordered by date.
           items: { $ref: "#/components/schemas/InsightsDay" }
+        comparison:
+          allOf:
+            - { $ref: "#/components/schemas/InsightsComparisonTotals" }
+          description: |
+            Actual candidate overlap in the comparison's current and previous
+            spans. The bounds are the echoed top-level comparison bounds.
+            Present exactly when the top-level comparison is present.
     InsightsSnapshot:
       allOf:
         - { $ref: "#/components/schemas/InsightsWindow" }
@@ -3170,6 +3237,19 @@ components:
               description: Present only when complete is false; unknown reasons also require fallback.
               enum:
                 - legacy_or_different_timezone_rollups
+                - candidate_payload_mismatch
+                - unknown_archived_contribution
+                - archived_timezone_mismatch
+                - archived_work_missing
+            comparison_incomplete_reason:
+              type: string
+              description: |
+                Present only when a comparison was requested but omitted.
+                It does not change `complete`, which describes the headline
+                union only. Unknown reasons also require local comparison
+                fallback.
+              enum:
+                - comparison_history_incomplete
                 - candidate_payload_mismatch
                 - unknown_archived_contribution
                 - archived_timezone_mismatch
@@ -3198,6 +3278,14 @@ components:
                 All-history streak over server positive-activity days
                 unioned with local_active_days, ending today or yesterday.
                 Independent of aggregate and calendar bounds.
+            comparison:
+              allOf:
+                - { $ref: "#/components/schemas/InsightsComparison" }
+              description: |
+                Server totals for the requested current and previous spans.
+                Omitted with `comparison_incomplete_reason` when exact
+                proration cannot be proven. Rollups created before exact
+                millisecond comparison evidence was introduced are refused.
             overlap: { $ref: "#/components/schemas/InsightsOverlap" }
     SessionInput:
       type: object
