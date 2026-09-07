@@ -109,8 +109,9 @@ func TestPublicationResourcesAreBoundedAndDeclared(t *testing.T) {
 // single position. The two chapters here are 9,000 and 3,000 bytes
 // (stored, so compressed size equals content size): a fine-grained
 // estimate of ceil(9000/1024)+ceil(3000/1024) = 12 positions, and a
-// bounded fallback that still gives the larger chapter roughly three
-// times as many positions as the smaller one.
+// bounded fallback (2 mandatory plus fallbackPositionBudget weighted)
+// that still gives the larger chapter roughly three times as many
+// positions as the smaller one.
 func TestIndexFallsBackToWeightedPositionsOverTheBound(t *testing.T) {
 	entries := validEntries()[:4]
 	entries[2].body = readerPackage
@@ -139,12 +140,12 @@ func TestIndexFallsBackToWeightedPositionsOverTheBound(t *testing.T) {
 		return one, two
 	}
 	idx := p.Index(t.Context(), 6)
-	if len(idx.Positions) != 6 {
-		t.Fatalf("bounded fallback must not exceed the requested budget, got %d positions", len(idx.Positions))
+	if want := 2 + fallbackPositionBudget; len(idx.Positions) != want {
+		t.Fatalf("bounded fallback must land on the mandatory-plus-weighted total, got %d, want %d", len(idx.Positions), want)
 	}
 	one, two := countByChapter(idx.Positions)
-	if one <= two {
-		t.Fatalf("the larger chapter must keep more positions than the smaller one, got one=%d two=%d", one, two)
+	if one < 2*two {
+		t.Fatalf("the 3x larger chapter must keep roughly 3x the positions, got one=%d two=%d", one, two)
 	}
 	if idx := p.Index(t.Context(), 20); len(idx.Positions) != 12 {
 		t.Fatalf("expected the fine-grained list within the bound, got %d positions", len(idx.Positions))
@@ -183,6 +184,53 @@ func TestApportionNeverExceedsBudgetWithManyItems(t *testing.T) {
 	}
 	if counts[0] <= counts[1] {
 		t.Fatalf("the far larger item must still get more positions, got %d vs %d", counts[0], counts[1])
+	}
+}
+
+// TestIndexKeepsWeightedCapacityWithManyChapters is the regression case
+// for the scenario the mandatory-plus-weighted split exists for: many
+// tiny chapters alongside one huge one. If the weighted pool were shared
+// with the one-per-chapter minimum instead of reserved on top of it, the
+// minimums alone would consume nearly the whole budget and the huge
+// chapter would end up with only a sliver of it despite holding nearly
+// all the bytes.
+func TestIndexKeepsWeightedCapacityWithManyChapters(t *testing.T) {
+	entries := validEntries()[:4]
+	pkg := `<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Reader</dc:title><dc:identifier id="uid">urn:uuid:test</dc:identifier><dc:language>en</dc:language></metadata>
+<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>`
+	spine := ""
+	const tinyChapters = 500
+	for i := range tinyChapters {
+		id := fmt.Sprintf("tiny%d", i)
+		pkg += fmt.Sprintf(`<item id="%s" href="%s.xhtml" media-type="application/xhtml+xml"/>`, id, id)
+		spine += fmt.Sprintf(`<itemref idref="%s"/>`, id)
+		entries = append(entries, zipEntry{name: "OPS/" + id + ".xhtml", method: zip.Store,
+			body: `<html xmlns="http://www.w3.org/1999/xhtml"><body>tiny</body></html>`})
+	}
+	pkg += `<item id="huge" href="huge.xhtml" media-type="application/xhtml+xml"/></manifest>`
+	spine += `<itemref idref="huge"/></spine></package>`
+	pkg += "<spine>" + spine
+	entries[2].body = pkg
+	entries = append(entries, zipEntry{name: "OPS/huge.xhtml", method: zip.Store,
+		body: `<html xmlns="http://www.w3.org/1999/xhtml"><body>` + strings.Repeat("a", 500_000) + `</body></html>`})
+	data := makeEPUB(t, entries...)
+	p, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	idx := p.Index(t.Context(), 1)
+	var huge, tiny int
+	for _, position := range idx.Positions {
+		if strings.HasSuffix(position.Href.String(), "huge.xhtml") {
+			huge++
+		} else {
+			tiny++
+		}
+	}
+	if huge <= tiny {
+		t.Fatalf("the huge chapter (nearly all the bytes) must keep more positions than all %d tiny chapters combined, got huge=%d tiny=%d", tinyChapters, huge, tiny)
 	}
 }
 
