@@ -470,11 +470,17 @@ func (s *Server) Routes() *http.ServeMux {
 	// Joining a catalog book to a sync work is the one route that spans
 	// both layers, so it demands both capabilities: it reads the catalog
 	// and it writes the caller's work graph (ADR-0003).
-	mux.Handle("POST /v1/books/{id}/resolve",
-		auth.RequireSecureTransport(s.Cfg,
+	resolveH := func(h http.Handler) http.Handler {
+		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireAllScopes(s.Auth,
 				[]store.Scope{store.ScopeLibraryRead, store.ScopeSync},
-				http.HandlerFunc(s.HandleResolveBookWork))))
+				h))
+	}
+	mux.Handle("POST /v1/books/{id}/resolve", resolveH(http.HandlerFunc(s.HandleResolveBookWork)))
+	// The same join for a whole shelf at once, for the device that has
+	// just signed in and has a name here for none of its books
+	// (ADR-0035).
+	mux.Handle("POST /v1/books/resolve", resolveH(http.HandlerFunc(s.HandleResolveBookWorkBatch)))
 
 	// OPDS 1.2. Same catalog, same library-read scope, different
 	// credential: e-reader catalog clients speak HTTP Basic and nothing

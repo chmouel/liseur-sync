@@ -210,6 +210,8 @@ var registeredRouteGates = map[string]routeGate{
 	"DELETE /v1/books/{id}": gateLibraryDelete,
 
 	"POST /v1/books/{id}/resolve": gateResolveBoth,
+	// ADR-0035. The same join for a shelf at a time, so the same pair.
+	"POST /v1/books/resolve": gateResolveBoth,
 
 	"GET /opds/v1.2":                             gateOPDS,
 	"GET /opds/v1.2/{$}":                         gateOPDS,
