@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
-	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 )
 
 func testServer(t *testing.T) (*httptest.Server, store.Store) {
@@ -26,13 +24,7 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 // both ways.
 func testServerCfg(t *testing.T, mutate func(*config.Config), tune func(*Server)) (*httptest.Server, store.Store) {
 	t.Helper()
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Migrate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	st := NewTestStore(t)
 	hash, _ := auth.HashPassword("hunter2hunter")
 	u := store.User{
 		ID: "u1", Name: "alice", Argon2Hash: hash,

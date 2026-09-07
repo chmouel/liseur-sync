@@ -27,6 +27,21 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+// Browser fixtures have independent servers and profiles. Limit concurrent
+// browsers to two so their long gesture checks overlap without exhausting RAM.
+var browserSlots = make(chan struct{}, 2)
+
+func parallelBrowser(t *testing.T) {
+	t.Helper()
+	// Screenshot runs share an explicitly chosen output path.
+	if os.Getenv("LISEUR_READER_SCREENSHOT") != "" {
+		return
+	}
+	t.Parallel()
+	browserSlots <- struct{}{}
+	t.Cleanup(func() { <-browserSlots })
+}
+
 // findChrome locates a Chromium to drive, preferring one named
 // explicitly. Chrome is not a build dependency of this project and the
 // test skips without it, so the search is allowed to be generous.
@@ -364,6 +379,7 @@ func TestReaderRendersSVGSpineItems(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := svgSpineTestEPUB(t)
 	bookID := f.addBook(t, "illustrated", epub)
@@ -548,6 +564,7 @@ func TestReaderLiveInARealBrowser(t *testing.T) {
 	if err != nil {
 		t.Skip("no node to drive the browser with")
 	}
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "live-novel", browserTestEPUB(t))
 	ts := httptest.NewUnstartedServer(nil)
@@ -581,6 +598,7 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := browserTestEPUB(t)
 	bookID := f.addBook(t, "novel", epub)
@@ -642,6 +660,7 @@ func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := browserTestEPUB(t)
 	bookID := f.addBook(t, "novel", epub)
@@ -759,6 +778,7 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := browserTestEPUB(t)
 	bookID := f.addBook(t, "novel", epub)
@@ -817,6 +837,7 @@ func TestReaderRecordsReadingSessions(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := browserTestEPUB(t)
 	bookID := f.addBook(t, "novel", epub)
@@ -853,8 +874,9 @@ func TestReaderRecordsReadingSessions(t *testing.T) {
 		t.Fatalf("sessions in store: got %d, want 2", len(rows))
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].StartedAt.Before(rows[j].StartedAt) })
-	if rows[0].EndProg != 0.47 || rows[0].IdleMs != 0 {
-		t.Errorf("first sitting: end %v idle %d, want 0.47 and 0", rows[0].EndProg, rows[0].IdleMs)
+	// Wall and monotonic clocks can round the same interval one millisecond apart.
+	if rows[0].EndProg != 0.47 || rows[0].IdleMs < 0 || rows[0].IdleMs > 1 {
+		t.Errorf("first sitting: end %v idle %d, want 0.47 and at most 1ms idle", rows[0].EndProg, rows[0].IdleMs)
 	}
 	if d := rows[1].IdleMs - 7*60*1000; d < -1000 || d > 1000 {
 		t.Errorf("second sitting: idle %d, want about 7 minutes", rows[1].IdleMs)
