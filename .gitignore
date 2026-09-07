@@ -10,5 +10,6 @@ liseur-sync.dev.toml
 bin/
 dist/
 coverage.out
+node_modules/
 /liseur-sync
 /.github/instructions/*local*

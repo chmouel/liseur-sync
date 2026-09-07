@@ -4,6 +4,13 @@ export function annotationCFI(a) {
   return fragments.find((s) => typeof s === "string" && s.startsWith("epubcfi(")) || null;
 }
 
+export function annotationAnchor(a) {
+  if (annotationCFI(a)) return true;
+  const locator = a?.locator;
+  return !!(locator?.href && (locator.text?.highlight || locator.locations?.cssSelector ||
+    locator.locations?.fragments?.some(fragment => typeof fragment === "string" && !fragment.startsWith("epubcfi("))));
+}
+
 // foliate's add/delete calls yield while resolving a CFI. One queue owns all
 // overlay mutations so an old add cannot land after a new set removed it.
 export function annotationRenderer({ getView, current, changed }) {
@@ -30,11 +37,12 @@ export function annotationRenderer({ getView, current, changed }) {
     for (const a of annotations) {
       if (!valid(run, stamp) || view !== getView()) return;
       const cfi = annotationCFI(a);
-      if (a.kind !== "highlight" || !cfi || failed.has(a.id)) continue;
-      colors.set(cfi, a.color);
+      if (a.kind !== "highlight" || !annotationAnchor(a) || failed.has(a.id)) continue;
+      const key = cfi || a.id;
+      colors.set(key, a.color);
       if (!drawn.has(view)) drawn.set(view, new Set());
-      drawn.get(view).add(cfi);
-      try { await view.addAnnotation({ value: cfi }); }
+      drawn.get(view).add(key);
+      try { await view.addAnnotation({ value: key, color: a.color, locator: cfi ? undefined : a.locator }); }
       catch { if (valid(run, stamp)) failed.add(a.id); }
     }
     if (valid(run, stamp)) changed();

@@ -408,6 +408,12 @@ func (s *Server) Routes() *http.ServeMux {
 	// clients probe with HEAD before fetching.
 	mux.Handle("GET /v1/books/{id}/download", readH(s.HandleBookDownload))
 	mux.Handle("HEAD /v1/books/{id}/download", readH(s.HandleBookDownload))
+	mux.Handle("GET /v1/books/{id}/publication/manifest.json", readH(s.HandlePublication))
+	mux.Handle("HEAD /v1/books/{id}/publication/manifest.json", readH(s.HandlePublication))
+	mux.Handle("GET /v1/books/{id}/publication/{digest}/positions.json", readH(s.HandlePublication))
+	mux.Handle("HEAD /v1/books/{id}/publication/{digest}/positions.json", readH(s.HandlePublication))
+	mux.Handle("GET /v1/books/{id}/publication/{digest}/resources/{resource...}", readH(s.HandlePublication))
+	mux.Handle("HEAD /v1/books/{id}/publication/{digest}/resources/{resource...}", readH(s.HandlePublication))
 	// A cover is catalog data, not content: it needs the same read scope
 	// as the book record it illustrates, and no more.
 	mux.Handle("GET /v1/books/{id}/cover", readH(s.HandleBookCover))

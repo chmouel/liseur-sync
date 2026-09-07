@@ -36,6 +36,10 @@ build: generate ## Build the binary into bin/
 generate: ## Regenerate templ templates (*_templ.go)
 	go tool templ generate $(TEMPL)
 
+.PHONY: reader-assets
+reader-assets: ## Install the pinned Readium toolchain and rebuild committed browser assets
+	cd tools/reader && npm ci && npm run build
+
 .PHONY: install
 install: generate ## go install the binary into GOBIN
 	go install -trimpath $(PKG)

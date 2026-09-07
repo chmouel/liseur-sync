@@ -1992,6 +1992,83 @@ paths:
         "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
+  /v1/books/{id}/publication/manifest.json:
+    get:
+      tags: [library]
+      summary: Fetch a book's Readium publication manifest
+      security: [{ deviceToken: [] }]
+      description: |
+        Returns a Readium Web Publication manifest for the catalogued EPUB.
+        Its reading-order and resource links are versioned by the book's
+        content digest. Fetch the position-list and package links with the
+        same bearer token; a digest change means the client must reopen the
+        publication. `HEAD` is also supported and returns the same headers
+        without a body.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Readium Web Publication manifest
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+          content:
+            application/webpub+json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "410": { $ref: "#/components/responses/Error", description: "The book has no readable file" }
+        "422": { $ref: "#/components/responses/Error", description: "The EPUB is invalid or unsupported" }
+
+  /v1/books/{id}/publication/{digest}/positions.json:
+    get:
+      tags: [library]
+      summary: Fetch a Readium position list
+      security: [{ deviceToken: [] }]
+      description: Returns the positions generated for the versioned EPUB publication. `HEAD` is also supported.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: digest, in: path, required: true, description: Content SHA-256 from the manifest links, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+      responses:
+        "200":
+          description: Readium position list
+          content:
+            application/vnd.readium.position-list+json:
+              schema:
+                type: object
+                required: [total, positions]
+                properties:
+                  total: { type: integer, minimum: 0 }
+                  positions: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "The digest is stale" }
+        "410": { $ref: "#/components/responses/Error", description: "The book has no readable file" }
+
+  /v1/books/{id}/publication/{digest}/resources/{resource}:
+    get:
+      tags: [library]
+      summary: Fetch one Readium publication resource
+      security: [{ deviceToken: [] }]
+      description: |
+        Returns one declared EPUB resource, addressed relative to the
+        package document. Clients should use the resource URLs in the
+        manifest rather than constructing paths. The route also accepts
+        slash-separated resource names and supports `HEAD`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: digest, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: resource, in: path, required: true, description: Relative archive resource path, schema: { type: string } }
+      responses:
+        "200":
+          description: The declared resource bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or undeclared resource" }
+        "409": { $ref: "#/components/responses/Error", description: "The digest is stale" }
+        "410": { $ref: "#/components/responses/Error", description: "The book has no readable file" }
+
   /v1/books/{id}/cover:
     get:
       tags: [library]
