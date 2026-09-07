@@ -59,6 +59,7 @@ loose ends that must come before any of it, are in
 | [0032](0032-reader-pages-are-readium-positions.md) | The reader's page is the app's page | Later | Accepted; implemented | Pages counted as Readium positions so the browser and the app name the same page; display only, no server or API change; three recorded patches to the vendored engine; amends [0031](0031-web-reader-footer.md) and [0012](0012-reader-engine-foliate.md) |
 | [0033](0033-a-device-outlives-its-token.md) | A device outlives its token | MVP | Accepted; implemented | `POST /v1/tokens` inherits a `device_id` the account already carried, `400 unknown_device` otherwise; `account_id` on `GET /v1/token`; the store keeps comparing devices; amends [0016](0016-token-self-introspection.md) |
 | [0034](0034-live-notifications-say-only-that-something-changed.md) | A live notification says only that something changed | Client | Accepted | `GET /v1/events` as topic-only SSE, published post-commit by the store, authorized per topic; correctness stays in the existing feeds; amends [0007](0007-web-reader.md) |
+| [0035](0035-naming-a-shelf-is-one-request.md) | Naming a shelf is one request | Client | Accepted; implemented | `POST /v1/books/resolve` for up to 500 books, one transaction and one answer each, `200` with per-item `not_found`/`ambiguous`; same `library-read` + `sync` pair; amends [0003](0003-catalog-work-identity.md) |
 
 ## Convention
 
