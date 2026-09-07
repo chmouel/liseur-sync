@@ -255,7 +255,7 @@ export class ReaderEngine extends HTMLElement {
 
   applySettings(settings, styleText, theme) {
     this.settings = settings; this.styleText = styleText;
-    const margin = { narrow: 16, normal: 32, wide: 48 }[settings.margin] || 32;
+    const margin = { none: 8, narrow: 16, normal: 32, wide: 48 }[settings.margin] || 32;
     // Readium's own auto column width targets a fixed character-count
     // range (its own defaults, unrelated to any setting here) and grows
     // the reading column to keep that count reachable, so widening only
@@ -264,8 +264,12 @@ export class ReaderEngine extends HTMLElement {
     // by a matching growth of the column. Driving the target line
     // length itself is what actually makes "narrow" show more of the
     // viewport as text and "wide" show less, matching what a margin
-    // control is expected to do.
+    // control is expected to do. A null max (and min) lifts Readium's
+    // own column-width cap entirely — "none" is the only choice where
+    // the column grows to fill the available width instead of stopping
+    // at a fixed character count.
     const lineLength = {
+      none: { optimalLineLength: 90, minimalLineLength: null, maximalLineLength: null },
       narrow: { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 },
       normal: { optimalLineLength: 65, minimalLineLength: 40, maximalLineLength: 80 },
       wide: { optimalLineLength: 48, minimalLineLength: 32, maximalLineLength: 60 },
