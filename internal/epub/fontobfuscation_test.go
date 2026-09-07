@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/readium/go-toolkit/pkg/manifest"
 )
 
 // obfuscate mirrors the XOR both algorithms use, so a test can construct
@@ -31,7 +33,8 @@ func TestDeobfuscatingReaderReversesIDPF(t *testing.T) {
 	original := bytes.Repeat([]byte("font-bytes-"), 200) // > 1040 bytes
 	obfuscated := obfuscate(original, key, 1040)
 
-	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), identifier, "http://www.idpf.org/2008/embedding")
+	metadata := manifest.Metadata{Identifier: identifier}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), metadata, "http://www.idpf.org/2008/embedding")
 	got, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -51,13 +54,60 @@ func TestDeobfuscatingReaderReversesAdobe(t *testing.T) {
 	original := bytes.Repeat([]byte("font-bytes-"), 200) // > 1024 bytes
 	obfuscated := obfuscate(original, key, 1024)
 
-	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), identifier, "http://ns.adobe.com/pdf/enc#RC")
+	metadata := manifest.Metadata{Identifier: identifier}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), metadata, "http://ns.adobe.com/pdf/enc#RC")
 	got, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if !bytes.Equal(got, original) {
 		t.Fatalf("deobfuscation did not reverse the Adobe transform")
+	}
+}
+
+// TestDeobfuscatingReaderFindsAdobeUUIDInAltIdentifier covers a publisher
+// whose package unique-identifier is not a UUID (an ISBN, say) while a
+// UUID Adobe's algorithm requires sits in another, unmarked dc:identifier.
+// This reader's previous foliate-js implementation searched every declared
+// identifier for one rather than trusting the primary identifier to be a
+// UUID, and this mirrors that.
+func TestDeobfuscatingReaderFindsAdobeUUIDInAltIdentifier(t *testing.T) {
+	uuid := "12345678-1234-1234-1234-123456789abc"
+	key, err := hex.DecodeString(strings.ReplaceAll(uuid, "-", ""))
+	if err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	original := bytes.Repeat([]byte("font-bytes-"), 200)
+	obfuscated := obfuscate(original, key, 1024)
+
+	metadata := manifest.Metadata{
+		Identifier:     "urn:isbn:9780000000000",
+		AltIdentifiers: []manifest.AltIdentifier{{Value: "urn:isbn:9780000000000"}, {Value: "urn:uuid:" + uuid}},
+	}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), metadata, "http://ns.adobe.com/pdf/enc#RC")
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("deobfuscation did not find the UUID in an alternate identifier")
+	}
+}
+
+// TestDeobfuscatingReaderSkipsAdobeWithoutUUID: when no declared
+// identifier looks like a UUID, Adobe's key cannot be derived at all, so
+// the reader must pass bytes through untouched rather than XOR with a
+// wrong or empty key and corrupt the font.
+func TestDeobfuscatingReaderSkipsAdobeWithoutUUID(t *testing.T) {
+	original := []byte("font bytes unchanged")
+	metadata := manifest.Metadata{Identifier: "urn:isbn:9780000000000"}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(original)), metadata, "http://ns.adobe.com/pdf/enc#RC")
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("no usable identifier must leave bytes untouched")
 	}
 }
 
@@ -70,7 +120,8 @@ func TestDeobfuscatingReaderWorksAcrossSmallReads(t *testing.T) {
 	original := bytes.Repeat([]byte("0123456789"), 200) // 2000 bytes, > 1040
 	obfuscated := obfuscate(original, key, 1040)
 
-	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), identifier, "http://www.idpf.org/2008/embedding")
+	metadata := manifest.Metadata{Identifier: identifier}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(obfuscated)), metadata, "http://www.idpf.org/2008/embedding")
 	var out bytes.Buffer
 	buf := make([]byte, 7)
 	for {
@@ -90,7 +141,8 @@ func TestDeobfuscatingReaderWorksAcrossSmallReads(t *testing.T) {
 
 func TestDeobfuscatingReaderSkipsUnknownAlgorithm(t *testing.T) {
 	original := []byte("font bytes unchanged")
-	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(original)), "urn:uuid:anything", "http://example.com/unknown")
+	metadata := manifest.Metadata{Identifier: "urn:uuid:anything"}
+	r := newDeobfuscatingReader(io.NopCloser(bytes.NewReader(original)), metadata, "http://example.com/unknown")
 	got, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read: %v", err)
