@@ -1,26 +1,13 @@
-// The reader page's controller: open the book with foliate-js, put it
-// on screen, and keep the reading position in step with every other
-// Liseur client.
-//
-// The rendering engine is vendored (ADR-0007, renderer revised by
-// ADR-0012). foliate-js paginates with CSS multi-column inside the
-// frame's own viewport, so there is nothing for this file to measure
-// and no sizing hook to get wrong — the failure mode that ended both
-// the hand-written renderer and epub.js.
-//
-// Sync is unchanged and deliberately so: this file talks to the same
-// /v1 routes Android and desktop use, with the short-lived token from
-// POST /ui/reader/token. It gets no special treatment from the server.
+// Reader controls and native sync over the Readium publication engine.
 
-import "./vendor/foliate/view.js";
-import { Overlayer } from "./vendor/foliate/overlayer.js";
+import "./reader-engine.js";
 import { openSession } from "./reader-session.js";
 import { uploadSessions } from "./reader-session-upload.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
 import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh } from "./reader-sync.js";
-import { annotationCFI, annotationRenderer } from "./reader-annotations.js";
+import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -314,7 +301,7 @@ function buildAnnotationList() {
   annList.textContent = "";
   const listed = annotationDrawing.annotations().filter(
     (a) =>
-      a.kind !== "highlight" || !annotationCFI(a) || annotationDrawing.failed(a.id),
+      a.kind !== "highlight" || !annotationAnchor(a) || annotationDrawing.failed(a.id),
   );
   annPanel.hidden = !listed.length;
   if (!listed.length) return;
@@ -380,7 +367,7 @@ async function loadAnnotations() {
 
 // bookTitle is read from the package document rather than from the
 // catalog, so the page says what the file says even when the two have
-// drifted. foliate-js keeps a title either as a string or as a
+// drifted. Readium keeps a title either as a string or as a
 // language map, and either way one string comes out.
 function bookTitle() {
   const raw =
@@ -408,7 +395,7 @@ function finite(v) {
 // one field every client can act on: a phone that has never heard of a
 // CFI still opens in the right place.
 //
-// `location` here is what foliate-js hands the relocate event: a total
+// `location` here is what the Readium adapter hands the relocate event: a total
 // fraction, the section index, and a CFI. The engine estimates the
 // fraction from section sizes it already knows, so there is no separate
 // "generate locations" pass and no moment when progress is unknown.
@@ -416,6 +403,7 @@ function finite(v) {
 // A non-finite fraction yields null: there is no position to push, and
 // the caller asks the engine to remeasure rather than record a wrong one.
 function locatorFor(location) {
+  if (location.locator && finite(location.fraction)) return location.locator;
   if (!finite(location.fraction)) return null;
   const section = location.section || {};
   const index = typeof section.current === "number" ? section.current : 0;
@@ -435,7 +423,7 @@ function locatorFor(location) {
 
 // sectionProgression recovers the fraction within the current section
 // from the total fraction and the section boundaries, because Readium's
-// `progression` is within-resource and foliate-js reports the total.
+// `progression` is within-resource and the Readium adapter reports the total.
 function sectionProgression(location) {
   const fractions = view.getSectionFractions ? view.getSectionFractions() : [];
   const section = location.section || {};
@@ -787,6 +775,13 @@ function startCandidates(op) {
   const out = [];
   const cfi = cfiOf(op);
   if (cfi && resolves(cfi)) out.push(cfi);
+  if (op.locator?.href && resolves(op.locator)) {
+    // The old reader used position for a spine index. Resource-relative
+    // anchors/progression survive the engine change; that index does not.
+    const locator = structuredClone(op.locator);
+    if (cfi) delete locator.locations.position;
+    out.push(locator);
+  }
   const locations = (op.locator && op.locator.locations) || {};
   const fraction =
     typeof locations.totalProgression === "number"
@@ -964,26 +959,7 @@ function applySettings() {
   applyChrome();
   if (here) chapterText.textContent = footerMiddle(here);
   if (!view || !view.renderer) return;
-  const renderer = view.renderer;
-  renderer.setAttribute(
-    "flow",
-    settings.flow === "scrolled" ? "scrolled" : "paginated",
-  );
-  renderer.setAttribute(
-    "max-column-count",
-    settings.columns === "auto" ? "2" : settings.columns,
-  );
-  renderer.setAttribute("margin", MARGINS[settings.margin] || MARGINS.normal);
-  renderer.setAttribute("gap", GAPS[settings.margin] || GAPS.normal);
-  // The line-length cap grows with the type: a bigger font on a wide
-  // window should mean a wider column with the same characters per
-  // line, not the same 720px ribbon with more empty page around it.
-  const scale = (Number(settings.size) || 100) / 100;
-  renderer.setAttribute(
-    "max-inline-size",
-    Math.round(720 * Math.max(1, scale)) + "px",
-  );
-  if (renderer.setStyles) renderer.setStyles(chapterCSS(settings));
+  view.applySettings(settings, chapterCSS(settings), THEMES[settings.theme]);
 }
 
 const settingsPanel = document.getElementById("reader-settings");
@@ -1396,7 +1372,13 @@ function wireChapterPointer(doc) {
   // there to select, so there is nothing to wait for. (Beyond a
   // half-second double-click interval the first click does turn a
   // page; the reader turns back, and nothing is lost.)
-  doc.addEventListener("dblclick", cancelDeferred);
+  doc.addEventListener("dblclick", cancelDeferred, true);
+  // A real second click starts with pointerdown, before the browser emits
+  // the second click/dblclick pair. Cancel here as well so a platform with
+  // a late or missing dblclick event cannot let the first deferred tap win.
+  doc.addEventListener("pointerdown", () => {
+    if (deferred) cancelDeferred();
+  }, true);
   doc.addEventListener("selectstart", cancelDeferred);
   // A tap on the text turns the page; a drag, a selection, a link or
   // any other control is not a tap and is left entirely alone.
@@ -1734,59 +1716,6 @@ tocList.addEventListener("click", (e) => {
   if (view) view.goTo(a.dataset.href).catch(() => {});
 });
 
-// stripScripts removes the publication's own code from every resource
-// before the engine turns it into a blob URL. The page CSP is what
-// actually stops a book's script from running — a blob document
-// inherits this page's policy, and only the nonce this server minted
-// for its own module tag passes script-src — so this is the second
-// fence, and it also keeps the console clear of the browser announcing
-// refusals.
-//
-// Markup is stripped by parsing it, not by pattern-matching it: a
-// regex misses a script element in an SVG island, a namespace prefix,
-// or markup broken in just the way a parser would quietly repair. The
-// document is parsed exactly as the engine will parse it, every script
-// element in any namespace is removed, and what is serialized back is
-// what the parser saw — there is no second interpretation for hostile
-// markup to aim between. If the resource does not parse at all, the
-// engine will not render it either; it is replaced with the parse
-// error rather than passed through unexamined.
-function stripScripts(book) {
-  if (!book || !book.transformTarget) return;
-  const parser = new DOMParser();
-  const serializer = new XMLSerializer();
-  const strip = (data, mime) => {
-    const doc = parser.parseFromString(data, mime);
-    if (doc.querySelector("parsererror")) {
-      return serializer.serializeToString(doc);
-    }
-    for (const el of [...doc.getElementsByTagName("script")]) el.remove();
-    for (const el of [...doc.getElementsByTagNameNS("*", "script")])
-      el.remove();
-    return serializer.serializeToString(doc);
-  };
-  book.transformTarget.addEventListener("data", (event) => {
-    const detail = event.detail;
-    const type = detail.type || "";
-    if (/\b(x-)?(javascript|ecmascript)\b/.test(type)) {
-      detail.data = "";
-      return;
-    }
-    const mime = /\bxhtml\+xml\b/.test(type)
-      ? "application/xhtml+xml"
-      : /\bsvg\+xml\b/.test(type)
-        ? "image/svg+xml"
-        : /\bhtml\b/.test(type)
-          ? "text/html"
-          : null;
-    if (mime) {
-      detail.data = Promise.resolve(detail.data).then((data) =>
-        typeof data === "string" ? strip(data, mime) : data,
-      );
-    }
-  });
-}
-
 function turn(direction) {
   if (!noteNavigation()) return undefined;
   return direction > 0 ? view.goRight() : view.goLeft();
@@ -1798,7 +1727,7 @@ document
   .addEventListener("click", () => turn(-1));
 // Any blank margin is a page turn: a click that lands on the stage or
 // on the engine's own chrome (margins, gaps, header, footer — all of
-// which retarget to the foliate-view host from its closed shadow root)
+// which retarget to the readium-view host)
 // goes through the same tap zones as the text, so the sides turn the
 // page and the middle brings the bar back. Clicks inside the chapter
 // itself are handled in that chapter's own document, where a link or a
@@ -2002,24 +1931,15 @@ window.addEventListener("beforeunload", () => {
   clearTimeout(pending);
   push();
   endSession();
+  view?.destroy().catch(() => {});
 });
 
 // ------------------------------------------------------------ open
 
 (async function start() {
   try {
-    say("Fetching the book…");
-    // Same-origin the cookie is enough and is what the UI download
-    // route expects; detached there is no cookie, so the book comes
-    // from the API with the bearer token like any other client.
-    const resp = cfg.detached
-      ? await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/download")
-      : await fetch(cfg.downloadURL, { credentials: "same-origin" });
-    if (!resp.ok) throw new Error("this book could not be downloaded");
-    const blob = await resp.blob();
-
-    say("Opening…");
-    view = document.createElement("foliate-view");
+    say("Opening the publication…");
+    view = document.createElement("readium-view");
     stage.append(view);
     view.addEventListener("relocate", (e) => {
       paint(e.detail);
@@ -2052,24 +1972,7 @@ window.addEventListener("beforeunload", () => {
     view.addEventListener("link", (e) => {
       if (!noteNavigation()) e.preventDefault();
     });
-    // Highlight drawing (ADR-0028): the engine asks how to draw each
-    // annotation it anchors, and asks again for every chapter it
-    // creates an overlay for. The color is resolved from the palette
-    // table above — a token in, a CSS value out, nothing pass-through.
-    view.addEventListener("draw-annotation", (e) => {
-      const { draw, annotation } = e.detail;
-      const color =
-        ANNOTATION_COLORS[annotationDrawing.color(annotation.value)] ||
-        ANNOTATION_COLORS.yellow;
-      draw(Overlayer.highlight, { color });
-    });
-    view.addEventListener("create-overlay", () => {
-      annotationDrawing.draw().catch(() => {});
-    });
-    await view.open(
-      new File([blob], "book.epub", { type: "application/epub+zip" }),
-    );
-    stripScripts(view.book);
+    await view.open({ request: api, current: resp => auth.responseCurrent(resp), bookID: cfg.bookID });
     // Counted before the first relocate paints a footer, so the very
     // first page the reader sees is already the app's number.
     positions = positionTable(view.book.sections);

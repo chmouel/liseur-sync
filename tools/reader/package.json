@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "@readium/navigator": "2.8.2",
+    "@readium/shared": "2.4.0",
+    "css-tree": "3.2.1"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

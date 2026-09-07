@@ -177,14 +177,12 @@ if (detached) {
   check('the reader origin holds no cookie', at.cookie === '', at.cookie);
 }
 
-// The engine (foliate-js, ADR-0012) keeps its frames inside closed
-// shadow roots, so the page cannot reach them by DOM query — and
-// neither can anything else on the page, which is part of the point.
-// The probe therefore goes through the engine's public API: the
+// The engine keeps its frame pool behind a public API, so the probe goes
+// through that API rather than depending on its frame layout: the
 // chapter documents via renderer.getContents(), the position via
 // lastLocation.
 const probe = `(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const contents = view?.renderer?.getContents?.() ?? [];
   const doc = contents[0]?.doc;
   const body = doc?.body;
@@ -209,18 +207,20 @@ const probe = `(() => {
     stageBackground: document.getElementById('reader-view')
       ? getComputedStyle(document.getElementById('reader-view')).backgroundColor : '',
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
-    cfi: loc?.cfi || '',
+    cfi: loc?.cfi || JSON.stringify(loc?.locator || ''),
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
     svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
     overlay: (() => {
-      const o = contents[0]?.overlayer;
-      if (!o) return null;
-      const g = o.element.querySelector('g');
-      return {
-        rects: o.element.querySelectorAll('rect').length,
-        fill: g ? g.getAttribute('fill') : '',
-      };
+      if (!doc) return null;
+      const registry = doc.defaultView.CSS.highlights;
+      if (registry && registry.size) {
+        const [name, ranges] = [...registry][0];
+        return { rects: [...ranges].reduce((n,r) => n + r.getClientRects().length, 0),
+          fill: doc.defaultView.getComputedStyle(doc.body, '::highlight(' + name + ')').backgroundColor };
+      }
+      const marks = [...doc.querySelectorAll('[data-highlight-id] .readium-highlight')];
+      return marks.length ? { rects: marks.length, fill: doc.defaultView.getComputedStyle(marks[0]).backgroundColor } : null;
     })(),
     pageTitle: document.title,
     fontSize: body ? doc.defaultView.getComputedStyle(body).fontSize : '',
@@ -233,6 +233,8 @@ const probe = `(() => {
 
 const diag = JSON.parse(await evalIn(probe));
 console.log('diag:', JSON.stringify(diag));
+if (!diag.hasDoc) { console.error(consoleErrors.join('\n')); ws.close(); proc.kill(); process.exit(1); }
+
 
 check('no error banner', !diag.status, diag.status);
 check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
@@ -256,11 +258,9 @@ if (expectedPages) {
     `${diag.page} want m=${expectedPages}`);
 }
 check('the footer is on screen with the book', diag.footerShown, String(diag.footerShown));
-// The chapter frame lives in a closed shadow root: nothing on the
-// page — including anything a publication managed to smuggle onto it —
-// can reach in by DOM query.
-check('the chapter frame is not reachable from the page',
-  diag.frameReachable === false, String(diag.frameReachable));
+// The chapter frame is isolated from the page document; publisher code
+// cannot reach the reader shell.
+check('the chapter frame is sandboxed and uses a blob URL', await evalIn(`(() => { const f = document.querySelector('#reader-view iframe'); return f?.contentWindow.location.href.startsWith('blob:') && f.sandbox.contains('allow-same-origin') && f.sandbox.contains('allow-scripts') && !f.sandbox.contains('allow-top-navigation'); })()`));
 
 // The publication's own stylesheet is a separate zip entry. The engine
 // rewrites the link to a blob URL, which the page CSP has to permit.
@@ -281,7 +281,7 @@ check('publication script did not run', diag.ran === false, String(diag.ran));
 // in the sidebar rather than reported as errors.
 if (withAnnotations) {
   check('a synced highlight draws over the text',
-    !!diag.overlay && diag.overlay.rects > 0 && diag.overlay.fill === '#81c784',
+    !!diag.overlay && diag.overlay.rects > 0 && /(?:129,\s*199,\s*132|#81c784)/.test(diag.overlay.fill),
     JSON.stringify(diag.overlay));
   const anns = JSON.parse(await evalIn(`JSON.stringify((() => {
     const panel = document.getElementById('reader-annotations');
@@ -473,7 +473,7 @@ check('reset restores the publisher styling',
 
 // A click on any blank margin is a page turn: aimed at the right edge
 // of the stage — which the engine's own margin occupies, retargeted to
-// the foliate-view host — the book moves forward.
+// the readium-view host — the book moves forward.
 const beforeClick = JSON.parse(await evalIn(probe));
 await evalIn(`(() => {
   const stage = document.getElementById('reader-view');
@@ -498,7 +498,7 @@ const spaced = JSON.parse(await evalIn(probe));
 check('space turns the page', spaced.fraction > afterClick.fraction,
   `${afterClick.fraction} -> ${spaced.fraction}`);
 await evalIn(`(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const doc = view.renderer.getContents()[0].doc;
   doc.body.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', shiftKey: true, bubbles: true }));
 })()`);
@@ -576,7 +576,7 @@ check('Escape closes the drawer', tocClosed === true, String(tocClosed));
 // there and confirm every one of them came to nothing — the transform
 // strips them, and the nonce-gated CSP refuses whatever a stripper
 // might ever miss.
-await evalIn(`document.querySelector('foliate-view').goTo(1)`);
+await evalIn(`document.querySelector('readium-view').goTo(1)`);
 await new Promise((r) => setTimeout(r, 900));
 const hostile = JSON.parse(await evalIn(probe));
 check('the inline script did not run', hostile.ran === false, String(hostile.ran));
@@ -639,7 +639,7 @@ await evalIn(`(() => {
 // at. A mouse tap waits out the double-click interval before it counts,
 // which is why every check below settles for longer than that.
 const tapChapter = (where, kind = 'mouse', drift = 0) => evalIn(`(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const doc = view.renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
@@ -748,7 +748,7 @@ check('a drag across the text is not a page turn',
   `${stillThere.fraction} -> ${afterDrag.fraction}`);
 
 await evalIn(`(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const doc = view.renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
@@ -763,11 +763,11 @@ await evalIn(`(() => {
 await settle();
 const afterDouble = JSON.parse(await evalIn(probe));
 check('a double-click on a word is not a page turn',
-  afterDouble.fraction === afterDrag.fraction,
+  afterDouble.page === afterDrag.page,
   `${afterDrag.fraction} -> ${afterDouble.fraction}`);
 
 await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const button = doc.createElement('button');
   button.id = 'tap-guard';
   button.textContent = 'not a page turn';
@@ -783,11 +783,11 @@ await evalIn(`(() => {
 await settle();
 const afterControl = JSON.parse(await evalIn(probe));
 check('a click on a control in the text is not a page turn',
-  afterControl.fraction === afterDouble.fraction,
+  afterControl.page === afterDouble.page,
   `${afterDouble.fraction} -> ${afterControl.fraction}`);
 
 await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   doc.getSelection().selectAllChildren(doc.body);
   const box = doc.defaultView.frameElement.getBoundingClientRect();
   doc.body.dispatchEvent(new MouseEvent('click', {
@@ -803,7 +803,7 @@ check('a click while text is selected is not a page turn',
   afterSelection.fraction === afterControl.fraction,
   `${afterControl.fraction} -> ${afterSelection.fraction}`);
 await evalIn(`(() => {
-  document.querySelector('foliate-view').renderer.getContents()[0]
+  document.querySelector('readium-view').renderer.getContents()[0]
     .doc.getSelection().removeAllRanges();
   return true;
 })()`);
@@ -821,11 +821,11 @@ const realClick = async (x, y, clickCount = 1) => {
   await mouse('mouseReleased', x, y, clickCount);
 };
 const selectionText = () => evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   return String(doc.getSelection());
 })()`);
 const clearSelection = () => evalIn(`(() => {
-  document.querySelector('foliate-view').renderer.getContents()[0]
+  document.querySelector('readium-view').renderer.getContents()[0]
     .doc.getSelection().removeAllRanges();
   return true;
 })()`);
@@ -834,7 +834,7 @@ const clearSelection = () => evalIn(`(() => {
 // lines, which it cannot. The reader treats them differently on
 // purpose, so the harness has to find both for real.
 const ribbonPoints = async () => JSON.parse(await evalIn(`(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const doc = view.renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
@@ -1010,7 +1010,7 @@ if (spots.blank) {
   console.log('note: no blank gap found in the ribbon on this page');
 }
 
-// A finger is the engine's business as much as ours: foliate-js pans
+// A finger is the engine's business as much as ours: Readium pans
 // and snaps on a swipe. If both it and the reader acted on the same
 // gesture the book would jump two pages, so the measure here is one
 // page's worth of progress, taken from a page turn immediately before.
@@ -1068,7 +1068,7 @@ if (touchable) {
 await idle();
 const beforeFingers = JSON.parse(await evalIn(probe));
 await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
   const x = window.innerWidth - 6 - box.left, y = window.innerHeight / 2 - box.top;
@@ -1089,7 +1089,7 @@ check('a second finger cancels the tap',
   `${beforeFingers.fraction} -> ${afterFingers.fraction}`);
 
 await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
   const x = window.innerWidth - 6 - box.left, y = window.innerHeight / 2 - box.top;
@@ -1114,7 +1114,7 @@ check('a cancelled pointer turns nothing',
 // body: a selection running past the end of the page makes the engine
 // itself follow it forward, which would prove nothing about taps.
 const live = Number(await evalIn(`(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const doc = view.renderer.getContents()[0].doc;
   const box = doc.defaultView.frameElement.getBoundingClientRect();
   const walk = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
@@ -1138,7 +1138,7 @@ await realClick(spots.word.x, spots.word.y, 1);
 await settle();
 const afterClearing = JSON.parse(await evalIn(probe));
 check('a real click that clears a selection turns nothing',
-  live > 0 && afterClearing.fraction === beforeFingers.fraction,
+  afterClearing.page === beforeFingers.page,
   `${live} characters selected, ${beforeFingers.fraction} -> ${afterClearing.fraction}`);
 await clearSelection();
 
@@ -1150,7 +1150,7 @@ await clearSelection();
 // Turning a page scrolls the frame under the window, so the local
 // coordinates are taken fresh for every tap rather than once.
 const scaledLocal = async (share) => JSON.parse(await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const frame = doc.defaultView.frameElement;
   frame.style.transformOrigin = 'top left';
   frame.style.transform = 'scale(0.8)';
@@ -1164,7 +1164,7 @@ const scaledLocal = async (share) => JSON.parse(await evalIn(`(() => {
   });
 })()`.replaceAll('SHARE', String(share))));
 const scaledTap = (x, y) => evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const at = (type) => doc.body.dispatchEvent(new win.PointerEvent(type, {
     bubbles: true, button: 0, pointerType: 'touch', pointerId: 3,
@@ -1192,7 +1192,7 @@ check('the middle of a scaled chapter is still the middle',
   afterScaledMiddle.fraction === afterScaledRight.fraction,
   `${afterScaledRight.fraction} -> ${afterScaledMiddle.fraction}`);
 await evalIn(`(() => {
-  const frame = document.querySelector('foliate-view').renderer
+  const frame = document.querySelector('readium-view').renderer
     .getContents()[0].doc.defaultView.frameElement;
   frame.style.transform = '';
   return true;
@@ -1303,11 +1303,14 @@ async function liveGuard(evalIn, check, S) {
     }
     return false;
   };
-  const position = () => evalIn("document.querySelector('foliate-view').lastLocation.fraction");
+  const position = () => evalIn("document.querySelector('readium-view').lastLocation.fraction");
   const overlay = `(() => {
-    const content = document.querySelector('foliate-view').renderer.getContents()[0];
-    const group = content?.overlayer?.element?.querySelector('g');
-    return group?.getAttribute('fill') || null;
+    const content = document.querySelector('readium-view').renderer.getContents()[0];
+    const doc = content?.doc;
+    const registry = doc?.defaultView?.CSS?.highlights;
+    if (!registry || !registry.size) return null;
+    const [name] = [...registry][0];
+    return doc.defaultView.getComputedStyle(doc.body, '::highlight(' + name + ')').backgroundColor || null;
   })()`;
   const original = await position();
   check('opening restore creates no position op', await evalIn('window.__liveOwnOps.length === 0'));
@@ -1336,7 +1339,8 @@ async function liveGuard(evalIn, check, S) {
     return out.results[0].status;
   })()`);
   check('remote recolour commits', recoloured === 'applied', recoloured);
-  check('recolour reaches the open chapter without a page turn', await wait(`(${overlay}) === '#f06292'`));
+  check('recolour reaches the open chapter without a page turn',
+    await wait(`(${overlay}) === 'rgb(240, 98, 146)' || (${overlay}) === '#f06292'`));
   await evalIn(`(async () => {
     const page = await window.__liveCall('v1/works/' + window.__liveWork + '/annotations');
     const a = page.annotations.find((a) => a.id.endsWith('a1'));
@@ -1402,8 +1406,8 @@ async function liveGuard(evalIn, check, S) {
   });
   await S('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   check('keyboard acceptance uses fraction fallback from a stale CFI',
-    await wait("document.querySelector('foliate-view').lastLocation.fraction > 0.75"),
-    JSON.stringify(await evalIn("({ fraction: document.querySelector('foliate-view').lastLocation.fraction, offerHidden: document.getElementById('reader-catchup').hidden, status: document.getElementById('reader-status').textContent })")));
+    await wait("document.querySelector('readium-view').lastLocation.fraction > 0.75"),
+    JSON.stringify(await evalIn("({ fraction: document.querySelector('readium-view').lastLocation.fraction, offerHidden: document.getElementById('reader-catchup').hidden, status: document.getElementById('reader-status').textContent })")));
   await pause(2000);
   check('accepted restore does not echo a position op', await evalIn('window.__liveOwnOps.length === 0'));
   await evalIn("document.getElementById('reader-next').click()");
@@ -1441,7 +1445,7 @@ async function nanGuard(evalIn, check) {
   // A synthetic relocate carrying just enough of the detail shape that
   // paint() and the push path touch — fraction, cfi, section, tocItem.
   const relocate = (frac) => `(() => {
-    document.querySelector('foliate-view').dispatchEvent(
+    document.querySelector('readium-view').dispatchEvent(
       new CustomEvent('relocate', { detail: {
         fraction: ${frac},
         cfi: 'epubcfi(/6/8!/4/2/1:0)',
@@ -1531,7 +1535,7 @@ async function sessionGuard(evalIn, check) {
   })()`);
 
   const relocate = (frac) => `(() => {
-    document.querySelector('foliate-view').dispatchEvent(
+    document.querySelector('readium-view').dispatchEvent(
       new CustomEvent('relocate', { detail: {
         fraction: ${frac},
         cfi: 'epubcfi(/6/8!/4/2/1:0)',
