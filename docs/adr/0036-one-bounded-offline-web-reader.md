@@ -1,7 +1,7 @@
 # ADR-0036: One bounded offline web reader
 
-**Status:** Accepted  
-**Scope:** Later  
+**Status:** Accepted
+**Scope:** Later
 **Amends:** [ADR-0007](0007-web-reader.md), [ADR-0030](0030-web-reader-reading-sessions.md), and [ADR-0028](0028-annotation-sync.md)
 
 ## Context
