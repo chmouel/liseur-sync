@@ -26,6 +26,15 @@ func TestReaderDecodesNonUTF8PublicationText(t *testing.T) {
 	runNodeTests(t, "readerdecode.test.mjs")
 }
 
+// TestReaderPublicationCacheIsBounded runs the node unit tests for
+// ReaderPublication's raw/blob cache: retain() releases entries whose
+// referrers have all left Readium's active frame window, keeps a shared
+// asset still referenced from inside that window, and never releases the
+// package document.
+func TestReaderPublicationCacheIsBounded(t *testing.T) {
+	runNodeTests(t, "readerpublication.test.mjs")
+}
+
 // runNodeTests runs one `node --test` file from testdata. These are the
 // reader checks that run in CI: the browser check needs a Chromium and
 // skips without one.

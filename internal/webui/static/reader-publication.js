@@ -89,13 +89,26 @@ export class ReaderPublication {
     this.raw = new Map();
     this.blobs = new Map();
     this.urls = new Set();
+    // Which spine document(s) a cached entry (raw bytes or a derived blob)
+    // was reached from. retain() below uses this to release entries no
+    // spine document inside the retained set still needs, instead of
+    // holding every fetched byte and blob for the whole reading session.
+    this.referrers = new Map();
     this.controller = new AbortController();
     this.closed = false;
   }
 
-  async bytes(href) {
+  addReferrer(key, rootHref) {
+    if (!rootHref) return;
+    let set = this.referrers.get(key);
+    if (!set) this.referrers.set(key, set = new Set());
+    set.add(rootHref);
+  }
+
+  async bytes(href, rootHref = href.split("#")[0]) {
     const key = href.split("#")[0];
     if (!this.entries.has(key) || this.closed) throw Error("Unavailable publication resource");
+    this.addReferrer(key, rootHref);
     if (!this.raw.has(key)) {
       const pending = (async () => {
         const response = await this.request(this.prefix + key, { signal: this.controller.signal });
@@ -112,6 +125,25 @@ export class ReaderPublication {
     return this.raw.get(key);
   }
 
+  // Releases raw bytes and blobs for every cached entry whose referrers are
+  // all outside keepRoots (the spine hrefs Readium's active frame window
+  // still needs), coordinating our cache with that window instead of
+  // holding the whole publication in memory for the reading session. The
+  // package document is never evicted.
+  retain(keepRoots) {
+    for (const [key, referrers] of this.referrers) {
+      if (key === this.packageHref) continue;
+      if ([...referrers].some(root => keepRoots.has(root))) continue;
+      this.raw.delete(key);
+      const blob = this.blobs.get(key);
+      if (blob) {
+        this.blobs.delete(key);
+        blob.then(url => { this.urls.delete(url); URL.revokeObjectURL(url); }, () => {});
+      }
+      this.referrers.delete(key);
+    }
+  }
+
   // Maps a publication-relative href (fragment-free) to the exact key this
   // publication's entries are stored under, tolerating a different but
   // equivalent percent-encoding. Returns null when the entry truly does not
@@ -121,18 +153,18 @@ export class ReaderPublication {
     return this.canonicalEntries.get(canonicalize(key)) ?? null;
   }
 
-  async document(href, transform = true, ancestors = new Set()) {
+  async document(href, transform = true, ancestors = new Set(), rootHref = href.split("#")[0]) {
     const type = this.entries.get(href)?.type || "application/xhtml+xml";
-    const text = decodeText(await this.bytes(href));
+    const text = decodeText(await this.bytes(href, rootHref));
     const doc = new DOMParser().parseFromString(text, type === "text/html" ? type : "application/xml");
     if (doc.querySelector("parsererror")) throw Error("The publication contains invalid markup.");
     stripPublicationCode(doc);
     doc.documentElement.setAttribute("data-reader-href", href);
-    if (transform) await this.transform(doc, href, ancestors);
+    if (transform) await this.transform(doc, href, ancestors, rootHref);
     return doc;
   }
 
-  async stylesheet(text, base, ancestors) {
+  async stylesheet(text, base, ancestors, rootHref) {
     const tree = css.parse(text, { parseCustomProperty: true });
     const replacements = [];
     css.walk(tree, node => {
@@ -142,11 +174,11 @@ export class ReaderPublication {
         if (node2?.type === "String") replacements.push({ node: node2, value: node2.value });
       }
     });
-    await Promise.all(replacements.map(async ({ node, value }) => { node.value = await this.assetURL(value, base, ancestors); }));
+    await Promise.all(replacements.map(async ({ node, value }) => { node.value = await this.assetURL(value, base, ancestors, rootHref); }));
     return css.generate(tree);
   }
 
-  async assetURL(reference, base, ancestors = new Set()) {
+  async assetURL(reference, base, ancestors = new Set(), rootHref = base.split("#")[0]) {
     if (reference.startsWith("#")) return reference;
     // Images and fonts may be embedded. Executable document containers are
     // removed, and SVG loaded as an image cannot execute script.
@@ -157,13 +189,14 @@ export class ReaderPublication {
     const key = this.resolveKey(rawKey) ?? rawKey;
     const entry = this.entries.get(key);
     if (!entry || ancestors.has(key)) return "data:,";
+    this.addReferrer(key, rootHref);
     if (!this.blobs.has(key)) {
       const next = new Set(ancestors).add(key);
       const pending = (async () => {
-        let data = await this.bytes(key);
+        let data = await this.bytes(key, rootHref);
         if (/javascript|ecmascript/i.test(entry.type || "")) return "data:,";
-        if (entry.type === "text/css") data = await this.stylesheet(decodeText(data, { css: true }), key, next);
-        else if (documentTypes.has(entry.type)) data = new XMLSerializer().serializeToString(await this.document(key, true, next));
+        if (entry.type === "text/css") data = await this.stylesheet(decodeText(data, { css: true }), key, next, rootHref);
+        else if (documentTypes.has(entry.type)) data = new XMLSerializer().serializeToString(await this.document(key, true, next, rootHref));
         if (this.closed) throw Error("Publication closed");
         const url = URL.createObjectURL(new Blob([data], { type: entry.type || "application/octet-stream" }));
         this.urls.add(url);
@@ -175,14 +208,14 @@ export class ReaderPublication {
     return await this.blobs.get(key) + (fragment ? "#" + fragment : "");
   }
 
-  async transform(doc, base, ancestors) {
+  async transform(doc, base, ancestors, rootHref) {
     for (const el of [...doc.querySelectorAll("*")]) {
       const name = el.localName.toLowerCase();
-      if (name === "style") el.textContent = await this.stylesheet(el.textContent, base, ancestors);
+      if (name === "style") el.textContent = await this.stylesheet(el.textContent, base, ancestors, rootHref);
       if (el.hasAttribute("style")) {
         // Parse a declaration list inside a rule so the CSS parser handles
         // escaped URLs and nested functions in inline styles too.
-        const wrapped = await this.stylesheet("x{" + el.getAttribute("style") + "}", base, ancestors);
+        const wrapped = await this.stylesheet("x{" + el.getAttribute("style") + "}", base, ancestors, rootHref);
         el.setAttribute("style", wrapped.slice(2, -1));
       }
       if (name === "a") {
@@ -200,7 +233,7 @@ export class ReaderPublication {
       if (name === "link" && !/^(stylesheet|icon)$/i.test(el.getAttribute("rel") || "")) { el.remove(); continue; }
       for (const attr of [...el.attributes]) {
         if (["src", "href", "poster", "background"].includes(attr.localName)) {
-          el.setAttributeNS(attr.namespaceURI, attr.name, await this.assetURL(attr.value, base, ancestors));
+          el.setAttributeNS(attr.namespaceURI, attr.name, await this.assetURL(attr.value, base, ancestors, rootHref));
         }
       }
       // A source set's descriptors are retained; candidates in an EPUB are
@@ -209,7 +242,7 @@ export class ReaderPublication {
         const candidates = el.getAttribute("srcset").split(",");
         el.setAttribute("srcset", (await Promise.all(candidates.map(async candidate => {
           const [url, ...descriptor] = candidate.trim().split(/\s+/);
-          return [await this.assetURL(url, base, ancestors), ...descriptor].join(" ");
+          return [await this.assetURL(url, base, ancestors, rootHref), ...descriptor].join(" ");
         }))).join(", "));
       }
     }
@@ -221,17 +254,17 @@ export class ReaderPublication {
   // the image's own intrinsic dimensions when they can be read so a fixed-
   // layout page still gets a usable viewport.
   async imageSpineDocument(href, type) {
-    const src = await this.assetURL(href, "");
+    const src = await this.assetURL(href, "", new Set(), href);
     let width, height;
     if (type === "image/svg+xml") {
-      const svg = (await this.document(href, false)).documentElement;
+      const svg = (await this.document(href, false, new Set(), href)).documentElement;
       width = svg.getAttribute("width");
       height = svg.getAttribute("height");
       const viewBox = svg.getAttribute("viewBox")?.trim().split(/\s+/);
       if ((!width || !height) && viewBox?.length === 4) { width ||= viewBox[2]; height ||= viewBox[3]; }
     } else {
       try {
-        const bitmap = await createImageBitmap(new Blob([await this.bytes(href)], { type }));
+        const bitmap = await createImageBitmap(new Blob([await this.bytes(href, href)], { type }));
         width = bitmap.width; height = bitmap.height;
         bitmap.close();
       } catch { /* Dimensions stay unknown; the <img> still renders at its natural size. */ }
@@ -265,6 +298,6 @@ export class ReaderPublication {
     this.closed = true;
     this.controller.abort();
     for (const url of this.urls) URL.revokeObjectURL(url);
-    this.urls.clear(); this.raw.clear(); this.blobs.clear();
+    this.urls.clear(); this.raw.clear(); this.blobs.clear(); this.referrers.clear();
   }
 }
