@@ -143,6 +143,36 @@ test('a relocate the reader did not cause is not activity', () => {
   assert.equal(out.start_progression, 0.1);
 });
 
+test('a checkpoint restores an unfinished sitting without counting the gap as reading', () => {
+  const first = openSession({
+    id: 'checkpointed',
+    workID: 'w1',
+    startedAt: t0,
+    now: 0,
+    fraction: 0.1,
+  });
+  first.activity(MIN, 0.2);
+  const checkpoint = first.checkpoint();
+  assert.equal(checkpoint.id, 'checkpointed');
+  assert.equal(checkpoint.activeMs, MIN);
+
+  const resumed = openSession({
+    id: 'new-page-id',
+    workID: 'w1',
+    startedAt: wall(60 * MIN),
+    now: 5000,
+    fraction: 0.2,
+    checkpoint,
+  });
+  resumed.activity(5000 + MIN, 0.3);
+  const out = resumed.close(5000 + 2 * MIN, wall(62 * MIN), 0.3);
+  assert.equal(out.session_id, 'checkpointed');
+  assert.equal(out.active_ms, undefined);
+  assert.equal(out.start_progression, 0.1);
+  assert.equal(out.end_progression, 0.3);
+  assert.equal(out.idle_ms, 59 * MIN);
+});
+
 test('progress supplies the first position when the open had none', () => {
   const s = open(NaN);
   s.progress(0.3);

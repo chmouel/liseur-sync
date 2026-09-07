@@ -17,3 +17,7 @@ func TestReaderCredentialLifecycle(t *testing.T) {
 func TestReaderAnnotationReplacement(t *testing.T) {
 	runNodeTests(t, "readerannotations.test.mjs")
 }
+
+func TestOfflinePublicationStorageCore(t *testing.T) {
+	runNodeTests(t, "offline-storage.test.mjs")
+}

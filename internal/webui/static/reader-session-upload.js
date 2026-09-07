@@ -60,7 +60,7 @@ export async function uploadSessions(sessions, {
         deferred(response.status, "malformed_acknowledgement");
         return;
       }
-      accepted(batch);
+      await accepted(batch);
       continue;
     }
     if (response.status === 413 || body.code === "batch_too_large") {
@@ -81,11 +81,11 @@ export async function uploadSessions(sessions, {
     }
     const index = namedIndex(body, batch);
     if (index >= 0) {
-      refused(batch[index], body.code);
+      await refused(batch[index], body.code);
       const rest = batch.filter((_, i) => i !== index);
       if (rest.length) queue.unshift(rest);
     } else if (batch.length === 1) {
-      refused(batch[0], body.code);
+      await refused(batch[0], body.code);
     } else {
       const middle = Math.ceil(batch.length / 2);
       queue.unshift(batch.slice(0, middle), batch.slice(middle));

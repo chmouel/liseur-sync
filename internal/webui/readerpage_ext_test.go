@@ -104,6 +104,38 @@ func TestReaderIsOfferedOnlyForBooksItCanOpen(t *testing.T) {
 	if !strings.Contains(detail, "books/"+bookID+"/read") {
 		t.Error("the book page does not offer to open the book")
 	}
+	if !strings.Contains(detail, `data-offline-book="`+bookID+`"`) ||
+		!strings.Contains(detail, "Save offline") {
+		t.Error("the book page does not offer a selected offline publication download")
+	}
+}
+
+func TestOfflineReaderShellIsGenericAndScoped(t *testing.T) {
+	f := newBooksFixture(t)
+	resp, page := f.get(t, "/ui/offline/read/?book=private-book", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("offline reader page: %d", resp.StatusCode)
+	}
+	if strings.Contains(page, "private-book") || strings.Contains(page, "alice") ||
+		strings.Contains(page, "hunter2hunter") {
+		t.Fatal("offline reader shell leaked request or account data")
+	}
+	for _, want := range []string{
+		`data-offline="1"`,
+		`../assets/reader-app.js`,
+		`../assets/style.css`,
+		`nonce="`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("offline reader shell missing %q", want)
+		}
+	}
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'none'") ||
+		!strings.Contains(csp, "'strict-dynamic'") ||
+		!strings.Contains(csp, "blob:") {
+		t.Errorf("offline reader shell does not retain the reader CSP: %s", csp)
+	}
 }
 
 // TestReaderPageRefusesOtherPeoplesBooks: the reader is a page about

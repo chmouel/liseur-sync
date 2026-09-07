@@ -113,6 +113,49 @@ becomes `content.insecure_http`. The server refuses to start on an
 unrecognized key rather than ignoring one, so a misplaced setting is
 reported instead of silently doing nothing.
 
+### Offline web reader
+
+With the default same-origin reader, the library exposes a **Save offline**
+action and the UI has an Offline shelf. Open `/ui/` online in the browser
+where the Home Screen app will be installed, sign in there, and add the
+site to the Home Screen from the browser's share menu. Launch the installed
+app once while online, sign in as the intended account, and download the
+books it should carry. A book appears on the offline shelf only after its
+publication resources have been downloaded and committed completely.
+
+Shell updates are detected from the embedded assets, including reader
+JavaScript. Open the app online to download an update, then close all its
+windows and reopen it to activate the new version. An open reader keeps its
+existing shell until it closes; updating the shell does not remove downloaded
+books or pending changes. Do not clear site data to apply an update.
+
+Offline reading requires a browser with Web Locks support. Only one window
+can read a given saved book at a time, preventing two windows from restoring
+the same unfinished reading session. Close that book's other window before
+opening it again.
+
+The app keeps publication bytes and pending reading state in browser-managed
+storage. Storage is subject to quota, user clearing, application removal
+and platform eviction; installation does not provide native-app durability.
+Synchronization runs when the app is open or returns to the foreground and
+requires a fresh credential for the same account. Do not rely on background
+upload while an iOS Home Screen app is suspended or closed. If a token
+expires, local books remain readable and the app waits for sign-in before
+uploading queued changes.
+
+The offline shelf also sends queued changes, including changes for a book
+whose downloaded bytes have been removed. Keep it open online while syncing.
+
+Downloaded bytes are local copies. Revoking a token or removing a folder
+grant stops future server access but cannot erase a disconnected device's
+already-downloaded publication. Explicit logout warns about unsynchronized
+changes before clearing the local account partition.
+
+If `reader_origin` is configured, the offline shelf, manifest and download
+controls are deliberately disabled. The separate reader origin remains an
+online-only isolated surface; do not try to combine it with the same-origin
+PWA.
+
 ### Live event streams
 
 `GET /v1/events` holds an authenticated `text/event-stream` connection.

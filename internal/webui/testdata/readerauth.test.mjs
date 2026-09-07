@@ -12,6 +12,41 @@ const deferred = () => {
 const options = { apiBase: "/proxy/", tokenURL: "/proxy/ui/reader/token", csrf: "csrf" };
 const metadata = (account = "a", device = "browser") => json({ account_id: account, device_id: device });
 
+test("every mutation retry checks both account and device after credential replacement", async () => {
+  for (const replacement of [["other", "browser"], ["a", "other-device"]]) {
+    let mints = 0, mutations = 0;
+    const auth = readerAuth({
+      ...options,
+      fetcher: async url => {
+        if (url === options.tokenURL) return json({ token: "token-" + ++mints });
+        if (url.endsWith("v1/token")) return mints === 1 ? metadata() : metadata(...replacement);
+        mutations++;
+        return json({}, 401);
+      },
+    });
+    await assert.rejects(auth.request("v1/annotations", {
+      method: "POST",
+      authorize: identity => {
+        if (identity.account !== "a" || identity.device !== "browser") throw new Error("identity changed");
+      },
+    }), /identity changed/);
+    assert.equal(mutations, 1, "must never send under the replacement identity");
+  }
+});
+
+test("same-account reauthentication can resume an exhausted cookie credential", async () => {
+  let signedIn = false;
+  const auth = readerAuth({
+    ...options,
+    fetcher: async url => url === options.tokenURL
+      ? json({ token: "restored" }, signedIn ? 200 : 401) : metadata(),
+  });
+  await assert.rejects(auth.acquire(), /expired/);
+  signedIn = true;
+  auth.resume();
+  assert.equal((await auth.acquire()).account, "a");
+});
+
 test("measured session duration requires an explicit server capability", async () => {
   for (const advertised of [undefined, false, "true", true]) {
     const auth = readerAuth({
@@ -51,6 +86,30 @@ test("concurrent streaming and API calls mint a single credential with Bearer he
   responses.forEach((resp) => assert.equal(auth.responseCurrent(resp), true));
   assert.equal(auth.identity().account, "a");
   assert.equal(auth.identity().device, "browser");
+});
+
+test("credential mint reads the current CSRF value", async () => {
+  let csrf = "first";
+  let apiCalls = 0;
+  const bodies = [];
+  const auth = readerAuth({
+    ...options,
+    csrf: () => csrf,
+    fetcher: async (url, opts) => {
+      if (url === options.tokenURL) {
+        bodies.push(String(opts.body));
+        return json({ token: "t" + bodies.length });
+      }
+      if (url.endsWith("v1/token")) return metadata();
+      if (++apiCalls === 1) {
+        csrf = "second";
+        return json({}, 401);
+      }
+      return json({ ok: true });
+    },
+  });
+  await auth.request("v1/events");
+  assert.deepEqual(bodies, ["csrf=first", "csrf=second"]);
 });
 
 test("concurrent 401 responses refresh once and late refusal cannot evict the new token", async () => {
