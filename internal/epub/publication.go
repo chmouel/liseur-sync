@@ -256,7 +256,7 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 		positions = p.Positions(ctx)
 	}
 	if len(positions) == 0 {
-		positions = p.boundedPositions(maxPositions)
+		positions = p.boundedPositions()
 	}
 	return &Index{
 		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: positions,
@@ -264,8 +264,13 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	}
 }
 
-// fallbackPositionBudget caps how many locators boundedPositions ever
-// builds, independently of the maxPositions a caller passes to Index: that
+// fallbackPositionBudget bounds how many extra, size-weighted positions
+// boundedPositions distributes on top of the one mandatory position every
+// reading-order item gets — not the total, so a publication with many
+// chapters can't crowd out that weighted pool by consuming it on mandatory
+// minimums alone (a large chapter still needs a meaningful share of
+// positions relative to a small one to keep progress tracking sensible).
+// It is independent of the maxPositions a caller passes to Index: that
 // parameter only decides when the fine-grained list is too expensive to
 // generate, but the fallback itself is cached the same way, and a cache
 // of PublicationIndexCache's default 32 entries each holding maxPositions
@@ -277,18 +282,18 @@ const fallbackPositionBudget = 4096
 
 // boundedPositions is the fallback for a publication too large to afford
 // the toolkit's byte-granular position list (never called unless the
-// fine-grained list was skipped or came back empty). It distributes a
-// small, fixed budget of locators across the reading order in proportion
-// to each item's own archive size, using the largest-remainder method so
-// the total never exceeds the budget: a reader tracking progress by
-// position multiplicity — the client divides a section's on-screen
-// progress by its position count, and the whole book's by the total —
-// still weights a large chapter correctly against a small one, just at
-// coarser granularity. Every item gets at least one position so the
-// reader can always place it; if the reading order itself is longer than
-// the budget, that guarantee wins and the total exceeds the budget by as
-// little as the chapter count requires.
-func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
+// fine-grained list was skipped or came back empty). Every reading-order
+// item first gets one mandatory position, so the reader can always place
+// it; a further fallbackPositionBudget positions are then distributed
+// across the reading order in proportion to each item's own archive size,
+// using the largest-remainder method so the total never exceeds the
+// combined budget. A reader tracking progress by position multiplicity —
+// the client divides a section's on-screen progress by its position
+// count, and the whole book's by the total — still weights a large
+// chapter correctly against a small one even when there are many
+// chapters, because the weighted pool is never shared with the mandatory
+// minimums.
+func (p *Publication) boundedPositions() []manifest.Locator {
 	readingOrder := p.Manifest.ReadingOrder
 	if len(readingOrder) == 0 {
 		return nil
@@ -307,13 +312,7 @@ func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 		sizes[i] = f.CompressedSize64
 		total += f.CompressedSize64
 	}
-	budget := fallbackPositionBudget
-	if maxPositions > 0 && maxPositions < budget {
-		budget = maxPositions
-	}
-	if budget < len(readingOrder) {
-		budget = len(readingOrder)
-	}
+	budget := len(readingOrder) + fallbackPositionBudget
 	counts := apportion(sizes, total, budget)
 	positions := make([]manifest.Locator, 0, budget)
 	var position uint
