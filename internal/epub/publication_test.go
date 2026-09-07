@@ -139,8 +139,8 @@ func TestIndexFallsBackToWeightedPositionsOverTheBound(t *testing.T) {
 		return one, two
 	}
 	idx := p.Index(t.Context(), 6)
-	if len(idx.Positions) == 0 {
-		t.Fatal("bounded fallback produced no positions at all")
+	if len(idx.Positions) != 6 {
+		t.Fatalf("bounded fallback must not exceed the requested budget, got %d positions", len(idx.Positions))
 	}
 	one, two := countByChapter(idx.Positions)
 	if one <= two {
@@ -151,6 +151,38 @@ func TestIndexFallsBackToWeightedPositionsOverTheBound(t *testing.T) {
 	}
 	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 12 {
 		t.Fatalf("a non-positive bound must mean unbounded (fine-grained), got %d positions", len(idx.Positions))
+	}
+}
+
+// TestApportionNeverExceedsBudgetWithManyItems confirms that giving every
+// item at least one position, plus a proportional share of the rest,
+// cannot overshoot the requested budget even when there are far more
+// items than the naive per-item minimum would suggest — one tiny item per
+// count plus one large one, which independent per-item rounding (round
+// every share up to at least one, uncoordinated) would overshoot on.
+func TestApportionNeverExceedsBudgetWithManyItems(t *testing.T) {
+	weights := make([]uint64, 200)
+	var total uint64
+	for i := range weights {
+		weights[i] = 1
+		total++
+	}
+	weights[0] = 1_000_000
+	total += weights[0] - 1
+	const budget = 210
+	counts := apportion(weights, total, budget)
+	var sum int
+	for i, count := range counts {
+		if count < 1 {
+			t.Fatalf("item %d got no position at all", i)
+		}
+		sum += count
+	}
+	if sum != budget {
+		t.Fatalf("apportion must land on the exact budget, got %d for a budget of %d", sum, budget)
+	}
+	if counts[0] <= counts[1] {
+		t.Fatalf("the far larger item must still get more positions, got %d vs %d", counts[0], counts[1])
 	}
 }
 
