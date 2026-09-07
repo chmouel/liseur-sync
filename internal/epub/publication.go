@@ -23,9 +23,10 @@ import (
 // entries: full validation belongs to reconciliation, not a reader request.
 type Publication struct {
 	*pub.Publication
-	PackagePath string
-	archive     *publicationArchive
-	allowed     map[string]manifest.Link
+	PackagePath     string
+	archive         *publicationArchive
+	allowed         map[string]manifest.Link
+	fontObfuscation map[string]string
 }
 
 func OpenPublication(ctx context.Context, source io.ReaderAt, size int64, limits Limits) (*Publication, error) {
@@ -93,12 +94,14 @@ func OpenPublication(ctx context.Context, source io.ReaderAt, size int64, limits
 	if err != nil {
 		return nil, err
 	}
+	var fontObfuscation map[string]string
 	if _, exists := a.entries["META-INF/encryption.xml"]; exists {
 		data, err := control("META-INF/encryption.xml")
 		if err != nil {
 			return nil, err
 		}
-		if _, err := validateEncryption(data, a.entries, details.manifest, limits.MaxXMLDepth); err != nil {
+		fontObfuscation, err = validateEncryption(data, a.entries, details.manifest, limits.MaxXMLDepth)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -119,7 +122,7 @@ func OpenPublication(ctx context.Context, source io.ReaderAt, size int64, limits
 		return nil, validationError(CodeInvalidEPUB, errors.New("empty reading order"))
 	}
 	a.metadataOnly = false
-	p := &Publication{Publication: builder.Build(), PackagePath: packagePath, archive: a, allowed: make(map[string]manifest.Link)}
+	p := &Publication{Publication: builder.Build(), PackagePath: packagePath, archive: a, allowed: make(map[string]manifest.Link), fontObfuscation: fontObfuscation}
 	for _, list := range []manifest.LinkList{p.Manifest.ReadingOrder, p.Manifest.Resources} {
 		for i := range list {
 			name, err := publicationPath(list[i].Href.String())
@@ -173,6 +176,9 @@ func (p *Publication) OpenResource(name string) (io.ReadCloser, int64, error) {
 	if err != nil {
 		return nil, 0, validationError(CodeInvalidEPUB, err)
 	}
+	if algorithm, ok := p.fontObfuscation[name]; ok {
+		r = newDeobfuscatingReader(r, p.Manifest.Metadata.Identifier, algorithm)
+	}
 	return r, int64(f.UncompressedSize64), nil
 }
 
@@ -200,6 +206,12 @@ type Index struct {
 	Manifest    manifest.Manifest
 	Positions   []manifest.Locator
 	Entries     map[string]IndexEntry
+	// FontObfuscation maps an archive path to the obfuscation algorithm
+	// URI declared for it in META-INF/encryption.xml, for the entries
+	// validateEncryption confirmed are permitted font obfuscation (the
+	// only encryption this server accepts at all). OpenIndexedResource
+	// reverses it before returning bytes for such a path.
+	FontObfuscation map[string]string
 }
 
 func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; return ok }
@@ -224,7 +236,10 @@ func (p *Publication) Index(ctx context.Context) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
-	return &Index{PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: p.Positions(ctx), Entries: entries}
+	return &Index{
+		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: p.Positions(ctx),
+		Entries: entries, FontObfuscation: p.fontObfuscation,
+	}
 }
 
 // ErrPublicationChanged means the catalog's content digest still names
@@ -264,6 +279,9 @@ func OpenIndexedResource(source io.ReaderAt, size int64, idx *Index, name string
 		r, err := f.Open()
 		if err != nil {
 			return nil, 0, validationError(CodeInvalidEPUB, err)
+		}
+		if algorithm, ok := idx.FontObfuscation[name]; ok {
+			r = newDeobfuscatingReader(r, idx.Manifest.Metadata.Identifier, algorithm)
 		}
 		return r, int64(f.UncompressedSize64), nil
 	}

@@ -247,12 +247,12 @@ func Validate(
 		if err != nil {
 			return Result{}, err
 		}
-		encrypted, err := validateEncryption(
+		obfuscated, err := validateEncryption(
 			encryptionXML, entries, packageInfo.manifest, limits.MaxXMLDepth)
 		if err != nil {
 			return Result{}, err
 		}
-		result.Encrypted = encrypted
+		result.Encrypted = len(obfuscated) > 0
 	}
 	return result, nil
 }
@@ -968,12 +968,20 @@ func validateXMLDocument(
 	}
 }
 
+// validateEncryption validates META-INF/encryption.xml and returns the
+// archive path of every entry it declares obfuscated, mapped to the
+// obfuscation algorithm URI. Only the two font-obfuscation schemes EPUB
+// permits (IDPF and Adobe's variant) are accepted; anything else is
+// rejected as unsupported DRM before a Publication is ever built. The
+// returned map is what OpenIndexedResource and Publication.OpenResource
+// use to know which entries need XOR deobfuscation before their bytes
+// reach a caller.
 func validateEncryption(
 	value []byte,
 	entries map[string]*zip.File,
 	manifest map[string]string,
 	maxDepth int,
-) (bool, error) {
+) (map[string]string, error) {
 	const (
 		idpfObfuscation  = "http://www.idpf.org/2008/embedding"
 		adobeObfuscation = "http://ns.adobe.com/pdf/enc#RC"
@@ -983,7 +991,7 @@ func validateEncryption(
 	decoder := xml.NewDecoder(bytes.NewReader(value))
 	depth := 0
 	roots := 0
-	encrypted := false
+	obfuscated := map[string]string{}
 	var currentAlgorithm, currentReference string
 	methods, cipherData, references := 0, 0, 0
 	insideEncryptedData := false
@@ -992,14 +1000,14 @@ func validateEncryption(
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
 			if roots != 1 || insideEncryptedData {
-				return false, validationError(
+				return nil, validationError(
 					CodeInvalidEPUB,
 					errors.New("invalid encryption document structure"))
 			}
-			return encrypted, nil
+			return obfuscated, nil
 		}
 		if err != nil {
-			return false, validationError(CodeInvalidEPUB, err)
+			return nil, validationError(CodeInvalidEPUB, err)
 		}
 		switch typed := token.(type) {
 		case xml.StartElement:
@@ -1007,7 +1015,7 @@ func validateEncryption(
 				roots++
 				if roots != 1 || typed.Name.Local != "encryption" ||
 					typed.Name.Space != containerNS {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("invalid encryption document root"))
 				}
@@ -1019,7 +1027,7 @@ func validateEncryption(
 			depth++
 			stack = append(stack, typed.Name)
 			if depth > maxDepth {
-				return false, validationError(
+				return nil, validationError(
 					CodeArchiveLimits, errors.New("encryption XML is too deep"))
 			}
 			switch typed.Name {
@@ -1027,7 +1035,7 @@ func validateEncryption(
 				if insideEncryptedData || parent != (xml.Name{
 					Space: containerNS, Local: "encryption",
 				}) {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("invalid EncryptedData structure"))
 				}
@@ -1041,13 +1049,13 @@ func validateEncryption(
 				if !insideEncryptedData || parent != (xml.Name{
 					Space: xmlEncryptionNS, Local: "EncryptedData",
 				}) {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("EncryptionMethod is outside EncryptedData"))
 				}
 				methods++
 				if methods != 1 {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("duplicate EncryptionMethod"))
 				}
@@ -1057,13 +1065,13 @@ func validateEncryption(
 				if !insideEncryptedData || parent != (xml.Name{
 					Space: xmlEncryptionNS, Local: "EncryptedData",
 				}) {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("CipherData is outside EncryptedData"))
 				}
 				cipherData++
 				if cipherData != 1 {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("duplicate CipherData"))
 				}
@@ -1072,13 +1080,13 @@ func validateEncryption(
 					parent != (xml.Name{
 						Space: xmlEncryptionNS, Local: "CipherData",
 					}) {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("CipherReference is outside EncryptedData"))
 				}
 				references++
 				if references != 1 {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("duplicate CipherReference"))
 				}
@@ -1086,7 +1094,7 @@ func validateEncryption(
 			}
 		case xml.EndElement:
 			if len(stack) == 0 || stack[len(stack)-1] != typed.Name {
-				return false, validationError(
+				return nil, validationError(
 					CodeInvalidEPUB,
 					errors.New("invalid encryption XML structure"))
 			}
@@ -1095,19 +1103,19 @@ func validateEncryption(
 				Space: xmlEncryptionNS, Local: "EncryptedData",
 			}) {
 				if !insideEncryptedData {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New("unexpected EncryptedData close"))
 				}
 				if methods != 1 || cipherData != 1 || references != 1 {
-					return false, validationError(
+					return nil, validationError(
 						CodeInvalidEPUB,
 						errors.New(
 							"EncryptedData requires one method and reference"))
 				}
 				if currentAlgorithm != idpfObfuscation &&
 					currentAlgorithm != adobeObfuscation {
-					return false, validationError(
+					return nil, validationError(
 						CodeUnsupportedDRM,
 						fmt.Errorf(
 							"unsupported encryption algorithm %q",
@@ -1115,25 +1123,25 @@ func validateEncryption(
 				}
 				reference, err := resolveEncryptedReference(currentReference)
 				if err != nil {
-					return false, err
+					return nil, err
 				}
 				file, ok := entries[reference]
 				mediaType := manifest[reference]
 				if !ok || !file.Mode().IsRegular() ||
 					!isFontPath(reference) || !isFontMediaType(mediaType) {
-					return false, validationError(
+					return nil, validationError(
 						CodeUnsupportedDRM,
 						fmt.Errorf(
 							"font obfuscation targets non-font %q",
 							reference))
 				}
-				encrypted = true
+				obfuscated[reference] = currentAlgorithm
 				insideEncryptedData = false
 			}
 			depth--
 		case xml.Directive:
 			if err := checkDirective(typed); err != nil {
-				return false, err
+				return nil, err
 			}
 		}
 	}
