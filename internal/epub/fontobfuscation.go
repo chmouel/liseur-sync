@@ -4,7 +4,10 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"io"
+	"regexp"
 	"strings"
+
+	"github.com/readium/go-toolkit/pkg/manifest"
 )
 
 // fontObfuscationLength maps the two font-obfuscation algorithms EPUB
@@ -16,16 +19,64 @@ var fontObfuscationLength = map[string]int64{
 	"http://ns.adobe.com/pdf/enc#RC":     1024,
 }
 
-// fontObfuscationKey derives the XOR key for algorithm from the
-// publication's dc:identifier, matching the two schemes' key derivations:
-// IDPF hashes the raw identifier with SHA-1, Adobe hex-decodes it after
-// stripping the "urn:uuid:" prefix and hyphens. An empty or malformed
-// identifier yields no usable key, in which case the caller must not
-// deobfuscate rather than serve corrupted bytes.
-func fontObfuscationKey(identifier, algorithm string) []byte {
-	if algorithm == "http://ns.adobe.com/pdf/enc#RC" {
-		trimmed := strings.ReplaceAll(strings.ReplaceAll(identifier, "urn:uuid:", ""), "-", "")
-		key, err := hex.DecodeString(trimmed)
+const adobeObfuscation = "http://ns.adobe.com/pdf/enc#RC"
+
+// uuidPattern matches a UUID's canonical hyphenated form anywhere inside a
+// string. This reader's previous foliate-js implementation scanned every
+// declared dc:identifier for one rather than trusting the package's
+// unique-identifier to be a UUID, because Adobe's obfuscation always keys
+// off a UUID even when a publisher's unique-identifier is something else
+// (an ISBN, say) and the UUID sits in another, unmarked identifier.
+var uuidPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// stripFontIdentifierWhitespace removes the ASCII space, tab, CR and LF
+// characters IDPF's font-obfuscation key derivation strips before hashing
+// the identifier, matching both go-toolkit's and foliate-js's behavior.
+func stripFontIdentifierWhitespace(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\r', '\n':
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// fontObfuscationIdentifier picks the raw identifier string an algorithm
+// keys off of. IDPF hashes the package's unique-identifier, whitespace
+// stripped — that one is EPUB's obfuscation identifier by definition.
+// Adobe's variant requires a UUID specifically, so every declared
+// identifier is searched for one rather than assuming the primary
+// identifier is it. An empty return means no usable identifier was found.
+func fontObfuscationIdentifier(metadata manifest.Metadata, algorithm string) string {
+	if algorithm != adobeObfuscation {
+		return stripFontIdentifierWhitespace(metadata.Identifier)
+	}
+	candidates := make([]string, 0, len(metadata.AltIdentifiers)+1)
+	candidates = append(candidates, metadata.Identifier)
+	for _, alt := range metadata.AltIdentifiers {
+		candidates = append(candidates, alt.Value)
+	}
+	for _, candidate := range candidates {
+		if uuid := uuidPattern.FindString(candidate); uuid != "" {
+			return uuid
+		}
+	}
+	return ""
+}
+
+// fontObfuscationKey derives the XOR key for algorithm: IDPF hashes the
+// identifier with SHA-1, Adobe hex-decodes the UUID's digits after
+// stripping hyphens. An empty or malformed identifier yields no usable
+// key, in which case the caller must not deobfuscate rather than serve
+// corrupted bytes.
+func fontObfuscationKey(metadata manifest.Metadata, algorithm string) []byte {
+	identifier := fontObfuscationIdentifier(metadata, algorithm)
+	if identifier == "" {
+		return nil
+	}
+	if algorithm == adobeObfuscation {
+		key, err := hex.DecodeString(strings.ReplaceAll(identifier, "-", ""))
 		if err != nil || len(key) == 0 {
 			return nil
 		}
@@ -49,12 +100,12 @@ type deobfuscatingReader struct {
 	pos               int64
 }
 
-func newDeobfuscatingReader(r io.ReadCloser, identifier, algorithm string) io.ReadCloser {
+func newDeobfuscatingReader(r io.ReadCloser, metadata manifest.Metadata, algorithm string) io.ReadCloser {
 	length, ok := fontObfuscationLength[algorithm]
 	if !ok {
 		return r
 	}
-	key := fontObfuscationKey(identifier, algorithm)
+	key := fontObfuscationKey(metadata, algorithm)
 	if len(key) == 0 {
 		return r
 	}
