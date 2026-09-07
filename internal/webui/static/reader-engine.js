@@ -204,8 +204,18 @@ export class ReaderEngine extends HTMLElement {
       if (finite(target.index)) return target;
       if (finite(target.fraction)) {
         const fraction = Math.max(0, Math.min(1, target.fraction));
-        const position = this.positionList[Math.min(this.positionList.length - 1, Math.floor(fraction * this.positionList.length))];
-        return { index: this.book.sections.findIndex(s => s.id === position.href), locator: position };
+        // Use the same byte-weighted section bounds relocate() reports
+        // progress with, not the position list's raw index spacing: with
+        // a bounded fallback list, a chapter's share of positions can be
+        // far smaller than its share of the book's bytes, and indexing
+        // straight into positionList would then favor small chapters
+        // over the one the reader actually meant to reach.
+        const bounds = this.getSectionFractions();
+        let index = bounds.length - 2;
+        while (index > 0 && bounds[index] > fraction) index--;
+        const span = bounds[index + 1] - bounds[index];
+        const anchor = span > 0 ? (fraction - bounds[index]) / span : 0;
+        return { index, anchor };
       }
       if (target.href) return { index: this.book.sections.findIndex(s => s.id === target.href.split("#")[0]), locator: Locator.deserialize(target) };
     }
