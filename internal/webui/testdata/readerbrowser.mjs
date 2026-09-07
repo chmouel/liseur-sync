@@ -557,6 +557,15 @@ const tocGone = await evalIn(`document.getElementById('reader-toc').hidden`);
 check('a contents entry jumps there',
   jumped.chapter === 'Chowder' && jumped.cfi !== beforeJump.cfi,
   `${beforeJump.chapter} -> ${jumped.chapter}`);
+// Chowder is served as a UTF-16LE+BOM archive entry (see
+// browserTestEPUB). A correct, encoding-aware decode renders the
+// accented word intact; a naive UTF-8 decode would instead produce
+// mojibake or U+FFFD replacement characters.
+const chowderText = await evalIn(
+  `[...document.querySelectorAll('#reader-view iframe')].map((f) => f.contentDocument?.body?.textContent || '').join(' ')`);
+check('Chowder decodes its UTF-16 text correctly',
+  chowderText.includes('café chowder') && !chowderText.includes('\ufffd'),
+  JSON.stringify(chowderText.slice(0, 80)));
 check('the jump closes the drawer', tocGone === true, String(tocGone));
 await evalIn(`(() => {
   document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 't', bubbles: true }));
