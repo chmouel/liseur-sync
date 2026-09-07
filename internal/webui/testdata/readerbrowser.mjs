@@ -20,6 +20,11 @@ const nan = process.env.SMOKE_NAN === '1';
 // Session mode (ADR-0030): hides and shows the tab with a skewed clock,
 // watching what the reader posts to /v1/sessions.
 const sessions = process.env.SMOKE_SESSIONS === '1';
+// SVG-spine mode: the fixture's spine has an SVG page and a bitmap page
+// instead of XHTML; watches that both render as a decoded <img> off a
+// blob URL rather than a blank frame or a direct (nonexistent) archive
+// URL, and that the SVG page's embedded script never ran.
+const svg = process.env.SMOKE_SVG === '1';
 const liveMode = process.env.SMOKE_LIVE === '1';
 // How many pages the fixture has, counted from the archive by the Go
 // side with Readium's recipe (ADR-0032). The footer has to agree, or the
@@ -153,6 +158,12 @@ if (nan) {
 }
 if (sessions) {
   await sessionGuard(evalIn, check);
+  ws.close();
+  proc.kill();
+  process.exit(fail.length ? 1 : 0);
+}
+if (svg) {
+  await svgGuard(evalIn, check);
   ws.close();
   proc.kill();
   process.exit(fail.length ? 1 : 0);
@@ -1422,6 +1433,40 @@ async function liveGuard(evalIn, check, S) {
   await evalIn("document.getElementById('reader-next').click()");
   check('a genuine page turn still syncs', await wait('window.__liveOwnOps.length > 0'));
   await visibility(true);
+}
+
+// svgGuard proves finding #1 of the streaming-reader review: a spine
+// item that is really an SVG or bitmap page must render as a decoded
+// image rather than a blank frame from a nonexistent archive URL, and
+// an SVG page's embedded script must still never run. The fixture's
+// spine is title page, SVG page, bitmap page, in that order.
+async function svgGuard(evalIn, check) {
+  const frameProbe = `(() => {
+    const view = document.querySelector('readium-view');
+    const contents = view?.renderer?.getContents?.() ?? [];
+    const doc = contents[0]?.doc;
+    const img = doc?.querySelector('img');
+    return JSON.stringify({
+      chapter: document.getElementById('reader-chapter')?.textContent,
+      hasImg: !!img,
+      srcIsBlob: !!img && img.src.startsWith('blob:'),
+      naturalWidth: img?.naturalWidth ?? 0,
+      svgRan: doc?.documentElement?.dataset?.svgRan ?? '',
+    });
+  })()`;
+
+  await evalIn("document.querySelector('readium-view').goTo(1)");
+  await new Promise((r) => setTimeout(r, 1200));
+  let frame = JSON.parse(await evalIn(frameProbe));
+  check('the SVG spine page renders a decoded image', frame.hasImg && frame.srcIsBlob, JSON.stringify(frame));
+  check('the SVG page has visible dimensions', frame.naturalWidth > 0, String(frame.naturalWidth));
+  check("the SVG page's embedded script did not run", frame.svgRan === '', frame.svgRan);
+
+  await evalIn("document.querySelector('readium-view').goTo(2)");
+  await new Promise((r) => setTimeout(r, 1200));
+  frame = JSON.parse(await evalIn(frameProbe));
+  check('the bitmap spine page renders a decoded image', frame.hasImg && frame.srcIsBlob, JSON.stringify(frame));
+  check('the bitmap page has visible dimensions', frame.naturalWidth > 0, String(frame.naturalWidth));
 }
 
 // nanGuard proves the position-jumps fix from the page's own side. The
