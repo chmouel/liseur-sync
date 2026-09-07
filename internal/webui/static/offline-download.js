@@ -13,6 +13,8 @@ import {
 
 const buttons = [...document.querySelectorAll("[data-offline-book]")];
 if (buttons.length) {
+  const offlineCapable = globalThis.isSecureContext &&
+    !!globalThis.navigator?.serviceWorker && !!globalThis.navigator?.locks;
   const prefix = deploymentPrefix();
   const csrf = document.querySelector('input[name="csrf"]')?.value || "";
   const auth = readerAuth({
@@ -47,6 +49,11 @@ if (buttons.length) {
   };
 
   for (const button of buttons) {
+    if (!offlineCapable) {
+      button.disabled = true;
+      say(button, "Offline reading requires a secure browser connection.", true);
+      continue;
+    }
     activeAccount(storagePartition())
       .then(account => account && updateReadyState(button, account))
       .catch(error => console.warn("offline download state could not be loaded", error));
@@ -81,6 +88,7 @@ if (buttons.length) {
           await removeBookSnapshots({
             partition,
             account: identity.account,
+            epoch: context.epoch,
             bookID: button.dataset.offlineBook,
           });
           button.dataset.offlineReady = "";
