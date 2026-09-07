@@ -842,10 +842,10 @@ const FONTS = {
   serif: 'Georgia, "Times New Roman", "Liberation Serif", serif',
   sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Liberation Sans", sans-serif',
 };
-const MARGINS = { narrow: "16px", normal: "48px", wide: "72px" };
+const MARGINS = { none: "8px", narrow: "16px", normal: "48px", wide: "72px" };
 // The column gap follows the margin choice: "narrow" should mean the
 // text gets the window, not just that the outer edge moved.
-const GAPS = { narrow: "3%", normal: "7%", wide: "11%" };
+const GAPS = { none: "1%", narrow: "3%", normal: "7%", wide: "11%" };
 
 let settings = loadSettings();
 
