@@ -21,11 +21,18 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 			<meta name="htmx-config" content="{&#34;includeIndicatorStyles&#34;:false}"/>
 			<title>{ title } · liseur-sync</title>
 			<link rel="icon" href={ prefix + "static/icon.png" }/>
+			if u.Offline {
+				<link rel="manifest" href={ prefix + "offline/manifest.json" }/>
+			}
 			<link rel="stylesheet" href={ prefix + "static/style.css" }/>
 			<script src={ prefix + "static/htmx.min.js" } defer></script>
 			<script src={ prefix + "static/ui.js" } defer></script>
+			if u.Offline {
+				<script type="module" src={ prefix + "static/offline-account.js" } defer></script>
+				<script type="module" src={ prefix + "static/offline-download.js" } defer></script>
+			}
 		</head>
-		<body>
+		<body data-pwa-base={ pwaBase(prefix, u.Offline) } data-offline-account={ offlineAccount(u) }>
 			<a class="skip" href="#content">Skip to content</a>
 			if u.User != nil {
 				<input type="checkbox" id="nav-toggle" class="nav-toggle"/>
@@ -53,6 +60,9 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 						<nav aria-label="Sections">
 							@railLink(prefix+".", "Dashboard", u.Section == "dashboard")
 							@railLink(prefix+"library", "Library", u.Section == "library")
+							if u.Offline {
+								@railLink(prefix+"offline/", "Offline shelf", u.Section == "offline")
+							}
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")
 						</nav>
 					</aside>

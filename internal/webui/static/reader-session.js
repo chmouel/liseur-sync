@@ -34,11 +34,26 @@ function clamp01(v) {
 // compares payloads under; `now` is monotonic ms; `startedAt` is the
 // wall-clock Date; `fraction` may be non-finite, in which case the start
 // progression is the first finite one progress() or activity() reports.
-export function openSession({ id, workID, startedAt, now, fraction, supportsActiveMs = false }) {
+export function openSession({
+  id, workID, startedAt, now, fraction, supportsActiveMs = false, checkpoint = null,
+}) {
+  const originalStartedAt = checkpoint?.startedAt
+    ? new Date(checkpoint.startedAt)
+    : startedAt;
+  const sessionID = checkpoint?.id || id;
+  const checkpointProgress = checkpoint || {};
+  const openedAt = now;
+  let activeBase = finite(checkpointProgress.activeMs)
+    ? Math.max(0, checkpointProgress.activeMs)
+    : 0;
   let last = now;
   let idle = 0;
-  let startProg = finite(fraction) ? clamp01(fraction) : null;
-  let endProg = startProg;
+  let startProg = finite(checkpointProgress.startProgression)
+    ? clamp01(checkpointProgress.startProgression)
+    : finite(fraction) ? clamp01(fraction) : null;
+  let endProg = finite(checkpointProgress.endProgression)
+    ? clamp01(checkpointProgress.endProgression)
+    : startProg;
   let closed = null;
 
   const settle = (at) => {
@@ -54,7 +69,7 @@ export function openSession({ id, workID, startedAt, now, fraction, supportsActi
   };
 
   return {
-    id,
+    id: sessionID,
     // progress records where the reader is without treating it as
     // activity. The engine relocates on a resize or a font change as
     // readily as on a page turn, and an untouched page must not earn
@@ -79,10 +94,10 @@ export function openSession({ id, workID, startedAt, now, fraction, supportsActi
       settle(at);
       note(frac);
       closed = true;
-      const active = at - now - idle;
+      const active = activeBase + at - openedAt - idle;
       if (!(active >= MIN_ACTIVE_MS)) return null;
       if (startProg === null) return null;
-      const started = startedAt.getTime();
+      const started = originalStartedAt.getTime();
       const ended = Math.max(started, endedAt.getTime());
       // The server works active time out as the span less idle_ms, so
       // idle is what the wall clock saw beyond what the monotonic clock
@@ -92,7 +107,7 @@ export function openSession({ id, workID, startedAt, now, fraction, supportsActi
       const span = ended - started;
       const idleMs = Math.max(0, Math.min(Math.round(span - active), span));
       const payload = {
-        session_id: id,
+        session_id: sessionID,
         work_id: workID,
         started_at: new Date(started).toISOString(),
         ended_at: new Date(ended).toISOString(),
@@ -104,6 +119,19 @@ export function openSession({ id, workID, startedAt, now, fraction, supportsActi
       // the payload of a sitting already queued for an immutable retry.
       if (supportsActiveMs) payload.active_ms = Math.round(active);
       return payload;
+    },
+    checkpoint() {
+      if (closed) return null;
+      const active = activeBase + Math.max(0, last - openedAt - idle);
+      return {
+        id: sessionID,
+        workID,
+        startedAt: originalStartedAt.toISOString(),
+        startProgression: startProg,
+        endProgression: endProg,
+        activeMs: Math.round(active),
+        supportsActiveMs,
+      };
     },
   };
 }

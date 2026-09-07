@@ -80,6 +80,9 @@ already have.**
 8. **Broad reader integration**: a native catalog API for Liseur clients,
    OPDS 1.2 for existing readers, and an isolated web reader using the
    same sync protocol.
+9. **Installable offline web reading**: one bounded same-origin PWA can
+   retain explicitly selected EPUBs and queue the same reading state and
+   annotation mutations until the account reconnects.
 
 ## 3. Architecture overview
 
@@ -128,6 +131,24 @@ already have.**
   observed by a complete, non-empty pass are marked `missing` and kept;
   except in a Calibre folder, where the pass reads a curated catalog and
   a book absent from `metadata.db` is deleted (ADR-0022).
+
+### 3.1 Offline web reader
+
+The web UI also exposes one multi-book installable PWA under
+`/ui/offline/`; it is not one app per book. The service worker is scoped
+to that namespace and caches only a versioned allowlist of generic shell
+assets. It never caches credentials, API responses, publication bytes or
+personalized HTML. Selected publication graphs and private reading state
+live in account- and deployment-partitioned IndexedDB records, with
+digest-pinned generations becoming visible only after a complete download.
+
+Local reading does not depend on a live bearer token. Positions, session
+checkpoints, finalized sessions and annotation mutations are committed
+locally before foreground delivery, then use the existing native sync and
+annotation protocols after a same-account reconnect. iOS background
+delivery, storage permanence and remote erasure of already-downloaded
+bytes are not promised. A configured separate reader origin disables this
+same-origin PWA surface rather than weakening the origin isolation.
 
 ## 4. Identity: works, editions, aliases
 

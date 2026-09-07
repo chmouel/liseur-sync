@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#5b8cf5">
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" href="./icon.svg">
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <link rel="stylesheet" href="./offline.css">
+    <script type="module" src="./offline.js"></script>
+    <script type="module" src="./offline-shelf.js"></script>
+    <title>Offline shelf · liseur-sync</title>
+  </head>
+  <body>
+    <main class="offline-shell">
+      <p class="eyebrow">Liseur Sync</p>
+      <h1>Offline shelf</h1>
+      <p class="lead">Selected books saved here can be opened without a network connection.</p>
+      <p class="muted" id="offline-status">Loading saved books…</p>
+      <section id="offline-books" class="offline-books" aria-label="Books available offline"></section>
+      <a class="button" href="../library">Try the online library</a>
+    </main>
+  </body>
+</html>

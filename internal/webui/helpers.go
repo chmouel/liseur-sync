@@ -63,6 +63,7 @@ type userCtx struct {
 	Prefs   prefs
 	Section string
 	Back    string
+	Offline bool
 	// IsAdmin decides whether the rail offers the Admin entry at all.
 	// Hiding it is presentation only: requireAdmin is what enforces it.
 	IsAdmin bool
@@ -76,8 +77,27 @@ func uiCtx(r *http.Request, u *store.User) userCtx {
 		Prefs:   readPrefs(r),
 		Section: sectionOf(r.URL.Path),
 		Back:    backTo(r.URL),
+		Offline: offlineEnabled(r),
 		IsAdmin: isAdmin(r),
 	}
+}
+
+type offlineEnabledKey struct{}
+
+func withOfflineEnabled(r *http.Request, enabled bool) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), offlineEnabledKey{}, enabled))
+}
+
+func offlineEnabled(r *http.Request) bool {
+	enabled, ok := r.Context().Value(offlineEnabledKey{}).(bool)
+	return !ok || enabled
+}
+
+func pwaBase(prefix string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return prefix + "offline/"
 }
 
 // adminCtxKey carries the per-request answer to "is this user an
@@ -117,6 +137,8 @@ func sectionOf(path string) string {
 	// concerned: there is nowhere else those pages could belong.
 	case "works", "books":
 		return "library"
+	case "offline":
+		return "offline"
 	case "devices", "settings", "admin", "tokens", "pairing", "koplugin", "kosync", "browsers":
 		return "settings"
 	case "libraries":
@@ -127,6 +149,13 @@ func sectionOf(path string) string {
 	default:
 		return head
 	}
+}
+
+func offlineAccount(u userCtx) string {
+	if u.User == nil {
+		return ""
+	}
+	return u.User.ID
 }
 
 // backTo renders a URL as a path relative to the UI root, which is what

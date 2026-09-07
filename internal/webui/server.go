@@ -204,7 +204,13 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	// them go through the transport check — not just the login POST.
 	// Static assets are exempt: they hold no credential, and serving
 	// the stylesheet keeps the "https required" page readable.
-	sec := func(h http.HandlerFunc) http.Handler { return secure(pagePolicy(h)) }
+	sec := func(h http.HandlerFunc) http.Handler {
+		next := h
+		h = func(w http.ResponseWriter, r *http.Request) {
+			next(w, withOfflineEnabled(r, s.Cfg.ReaderOrigin == ""))
+		}
+		return secure(pagePolicy(h))
+	}
 
 	// The re-verification budgets are stricter than the login limiter
 	// (10 a minute): this verifier sits behind an authenticated session
@@ -231,6 +237,18 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 			w.Header().Set("Cache-Control", "no-cache")
 			http.FileServerFS(staticContent()).ServeHTTP(w, r)
 		})))
+
+	// The offline shell is authenticated when opened online, but its
+	// data-free assets are public so the service worker can install and
+	// refresh without ever handling a session response. A separate reader
+	// origin deliberately leaves this same-origin feature unavailable.
+	if s.Cfg.ReaderOrigin == "" {
+		mux.Handle("GET /ui/offline/{$}", sec(s.requireAuth(s.handleOfflineShell)))
+		mux.Handle("GET /ui/offline/account", sec(s.requireAuth(s.handleOfflineAccount)))
+		mux.Handle("GET /ui/offline/", pagePolicy(handleOfflineAsset))
+		mux.Handle("GET /ui/offline/read/{$}", pagePolicy(s.handleOfflineReaderPage))
+		mux.Handle("GET /ui/offline/assets/{name...}", pagePolicy(handleOfflineReaderAsset))
+	}
 
 	// /ui normalizes to /ui/ so the dashboard shares the /ui/ base
 	// directory with the other top-level pages and relative links

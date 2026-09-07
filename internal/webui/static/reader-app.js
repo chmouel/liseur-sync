@@ -5,9 +5,31 @@ import { openSession } from "./reader-session.js";
 import { uploadSessions } from "./reader-session-upload.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
+import { offlineSync } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh } from "./reader-sync.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
+import {
+  clearOfflineSessionCheckpoint,
+  accountContext,
+  claimOfflineReader,
+  assertOfflineContext,
+  notifyOfflineChange,
+  finishOfflineSession,
+  getOfflineSessionCheckpoint,
+  getReadySnapshot,
+  listOfflineAnnotations,
+  listOfflineOutbox,
+  removeOfflineOutbox,
+  queueOfflineAnnotation,
+  removeOfflineAnnotation,
+  saveOfflinePosition,
+  saveOfflineSessionCheckpoint,
+  deploymentPrefix,
+  storagePartition,
+  updateOfflineAnnotation,
+} from "./offline-storage.js";
+import * as CFI from "./vendor/foliate/epubcfi.js";
 
 const el = document.getElementById("reader-config");
 // Every URL is relative, computed server-side, so the reader keeps
@@ -19,8 +41,13 @@ const cfg = {
   downloadURL: el.dataset.downloadUrl,
   apiBase: el.dataset.apiBase,
   detached: el.dataset.detached === "1",
+  offline: el.dataset.offline === "1",
   handed: null,
 };
+
+if (cfg.offline) {
+  cfg.bookID = new URL(location.href).searchParams.get("book") || "";
+}
 
 // On the separate reader origin (ADR-0007 phase 3) there is no session
 // and no CSRF token, because there is no cookie on this hostname at
@@ -77,6 +104,16 @@ const catchupDismiss = document.getElementById("reader-catchup-dismiss");
 // this recipe cannot measure, which leaves the engine's own locations
 // to say what page it is.
 let positions = null;
+let offlineSnapshot = null;
+let offlineAccount = null;
+let offlineCSRF = "";
+let offlineCheckpoint = null;
+let offlineContext = null;
+let offlineCoordinator = null;
+let releaseOfflineReader = null;
+let offlineInvalidated = false;
+const offlinePartition = cfg.offline ? storagePartition() : null;
+const offlineBase = cfg.offline ? deploymentPrefix() : "";
 
 function say(message, isError) {
   status.textContent = message;
@@ -88,8 +125,12 @@ function say(message, isError) {
 
 const auth = readerAuth({
   ...cfg,
+  apiBase: cfg.offline ? offlineBase : cfg.apiBase,
+  tokenURL: cfg.offline ? offlineBase + "ui/reader/token" : cfg.tokenURL,
+  csrf: () => cfg.offline ? offlineCSRF : cfg.csrf,
   handed: cfg.handed,
   onChange(identity, previous) {
+    if (!cfg.offline) offlineAccount = identity.account;
     catchup.bind(identity.account, workID, identity.device);
     hideCatchup();
     if (!previous) return;
@@ -108,6 +149,11 @@ const auth = readerAuth({
     if (ready && !document.hidden) startLive();
   },
   onExhausted(err) {
+    if (cfg.offline) {
+      syncExpired = true;
+      say("Sign in again to sync offline changes.", true);
+      return;
+    }
     syncExpired = true;
     ready = false;
     lifecycle++;
@@ -129,11 +175,71 @@ cfg.handed = null;
 const api = (path, options) => auth.request(path, options);
 
 function snapshot() {
-  return { identity: auth.identity(), work: workID, view, lifecycle };
+  return { identity: auth.identity(), work: workID, view, lifecycle, offline: cfg.offline };
 }
 function current(stamp) {
+  if (cfg.offline) {
+    return !offlineInvalidated && !!stamp && stamp.offline && stamp.view === view &&
+      stamp.lifecycle === lifecycle;
+  }
   return stamp && auth.current(stamp.identity) && stamp.work === workID &&
     stamp.view === view && stamp.lifecycle === lifecycle;
+}
+
+function prepareOfflineSync() {
+  if (!offlineContext) return;
+  offlineCoordinator = offlineSync({
+    context: offlineContext, base: offlineBase,
+    onChange: async () => {
+      await loadAnnotations();
+      const fresh = await getReadySnapshot({ ...offlineContext, bookID: cfg.bookID });
+      if (fresh?.localPosition && !readingDirty) {
+        catchup.observe(fresh.localPosition);
+        showCatchup();
+      }
+    },
+    onStatus: message => say(message, !!message),
+  });
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "button secondary";
+  retry.textContent = "Retry sync";
+  retry.addEventListener("click", () => offlineCoordinator.trigger());
+  status.after(retry);
+  offlineCoordinator.trigger();
+}
+
+async function checkOfflineAccount() {
+  if (!offlineContext || offlineInvalidated) return;
+  try { await assertOfflineContext(offlineContext); }
+  catch {
+    offlineInvalidated = true;
+    lifecycle++;
+    session = null;
+    offlineCheckpoint = null;
+    readingDirty = false;
+    workID = null;
+    cancelScheduledPush();
+    offlineCoordinator?.stop();
+    await view?.destroy().catch(() => {});
+    stage.textContent = "";
+    view = null;
+    offlineSnapshot = null;
+    hideCatchup();
+    for (const element of [titleText, chapterText, progressText, pageText]) {
+      if (element) element.textContent = "";
+    }
+    await annotationDrawing.clear().catch(() => {});
+    releaseOfflineReader?.();
+    say("Offline access ended. Close this reader and sign in again.", true);
+  }
+}
+if (cfg.offline) {
+  const channel = new BroadcastChannel("liseur-offline");
+  channel.onmessage = () => checkOfflineAccount();
+  window.addEventListener("offline-change", checkOfflineAccount);
+  window.addEventListener("pageshow", checkOfflineAccount);
+  document.addEventListener("visibilitychange", checkOfflineAccount);
 }
 
 // ------------------------------------------------------------ sync
@@ -287,11 +393,386 @@ const ANNOTATION_COLORS = {
   purple: "#ba68c8",
   orange: "#ffb74d",
 };
+const ANNOTATION_MAX_EXCERPT_BYTES = 1 << 10;
+const ANNOTATION_MAX_BODY_BYTES = 16 << 10;
 
 const annotationDrawing = annotationRenderer({
   getView: () => view,
   current,
   changed: buildAnnotationList,
+});
+const annotationActions = document.getElementById("reader-annotation-actions");
+const annotationColor = document.getElementById("reader-annotation-color");
+const addNoteButton = document.getElementById("reader-add-note");
+let selectedText = null;
+
+function annotationStamp() {
+  return snapshot();
+}
+
+async function replaceAnnotations(next) {
+  return annotationDrawing.replace(next, annotationStamp());
+}
+
+function annotationPayload(annotation, baseRev = annotation.rev || 0) {
+  const payload = {
+    id: annotation.id,
+    base_rev: baseRev,
+    work_id: annotation.work_id,
+    kind: annotation.kind,
+    progression: annotation.progression,
+    excerpt: annotation.excerpt || "",
+    color: annotation.color || "",
+    body: annotation.body || "",
+    client_ts: annotation.client_ts || new Date().toISOString(),
+  };
+  if (annotation.locator) payload.locator = annotation.locator;
+  return payload;
+}
+
+function annotationValidationError(annotation) {
+  const bytes = value => new TextEncoder().encode(value || "").byteLength;
+  if (annotation.kind === "note" && !annotation.body?.trim())
+    return "A note requires a body.";
+  if (bytes(annotation.excerpt) > ANNOTATION_MAX_EXCERPT_BYTES)
+    return "That selection is too long to save as an annotation.";
+  if (bytes(annotation.body) > ANNOTATION_MAX_BODY_BYTES)
+    return "That note is too long to save.";
+  if (annotation.kind === "bookmark" && annotation.body)
+    return "A bookmark cannot have a note.";
+  return "";
+}
+
+async function applyAnnotationResult(annotation, result) {
+  if (result.status === "conflict" && result.server) {
+    await handleAnnotationConflict(annotation, result.server);
+    return false;
+  }
+  if (!["applied", "duplicate"].includes(result.status)) {
+    say(result.reason || "The annotation could not be saved.", true);
+    return false;
+  }
+  annotation.rev = result.rev || annotation.rev || 0;
+  annotation.seq = result.seq || annotation.seq || 0;
+  annotation.pending = false;
+  await replaceAnnotations(annotationDrawing.annotations());
+  return true;
+}
+
+async function writeAnnotation(annotation, baseRev = annotation.rev || 0) {
+  const validationError = annotationValidationError(annotation);
+  if (validationError) {
+    say(validationError, true);
+    return false;
+  }
+  const payload = annotationPayload(annotation, baseRev);
+  if (cfg.offline) {
+    annotation.pending = true;
+    await queueOfflineAnnotation({
+      ...offlineContext,
+      partition: offlinePartition,
+      account: offlineAccount,
+      bookID: cfg.bookID,
+      annotation,
+      payload: { method: "write", annotation: payload },
+    });
+    notifyOfflineChange();
+    await replaceAnnotations(await listOfflineAnnotations({ ...offlineContext, bookID: cfg.bookID }));
+    return true;
+  }
+  const response = await api("v1/annotations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ annotations: [payload] }),
+  });
+  if (!response.ok) {
+    say("The annotation could not be saved.", true);
+    return false;
+  }
+  const body = await response.json().catch(() => null);
+  const result = body?.results?.[0];
+  if (!result) {
+    say("The annotation response was incomplete.", true);
+    return false;
+  }
+  return applyAnnotationResult(annotation, result);
+}
+
+async function deleteAnnotation(annotation) {
+  if (!window.confirm("Delete this annotation?")) return;
+  if (cfg.offline) {
+    const tombstone = { ...annotation, deleted: true, pending: true };
+    await queueOfflineAnnotation({
+      ...offlineContext,
+      partition: offlinePartition,
+      account: offlineAccount,
+      bookID: cfg.bookID,
+      annotation: tombstone,
+      payload: { method: "delete", id: annotation.id, rev: annotation.rev || 0 },
+    });
+    notifyOfflineChange();
+    await replaceAnnotations(await listOfflineAnnotations({ ...offlineContext, bookID: cfg.bookID }));
+    return;
+  }
+  const response = await api(
+    "v1/annotations/" + encodeURIComponent(annotation.id) +
+      "?rev=" + encodeURIComponent(annotation.rev || 0),
+    { method: "DELETE" },
+  );
+  if (response.status === 409) {
+    const body = await response.json().catch(() => null);
+    if (body?.server) await handleAnnotationConflict(
+      { ...annotation, deleted: true, pending: true },
+      body.server,
+    );
+    return;
+  }
+  if (!response.ok) {
+    say("The annotation could not be deleted.", true);
+    return;
+  }
+  await replaceAnnotations(annotationDrawing.annotations().map(value =>
+    value.id === annotation.id ? { ...value, deleted: true } : value));
+}
+
+async function handleAnnotationConflict(local, server, record = null) {
+  const keepLocal = window.confirm(
+    "This annotation changed elsewhere. Choose OK to keep your local version, or Cancel to use the server version.",
+  );
+  if (keepLocal) {
+    local.rev = server.rev;
+    local.pending = true;
+    if (record) {
+      await queueOfflineAnnotation({
+        ...offlineContext,
+        partition: storagePartition(),
+        account: offlineAccount,
+        bookID: cfg.bookID,
+        annotation: local,
+        payload: local.deleted
+          ? { method: "delete", id: local.id, rev: server.rev }
+          : { method: "write", annotation: annotationPayload(local, server.rev) },
+      });
+      notifyOfflineChange();
+    } else if (local.deleted) {
+      const response = await api(
+        "v1/annotations/" + encodeURIComponent(local.id) +
+          "?rev=" + encodeURIComponent(server.rev),
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        say("The annotation could not be deleted.", true);
+        return;
+      }
+    } else {
+      await writeAnnotation(local, server.rev);
+    }
+    await replaceAnnotations([
+      ...annotationDrawing.annotations().filter(value => value.id !== local.id),
+      local,
+    ]);
+    return;
+  }
+  if (record) {
+    await removeOfflineOutbox({
+      ...offlineContext,
+      partition: storagePartition(),
+      account: offlineAccount,
+      kind: record.kind,
+      id: record.id,
+    });
+    if (server.deleted) {
+      await removeOfflineAnnotation({
+        ...offlineContext,
+        partition: storagePartition(),
+        account: offlineAccount,
+        bookID: cfg.bookID,
+        id: server.id,
+      });
+    } else {
+      await updateOfflineAnnotation({
+        ...offlineContext,
+        partition: storagePartition(),
+        account: offlineAccount,
+        bookID: cfg.bookID,
+        annotation: server,
+      });
+    }
+  }
+  await replaceAnnotations(annotationDrawing.annotations().map(value =>
+    value.id === local.id ? server : value));
+}
+
+async function resolveStoredAnnotationConflicts() {
+  if (!cfg.offline) return;
+  const conflicts = await listOfflineOutbox({
+    partition: storagePartition(),
+    account: offlineAccount,
+    kind: "annotation",
+    state: "conflict",
+  });
+  if (!conflicts.length) return;
+  const local = await listOfflineAnnotations({
+    partition: storagePartition(),
+    account: offlineAccount,
+    bookID: cfg.bookID,
+  });
+  for (const record of conflicts) {
+    if (record.bookID !== cfg.bookID || !record.details) continue;
+    const annotation = local.find(value => value.id === record.annotationID);
+    if (annotation) await handleAnnotationConflict(annotation, record.details, record);
+  }
+}
+
+function selectionFromDocument(doc) {
+  const selection = doc.getSelection?.();
+  if (!selection || !selection.rangeCount || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0);
+  const text = selection.toString().trim();
+  if (!text || !view?.getCFIForRange) return null;
+  return {
+    cfi: view.getCFIForRange(doc, range),
+    href: doc.documentElement.dataset.readerHref,
+    text: text.slice(0, 4096),
+    progression: finite(here?.fraction) ? here.fraction : null,
+  };
+}
+
+function showAnnotationActions() {
+  if (annotationActions) annotationActions.hidden = !selectedText;
+}
+
+function clearSelectedText() {
+  selectedText = null;
+  showAnnotationActions();
+}
+
+function annotationFromSelection(kind, body = "", color = "yellow") {
+  const selection = selectedText;
+  if (!selection || !workID) return null;
+  const attachedKind = kind === "note" ? "highlight" : kind;
+  return {
+    id: opID(),
+    rev: 0,
+    work_id: workID,
+    kind: attachedKind,
+    locator: {
+      href: selection.href,
+      type: "application/xhtml+xml",
+      locations: { fragments: [selection.cfi] },
+      text: { highlight: selection.text },
+    },
+    progression: selection.progression,
+    excerpt: selection.text,
+    color: attachedKind === "highlight" && ANNOTATION_COLORS[color] ? color : "",
+    body,
+    client_ts: new Date().toISOString(),
+  };
+}
+
+async function createSelectionAnnotation(action) {
+  if (!selectedText) return;
+  let body = "";
+  if (action === "note") {
+    body = window.prompt("Note for this passage:", "");
+    if (body === null || !body.trim()) return;
+  }
+  const annotation = annotationFromSelection(
+    action,
+    body.trim(),
+    annotationColor?.value || "yellow",
+  );
+  if (!annotation) return;
+  const validationError = annotationValidationError(annotation);
+  if (validationError) {
+    say(validationError, true);
+    return;
+  }
+  clearSelectedText();
+  await replaceAnnotations([...annotationDrawing.annotations(), annotation]);
+  await writeAnnotation(annotation);
+}
+
+async function createStandaloneNote() {
+  if (!workID) return;
+  const body = window.prompt("Note about this place in the book:", "");
+  if (body === null || !body.trim()) return;
+  const annotation = {
+    id: opID(),
+    rev: 0,
+    work_id: workID,
+    kind: "note",
+    progression: finite(here?.fraction) ? here.fraction : null,
+    body: body.trim(),
+    client_ts: new Date().toISOString(),
+  };
+  const validationError = annotationValidationError(annotation);
+  if (validationError) {
+    say(validationError, true);
+    return;
+  }
+  await replaceAnnotations([...annotationDrawing.annotations(), annotation]);
+  await writeAnnotation(annotation);
+}
+
+async function editAnnotation(annotation) {
+  const nextBody = window.prompt(
+    annotation.kind === "highlight" ? "Edit attached note:" : "Edit note:",
+    annotation.body || "",
+  );
+  if (nextBody === null) return;
+  let color = annotation.color;
+  if (annotation.kind === "highlight") {
+    color = window.prompt(
+      "Highlight color (yellow, green, blue, pink, purple or orange):",
+      annotation.color || "yellow",
+    );
+    if (color === null) return;
+    color = color.trim().toLowerCase();
+    if (!ANNOTATION_COLORS[color]) {
+      say("Choose one of the available highlight colors.", true);
+      return;
+    }
+  }
+  const next = { ...annotation, body: nextBody, color, client_ts: new Date().toISOString() };
+  const validationError = annotationValidationError(next);
+  if (validationError) {
+    say(validationError, true);
+    return;
+  }
+  await replaceAnnotations(annotationDrawing.annotations().map(value =>
+    value.id === annotation.id ? next : value));
+  await writeAnnotation(next, annotation.rev || 0);
+}
+
+function wireSelection(doc) {
+  const update = () => {
+    const next = selectionFromDocument(doc);
+    if (next) {
+      selectedText = next;
+      showAnnotationActions();
+    } else if (!annotationActions?.matches(":hover")) {
+      clearSelectedText();
+    }
+  };
+  doc.addEventListener("selectionchange", update);
+  doc.addEventListener("mouseup", () => setTimeout(update, 0));
+  doc.addEventListener("touchend", () => setTimeout(update, 0), { passive: true });
+}
+
+annotationActions?.addEventListener("click", event => {
+  const action = event.target?.dataset?.annotationAction;
+  if (action === "cancel") {
+    clearSelectedText();
+    return;
+  }
+  if (["highlight", "note", "bookmark"].includes(action))
+    createSelectionAnnotation(action).catch(error =>
+      say(error.message || "The annotation could not be created.", true));
+});
+addNoteButton?.addEventListener("click", () => {
+  createStandaloneNote().catch(error =>
+    say(error.message || "The note could not be created.", true));
 });
 
 // buildAnnotationList fills the sidebar with the entries that do not
@@ -300,8 +781,8 @@ function buildAnnotationList() {
   if (!annPanel || !annList) return;
   annList.textContent = "";
   const listed = annotationDrawing.annotations().filter(
-    (a) =>
-      a.kind !== "highlight" || !annotationAnchor(a) || annotationDrawing.failed(a.id),
+    (a) => !a.deleted && (cfg.offline ||
+      a.kind !== "highlight" || !annotationAnchor(a) || annotationDrawing.failed(a.id)),
   );
   annPanel.hidden = !listed.length;
   if (!listed.length) return;
@@ -330,7 +811,7 @@ function buildAnnotationList() {
     }
     const kind = document.createElement("span");
     kind.className = "reader-ann-kind";
-    kind.textContent = a.kind;
+    kind.textContent = a.kind + (a.pending ? " · pending" : "");
     entry.append(kind);
     const text = document.createElement("span");
     text.className = "reader-ann-text";
@@ -342,6 +823,21 @@ function buildAnnotationList() {
         : "");
     entry.append(text);
     li.append(entry);
+    const actions = document.createElement("span");
+    actions.className = "reader-ann-actions";
+    if (a.kind !== "bookmark") {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => editAnnotation(a));
+      actions.append(edit);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Delete";
+    remove.addEventListener("click", () => deleteAnnotation(a));
+    actions.append(remove);
+    li.append(actions);
     ul.append(li);
   }
   annList.append(ul);
@@ -351,6 +847,17 @@ function buildAnnotationList() {
 // on a server without the routes, or offline, still reads the book.
 async function loadAnnotations() {
   if (!workID || !view) return false;
+  if (cfg.offline) {
+    await assertOfflineContext(offlineContext);
+    const local = await listOfflineAnnotations({
+      partition: offlinePartition,
+      account: offlineAccount,
+      bookID: cfg.bookID,
+    });
+    await replaceAnnotations(local);
+    await resolveStoredAnnotationConflicts();
+    return true;
+  }
   const work = workID;
   const stamp = snapshot();
   const resp = await api("v1/works/" + encodeURIComponent(work) + "/annotations");
@@ -362,6 +869,7 @@ async function loadAnnotations() {
   if (!current(stamp) || work !== workID || document.hidden) return false;
   if (!Array.isArray(data.annotations)) return false;
   await annotationDrawing.replace(data.annotations, stamp);
+  await resolveStoredAnnotationConflicts();
   return current(stamp);
 }
 
@@ -524,15 +1032,34 @@ async function push() {
           locator: locator,
         };
   retryOp = { key, op };
-  catchup.wrote(op);
+  if (!cfg.offline) catchup.wrote(op);
+  if (cfg.offline) {
+    try {
+      await saveOfflinePosition({
+        ...offlineContext,
+        partition: offlinePartition,
+        account: offlineAccount,
+        bookID: cfg.bookID,
+        op,
+      });
+      notifyOfflineChange();
+      if (retryOp?.op === op) {
+        retryOp = null;
+        readingDirty = false;
+      }
+    } catch (err) {
+      say(err.message || "Offline position could not be saved.", true);
+    }
+    return;
+  }
   const request = api("v1/ops", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // keepalive lets the final flush outlive the page: without it a
-      // position pushed from beforeunload is cancelled mid-flight.
-      keepalive: true,
-      body: JSON.stringify({ ops: [op] }),
-    });
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // keepalive lets the final flush outlive the page: without it a
+    // position pushed from beforeunload is cancelled mid-flight.
+    keepalive: true,
+    body: JSON.stringify({ ops: [op] }),
+  });
   positionInFlight = request;
   try {
     const resp = await request;
@@ -611,7 +1138,7 @@ let session = null;
 let unsent = [];
 
 function beginSession() {
-  if (session || !workID || document.hidden) return;
+  if (session || !workID || document.hidden || offlineInvalidated) return;
   if (!here || !finite(here.fraction)) return;
   session = openSession({
     id: opID(),
@@ -619,8 +1146,29 @@ function beginSession() {
     startedAt: new Date(),
     now: performance.now(),
     fraction: here.fraction,
-    supportsActiveMs: auth.identity()?.supportsActiveMs === true,
+    supportsActiveMs: cfg.offline
+      ? offlineSnapshot?.supportsActiveMs === true
+      : auth.identity()?.supportsActiveMs === true,
+    checkpoint: cfg.offline ? offlineCheckpoint : null,
   });
+  offlineCheckpoint = null;
+  checkpointSession();
+}
+
+function checkpointSession() {
+  if (!cfg.offline || !session || !offlineAccount) return;
+  const checkpoint = session.checkpoint();
+  if (!checkpoint) return;
+  saveOfflineSessionCheckpoint({
+    ...offlineContext,
+    partition: offlinePartition,
+    account: offlineAccount,
+    bookID: cfg.bookID,
+    checkpoint,
+  }).catch(error => say(
+    error.message || "Offline reading progress could not be saved.",
+    true,
+  ));
 }
 
 function noteActivity() {
@@ -629,6 +1177,7 @@ function noteActivity() {
   interactionPending = true;
   if (session) {
     session.activity(performance.now(), here && here.fraction);
+    checkpointSession();
   } else {
     beginSession();
   }
@@ -636,7 +1185,7 @@ function noteActivity() {
 }
 
 function noteNavigation() {
-  if (!view || restoring || document.hidden) return false;
+  if (!view || restoring || document.hidden || offlineInvalidated) return false;
   noteActivity();
   catchup.moved();
   hideCatchup();
@@ -647,17 +1196,46 @@ function noteNavigation() {
 // relocates on a resize or a font change too, and only a key, a tap or
 // a scroll says somebody was there.
 function noteProgress() {
-  if (session) session.progress(here && here.fraction);
+  if (session) {
+    session.progress(here && here.fraction);
+    checkpointSession();
+  }
 }
 
-function endSession() {
+async function endSession() {
   if (!session) return;
+  const sessionID = session.checkpoint()?.id;
   const payload = session.close(
     performance.now(),
     new Date(),
     here && here.fraction,
   );
   session = null;
+  if (cfg.offline) {
+    try {
+      if (payload) {
+        await finishOfflineSession({
+          ...offlineContext,
+          partition: offlinePartition,
+          account: offlineAccount,
+          bookID: cfg.bookID,
+          payload,
+        });
+      } else {
+        await clearOfflineSessionCheckpoint({
+          ...offlineContext,
+          sessionID,
+          partition: offlinePartition,
+          account: offlineAccount,
+          bookID: cfg.bookID,
+        });
+      }
+      notifyOfflineChange();
+    } catch (error) {
+      say(error.message || "Offline reading session could not be saved.", true);
+    }
+    return;
+  }
   if (payload) unsent.push(payload);
   pushSession(true);
 }
@@ -1974,11 +2552,37 @@ window.addEventListener("beforeunload", () => {
     view.addEventListener("load", (e) => {
       e.detail.doc.addEventListener("keydown", handleKeys);
       wireChapterPointer(e.detail.doc);
+      wireSelection(e.detail.doc);
     });
     view.addEventListener("link", (e) => {
       if (!noteNavigation()) e.preventDefault();
     });
-    await view.open({ request: api, current: resp => auth.responseCurrent(resp), bookID: cfg.bookID });
+    const local = cfg.offline
+      ? await getReadySnapshot({ partition: storagePartition(), bookID: cfg.bookID })
+      : null;
+    if (cfg.offline && !local) throw Error("This book is not available offline.");
+    if (cfg.offline) {
+      offlineSnapshot = local;
+      offlineAccount = local.account;
+      offlineContext = {
+        ...await accountContext(offlinePartition, offlineAccount), deviceID: local.deviceID,
+      };
+      if (local.epoch !== offlineContext.epoch)
+        throw new Error("This offline copy belongs to an expired sign-in.");
+      releaseOfflineReader = await claimOfflineReader(offlineContext, cfg.bookID);
+      await assertOfflineContext(offlineContext);
+      workID = local.workID || local.localPosition?.work_id || null;
+      offlineCheckpoint = await getOfflineSessionCheckpoint({
+        partition: offlinePartition,
+        account: offlineAccount,
+        bookID: cfg.bookID,
+      });
+    }
+    await view.open({
+      request: cfg.offline ? local.request : api,
+      current: cfg.offline ? () => true : resp => auth.responseCurrent(resp),
+      bookID: cfg.bookID,
+    });
     // Counted before the first relocate paints a footer, so the very
     // first page the reader sees is already the app's number.
     positions = positionTable(view.book.sections);
@@ -1998,7 +2602,7 @@ window.addEventListener("beforeunload", () => {
     // gets the placeholder response, so the icon is still swapped for
     // it. Same-origin pages linked the cover route from the start, so
     // there is nothing to do.
-    if (cfg.detached) {
+    if (!cfg.offline && cfg.detached) {
       api("v1/books/" + encodeURIComponent(cfg.bookID) + "/cover?size=icon")
         .then(async (resp) => {
           if (!resp.ok) return;
@@ -2019,8 +2623,12 @@ window.addEventListener("beforeunload", () => {
 
     // Sync is best-effort: a book still opens on a server that has
     // lost its work mapping, it just opens at the beginning.
-    let op = null;
-    try {
+    let op = cfg.offline ? offlineSnapshot.localPosition || null : null;
+    if (cfg.offline) {
+      catchup.bind(offlineAccount, workID, offlineSnapshot.deviceID);
+      catchup.baseline(op);
+    }
+    if (!cfg.offline) try {
       workID = await resolveWork();
       const identity = auth.identity();
       catchup.bind(identity?.account, workID, identity?.device);
@@ -2050,14 +2658,20 @@ window.addEventListener("beforeunload", () => {
     }
     if (!opened) await view.init({ lastLocation: null });
     restoring = false;
-    ready = !syncExpired;
+    ready = !cfg.offline && !syncExpired;
     beginSession();
     // The annotations arrive after the book is on screen: they are
     // decoration on the text, never the reason the text waits.
-    if (ready && !document.hidden) startLive();
+    if (cfg.offline) {
+      await loadAnnotations().catch(error =>
+        console.warn("Annotations could not be loaded:", error));
+      prepareOfflineSync();
+    }
+    if (!cfg.offline && ready && !document.hidden) startLive();
     if (document.hidden) catchup.hide();
     if (!syncExpired) say("");
   } catch (err) {
+    releaseOfflineReader?.();
     say((err && err.message) || "this book could not be opened", true);
   }
 })();

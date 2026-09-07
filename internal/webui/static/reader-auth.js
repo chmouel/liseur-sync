@@ -32,10 +32,11 @@ export function readerAuth({
         if (!handed) throw exhausted();
         got = { token: handed };
       } else {
+        const csrfValue = typeof csrf === "function" ? csrf() : csrf;
         const resp = await fetcher(tokenURL, {
           method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ csrf }),
+          body: new URLSearchParams({ csrf: csrfValue || "" }),
           signal: AbortSignal.timeout(30000),
         });
         if ([401, 403].includes(resp.status) || resp.redirected) throw exhausted();
@@ -78,18 +79,28 @@ export function readerAuth({
   };
   return {
     acquire,
+    resume: () => {
+      if (!detached && stopped) {
+        stopped = false;
+        credential = null;
+        generation++;
+      }
+    },
     stop: () => { if (!stopped) exhausted(); },
     identity: () => credential,
     current,
     responseIdentity: (resp) => responses.get(resp),
     responseCurrent: (resp) => current(responses.get(resp)),
     async request(path, options = {}) {
+      const { authorize, ...transportOptions } = options;
       let refreshed = false;
       for (let attempt = 0; attempt < 2; attempt++) {
         const identity = await acquire();
+        if (authorize) await authorize(identity);
+        if (!current(identity)) throw new Error("stale reading credential");
         options.signal?.throwIfAborted();
         const resp = await fetcher(apiBase + path, {
-          ...options, credentials: "omit",
+          ...transportOptions, credentials: "omit",
           signal: options.signal || AbortSignal.timeout(30000),
           headers: { ...options.headers, Authorization: "Bearer " + identity.secret },
         });

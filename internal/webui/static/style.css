@@ -968,6 +968,18 @@ button.linkish:hover, button.linkish:focus-visible {
   background:var(--surface);border:1px solid var(--line);border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .reader-status.problem{color:var(--danger);opacity:1}
+.reader-annotation-actions{position:fixed;z-index:55;left:50%;bottom:4.5rem;
+  transform:translateX(-50%);display:flex;gap:.35rem;padding:.45rem;
+  border:1px solid var(--line);border-radius:10px;background:var(--surface);
+  box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.reader-annotation-actions[hidden]{display:none}
+.reader-annotation-actions button{border:1px solid var(--line);border-radius:7px;
+  padding:.4rem .65rem;background:var(--surface-2);color:inherit;cursor:pointer}
+.reader-annotation-actions button:hover,.reader-annotation-actions button:focus-visible{
+  background:var(--surface-3);outline:2px solid var(--primary);outline-offset:1px}
+.reader-annotation-actions label{display:flex;align-items:center;gap:.25rem;font-size:.8rem}
+.reader-annotation-actions select{border:1px solid var(--line);border-radius:6px;
+  padding:.35rem;background:var(--surface-2);color:inherit}
 /* Chrome that has stepped aside is invisible and untouchable, never
    absent: a click at the edge falls through to the page-turn zones,
    and the buttons stay where a script (or a test) can reach them. */
@@ -1020,6 +1032,9 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-annotations{margin-top:1rem;border-top:1px solid var(--line);padding-top:.75rem}
 .reader-ann-kind{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;opacity:.65}
 .reader-ann-text{display:block;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reader-ann-actions{display:flex;gap:.35rem;margin-top:.35rem}
+.reader-ann-actions button{border:1px solid var(--line);border-radius:5px;padding:.2rem .45rem;
+  background:var(--surface-2);color:inherit;cursor:pointer;font-size:.75rem}
 .annlist{list-style:none;margin:0;padding:0}
 .annlist li{padding:.6rem 0;border-bottom:1px solid var(--line)}
 .annlist li:last-child{border-bottom:none}

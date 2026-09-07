@@ -13,6 +13,7 @@ type ReaderView struct {
 	TokenURL    string
 	APIBase    string
 	StaticBase string
+	Offline    bool
 
 	// IconURL is the tab icon. Same-origin it is the book's own cover
 	// at the icon size, which falls back to the placeholder card for a
@@ -61,6 +62,7 @@ templ readerPage(v ReaderView, csrf string) {
 				data-download-url={ v.DownloadURL }
 				data-api-base={ v.APIBase }
 				data-detached={ boolAttr(v.Detached) }
+				data-offline={ boolAttr(v.Offline) }
 				hidden
 			></div>
 			<header class="reader-bar">
@@ -186,6 +188,13 @@ templ readerPage(v ReaderView, csrf string) {
 					</details>
 					<button
 						type="button"
+						id="reader-add-note"
+						class="reader-icon-btn"
+						title="Add a note"
+						aria-label="Add a note"
+					>✎</button>
+					<button
+						type="button"
 						id="reader-fullscreen"
 						class="reader-icon-btn reader-fullscreen-btn"
 						title="Full screen (f)"
@@ -209,6 +218,22 @@ templ readerPage(v ReaderView, csrf string) {
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
 			<p id="reader-status" class="reader-status">Loading…</p>
+			<div id="reader-annotation-actions" class="reader-annotation-actions" hidden>
+				<button type="button" data-annotation-action="highlight">Highlight</button>
+				<button type="button" data-annotation-action="note">Note</button>
+				<button type="button" data-annotation-action="bookmark">Bookmark</button>
+				<label>Color
+					<select id="reader-annotation-color">
+						<option value="yellow">Yellow</option>
+						<option value="green">Green</option>
+						<option value="blue">Blue</option>
+						<option value="pink">Pink</option>
+						<option value="purple">Purple</option>
+						<option value="orange">Orange</option>
+					</select>
+				</label>
+				<button type="button" data-annotation-action="cancel">Cancel</button>
+			</div>
 			<aside id="reader-catchup" class="reader-catchup" aria-label="Reading position on another device" hidden>
 				<p id="reader-catchup-text" role="status" aria-live="polite"></p>
 				<div>

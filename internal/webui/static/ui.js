@@ -88,6 +88,16 @@
     el.scrollLeft = el.scrollWidth;
   });
 
+  // The worker is scoped to the data-free offline shelf only. The
+  // runtime-relative base keeps registration under a reverse-proxy prefix.
+  const pwaBase = document.body && document.body.dataset.pwaBase;
+  if (pwaBase && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register(pwaBase + 'sw.js', { scope: pwaBase })
+      .catch(function (err) {
+        console.warn('offline shelf could not be installed', err);
+      });
+  }
+
   // A shown-once secret (token, pairing code, capability URL) is
   // otherwise only recoverable by drag-selecting text that a long
   // random string forces to wrap (word-break: break-all), which is

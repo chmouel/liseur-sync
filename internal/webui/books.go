@@ -133,6 +133,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 		Present:   book.Status == store.BookActive,
 		MediaType: book.MediaType,
 		SHA256:    book.ContentSHA256,
+		Offline:   s.Cfg.ReaderOrigin == "",
 	}
 	v.CanRead = bookReadable(book)
 	if link, err := s.St.UserBookWork(r.Context(), readerID(u), book.ID); err == nil {

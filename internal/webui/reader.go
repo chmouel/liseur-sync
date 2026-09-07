@@ -46,6 +46,22 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 	}, csrfFor(a)).Render(r.Context(), w)
 }
 
+func (s *Server) handleOfflineReaderPage(w http.ResponseWriter, r *http.Request) {
+	nonce := setReaderPolicy(w, "")
+	readerPage(offlineReaderView(nonce), "").Render(r.Context(), w)
+}
+
+func offlineReaderView(nonce string) ReaderView {
+	return ReaderView{
+		Title:        "Offline reader",
+		BackURL:      "../",
+		StaticBase:   "../assets/",
+		IconFallback: "../icon.svg",
+		ScriptNonce:  nonce,
+		Offline:      true,
+	}
+}
+
 // readerTokenResponse is the browser reader's credential. The secret is
 // returned in the body rather than set as a cookie on purpose: the
 // reader is an ordinary API client sending Authorization headers, and a
@@ -134,11 +150,18 @@ func setReaderPolicy(w http.ResponseWriter, apiOrigin string) string {
 		panic(err)
 	}
 	nonce := base64.StdEncoding.EncodeToString(raw)
+	w.Header().Set("Content-Security-Policy", readerPolicy(apiOrigin, nonce))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	return nonce
+}
+
+func readerPolicy(apiOrigin, nonce string) string {
 	connect := "connect-src 'self' blob:"
 	if apiOrigin != "" {
 		connect += " " + apiOrigin
 	}
-	w.Header().Set("Content-Security-Policy", strings.Join([]string{
+	return strings.Join([]string{
 		"default-src 'none'",
 		"script-src 'self' 'nonce-" + nonce + "' 'strict-dynamic'",
 		"style-src 'self' 'unsafe-inline' blob:",
@@ -155,10 +178,7 @@ func setReaderPolicy(w http.ResponseWriter, apiOrigin string) string {
 		// the attack this directive exists for.
 		"base-uri 'self'",
 		"form-action 'none'",
-	}, "; "))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	return nonce
+	}, "; ")
 }
 
 // boolAttr renders a bool as a data attribute the browser can read
