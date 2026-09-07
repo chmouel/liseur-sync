@@ -44,6 +44,7 @@ type BookView struct {
 	Filename  string
 	MediaType string
 	SHA256    string
+	Offline   bool
 	// Present is false for a book the last completed pass could not
 	// find. The row stays — it is the record of what the folder held,
 	// and of anybody's reading position against it — but there is
@@ -142,6 +143,15 @@ templ bookBody(prefix, csrf string, b BookView) {
 				@markBookButton(prefix, csrf, b.ID, b.Finished)
 				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
+					if b.Offline {
+						<button
+							class="btn"
+							type="button"
+							data-offline-book={ b.ID }
+							data-offline-digest={ b.SHA256 }
+						>Save offline</button>
+						<span class="muted" data-offline-status={ b.ID } role="status"></span>
+					}
 				}
 			</div>
 			if len(b.Series) > 0 || len(b.Authors) > 0 {

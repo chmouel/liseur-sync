@@ -36,6 +36,7 @@ export function annotationRenderer({ getView, current, changed }) {
     if (!view) return;
     for (const a of annotations) {
       if (!valid(run, stamp) || view !== getView()) return;
+      if (a.deleted) continue;
       const cfi = annotationCFI(a);
       if (a.kind !== "highlight" || !annotationAnchor(a) || failed.has(a.id)) continue;
       const key = cfi || a.id;

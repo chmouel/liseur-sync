@@ -246,6 +246,21 @@ export class ReaderEngine extends HTMLElement {
     } });
   }
 
+  getCFIForRange(doc, range) {
+    const href = doc?.documentElement?.dataset?.readerHref;
+    const index = this.book.sections.findIndex(section => section.id === href);
+    if (index < 0) throw Error("The selected text is not in a reading section.");
+    // The package spine includes non-linear items omitted from reading order.
+    const item = [...this.packageDocument.querySelectorAll("manifest > item")].find(el => {
+      const path = publicationHref(el.getAttribute("href"), this.packageHref)?.split("#")[0];
+      return path && (this.resources.resolveKey(path) ?? path) === href;
+    });
+    const itemref = item && [...this.packageDocument.querySelectorAll("spine > itemref")]
+      .find(el => el.getAttribute("idref") === item.getAttribute("id"));
+    if (!itemref) throw Error("The selected text has no package spine item.");
+    return CFI.joinIndir(CFI.fromElements([itemref])[0], CFI.fromRange(range));
+  }
+
   async targetLocator(target) {
     const resolved = this.resolveNavigation(target);
     if (resolved.locator) return resolved.locator;

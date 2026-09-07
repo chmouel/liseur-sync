@@ -21,6 +21,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * EPUB library indexing and search
 * EPUB upload and deletion for writable folders
 * a browser EPUB reader
+* an installable offline web reader for selected books
 * per-user reading statistics and sessions
 * per-user series claims
 
@@ -108,6 +109,15 @@ The reader uses the same synchronization API as other clients, so reading state 
 EPUB content is unpacked and rendered without exposing publisher files through normal application routes. Scripts embedded in EPUBs are not executed.
 
 The reader design and security model are documented in [ADR-0007](docs/adr/0007-web-reader.md), including support for running the reader on a separate hostname.
+
+### Offline PWA
+
+Liseur-sync's web UI ships as a PWA that lets you read books offline. From the
+library, choose **Save offline** for each book you want to carry, then install
+the site via your browser's "Add to Home Screen" option (Safari, Chrome, etc.).
+The installed app opens downloaded books without a network connection and keeps
+positions, reading sessions, highlights and notes locally until it can
+reconnect.
 
 ## Installation
 
