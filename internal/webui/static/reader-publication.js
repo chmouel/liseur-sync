@@ -2,6 +2,12 @@ import { css, Resource } from "./vendor/readium/readium.js";
 
 const virtualOrigin = "https://publication.invalid/";
 const documentTypes = new Set(["application/xhtml+xml", "text/html", "image/svg+xml"]);
+// A spine item of one of these types is not HTML: Readium's own frame
+// builder would otherwise skip our fetcher and build an <img> pointed
+// directly at the manifest's (fake) self link. reader-engine.js declares
+// these as XHTML to Readium instead, and ReaderPublication.get() below
+// recognizes the real type from its own entry map to serve a wrapper.
+export const imageSpineTypes = new Set(["image/svg+xml", "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]);
 
 // Resolve only archive-local references. Never pass a publisher URL to the
 // authenticated request function, including protocol-relative URLs.
@@ -209,13 +215,46 @@ export class ReaderPublication {
     }
   }
 
+  // Builds a minimal XHTML frame for a spine item that is really an image:
+  // a blob URL for the asset itself (through assetURL, so an SVG is still
+  // stripped of scripts and a bitmap keeps its real mime type), sized from
+  // the image's own intrinsic dimensions when they can be read so a fixed-
+  // layout page still gets a usable viewport.
+  async imageSpineDocument(href, type) {
+    const src = await this.assetURL(href, "");
+    let width, height;
+    if (type === "image/svg+xml") {
+      const svg = (await this.document(href, false)).documentElement;
+      width = svg.getAttribute("width");
+      height = svg.getAttribute("height");
+      const viewBox = svg.getAttribute("viewBox")?.trim().split(/\s+/);
+      if ((!width || !height) && viewBox?.length === 4) { width ||= viewBox[2]; height ||= viewBox[3]; }
+    } else {
+      try {
+        const bitmap = await createImageBitmap(new Blob([await this.bytes(href)], { type }));
+        width = bitmap.width; height = bitmap.height;
+        bitmap.close();
+      } catch { /* Dimensions stay unknown; the <img> still renders at its natural size. */ }
+    }
+    const viewport = width && height ? `<meta name="viewport" content="width=${Math.round(width)}, height=${Math.round(height)}"/>` : "";
+    const doc = new DOMParser().parseFromString(
+      `<html xmlns="http://www.w3.org/1999/xhtml"><head>${viewport}</head>` +
+      `<body style="margin:0"><img src="${src}" alt="" style="width:100%;height:100%;object-fit:contain"/></body></html>`,
+      "application/xhtml+xml");
+    doc.documentElement.setAttribute("data-reader-href", href);
+    return doc;
+  }
+
   get(link) {
     const owner = this;
     return new class extends Resource {
       async link() { return link; }
       async length() { return (await owner.bytes(link.href)).length; }
       async read() {
-        const doc = await owner.document(link.href);
+        const entry = owner.entries.get(link.href);
+        const doc = imageSpineTypes.has(entry?.type)
+          ? await owner.imageSpineDocument(link.href, entry.type)
+          : await owner.document(link.href);
         return new TextEncoder().encode(new XMLSerializer().serializeToString(doc));
       }
       close() {}
