@@ -155,6 +155,26 @@ export class ReaderEngine extends HTMLElement {
     };
     this.dispatchEvent(new CustomEvent("relocate", { detail: this.lastLocation }));
     this.drawAnnotations().catch(() => {});
+    if (index !== this.lastWindowIndex) { this.lastWindowIndex = index; this.releaseOutOfWindow(index); }
+  }
+
+  // Coordinates our own resource cache (raw bytes, decoded blobs) with
+  // Readium's active frame window instead of retaining every fetched byte
+  // for the whole reading session. A chapter well outside the current
+  // position also has its own built frame released from Readium's pool
+  // (evict is a no-op while Readium still has it preloaded) so a stale
+  // blob is not left referencing a resource we are about to release.
+  releaseOutOfWindow(index) {
+    if (!this.resources) return;
+    const windowSize = 6;
+    const keep = new Set();
+    for (let i = Math.max(0, index - windowSize); i <= Math.min(this.book.sections.length - 1, index + windowSize); i++) {
+      keep.add(this.book.sections[i].id);
+    }
+    if (this.navigator?.framePool?.evict) {
+      for (const section of this.book.sections) if (!keep.has(section.id)) this.navigator.framePool.evict(section.id);
+    }
+    this.resources.retain(keep);
   }
 
   getSectionFractions() {
