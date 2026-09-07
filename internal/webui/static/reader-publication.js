@@ -31,10 +31,14 @@ export function decodeText(bytes, { css = false } = {}) {
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return tryDecode("utf-8") ?? "";
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return tryDecode("utf-16le") ?? "";
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return tryDecode("utf-16be") ?? "";
-  // No BOM: XML permits UTF-16 signaled only by the pattern of nulls in
-  // "<?xml" (or, for a document with no declaration at all, "<").
-  if (bytes.length >= 4 && bytes[0] === 0x3c && bytes[1] === 0x00 && bytes[2] === 0x3f && bytes[3] === 0x00) return tryDecode("utf-16le");
-  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x3c && bytes[2] === 0x00 && bytes[3] === 0x3f) return tryDecode("utf-16be");
+  // No BOM: XML permits UTF-16 signaled only by the pattern of nulls
+  // around a leading "<" — "<?xml" for a document with a declaration,
+  // but just as validly the first tag's own "<" when there is none. Only
+  // the first byte pair needs checking either way, and a decode failure
+  // here still falls through to the encoding sniff below rather than
+  // handing DOMParser a null string.
+  if (bytes.length >= 2 && bytes[0] === 0x3c && bytes[1] === 0x00) { const decoded = tryDecode("utf-16le"); if (decoded != null) return decoded; }
+  if (bytes.length >= 2 && bytes[0] === 0x00 && bytes[1] === 0x3c) { const decoded = tryDecode("utf-16be"); if (decoded != null) return decoded; }
   // Sniff a declared encoding from the first kilobyte, read as latin1 so
   // every byte maps to one character regardless of the real encoding.
   const head = tryDecode("latin1")?.slice(0, 1024) ?? "";
