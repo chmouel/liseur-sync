@@ -11,6 +11,47 @@ export function publicationHref(reference, base) {
   return url.pathname.slice(1) + url.hash;
 }
 
+// Decodes archive bytes that may be UTF-16 (BOM or bare, as XML permits)
+// or declare a non-UTF-8 encoding, falling back to UTF-8 for everything
+// else. A wrong guess must never throw: fatal is always false, and an
+// unsupported label falls back rather than reject the decode.
+export function decodeText(bytes, { css = false } = {}) {
+  const tryDecode = label => {
+    try { return new TextDecoder(label, { fatal: false }).decode(bytes); }
+    catch { return null; }
+  };
+  // TextDecoder strips a matching BOM itself (ignoreBOM defaults to
+  // false, meaning "process it", not "ignore stripping it").
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return tryDecode("utf-8") ?? "";
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return tryDecode("utf-16le") ?? "";
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return tryDecode("utf-16be") ?? "";
+  // No BOM: XML permits UTF-16 signaled only by the pattern of nulls in
+  // "<?xml" (or, for a document with no declaration at all, "<").
+  if (bytes.length >= 4 && bytes[0] === 0x3c && bytes[1] === 0x00 && bytes[2] === 0x3f && bytes[3] === 0x00) return tryDecode("utf-16le");
+  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x3c && bytes[2] === 0x00 && bytes[3] === 0x3f) return tryDecode("utf-16be");
+  // Sniff a declared encoding from the first kilobyte, read as latin1 so
+  // every byte maps to one character regardless of the real encoding.
+  const head = tryDecode("latin1")?.slice(0, 1024) ?? "";
+  const match = css ? head.match(/@charset\s+"([^"]+)"/i) : head.match(/<\?xml[^>]*\bencoding\s*=\s*["']([^"']+)["']/i);
+  const label = match?.[1]?.trim().toLowerCase();
+  if (label && label !== "utf-8" && label !== "utf8") {
+    const decoded = tryDecode(label);
+    if (decoded != null) return decoded;
+  }
+  return tryDecode("utf-8") ?? "";
+}
+
+// A publication's own hrefs (readingOrder/resources, built server-side) and
+// an in-content href (an <a> or <img> as the original author escaped it) can
+// name the same archive entry with different, both-valid percent-encoding —
+// e.g. a manifest href leaving a comma literal while a chapter's own anchor
+// escapes it as %2c. Percent-decoding both to the same characters is how we
+// tell they are the same key without assuming either side's escaping style.
+function canonicalize(href) {
+  try { return decodeURIComponent(href); }
+  catch { return href; }
+}
+
 export function stripPublicationCode(doc) {
   for (const element of [...doc.querySelectorAll("*")]) {
     const name = element.localName.toLowerCase();
@@ -35,6 +76,10 @@ export class ReaderPublication {
     Object.assign(this, { request, current, prefix, packageHref });
     this.entries = new Map([...manifest.readingOrder, ...(manifest.resources || [])].map(link => [link.href, link]));
     this.entries.set(packageHref, { href: packageHref, type: "application/oebps-package+xml" });
+    // Indexes entries a second time under their decoded form, so a
+    // differently-escaped in-content reference to the same archive entry
+    // still resolves (see resolveKey and canonicalize above).
+    this.canonicalEntries = new Map([...this.entries.keys()].map(key => [canonicalize(key), key]));
     this.raw = new Map();
     this.blobs = new Map();
     this.urls = new Set();
@@ -61,9 +106,18 @@ export class ReaderPublication {
     return this.raw.get(key);
   }
 
+  // Maps a publication-relative href (fragment-free) to the exact key this
+  // publication's entries are stored under, tolerating a different but
+  // equivalent percent-encoding. Returns null when the entry truly does not
+  // exist.
+  resolveKey(key) {
+    if (this.entries.has(key)) return key;
+    return this.canonicalEntries.get(canonicalize(key)) ?? null;
+  }
+
   async document(href, transform = true, ancestors = new Set()) {
     const type = this.entries.get(href)?.type || "application/xhtml+xml";
-    const text = new TextDecoder().decode(await this.bytes(href));
+    const text = decodeText(await this.bytes(href));
     const doc = new DOMParser().parseFromString(text, type === "text/html" ? type : "application/xml");
     if (doc.querySelector("parsererror")) throw Error("The publication contains invalid markup.");
     stripPublicationCode(doc);
@@ -93,7 +147,8 @@ export class ReaderPublication {
     if (/^data:(image\/|font\/|application\/(font|vnd\.ms-fontobject))/i.test(reference)) return reference;
     const resolved = publicationHref(reference, base);
     if (!resolved) return "data:,";
-    const [key, fragment] = resolved.split("#");
+    const [rawKey, fragment] = resolved.split("#");
+    const key = this.resolveKey(rawKey) ?? rawKey;
     const entry = this.entries.get(key);
     if (!entry || ancestors.has(key)) return "data:,";
     if (!this.blobs.has(key)) {
@@ -101,7 +156,7 @@ export class ReaderPublication {
       const pending = (async () => {
         let data = await this.bytes(key);
         if (/javascript|ecmascript/i.test(entry.type || "")) return "data:,";
-        if (entry.type === "text/css") data = await this.stylesheet(new TextDecoder().decode(data), key, next);
+        if (entry.type === "text/css") data = await this.stylesheet(decodeText(data, { css: true }), key, next);
         else if (documentTypes.has(entry.type)) data = new XMLSerializer().serializeToString(await this.document(key, true, next));
         if (this.closed) throw Error("Publication closed");
         const url = URL.createObjectURL(new Blob([data], { type: entry.type || "application/octet-stream" }));
@@ -127,7 +182,10 @@ export class ReaderPublication {
       if (name === "a") {
         const href = el.getAttribute("href") || el.getAttributeNS("http://www.w3.org/1999/xlink", "href");
         if (href) {
-          const target = publicationHref(href, base);
+          const resolved = publicationHref(href, base);
+          const [rawPath, fragment] = resolved ? resolved.split("#") : [null, null];
+          const path = rawPath != null ? (this.resolveKey(rawPath) ?? rawPath) : null;
+          const target = path != null ? path + (fragment ? "#" + fragment : "") : null;
           el.setAttribute("href", target ? "#" + encodeURIComponent(target) : "#");
           if (target) el.setAttribute("data-reader-href", target);
         }

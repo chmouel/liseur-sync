@@ -18,6 +18,14 @@ func TestReaderPositionArithmetic(t *testing.T) {
 	runNodeTests(t, "readerpositions.test.mjs")
 }
 
+// TestReaderDecodesNonUTF8PublicationText runs the node unit tests for
+// reader-publication.js's decodeText: BOM and bare UTF-16, an XML
+// declaration or CSS @charset naming another encoding, and the UTF-8
+// fallback for everything else.
+func TestReaderDecodesNonUTF8PublicationText(t *testing.T) {
+	runNodeTests(t, "readerdecode.test.mjs")
+}
+
 // runNodeTests runs one `node --test` file from testdata. These are the
 // reader checks that run in CI: the browser check needs a Chromium and
 // skips without one.
