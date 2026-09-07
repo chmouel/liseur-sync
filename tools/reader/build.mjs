@@ -30,6 +30,37 @@ await build({
           loader: "js",
         };
       });
+      // Pinned Readium 2.8.2 patch. Neither pool manager frees a frame's own
+      // blob (the built HTML document) once a chapter falls out of the
+      // pool's live window (update()'s own pruning only marks the entry;
+      // the blob itself is freed lazily, the next time that href happens to
+      // be revisited) — an evict(href) the reader can call once it decides
+      // a chapter is unlikely to be revisited soon. It refuses to touch an
+      // href still in the pool (visible or preloaded), matching what the
+      // managers' own pruning already treats as untouchable.
+      build.onLoad({ filter: /@readium\/navigator\/dist\/epub\/frame\/FramePoolManager\.js$/ }, async ({ path: filename }) => {
+        const source = await readFile(filename, "utf8");
+        const needle = "}}export{B as FramePoolManager};";
+        if (source.split(needle).length !== 2) throw Error("Readium FramePoolManager evict patch needs review");
+        return {
+          contents: source.replace(needle,
+            "}evict(e){if(this.pool.has(e))return;const r=this.blobs.get(e);" +
+            "r&&(this.injector?.releaseBlobUrl?.(r),URL.revokeObjectURL(r),this.blobs.delete(e),this.pendingUpdates?.delete(e))}" +
+            "}export{B as FramePoolManager};"),
+          loader: "js",
+        };
+      });
+      build.onLoad({ filter: /@readium\/navigator\/dist\/epub\/fxl\/FXLFramePoolManager\.js$/ }, async ({ path: filename }) => {
+        const source = await readFile(filename, "utf8");
+        const needle = "}}export{z as FXLFramePoolManager};";
+        if (source.split(needle).length !== 2) throw Error("Readium FXLFramePoolManager evict patch needs review");
+        return {
+          contents: source.replace(needle,
+            "}evict(e){if(this.pool.has(e))return;const r=this.blobs.get(e);r&&(URL.revokeObjectURL(r),this.blobs.delete(e))}" +
+            "}export{z as FXLFramePoolManager};"),
+          loader: "js",
+        };
+      });
     },
   }],
 });
