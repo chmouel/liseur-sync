@@ -226,11 +226,26 @@ export class ReaderEngine extends HTMLElement {
   applySettings(settings, styleText, theme) {
     this.settings = settings; this.styleText = styleText;
     const margin = { narrow: 16, normal: 32, wide: 48 }[settings.margin] || 32;
+    // Readium's own auto column width targets a fixed character-count
+    // range (its own defaults, unrelated to any setting here) and grows
+    // the reading column to keep that count reachable, so widening only
+    // pageGutter (the column's own inner padding) leaves the column
+    // exactly as wide as before it — the padding increase is absorbed
+    // by a matching growth of the column. Driving the target line
+    // length itself is what actually makes "narrow" show more of the
+    // viewport as text and "wide" show less, matching what a margin
+    // control is expected to do.
+    const lineLength = {
+      narrow: { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 },
+      normal: { optimalLineLength: 65, minimalLineLength: 40, maximalLineLength: 80 },
+      wide: { optimalLineLength: 48, minimalLineLength: 32, maximalLineLength: 60 },
+    }[settings.margin] || { optimalLineLength: 65, minimalLineLength: 40, maximalLineLength: 80 };
     this.renderer.style.inset = `0 0 ${settings.flow === "scrolled" ? 0 : margin}px`;
     this.preferences = {
       scroll: settings.flow === "scrolled",
       columnCount: settings.columns === "auto" ? null : Number(settings.columns),
       pageGutter: margin,
+      ...lineLength,
       fontSize: settings.size === 100 ? null : settings.size / 100,
       lineHeight: Number(settings.spacing) || null,
       hyphens: settings.hyphenate || null,
