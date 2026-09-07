@@ -1955,6 +1955,73 @@ paths:
                   error: { type: string }
                   works: { type: array, items: { type: string } }
 
+  /v1/books/resolve:
+    post:
+      tags: [library, sync]
+      summary: Join many catalog books to your own works
+      security: [{ deviceToken: [] }]  # requires BOTH library-read and sync
+      description: |
+        The same join as `POST /v1/books/{id}/resolve`, for a shelf at a
+        time. It exists for the moment a device signs in to an account and
+        has a name here for none of its books: a book with no work can
+        neither send a position nor receive one, so asking one request per
+        book is what made a fresh library arrive in batches.
+
+        Each book is resolved in its own transaction and takes its own
+        answer, so one book the server cannot place settles nothing about
+        the others. The response is therefore `200` with per-item results
+        rather than a status code: no single status could describe five
+        hundred answers, and refusing the batch would throw away the ones
+        that worked.
+
+        Results come back in the order the ids were sent. A refused one
+        carries `error`: `not_found`, `ambiguous` with the works, or
+        `conflict` when the work graph moved under the write — the only
+        one of the three worth sending again.
+
+        `confirmed` applies to the whole batch and should be sent only by a
+        caller with no reader to ask. Accepting a doubtful title/author
+        match is a question about one book, and the single-book route is
+        where the answer belongs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [book_ids]
+              properties:
+                book_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items: { type: string, format: uuid }
+                confirmed:
+                  type: boolean
+                  description: Accept low-confidence title/author matches.
+      responses:
+        "200":
+          description: One result per requested book, in the order asked for
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogResolutionItem" }
+        "400":
+          description: |
+            Malformed or empty body, or more than 500 ids — in which case
+            the answer carries `code: batch_too_large` and the `limit` the
+            server will take.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchItemError" }
+        "403": { $ref: "#/components/responses/Error", description: "The token lacks library-read or sync" }
+        "413": { $ref: "#/components/responses/Error", description: "Request body too large" }
+
   /v1/books/{id}/download:
     get:
       tags: [library]
@@ -2394,6 +2461,44 @@ components:
             properties:
               kind: { type: string, enum: [sha256, partial-md5, source, dc, ta] }
               value: { type: string }
+
+    CatalogResolutionItem:
+      type: object
+      description: |
+        One book's answer within a batch resolve. Either it resolved, and
+        carries the same fields `CatalogResolution` does, or it did not,
+        and carries the reason instead.
+
+        A doubtful match is not a refusal: the work comes back with
+        `confidence: low` and nothing is stored, exactly as on the
+        single-book route.
+      required: [book_id]
+      properties:
+        book_id: { type: string }
+        work_id: { type: string }
+        confidence: { type: string, enum: [high, low] }
+        created: { type: boolean }
+        identifiers:
+          type: array
+          description: The catalog's evidence, strongest first.
+          items:
+            type: object
+            required: [kind, value]
+            properties:
+              kind: { type: string, enum: [sha256, partial-md5, source, dc, ta] }
+              value: { type: string }
+        error:
+          type: string
+          enum: [not_found, ambiguous, conflict]
+          description: |
+            Why this book alone was refused. `not_found` is the batch
+            spelling of the single route's `404`, `ambiguous` of its
+            `409`. `conflict` means the work graph moved under the write
+            and the book is worth asking about again.
+        works:
+          type: array
+          description: With `ambiguous`, the works the identifiers landed between.
+          items: { type: string }
 
     CatalogBook:
       type: object
