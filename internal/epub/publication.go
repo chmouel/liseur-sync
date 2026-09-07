@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/readium/go-toolkit/pkg/asset"
@@ -244,11 +245,12 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
-	positions := p.boundedPositions(maxPositions)
+	var positions []manifest.Locator
 	if maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
-		if fine := p.Positions(ctx); len(fine) > 0 {
-			positions = fine
-		}
+		positions = p.Positions(ctx)
+	}
+	if len(positions) == 0 {
+		positions = p.boundedPositions(maxPositions)
 	}
 	return &Index{
 		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: positions,
@@ -257,19 +259,23 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 }
 
 // boundedPositions is the fallback for a publication too large to afford
-// the toolkit's byte-granular position list. It mirrors the toolkit's own
-// ArchiveEntryLength strategy but with a page length scaled up so the
-// total position count fits maxPositions, instead of the fixed 1,024
-// bytes: each reading-order item still gets a share of positions
-// proportional to its own archive size (at least one), so a reader
-// tracking progress by position multiplicity — the client divides a
-// section's on-screen progress by its position count, and the whole
-// book's by the total — still weights a large chapter correctly against
-// a small one, just at coarser granularity. maxPositions <= 0 falls back
-// to one position per item (only reachable when the fine-grained list
-// itself produced none, e.g. an empty reading order).
+// the toolkit's byte-granular position list (never called unless the
+// fine-grained list was skipped or came back empty). It distributes a
+// budget of at most maxPositions locators across the reading order in
+// proportion to each item's own archive size, using the largest-remainder
+// method so the total never exceeds the budget: a reader tracking
+// progress by position multiplicity — the client divides a section's
+// on-screen progress by its position count, and the whole book's by the
+// total — still weights a large chapter correctly against a small one,
+// just at coarser granularity. Every item gets at least one position so
+// the reader can always place it; if maxPositions is smaller than the
+// reading order's own length, that guarantee wins and the total exceeds
+// maxPositions by as little as the chapter count requires.
 func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 	readingOrder := p.Manifest.ReadingOrder
+	if len(readingOrder) == 0 {
+		return nil
+	}
 	sizes := make([]uint64, len(readingOrder))
 	var total uint64
 	for i, link := range readingOrder {
@@ -284,24 +290,12 @@ func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 		sizes[i] = f.CompressedSize64
 		total += f.CompressedSize64
 	}
-	pageLength := uint64(1)
-	if maxPositions > 0 && total > 0 {
-		pageLength = uint64(math.Ceil(float64(total) / float64(maxPositions)))
-		if pageLength < 1 {
-			pageLength = 1
-		}
+	budget := maxPositions
+	if budget < len(readingOrder) {
+		budget = len(readingOrder)
 	}
-	counts := make([]int, len(readingOrder))
-	var totalCount int
-	for i, size := range sizes {
-		count := int(math.Ceil(float64(size) / float64(pageLength)))
-		if count < 1 {
-			count = 1
-		}
-		counts[i] = count
-		totalCount += count
-	}
-	positions := make([]manifest.Locator, 0, totalCount)
+	counts := apportion(sizes, total, budget)
+	positions := make([]manifest.Locator, 0, budget)
 	var position uint
 	for i, link := range readingOrder {
 		mt := link.MediaType
@@ -318,11 +312,57 @@ func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 			})
 		}
 	}
+	totalCount := len(positions)
 	for i := range positions {
 		totalProgression := float64(*positions[i].Locations.Position-1) / float64(totalCount)
 		positions[i].Locations.TotalProgression = &totalProgression
 	}
 	return positions
+}
+
+// apportion splits budget positions across len(weights) items in
+// proportion to each weight, guaranteeing every item at least one and the
+// total never exceeding budget (the caller has already ensured
+// budget >= len(weights)). It reserves one position per item first, then
+// hands out the rest (budget-len(weights)) by the largest-remainder
+// method: each item's ideal extra share is floored, and the leftover
+// slots go to the items with the largest fractional remainder, so the sum
+// lands on the extra budget exactly instead of drifting from independent
+// per-item rounding.
+func apportion(weights []uint64, total uint64, budget int) []int {
+	counts := make([]int, len(weights))
+	for i := range counts {
+		counts[i] = 1
+	}
+	extra := budget - len(weights)
+	if extra <= 0 {
+		return counts
+	}
+	if total == 0 {
+		// No size information at all: split the extra evenly.
+		for i := 0; i < extra; i++ {
+			counts[i%len(weights)]++
+		}
+		return counts
+	}
+	type remainder struct {
+		index     int
+		remainder float64
+	}
+	remainders := make([]remainder, len(weights))
+	assigned := 0
+	for i, weight := range weights {
+		ideal := float64(weight) / float64(total) * float64(extra)
+		floor := int(math.Floor(ideal))
+		counts[i] += floor
+		assigned += floor
+		remainders[i] = remainder{i, ideal - float64(floor)}
+	}
+	sort.Slice(remainders, func(a, b int) bool { return remainders[a].remainder > remainders[b].remainder })
+	for i := 0; i < extra-assigned; i++ {
+		counts[remainders[i].index]++
+	}
+	return counts
 }
 
 // estimatedPositionCount mirrors the toolkit's own ArchiveEntryLength
