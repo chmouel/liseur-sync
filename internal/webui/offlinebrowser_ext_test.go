@@ -18,6 +18,7 @@ func TestOfflineIndexedDBInBrowser(t *testing.T) {
 	if err != nil {
 		t.Skip("node not installed")
 	}
+	parallelBrowser(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, node, "--test", filepath.Join("testdata", "offlinebrowser.test.mjs"))
