@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -43,21 +45,27 @@ func (s *Server) HandlePublication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	p, err := epub.OpenPublication(r.Context(), file, size, epub.DefaultLimits())
+	idx, err := s.publicationIndex(r.Context(), book.ContentSHA256, file, size)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "invalid or unsupported EPUB")
 		return
 	}
-	defer p.Close()
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	resource := r.PathValue("resource")
 	if resource != "" {
-		if !p.HasResource(resource) {
+		if !idx.HasResource(resource) {
 			writeError(w, http.StatusNotFound, "publication resource not found")
 			return
 		}
-		data, size, err := p.OpenResource(resource)
+		data, size, err := epub.OpenIndexedResource(file, size, idx, resource)
+		if errors.Is(err, epub.ErrPublicationChanged) {
+			if s.PublicationIndexes != nil {
+				s.PublicationIndexes.Evict(book.ContentSHA256)
+			}
+			writeError(w, http.StatusConflict, "publication changed; reload the book")
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "invalid publication resource")
 			return
@@ -77,11 +85,10 @@ func (s *Server) HandlePublication(w http.ResponseWriter, r *http.Request) {
 	var value any
 	mediaType := "application/webpub+json"
 	if strings.HasSuffix(r.URL.Path, "/positions.json") {
-		locators := p.Positions(r.Context())
-		value = map[string]any{"total": len(locators), "positions": locators}
+		value = map[string]any{"total": len(idx.Positions), "positions": idx.Positions}
 		mediaType = "application/vnd.readium.position-list+json"
 	} else {
-		value = p.Manifest
+		value = idx.Manifest
 	}
 	// Use the toolkit's serializers, then add transport URLs. Stored locators
 	// remain publication-relative; the reader removes this transport prefix.
@@ -95,12 +102,12 @@ func (s *Server) HandlePublication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "publication encoding failed")
 		return
 	}
-	publicationURLs(body, version+"resources/", p)
+	publicationURLs(body, version+"resources/", idx)
 	if mediaType == "application/webpub+json" {
 		body["links"] = []map[string]any{
 			{"rel": "self", "href": base + "manifest.json", "type": mediaType},
 			{"rel": "http://readium.org/position-list", "href": version + "positions.json", "type": "application/vnd.readium.position-list+json"},
-			{"rel": "package", "href": version + "resources/" + (&url.URL{Path: p.PackagePath}).String(), "type": "application/oebps-package+xml"},
+			{"rel": "package", "href": version + "resources/" + (&url.URL{Path: idx.PackagePath}).String(), "type": "application/oebps-package+xml"},
 		}
 	}
 	encoded, err = json.Marshal(body)
@@ -115,20 +122,43 @@ func (s *Server) HandlePublication(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func publicationURLs(value any, prefix string, p *epub.Publication) {
+// publicationIndex returns the cached epub.Index for digest, or opens and
+// parses the archive and caches the result. This is the one place a
+// publication resource request pays for preflightZIP, control document
+// validation and the toolkit parser; every other request for the same
+// digest reuses the result.
+func (s *Server) publicationIndex(ctx context.Context, digest string, file io.ReaderAt, size int64) (*epub.Index, error) {
+	if s.PublicationIndexes != nil {
+		if idx, ok := s.PublicationIndexes.Get(digest); ok {
+			return idx, nil
+		}
+	}
+	p, err := epub.OpenPublication(ctx, file, size, epub.DefaultLimits())
+	if err != nil {
+		return nil, err
+	}
+	defer p.Close()
+	idx := p.Index(ctx)
+	if s.PublicationIndexes != nil {
+		s.PublicationIndexes.Put(digest, idx)
+	}
+	return idx, nil
+}
+
+func publicationURLs(value any, prefix string, idx *epub.Index) {
 	switch v := value.(type) {
 	case map[string]any:
 		if href, ok := v["href"].(string); ok {
-			if u, err := url.Parse(href); err == nil && !u.IsAbs() && u.Host == "" && p.HasResource(u.Path) {
+			if u, err := url.Parse(href); err == nil && !u.IsAbs() && u.Host == "" && idx.HasResource(u.Path) {
 				v["href"] = prefix + u.String()
 			}
 		}
 		for _, child := range v {
-			publicationURLs(child, prefix, p)
+			publicationURLs(child, prefix, idx)
 		}
 	case []any:
 		for _, child := range v {
-			publicationURLs(child, prefix, p)
+			publicationURLs(child, prefix, idx)
 		}
 	}
 }

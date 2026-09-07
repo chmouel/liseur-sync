@@ -38,6 +38,11 @@ type Server struct {
 	// Covers caches rendered covers. Nil is not an error: covers are then
 	// rendered on every request, which is slow but correct.
 	Covers CoverCache
+	// PublicationIndexes caches a parsed epub.Index per content digest so a
+	// publication resource request does not reparse the whole EPUB. Nil is
+	// not an error: every request then opens and parses the archive, which
+	// is slow but correct.
+	PublicationIndexes *PublicationIndexCache
 	// Ingest writes an uploaded publication into a folder and asks for
 	// a pass (ADR-0023). Nil disables the upload route, which then
 	// reports 503: a server with no watcher has nothing to reconcile
