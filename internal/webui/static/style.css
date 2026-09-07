@@ -884,12 +884,12 @@ button.linkish:hover, button.linkish:focus-visible {
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left.
 
-   The bar, the progress line and the status float over the stage
-   rather than sitting in the column above it. That is what lets the
-   chrome be taken away and brought back without resizing the stage:
-   a stage that changes height makes the engine repaginate, which
+   The progress line and status float over the stage. The bar has a
+   permanently reserved inset at its top, so it can be taken away and
+   brought back without covering text or resizing the reading viewport:
+   a viewport that changes height makes the engine repaginate, which
    would move the page out from under whoever is reading it. */
-.reader-body{margin:0;height:100vh;box-sizing:border-box;padding-top:3px;
+.reader-body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
   display:flex;align-items:center;gap:.6rem;padding:.35rem .75rem;
@@ -948,6 +948,7 @@ button.linkish:hover, button.linkish:focus-visible {
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .reader-footer-mid:empty{visibility:hidden}
 .reader-body[data-reader-flow="scrolled"] .reader-footer{display:none}
+.reader-body[data-reader-flow="scrolled"] .reader-turn{bottom:0}
 /* The footer sits over the stage, so its ink follows the stage's
    theme rather than the app's. */
 .reader-body[data-reader-theme="original"] .reader-footer{--reader-footer-fg:#1b1b1f}
@@ -1032,11 +1033,15 @@ button.linkish:hover, button.linkish:focus-visible {
 .ann-color-pink{border-left:4px solid #f06292}
 .ann-color-purple{border-left:4px solid #ba68c8}
 .ann-color-orange{border-left:4px solid #ffb74d}
-.reader-stage{flex:1;display:flex;min-height:0}
+.reader-stage{flex:1;display:flex;min-height:0;position:relative;
+  box-sizing:border-box;padding-top:3rem}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden;position:relative}
 readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:block}
-.reader-turn{border:0;background:transparent;cursor:pointer;font-size:2rem;
-  padding:0 .6rem;opacity:.35;color:inherit;transition:opacity .18s ease}
+.reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;
+  border:0;background:transparent;cursor:pointer;font-size:2rem;
+  padding:0;opacity:.35;color:inherit;transition:opacity .18s ease}
+#reader-prev{left:0}
+#reader-next{right:0}
 .reader-turn:hover{opacity:.9}
 
 /* Reader appearance settings (ADR-0012): a details popover, no script

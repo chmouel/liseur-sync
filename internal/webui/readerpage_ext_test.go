@@ -198,3 +198,33 @@ func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
 		t.Errorf("the reader bar still carries the meta block")
 	}
 }
+
+// Android browsers can make 100vh taller than the visible viewport while
+// their URL bar is open. The reader must follow the dynamic viewport or its
+// bottom lines disappear below the browser chrome, especially at larger type.
+func TestReaderUsesTheDynamicMobileViewport(t *testing.T) {
+	f := newBooksFixture(t)
+	resp, css := f.get(t, "/ui/static/style.css", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader stylesheet: %d", resp.StatusCode)
+	}
+	if !strings.Contains(css, ".reader-body{margin:0;height:100vh;height:100dvh;") {
+		t.Error("reader shell does not use the dynamic mobile viewport height")
+	}
+	for _, want := range []string{
+		".reader-stage{flex:1;display:flex;min-height:0;position:relative;\n  box-sizing:border-box;padding-top:3rem}",
+		".reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("reader page controls are not overlaid: missing %q", want)
+		}
+	}
+
+	resp, js := f.get(t, "/ui/static/reader-app.js", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader script: %d", resp.StatusCode)
+	}
+	if !strings.Contains(js, `flow: COMPACT_READER ? "scrolled" : "paginated",`) {
+		t.Error("compact readers do not default to scrolling")
+	}
+}
