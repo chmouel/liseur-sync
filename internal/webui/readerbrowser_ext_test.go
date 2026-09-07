@@ -6,6 +6,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	gopng "image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -255,6 +259,137 @@ func browserTestPages(t *testing.T, epub []byte) int {
 		total += int(pages)
 	}
 	return total
+}
+
+// svgSpineTestEPUB is a minimal EPUB whose spine is not all XHTML: a
+// title page, then an SVG page, then a bitmap (PNG) page. Readium's
+// frame builder only routes an item through our fetcher when its
+// declared type says HTML — an SVG or bitmap spine item otherwise
+// becomes an <img> pointed straight at item.toURL(baseURL), which
+// resolves against this reader's fake self link rather than a real
+// endpoint (finding #1 of the streaming-reader review). The SVG page
+// carries an embedded script the same way chapter1 does in
+// browserTestEPUB: the check is that it never runs.
+func svgSpineTestEPUB(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	stored, err := w.CreateHeader(&zip.FileHeader{Name: "mimetype", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stored.Write([]byte("application/epub+zip")); err != nil {
+		t.Fatal(err)
+	}
+
+	png := new(bytes.Buffer)
+	img := image.NewRGBA(image.Rect(0, 0, 64, 48))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{R: 0x42, G: 0x86, B: 0xf4, A: 0xff}}, image.Point{}, draw.Src)
+	if err := gopng.Encode(png, img); err != nil {
+		t.Fatal(err)
+	}
+
+	files := map[string]string{
+		"META-INF/container.xml": `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>`,
+		"OEBPS/pagetitre.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+			`<head><title>Title</title></head><body><p>An SVG-spine publication.</p></body></html>`,
+		// The script marks whether it ran on the SVG root's own dataset,
+		// the same convention chapter1 in browserTestEPUB uses; the
+		// browser check asserts that mark is absent.
+		"OEBPS/illustration.svg": `<?xml version="1.0"?>` +
+			`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240">` +
+			`<script>document.documentElement.dataset.svgRan = "yes";</script>` +
+			`<rect width="320" height="240" fill="#642"/><text x="10" y="120" fill="#fff">An SVG page</text></svg>`,
+		"OEBPS/nav.xhtml": `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">` +
+			`<head><title>Contents</title></head><body><nav epub:type="toc"><h1>Contents</h1><ol>` +
+			`<li><a href="pagetitre.xhtml">Title Page</a></li>` +
+			`<li><a href="illustration.svg">Illustration</a></li>` +
+			`<li><a href="photo.png">Photo</a></li>` +
+			`</ol></nav></body></html>`,
+	}
+	for name, content := range files {
+		f, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	imgEntry, err := w.Create("OEBPS/photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imgEntry.Write(png.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>An SVG-Spine Book</dc:title></metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="tp" href="pagetitre.xhtml" media-type="application/xhtml+xml"/>
+    <item id="svgpage" href="illustration.svg" media-type="image/svg+xml"/>
+    <item id="photo" href="photo.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="tp"/><itemref idref="svgpage"/><itemref idref="photo"/></spine>
+</package>`
+	opf, err := w.Create("OEBPS/content.opf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := opf.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestReaderRendersSVGSpineItems is finding #1 of the streaming-reader
+// review: a valid EPUB whose spine has an SVG page and a bitmap page,
+// not just XHTML, must still render those pages rather than going blank.
+func TestReaderRendersSVGSpineItems(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	f := newBooksFixture(t)
+	epub := svgSpineTestEPUB(t)
+	bookID := f.addBook(t, "illustrated", epub)
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	if resp, _ := f.get(t, "/ui/books/"+bookID+"/read", f.cookie); resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader page: %d", resp.StatusCode)
+	}
+
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_SVG=1",
+		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the reader did not render SVG/bitmap spine items in a browser: %v", err)
+	}
 }
 
 // seededStaleOpID names the op the test plants before the browser

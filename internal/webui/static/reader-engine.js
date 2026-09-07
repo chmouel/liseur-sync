@@ -1,6 +1,6 @@
 import { EpubNavigator, Publication, Manifest, Locator, setScriptNonce } from "./vendor/readium/readium.js";
 import * as CFI from "./vendor/foliate/epubcfi.js";
-import { ReaderPublication, publicationHref } from "./reader-publication.js";
+import { ReaderPublication, publicationHref, imageSpineTypes } from "./reader-publication.js";
 
 const archiveProperty = "https://readium.org/webpub-manifest/properties#archive";
 const colors = { yellow: "#ffd54f", green: "#81c784", blue: "#64b5f6", pink: "#f06292", purple: "#ba68c8", orange: "#ffb74d" };
@@ -61,7 +61,17 @@ export class ReaderEngine extends HTMLElement {
     this.positionList = (list.positions || []).map(value => Locator.deserialize(value));
     if (!this.positionList.length || this.positionList.some(value => !value)) throw Error("The publication has no usable positions.");
     this.resources = new ReaderPublication({ request, current, prefix: prefix.replace(/^\//, ""), manifest: raw, packageHref });
-    const manifest = Manifest.deserialize(raw);
+    // Readium's frame builder only routes a spine item through our fetcher
+    // when its type says HTML; an SVG or bitmap spine item is otherwise
+    // built into an <img> frame pointed straight at item.toURL(baseURL),
+    // which resolves against our fake self link rather than a real
+    // resource endpoint. Declaring these as XHTML to Readium sends them
+    // through the normal document path instead, where ReaderPublication
+    // recognizes the (still-true) original type from its own entry map
+    // and serves a wrapper document embedding the asset as a blob image.
+    const forReadium = { ...raw, readingOrder: raw.readingOrder.map(link =>
+      imageSpineTypes.has(link.type) ? { ...link, type: "application/xhtml+xml" } : link) };
+    const manifest = Manifest.deserialize(forReadium);
     if (!manifest) throw Error("Invalid publication manifest.");
     // A local virtual base makes Readium's link resolution deterministic. All
     // actual requests use ReaderPublication, and all rendered assets are blobs.
