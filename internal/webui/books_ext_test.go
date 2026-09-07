@@ -23,7 +23,6 @@ import (
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/store"
-	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 	"github.com/chmouel/liseur-sync/internal/webui"
 )
 
@@ -47,14 +46,7 @@ type booksFixture struct {
 func newBooksFixture(t *testing.T) *booksFixture {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := sqlite.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	if err := st.Migrate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	st := webui.NewTestStore(t)
 	cacheDir := filepath.Join(dir, "cache")
 	if err := os.Mkdir(cacheDir, 0o700); err != nil {
 		t.Fatal(err)

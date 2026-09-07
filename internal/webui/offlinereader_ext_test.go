@@ -21,6 +21,7 @@ func TestOfflineReaderColdNavigationInBrowser(t *testing.T) {
 	if err != nil {
 		t.Skip("no node to drive the browser with")
 	}
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	epub := browserTestEPUB(t)
 	bookID := f.addBook(t, "offline-novel", epub)

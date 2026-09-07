@@ -39,6 +39,8 @@ const proc = spawn(chrome, [
   ...(mapHost ? [`--host-resolver-rules=MAP ${mapHost} 127.0.0.1`] : []),
   'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
+process.on('exit', () => proc.kill());
+process.on('SIGTERM', () => process.exit(1));
 
 const wsURL = await new Promise((res, rej) => {
   let buf = '';
@@ -83,7 +85,14 @@ ws.addEventListener('message', (ev) => {
 function send(method, params = {}, sessionId) {
   const id = ++nextID;
   return new Promise((res, rej) => {
-    pending.set(id, { res, rej });
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      rej(new Error('CDP request timed out: ' + method));
+    }, 15000);
+    pending.set(id, {
+      res: value => { clearTimeout(timer); res(value); },
+      rej: error => { clearTimeout(timer); rej(error); },
+    });
     ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
 }
@@ -125,9 +134,6 @@ if (liveMode) {
     };
   })()` });
 }
-await S('Page.navigate', { url });
-await new Promise((r) => setTimeout(r, 8000));
-
 // In two-origin mode the page under test is not the one navigated to:
 // the main origin authorised the book and redirected here with the
 // credential in the fragment. Everything after this point is the same
@@ -139,6 +145,27 @@ const evalIn = async (expr) => {
   if (r.exceptionDetails) throw new Error('eval threw: ' + JSON.stringify(r.exceptionDetails));
   return r.result.value;
 };
+
+async function waitFor(expression, description, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await evalIn(expression)) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Timed out waiting for ' + description);
+}
+
+await S('Page.navigate', { url });
+await waitFor(`(() => {
+  const view = document.querySelector('readium-view');
+  return Number.isFinite(view?.lastLocation?.fraction) &&
+    view?.renderer?.getContents?.().some(({ doc }) => doc?.body) &&
+    document.getElementById('reader-status')?.textContent === '';
+})()`, 'the publication to open');
+if (withAnnotations || liveMode) {
+  await waitFor(`document.querySelector('readium-view').renderer.getContents()
+    .some(({ doc }) => doc.defaultView.CSS?.highlights?.size > 0)`, 'the initial annotations');
+}
 
 const fail = [];
 const check = (name, ok, extra = '') => {
@@ -360,8 +387,10 @@ check('the page painted something', png.length > 8000 && uniq > 40,
 // book ends and asks how far it got.
 const seen = [];
 for (let i = 0; i < 10; i++) {
+  const before = await evalIn("JSON.stringify(document.querySelector('readium-view').lastLocation.locator)");
   await evalIn(`document.getElementById('reader-next').click()`);
-  await new Promise((r) => setTimeout(r, 900));
+  await waitFor(`JSON.stringify(document.querySelector('readium-view').lastLocation.locator) !== ${JSON.stringify(before)}`,
+    'page turn ' + (i + 1));
   const now = JSON.parse(await evalIn(probe));
   seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi, loc: now.page });
 }
@@ -628,7 +657,6 @@ check('Escape closes the drawer', tocClosed === true, String(tocClosed));
 // strips them, and the nonce-gated CSP refuses whatever a stripper
 // might ever miss.
 await evalIn(`document.querySelector('readium-view').goTo(1)`);
-await new Promise((r) => setTimeout(r, 900));
 const hostile = JSON.parse(await evalIn(probe));
 check('the inline script did not run', hostile.ran === false, String(hostile.ran));
 check('the SVG script did not run', hostile.svgRan === false, String(hostile.svgRan));
@@ -670,6 +698,8 @@ const chromeState = () => evalIn(`JSON.stringify({
   arrow: getComputedStyle(document.getElementById('reader-next')).opacity,
   footer: getComputedStyle(document.getElementById('reader-footer')).display,
 })`);
+// Negative checks must observe the full idle interval even when focus or a
+// setting keeps the chrome visible; there is no state change to wait for.
 const idle = () => new Promise((r) => setTimeout(r, 3000));
 const defaultChrome = JSON.parse(await chromeState());
 const defaultAutoHide = await evalIn(
@@ -1487,14 +1517,16 @@ async function svgGuard(evalIn, check) {
   })()`;
 
   await evalIn("document.querySelector('readium-view').goTo(1)");
-  await new Promise((r) => setTimeout(r, 1200));
+  await waitFor(`document.querySelector('readium-view').renderer.getContents()
+    .some(({ doc }) => doc.querySelector('img')?.naturalWidth > 0)`, 'the SVG image to decode');
   let frame = JSON.parse(await evalIn(frameProbe));
   check('the SVG spine page renders a decoded image', frame.hasImg && frame.srcIsBlob, JSON.stringify(frame));
   check('the SVG page has visible dimensions', frame.naturalWidth > 0, String(frame.naturalWidth));
   check("the SVG page's embedded script did not run", frame.svgRan === '', frame.svgRan);
 
   await evalIn("document.querySelector('readium-view').goTo(2)");
-  await new Promise((r) => setTimeout(r, 1200));
+  await waitFor(`document.querySelector('readium-view').renderer.getContents()
+    .some(({ doc }) => doc.querySelector('img')?.naturalWidth > 0)`, 'the bitmap image to decode');
   frame = JSON.parse(await evalIn(frameProbe));
   check('the bitmap spine page renders a decoded image', frame.hasImg && frame.srcIsBlob, JSON.stringify(frame));
   check('the bitmap page has visible dimensions', frame.naturalWidth > 0, String(frame.naturalWidth));
@@ -1664,7 +1696,8 @@ async function sessionGuard(evalIn, check) {
   check('the sitting ends where the reader is', first.end_progression === 0.47, String(first.end_progression));
   check('the sitting began before it ended',
     typeof first.start_progression === 'number' && first.start_progression <= 0.47, String(first.start_progression));
-  check('a TOC tap resets the idle gap', first.idle_ms === 0, String(first.idle_ms));
+  // Date has millisecond precision while performance.now retains fractions.
+  check('a TOC tap resets the idle gap', first.idle_ms >= 0 && first.idle_ms <= 1, String(first.idle_ms));
 
   // Back, and away again at once: too short to be a sitting.
   await setHidden(false);

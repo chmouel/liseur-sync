@@ -46,6 +46,8 @@ const proc = spawn(firefox, [
   '--headless', '--no-remote', '--profile', profile,
   '--remote-debugging-port=0', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
+process.on('exit', () => proc.kill());
+process.on('SIGTERM', () => process.exit(1));
 
 const wsURL = await new Promise((res, rej) => {
   let buf = '';
@@ -111,7 +113,6 @@ await send('storage.setCookie', {
 
 at('navigate');
 await send('browsingContext.navigate', { context, url, wait: 'complete' });
-await new Promise((r) => setTimeout(r, 8000));
 
 const evalIn = async (expression) => {
   const r = await send('script.evaluate', {
@@ -120,6 +121,25 @@ const evalIn = async (expression) => {
   if (r.type === 'exception') throw new Error('eval threw: ' + JSON.stringify(r.exceptionDetails));
   return r.result.value;
 };
+
+async function waitFor(expression, description, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await evalIn(expression)) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const state = await evalIn(`JSON.stringify((() => {
+    const view = document.querySelector('readium-view');
+    return { location: view?.lastLocation, contents: view?.renderer?.getContents?.().map(({ doc, index }) => ({
+      index, selection: String(doc.getSelection()), href: doc.documentElement.dataset.readerHref,
+      frame: doc.defaultView.frameElement.getBoundingClientRect().toJSON(),
+    })) };
+  })())`);
+  throw new Error('Timed out waiting for ' + description + ': ' + state);
+}
+
+await waitFor(`document.querySelector('readium-view')?.renderer?.getContents?.().some(({ doc }) => doc?.body) &&
+  document.getElementById('reader-status')?.textContent === ''`, 'the publication to open');
 
 const fail = [];
 const check = (name, ok, extra = '') => {
@@ -153,7 +173,7 @@ const probe = `(() => {
     hasDoc: !!doc,
     frameSandboxed: (() => {
       const frame = document.querySelector('#reader-view iframe');
-      return !!frame && frame.src.startsWith('blob:') &&
+      return !!frame && frame.contentWindow.location.href.startsWith('blob:') &&
         frame.sandbox.contains('allow-same-origin') &&
         frame.sandbox.contains('allow-scripts') &&
         !frame.sandbox.contains('allow-top-navigation');
@@ -163,7 +183,7 @@ const probe = `(() => {
     stageBackground: document.getElementById('reader-view')
       ? getComputedStyle(document.getElementById('reader-view')).backgroundColor : '',
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
-    cfi: loc?.cfi || '',
+    cfi: loc?.cfi || JSON.stringify(loc?.locator || ''),
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
     svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
@@ -188,8 +208,21 @@ check('publication script did not run', diag.ran === false, String(diag.ran));
 at('turning pages');
 const seen = [];
 for (let i = 0; i < 10; i++) {
-  await evalIn(`document.getElementById('reader-next').click()`);
-  await new Promise((r) => setTimeout(r, 900));
+  // Observe the button's navigation promise so the next click cannot overlap
+  // a chapter transition on slower browser engines.
+  await evalIn(`(async () => {
+    const view = document.querySelector('readium-view');
+    const turn = view.turn;
+    let navigation;
+    view.turn = function(...args) { return navigation = turn.apply(this, args); };
+    try {
+      document.getElementById('reader-next').click();
+      if (!navigation) throw new Error('The next-page button did not navigate');
+      await navigation;
+    } finally { view.turn = turn; }
+  })()`);
+  await waitFor(`document.querySelector('readium-view').renderer.getContents().some(({ doc }) => doc?.body)`,
+    'the turned page to render');
   const now = JSON.parse(await evalIn(probe));
   seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi });
 }
@@ -214,7 +247,10 @@ for (const [value, label, colour, background] of [
     radio.checked = true;
     radio.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await new Promise((r) => setTimeout(r, 700));
+  await waitFor(`(() => {
+    const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+    return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === ${JSON.stringify(colour)};
+  })()`, 'the ' + label + ' publication theme');
   const themed = JSON.parse(await evalIn(probe));
   check(`the ${label} theme restyles the publication`,
     themed.colour.replace(/\s/g, '') === colour, themed.colour);
@@ -223,7 +259,10 @@ for (const [value, label, colour, background] of [
     themed.stageBackground);
 }
 await evalIn(`document.getElementById('reader-settings-reset').click()`);
-await new Promise((r) => setTimeout(r, 700));
+await waitFor(`(() => {
+  const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+  return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === 'rgb(17,34,51)';
+})()`, 'the publisher styling');
 const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the publisher styling',
   unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
@@ -234,6 +273,10 @@ check('reset restores the publisher styling',
 // caretPositionFromPoint standing in for Blink's caretRangeFromPoint
 // when the reader decides whether a click landed on a word.
 at('auto-hiding chrome');
+// Gesture checks need enough text for both turns to stay in one chapter.
+// Chapter transitions were exercised above; use the fixture's long chapter
+// here so pointer handling is measured independently of frame replacement.
+await evalIn(`document.querySelector('readium-view').goTo(1)`);
 const chromeState = () => evalIn(`JSON.stringify({
   state: document.body.dataset.readerChrome,
   bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
@@ -298,15 +341,19 @@ check('reaching for the top of the window brings the chrome back',
 await new Promise((r) => setTimeout(r, 2600));
 const ffBefore = JSON.parse(await evalIn(probe));
 await ffTap('right', 'touch');
-await new Promise((r) => setTimeout(r, 900));
+await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffBefore.fraction} &&
+  document.querySelector('readium-view').renderer.getContents().some(({ doc }) => doc?.body)`, 'the touch page turn');
 const ffForward = JSON.parse(await evalIn(probe));
 check('a tap on the right of the text turns the page',
   ffForward.fraction > ffBefore.fraction,
   `${ffBefore.fraction} -> ${ffForward.fraction}`);
 
 // The mouse path is the one that has to ask Gecko where the caret is.
+// Let the 700ms suppression of synthetic mouse events after touch expire.
+await new Promise(resolve => setTimeout(resolve, 750));
 await ffTap('right', 'mouse');
-await new Promise((r) => setTimeout(r, 1200));
+await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffForward.fraction} &&
+  document.querySelector('readium-view').renderer.getContents().some(({ doc }) => doc?.body)`, 'the mouse page turn');
 const ffMouse = JSON.parse(await evalIn(probe));
 check('a mouse click on the right of the text turns the page',
   ffMouse.fraction > ffForward.fraction,

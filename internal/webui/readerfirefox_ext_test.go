@@ -58,6 +58,7 @@ func TestReaderOpensInFirefox(t *testing.T) {
 		t.Skip("no node to drive the browser with")
 	}
 
+	parallelBrowser(t)
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", browserTestEPUB(t))
 

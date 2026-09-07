@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
-	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 )
 
 // emptyServer is a freshly migrated instance with no accounts at all —
@@ -21,13 +19,7 @@ import (
 // because every other helper plants alice first.
 func emptyServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
-	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Migrate(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	st := NewTestStore(t)
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
 	s := &Server{St: st, Auth: auth.NewService(st), Cfg: cfg}
