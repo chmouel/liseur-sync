@@ -24,7 +24,9 @@ export async function drainOfflineOutbox(context, request) {
         responseCurrent: () => true,
         accepted: done,
         refused: (_, code) => failed("failed", code || "session rejected"),
-        deferred: () => {},
+        deferred: (status, code) => failed(
+          "pending", code || `HTTP ${status || "unknown"}`,
+        ),
       });
       continue;
     }
@@ -49,11 +51,15 @@ export async function drainOfflineOutbox(context, request) {
       if (response.status === 409) await failed("conflict", "revision conflict", body?.server);
       else if ([400, 403, 404, 413, 422].includes(response.status))
         await failed("failed", body?.error || `HTTP ${response.status}`);
+      else await failed("pending", body?.error || `HTTP ${response.status}`);
       continue;
     }
     const result = body?.results?.find(value => (annotation ? value.id : value.op_id) ===
       (annotation ? record.annotationID : record.id));
-    if (!result) continue;
+    if (!result) {
+      await failed("pending", "missing acknowledgement");
+      continue;
+    }
     if (["applied", "duplicate"].includes(result.status)) {
       if (annotation) {
         const server = { ...record.payload.annotation, rev: result.rev, seq: result.seq };

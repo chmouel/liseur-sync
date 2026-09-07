@@ -58,10 +58,12 @@ if (buttons.length) {
       button.disabled = false;
       const controller = new AbortController();
       active = controller;
+      let operationAccount = "";
       button.textContent = "Cancel download";
       say(button, "Preparing offline copy…");
       try {
         const identity = await auth.acquire();
+        operationAccount = identity.account;
         const partition = storagePartition();
         const context = await accountContext(partition, identity.account);
         const authorize = async current => {
@@ -119,9 +121,21 @@ if (buttons.length) {
         }
       } catch (error) {
         if (error.name === "AbortError") say(button, "Download cancelled");
-        else if (error.code === "quota") say(button, error.message, true);
-        else say(button, error.message || "Offline download failed", true);
-        button.textContent = "Save offline";
+        else {
+          const message = error.code === "quota"
+            ? error.message : error.message || "Offline download failed";
+          let restored = false;
+          if (operationAccount) {
+            try {
+              await updateReadyState(button, operationAccount);
+              restored = true;
+            } catch (stateError) {
+              console.warn("offline download state could not be restored", stateError);
+            }
+          }
+          if (!restored) button.textContent = "Save offline";
+          say(button, message, true);
+        }
       } finally {
         active = null;
       }
