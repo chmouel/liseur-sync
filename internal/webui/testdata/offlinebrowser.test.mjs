@@ -188,6 +188,15 @@ async function storageChecks() {
     "permanent annotation error does not stop sessions or other annotations");
   await rejected(() => s.finishOfflineSession({ ...context, bookID, payload: { ...payload, active_ms: 2000 } }),
     "delivered session retains immutable identity");
+  await queue("retryable", "retryable", "retryable");
+  await drainOfflineOutbox(context, async () => reply({ error: "temporary failure" }, "", 500));
+  const retryable = (await pending()).find(row => row.id === "retryable");
+  check(retryable?.state === "pending" && retryable.error === "temporary failure",
+    "unexpected server errors stay retryable with an error");
+  await drainOfflineOutbox(context, async () =>
+    reply({ results: [{ id: "retryable", status: "applied", rev: 1 }] }));
+  check(!(await pending()).some(row => row.id === "retryable"),
+    "retryable outbox records recover after a later success");
   await s.saveOfflineSessionCheckpoint({ ...context, bookID, checkpoint: { id: "session" } });
   check(!await s.getOfflineSessionCheckpoint({ ...context, bookID }), "late checkpoint cannot recreate finalized session");
   await s.saveOfflineSessionCheckpoint({ ...context, bookID, checkpoint: { id: "next-session" } });
