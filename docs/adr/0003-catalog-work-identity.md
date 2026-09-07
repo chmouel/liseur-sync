@@ -90,7 +90,9 @@ identity.
    and tenant-isolation/concurrency tests. **Implemented.**
 2. Add an explicit catalog-book resolve operation for sync-capable clients.
    **Implemented** as `POST /v1/books/{id}/resolve`, which requires both
-   `library-read` and `sync`.
+   `library-read` and `sync`. [ADR-0035](0035-naming-a-shelf-is-one-request.md)
+   adds `POST /v1/books/resolve` for a whole shelf at once; it goes
+   through the same resolver and decides nothing differently.
 3. Add maintenance backfill and mapping repair for split/merge. **Implemented.**
    Split and merge repair cover unavailable current files, and
    `liseur-sync admin backfill-works <user>` pre-resolves a user's whole

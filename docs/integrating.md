@@ -1161,6 +1161,91 @@ This route needs both `library-read` and `sync`, the only one that does:
 it reads the catalog and writes your work graph. A catalog-only token
 gets `403`, and so does a sync-only one.
 
+#### Naming a whole shelf at once
+
+One request per book is fine for a book the reader has just downloaded.
+It is not fine for a device that has just signed in, which has a name
+here for none of its books — and a book with no work can neither send a
+position nor receive one, so nothing syncs until they all have names.
+
+`POST /v1/books/resolve` does the same join for up to 500 books:
+
+```json
+POST /v1/books/resolve
+{"book_ids": ["…", "…", "…"]}
+```
+
+```json
+{"results": [
+  {"book_id": "…", "work_id": "…", "confidence": "high", "created": true,
+   "identifiers": [{"kind": "sha256", "value": "…"}]},
+  {"book_id": "…", "error": "ambiguous", "works": ["…", "…"]},
+  {"book_id": "…", "error": "not_found"}
+]}
+```
+
+Results come back in the order you asked for them.
+
+Each book is resolved on its own, so one book the server cannot place
+settles nothing about the others: it takes its refusal in its own entry
+and the rest of the batch stands. That is why the answer is `200` with
+per-item results rather than a status code — refusing the batch would
+throw away the four hundred and ninety-eight that worked.
+
+`error` is the per-item spelling of what the single route answers with:
+`not_found` for its `404`, and `ambiguous`, with the works, or
+`conflict` for its two `409`s. `conflict` means the work graph moved
+under the write; that book alone is worth sending again, since the next
+attempt sees the graph that displaced it. The other two are settled
+answers.
+
+A doubtful match is *not* an error — it comes back with
+`confidence: "low"` and nothing stored, exactly as it does one at a
+time.
+
+Over 500 ids the whole request is refused with `code: batch_too_large`
+and the `limit` it will take, so cut the list down and send it again. An
+empty `book_ids` is a `400`.
+
+`confirmed` applies to every book in the batch. Send it only if you have
+no reader to ask: accepting a title/author guess is a question about one
+book, and the single-book route is where that answer belongs.
+
+A server that predates this route answers `404` or `405`. Fall back to
+`POST /v1/books/{id}/resolve` per book, and remember the answer rather
+than probing on every run.
+
+### Bootstrapping a fresh device
+
+A device signing in to an existing account has to do three things before
+its shelf looks right, and the order matters.
+
+1. **Name everything.** Batch-resolve the catalog books as above.
+   Anything the reader side-loaded resolves through `POST
+   /v1/works/resolve` with identifiers you compute locally.
+
+2. **Ask where each book stands.** Everything the account did before
+   this device had a name for a book happened *behind* your cursor, so
+   the delta feed will never mention it. `GET /v1/heads` answers for the
+   whole account at once — the newest op per work — which is exactly the
+   question a device with a freshly named library is asking. Do not
+   advance your cursor from it: `snapshot_seq` belongs to the resync
+   protocol, and a seed is not a pull.
+
+   `/v1/heads` carries only the newest record per work, so if one comes
+   back in a shape you cannot read, ask `GET /v1/works/{id}/positions`
+   for that work alone rather than treating it as "nothing here": an
+   older op behind it may still hold a position you can use.
+
+3. **Sync normally.** From here `GET /v1/changes?since=…` is enough, and
+   the cursor advances in the transaction that stores the page it
+   covers.
+
+Steps 1 and 2 are two requests for a whole library. Do them in one go
+rather than a few books at a time: a reader who sees the shelf fill in
+batches over several refreshes will refresh again, and every batch that
+lands stamps its arrival on books that were read weeks ago.
+
 ## KOReader through OPDS
 
 KOReader can browse the catalog with no plugin at all. Add an OPDS
@@ -1211,7 +1296,7 @@ round-trips verbatim to kosync pulls.
   bug, report it. A refusal a client can recover from also carries a
   machine-readable `code`, currently only `unknown_work` (see
   [Pushing](#pushing)).
-- Batch limits: 500 ops, 1000 sessions per request, 1
+- Batch limits: 500 ops, 1000 sessions, 500 books per batch resolve, 1
   MiB body, 16 KiB per `locator`.
 - Auth endpoints are rate-limited per
   IP (429 + `Retry-After`).
