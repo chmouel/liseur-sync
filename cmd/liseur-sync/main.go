@@ -201,16 +201,17 @@ func cmdServe(args []string) error {
 		n.SetChangeNotifier(hub)
 	}
 	apiSrv := &api.Server{
-		St:           st,
-		Auth:         auth.NewService(st),
-		Cfg:          cfg,
-		LoginLimiter: loginLimiter,
-		OPDSLimiter:  opdsLimiter,
-		Files:        content.NewFiles(st),
-		Covers:       cache,
-		Ingest:       ingester,
-		Removal:      ingester,
-		Live:         hub,
+		St:                 st,
+		Auth:               auth.NewService(st),
+		Cfg:                cfg,
+		LoginLimiter:       loginLimiter,
+		OPDSLimiter:        opdsLimiter,
+		Files:              content.NewFiles(st),
+		Covers:             cache,
+		PublicationIndexes: api.NewPublicationIndexCache(0),
+		Ingest:             ingester,
+		Removal:            ingester,
+		Live:               hub,
 		Kosync: &kosync.Server{
 			St:          st,
 			Cfg:         cfg,

@@ -178,6 +178,98 @@ func (p *Publication) OpenResource(name string) (io.ReadCloser, int64, error) {
 
 func (p *Publication) HasResource(name string) bool { _, ok := p.allowed[name]; return ok }
 
+// IndexEntry records where one archive entry sits in the ZIP directory, so
+// a later request for the same content digest can be verified without
+// rerunning preflightZIP or the toolkit parser: a fresh zip.Reader over the
+// same bytes must describe that entry at the exact same offset, sizes and
+// compression method, or the archive changed under the catalog's back.
+type IndexEntry struct {
+	Offset           int64
+	CompressedSize   uint64
+	UncompressedSize uint64
+	Method           uint16
+}
+
+// Index is the file-independent shape of a Publication: the manifest,
+// positions and each allowed entry's ZIP directory coordinates. It never
+// holds a reference to the archive it was built from, so it is safe to
+// keep across requests (and across the file handle that produced it)
+// for as long as the catalog's content digest names the same bytes.
+type Index struct {
+	PackagePath string
+	Manifest    manifest.Manifest
+	Positions   []manifest.Locator
+	Entries     map[string]IndexEntry
+}
+
+func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; return ok }
+
+// Index builds the cacheable shape of this Publication. It reads no
+// chapter bytes: entry coordinates come from the ZIP directory already
+// read by OpenPublication, and positions come from the reading order's own
+// recorded sizes.
+func (p *Publication) Index(ctx context.Context) *Index {
+	entries := make(map[string]IndexEntry, len(p.allowed))
+	for name := range p.allowed {
+		f := p.archive.entries[name]
+		if f == nil {
+			continue
+		}
+		offset, err := f.DataOffset()
+		if err != nil {
+			continue
+		}
+		entries[name] = IndexEntry{
+			Offset: offset, CompressedSize: f.CompressedSize64,
+			UncompressedSize: f.UncompressedSize64, Method: f.Method,
+		}
+	}
+	return &Index{PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: p.Positions(ctx), Entries: entries}
+}
+
+// ErrPublicationChanged means the catalog's content digest still names
+// this file, but the bytes at the requested path moved since the index
+// was built (a rewritten ZIP with the same digest by coincidence, or the
+// index survived a change the catalog did not notice). The caller should
+// serve 409 and drop the index from any cache: it no longer describes
+// this file.
+var ErrPublicationChanged = errors.New("publication changed since it was indexed")
+
+// OpenIndexedResource opens one archive entry using a cached Index instead
+// of a full OpenPublication: it reopens the ZIP directory (unavoidable,
+// since source may be a fresh file handle) but skips preflightZIP, control
+// document validation and the toolkit parser entirely. The entry's offset,
+// sizes and compression method must match the index exactly, or this
+// returns ErrPublicationChanged rather than serving bytes the index did
+// not describe.
+func OpenIndexedResource(source io.ReaderAt, size int64, idx *Index, name string) (io.ReadCloser, int64, error) {
+	entry, ok := idx.Entries[name]
+	if !ok {
+		return nil, 0, errors.New("publication resource not found")
+	}
+	z, err := zip.NewReader(source, size)
+	if err != nil {
+		return nil, 0, validationError(CodeInvalidEPUB, err)
+	}
+	for _, f := range z.File {
+		archiveName, err := safeArchivePath(f.Name)
+		if err != nil || archiveName != name {
+			continue
+		}
+		offset, err := f.DataOffset()
+		if err != nil || offset != entry.Offset || f.CompressedSize64 != entry.CompressedSize ||
+			f.UncompressedSize64 != entry.UncompressedSize || f.Method != entry.Method {
+			return nil, 0, ErrPublicationChanged
+		}
+		r, err := f.Open()
+		if err != nil {
+			return nil, 0, validationError(CodeInvalidEPUB, err)
+		}
+		return r, int64(f.UncompressedSize64), nil
+	}
+	return nil, 0, ErrPublicationChanged
+}
+
 func publicationPath(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.IsAbs() || u.Host != "" || u.RawQuery != "" || u.Fragment != "" || strings.Contains(u.Path, "\\") {
