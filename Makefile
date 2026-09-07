@@ -138,7 +138,10 @@ run: generate $(CONFIG) ## Run the server once
 dev: generate $(CONFIG) ## Run the server and restart it on every change (needs reflex)
 	@command -v reflex >/dev/null || { \
 		echo "reflex is not installed: go install github.com/cespare/reflex@latest"; exit 1; }
-	CONFIG=$(CONFIG) reflex --decoration=fancy --config=.reflex.conf
+	@host_ip=$$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([^ ]*\).*/\1/p'); \
+	test -n "$$host_ip" || { echo "could not determine the host IP address"; exit 1; }; \
+	printf 'dev server: http://%s:8585\n\n' "$$host_ip"
+	@CONFIG=$(CONFIG) reflex --decoration=fancy --config=.reflex.conf
 
 # ARGS is the admin subcommand: make admin ARGS="create-user alice"
 .PHONY: admin
