@@ -99,6 +99,29 @@ func TestPublicationResourcesAreBoundedAndDeclared(t *testing.T) {
 	}
 }
 
+// TestIndexSkipsPositionsOverTheBound confirms Index itself, not just a
+// caller's decision to cache the result, avoids materializing the full
+// position list once the cheap archive-size estimate exceeds maxPositions
+// — the two reading-order chapters here have two archive entries, so a
+// bound of 1 must be exceeded and a bound of 2 or more must not be.
+func TestIndexSkipsPositionsOverTheBound(t *testing.T) {
+	data := readerArchive(t, readerPackage)
+	p, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if idx := p.Index(t.Context(), 1); idx.Positions != nil {
+		t.Fatalf("positions over the bound were still generated: %+v", idx.Positions)
+	}
+	if idx := p.Index(t.Context(), 2); len(idx.Positions) != 2 {
+		t.Fatalf("positions within the bound were not generated: %+v", idx.Positions)
+	}
+	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 2 {
+		t.Fatalf("a non-positive bound must mean unbounded: %+v", idx.Positions)
+	}
+}
+
 func TestPublicationRefusesRemoteAndDuplicateEntries(t *testing.T) {
 	for _, tt := range []struct {
 		name, pkg string
