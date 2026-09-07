@@ -14,7 +14,14 @@ export class ReaderEngine extends HTMLElement {
   constructor() {
     super();
     this.renderer = document.createElement("div");
-    this.renderer.style.cssText = "position:absolute;inset:0;overflow:hidden";
+    // Readium sets an explicit pixel width on this element directly
+    // (ReadiumCSS caps a single column's width to a readable line length
+    // on a wide viewport). With inset:0 alone, an explicit width leaves
+    // the box flush left: left and right are both already pinned to 0,
+    // so the browser's over-constrained resolution drops "right" rather
+    // than centering. margin:auto on left/right is what makes that same
+    // resolution split the leftover space evenly instead.
+    this.renderer.style.cssText = "position:absolute;inset:0;overflow:hidden;margin:0 auto";
     this.renderer.getContents = () => this.contents();
     this.renderer.goTo = target => this.goTo(target);
     this.renderer.render = () => { if (this.navigator) this.relocate(this.navigator.currentLocator); };
@@ -151,8 +158,9 @@ export class ReaderEngine extends HTMLElement {
     const id = itemref?.getAttribute("idref");
     const item = [...this.packageDocument.querySelectorAll("manifest > item")].find(el => el.getAttribute("id") === id);
     const href = item && publicationHref(item.getAttribute("href"), this.packageHref);
-    if (!href) throw Error("The saved CFI does not name a chapter.");
-    return { href, parsed };
+    const resolvedHref = href && (this.resources.resolveKey(href.split("#")[0]) ?? href.split("#")[0]);
+    if (!resolvedHref) throw Error("The saved CFI does not name a chapter.");
+    return { href: resolvedHref, parsed };
   }
 
   resolveNavigation(target) {

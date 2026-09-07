@@ -3,6 +3,7 @@ package webui_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
@@ -62,6 +64,20 @@ func TestFindChromeDoesNotAutoDiscoverInCI(t *testing.T) {
 	if got := findChrome(); got != "" {
 		t.Fatalf("findChrome() = %q in CI without explicit opt-in, want empty", got)
 	}
+}
+
+// utf16LEWithBOM encodes text as UTF-16LE with a leading byte-order mark,
+// the shape a real EPUB may ship a chapter in: XML permits UTF-16 through
+// a BOM or declaration, and a reader that assumes UTF-8 must not render
+// this as replacement characters.
+func utf16LEWithBOM(text string) []byte {
+	units := utf16.Encode([]rune(text))
+	buf := make([]byte, 2+2*len(units))
+	binary.LittleEndian.PutUint16(buf, 0xFEFF)
+	for i, unit := range units {
+		binary.LittleEndian.PutUint16(buf[2+2*i:], unit)
+	}
+	return buf
 }
 
 // browserTestEPUB is a small but real publication, and it is deliberately
@@ -146,11 +162,24 @@ func browserTestEPUB(t *testing.T) []byte {
 	spine := `<itemref idref="tp"/><itemref idref="c1"/>`
 	for i := 2; i <= browserTestChapters; i++ {
 		name := fmt.Sprintf("chapter%d.xhtml", i)
-		files["OEBPS/"+name] = `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+		content := `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">` +
 			`<head><link rel="stylesheet" href="style.css"/></head><body>` + offscreen +
 			fmt.Sprintf("<p>The Carpet-Bag, part %d.</p>", i) +
 			strings.Repeat("<p>A cold, damp night, and the wind in the rigging.</p>\n", 20) +
 			`</body></html>`
+		if i == 5 {
+			// Chowder (linked from nav.xhtml above) is a valid UTF-16LE
+			// document with a BOM and a non-ASCII word, pinning down that
+			// the reader decodes archive text instead of assuming UTF-8.
+			content = `<?xml version="1.0" encoding="UTF-16"?><html xmlns="http://www.w3.org/1999/xhtml">` +
+				`<head><link rel="stylesheet" href="style.css"/></head><body>` + offscreen +
+				"<p>A steaming bowl of caf\u00e9 chowder awaited them.</p>" +
+				strings.Repeat("<p>A cold, damp night, and the wind in the rigging.</p>\n", 20) +
+				`</body></html>`
+			files["OEBPS/"+name] = string(utf16LEWithBOM(content))
+		} else {
+			files["OEBPS/"+name] = content
+		}
 		manifest += fmt.Sprintf("\n    <item id=\"c%d\" href=\"%s\" media-type=\"application/xhtml+xml\"/>", i, name)
 		spine += fmt.Sprintf("<itemref idref=\"c%d\"/>", i)
 	}
