@@ -145,16 +145,17 @@ func (s *Server) publicationIndex(ctx context.Context, digest string, file io.Re
 	return idx, nil
 }
 
-// maxPublicationPositions bounds the position list Index itself will
-// generate, not just whether the result gets cached: the toolkit produces
-// one position per 1,024 bytes of reading-order content, so a publication
-// near this server's own upper size limits could otherwise make a single
-// manifest request allocate on the order of two million locator objects
-// before caching is ever considered. Index estimates the count from ZIP
-// directory sizes alone and skips calling the toolkit's position generator
-// entirely once the estimate passes this bound, so a book that large never
-// pays for or retains the full list — it serves everything else normally,
-// with positions.json reporting none.
+// maxPublicationPositions bounds how fine-grained a position list Index
+// will generate, not just whether the result gets cached: the toolkit
+// produces one position per 1,024 bytes of reading-order content, so a
+// publication near this server's own upper size limits could otherwise
+// make a single manifest request allocate on the order of two million
+// locator objects before caching is ever considered. Index estimates the
+// count from ZIP directory sizes alone and, once the estimate passes this
+// bound, falls back to one coarse position per reading-order item instead
+// of calling the toolkit's position generator — the reader still gets a
+// non-empty position list and can open the book, just without sub-chapter
+// position numbers for that one publication.
 const maxPublicationPositions = 200_000
 
 func publicationURLs(value any, prefix string, idx *epub.Index) {
