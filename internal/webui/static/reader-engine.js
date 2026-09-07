@@ -339,13 +339,19 @@ export class ReaderEngine extends HTMLElement {
       const decorations = [];
       const shown = new Set(this.contents().map(({ doc }) => doc.documentElement.dataset.readerHref));
       for (const [id, entry] of this.annotations) {
-        let locator = entry.locator && Locator.deserialize(entry.locator);
-        if (!locator && entry.value) {
-          const href = this.cfiHref(entry.value).href;
-          if (!shown.has(href)) continue;
-          locator = await this.cfiLocator(entry.value);
+        try {
+          let locator = entry.locator && Locator.deserialize(entry.locator);
+          if (!locator && entry.value) {
+            const href = this.cfiHref(entry.value).href;
+            if (!shown.has(href)) continue;
+            locator = await this.cfiLocator(entry.value);
+          }
+          if (locator) decorations.push({ id, locator, style: { tint: colors[entry.color] || colors.yellow, enforceContrast: false } });
+        } catch {
+          // An unresolvable CFI (a cross-engine or otherwise malformed
+          // annotation) must not take every later, valid annotation down
+          // with it: skip only this one entry and keep drawing the rest.
         }
-        if (locator) decorations.push({ id, locator, style: { tint: colors[entry.color] || colors.yellow, enforceContrast: false } });
       }
       this.navigator.applyDecorations(decorations, "annotations");
     } finally {
