@@ -268,16 +268,15 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 // boundedPositions distributes on top of the one mandatory position every
 // reading-order item gets — not the total, so a publication with many
 // chapters can't crowd out that weighted pool by consuming it on mandatory
-// minimums alone (a large chapter still needs a meaningful share of
-// positions relative to a small one to keep progress tracking sensible).
-// It is independent of the maxPositions a caller passes to Index: that
-// parameter only decides when the fine-grained list is too expensive to
-// generate, but the fallback itself is cached the same way, and a cache
-// of PublicationIndexCache's default 32 entries each holding maxPositions
-// (200,000) fallback locators could still retain millions of them. The
-// fallback is already an approximation, so a few thousand positions give
-// a reader plenty of granularity for progress tracking without the
-// memory cost the estimate cap was meant to avoid in the first place.
+// minimums alone. It is independent of the maxPositions a caller passes to
+// Index: that parameter only decides when the fine-grained list is too
+// expensive to generate, but the fallback itself is cached the same way,
+// and a cache of PublicationIndexCache's default 32 entries each holding
+// maxPositions (200,000) fallback locators could still retain millions of
+// them. The fallback is already an approximation, so a few thousand
+// positions give a reader plenty of granularity for progress tracking
+// without the memory cost the estimate cap was meant to avoid in the
+// first place.
 const fallbackPositionBudget = 4096
 
 // boundedPositions is the fallback for a publication too large to afford
@@ -287,12 +286,17 @@ const fallbackPositionBudget = 4096
 // it; a further fallbackPositionBudget positions are then distributed
 // across the reading order in proportion to each item's own archive size,
 // using the largest-remainder method so the total never exceeds the
-// combined budget. A reader tracking progress by position multiplicity —
-// the client divides a section's on-screen progress by its position
-// count, and the whole book's by the total — still weights a large
-// chapter correctly against a small one even when there are many
-// chapters, because the weighted pool is never shared with the mandatory
-// minimums.
+// combined budget.
+//
+// Each locator's TotalProgression is computed directly from cumulative
+// archive bytes, not from its ordinal position among the mandatory-plus-
+// weighted counts: with many chapters, the mandatory one-per-item
+// minimum can dominate that count even though it holds almost none of
+// the bytes, and a client that divides progress by position multiplicity
+// (as reader-engine.js does for its per-chapter progress markers) would
+// then under-report a large chapter's true weight. Deriving
+// TotalProgression from bytes instead keeps it accurate regardless of
+// how the discrete positions themselves are distributed.
 func (p *Publication) boundedPositions() []manifest.Locator {
 	readingOrder := p.Manifest.ReadingOrder
 	if len(readingOrder) == 0 {
@@ -314,6 +318,12 @@ func (p *Publication) boundedPositions() []manifest.Locator {
 	}
 	budget := len(readingOrder) + fallbackPositionBudget
 	counts := apportion(sizes, total, budget)
+	bytesBefore := make([]uint64, len(readingOrder))
+	var cumulative uint64
+	for i := range readingOrder {
+		bytesBefore[i] = cumulative
+		cumulative += sizes[i]
+	}
 	positions := make([]manifest.Locator, 0, budget)
 	var position uint
 	for i, link := range readingOrder {
@@ -325,16 +335,23 @@ func (p *Publication) boundedPositions() []manifest.Locator {
 			position++
 			progression := float64(page) / float64(counts[i])
 			pagePosition := position
+			var totalProgression float64
+			if total > 0 {
+				totalProgression = (float64(bytesBefore[i]) + progression*float64(sizes[i])) / float64(total)
+			} else {
+				// No size information for any item: fall back to
+				// spacing positions evenly, since there is nothing to
+				// weight by.
+				totalProgression = float64(position-1) / float64(budget)
+			}
 			positions = append(positions, manifest.Locator{
 				Href: link.URL(nil, nil), MediaType: *mt, Title: link.Title,
-				Locations: manifest.Locations{Progression: &progression, Position: &pagePosition},
+				Locations: manifest.Locations{
+					Progression: &progression, Position: &pagePosition,
+					TotalProgression: &totalProgression,
+				},
 			})
 		}
-	}
-	totalCount := len(positions)
-	for i := range positions {
-		totalProgression := float64(*positions[i].Locations.Position-1) / float64(totalCount)
-		positions[i].Locations.TotalProgression = &totalProgression
 	}
 	return positions
 }
