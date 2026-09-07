@@ -232,6 +232,23 @@ func TestIndexKeepsWeightedCapacityWithManyChapters(t *testing.T) {
 	if huge <= tiny {
 		t.Fatalf("the huge chapter (nearly all the bytes) must keep more positions than all %d tiny chapters combined, got huge=%d tiny=%d", tinyChapters, huge, tiny)
 	}
+	var hugeEnd float64 = -1
+	for _, position := range idx.Positions {
+		if strings.HasSuffix(position.Href.String(), "huge.xhtml") {
+			hugeEnd = *position.Locations.TotalProgression
+		}
+	}
+	if hugeEnd < 0 {
+		t.Fatal("expected at least one position for the huge chapter")
+	}
+	// The huge chapter holds nearly all the bytes, so finishing it must
+	// put the reader almost at the end of the book: its last
+	// TotalProgression must not be diluted down to the roughly 31% a
+	// position-count-based fraction would give it when 500 mandatory
+	// single-position chapters precede it.
+	if hugeEnd < 0.99 {
+		t.Fatalf("TotalProgression must be byte-weighted, not position-count-weighted: huge chapter ends at %v, want >= 0.99", hugeEnd)
+	}
 }
 
 // TestIndexNeverCapsFixedLayoutPositions confirms a fixed-layout
