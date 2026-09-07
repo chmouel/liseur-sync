@@ -804,6 +804,12 @@ function startCandidates(op) {
 // publisher said": a fresh reader renders the book exactly as shipped,
 // and every override below exists only once the user asks for it.
 const SETTINGS_KEY = "liseur.reader.settings";
+// On a phone the browser chrome already consumes part of the viewport, and
+// leaving our own bar visible takes another useful slice from the page. This
+// is only the default: a saved choice still wins, and the setting remains
+// available for readers who want the bar pinned.
+const COMPACT_READER = /Android/i.test(navigator.userAgent) ||
+  window.matchMedia("(max-width: 700px)").matches;
 const SETTINGS_DEFAULTS = Object.freeze({
   theme: "original",
   font: "publisher",
@@ -811,10 +817,10 @@ const SETTINGS_DEFAULTS = Object.freeze({
   spacing: "0",
   justify: false,
   hyphenate: false,
-  flow: "paginated",
+  flow: COMPACT_READER ? "scrolled" : "paginated",
   columns: "auto",
-  margin: "normal",
-  autohide: false,
+  margin: COMPACT_READER ? "narrow" : "normal",
+  autohide: COMPACT_READER,
   footer: "chapter",
 });
 // What the footer's middle slot shows; a click on the footer walks

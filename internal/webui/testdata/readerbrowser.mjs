@@ -34,6 +34,7 @@ const expectedPages = Number(process.env.SMOKE_PAGES) || 0;
 const profile = mkdtempSync(join(tmpdir(), 'smoke-'));
 const proc = spawn(chrome, [
   '--headless=new', '--disable-gpu', '--no-sandbox',
+  '--window-size=800,600',
   '--remote-debugging-port=0', `--user-data-dir=${profile}`,
   ...(mapHost ? [`--host-resolver-rules=MAP ${mapHost} 127.0.0.1`] : []),
   'about:blank',
@@ -269,6 +270,36 @@ if (expectedPages) {
     `${diag.page} want m=${expectedPages}`);
 }
 check('the footer is on screen with the book', diag.footerShown, String(diag.footerShown));
+// The arrows keep a touch-sized strip at each edge. They must not reach into
+// the rest of the chapter or down over the footer controls.
+const readerHitTargets = JSON.parse(await evalIn(`JSON.stringify((() => {
+  const hit = (id) => {
+    const el = document.getElementById(id);
+    const box = el.getBoundingClientRect();
+    return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+      ?.closest?.('button')?.id || '';
+  };
+  const stage = document.querySelector('.reader-stage').getBoundingClientRect();
+  const edge = (x) => document.elementFromPoint(x, stage.top + stage.height / 2)?.id || '';
+  return {
+    progress: hit('reader-progress-text'),
+    page: hit('reader-page'),
+    left: edge(stage.left + 56),
+    right: edge(stage.right - 56),
+  };
+})())`));
+const readerTop = JSON.parse(await evalIn(`JSON.stringify({
+  bar: document.querySelector('.reader-bar').getBoundingClientRect().bottom,
+  book: document.getElementById('reader-view').getBoundingClientRect().top,
+})`));
+check('the toolbar does not cover the book viewport', readerTop.book >= readerTop.bar,
+  JSON.stringify(readerTop));
+check('the page arrows do not cover the reading surface',
+  readerHitTargets.left !== 'reader-prev' && readerHitTargets.right !== 'reader-next',
+  JSON.stringify(readerHitTargets));
+check('the page arrows do not cover the footer controls',
+  readerHitTargets.progress === 'reader-progress-text' && readerHitTargets.page === 'reader-page',
+  JSON.stringify(readerHitTargets));
 // The chapter frame is isolated from the page document; publisher code
 // cannot reach the reader shell.
 check('the chapter frame is sandboxed and uses a blob URL', await evalIn(`(() => { const f = document.querySelector('#reader-view iframe'); return f?.contentWindow.location.href.startsWith('blob:') && f.sandbox.contains('allow-same-origin') && f.sandbox.contains('allow-scripts') && !f.sandbox.contains('allow-top-navigation'); })()`));
