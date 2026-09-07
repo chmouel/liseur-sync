@@ -2119,12 +2119,21 @@ paths:
       description: |
         Returns one declared EPUB resource, addressed relative to the
         package document. Clients should use the resource URLs in the
-        manifest rather than constructing paths. The route also accepts
-        slash-separated resource names and supports `HEAD`.
+        manifest rather than constructing paths.
+
+        `{resource}` is a greedy match on the server: it is registered as
+        Go's `{resource...}` wildcard, so it consumes every remaining
+        path segment after `/resources/`, slashes included (for example
+        `OEBPS/images/cover.jpg` arrives as that one value, not three
+        separate segments). OpenAPI has no path-parameter syntax for
+        that, so tooling that treats `{resource}` as a single segment
+        will not by itself construct a nested path correctly; use the
+        resource URLs already embedded in the manifest instead of
+        building this path yourself. `HEAD` is also supported.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: digest, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
-        - { name: resource, in: path, required: true, description: Relative archive resource path, schema: { type: string } }
+        - { name: resource, in: path, required: true, description: "Relative archive resource path; may itself contain slashes (see above)", schema: { type: string } }
       responses:
         "200":
           description: The declared resource bytes
