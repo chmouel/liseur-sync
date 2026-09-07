@@ -145,18 +145,21 @@ func (s *Server) publicationIndex(ctx context.Context, digest string, file io.Re
 	return idx, nil
 }
 
-// maxPublicationPositions bounds how fine-grained a position list Index
-// will generate, not just whether the result gets cached: the toolkit
-// produces one position per 1,024 bytes of reading-order content, so a
-// publication near this server's own upper size limits could otherwise
-// make a single manifest request allocate on the order of two million
-// locator objects before caching is ever considered. Index estimates the
-// count from ZIP directory sizes alone and, once the estimate passes this
-// bound, falls back to a coarser list scaled to this bound instead of
-// calling the toolkit's position generator — each chapter still gets a
-// share of positions proportional to its own size, so the reader can open
-// the book and track progress sensibly, just at coarser granularity for
-// that one publication.
+// maxPublicationPositions bounds how fine-grained a reflowable
+// publication's position list Index will generate, not just whether the
+// result gets cached: the toolkit produces one position per 1,024 bytes
+// of reading-order content, so a publication near this server's own upper
+// size limits could otherwise make a single manifest request allocate on
+// the order of two million locator objects before caching is ever
+// considered. Index estimates the count from ZIP directory sizes alone
+// and, once the estimate passes this bound, falls back to a small, fixed
+// number of size-weighted positions instead of calling the toolkit's
+// position generator — each chapter still gets a share proportional to
+// its own size, so the reader can open the book and track progress
+// sensibly, just at coarser granularity for that one publication. A
+// fixed-layout publication is exempt: its real position list is one
+// Locator per reading-order item with no content read at all, so it is
+// always cheap and never estimated or capped.
 const maxPublicationPositions = 200_000
 
 func publicationURLs(value any, prefix string, idx *epub.Index) {

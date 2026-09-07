@@ -226,9 +226,14 @@ func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; re
 // requires a non-empty position list to open a book at all, so a
 // publication whose full, byte-granular list (one per 1,024 archive bytes
 // of reading-order content, the toolkit's own count) would exceed
-// maxPositions instead gets a coarser list sized to fit the bound, built
-// from the same per-entry sizes rather than reading content. A
-// maxPositions of 0 or less means unbounded (always the fine-grained list).
+// maxPositions instead gets a coarser, size-weighted list built from the
+// same per-entry sizes rather than reading content, capped independently
+// of maxPositions so a cache of these indexes never has to hold as many
+// locators as the cap technically allows. A fixed-layout publication's
+// real position list is one Locator per reading-order item with no
+// content read at all (the toolkit never touches the fetcher for it), so
+// it is always cheap and never estimated or capped. A maxPositions of 0 or
+// less means unbounded (always the fine-grained list).
 func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	entries := make(map[string]IndexEntry, len(p.allowed))
 	for name := range p.allowed {
@@ -245,8 +250,9 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
+	fixed := p.Manifest.Metadata.Layout == manifest.LayoutFixed
 	var positions []manifest.Locator
-	if maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
+	if fixed || maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
 		positions = p.Positions(ctx)
 	}
 	if len(positions) == 0 {
@@ -258,19 +264,30 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	}
 }
 
+// fallbackPositionBudget caps how many locators boundedPositions ever
+// builds, independently of the maxPositions a caller passes to Index: that
+// parameter only decides when the fine-grained list is too expensive to
+// generate, but the fallback itself is cached the same way, and a cache
+// of PublicationIndexCache's default 32 entries each holding maxPositions
+// (200,000) fallback locators could still retain millions of them. The
+// fallback is already an approximation, so a few thousand positions give
+// a reader plenty of granularity for progress tracking without the
+// memory cost the estimate cap was meant to avoid in the first place.
+const fallbackPositionBudget = 4096
+
 // boundedPositions is the fallback for a publication too large to afford
 // the toolkit's byte-granular position list (never called unless the
 // fine-grained list was skipped or came back empty). It distributes a
-// budget of at most maxPositions locators across the reading order in
-// proportion to each item's own archive size, using the largest-remainder
-// method so the total never exceeds the budget: a reader tracking
-// progress by position multiplicity — the client divides a section's
-// on-screen progress by its position count, and the whole book's by the
-// total — still weights a large chapter correctly against a small one,
-// just at coarser granularity. Every item gets at least one position so
-// the reader can always place it; if maxPositions is smaller than the
-// reading order's own length, that guarantee wins and the total exceeds
-// maxPositions by as little as the chapter count requires.
+// small, fixed budget of locators across the reading order in proportion
+// to each item's own archive size, using the largest-remainder method so
+// the total never exceeds the budget: a reader tracking progress by
+// position multiplicity — the client divides a section's on-screen
+// progress by its position count, and the whole book's by the total —
+// still weights a large chapter correctly against a small one, just at
+// coarser granularity. Every item gets at least one position so the
+// reader can always place it; if the reading order itself is longer than
+// the budget, that guarantee wins and the total exceeds the budget by as
+// little as the chapter count requires.
 func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 	readingOrder := p.Manifest.ReadingOrder
 	if len(readingOrder) == 0 {
@@ -290,7 +307,10 @@ func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 		sizes[i] = f.CompressedSize64
 		total += f.CompressedSize64
 	}
-	budget := maxPositions
+	budget := fallbackPositionBudget
+	if maxPositions > 0 && maxPositions < budget {
+		budget = maxPositions
+	}
 	if budget < len(readingOrder) {
 		budget = len(readingOrder)
 	}

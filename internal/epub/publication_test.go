@@ -186,6 +186,27 @@ func TestApportionNeverExceedsBudgetWithManyItems(t *testing.T) {
 	}
 }
 
+// TestIndexNeverCapsFixedLayoutPositions confirms a fixed-layout
+// publication always gets the toolkit's real position list — one Locator
+// per reading-order item — even with a bound of 1, because that list
+// costs nothing to generate (no resource is read for it) and is not the
+// byte-based estimate this bound exists to guard.
+func TestIndexNeverCapsFixedLayoutPositions(t *testing.T) {
+	pkg := strings.Replace(readerPackage,
+		`<dc:language>en</dc:language></metadata>`,
+		`<dc:language>en</dc:language><meta property="rendition:layout">pre-paginated</meta></metadata>`, 1)
+	data := readerArchive(t, pkg)
+	p, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	idx := p.Index(t.Context(), 1)
+	if len(idx.Positions) != 2 {
+		t.Fatalf("expected the real one-per-chapter fixed-layout list despite the tiny bound, got %d positions", len(idx.Positions))
+	}
+}
+
 func TestPublicationRefusesRemoteAndDuplicateEntries(t *testing.T) {
 	for _, tt := range []struct {
 		name, pkg string
