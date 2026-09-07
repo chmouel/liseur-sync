@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"math"
 	"net/url"
 	"strings"
 
@@ -177,7 +178,7 @@ func (p *Publication) OpenResource(name string) (io.ReadCloser, int64, error) {
 		return nil, 0, validationError(CodeInvalidEPUB, err)
 	}
 	if algorithm, ok := p.fontObfuscation[name]; ok {
-		r = newDeobfuscatingReader(r, p.Manifest.Metadata.Identifier, algorithm)
+		r = newDeobfuscatingReader(r, p.Manifest.Metadata, algorithm)
 	}
 	return r, int64(f.UncompressedSize64), nil
 }
@@ -219,8 +220,14 @@ func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; re
 // Index builds the cacheable shape of this Publication. It reads no
 // chapter bytes: entry coordinates come from the ZIP directory already
 // read by OpenPublication, and positions come from the reading order's own
-// recorded sizes.
-func (p *Publication) Index(ctx context.Context) *Index {
+// recorded sizes. maxPositions bounds the position list itself, not just
+// whether a caller chooses to cache it: the toolkit's own position count
+// (one per 1,024 archive bytes of reading-order content) is cheap to
+// estimate from the same ZIP directory sizes before ever calling
+// Positions, so a publication whose estimate exceeds maxPositions never
+// pays for or retains the full list at all. A maxPositions of 0 or less
+// means unbounded.
+func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	entries := make(map[string]IndexEntry, len(p.allowed))
 	for name := range p.allowed {
 		f := p.archive.entries[name]
@@ -236,10 +243,39 @@ func (p *Publication) Index(ctx context.Context) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
+	var positions []manifest.Locator
+	if maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
+		positions = p.Positions(ctx)
+	}
 	return &Index{
-		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: p.Positions(ctx),
+		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: positions,
 		Entries: entries, FontObfuscation: p.fontObfuscation,
 	}
+}
+
+// estimatedPositionCount mirrors the toolkit's own ArchiveEntryLength
+// strategy (one position per 1,024 bytes of a reading-order entry's
+// archive size, at least one per entry) using only the ZIP directory
+// sizes already read by OpenPublication, so Index can decide whether to
+// materialize the real position list before ever calling Positions.
+func (p *Publication) estimatedPositionCount() int {
+	var total int64
+	for _, link := range p.Manifest.ReadingOrder {
+		name, err := publicationPath(link.Href.String())
+		if err != nil {
+			continue
+		}
+		f := p.archive.entries[name]
+		if f == nil {
+			continue
+		}
+		count := int64(math.Ceil(float64(f.CompressedSize64) / 1024))
+		if count < 1 {
+			count = 1
+		}
+		total += count
+	}
+	return int(total)
 }
 
 // ErrPublicationChanged means the catalog's content digest still names
@@ -281,7 +317,7 @@ func OpenIndexedResource(source io.ReaderAt, size int64, idx *Index, name string
 			return nil, 0, validationError(CodeInvalidEPUB, err)
 		}
 		if algorithm, ok := idx.FontObfuscation[name]; ok {
-			r = newDeobfuscatingReader(r, idx.Manifest.Metadata.Identifier, algorithm)
+			r = newDeobfuscatingReader(r, idx.Manifest.Metadata, algorithm)
 		}
 		return r, int64(f.UncompressedSize64), nil
 	}

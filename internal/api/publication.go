@@ -138,23 +138,24 @@ func (s *Server) publicationIndex(ctx context.Context, digest string, file io.Re
 		return nil, err
 	}
 	defer p.Close()
-	idx := p.Index(ctx)
-	if s.PublicationIndexes != nil && len(idx.Positions) <= maxCachedPublicationPositions {
+	idx := p.Index(ctx, maxPublicationPositions)
+	if s.PublicationIndexes != nil {
 		s.PublicationIndexes.Put(digest, idx)
 	}
 	return idx, nil
 }
 
-// maxCachedPublicationPositions bounds what the index cache retains. The
-// toolkit generates one position per 1,024 bytes of reading-order content,
-// so a publication near this server's own upper size limits can produce
-// well over a million of them; retaining that list across the cache's
-// bounded entry count could itself become the memory problem the cache
-// exists to avoid. A publication over this bound still serves correctly —
-// its index is simply never cached, so the one request that built it pays
-// the reparse cost the cache is meant to save, rather than every request
-// paying to keep it in memory indefinitely.
-const maxCachedPublicationPositions = 200_000
+// maxPublicationPositions bounds the position list Index itself will
+// generate, not just whether the result gets cached: the toolkit produces
+// one position per 1,024 bytes of reading-order content, so a publication
+// near this server's own upper size limits could otherwise make a single
+// manifest request allocate on the order of two million locator objects
+// before caching is ever considered. Index estimates the count from ZIP
+// directory sizes alone and skips calling the toolkit's position generator
+// entirely once the estimate passes this bound, so a book that large never
+// pays for or retains the full list — it serves everything else normally,
+// with positions.json reporting none.
+const maxPublicationPositions = 200_000
 
 func publicationURLs(value any, prefix string, idx *epub.Index) {
 	switch v := value.(type) {
