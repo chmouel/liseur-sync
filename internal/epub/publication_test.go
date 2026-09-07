@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/readium/go-toolkit/pkg/manifest"
 	readium "github.com/readium/go-toolkit/pkg/parser/epub"
 )
 
@@ -99,22 +100,25 @@ func TestPublicationResourcesAreBoundedAndDeclared(t *testing.T) {
 	}
 }
 
-// TestIndexFallsBackToCoarsePositionsOverTheBound confirms Index avoids
+// TestIndexFallsBackToWeightedPositionsOverTheBound confirms Index avoids
 // materializing the toolkit's byte-granular position list (one per 1,024
 // archive bytes of reading-order content) once the cheap archive-size
 // estimate exceeds maxPositions, but never leaves the reader with no
-// positions at all: it falls back to one coarse position per reading-order
-// item instead. The two chapters here are ~3,000 bytes each (stored, so
-// compressed size equals content size), giving a fine-grained estimate of
-// six positions and a coarse fallback of two (one per chapter).
-func TestIndexFallsBackToCoarsePositionsOverTheBound(t *testing.T) {
+// positions at all, and keeps a larger chapter weighted with more
+// positions than a smaller one rather than collapsing every chapter to a
+// single position. The two chapters here are 9,000 and 3,000 bytes
+// (stored, so compressed size equals content size): a fine-grained
+// estimate of ceil(9000/1024)+ceil(3000/1024) = 12 positions, and a
+// bounded fallback that still gives the larger chapter roughly three
+// times as many positions as the smaller one.
+func TestIndexFallsBackToWeightedPositionsOverTheBound(t *testing.T) {
 	entries := validEntries()[:4]
 	entries[2].body = readerPackage
 	chapter := func(body string) string {
 		return `<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>` + body + `</body></html>`
 	}
 	entries = append(entries,
-		zipEntry{name: "OPS/one.xhtml", body: chapter(strings.Repeat("a", 3000)), method: zip.Store},
+		zipEntry{name: "OPS/one.xhtml", body: chapter(strings.Repeat("a", 9000)), method: zip.Store},
 		zipEntry{name: "OPS/two.xhtml", body: chapter(strings.Repeat("b", 3000)), method: zip.Store},
 		zipEntry{name: "OPS/late.bin", body: strings.Repeat("x", 8<<20), method: zip.Store})
 	data := makeEPUB(t, entries...)
@@ -123,13 +127,29 @@ func TestIndexFallsBackToCoarsePositionsOverTheBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if idx := p.Index(t.Context(), 5); len(idx.Positions) != 2 {
-		t.Fatalf("expected the coarse, one-per-chapter fallback over the bound, got: %+v", idx.Positions)
+	countByChapter := func(positions []manifest.Locator) (one, two int) {
+		for _, position := range positions {
+			switch {
+			case strings.HasSuffix(position.Href.String(), "one.xhtml"):
+				one++
+			case strings.HasSuffix(position.Href.String(), "two.xhtml"):
+				two++
+			}
+		}
+		return one, two
 	}
-	if idx := p.Index(t.Context(), 10); len(idx.Positions) != 6 {
+	idx := p.Index(t.Context(), 6)
+	if len(idx.Positions) == 0 {
+		t.Fatal("bounded fallback produced no positions at all")
+	}
+	one, two := countByChapter(idx.Positions)
+	if one <= two {
+		t.Fatalf("the larger chapter must keep more positions than the smaller one, got one=%d two=%d", one, two)
+	}
+	if idx := p.Index(t.Context(), 20); len(idx.Positions) != 12 {
 		t.Fatalf("expected the fine-grained list within the bound, got %d positions", len(idx.Positions))
 	}
-	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 6 {
+	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 12 {
 		t.Fatalf("a non-positive bound must mean unbounded (fine-grained), got %d positions", len(idx.Positions))
 	}
 }
