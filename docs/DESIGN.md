@@ -541,9 +541,17 @@ size, entry, decompression-ratio, path, symlink, XML, and
 encryption-algorithm bounds before it trusts metadata. Covers are rasterized and
 served with fixed MIME types and `nosniff`.
 
-The browser reader unpacks publications in the page, not on the server.
-No route serves publisher HTML, CSS or fonts as ordinary application
-resources, and no script inside a book executes.
+The browser reader streams publication resources from the server: each
+chapter, stylesheet, image and font is served from
+`/v1/books/{id}/publication/{digest}/resources/{resource}`, one archive
+entry at a time, behind the same device-token authentication as every
+other route. A resource response carries `application/octet-stream`,
+`Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: sandbox; default-src 'none'`, so the browser
+never executes or directly renders it as fetched; the reader's own script
+reassembles chapters into blob URLs it loads inside a sandboxed frame, and
+no script inside a book executes there either.
+
 
 ## 9. Folder catalog
 
