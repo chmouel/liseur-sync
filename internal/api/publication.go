@@ -152,10 +152,11 @@ func (s *Server) publicationIndex(ctx context.Context, digest string, file io.Re
 // make a single manifest request allocate on the order of two million
 // locator objects before caching is ever considered. Index estimates the
 // count from ZIP directory sizes alone and, once the estimate passes this
-// bound, falls back to one coarse position per reading-order item instead
-// of calling the toolkit's position generator — the reader still gets a
-// non-empty position list and can open the book, just without sub-chapter
-// position numbers for that one publication.
+// bound, falls back to a coarser list scaled to this bound instead of
+// calling the toolkit's position generator — each chapter still gets a
+// share of positions proportional to its own size, so the reader can open
+// the book and track progress sensibly, just at coarser granularity for
+// that one publication.
 const maxPublicationPositions = 200_000
 
 func publicationURLs(value any, prefix string, idx *epub.Index) {

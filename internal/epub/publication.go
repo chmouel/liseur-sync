@@ -225,9 +225,9 @@ func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; re
 // requires a non-empty position list to open a book at all, so a
 // publication whose full, byte-granular list (one per 1,024 archive bytes
 // of reading-order content, the toolkit's own count) would exceed
-// maxPositions instead gets one coarse position per reading-order item,
-// which costs O(chapters) rather than O(kilobytes of content) to build.
-// A maxPositions of 0 or less means unbounded (always the fine-grained list).
+// maxPositions instead gets a coarser list sized to fit the bound, built
+// from the same per-entry sizes rather than reading content. A
+// maxPositions of 0 or less means unbounded (always the fine-grained list).
 func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	entries := make(map[string]IndexEntry, len(p.allowed))
 	for name := range p.allowed {
@@ -244,7 +244,7 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
-	positions := p.coarsePositions()
+	positions := p.boundedPositions(maxPositions)
 	if maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
 		if fine := p.Positions(ctx); len(fine) > 0 {
 			positions = fine
@@ -256,13 +256,19 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	}
 }
 
-// coarsePositions builds one Locator per reading-order item, using
-// cumulative archive size to place each item's totalProgression. It is
-// the fallback for a publication too large to afford the toolkit's
-// byte-granular position list: still enough for the reader to open the
-// book, track which chapter it is in and report overall progress, just
-// without sub-chapter position numbers.
-func (p *Publication) coarsePositions() []manifest.Locator {
+// boundedPositions is the fallback for a publication too large to afford
+// the toolkit's byte-granular position list. It mirrors the toolkit's own
+// ArchiveEntryLength strategy but with a page length scaled up so the
+// total position count fits maxPositions, instead of the fixed 1,024
+// bytes: each reading-order item still gets a share of positions
+// proportional to its own archive size (at least one), so a reader
+// tracking progress by position multiplicity — the client divides a
+// section's on-screen progress by its position count, and the whole
+// book's by the total — still weights a large chapter correctly against
+// a small one, just at coarser granularity. maxPositions <= 0 falls back
+// to one position per item (only reachable when the fine-grained list
+// itself produced none, e.g. an empty reading order).
+func (p *Publication) boundedPositions(maxPositions int) []manifest.Locator {
 	readingOrder := p.Manifest.ReadingOrder
 	sizes := make([]uint64, len(readingOrder))
 	var total uint64
@@ -278,26 +284,43 @@ func (p *Publication) coarsePositions() []manifest.Locator {
 		sizes[i] = f.CompressedSize64
 		total += f.CompressedSize64
 	}
-	positions := make([]manifest.Locator, len(readingOrder))
-	var cumulative uint64
+	pageLength := uint64(1)
+	if maxPositions > 0 && total > 0 {
+		pageLength = uint64(math.Ceil(float64(total) / float64(maxPositions)))
+		if pageLength < 1 {
+			pageLength = 1
+		}
+	}
+	counts := make([]int, len(readingOrder))
+	var totalCount int
+	for i, size := range sizes {
+		count := int(math.Ceil(float64(size) / float64(pageLength)))
+		if count < 1 {
+			count = 1
+		}
+		counts[i] = count
+		totalCount += count
+	}
+	positions := make([]manifest.Locator, 0, totalCount)
+	var position uint
 	for i, link := range readingOrder {
 		mt := link.MediaType
 		if mt == nil {
 			mt = &mediatype.HTML
 		}
-		progression := 0.0
-		position := uint(i + 1) //nolint:gosec // reading order length is bounded by the archive's own entry count
-		totalProgression := 0.0
-		if total > 0 {
-			totalProgression = float64(cumulative) / float64(total)
+		for page := range counts[i] {
+			position++
+			progression := float64(page) / float64(counts[i])
+			pagePosition := position
+			positions = append(positions, manifest.Locator{
+				Href: link.URL(nil, nil), MediaType: *mt, Title: link.Title,
+				Locations: manifest.Locations{Progression: &progression, Position: &pagePosition},
+			})
 		}
-		positions[i] = manifest.Locator{
-			Href: link.URL(nil, nil), MediaType: *mt, Title: link.Title,
-			Locations: manifest.Locations{
-				Progression: &progression, Position: &position, TotalProgression: &totalProgression,
-			},
-		}
-		cumulative += sizes[i]
+	}
+	for i := range positions {
+		totalProgression := float64(*positions[i].Locations.Position-1) / float64(totalCount)
+		positions[i].Locations.TotalProgression = &totalProgression
 	}
 	return positions
 }
