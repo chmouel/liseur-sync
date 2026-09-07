@@ -133,8 +133,13 @@ export class ReaderEngine extends HTMLElement {
     const index = this.book.sections.findIndex(s => s.id === locator.href);
     if (index < 0) return;
     const sectionFraction = locator.locations.progression || 0;
-    const positions = this.sectionPositions[index];
-    const fraction = ((positions[0].locations.position - 1) + sectionFraction * positions.length) / this.positionList.length;
+    // The server's per-position totalProgression already reflects each
+    // section's real weight (bytes, not the discrete position count,
+    // which a bounded fallback list may distribute unevenly across many
+    // chapters); interpolate within the section's start/end bounds
+    // rather than dividing by position counts.
+    const bounds = this.getSectionFractions();
+    const fraction = bounds[index] + sectionFraction * (bounds[index + 1] - bounds[index]);
     locator = locator.copyWithLocations({ totalProgression: fraction });
     const sizes = this.book.sections.map(s => s.size || 0);
     const remaining = (1 - sectionFraction) * sizes[index];
