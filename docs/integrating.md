@@ -174,11 +174,29 @@ is stable, so all browser reading is one device in the op log rather
 than one per tab. Signing out revokes it.
 
 This is the credential the built-in web reader uses, at
-`/ui/books/{id}/read`. That reader fetches the whole EPUB from the
-ordinary download route and unpacks it in the page. No route serves
-publication resources, so do not look for one. Rendering publisher
-markup anywhere it can reach a session cookie is the mistake the design
-is arranged to prevent.
+`/ui/books/{id}/read`. That reader fetches the Readium manifest and then
+asks for the position list, package document, and individual resources as
+it needs them. The publication responses are versioned by the book's
+content digest, so a reader can keep its in-memory publication stable
+while the watched folder is reconciled. Publisher markup is rendered in
+sandboxed frames and is never given the web UI's session cookie.
+
+### Opening a publication
+
+After obtaining the browser token, request:
+
+```
+GET /v1/books/{id}/publication/manifest.json
+```
+
+The manifest contains a Readium position-list link and a package link.
+Fetch both with the same bearer token. The package and reading-order
+links point below `/v1/books/{id}/publication/{sha256}/resources/` and
+are valid only for that content digest. Resource requests return the
+declared bytes on demand; they do not expose the watched-folder path.
+The manifest and position list are private and must not be cached across
+credentials. If the digest changes, discard the old publication and fetch
+the manifest again.
 
 ## Position sync
 

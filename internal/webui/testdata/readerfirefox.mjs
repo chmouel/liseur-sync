@@ -137,10 +137,10 @@ if (detached) {
   check('the reader origin holds no cookie', at.cookie === '', at.cookie);
 }
 
-// foliate-js keeps its frames in closed shadow roots, so the probe
-// goes through the engine's public API rather than DOM queries.
+// Readium owns the frame pool, so the probe goes through the engine's public
+// API rather than depending on its frame layout.
 const probe = `(() => {
-  const view = document.querySelector('foliate-view');
+  const view = document.querySelector('readium-view');
   const contents = view?.renderer?.getContents?.() ?? [];
   const doc = contents[0]?.doc;
   const body = doc?.body;
@@ -151,7 +151,13 @@ const probe = `(() => {
     progress: document.getElementById('reader-progress-text')?.textContent,
     title: document.getElementById('reader-title-text')?.textContent,
     hasDoc: !!doc,
-    frameReachable: !!document.querySelector('#reader-view iframe'),
+    frameSandboxed: (() => {
+      const frame = document.querySelector('#reader-view iframe');
+      return !!frame && frame.src.startsWith('blob:') &&
+        frame.sandbox.contains('allow-same-origin') &&
+        frame.sandbox.contains('allow-scripts') &&
+        !frame.sandbox.contains('allow-top-navigation');
+    })(),
     text: body ? (body.innerText || '').slice(0, 60) : '',
     colour: body ? doc.defaultView.getComputedStyle(body).color : '',
     stageBackground: document.getElementById('reader-view')
@@ -246,7 +252,7 @@ await evalIn(`(() => {
   return true;
 })()`);
 const ffTap = (where, kind) => evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   const win = doc.defaultView;
   const box = win.frameElement.getBoundingClientRect();
   const xs = { left: 6, right: window.innerWidth - 6 };
@@ -307,7 +313,7 @@ check('a mouse click on the right of the text turns the page',
   `${ffForward.fraction} -> ${ffMouse.fraction}`);
 
 await evalIn(`(() => {
-  const doc = document.querySelector('foliate-view').renderer.getContents()[0].doc;
+  const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
   doc.getSelection().selectAllChildren(doc.body);
   const box = doc.defaultView.frameElement.getBoundingClientRect();
   doc.body.dispatchEvent(new MouseEvent('click', {
@@ -323,7 +329,7 @@ check('a click while text is selected is not a page turn',
   ffSelected.fraction === ffMouse.fraction,
   `${ffMouse.fraction} -> ${ffSelected.fraction}`);
 await evalIn(`(() => {
-  document.querySelector('foliate-view').renderer.getContents()[0]
+  document.querySelector('readium-view').renderer.getContents()[0]
     .doc.getSelection().removeAllRanges();
   document.getElementById('reader-settings-form').autohide.checked = false;
   document.getElementById('reader-settings-form').autohide
@@ -334,7 +340,7 @@ await new Promise((r) => setTimeout(r, 400));
 
 // The same hostile battery as the Chromium harness, judged by Firefox.
 at('hostile chapter');
-await evalIn(`document.querySelector('foliate-view').goTo(1)`);
+await evalIn(`document.querySelector('readium-view').goTo(1)`);
 await new Promise((r) => setTimeout(r, 900));
 const hostile = JSON.parse(await evalIn(probe));
 check('the inline script did not run', hostile.ran === false, String(hostile.ran));
@@ -353,12 +359,11 @@ if (process.env.SMOKE_SHOT) {
 // script. Firefox reports the same refusal as a policy violation, and
 // BiDi's log channel carries console calls and script errors only — a
 // violation never reaches it. So state the refusal structurally: the
-// chapter frame is unreachable from the page (closed shadow root), the
+// chapter frame is sandboxed, the
 // reader stripped the publication's script elements, and the page CSP
 // — inherited by every blob chapter — refuses whatever stripping might
 // miss. What can be observed from here is that the script did not run.
-check('the chapter frame is not reachable from the page',
-  diag.frameReachable === false, String(diag.frameReachable));
+check('the chapter frame is sandboxed', diag.frameSandboxed, String(diag.frameSandboxed));
 check('the browser refused to run the publication', diag.ran === false,
   String(diag.ran));
 const unexpected = consoleErrors.filter((e) => !/Content-Security-Policy|Blocked script/i.test(e));
