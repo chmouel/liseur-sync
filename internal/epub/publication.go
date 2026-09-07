@@ -220,13 +220,14 @@ func (idx *Index) HasResource(name string) bool { _, ok := idx.Entries[name]; re
 // Index builds the cacheable shape of this Publication. It reads no
 // chapter bytes: entry coordinates come from the ZIP directory already
 // read by OpenPublication, and positions come from the reading order's own
-// recorded sizes. maxPositions bounds the position list itself, not just
-// whether a caller chooses to cache it: the toolkit's own position count
-// (one per 1,024 archive bytes of reading-order content) is cheap to
-// estimate from the same ZIP directory sizes before ever calling
-// Positions, so a publication whose estimate exceeds maxPositions never
-// pays for or retains the full list at all. A maxPositions of 0 or less
-// means unbounded.
+// recorded sizes. maxPositions bounds how fine-grained the position list
+// is allowed to get, not whether one is produced at all: the reader
+// requires a non-empty position list to open a book at all, so a
+// publication whose full, byte-granular list (one per 1,024 archive bytes
+// of reading-order content, the toolkit's own count) would exceed
+// maxPositions instead gets one coarse position per reading-order item,
+// which costs O(chapters) rather than O(kilobytes of content) to build.
+// A maxPositions of 0 or less means unbounded (always the fine-grained list).
 func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 	entries := make(map[string]IndexEntry, len(p.allowed))
 	for name := range p.allowed {
@@ -243,14 +244,62 @@ func (p *Publication) Index(ctx context.Context, maxPositions int) *Index {
 			UncompressedSize: f.UncompressedSize64, Method: f.Method,
 		}
 	}
-	var positions []manifest.Locator
+	positions := p.coarsePositions()
 	if maxPositions <= 0 || p.estimatedPositionCount() <= maxPositions {
-		positions = p.Positions(ctx)
+		if fine := p.Positions(ctx); len(fine) > 0 {
+			positions = fine
+		}
 	}
 	return &Index{
 		PackagePath: p.PackagePath, Manifest: p.Manifest, Positions: positions,
 		Entries: entries, FontObfuscation: p.fontObfuscation,
 	}
+}
+
+// coarsePositions builds one Locator per reading-order item, using
+// cumulative archive size to place each item's totalProgression. It is
+// the fallback for a publication too large to afford the toolkit's
+// byte-granular position list: still enough for the reader to open the
+// book, track which chapter it is in and report overall progress, just
+// without sub-chapter position numbers.
+func (p *Publication) coarsePositions() []manifest.Locator {
+	readingOrder := p.Manifest.ReadingOrder
+	sizes := make([]uint64, len(readingOrder))
+	var total uint64
+	for i, link := range readingOrder {
+		name, err := publicationPath(link.Href.String())
+		if err != nil {
+			continue
+		}
+		f := p.archive.entries[name]
+		if f == nil {
+			continue
+		}
+		sizes[i] = f.CompressedSize64
+		total += f.CompressedSize64
+	}
+	positions := make([]manifest.Locator, len(readingOrder))
+	var cumulative uint64
+	for i, link := range readingOrder {
+		mt := link.MediaType
+		if mt == nil {
+			mt = &mediatype.HTML
+		}
+		progression := 0.0
+		position := uint(i + 1) //nolint:gosec // reading order length is bounded by the archive's own entry count
+		totalProgression := 0.0
+		if total > 0 {
+			totalProgression = float64(cumulative) / float64(total)
+		}
+		positions[i] = manifest.Locator{
+			Href: link.URL(nil, nil), MediaType: *mt, Title: link.Title,
+			Locations: manifest.Locations{
+				Progression: &progression, Position: &position, TotalProgression: &totalProgression,
+			},
+		}
+		cumulative += sizes[i]
+	}
+	return positions
 }
 
 // estimatedPositionCount mirrors the toolkit's own ArchiveEntryLength

@@ -99,26 +99,38 @@ func TestPublicationResourcesAreBoundedAndDeclared(t *testing.T) {
 	}
 }
 
-// TestIndexSkipsPositionsOverTheBound confirms Index itself, not just a
-// caller's decision to cache the result, avoids materializing the full
-// position list once the cheap archive-size estimate exceeds maxPositions
-// — the two reading-order chapters here have two archive entries, so a
-// bound of 1 must be exceeded and a bound of 2 or more must not be.
-func TestIndexSkipsPositionsOverTheBound(t *testing.T) {
-	data := readerArchive(t, readerPackage)
+// TestIndexFallsBackToCoarsePositionsOverTheBound confirms Index avoids
+// materializing the toolkit's byte-granular position list (one per 1,024
+// archive bytes of reading-order content) once the cheap archive-size
+// estimate exceeds maxPositions, but never leaves the reader with no
+// positions at all: it falls back to one coarse position per reading-order
+// item instead. The two chapters here are ~3,000 bytes each (stored, so
+// compressed size equals content size), giving a fine-grained estimate of
+// six positions and a coarse fallback of two (one per chapter).
+func TestIndexFallsBackToCoarsePositionsOverTheBound(t *testing.T) {
+	entries := validEntries()[:4]
+	entries[2].body = readerPackage
+	chapter := func(body string) string {
+		return `<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>` + body + `</body></html>`
+	}
+	entries = append(entries,
+		zipEntry{name: "OPS/one.xhtml", body: chapter(strings.Repeat("a", 3000)), method: zip.Store},
+		zipEntry{name: "OPS/two.xhtml", body: chapter(strings.Repeat("b", 3000)), method: zip.Store},
+		zipEntry{name: "OPS/late.bin", body: strings.Repeat("x", 8<<20), method: zip.Store})
+	data := makeEPUB(t, entries...)
 	p, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if idx := p.Index(t.Context(), 1); idx.Positions != nil {
-		t.Fatalf("positions over the bound were still generated: %+v", idx.Positions)
+	if idx := p.Index(t.Context(), 5); len(idx.Positions) != 2 {
+		t.Fatalf("expected the coarse, one-per-chapter fallback over the bound, got: %+v", idx.Positions)
 	}
-	if idx := p.Index(t.Context(), 2); len(idx.Positions) != 2 {
-		t.Fatalf("positions within the bound were not generated: %+v", idx.Positions)
+	if idx := p.Index(t.Context(), 10); len(idx.Positions) != 6 {
+		t.Fatalf("expected the fine-grained list within the bound, got %d positions", len(idx.Positions))
 	}
-	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 2 {
-		t.Fatalf("a non-positive bound must mean unbounded: %+v", idx.Positions)
+	if idx := p.Index(t.Context(), 0); len(idx.Positions) != 6 {
+		t.Fatalf("a non-positive bound must mean unbounded (fine-grained), got %d positions", len(idx.Positions))
 	}
 }
 
