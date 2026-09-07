@@ -588,6 +588,7 @@ async function handleAnnotationConflict(local, server, record = null) {
         account: offlineAccount,
         bookID: cfg.bookID,
         id: server.id,
+        removeAnnotation: false,
       });
     } else {
       await updateOfflineAnnotation({

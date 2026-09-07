@@ -478,12 +478,13 @@ export async function updateOfflineAnnotation({
 }
 
 export async function removeOfflineAnnotation({
-  partition = storagePartition(), account, epoch, bookID, id,
+  partition = storagePartition(), account, epoch, bookID, id, removeAnnotation = true,
 } = {}) {
   if (!partition || !account || !bookID || !id) return;
   return withDB(async db => {
     await guardedWork(db, [ANNOTATIONS, OUTBOX], { partition, account, epoch }, tx => {
-      tx.objectStore(ANNOTATIONS).delete(keyForAnnotation({ partition, account, bookID, id }));
+      if (removeAnnotation)
+        tx.objectStore(ANNOTATIONS).delete(keyForAnnotation({ partition, account, bookID, id }));
       const outbox = tx.objectStore(OUTBOX);
       const cursorRequest = outbox.index("account").openCursor(IDBKeyRange.bound(
         [partition, account, "", 0],
@@ -1015,11 +1016,15 @@ export function localPublicationRequest(snapshot, resources, path) {
   return Promise.resolve({ ok: false, status: 404, url: clean });
 }
 
-export async function removeBookSnapshots({ partition = storagePartition(), account, bookID } = {}) {
+export async function removeBookSnapshots({
+  partition = storagePartition(), account, epoch, bookID,
+} = {}) {
   const selectedAccount = account || await activeAccount(partition);
   if (!selectedAccount) return;
   return withDB(async db => {
-    await transactionWork(db, [SNAPSHOTS, RESOURCES], "readwrite", tx => {
+    await guardedWork(db, [SNAPSHOTS, RESOURCES], {
+      partition, account: selectedAccount, epoch,
+    }, tx => {
       const snapshots = tx.objectStore(SNAPSHOTS);
       const resources = tx.objectStore(RESOURCES);
       let records;
@@ -1036,6 +1041,26 @@ export async function removeBookSnapshots({ partition = storagePartition(), acco
       snapshotRequest.onsuccess = () => {
         records = snapshotRequest.result;
         clear();
+      };
+    });
+  });
+}
+
+async function removeStagingSnapshots(context, bookID) {
+  return withDB(async db => {
+    await guardedWork(db, [SNAPSHOTS, RESOURCES], context, tx => {
+      const snapshots = tx.objectStore(SNAPSHOTS);
+      const resources = tx.objectStore(RESOURCES);
+      const request = snapshots.index("book").getAll([
+        context.partition, context.account, bookID,
+      ]);
+      request.onsuccess = () => {
+        for (const snapshot of request.result) {
+          if (snapshot.state !== "staging") continue;
+          for (const href of snapshot.resourceHrefs || [])
+            resources.delete([snapshot.key, href]);
+          snapshots.delete(snapshot.key);
+        }
       };
     });
   });
@@ -1089,6 +1114,7 @@ export async function downloadPublication({
     author: (manifest.metadata?.author || {}).name || "",
     createdAt: Date.now(),
   };
+  await removeStagingSnapshots(context, bookID);
   await putStagingSnapshot(snapshot);
   const queue = [...plan.resources.values()];
   const seen = new Set(queue.map(resource => resource.href));

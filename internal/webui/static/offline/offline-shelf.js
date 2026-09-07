@@ -99,7 +99,9 @@ async function render() {
       remove.addEventListener("click", async () => {
         remove.disabled = true;
         try {
-          await removeBookSnapshots({ partition, account, bookID: snapshot.bookID });
+          await removeBookSnapshots({
+            partition, account, epoch: context.epoch, bookID: snapshot.bookID,
+          });
           notifyOfflineChange();
           await render();
         } catch (error) {
