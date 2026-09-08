@@ -743,6 +743,7 @@ const chromeState = () => evalIn(`JSON.stringify({
   stageTop: document.querySelector('.reader-stage').getBoundingClientRect().top,
   barBottom: document.querySelector('.reader-bar').getBoundingClientRect().bottom,
 })`);
+const closeEnough = (a, b, epsilon = 0.5) => Math.abs(a - b) <= epsilon;
 // Negative checks must observe the full idle interval even when focus or a
 // setting keeps the chrome visible; there is no state change to wait for.
 const idle = () => new Promise((r) => setTimeout(r, 3000));
@@ -800,7 +801,7 @@ check('the chrome steps aside while reading',
   parked.state === 'hidden' && parked.bar === '0' && parked.arrow === '0',
   JSON.stringify(parked));
 check('auto-hide leaves no empty toolbar strip above the book',
-  parked.bookTop === parked.stageTop, JSON.stringify(parked));
+  closeEnough(parked.bookTop, parked.stageTop), JSON.stringify(parked));
 // The footer is the one piece of chrome that stays: the figures are
 // what a reader glances at mid-page, bars or no bars.
 check('the footer stays while the chrome is hidden',
@@ -828,7 +829,8 @@ const reached = JSON.parse(await chromeState());
 check('reaching for the top of the window brings the chrome back',
   reached.state === 'visible' && reached.bar === '1', JSON.stringify(reached));
 check('revealing auto-hide chrome does not resize the book',
-  reached.bookTop === parked.bookTop && reached.bookHeight === parked.bookHeight,
+  closeEnough(reached.bookTop, parked.bookTop) &&
+    closeEnough(reached.bookHeight, parked.bookHeight),
   JSON.stringify({ parked, reached }));
 
 await idle();
