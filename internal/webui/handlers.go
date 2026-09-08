@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,8 +33,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		return
 	}
 	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
-	span := dashboardSpan(w, r)
+	span, chart := dashboardView(w, r, now, loc)
 	win := span.Window(now, loc)
+
 	stats, err := insights.Build(snapshot, win, now)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
@@ -58,11 +60,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 
 	sum := SummaryData{
 		Span: span, RangeDays: win.Days(),
-		Bars:          span.SuitsDailyBars(now, loc),
+		Bucket:        span.Bucket(),
+		Chart:         chart,
+		Calendar:      span.SuitsCalendar(now, loc),
 		ActiveMinutes: stats.Summary.TotalActiveMinutes,
 		Sessions:      stats.Summary.Sessions,
 		Pages:         stats.Summary.TotalPages,
 		StreakDays:    stats.Summary.StreakDays,
+		SpeedPerHour:  stats.Summary.SpeedProgPerHour,
+		BooksRead:     len(stats.Works),
+		BooksFinished: booksFinished(stats.Works),
 	}
 	dayMin := map[string]float64{}
 	for _, day := range stats.Days {
@@ -79,8 +86,59 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		sum,
 		daySeries(win, dayMin, now, loc),
 		recentSessions(sessions, titles, loc, labels),
-		reading).
+		reading,
+		byBook(stats.Works)).
 		Render(r.Context(), w)
+}
+
+// finishedProgression is where a progression stops being "reading". It
+// is library.go's threshold, spelled here so the two cannot drift: a
+// book the library calls finished must not be a book the statistics
+// call half-read.
+const finishedProgression = finished
+
+// booksFinished counts the works read in this span that are now done.
+//
+// It is deliberately not "finished during this span": the server has no
+// flag saying when a book crossed the line, only where each work stands
+// now (an op at or past [finishedProgression], which is what the
+// library's own "mark as read" writes). So this answers the question it
+// can answer honestly — you read from these in this span, and these
+// ones are finished — rather than inventing a date for the last page.
+func booksFinished(works []insights.Work) int {
+	n := 0
+	for _, w := range works {
+		if w.CurrentProgression >= finishedProgression {
+			n++
+		}
+	}
+	return n
+}
+
+// byBookLimit is how many books the breakdown names. The dashboard is a
+// glance at where the reading went, and there is no fuller statistics
+// page to send anybody to; a list past ten is a report.
+const byBookLimit = 10
+
+// byBook is the works read in this span, most time first — which is the
+// order insights.Build already leaves them in.
+func byBook(works []insights.Work) []BookStatRow {
+	rows := make([]BookStatRow, 0, min(len(works), byBookLimit))
+	for _, w := range works {
+		if len(rows) == byBookLimit {
+			break
+		}
+		rows = append(rows, BookStatRow{
+			WorkID:      w.WorkID,
+			Title:       orPlaceholder(w.Title),
+			Author:      w.Author,
+			Duration:    readingMinutes(w.TotalActiveMinutes),
+			Sittings:    sittings(w.Sessions),
+			Progression: w.CurrentProgression,
+			Finished:    w.CurrentProgression >= finishedProgression,
+		})
+	}
+	return rows
 }
 
 // daySeries is every day in the window, the empty ones included.
@@ -118,6 +176,7 @@ func recentSessions(sessions []store.Session, titles map[string]string, loc *tim
 	rows := make([]SessionRow, 0, recentSessionLimit)
 	for i := len(sessions) - 1; i >= 0 && len(rows) < recentSessionLimit; i-- {
 		ses := sessions[i]
+		active := insights.ActiveSeconds(ses)
 		rows = append(rows, SessionRow{
 			When:          ses.EndedAt.In(loc).Format("Jan 2 15:04"),
 			WorkID:        ses.WorkID,
@@ -125,7 +184,8 @@ func recentSessions(sessions []store.Session, titles map[string]string, loc *tim
 			DeviceID:      ses.DeviceID,
 			DeviceName:    labels[ses.DeviceID],
 			DeviceIDShort: compactDeviceID(ses.DeviceID),
-			Minutes:       int(insights.ActiveSeconds(ses) / 60),
+			Minutes:       int(active / 60),
+			Duration:      readingDuration(asDuration(active, time.Second)),
 			StartProg:     ses.StartProg,
 			EndProg:       ses.EndProg,
 		})
@@ -198,6 +258,9 @@ func (s *Server) linkReadingWorks(r *http.Request, userID string, rows []WorkRow
 			if book.Status == store.BookActive {
 				rows[i].BookID = id
 				rows[i].CanRead = bookReadable(book)
+				if rows[i].Subtitle == "" && book.Subtitle != "" {
+					rows[i].Subtitle = book.Subtitle
+				}
 				break
 			}
 		}
@@ -235,19 +298,29 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		return
 	}
 	stat := stats.ByWork[workID]
+	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
 	d := WorkDetail{
-		Work: wk, Sessions: stat.Sessions, Minutes: stat.TotalActiveMinutes,
-		Pages: stat.TotalPages, CurrentProg: stat.CurrentProgression,
+		Work: wk, Sessions: stat.Sessions,
+		Duration: readingMinutes(stat.TotalActiveMinutes),
+		Sittings: sittings(stat.Sessions),
+		Pages:    stat.TotalPages, CurrentProg: stat.CurrentProgression,
 	}
 	if seconds := stat.ETASeconds; seconds != nil && *seconds <= float64((1<<63-1)/int64(time.Second)) {
-		d.ETAHuman = humanDuration(time.Duration(*seconds) * time.Second)
+		d.ETAHuman = readingDuration(asDuration(*seconds, time.Second))
+	}
+	if first, ok := firstReadingDay(snapshot, workID, loc); ok {
+		d.Started = first.Format("2 Jan 2006")
+		if stat.LastReadAt != nil {
+			last := stat.LastReadAt.In(loc)
+			d.LastRead = last.Format("2 Jan 2006")
+			d.ReadingFor = readingSpanDays(first, last)
+		}
 	}
 	ops, err := s.St.Positions(r.Context(), u.ID, workID, 50)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
 	// The work's own book, when it has one: it makes this page a way
 	// back into the reading rather than only a report about it.
 	if ids, err := s.St.WorkBookIDs(r.Context(), u.ID, workID); err == nil && len(ids) > 0 {
@@ -265,12 +338,14 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	sessionRows := make([]SessionRow, 0, min(len(sessions), sessionLogLimit))
 	for i := len(sessions) - 1; i >= 0 && len(sessionRows) < sessionLogLimit; i-- {
 		ses := sessions[i]
+		active := insights.ActiveSeconds(ses)
 		sessionRows = append(sessionRows, SessionRow{
 			When:      ses.StartedAt.In(loc).Format("Jan 2 15:04"),
 			WorkID:    workID,
 			WorkTitle: wk.Title,
 			DeviceID:  ses.DeviceID,
-			Minutes:   int(insights.ActiveSeconds(ses) / 60),
+			Minutes:   int(active / 60),
+			Duration:  readingDuration(asDuration(active, time.Second)),
 			StartProg: ses.StartProg,
 			EndProg:   ses.EndProg,
 		})
@@ -310,12 +385,68 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 		Render(r.Context(), w)
 }
 
-func humanDuration(d time.Duration) string {
-	h := int(d.Hours())
-	if h >= 1 {
-		return fmt.Sprintf("~%dh", h)
+// firstReadingDay is the day a work was first read.
+//
+// It comes from the snapshot the page already holds rather than from
+// [insights.Work], which does not carry it: that struct is serialised
+// straight onto the API, and one page wanting a date is not a reason to
+// change a wire contract. Both halves of the record are consulted,
+// because an old sitting no longer exists one by one — it lives on as
+// the day its rollup names, and a work read for a year would otherwise
+// claim to have started whenever compaction happened to stop.
+//
+// A raw sitting is placed on the account-local day it ended, which is
+// the day its rollup will name once it is compacted. Placing it by its
+// start would move the date a reader sees the day the sitting aged out.
+func firstReadingDay(snap store.StatsSnapshot, workID string, loc *time.Location) (time.Time, bool) {
+	var first time.Time
+	consider := func(day time.Time) {
+		if first.IsZero() || day.Before(first) {
+			first = day
+		}
 	}
-	return fmt.Sprintf("~%dm", int(d.Minutes()))
+	midnight := func(t time.Time) time.Time {
+		d := t.In(loc)
+		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
+	}
+	for _, ses := range snap.Sessions {
+		if ses.WorkID == workID {
+			consider(midnight(ses.EndedAt))
+		}
+	}
+	for _, ru := range snap.Rollups {
+		if ru.WorkID != workID {
+			continue
+		}
+		day, err := time.Parse(insights.DayFormat, ru.Day)
+		if err != nil {
+			continue
+		}
+		consider(time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc))
+	}
+	return first, !first.IsZero()
+}
+
+// readingSpanDays is how long a book has been on the go, counted in
+// calendar days.
+//
+// Both endpoints count, so a book started and finished in one afternoon
+// has been read for a day rather than for none.
+//
+// The two dates are rebuilt in UTC before subtracting. Local midnights
+// are not always twenty-four hours apart: across a spring-forward they
+// are twenty-three, and dividing elapsed hours would lose a day.
+func readingSpanDays(first, last time.Time) string {
+	from := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.UTC)
+	to := time.Date(last.Year(), last.Month(), last.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(to.Sub(from)/(24*time.Hour)) + 1
+	if days < 1 {
+		days = 1
+	}
+	if days == 1 {
+		return "1 day"
+	}
+	return strconv.Itoa(days) + " days"
 }
 
 // --- devices ---

@@ -219,23 +219,69 @@ func TestSpanWindowsAreTheDaysTheyName(t *testing.T) {
 	}
 }
 
-// Bars while a day is still a readable unit, a grid once it is not.
-func TestBarsGiveWayToTheGridAtAMonth(t *testing.T) {
+// A bar is worth a day while the days still fit; past that they are
+// grouped, and the calendar grid becomes worth offering.
+func TestBucketsWidenOnceTheDaysStopFitting(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, paris)
-	for _, span := range []Span{Span7Days, Span30Days} {
-		if !span.SuitsDailyBars(now, paris) {
-			t.Errorf("%s (%d days) fits in bars", span, span.Window(now, paris).Days())
+	for span, want := range map[Span]Bucket{
+		Span7Days:     BucketDay,
+		Span30Days:    BucketDay,
+		SpanThisMonth: BucketDay,
+		Span90Days:    BucketWeek,
+		Span365Days:   BucketMonth,
+		SpanThisYear:  BucketMonth,
+		SpanAllTime:   BucketYear,
+	} {
+		if got := span.Bucket(); got != want {
+			t.Errorf("%s: bucket %q, want %q", span, got, want)
 		}
 	}
-	for _, span := range []Span{Span90Days, Span365Days, SpanAllTime} {
-		if span.SuitsDailyBars(now, paris) {
-			t.Errorf("%s is too long for bars", span)
+	for _, span := range []Span{Span7Days, Span30Days, SpanThisMonth} {
+		if span.SuitsCalendar(now, paris) {
+			t.Errorf("%s (%d days) is too short for a calendar grid",
+				span, span.Window(now, paris).Days())
+		}
+	}
+	for _, span := range []Span{Span90Days, Span365Days, SpanThisYear, SpanAllTime} {
+		if !span.SuitsCalendar(now, paris) {
+			t.Errorf("%s is long enough for a calendar grid", span)
 		}
 	}
 	// The boundary itself, which is what MaxBarDays names.
 	edge := DayWindow(now.AddDate(0, 0, -(MaxBarDays-1)), now, paris)
 	if edge.Days() != MaxBarDays {
 		t.Fatalf("precondition: %d days, want %d", edge.Days(), MaxBarDays)
+	}
+}
+
+// Every bucket a heading, so a chart cannot be drawn under a name for
+// some other chart.
+func TestEveryBucketNamesItself(t *testing.T) {
+	for bucket, want := range map[Bucket]string{
+		BucketDay:   "Day by day",
+		BucketWeek:  "Week by week",
+		BucketMonth: "Month by month",
+		BucketYear:  "Year by year",
+	} {
+		if got := bucket.Heading(); got != want {
+			t.Errorf("%s: heading %q, want %q", bucket, got, want)
+		}
+	}
+}
+
+// "This month" runs from the first of the month to today, and is a
+// month of a different length every time it is asked.
+func TestThisMonthStartsOnTheFirst(t *testing.T) {
+	win := SpanThisMonth.Window(time.Date(2026, 3, 4, 9, 0, 0, 0, paris), paris)
+	if got, want := win.FromDay(), "2026-03-01"; got != want {
+		t.Errorf("first day: got %q, want %q", got, want)
+	}
+	if got, want := win.ToDay(), "2026-03-04"; got != want {
+		t.Errorf("last day: got %q, want %q", got, want)
+	}
+	first := time.Date(2026, 3, 1, 9, 0, 0, 0, paris)
+	if got := SpanThisMonth.Window(first, paris).Days(); got != 1 {
+		t.Errorf("on the first, this month is one day, got %d", got)
 	}
 }
 
