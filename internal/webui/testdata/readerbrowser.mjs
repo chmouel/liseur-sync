@@ -650,6 +650,47 @@ await evalIn(`(() => {
 const tocClosed = await evalIn(`document.getElementById('reader-toc').hidden`);
 check('Escape closes the drawer', tocClosed === true, String(tocClosed));
 
+// Narrow margins must stay narrow on a desktop, even in a single column.
+// Measure the chapter's paragraph width as well as the outer frame so a
+// line-length cap inside either layer cannot leave a wide empty strip.
+await S('Emulation.setDeviceMetricsOverride', {
+  width: 2048, height: 1080, deviceScaleFactor: 1, mobile: false,
+});
+const setMargins = (margin, columns = '1') => evalIn(`(() => {
+  const form = document.getElementById('reader-settings-form');
+  form.elements.columns.value = '${columns}';
+  form.elements.margin.value = '${margin}';
+  form.elements.margin.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+const marginWidths = {};
+for (const margin of ['none', 'narrow', 'normal', 'wide']) {
+  await setMargins(margin);
+  await new Promise((r) => setTimeout(r, 900));
+  marginWidths[margin] = JSON.parse(await evalIn(`JSON.stringify((() => {
+    const view = document.querySelector('readium-view');
+    const doc = view.renderer.getContents()[0].doc;
+    return {
+      viewport: view.getBoundingClientRect().width,
+      frame: view.renderer.getBoundingClientRect().width,
+      text: doc.querySelector('p').getBoundingClientRect().width,
+    };
+  })())`));
+}
+check('narrow margins use the desktop width with small side gutters',
+  marginWidths.narrow.frame >= 2000 && marginWidths.narrow.text >= 1984,
+  JSON.stringify(marginWidths.narrow));
+check('normal gives text more room and wide keeps the former normal measure',
+  marginWidths.normal.text >= 880 && marginWidths.wide.text >= 640,
+  JSON.stringify({ normal: marginWidths.normal, wide: marginWidths.wide }));
+check('margin choices progressively reduce the text width',
+  marginWidths.none.text > marginWidths.narrow.text &&
+  marginWidths.narrow.text > marginWidths.normal.text &&
+  marginWidths.normal.text > marginWidths.wide.text,
+  JSON.stringify(marginWidths));
+await setMargins('normal', 'auto');
+await S('Emulation.clearDeviceMetricsOverride');
+await new Promise((r) => setTimeout(r, 900));
+
 // The first chapter carries the full hostile battery: an inline script,
 // a script inside an SVG island, an external script pointing at a real
 // same-origin file, and an attempt to retitle the parent page. Jump

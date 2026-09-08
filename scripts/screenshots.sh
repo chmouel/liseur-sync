@@ -266,8 +266,8 @@ READER=${BOOK_IDS[0]}
 # switched off in the same breath: the bar steps aside after a couple of
 # idle seconds, and a photograph of the reader with no bar in it says
 # nothing about the reader. Everything else is ready when the page is.
-WAIT=$'\n\n'"document.querySelector('foliate-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
-EVAL=$'\n\n'"(() => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); const a = document.querySelector('#reader-settings-form input[name=\"autohide\"]'); a.checked = false; a.dispatchEvent(new Event('input', { bubbles: true })); return 'dark' })()"$'\n\n'
+WAIT=$'\n\n'"document.querySelector('readium-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
+EVAL=$'\n\n'"(async () => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); const a = document.querySelector('#reader-settings-form input[name=\"autohide\"]'); a.checked = false; a.dispatchEvent(new Event('input', { bubbles: true })); await document.querySelector('readium-view').goToFraction(0.3); return 'dark' })()"$'\n\n'
 
 cd internal/webui
 SHOT_CHROME="$CHROME" \
