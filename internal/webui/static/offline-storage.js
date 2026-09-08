@@ -2,13 +2,14 @@ import { decodeText, publicationHref, stripPublicationCode } from "./reader-publ
 import { latestReadablePosition } from "./reader-sync.js";
 
 export const OFFLINE_DB_NAME = "liseur-sync-offline";
-export const OFFLINE_DB_VERSION = 3;
+export const OFFLINE_DB_VERSION = 4;
 const SNAPSHOTS = "snapshots";
 const RESOURCES = "resources";
 const ACCOUNTS = "accounts";
 const OUTBOX = "outbox";
 const CHECKPOINTS = "checkpoints";
 const ANNOTATIONS = "annotations";
+const READING = "reading";
 const separator = "\u001f";
 
 export class OfflineStorageError extends Error {
@@ -107,6 +108,14 @@ export function openOfflineDB() {
         const annotations = db.createObjectStore(ANNOTATIONS, { keyPath: "key" });
         annotations.createIndex("book", ["partition", "account", "bookID"]);
       }
+      // Version 4. Added, never rewritten: an installed app upgrading
+      // from 3 keeps every snapshot, queued change and annotation it
+      // already had, and simply has no agreed baseline until the next
+      // position settles one.
+      if (!db.objectStoreNames.contains(READING)) {
+        const reading = db.createObjectStore(READING, { keyPath: "key" });
+        reading.createIndex("book", ["partition", "account", "bookID"]);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new OfflineStorageError("Could not open offline storage."));
@@ -149,6 +158,13 @@ function keyForCheckpoint({ partition, account, bookID }) {
 
 function keyForAnnotation({ partition, account, bookID, id }) {
   return [partition, account, bookID, id].join(separator);
+}
+
+// A reading-state record is per device as well as per book: the agreed
+// baseline is what *this* browser and the server last agreed on, and a
+// second device's agreement says nothing about this one's.
+function keyForReading({ partition, account, deviceID, bookID }) {
+  return [partition, account, deviceID || "", bookID].join(separator);
 }
 
 export async function accountVersion(partition) {
@@ -245,24 +261,34 @@ export function notifyOfflineChange(type = "write", partition = storagePartition
   }
 }
 
-export async function saveOfflinePosition({
-  partition = storagePartition(), account, epoch, deviceID, bookID, op,
+// saveReadingPosition queues one position op and records it as this
+// device's local reading state, before anything is sent. It is the same
+// path online and offline: the outbox record is immutable once written,
+// and the op is replayed byte for byte until the server acknowledges it.
+//
+// `requireSnapshot` is what differs. Offline reading has no meaning
+// without downloaded bytes, so a missing snapshot is an error there. An
+// online book has no snapshot at all and must still queue.
+export async function saveReadingPosition({
+  partition = storagePartition(), account, epoch, deviceID, bookID, workID = "", op,
+  requireSnapshot = true,
 } = {}) {
   if (!partition || !account || !bookID || !op?.op_id)
-    throw new OfflineStorageError("An offline position needs an account, book and operation.");
+    throw new OfflineStorageError("A reading position needs an account, book and operation.");
   return withDB(async db => {
     try {
-      await guardedWork(db, [SNAPSHOTS, OUTBOX], { partition, account, epoch }, (tx, _, fail) => {
+      await guardedWork(db, [SNAPSHOTS, OUTBOX, READING], { partition, account, epoch }, (tx, _, fail) => {
         const snapshots = tx.objectStore(SNAPSHOTS);
         const request = snapshots.index("book").getAll([partition, account, bookID]);
         request.onsuccess = () => {
           const current = request.result
             .filter(value => value.state === "ready")
             .sort((a, b) => (b.readyAt || 0) - (a.readyAt || 0))[0];
-          if (!current) {
+          if (!current && requireSnapshot) {
             fail(new OfflineStorageError("This book is not available offline.", "missing"));
             return;
           }
+          const device = deviceID || current?.deviceID || "";
           const outbox = tx.objectStore(OUTBOX);
           const queued = outbox.index("account").getAll(IDBKeyRange.bound(
             [partition, account, "", 0],
@@ -279,13 +305,17 @@ export async function saveOfflinePosition({
             // Wall clocks can move backwards and two page turns can share a
             // millisecond. Transaction order, not UUID order, decides the head.
             const createdAt = records.reduce((latest, row) => Math.max(latest, (row.createdAt || 0) + 1), Date.now());
-            current.localPosition = op;
-            snapshots.put(current);
+            if (current) {
+              current.localPosition = op;
+              snapshots.put(current);
+            }
             outbox.put({
               key: keyForOutbox({ partition, account, kind: "position", id: op.op_id }),
-              partition, account, epoch, deviceID: deviceID || current.deviceID, bookID, kind: "position", id: op.op_id,
+              partition, account, epoch, deviceID: device, bookID, kind: "position", id: op.op_id,
               payload: op, state: "pending", createdAt, attempts: 0,
             });
+            putReadingLocal(tx.objectStore(READING),
+              { partition, account, deviceID: device, bookID }, workID, op, createdAt);
           };
         };
       });
@@ -294,6 +324,70 @@ export async function saveOfflinePosition({
       throw error;
     }
   });
+}
+
+function putReadingLocal(store, identity, workID, op, updatedAt) {
+  const key = keyForReading(identity);
+  const request = store.get(key);
+  request.onsuccess = () => {
+    const record = request.result || { key, ...identity, baseline: null, local: null };
+    // A late write from a slower tab must not resurrect an older page as
+    // this device's local state.
+    if ((record.updatedAt || 0) > updatedAt) return;
+    record.workID = workID || record.workID || "";
+    record.local = op;
+    record.updatedAt = updatedAt;
+    store.put(record);
+  };
+}
+
+/**
+ * readingState returns this device's durable reading state for a book:
+ * the agreed baseline and the last position it authored. Null when the
+ * device has never read the book here.
+ */
+export async function readingState({
+  partition = storagePartition(), account, deviceID, bookID,
+} = {}) {
+  if (!partition || !account || !bookID) return null;
+  return withDB(async db => {
+    const result = await requestResult(db.transaction(READING).objectStore(READING)
+      .get(keyForReading({ partition, account, deviceID, bookID })));
+    return result || null;
+  });
+}
+
+/**
+ * agreeReadingBaseline records the position this device and the server
+ * agree on. It moves on exactly three events: the position read when the
+ * book opens, an acknowledged local op, and a remote position the reader
+ * accepted. Everything else is movement away from it, which is what
+ * makes a three-way comparison possible at all.
+ *
+ * `settled` says this device is at the baseline, not merely aware of
+ * it: an acknowledged page turn, or a remote position the reader chose
+ * to take. Its local op is cleared, because it is no longer movement
+ * away from anything.
+ */
+export async function agreeReadingBaseline({
+  partition = storagePartition(), account, epoch, deviceID, bookID, workID = "", baseline,
+  settled = false,
+} = {}) {
+  if (!partition || !account || !bookID) return;
+  return withDB(db => guardedWork(db, READING, { partition, account, epoch }, tx => {
+    const store = tx.objectStore(READING);
+    const identity = { partition, account, deviceID, bookID };
+    const key = keyForReading(identity);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result || { key, ...identity, baseline: null, local: null };
+      record.workID = workID || record.workID || "";
+      record.baseline = baseline || null;
+      if (settled) record.local = null;
+      record.updatedAt = Date.now();
+      store.put(record);
+    };
+  }));
 }
 
 export async function saveOfflineSessionCheckpoint({
@@ -523,18 +617,43 @@ export async function removeOfflineAnnotation({
 }
 
 export async function removeOfflineOutbox({
-  partition = storagePartition(), account, epoch, kind, id,
+  partition = storagePartition(), account, epoch, kind, id, settle = true,
 } = {}) {
   if (!partition || !account || !kind || !id) return;
   return withDB(async db => {
-    await guardedWork(db, OUTBOX, { partition, account, epoch }, tx => {
+    await guardedWork(db, [OUTBOX, READING], { partition, account, epoch }, tx => {
       const store = tx.objectStore(OUTBOX);
       const key = keyForOutbox({ partition, account, kind, id });
-      if (kind !== "session") { store.delete(key); return; }
       const request = store.get(key);
       request.onsuccess = () => {
-        if (request.result) {
-          const delivered = { ...request.result, state: "delivered" };
+        const record = request.result;
+        // An acknowledged position is now what this device and the
+        // server both know: it is the agreed baseline, and it stops
+        // counting as local movement. This is the one place a position
+        // is known to have landed, online and offline alike.
+        //
+        // `settle: false` is the other way a record leaves the queue:
+        // the reader withdrew it. It is dropped without ever becoming
+        // anything either side agreed on.
+        if (settle && record && kind === "position" && record.payload) {
+          const reading = tx.objectStore(READING);
+          const identity = {
+            partition, account, deviceID: record.deviceID, bookID: record.bookID,
+          };
+          const readingKey = keyForReading(identity);
+          const existing = reading.get(readingKey);
+          existing.onsuccess = () => {
+            const state = existing.result || { key: readingKey, ...identity, local: null };
+            state.workID = state.workID || record.payload.work_id || "";
+            state.baseline = record.payload;
+            if (state.local?.op_id === record.id) state.local = null;
+            state.updatedAt = Date.now();
+            reading.put(state);
+          };
+        }
+        if (kind !== "session") { store.delete(key); return; }
+        if (record) {
+          const delivered = { ...record, state: "delivered" };
           if (delivered.fingerprint) delete delivered.payload;
           store.put(delivered);
         }
@@ -648,15 +767,16 @@ export async function clearOfflineAccount(partition, account) {
   if (!partition || !account) return;
   return withDB(async db => {
     await transactionWork(db, [
-      SNAPSHOTS, RESOURCES, OUTBOX, CHECKPOINTS, ANNOTATIONS, ACCOUNTS,
+      SNAPSHOTS, RESOURCES, OUTBOX, CHECKPOINTS, ANNOTATIONS, READING, ACCOUNTS,
     ], "readwrite", tx => {
       const snapshots = tx.objectStore(SNAPSHOTS);
       const resources = tx.objectStore(RESOURCES);
       const outbox = tx.objectStore(OUTBOX);
       const checkpoints = tx.objectStore(CHECKPOINTS);
       const annotations = tx.objectStore(ANNOTATIONS);
-      let snapshotRecords, outboxRecords, checkpointRecords, annotationRecords;
-      let remaining = 4;
+      const reading = tx.objectStore(READING);
+      let snapshotRecords, outboxRecords, checkpointRecords, annotationRecords, readingRecords;
+      let remaining = 5;
       const clear = () => {
         if (--remaining) return;
         for (const snapshot of snapshotRecords) {
@@ -670,6 +790,7 @@ export async function clearOfflineAccount(partition, account) {
             checkpoints.delete(checkpoint.key);
         }
         for (const annotation of annotationRecords) annotations.delete(annotation.key);
+        for (const record of readingRecords) reading.delete(record.key);
         const marker = tx.objectStore(ACCOUNTS).get(keyForAccount(partition));
         marker.onsuccess = () => {
           if (marker.result?.account === account)
@@ -701,6 +822,13 @@ export async function clearOfflineAccount(partition, account) {
       ));
       annotationRequest.onsuccess = () => {
         annotationRecords = annotationRequest.result;
+        clear();
+      };
+      const readingRequest = reading.index("book").getAll(IDBKeyRange.bound(
+        [partition, account, ""], [partition, account, "\uffff"],
+      ));
+      readingRequest.onsuccess = () => {
+        readingRecords = readingRequest.result;
         clear();
       };
     });

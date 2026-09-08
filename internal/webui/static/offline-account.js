@@ -34,7 +34,7 @@ document.addEventListener("submit", async event => {
   try {
     const pending = await listOfflineOutbox({ partition, account, state: null });
     if (pending.length && !window.confirm(
-      "Offline changes are waiting to sync. Signing out will remove them from this device. Continue?",
+      "Reading changes on this device are waiting to sync. Signing out will remove them. Continue?",
     )) return;
     signingOut = true;
     await clearOfflineAccount(partition, account);

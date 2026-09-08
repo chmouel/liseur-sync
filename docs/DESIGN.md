@@ -132,7 +132,28 @@ already have.**
   except in a Calibre folder, where the pass reads a curated catalog and
   a book absent from `metadata.db` is deleted (ADR-0022).
 
-### 3.1 Offline web reader
+### 3.1 Reading state in the browser
+
+The browser reader writes every position, session checkpoint and
+finished sitting to an account- and deployment-partitioned IndexedDB
+outbox before it tries to deliver it, and replays those immutable
+payloads until the server acknowledges them (ADR-0037). One coordinator
+drains that queue for every same-origin page: an ordinary reader tab, a
+second tab and the installed app take turns on one lock named after the
+account's queue, so a stale page cannot overtake a newer one for the
+same work. A page turn is settled by the server's acknowledgement, so a
+tab that closes before one arrives loses nothing.
+
+Each book and device keeps the position it and the server last agreed
+on. A remote position is compared against that baseline. The comparison
+never looks at a clock and never prefers the larger fraction. If only the
+other device moved, the reader is offered the trip and the text stays
+put until they take it. If both moved, the reader is shown both
+positions and asked; the answer settles the disagreement so a reload
+does not raise it again. This mirrors the Android client's merge, less
+its reading `status` dimension, which a web op does not carry.
+
+### 3.2 Offline web reader
 
 The web UI also exposes one multi-book installable PWA under
 `/ui/offline/`; it is not one app per book. The service worker is scoped
@@ -148,7 +169,8 @@ locally before foreground delivery, then use the existing native sync and
 annotation protocols after a same-account reconnect. iOS background
 delivery, storage permanence and remote erasure of already-downloaded
 bytes are not promised. A configured separate reader origin disables this
-same-origin PWA surface rather than weakening the origin isolation.
+same-origin PWA surface, and with it the durable queue above, rather than
+weakening the origin isolation.
 
 ## 4. Identity: works, editions, aliases
 

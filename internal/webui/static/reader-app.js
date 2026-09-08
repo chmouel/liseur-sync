@@ -5,13 +5,16 @@ import { openSession } from "./reader-session.js";
 import { uploadSessions } from "./reader-session-upload.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
-import { offlineSync } from "./offline-sync.js";
+import { offlineSync, readingSync, outboxLock } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
+import { reconcileReadingState } from "./reader-reconcile.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import {
   clearOfflineSessionCheckpoint,
   accountContext,
+  accountVersion,
+  setActiveAccount,
   claimOfflineReader,
   assertOfflineContext,
   notifyOfflineChange,
@@ -23,7 +26,9 @@ import {
   removeOfflineOutbox,
   queueOfflineAnnotation,
   removeOfflineAnnotation,
-  saveOfflinePosition,
+  saveReadingPosition,
+  readingState,
+  agreeReadingBaseline,
   saveOfflineSessionCheckpoint,
   deploymentPrefix,
   storagePartition,
@@ -111,9 +116,21 @@ let offlineCheckpoint = null;
 let offlineContext = null;
 let offlineCoordinator = null;
 let releaseOfflineReader = null;
+// True when this page holds the book's reader claim, so it owns the
+// single checkpoint slot for the sitting. A second tab reads on with
+// its own fresh sitting rather than adopting this one's.
+let sessionOwner = false;
 let offlineInvalidated = false;
-const offlinePartition = cfg.offline ? storagePartition() : null;
+// An online reader on the deployment's own origin queues its reading
+// state in the same IndexedDB the offline app uses, and drains it
+// through the same lock. The separate reader origin (ADR-0007 phase 3)
+// has no such storage of its own to share, so it keeps posting
+// directly: that boundary is deliberate, not an oversight.
+const durableSync = !cfg.offline && !cfg.detached;
+const offlinePartition = cfg.detached ? null : storagePartition();
 const offlineBase = cfg.offline ? deploymentPrefix() : "";
+let readingCoordinator = null;
+let sendTimer = null;
 
 function say(message, isError) {
   status.textContent = message;
@@ -163,6 +180,13 @@ const auth = readerAuth({
     retryOp = null;
     readingDirty = false;
     cancelScheduledPush();
+    clearTimeout(sendTimer);
+    sendTimer = null;
+    readingCoordinator?.stop();
+    readingCoordinator = null;
+    releaseOfflineReader?.();
+    releaseOfflineReader = null;
+    sessionOwner = false;
     refreshes.stop();
     live.stop();
     catchup.bind(null, null, null);
@@ -209,6 +233,61 @@ function prepareOfflineSync() {
   offlineCoordinator.trigger();
 }
 
+// prepareReadingSync claims the local queue for an online reader.
+//
+// The account marker is written from a credential this page actually
+// holds — the token introspection said whose it is — so a reader opened
+// straight from a bookmark queues durably without having to visit the
+// library first. An unchanged account keeps its epoch, so downloaded
+// books and anything already queued survive.
+async function prepareReadingSync(identity) {
+  if (!durableSync || !identity?.account || !offlinePartition) return;
+  try {
+    const version = await accountVersion(offlinePartition);
+    const epoch = await setActiveAccount(offlinePartition, identity.account, version);
+    offlineContext = {
+      partition: offlinePartition, account: identity.account, epoch, deviceID: identity.device,
+    };
+    offlineAccount = identity.account;
+  } catch (error) {
+    // No local queue is a weaker reader, not a broken one: it posts
+    // straight through the way it always did.
+    console.warn("Reading changes cannot be queued locally:", error);
+    offlineContext = null;
+    return;
+  }
+  readingCoordinator = readingSync({
+    context: offlineContext,
+    request: (path, options) => api(path, options),
+    onChange: async () => { await refreshLocalReadingState(); },
+    onStatus: message => { if (!syncExpired) say(message, !!message); },
+  });
+}
+
+// The durable state is the truth about what this device has said. It is
+// re-read after every drain so an acknowledgement settles the baseline
+// and a still-queued page keeps counting as local movement.
+async function refreshLocalReadingState() {
+  if (!offlineContext || !durableSync) return;
+  const state = await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null);
+  if (!state) return;
+  const queued = await listOfflineOutbox({ ...offlineContext, kind: "position" }).catch(() => []);
+  const dirty = queued.some(record => record.deviceID === offlineContext.deviceID &&
+    record.bookID === cfg.bookID);
+  catchup.baseline(state.baseline);
+  catchup.local(state.local, dirty);
+  if (!dirty && !readingDirty) retryOp = null;
+}
+
+function scheduleSend() {
+  if (!readingCoordinator) return;
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(() => {
+    sendTimer = null;
+    readingCoordinator?.trigger();
+  }, 1500);
+}
+
 async function checkOfflineAccount() {
   if (!offlineContext || offlineInvalidated) return;
   try { await assertOfflineContext(offlineContext); }
@@ -231,6 +310,8 @@ async function checkOfflineAccount() {
     }
     await annotationDrawing.clear().catch(() => {});
     releaseOfflineReader?.();
+    releaseOfflineReader = null;
+    sessionOwner = false;
     say("Offline access ended. Close this reader and sign in again.", true);
   }
 }
@@ -284,13 +365,32 @@ function hideCatchup() {
   }
 }
 
+const percent = (fraction) =>
+  finite(fraction) ? `${Math.round(fraction * 100)}%` : null;
+
 function showCatchup() {
   const offer = catchup.offer();
   if (!offer || !catchupPanel) return;
-  const fraction = offer.op.progression;
-  catchupText.textContent = finite(fraction)
-    ? `Continue from ${Math.round(fraction * 100)}% read on another device?`
-    : "Continue from the position read on another device?";
+  const there = percent(offer.op.progression);
+  catchupPanel.classList.toggle("conflict", offer.kind === "conflict");
+  if (offer.kind === "conflict") {
+    // Both sides moved since they last agreed. Say what both of them
+    // are; deciding which one the reader meant is not this program's
+    // business. The near side is the page actually on screen, which is
+    // the one the reader can check.
+    const local = percent(here?.fraction) || percent(offer.local?.progression);
+    catchupText.textContent = local && there
+      ? `This device is at ${local}; another device reached ${there}. Which one is where you are?`
+      : "This device and another device are in different places in this book.";
+    catchupAccept.textContent = there ? `Go to ${there}` : "Go to the other position";
+    catchupDismiss.textContent = local ? `Stay at ${local}` : "Stay here";
+  } else {
+    catchupText.textContent = there
+      ? `Continue from ${there} read on another device?`
+      : "Continue from the position read on another device?";
+    catchupAccept.textContent = "Continue there";
+    catchupDismiss.textContent = "Stay here";
+  }
   catchupPanel.hidden = false;
 }
 
@@ -322,15 +422,54 @@ function startLive() {
   live.start();
 }
 
-catchupDismiss?.addEventListener("click", () => {
+// Answering settles the disagreement for good: the position the reader
+// did not take becomes the agreed baseline too, because it has been
+// seen and answered. Without that, every reload asks again.
+function rememberAnswer(op, settled) {
+  if (!op || !offlineContext) return;
+  agreeReadingBaseline({
+    ...offlineContext, bookID: cfg.bookID, workID, baseline: op, settled,
+  }).catch(() => {});
+}
+
+// Taking the other device's position withdraws this device's own
+// undelivered ones. The queue drains oldest first, so a page turn still
+// waiting there would land after the reader's answer and reinstate the
+// position they just refused. Nothing is lost: an op the server never
+// acknowledged is a claim about where the reader was, and they have
+// just said otherwise. It runs under the queue's own lock so a send
+// already in flight finishes before the queue is edited underneath it.
+async function withdrawQueuedPositions() {
+  if (!offlineContext) return;
+  const withdraw = async () => {
+    const queued = await listOfflineOutbox({ ...offlineContext, kind: "position" });
+    for (const record of queued) {
+      if (record.bookID !== cfg.bookID || record.deviceID !== offlineContext.deviceID) continue;
+      await removeOfflineOutbox({
+        ...offlineContext, kind: "position", id: record.id, settle: false,
+      });
+    }
+  };
+  try {
+    if (navigator.locks) await navigator.locks.request(outboxLock(offlineContext), withdraw);
+    else await withdraw();
+  } catch { /* the queue is best-effort; a stale op is not worth an error */ }
+}
+
+// Every way of saying no goes through here: an answered offer settles
+// durably, or the next open raises the same disagreement again.
+function dismissCatchup() {
+  const shown = catchup.shown();
   catchup.dismiss();
   hideCatchup();
-});
+  rememberAnswer(shown?.op, false);
+}
+
+catchupDismiss?.addEventListener("click", dismissCatchup);
 catchupPanel?.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
-    catchup.dismiss();
-    hideCatchup();
+    dismissCatchup();
   }
 });
 catchupAccept?.addEventListener("click", async () => {
@@ -350,6 +489,13 @@ catchupAccept?.addEventListener("click", async () => {
   retryOp = null;
   readingDirty = false;
   interactionPending = false;
+  // Withdraw before anything else can drain the queue: ending the
+  // sitting triggers a send, and a page delivered after the answer
+  // would reinstate the position the reader just refused.
+  clearTimeout(sendTimer);
+  sendTimer = null;
+  await withdrawQueuedPositions();
+  if (!current(stamp) || !view) return;
   // Close the old sitting at its actual page, not at the remote destination.
   endSession();
   restoring = true;
@@ -368,6 +514,7 @@ catchupAccept?.addEventListener("click", async () => {
   } finally {
     restoring = false;
     // A restored page starts accounting only when the reader next interacts.
+    rememberAnswer(op, true);
   }
 });
 
@@ -1049,23 +1196,47 @@ async function pushPosition() {
         };
   retryOp = { key, op };
   catchup.wrote(op);
-  if (cfg.offline) {
+  if (cfg.offline || (durableSync && offlineContext)) {
     try {
-      await saveOfflinePosition({
+      await saveReadingPosition({
         ...offlineContext,
-        partition: offlinePartition,
-        account: offlineAccount,
         bookID: cfg.bookID,
+        workID,
         op,
+        requireSnapshot: cfg.offline,
       });
-      notifyOfflineChange();
+      catchup.local(op);
+      if (cfg.offline) notifyOfflineChange();
+      else if (leaving) {
+        // The queue is the guarantee, but an unload is the last moment
+        // this page can speak and another device is probably waiting.
+        // The queued copy carries the same bytes under the same op id,
+        // so a later delivery is a duplicate rather than a second page.
+        api("v1/ops", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          keepalive: true,
+          body: JSON.stringify({ ops: [op] }),
+        }).catch(() => {});
+      } else scheduleSend();
       if (retryOp?.op === op) {
         retryOp = null;
         if (locatorFor(here)?.locations.fragments[0] === locator.locations.fragments[0] &&
             here.fraction === locator.locations.totalProgression) readingDirty = false;
       }
     } catch (err) {
-      say(err.message || "Offline position could not be saved.", true);
+      // An expired local account cannot be queued into. The reader
+      // keeps reading; the credential layer is what says so.
+      if (!cfg.offline && err?.code === "auth") {
+        offlineContext = null;
+        readingCoordinator?.stop();
+        readingCoordinator = null;
+        releaseOfflineReader?.();
+        releaseOfflineReader = null;
+        sessionOwner = false;
+        return;
+      }
+      say(err.message || "This reading position could not be saved on this device.", true);
     }
     return;
   }
@@ -1090,6 +1261,7 @@ async function pushPosition() {
       return;
     }
     if (!positionAcknowledged(out, op)) return;
+    catchup.settled(op);
     // Only this op's own outcome may clear it: a slower response
     // arriving after the reader has moved on must not discard the op
     // a newer push is still responsible for.
@@ -1132,7 +1304,7 @@ function schedulePush() {
   if (!readingDirty || restoring) return;
   cancelScheduledPush();
   // Local durability need not wait for the network debounce.
-  pending = setTimeout(push, cfg.offline ? 0 : 1500);
+  pending = setTimeout(push, cfg.offline || offlineContext ? 0 : 1500);
 }
 
 // ------------------------------------------------------- sessions
@@ -1162,24 +1334,29 @@ function beginSession() {
     supportsActiveMs: cfg.offline
       ? offlineSnapshot?.supportsActiveMs === true
       : auth.identity()?.supportsActiveMs === true,
-    checkpoint: cfg.offline ? offlineCheckpoint : null,
+    checkpoint: cfg.offline || sessionOwner ? offlineCheckpoint : null,
   });
   offlineCheckpoint = null;
   checkpointSession();
 }
 
+// A sitting is checkpointed as it goes, so a browser that is killed
+// mid-page still leaves the reading behind: the next open finds the
+// checkpoint and carries on inside the same sitting instead of
+// discarding the minutes before the crash. Only the page holding the
+// book's reader claim writes one, because a checkpoint names one
+// sitting and two pages finalizing under that name is a refused
+// session, not a longer one.
 function checkpointSession() {
-  if (!cfg.offline || !session || !offlineAccount) return;
+  if (!session || !offlineContext || !(cfg.offline || sessionOwner)) return;
   const checkpoint = session.checkpoint();
   if (!checkpoint) return;
   saveOfflineSessionCheckpoint({
     ...offlineContext,
-    partition: offlinePartition,
-    account: offlineAccount,
     bookID: cfg.bookID,
     checkpoint,
   }).catch(error => say(
-    error.message || "Offline reading progress could not be saved.",
+    error.message || "This reading progress could not be saved on this device.",
     true,
   ));
 }
@@ -1215,6 +1392,13 @@ function noteProgress() {
   }
 }
 
+// True once the page is going away. Only then does a finished sitting go
+// out directly as well as durably: an IndexedDB write cannot finish
+// during an unload, so the keepalive attempt is the only voice left. On
+// any other path the queue is both the guarantee and prompt enough, and
+// posting the same sitting twice at once races itself at the server.
+let leaving = false;
+
 async function endSession() {
   if (!session) return;
   const sessionID = session.checkpoint()?.id;
@@ -1224,13 +1408,19 @@ async function endSession() {
     here && here.fraction,
   );
   session = null;
-  if (cfg.offline) {
+  if (!cfg.offline && offlineContext && payload && leaving) {
+    // On an unload this is the last moment the page can speak, and an
+    // IndexedDB write is not something a closing tab can wait for. The
+    // queued copy below is the guarantee; this is only promptness, and
+    // a session id is an idempotency key, so both landing is harmless.
+    unsent = [payload];
+    pushSession(true);
+  }
+  if (cfg.offline || offlineContext) {
     try {
       if (payload) {
         await finishOfflineSession({
           ...offlineContext,
-          partition: offlinePartition,
-          account: offlineAccount,
           bookID: cfg.bookID,
           payload,
         });
@@ -1238,14 +1428,13 @@ async function endSession() {
         await clearOfflineSessionCheckpoint({
           ...offlineContext,
           sessionID,
-          partition: offlinePartition,
-          account: offlineAccount,
           bookID: cfg.bookID,
         });
       }
-      notifyOfflineChange();
+      if (cfg.offline) notifyOfflineChange();
+      else readingCoordinator?.trigger();
     } catch (error) {
-      say(error.message || "Offline reading session could not be saved.", true);
+      say(error.message || "This reading session could not be saved on this device.", true);
     }
     return;
   }
@@ -1278,7 +1467,18 @@ async function pushSession(closing) {
         return resp;
       },
       responseCurrent: (resp) => current(stamp) && auth.responseCurrent(resp),
-      accepted: (sent) => { unsent = unsent.filter((p) => !sent.includes(p)); },
+      accepted: async (sent) => {
+        unsent = unsent.filter((p) => !sent.includes(p));
+        // The queued copy is what a later drain would replay. Settling
+        // it here keeps the same sitting from going out twice.
+        if (offlineContext) {
+          for (const item of sent) {
+            await removeOfflineOutbox({
+              ...offlineContext, kind: "session", id: item.session_id,
+            }).catch(() => {});
+          }
+        }
+      },
       deferred: (status, code) => console.warn("Reading sessions are waiting to sync:", status, code),
       refused: (item, code) => {
         unsent = unsent.filter((p) => p !== item);
@@ -1309,6 +1509,7 @@ document.addEventListener("visibilitychange", () => {
   catchup.resume();
   push();
   pushSession();
+  readingCoordinator?.trigger();
   if (ready) startLive();
   beginSession();
   if (here && !finite(here.fraction)) {
@@ -1316,8 +1517,10 @@ document.addEventListener("visibilitychange", () => {
     scheduleFractionRetry();
   }
 });
+window.addEventListener("pageshow", () => { leaving = false; });
 window.addEventListener("pagehide", () => {
   lifecycle++;
+  leaving = true;
   live.stop();
   refreshes.stop();
   catchup.hide();
@@ -1330,12 +1533,14 @@ window.addEventListener("online", () => {
   if (document.hidden) return;
   push();
   pushSession();
+  readingCoordinator?.trigger();
   if (ready) startLive();
 });
 setInterval(() => {
   if (document.hidden || navigator.onLine === false) return;
   push();
   pushSession();
+  readingCoordinator?.trigger();
 }, 30000);
 
 function cfiOf(op) {
@@ -2470,8 +2675,7 @@ function handleKeys(e) {
   // it, the same as the drawer above.
   if (catchupPanel && !catchupPanel.hidden && e.key === "Escape") {
     e.preventDefault();
-    catchup.dismiss();
-    hideCatchup();
+    dismissCatchup();
     return;
   }
   // "?" summons the help from anywhere, including from inside a
@@ -2542,6 +2746,7 @@ function handleKeys(e) {
 document.addEventListener("keydown", handleKeys);
 window.addEventListener("beforeunload", () => {
   clearTimeout(pending);
+  leaving = true;
   push();
   endSession();
   view?.destroy().catch(() => {});
@@ -2657,15 +2862,57 @@ window.addEventListener("beforeunload", () => {
       catchup.bind(offlineAccount, workID, offlineSnapshot.deviceID);
       // A locally queued wire op omits device_id; the credential supplies it
       // on upload. Its echo after a reload is still our opening baseline.
-      catchup.baseline(op && { ...op, device_id: op.device_id || offlineSnapshot.deviceID });
+      const stamped = op && { ...op, device_id: op.device_id || offlineSnapshot.deviceID };
+      catchup.baseline(stamped);
+      catchup.local(stamped, false);
     }
     if (!cfg.offline) try {
       workID = await resolveWork();
       const identity = auth.identity();
       catchup.bind(identity?.account, workID, identity?.device);
+      await prepareReadingSync(identity);
+      // A checkpoint names one sitting, so only the page that can claim
+      // this book keeps one. A second tab is refused the claim and reads
+      // on with a fresh sitting, which is what it did before.
+      if (offlineContext) {
+        releaseOfflineReader = await claimOfflineReader(offlineContext, cfg.bookID)
+          .catch(() => null);
+        if (releaseOfflineReader) {
+          sessionOwner = true;
+          offlineCheckpoint = await getOfflineSessionCheckpoint({
+            partition: offlinePartition, account: offlineAccount, bookID: cfg.bookID,
+          }).catch(() => null);
+        }
+      }
+      // What this browser last said, read back from its own disk. A page
+      // turn the server never acknowledged is still where the reader is,
+      // and it is still owed.
+      const stored = offlineContext
+        ? await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null)
+        : null;
+      const queued = offlineContext
+        ? await listOfflineOutbox({ ...offlineContext, kind: "position" }).catch(() => [])
+        : [];
+      const dirty = queued.some(record => record.deviceID === offlineContext?.deviceID &&
+        record.bookID === cfg.bookID);
       const result = await lastPosition();
-      if (result.ok) op = result.op;
-      catchup.baseline(op);
+      const remote = result.ok ? result.op : null;
+      const baseline = stored ? stored.baseline : remote;
+      catchup.baseline(baseline);
+      catchup.local(stored?.local || null, dirty);
+      const { decision } = reconcileReadingState({
+        local: stored?.local || null, remote, baseline, localDirty: dirty,
+      });
+      // A conflict opens where this reader was, never where the other
+      // device went: the trip is offered, not taken for them.
+      op = decision === "push" || decision === "conflict"
+        ? stored?.local || remote : remote || stored?.local || null;
+      if (!stored && remote && offlineContext) {
+        await agreeReadingBaseline({
+          ...offlineContext, bookID: cfg.bookID, workID, baseline: remote,
+        }).catch(() => {});
+      }
+      catchup.observe(remote);
     } catch (err) {
       /* read on without sync */
     }
@@ -2701,6 +2948,13 @@ window.addEventListener("beforeunload", () => {
     if (!cfg.offline && ready && !document.hidden) startLive();
     if (document.hidden) catchup.hide();
     if (!syncExpired) say("");
+    // Opening the book is a moment where a disagreement can be raised
+    // without taking the page out from under anybody.
+    if (!document.hidden) {
+      catchup.present();
+      showCatchup();
+    }
+    if (readingCoordinator) readingCoordinator.trigger();
   } catch (err) {
     releaseOfflineReader?.();
     say((err && err.message) || "this book could not be opened", true);

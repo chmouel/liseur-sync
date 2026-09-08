@@ -21,3 +21,10 @@ func TestReaderAnnotationReplacement(t *testing.T) {
 func TestOfflinePublicationStorageCore(t *testing.T) {
 	runNodeTests(t, "offline-storage.test.mjs")
 }
+
+// Three-way reconciliation is the whole of the reader's conflict
+// behaviour, and it is pure: it deserves to be pinned on its own,
+// away from a browser.
+func TestReadingStateReconciliation(t *testing.T) {
+	runNodeTests(t, "readerreconcile.test.mjs")
+}

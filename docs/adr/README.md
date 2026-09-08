@@ -61,6 +61,7 @@ loose ends that must come before any of it, are in
 | [0034](0034-live-notifications-say-only-that-something-changed.md) | A live notification says only that something changed | Client | Accepted | `GET /v1/events` as topic-only SSE, published post-commit by the store, authorized per topic; correctness stays in the existing feeds; amends [0007](0007-web-reader.md) |
 | [0035](0035-naming-a-shelf-is-one-request.md) | Naming a shelf is one request | Client | Accepted; implemented | `POST /v1/books/resolve` for up to 500 books, one transaction and one answer each, `200` with per-item `not_found`/`ambiguous`; same `library-read` + `sync` pair; amends [0003](0003-catalog-work-identity.md) |
 | [0036](0036-one-bounded-offline-web-reader.md) | One bounded offline web reader | Later | Accepted; implemented pending iOS acceptance | Same-origin multi-book PWA under `/ui/offline/`, private IndexedDB publication/state storage, foreground-only reconnect, and explicit annotation conflict handling; separate reader origins leave it disabled |
+| [0037](0037-durable-online-reading.md) | Durable online reading, and a disagreement the reader answers | Now | Accepted; implemented | The online reader queues positions and sittings to the same IndexedDB outbox, drains through one shared lock and sender, keeps an agreed baseline per book and device, and presents a two-sided move as a conflict; same-origin deployments only; amends [0007](0007-web-reader.md), [0030](0030-web-reader-reading-sessions.md), [0036](0036-one-bounded-offline-web-reader.md) |
 
 ## Convention
 

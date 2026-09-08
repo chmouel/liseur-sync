@@ -1,3 +1,5 @@
+import { reconcileReadingState } from "./reader-reconcile.js";
+
 // Match Android's bounded fallback past malformed position records. A real
 // zero is readable; missing, null and out-of-range fractions are not.
 export function latestReadablePosition(ops, workID) {
@@ -69,12 +71,56 @@ export function candidateID(account, work, op) {
   return JSON.stringify([account, work, op.op_id, op.device_id]);
 }
 
+/**
+ * catchupState decides what, if anything, to say about a position that
+ * arrived from somewhere else.
+ *
+ * It holds the three sides of the comparison — the agreed baseline, this
+ * device's own position, and the newest remote one — and asks
+ * `reconcileReadingState` which of them moved. A remote move on its own
+ * becomes an offer; a move on both sides becomes a conflict carrying
+ * both positions, because there is no honest way to pick one.
+ *
+ * Baseline, local position and dirtiness are fed in from durable
+ * storage, so a reload does not turn a disagreement back into a bare
+ * offer.
+ *
+ * Presentation is deliberately not immediate. An offer waits for a
+ * moment when the reader is not mid-page: opening the book, or coming
+ * back to the tab. A conflict waits for the same moment rather than
+ * interrupting, which is what the Android client does with a conflict
+ * it has preserved.
+ */
 export function catchupState() {
   let account = null, work = null, device = null, generation = 0;
-  let candidate = null, offer = null, hidden = false, resume = false, baseline = null;
+  let candidate = null, offer = null, hidden = false, resume = false;
+  let baseline = null, remote = null, localOp = null, localDirty = false;
   const authored = new Map();
   const ignored = new Set();
   const identify = (op) => candidateID(account, work, op);
+  const ours = (op) => authored.has(op.op_id) && authored.get(op.op_id) === op.device_id;
+  const evaluate = () => {
+    const id = remote && identify(remote);
+    if (!id || ignored.has(id) || ours(remote)) {
+      candidate = null;
+      return;
+    }
+    const { decision } = reconcileReadingState({
+      // Having authored nothing since the book opened is not having no
+      // position: this device is where the baseline says it is. Without
+      // that, every remote echo of the opening position looks like an
+      // invitation to somewhere else.
+      local: localOp || baseline, remote, baseline, localDirty,
+    });
+    if (decision !== "pull" && decision !== "conflict") {
+      candidate = null;
+      return;
+    }
+    candidate = {
+      id, kind: decision, op: structuredClone(remote),
+      local: structuredClone(localOp || baseline), generation,
+    };
+  };
   return {
     bind(nextAccount, nextWork, nextDevice) {
       const sameBook = account === nextAccount && work === nextWork;
@@ -82,29 +128,43 @@ export function catchupState() {
       generation++; candidate = null; offer = null;
       if (!sameBook) resume = false;
       if (!sameBook) {
-        baseline = null;
+        baseline = null; remote = null; localOp = null; localDirty = false;
         authored.clear(); ignored.clear();
       }
     },
-    baseline(op) { baseline = identify(op); },
+    // The position this device and the server last agreed on.
+    baseline(op) { baseline = op ? structuredClone(op) : null; evaluate(); },
+    // This device's durable position, and whether the server has it.
+    local(op, dirty = !!op) {
+      localOp = op ? structuredClone(op) : null;
+      localDirty = !!op && dirty;
+      evaluate();
+    },
+    // settled folds an acknowledged local op into the baseline: it is
+    // now what both sides know, so it is no longer local movement.
+    settled(op) {
+      if (!op) return;
+      baseline = structuredClone(op);
+      if (localOp?.op_id === op.op_id) localDirty = false;
+      evaluate();
+    },
     wrote(op) {
       authored.set(op.op_id, device);
       if (authored.size > 256) authored.delete(authored.keys().next().value);
     },
     observe(op) {
-      const id = identify(op);
-      if (!id || id === baseline || ignored.has(id) ||
-          (authored.has(op.op_id) && authored.get(op.op_id) === op.device_id)) {
-        candidate = null;
-        return;
-      }
-      candidate = { id, op: structuredClone(op), generation };
+      remote = op ? structuredClone(op) : null;
+      evaluate();
     },
     hide() { hidden = true; resume = false; offer = null; },
     resume() {
       if (!hidden) return;
       hidden = false; resume = true;
     },
+    // present marks a moment where an offer may be shown without
+    // interrupting: the book opening, or a reload landing on a
+    // disagreement that was already there.
+    present() { if (!hidden) resume = true; },
     offer() {
       if (hidden || !resume || offer) return offer;
       resume = false;
@@ -112,14 +172,26 @@ export function catchupState() {
       return offer;
     },
     shown: () => offer,
+    // The reader turned a page. That does not settle the other device's
+    // position — it disagrees with it. The offer comes down, the
+    // knowledge stays, and the next quiet moment presents a conflict.
     moved() {
-      baseline = candidate?.id || offer?.id || baseline;
-      generation++; candidate = null; offer = null; resume = false;
+      offer = null; resume = false;
+      if (!localDirty) {
+        localDirty = true;
+        evaluate();
+      }
     },
     dismiss() {
-      if (offer) ignored.add(offer.id);
+      if (offer) {
+        ignored.add(offer.id);
+        // Choosing to stay is an answer about this remote position, so
+        // it becomes the agreed baseline: it must not be asked again.
+        baseline = structuredClone(offer.op);
+      }
       if (ignored.size > 256) ignored.delete(ignored.values().next().value);
       offer = null; resume = false;
+      evaluate();
     },
     accept(shown) {
       if (!shown || hidden || offer !== shown || shown.generation !== generation ||
@@ -127,7 +199,9 @@ export function catchupState() {
         offer = null;
         return null;
       }
-      baseline = shown.id;
+      baseline = structuredClone(shown.op);
+      localOp = structuredClone(shown.op);
+      localDirty = false;
       candidate = null; offer = null; resume = false;
       return structuredClone(shown.op);
     },

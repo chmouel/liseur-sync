@@ -52,7 +52,7 @@ async function annotationChecks() {
 
 async function storageChecks() {
   const s = await import("/offline-storage.js");
-  const { drainOfflineOutbox, offlineSync } = await import("/offline-sync.js");
+  const { drainOfflineOutbox, offlineSync, readingSync } = await import("/offline-sync.js");
   const check = (value, message) => { if (!value) throw new Error(message); };
   const rejected = async (fn, message) => {
     let error;
@@ -207,7 +207,7 @@ async function storageChecks() {
   await queue("local", "local pending", "local");
   remoteAnnotations = [{ ...initialNote, id: "fresh", body: "remote update" }];
   remotePosition = { ...remotePosition, progression: 0.8 };
-  await s.saveOfflinePosition({ ...context, bookID, op: { op_id: "local-position", progression: 0.6 } });
+  await s.saveReadingPosition({ ...context, bookID, op: { op_id: "local-position", progression: 0.6 } });
   await s.reconcileOfflineBook(context, book, publicationRequest);
   local = await s.listOfflineAnnotations({ ...context, bookID });
   check(local.some(row => row.id === "local") && local.some(row => row.id === "fresh") &&
@@ -217,7 +217,7 @@ async function storageChecks() {
   await new Promise(resolve => setTimeout(resolve, 5));
   const latestPosition = { op_id: "a-newer-position", progression: 0.2,
     locator: { href: "chapter.xhtml", locations: { progression: 0.2 } } };
-  await s.saveOfflinePosition({ ...context, bookID, op: latestPosition });
+  await s.saveReadingPosition({ ...context, bookID, op: latestPosition });
   await s.removeBookSnapshots({ ...context, bookID });
   check(!await s.getReadySnapshot({ ...context, bookID }), "removal discards publication snapshots");
   await s.downloadPublication({ ...context, bookID, workID, request: publicationRequest });
@@ -235,12 +235,12 @@ async function storageChecks() {
   });
   check(positionPosts.join(",") === "local-position", "a deferred page blocks newer pages of the same work");
   const firstPosition = (await s.listOfflineOutbox({ ...context, kind: "position" }))[0];
-  await s.saveOfflinePosition({ ...context, bookID, op: firstPosition.payload });
+  await s.saveReadingPosition({ ...context, bookID, op: firstPosition.payload });
   check((await s.listOfflineOutbox({ ...context, kind: "position" }))[0].attempted,
     "saving a retry does not erase its transmission evidence");
   check((await s.getReadySnapshot({ ...context, bookID })).localPosition.op_id === latestPosition.op_id,
     "saving an older retry cannot replace the local head");
-  await rejected(() => s.saveOfflinePosition({ ...context, bookID,
+  await rejected(() => s.saveReadingPosition({ ...context, bookID,
     op: { ...firstPosition.payload, progression: 0.9 } }), "queued position IDs have immutable payloads");
   await drainOfflineOutbox(context, async (path, options) => {
     if (path !== "v1/ops") return reply({ results: [] });
@@ -253,15 +253,90 @@ async function storageChecks() {
   const originalNow = Date.now;
   try {
     Date.now = () => 100;
-    await s.saveOfflinePosition({ ...context, bookID, op: { ...latestPosition, op_id: "z-first" } });
+    await s.saveReadingPosition({ ...context, bookID, op: { ...latestPosition, op_id: "z-first" } });
     Date.now = () => 50;
-    await s.saveOfflinePosition({ ...context, bookID, op: { ...latestPosition, op_id: "a-last" } });
+    await s.saveReadingPosition({ ...context, bookID, op: { ...latestPosition, op_id: "a-last" } });
   } finally { Date.now = originalNow; }
   check((await s.listOfflineOutbox({ ...context, kind: "position" })).map(row => row.id).join(",") === "z-first,a-last",
     "a clock moving backwards cannot reorder page turns");
 
-  // The coordinator uses actual IndexedDB, Web Locks, account/token handshakes
-  // and transport-bound identity checks, with only HTTP replaced by fixtures.
+  // An online book has no downloaded snapshot, and its reading still has
+  // to outlive a closed tab. The durable baseline lives beside it: it is
+  // what makes a later disagreement answerable.
+  const online = "online-book";
+  const page = (id, progression) => ({ op_id: id, work_id: workID, progression });
+  await rejected(() => s.saveReadingPosition({ ...context, bookID: online, workID, op: page("needs-snapshot", 0.3) }),
+    "an offline reader still needs its book on disk");
+  await s.saveReadingPosition({ ...context, bookID: online, workID, requireSnapshot: false, op: page("online-1", 0.3) });
+  let reading = await s.readingState({ ...context, bookID: online });
+  check(reading.local.op_id === "online-1" && !reading.baseline && reading.workID === workID,
+    "a queued online page is this device's position, and nothing is agreed yet");
+  await s.removeOfflineOutbox({ ...context, kind: "position", id: "online-1" });
+  reading = await s.readingState({ ...context, bookID: online });
+  check(reading.baseline.op_id === "online-1" && !reading.local,
+    "an acknowledged page is what both sides now know");
+  await s.saveReadingPosition({ ...context, bookID: online, workID, requireSnapshot: false, op: page("online-2", 0.5) });
+  await s.agreeReadingBaseline({ ...context, bookID: online, workID, baseline: page("elsewhere", 0.7) });
+  reading = await s.readingState({ ...context, bookID: online });
+  check(reading.baseline.op_id === "elsewhere" && reading.local.op_id === "online-2",
+    "answering a disagreement by staying keeps this device's own page owed");
+  await s.agreeReadingBaseline({ ...context, bookID: online, workID, baseline: page("elsewhere", 0.7), settled: true });
+  reading = await s.readingState({ ...context, bookID: online });
+  check(!reading.local, "taking the other position puts this device there too");
+  await s.removeOfflineOutbox({ ...context, kind: "position", id: "online-2", settle: false });
+  reading = await s.readingState({ ...context, bookID: online });
+  check(reading.baseline.op_id === "elsewhere" &&
+    !(await s.listOfflineOutbox({ ...context, kind: "position" })).some(row => row.id === "online-2"),
+    "a withdrawn page leaves the queue without ever being agreed on");
+
+  // Two windows of one account share one queue and one lock. Whichever
+  // holds the lock does the sending; the other finds nothing left to do
+  // rather than putting the same page turn on the wire twice.
+  const handoffWork = "handoff-work";
+  const seen = [];
+  let credential = "old", accepting = true;
+  const readerRequest = async (path, options) => {
+    if (path === "v1/sessions") return reply({ accepted: 1 });
+    if (path.startsWith("v1/annotations")) {
+      const body = options.body ? JSON.parse(options.body).annotations[0] : null;
+      return reply({ results: [{ id: body?.id, status: "applied", rev: 1 }], rev: 1 });
+    }
+    const op = JSON.parse(options.body).ops[0];
+    const applied = reply({ results: [{ op_id: op.op_id, status: "applied" }] });
+    if (op.work_id !== handoffWork) return applied;
+    seen.push(`${credential}:${op.op_id}:${op.progression}`);
+    return accepting ? applied : reply({ error: "The reading credential expired." }, "", 401);
+  };
+  const queuePage = (id, progression) => s.saveReadingPosition({
+    ...context, bookID: "handoff-book", workID: handoffWork, requireSnapshot: false,
+    op: { op_id: id, work_id: handoffWork, progression },
+  });
+  const owed = async () => (await s.listOfflineOutbox({ ...context, kind: "position" }))
+    .filter(row => row.payload.work_id === handoffWork).map(row => row.id).join(",");
+  await queuePage("handoff-1", 0.25);
+  const tabA = readingSync({ context, request: readerRequest });
+  const tabB = readingSync({ context, request: readerRequest });
+  await Promise.all([tabA.trigger(), tabB.trigger()]);
+  check(seen.join(",") === "old:handoff-1:0.25", "two windows take turns on one queue", seen.join(","));
+  check(!(await owed()), "a delivered page leaves the shared queue", await owed());
+
+  // A credential that expires mid-drain is the transport's problem. The
+  // page stays owed with the bytes it was written with, and goes out
+  // under the new credential — from whichever window is still open.
+  accepting = false;
+  await queuePage("handoff-2", 0.4);
+  await tabA.trigger();
+  check(seen.at(-1) === "old:handoff-2:0.4" && await owed() === "handoff-2",
+    "a page the credential could not carry stays owed", seen.join(",") + " | " + await owed());
+  await rejected(() => queuePage("handoff-2", 0.9), "an owed page cannot be rewritten while it waits");
+  credential = "new"; accepting = true;
+  tabA.stop();
+  await tabB.trigger();
+  check(seen.at(-1) === "new:handoff-2:0.4" && !(await owed()),
+    "the renewed credential replays the same bytes from the surviving window", seen.join(","));
+  tabB.stop();
+
+
   await s.clearOfflineAccount(partition, account);
   await s.setActiveAccount(partition, account);
   context = { ...await s.accountContext(partition, account), deviceID };
@@ -346,6 +421,12 @@ async function storageChecks() {
   }
   globalThis.fetch = originalFetch;
 
+  // Reading state is as private as anything else here, so logout has to
+  // take it with everything else.
+  await s.agreeReadingBaseline({ ...context, bookID: online, workID, baseline: page("kept", 0.4) });
+  check((await s.readingState({ ...context, bookID: online })).baseline.op_id === "kept",
+    "reading state survives an ordinary reload");
+
   const old = context;
   const version = await s.accountVersion(partition);
   let releaseDownload, downloading;
@@ -371,7 +452,8 @@ async function storageChecks() {
   await rejected(() => s.downloadPublication({ ...old, bookID, request: publicationRequest }),
     "late download cannot repopulate logout");
   check(!(await s.listOfflineAnnotations({ ...old, bookID })).length &&
-    !(await s.listReadySnapshots(partition, account)).length, "logout leaves no private rows");
+    !(await s.listReadySnapshots(partition, account)).length &&
+    !(await s.readingState({ ...old, bookID: online })), "logout leaves no private rows");
   return "IndexedDB publication, mutation, session, reconciliation, coordinator and logout checks passed";
 }
 

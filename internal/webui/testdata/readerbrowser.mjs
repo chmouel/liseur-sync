@@ -114,15 +114,23 @@ if (liveMode) {
     window.__liveReads = 0;
     window.__liveStreams = [];
     window.__liveOwnOps = [];
+    window.__liveDelivered = [];
     window.fetch = async function(input, init = {}) {
       const url = typeof input === 'string' ? input : input.url;
       if (init.headers?.Authorization) window.__liveBearer = init.headers.Authorization;
       if (url.endsWith('v1/events')) window.__liveStreams.push(init.signal);
       if (url.endsWith('v1/ops') && init.body) {
         const ops = JSON.parse(init.body).ops || [];
-        window.__liveOwnOps.push(...ops.filter((op) => !op.op_id.startsWith('live-test-')));
+        const mine = ops.filter((op) => !op.op_id.startsWith('live-test-'));
+        window.__liveOwnOps.push(...mine);
+        // Only this browser's own writes go missing: the test's injected
+        // remote pages come from somewhere the outage does not reach.
+        if (window.__liveBlockOps && mine.length) throw new TypeError('Failed to fetch');
       }
       const resp = await original.call(this, input, init);
+      if (url.endsWith('v1/ops') && init.body && resp.ok) {
+        for (const op of JSON.parse(init.body).ops || []) window.__liveDelivered.push(op.op_id);
+      }
       if (url.includes('/positions?') && resp.ok) {
         await resp.clone().json();
         window.__liveReads++;
@@ -1547,7 +1555,106 @@ async function liveGuard(evalIn, check, S) {
   check('accepted restore does not echo a position op', await evalIn('window.__liveOwnOps.length === 0'));
   await evalIn("document.getElementById('reader-next').click()");
   check('a genuine page turn still syncs', await wait('window.__liveOwnOps.length > 0'));
+
+  await durableGuard(evalIn, check, { pause, wait, remote, visibility, position });
   await visibility(true);
+}
+
+// durableGuard covers the online reader's half of issue #49: a page
+// turn is written to this browser's disk before it is sent, it is still
+// owed after a reload, and a page turn on both sides is presented as a
+// disagreement with both positions rather than resolved behind the
+// reader's back.
+async function durableGuard(evalIn, check, { pause, wait, remote, visibility, position }) {
+  const storageModule = `import(document.querySelector('script[type=module][src$="reader-app.js"]')
+    .src.replace('reader-app.js', 'offline-storage.js'))`;
+  // The reader's own IndexedDB, read the way the reader writes it.
+  const inStorage = (body) => evalIn(`(async () => {
+    const s = await ${storageModule};
+    const partition = s.storagePartition();
+    const account = await s.activeAccount(partition);
+    if (!account) return null;
+    const context = { ...await s.accountContext(partition, account), deviceID: window.__liveDevice };
+    return await (${body})(s, context, partition, account);
+  })()`);
+  await evalIn(`(async () => {
+    const base = document.getElementById('reader-config').dataset.apiBase;
+    const resp = await fetch(base + 'v1/token', { headers: { Authorization: window.__liveBearer } });
+    window.__liveDevice = (await resp.json()).device_id;
+    return true;
+  })()`);
+  check('the reader has a device identity to key its own state by',
+    typeof await evalIn('window.__liveDevice') === 'string' && await evalIn('window.__liveDevice.length > 0'));
+
+  const positions = () => inStorage(`async (s, c) => (await s.listOfflineOutbox({ ...c, kind: 'position' })).map(r => r.id).join(',')`);
+  const stored = () => inStorage(`async (s, c) => JSON.stringify(await s.readingState({ ...c, bookID: document.getElementById('reader-config').dataset.book }))`);
+  const drained = `(async () => {
+    const s = await ${storageModule};
+    const partition = s.storagePartition();
+    const account = await s.activeAccount(partition);
+    const context = { ...await s.accountContext(partition, account), deviceID: window.__liveDevice };
+    return (await s.listOfflineOutbox({ ...context, kind: 'position' })).length;
+  })()`;
+
+  check('an acknowledged page turn is agreed, not owed',
+    await wait(`(${drained}).then(n => n === 0)`), String(await positions()));
+  let reading = JSON.parse(await stored() || 'null');
+  check('the reader keeps a durable baseline for this book',
+    reading && reading.baseline && typeof reading.baseline.progression === 'number',
+    JSON.stringify(reading));
+
+  // A page turn the network never carried is still where the reader is.
+  await evalIn('window.__liveBlockOps = true');
+  const beforeTurn = await evalIn('window.__liveDelivered.length');
+  const wasAt = await position();
+  await evalIn("document.getElementById('reader-prev').click()");
+  check('the reader actually moved', await wait(`document.querySelector('readium-view').lastLocation.fraction !== ${wasAt}`),
+    String(await position()));
+  check('an undeliverable page turn is written to this browser first',
+    await wait(`(${drained}).then(n => n > 0)`), String(await positions()));
+  check('a page the network refused is not counted as delivered',
+    await evalIn('window.__liveDelivered.length') === beforeTurn);
+  const owed = await positions();
+
+  // Both sides have now moved since they last agreed, and neither of
+  // them can be discarded.
+  await remote('conflict', 0.42);
+  await visibility(true);
+  await visibility(false);
+  check('a page turn on both sides is presented as a disagreement',
+    await wait("!document.getElementById('reader-catchup').hidden"));
+  const text = await evalIn("document.getElementById('reader-catchup-text').textContent");
+  const accept = await evalIn("document.getElementById('reader-catchup-accept').textContent");
+  const stay = await evalIn("document.getElementById('reader-catchup-dismiss').textContent");
+  check('the disagreement names both positions', text.includes('42%') && /\d+%.*42%|42%.*\d+%/.test(text), text);
+  check('each button says where it goes', accept.includes('42%') && /\d/.test(stay), accept + ' / ' + stay);
+  check('a disagreement is marked as one',
+    await evalIn("document.getElementById('reader-catchup').classList.contains('conflict')"));
+
+  // Staying is an answer: it settles the other device's position without
+  // giving up the page this browser still owes.
+  await evalIn("document.getElementById('reader-catchup-dismiss').click()");
+  await pause(300);
+  check('staying keeps this browser where it was', Math.abs(await position() - 0.42) > 0.01);
+  check('staying does not withdraw the page this browser owes', await positions() === owed, await positions());
+  await visibility(true); await visibility(false);
+  await pause(500);
+  check('an answered disagreement is not asked again',
+    await evalIn("document.getElementById('reader-catchup').hidden"));
+
+  // The network comes back. Nothing prompts it: the queue drains itself.
+  await evalIn('window.__liveBlockOps = false');
+  await evalIn("window.dispatchEvent(new Event('online'))");
+  check('the owed page reaches the server once the network returns',
+    await wait(`window.__liveDelivered.includes(${JSON.stringify(owed.split(',')[0])})`),
+    String(await evalIn('JSON.stringify(window.__liveDelivered)')));
+  check('a delivered page leaves the queue',
+    await wait(`(${drained}).then(n => n === 0)`), String(await positions()));
+  reading = JSON.parse(await stored() || 'null');
+  check('delivery is what moves the agreed baseline',
+    reading && reading.baseline && reading.baseline.op_id === owed.split(',')[0],
+    JSON.stringify(reading && reading.baseline));
+  check('nothing is owed once it has been agreed', !reading.local, JSON.stringify(reading));
 }
 
 // svgGuard proves finding #1 of the streaming-reader review: a spine
