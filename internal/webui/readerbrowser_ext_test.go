@@ -739,7 +739,7 @@ func TestUIScreenshots(t *testing.T) {
 			m.at, now)
 	}
 	// And sittings behind that progress, because the statistics half of
-	// the dashboard is drawn from sessions, not positions: without them
+	// insights are drawn from sessions, not positions: without them
 	// every tile reads zero and the chart is a blank rule.
 	sittingsFor(t, f, now)
 
@@ -755,7 +755,7 @@ func TestUIScreenshots(t *testing.T) {
 		"SHOT_DIR="+outDir,
 		// The calendar view of the reading habit is only offered on a
 		// span longer than a month, so the walk asks for one outright.
-		"SHOT_PATHS=/ui/,/ui/?span=365d&chart=chart-calendar,"+
+		"SHOT_PATHS=/ui/insights,/ui/insights?span=365d&chart=chart-calendar,"+
 			"/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
 			"/ui/entities/contributors,/ui/settings?section=devices,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),

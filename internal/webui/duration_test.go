@@ -145,3 +145,26 @@ func TestReadingKeepsMeasuredTimeAtBothExtremes(t *testing.T) {
 		}
 	}
 }
+
+// TestPaceKeepsASlowButRealReadingRate is the pace tile's version of
+// the falsy-zero bug: a reader crawling through a long book at a
+// fraction of a point an hour was told "0%/h", which is the one thing
+// the tile is not there to say. It is drawn only when the pace is
+// known and positive.
+func TestPaceKeepsASlowButRealReadingRate(t *testing.T) {
+	for _, tc := range []struct {
+		perHour float64
+		wants   string
+	}{
+		{0.00004, "<1%/h"},
+		{0.004, "<1%/h"},
+		{0.0049, "<1%/h"},
+		{0.005, "1%/h"},
+		{0.05, "5%/h"},
+		{0.23, "23%/h"},
+	} {
+		if got := paceValue(tc.perHour); got != tc.wants {
+			t.Errorf("%v/h: got %q, want %q", tc.perHour, got, tc.wants)
+		}
+	}
+}

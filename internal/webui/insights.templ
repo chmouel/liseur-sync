@@ -2,7 +2,7 @@ package webui
 
 import "github.com/chmouel/liseur-sync/internal/insights"
 
-// Dashboard data carriers (populated by handlers).
+// Insights data carriers (populated by handlers).
 
 type SummaryData struct {
 	// Span is what the reader asked for; RangeDays is how many days
@@ -26,7 +26,7 @@ type SummaryData struct {
 	BooksFinished int
 }
 
-// BookStatRow is one book in the dashboard's breakdown of where the
+// BookStatRow is one book in the breakdown of where the
 // span's reading went.
 type BookStatRow struct {
 	WorkID      string
@@ -44,33 +44,25 @@ type DayCell struct {
 	Minutes float64
 }
 
-templ dashboard(
+templ insightsPage(
 	prefix string, u userCtx, csrf string,
-	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow, books []BookStatRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, books []BookStatRow,
 ) {
-	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, days, recent, reading, books))
+	@layout("Insights", prefix, u, csrf, insightsBody(prefix, csrf, sum, days, recent, books))
 }
 
-templ dashboardBody(
+templ insightsBody(
 	prefix string, csrf string,
-	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow, books []BookStatRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, books []BookStatRow,
 ) {
-	<header class="dashhead">
+	<header class="insightshead">
 		<div>
 			<p class="eyebrow">{ sum.Span.Label() }</p>
-			<h1>Dashboard</h1>
+			<h1>Insights</h1>
 			<p class="page-intro">Reading activity and recent sessions.</p>
 		</div>
 		@spanPicker(sum.Span)
 	</header>
-	if len(reading) > 0 {
-		@dashboardHero(prefix, reading[0])
-		if len(reading) > 1 {
-			@recentShelf(prefix, reading[1:])
-		}
-	} else {
-		@emptyReadingDesk(prefix)
-	}
 	@headlineTotal(sum)
 	<section class="cards">
 		<div class="stat"><span class="stat-icon">@uiIcon("Library")</span><span class="num">{ i2s(sum.BooksRead) }</span><span class="lbl">books read from</span></div>
@@ -197,202 +189,11 @@ templ bookStatRow(prefix string, b BookStatRow) {
 	</li>
 }
 
-// dashboardHero showcases the reader's latest active book in an editorial 3D layout.
-templ dashboardHero(prefix string, w WorkRow) {
-	<section class="dash-hero-card">
-		<div class="dash-hero-ambient" aria-hidden="true"></div>
-		<div class="dash-hero-content">
-			<div class="dash-hero-book-wrap">
-				<div class="book-3d">
-					if w.BookID != "" {
-						<a class="book-cover-link" href={ w.readURL(prefix) } title={ workCardHint(w) }>
-							<div class="book-spine" aria-hidden="true"></div>
-							<div class="book-cover">
-								<img
-									src={ prefix + "books/" + w.BookID + "/cover?size=full" }
-									alt=""
-									loading="eager"
-									decoding="async"
-									width="333"
-									height="500"
-								/>
-								<div class="book-glare" aria-hidden="true"></div>
-							</div>
-							<div class="book-pages-edge" aria-hidden="true"></div>
-						</a>
-					} else {
-						<a class="book-cover-link book-cover-textual" href={ prefix + "works/" + w.ID } title={ workCardHint(w) }>
-							<div class="book-spine" aria-hidden="true"></div>
-							<div class="book-cover text-cover">
-								<span class="text-cover-title">{ orPlaceholder(w.Title) }</span>
-								if w.Author != "" {
-									<span class="text-cover-author">{ w.Author }</span>
-								}
-								if w.Progression != nil {
-									<span class="text-cover-pct">{ pct(*w.Progression) }</span>
-								}
-								<div class="book-glare" aria-hidden="true"></div>
-							</div>
-							<div class="book-pages-edge" aria-hidden="true"></div>
-						</a>
-					}
-				</div>
-			</div>
-			<div class="dash-hero-details">
-				<div class="hero-status-row">
-					<span class="hero-badge">
-						<span class="hero-badge-pulse" aria-hidden="true"></span>
-						Currently Reading
-					</span>
-					if w.Pending {
-						<span class="chip warn">Sync pending</span>
-					} else if w.LastActive != "" {
-						<span class="hero-last-active">
-							<span class="hero-clock-icon" aria-hidden="true">@uiIcon("Minutes")</span>
-							{ "Active " + w.LastActive }
-						</span>
-					}
-				</div>
-				<h2 class="hero-title">
-					<a href={ w.readURL(prefix) }>{ orPlaceholder(w.Title) }</a>
-				</h2>
-				if w.Author != "" {
-					<p class="hero-author">{ "by " + w.Author }</p>
-				}
-				if w.Subtitle != "" {
-					<p class="hero-subtitle">{ w.Subtitle }</p>
-				}
-				if w.Progression != nil {
-					<div class="hero-progress-block">
-						<div class="hero-prog-header">
-							<span class="hero-prog-label">Progress</span>
-							<span class="hero-prog-val">{ pct(*w.Progression) }</span>
-						</div>
-						<div class="hero-prog-track" role="progressbar" aria-valuenow={ pctNum(*w.Progression) } aria-valuetext={ pct(*w.Progression) } aria-valuemin="0" aria-valuemax="100">
-							<span class={ "hero-prog-fill " + pctClass(*w.Progression) }></span>
-						</div>
-					</div>
-				}
-				<div class="hero-actions">
-					if w.CanRead && w.BookID != "" {
-						<a class="btn primary hero-btn-read" href={ w.readURL(prefix) }>
-							<span>Resume Reading</span>
-							<span class="btn-arrow" aria-hidden="true">→</span>
-						</a>
-					} else {
-						<a class="btn primary hero-btn-read" href={ prefix + "works/" + w.ID }>
-							<span>View Work</span>
-							<span class="btn-arrow" aria-hidden="true">→</span>
-						</a>
-					}
-					<a class="btn hero-btn-sec" href={ prefix + "works/" + w.ID }>Stats & Sessions</a>
-					if w.BookID != "" {
-						<a class="btn hero-btn-sec" href={ prefix + "books/" + w.BookID }>Book Details</a>
-					}
-				</div>
-			</div>
-		</div>
-	</section>
-}
 
-// recentShelf presents additional in-progress books on the reader's desk.
-templ recentShelf(prefix string, reading []WorkRow) {
-	<section class="card dash-shelf-card">
-		<div class="cardhead">
-			<div>
-				<p class="eyebrow">On your desk</p>
-				<h2>More books in progress</h2>
-			</div>
-			<a class="section-link" href={ prefix + "library" }>Your library <span aria-hidden="true">→</span></a>
-		</div>
-		<div class="dash-shelf-grid">
-			for _, w := range reading {
-				@shelfWorkCard(prefix, w)
-			}
-		</div>
-	</section>
-}
 
-// shelfWorkCard is one secondary active book on the shelf.
-templ shelfWorkCard(prefix string, w WorkRow) {
-	<article class="shelf-book-card">
-		<div class="shelf-art-wrap">
-			<div class="shelf-book-3d">
-				if w.BookID != "" {
-					<a class="shelf-cover-link" href={ w.readURL(prefix) } title={ workCardHint(w) }>
-						<div class="shelf-book-spine" aria-hidden="true"></div>
-						<div class="shelf-book-cover">
-							<img
-								src={ prefix + "books/" + w.BookID + "/cover?size=thumbnail" }
-								alt=""
-								loading="lazy"
-								decoding="async"
-								width="333"
-								height="500"
-							/>
-						</div>
-						<div class="shelf-book-edge" aria-hidden="true"></div>
-					</a>
-				} else {
-					<a class="shelf-cover-link shelf-text-cover" href={ prefix + "works/" + w.ID } title={ workCardHint(w) }>
-						<div class="shelf-book-spine" aria-hidden="true"></div>
-						<div class="shelf-book-cover text-cover">
-							<span class="shelf-text-title">{ orPlaceholder(w.Title) }</span>
-							if w.Progression != nil {
-								<span class="shelf-text-pct">{ pct(*w.Progression) }</span>
-							}
-						</div>
-						<div class="shelf-book-edge" aria-hidden="true"></div>
-					</a>
-				}
-			</div>
-			if w.CanRead && w.BookID != "" {
-				<div class="shelf-actions">
-					<a class="btn primary" href={ prefix + "books/" + w.BookID + "/read" }>Read</a>
-				</div>
-			}
-		</div>
-		<div class="shelf-info">
-			<a class="shelf-title" href={ w.readURL(prefix) }>{ orPlaceholder(w.Title) }</a>
-			if w.Author != "" {
-				<span class="shelf-author">{ w.Author }</span>
-			}
-			if w.Progression != nil {
-				<div class="shelf-prog-row">
-					<div class="shelf-prog-track">
-						<span class={ "shelf-prog-fill " + pctClass(*w.Progression) }></span>
-					</div>
-					<span class="shelf-prog-pct">{ pct(*w.Progression) }</span>
-				</div>
-			}
-			<nav class="shelf-sublinks">
-				<a href={ prefix + "works/" + w.ID }>Stats</a>
-				if w.BookID != "" {
-					<a href={ prefix + "books/" + w.BookID }>Book</a>
-				}
-				if w.LastActive != "" {
-					<span class="shelf-last-active">{ "· " + w.LastActive }</span>
-				}
-			</nav>
-		</div>
-	</article>
-}
 
-// emptyReadingDesk is shown when there are no currently started books.
-templ emptyReadingDesk(prefix string) {
-	<section class="card dash-empty-desk">
-		<div class="empty-desk-icon" aria-hidden="true">
-			@uiIcon("Library")
-		</div>
-		<h2>Your reading desk is clear</h2>
-		<p class="muted">No books currently in progress. Open a book from your library or sync from a device to resume right where you left off.</p>
-		<div class="empty-desk-action">
-			<a class="btn primary" href={ prefix + "library" }>Browse Your Library <span aria-hidden="true">→</span></a>
-		</div>
-	</section>
-}
 
-// spanPicker is how far back the dashboard looks.
+// spanPicker is how far back the insights page looks.
 //
 // A menu rather than a row of chips: six spans across a phone would
 // either wrap into a paragraph or shrink to initials, and this is a
@@ -400,7 +201,7 @@ templ emptyReadingDesk(prefix string) {
 // where there is scripting (static/ui.js) and shows its button where
 // there is not, like every other picker here.
 templ spanPicker(current insights.Span) {
-	// No action: the dashboard is the only page this draws on, and a
+	// No action: insights is the only page this draws on, and a
 	// form without one submits to wherever it already is.
 	<form class="spanpick" method="get">
 		<label class="visually-hidden" for="span-pick">How far back</label>

@@ -63,8 +63,8 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					<aside class="rail">
 						<p class="rail-caption">Your reading space</p>
 						<nav aria-label="Sections">
-							@railLink(prefix+".", "Dashboard", u.Section == "dashboard")
 							@railLink(prefix+"library", "Library", u.Section == "library")
+							@railLink(prefix+"insights", "Insights", u.Section == "insights")
 							if u.IsAdmin {
 								@railLink(settingsAdminHref(prefix, settingsAdminFolders), "Folders", u.Section == "folders")
 							}
@@ -105,7 +105,7 @@ templ railLink(href string, label string, current bool) {
 templ uiIcon(name string) {
 	<svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
 		switch name {
-			case "Dashboard":
+			case "Insights":
 				<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>
 			case "Library":
 				<path d="M12 6v15M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/>
@@ -169,7 +169,7 @@ templ forbiddenBody(prefix string) {
 			existing administrator grants them, or the operator does with
 			<code>liseur-sync admin grant-admin</code>.
 		</p>
-		<p><a href={ prefix + "." }>Back to the dashboard</a></p>
+		<p><a href={ prefix + "library" }>Back to the library</a></p>
 	</section>
 }
 

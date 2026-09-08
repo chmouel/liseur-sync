@@ -129,10 +129,13 @@ func sectionOf(path string) string {
 	rest := strings.TrimPrefix(strings.TrimPrefix(path, "/ui"), "/")
 	head, _, _ := strings.Cut(rest, "/")
 	switch head {
-	case "":
-		return "dashboard"
-	case "library":
+	// The front door redirects to the library, so nothing renders at
+	// the bare path; naming it library keeps the rail steady during the
+	// hop rather than lighting nothing at all.
+	case "", "library":
 		return "library"
+	case "insights":
+		return "insights"
 	// A single book or work is still the library, as far as the rail is
 	// concerned: there is nowhere else those pages could belong.
 	case "works", "books":
@@ -171,7 +174,7 @@ func backTo(u *url.URL) string {
 	return rest
 }
 
-// SessionRow is one recent session for the dashboard.
+// SessionRow is one recent session for the insights page.
 type SessionRow struct {
 	When          string
 	WorkID        string
