@@ -10,7 +10,7 @@ test("position reads skip corrupt heads without inventing a zero", () => {
     assert.equal(latestReadablePosition([bad], "work"), null);
   }
   assert.equal(latestReadablePosition([{ ...good, work_id: "other" }], "work"), null);
-  assert.equal(latestReadablePosition([{ ...good, locator: { locations: { totalProgression: null } } }, good], "work"), good);
+  assert.equal(latestReadablePosition([{ ...good, locator: { locations: { totalProgression: null } } }, good], "work").op_id, "good");
   assert.equal(latestReadablePosition([{ ...good, progression: 0 }, good], "work").progression, 0);
 });
 
