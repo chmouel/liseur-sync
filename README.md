@@ -20,8 +20,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * OPDS 1.2
 * EPUB library indexing and search
 * EPUB upload and deletion for writable folders
-* a browser EPUB reader
-* an installable offline web reader for selected books
+* a browser based EPUB reader that supports offline reading.
 * per-user reading statistics and sessions
 * per-user series claims
 
