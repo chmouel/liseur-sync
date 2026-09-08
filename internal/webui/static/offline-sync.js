@@ -8,15 +8,23 @@ import {
 
 export async function drainOfflineOutbox(context, request) {
   const records = await listOfflineOutbox({ ...context });
+  const blockedWorks = new Set();
   for (const queued of records) {
     if (queued.deviceID !== context.deviceID) continue;
+    const positionWork = queued.payload.work_id || queued.bookID;
+    if (queued.kind === "position" && blockedWorks.has(positionWork)) continue;
     const record = await attemptOfflineRecord(context, queued.key);
     if (!record) continue;
     const options = { method: "POST", headers: { "Content-Type": "application/json" } };
     const done = () => removeOfflineOutbox({ ...context, kind: record.kind, id: record.id });
-    const failed = (state, error, details = null) => markOfflineOutbox({
-      ...context, kind: record.kind, id: record.id, state, error, details,
-    });
+    const failed = (state, error, details = null) => {
+      // Sending the next page before this one is acknowledged lets a later
+      // retry of the older page become the server's newest position.
+      if (record.kind === "position" && state === "pending") blockedWorks.add(positionWork);
+      return markOfflineOutbox({
+        ...context, kind: record.kind, id: record.id, state, error, details,
+      });
+    };
     if (record.kind === "session") {
       await uploadSessions([record.payload], {
         canSend: () => true,
@@ -68,7 +76,8 @@ export async function drainOfflineOutbox(context, request) {
       } else await done();
     } else if (result.status === "conflict") {
       await failed("conflict", result.reason || "revision conflict", result.server || result);
-    } else await failed("failed", result.reason || "change rejected", result);
+    } else await failed(result.status === "invalid" ? "failed" : "pending",
+      result.reason || "change not acknowledged", result);
   }
 }
 
@@ -77,6 +86,7 @@ export function offlineSync({ context, base, onChange = () => {}, onStatus = () 
   const auth = readerAuth({ apiBase: base, tokenURL: base + "ui/reader/token",
     csrf: () => csrf, onExhausted: () => {} });
   const authorize = async identity => {
+    if (stopped) throw new Error("Offline synchronization stopped.");
     await assertOfflineContext(context);
     if (identity.account !== context.account || identity.device !== context.deviceID)
       throw new Error("Sign in on the original account and device to sync offline changes.");
@@ -88,12 +98,15 @@ export function offlineSync({ context, base, onChange = () => {}, onStatus = () 
     return response;
   };
   const run = async () => {
+    // A stopped coordinator may still be waiting for another tab's lock.
+    if (stopped || globalThis.document?.hidden || globalThis.navigator?.onLine === false) return false;
     const response = await fetch(base + "ui/offline/account", {
       cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout(30000),
     });
     if (!response.ok || response.redirected)
       throw new Error("Sign in again to sync offline changes.");
     const account = await response.json();
+    if (stopped) return false;
     if (account.account !== context.account) throw new Error("Sign in as the account that saved these books.");
     if (typeof account.csrf !== "string" || !account.csrf)
       throw new Error("Sign in again to sync offline changes.");
@@ -122,9 +135,12 @@ export function offlineSync({ context, base, onChange = () => {}, onStatus = () 
       onStatus(error.message || "Offline changes are waiting to sync.");
       return true;
     }).then(pending => {
-      if ((pending || again) && !stopped && retries < 4) {
+      if (!stopped) {
+        const delay = pending || again ? [1000, 3000, 10000, 30000][Math.min(retries++, 3)] : 30000;
         again = false;
-        timer = setTimeout(() => trigger(false), [1000, 3000, 10000, 30000][retries++]);
+        // Keep checking in the foreground, including after the network comes
+        // back without an online event and while another device is reading.
+        timer = setTimeout(() => trigger(false), delay);
       }
     }).finally(() => { flight = null; });
     return flight;

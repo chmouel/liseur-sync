@@ -1,6 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { catchupState, candidateID, topicRefresh } from "../static/reader-sync.js";
+import { catchupState, candidateID, topicRefresh, latestReadablePosition, positionAcknowledged } from "../static/reader-sync.js";
+
+test("position reads skip corrupt heads without inventing a zero", () => {
+  const good = { op_id: "good", work_id: "work", progression: 0.7 };
+  for (const progression of [null, undefined, NaN, Infinity, -0.1, 1.1, "bad"]) {
+    const bad = { ...good, op_id: "bad", progression };
+    assert.deepEqual(latestReadablePosition([bad, good], "work"), good);
+    assert.equal(latestReadablePosition([bad], "work"), null);
+  }
+  assert.equal(latestReadablePosition([{ ...good, work_id: "other" }], "work"), null);
+  assert.equal(latestReadablePosition([{ ...good, locator: { locations: { totalProgression: null } } }, good], "work"), good);
+  assert.equal(latestReadablePosition([{ ...good, progression: 0 }, good], "work").progression, 0);
+});
+
+test("only an acknowledgement of this exact operation settles a position", () => {
+  const op = { op_id: "mine" };
+  for (const status of ["applied", "duplicate"]) {
+    assert.equal(positionAcknowledged({ results: [{ op_id: "mine", status }] }, op), true);
+    assert.equal(positionAcknowledged({ results: [{ op_id: "other", status }] }, op), false);
+  }
+  for (const status of ["conflict", "invalid", undefined])
+    assert.equal(positionAcknowledged({ results: [{ op_id: "mine", status }] }, op), false);
+  assert.equal(positionAcknowledged(null, op), false);
+});
 
 const op = (id, device = "phone", progression = 0.6) => ({
   op_id: id, device_id: device, work_id: "work", progression,
