@@ -241,8 +241,8 @@ func TestPlaceholderFollowsTheTheme(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := bookWithMetadata(t, f, "coverless")
 
-	dark := f.coverBytes(t, bookID, nil)
-	light := f.coverBytes(t, bookID, &http.Cookie{Name: "liseur_ui", Value: "light.grid"})
+	light := f.coverBytes(t, bookID, nil)
+	dark := f.coverBytes(t, bookID, &http.Cookie{Name: "liseur_ui", Value: "dark.grid"})
 	if bytes.Equal(dark, light) {
 		t.Fatal("the placeholder ignored the theme")
 	}

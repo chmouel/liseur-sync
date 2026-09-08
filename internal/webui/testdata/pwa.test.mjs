@@ -12,7 +12,9 @@ test("offline manifest is stable and scoped", async () => {
   assert.equal(manifest.start_url, "./");
   assert.equal(manifest.scope, "./");
   assert.equal(manifest.display, "standalone");
-  assert.deepEqual(manifest.icons.map((icon) => icon.src), ["./icon.svg", "./icon-512.svg"]);
+  assert.deepEqual(manifest.icons.map((icon) => icon.src), [
+    "./icon.svg", "./icon-512.svg", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png",
+  ]);
 });
 
 test("offline app identities inherit deployment-specific start URLs", async () => {

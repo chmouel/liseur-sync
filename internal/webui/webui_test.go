@@ -878,8 +878,23 @@ func TestSettingsRailAndAdminTab(t *testing.T) {
 	if strings.Contains(body, `href="admin`) {
 		t.Fatal("the rail still exposes a separate Admin entry")
 	}
+	rail := strings.SplitN(strings.SplitN(body, `<nav aria-label="Sections">`, 2)[1], "</nav>", 2)[0]
+	folders := strings.Index(rail, `settings?section=admin&amp;view=folders`)
+	settings := strings.Index(rail, `href="settings"`)
+	if folders < 0 || settings < folders || strings.Contains(rail, "Offline shelf") {
+		t.Fatal("the rail must place Folders before Settings and omit Offline shelf")
+	}
+	_, foldersBody := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if !strings.Contains(foldersBody, `href="settings?section=admin&amp;view=folders" aria-current="page"`) {
+		t.Fatal("the Folders rail entry is not active on its page")
+	}
 	_, body = page(t, ts, cookie, "/ui/settings?section=admin")
 	if !strings.Contains(body, `settings?section=admin&amp;view=folders`) {
 		t.Fatal("the Settings Administration tab does not reach Folders")
+	}
+	readerServer, _ := testServer(t)
+	_, body = page(t, readerServer, loginCookie(t, readerServer), "/ui/library")
+	if strings.Contains(body, `settings?section=admin&amp;view=folders`) {
+		t.Fatal("the admin Folders entry is visible to a reader")
 	}
 }

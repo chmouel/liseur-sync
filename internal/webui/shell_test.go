@@ -19,7 +19,7 @@ func TestShellRendersRailAndTheme(t *testing.T) {
 
 	_, body := page(t, ts, cookie, "/ui/library")
 	for _, want := range []string{
-		`data-theme="dark"`, // dark-first, rendered by the server
+		`data-theme="light"`, // light by default, rendered by the server
 		`class="rail"`,
 		`class="topbar"`,
 		`aria-current="page"`, // the rail knows where it is
@@ -31,8 +31,34 @@ func TestShellRendersRailAndTheme(t *testing.T) {
 	}
 	// The section marker must be on the Library link, not just anywhere.
 	i := strings.Index(body, `aria-current="page"`)
-	if i < 0 || !strings.Contains(body[i:min(i+40, len(body))], "Library") {
+	if i < 0 || !strings.Contains(strings.SplitN(body[i:], "</a>", 2)[0], "Library") {
 		t.Error("aria-current is not on the current section")
+	}
+}
+
+func TestLightThemeIsDefaultAndExplicitPreferencesWin(t *testing.T) {
+	for _, tc := range []struct {
+		cookie string
+		want   string
+	}{
+		{"", themeLight},
+		{"list.series-ungrouped", themeLight},
+		{"unknown.grid", themeLight},
+		{"dark.grid", themeDark},
+		{"light.list", themeLight},
+		{"system.grid", themeSystem},
+		{"tokyo-night.grid", themeTokyoNight},
+		{"rose-pine.grid", themeRosePine},
+	} {
+		t.Run(tc.cookie, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+			if tc.cookie != "" {
+				r.AddCookie(&http.Cookie{Name: prefsCookie, Value: tc.cookie})
+			}
+			if got := readPrefs(r).Theme; got != tc.want {
+				t.Errorf("theme = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -40,7 +66,7 @@ func TestPreferencesRoundTrip(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	for _, theme := range []string{themeLight, themeTokyoNight, themeRosePine} {
+	for _, theme := range []string{themeDark, themeLight, themeSystem, themeTokyoNight, themeRosePine} {
 		t.Run(theme, func(t *testing.T) {
 			_, body := page(t, ts, cookie, "/ui/library")
 			csrf := extractCSRF(t, body)
@@ -212,7 +238,7 @@ func TestPreferenceCookieIsNotTrusted(t *testing.T) {
 	buf := make([]byte, 4096)
 	n, _ := resp.Body.Read(buf)
 	head := string(buf[:n])
-	if !strings.Contains(head, `data-theme="dark"`) {
+	if !strings.Contains(head, `data-theme="light"`) {
 		t.Error("unknown theme did not fall back to the default")
 	}
 	if strings.Contains(head, "<script>alert") {

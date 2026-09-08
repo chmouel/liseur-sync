@@ -91,13 +91,14 @@ worth reaching without a page load (stats, sessions, download) are
 small text sublinks under the cover. No popup, nothing to close, and
 the same behaviour under a finger as under a pointer.
 
-**Dark first.** The default theme is dark, because that is what a
-reading application is for and what the comparison does. Light remains,
-as a full palette rather than a grudging inversion. Tokyo Night and Rosé
-Pine are also available as named dark palettes.
+**Light by default.** The September 2026 visual refresh uses white
+surfaces, green accents and serif headings. A new browser, or a cookie
+without a recognised theme, gets light mode. Explicit dark, light,
+system, Tokyo Night and Rosé Pine preferences remain in effect. The
+reader keeps its separate saved appearance and publisher formatting.
 
 **The theme is a cookie, not local storage.** The server renders
-`<html data-theme="dark">`, so a reload cannot flash the wrong palette,
+`<html data-theme="light">` by default, so a reload cannot flash the wrong palette,
 and the toggle cycles dark, light, system, Tokyo Night and Rosé Pine as a
 form POST carrying the session's CSRF token like every other mutation in
 this UI. It therefore works with JavaScript off. Local storage would

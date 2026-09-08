@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="internal/webui/static/icon.svg" width="160" height="160" alt="Liseur Sync — an open book encircled by mint and gold sync arrows">
+</p>
+
 # liseur-sync
 
 Self-hosted server for book libraries and reading-position synchronization.

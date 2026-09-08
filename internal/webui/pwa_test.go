@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"bytes"
 	"encoding/json"
+	"image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -95,7 +97,10 @@ func TestOfflineAssetsArePublicAndRelative(t *testing.T) {
 		Scope    string `json:"scope"`
 		Display  string `json:"display"`
 		Icons    []struct {
-			Src string `json:"src"`
+			Src     string `json:"src"`
+			Sizes   string `json:"sizes"`
+			Type    string `json:"type"`
+			Purpose string `json:"purpose"`
 		} `json:"icons"`
 	}
 	if err := json.NewDecoder(manifestResp.Body).Decode(&manifest); err != nil {
@@ -105,9 +110,45 @@ func TestOfflineAssetsArePublicAndRelative(t *testing.T) {
 		manifest.Scope != "./" || manifest.Display != "standalone" {
 		t.Fatalf("manifest metadata is not stable and scoped: %+v", manifest)
 	}
-	if len(manifest.Icons) != 2 || manifest.Icons[0].Src != "./icon.svg" ||
+	if len(manifest.Icons) != 5 || manifest.Icons[0].Src != "./icon.svg" ||
 		manifest.Icons[1].Src != "./icon-512.svg" {
 		t.Fatalf("manifest icon is not relative: %+v", manifest.Icons)
+	}
+	for _, icon := range manifest.Icons {
+		if !strings.HasPrefix(icon.Src, "./") {
+			t.Fatalf("icon URL is not relative: %q", icon.Src)
+		}
+		resp, err := noRedirect().Get(ts.URL + "/ui/offline/" + strings.TrimPrefix(icon.Src, "./"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != icon.Type {
+			t.Fatalf("icon %s: status %d, type %q", icon.Src, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+		if icon.Type == "image/png" {
+			im, err := png.Decode(bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("icon %s: %v", icon.Src, err)
+			}
+			want := 512
+			if icon.Sizes == "192x192" {
+				want = 192
+			}
+			if im.Bounds().Dx() != want || im.Bounds().Dy() != want {
+				t.Errorf("icon %s: dimensions %v do not match %s", icon.Src, im.Bounds(), icon.Sizes)
+			}
+			if icon.Purpose == "maskable" {
+				for y := 0; y < want; y++ {
+					for x := 0; x < want; x++ {
+						if _, _, _, a := im.At(x, y).RGBA(); a != 0xffff {
+							t.Fatalf("maskable icon is transparent at %d,%d", x, y)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	for _, name := range []string{"shell.html", "offline.css", "offline.js", "offline-shelf.js", "icon.svg", "icon-512.svg", "apple-touch-icon.png", "sw.js"} {
@@ -158,6 +199,9 @@ func TestOfflineServiceWorkerIsBoundedToShellAssets(t *testing.T) {
 		"./offline-shelf.js",
 		"./icon.svg",
 		"./icon-512.svg",
+		"./icon-192.png",
+		"./icon-512.png",
+		"./icon-maskable-512.png",
 		"request.mode === 'navigate'",
 	} {
 		if !strings.Contains(script, required) {
@@ -254,7 +298,6 @@ func TestUILinksToRelativeOfflineInstallSurface(t *testing.T) {
 	for _, want := range []string{
 		`rel="manifest" href="offline/manifest.json"`,
 		`data-pwa-base="offline/"`,
-		`href="offline/"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("library missing relative PWA surface %q", want)

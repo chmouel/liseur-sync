@@ -23,6 +23,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 		<div>
 			<p class="eyebrow">Your shelves</p>
 			<h1>Library</h1>
+			<p class="page-intro">Browse your books and continue reading.</p>
 		</div>
 		if v.HasGrant() || (admin && v.ServerHasFolders) {
 			<div class="librarycontrols">
