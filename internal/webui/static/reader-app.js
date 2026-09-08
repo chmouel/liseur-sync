@@ -958,6 +958,7 @@ function sectionProgression(location) {
 // has it. A refusal is never an acknowledgement.
 let retryOp = null;
 let positionInFlight = null;
+let positionAgain = false;
 let fractionRetryTimer = null;
 let fractionRetryAttempt = 0;
 const FRACTION_RETRY_DELAYS = [250, 750, 1500, 3000, 6000];
@@ -1005,11 +1006,17 @@ function scheduleFractionRetry() {
 }
 
 async function push() {
-  if (positionInFlight) return positionInFlight;
+  if (positionInFlight) {
+    positionAgain = true;
+    return positionInFlight;
+  }
   const activity = activityGeneration;
   positionInFlight = pushPosition().finally(() => {
     positionInFlight = null;
-    if (activity !== activityGeneration && readingDirty) schedulePush();
+    const again = positionAgain;
+    positionAgain = false;
+    if (again && readingDirty) push();
+    else if (activity !== activityGeneration && readingDirty) schedulePush();
   });
   return positionInFlight;
 }
@@ -1076,6 +1083,12 @@ async function pushPosition() {
     if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
     if (!current(stamp) || !auth.responseCurrent(resp)) return;
+    const result = out?.results?.[0];
+    if (result?.op_id === op.op_id && result.status === "conflict") {
+      if (retryOp?.op === op) retryOp = null;
+      say("This position changed while it was syncing. Retrying with a new operation.", true);
+      return;
+    }
     if (!positionAcknowledged(out, op)) return;
     // Only this op's own outcome may clear it: a slower response
     // arriving after the reader has moved on must not discard the op
