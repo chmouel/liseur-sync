@@ -271,7 +271,9 @@ async function refreshLocalReadingState() {
   if (!offlineContext || !durableSync) return;
   const state = await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null);
   if (!state) return;
-  const queued = await listOfflineOutbox({ ...offlineContext, kind: "position" }).catch(() => []);
+  const queued = await listOfflineOutbox({
+    ...offlineContext, kind: "position", state: null,
+  }).catch(() => []);
   const dirty = queued.some(record => record.deviceID === offlineContext.deviceID &&
     record.bookID === cfg.bookID);
   catchup.baseline(state.baseline);
@@ -442,7 +444,9 @@ function rememberAnswer(op, settled) {
 async function withdrawQueuedPositions() {
   if (!offlineContext) return;
   const withdraw = async () => {
-    const queued = await listOfflineOutbox({ ...offlineContext, kind: "position" });
+    const queued = await listOfflineOutbox({
+      ...offlineContext, kind: "position", state: null,
+    });
     for (const record of queued) {
       if (record.bookID !== cfg.bookID || record.deviceID !== offlineContext.deviceID) continue;
       await removeOfflineOutbox({
@@ -463,6 +467,10 @@ function dismissCatchup() {
   catchup.dismiss();
   hideCatchup();
   rememberAnswer(shown?.op, false);
+  if (shown && view && here && finite(here.fraction)) {
+    readingDirty = true;
+    void pushPosition();
+  }
 }
 
 catchupDismiss?.addEventListener("click", dismissCatchup);
@@ -2891,7 +2899,9 @@ window.addEventListener("beforeunload", () => {
         ? await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null)
         : null;
       const queued = offlineContext
-        ? await listOfflineOutbox({ ...offlineContext, kind: "position" }).catch(() => [])
+        ? await listOfflineOutbox({
+          ...offlineContext, kind: "position", state: null,
+        }).catch(() => [])
         : [];
       const dirty = queued.some(record => record.deviceID === offlineContext?.deviceID &&
         record.bookID === cfg.bookID);
