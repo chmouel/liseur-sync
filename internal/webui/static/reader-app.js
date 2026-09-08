@@ -7,7 +7,7 @@ import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
 import { offlineSync } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
-import { catchupState, topicRefresh } from "./reader-sync.js";
+import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import {
   clearOfflineSessionCheckpoint,
@@ -263,13 +263,13 @@ async function lastPosition() {
   const work = workID;
   const stamp = snapshot();
   const resp = await api(
-    "v1/works/" + encodeURIComponent(work) + "/positions?limit=1",
+    "v1/works/" + encodeURIComponent(work) + "/positions?limit=20",
   );
   if (!resp.ok) return { ok: false };
   stamp.identity = auth.responseIdentity(resp);
   const ops = (await resp.json()).ops || [];
   if (work !== workID || !current(stamp)) return { ok: false };
-  return { ok: true, op: ops.length ? ops[0] : null };
+  return { ok: true, op: latestReadablePosition(ops, work) };
 }
 
 // ------------------------------------------------------------- live
@@ -945,9 +945,8 @@ function sectionProgression(location) {
   return Math.max(0, Math.min(1, (total - lo) / (hi - lo)));
 }
 
-// push records where we are. Failure is deliberately quiet: losing a
-// position update is a smaller harm than an error banner over the page
-// every time a laptop lid closes, and the next page turn retries.
+// push records where we are. Transient failures retain the operation for
+// the next foreground retry, reconnect or page turn.
 //
 // The op log is append-only and idempotent by op id, so a retry of the
 // same position must replay the same op — the whole op, byte for byte,
@@ -956,8 +955,7 @@ function sectionProgression(location) {
 // once and kept until the server confirms it holds it; a different
 // position is a different op and gets a new id. The server answers 200
 // with a status per op: "applied" and "duplicate" both mean the log
-// has it, and "conflict" means this id already belongs to another
-// payload, where replaying is the one thing that cannot help.
+// has it. A refusal is never an acknowledgement.
 let retryOp = null;
 let positionInFlight = null;
 let fractionRetryTimer = null;
@@ -1007,6 +1005,16 @@ function scheduleFractionRetry() {
 }
 
 async function push() {
+  if (positionInFlight) return positionInFlight;
+  const activity = activityGeneration;
+  positionInFlight = pushPosition().finally(() => {
+    positionInFlight = null;
+    if (activity !== activityGeneration && readingDirty) schedulePush();
+  });
+  return positionInFlight;
+}
+
+async function pushPosition() {
   if (!workID || !here || !readingDirty || restoring) return;
   const stamp = snapshot();
   const locator = locatorFor(here);
@@ -1033,7 +1041,7 @@ async function push() {
           locator: locator,
         };
   retryOp = { key, op };
-  if (!cfg.offline) catchup.wrote(op);
+  catchup.wrote(op);
   if (cfg.offline) {
     try {
       await saveOfflinePosition({
@@ -1046,7 +1054,8 @@ async function push() {
       notifyOfflineChange();
       if (retryOp?.op === op) {
         retryOp = null;
-        readingDirty = false;
+        if (locatorFor(here)?.locations.fragments[0] === locator.locations.fragments[0] &&
+            here.fraction === locator.locations.totalProgression) readingDirty = false;
       }
     } catch (err) {
       say(err.message || "Offline position could not be saved.", true);
@@ -1061,22 +1070,13 @@ async function push() {
     keepalive: true,
     body: JSON.stringify({ ops: [op] }),
   });
-  positionInFlight = request;
   try {
     const resp = await request;
     stamp.identity = auth.responseIdentity(resp) || stamp.identity;
     if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
     if (!current(stamp) || !auth.responseCurrent(resp)) return;
-    const status =
-      out && out.results && out.results[0] && out.results[0].status;
-    if (
-      status !== "applied" &&
-      status !== "duplicate" &&
-      status !== "conflict"
-    ) {
-      return;
-    }
+    if (!positionAcknowledged(out, op)) return;
     // Only this op's own outcome may clear it: a slower response
     // arriving after the reader has moved on must not discard the op
     // a newer push is still responsible for.
@@ -1088,8 +1088,6 @@ async function push() {
     }
   } catch (err) {
     /* offline: the next page turn replays this exact op */
-  } finally {
-    if (positionInFlight === request) positionInFlight = null;
   }
 }
 
@@ -1120,7 +1118,8 @@ function opID() {
 function schedulePush() {
   if (!readingDirty || restoring) return;
   cancelScheduledPush();
-  pending = setTimeout(push, 1500);
+  // Local durability need not wait for the network debounce.
+  pending = setTimeout(push, cfg.offline ? 0 : 1500);
 }
 
 // ------------------------------------------------------- sessions
@@ -1295,6 +1294,8 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   catchup.resume();
+  push();
+  pushSession();
   if (ready) startLive();
   beginSession();
   if (here && !finite(here.fraction)) {
@@ -1308,8 +1309,21 @@ window.addEventListener("pagehide", () => {
   refreshes.stop();
   catchup.hide();
   hideCatchup();
+  cancelScheduledPush();
+  push();
   endSession();
 });
+window.addEventListener("online", () => {
+  if (document.hidden) return;
+  push();
+  pushSession();
+  if (ready) startLive();
+});
+setInterval(() => {
+  if (document.hidden || navigator.onLine === false) return;
+  push();
+  pushSession();
+}, 30000);
 
 function cfiOf(op) {
   const fragments =
@@ -2628,7 +2642,9 @@ window.addEventListener("beforeunload", () => {
     let op = cfg.offline ? offlineSnapshot.localPosition || null : null;
     if (cfg.offline) {
       catchup.bind(offlineAccount, workID, offlineSnapshot.deviceID);
-      catchup.baseline(op);
+      // A locally queued wire op omits device_id; the credential supplies it
+      // on upload. Its echo after a reload is still our opening baseline.
+      catchup.baseline(op && { ...op, device_id: op.device_id || offlineSnapshot.deviceID });
     }
     if (!cfg.offline) try {
       workID = await resolveWork();

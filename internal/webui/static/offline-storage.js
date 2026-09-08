@@ -1,4 +1,5 @@
 import { decodeText, publicationHref, stripPublicationCode } from "./reader-publication.js";
+import { latestReadablePosition } from "./reader-sync.js";
 
 export const OFFLINE_DB_NAME = "liseur-sync-offline";
 export const OFFLINE_DB_VERSION = 3;
@@ -262,13 +263,27 @@ export async function saveOfflinePosition({
             fail(new OfflineStorageError("This book is not available offline.", "missing"));
             return;
           }
-          current.localPosition = op;
-          snapshots.put(current);
-          tx.objectStore(OUTBOX).put({
-            key: keyForOutbox({ partition, account, kind: "position", id: op.op_id }),
-            partition, account, epoch, deviceID: deviceID || current.deviceID, bookID, kind: "position", id: op.op_id,
-            payload: op, state: "pending", createdAt: Date.now(), attempts: 0,
-          });
+          const outbox = tx.objectStore(OUTBOX);
+          const queued = outbox.getAll();
+          queued.onsuccess = () => {
+            const records = queued.result.filter(row => row.partition === partition && row.account === account);
+            const existing = records.find(row => row.kind === "position" && row.id === op.op_id);
+            if (existing) {
+              if (JSON.stringify(existing.payload) !== JSON.stringify(op))
+                fail(new OfflineStorageError("A queued position cannot change its payload.", "conflict"));
+              return;
+            }
+            // Wall clocks can move backwards and two page turns can share a
+            // millisecond. Transaction order, not UUID order, decides the head.
+            const createdAt = records.reduce((latest, row) => Math.max(latest, (row.createdAt || 0) + 1), Date.now());
+            current.localPosition = op;
+            snapshots.put(current);
+            outbox.put({
+              key: keyForOutbox({ partition, account, kind: "position", id: op.op_id }),
+              partition, account, epoch, deviceID: deviceID || current.deviceID, bookID, kind: "position", id: op.op_id,
+              payload: op, state: "pending", createdAt, attempts: 0,
+            });
+          };
         };
       });
     } catch (error) {
@@ -585,7 +600,7 @@ export async function reconcileOfflineBook(context, book, request, current = () 
   if (!book.workID) return;
   const base = "v1/works/" + encodeURIComponent(book.workID);
   const [positions, annotations] = await Promise.all([
-    request(base + "/positions?limit=1"), request(base + "/annotations"),
+    request(base + "/positions?limit=20"), request(base + "/annotations"),
   ]);
   if (!positions.ok || !annotations.ok) throw new OfflineStorageError("Reading state could not be refreshed.");
   const [positionData, annotationData] = await Promise.all([positions.json(), annotations.json()]);
@@ -604,7 +619,7 @@ export async function reconcileOfflineBook(context, book, request, current = () 
         const position = pending.filter(value => value.kind === "position")
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
         for (const copy of copies.result) {
-          copy.localPosition = position ? position.payload : positionData.ops[0] || null;
+          copy.localPosition = position ? position.payload : latestReadablePosition(positionData.ops, book.workID) || copy.localPosition || null;
           snapshots.put(copy);
         }
       };

@@ -227,6 +227,39 @@ async function storageChecks() {
   check((await s.listOfflineOutbox({ ...context, kind: "position" })).length === 2,
     "restoring a replacement snapshot preserves queued operations");
 
+  const positionPosts = [];
+  await drainOfflineOutbox(context, async (path, options) => {
+    if (path !== "v1/ops") return reply({ results: [] });
+    positionPosts.push(JSON.parse(options.body).ops[0].op_id);
+    return reply({ error: "temporary failure" }, "", 503);
+  });
+  check(positionPosts.join(",") === "local-position", "a deferred page blocks newer pages of the same work");
+  const firstPosition = (await s.listOfflineOutbox({ ...context, kind: "position" }))[0];
+  await s.saveOfflinePosition({ ...context, bookID, op: firstPosition.payload });
+  check((await s.listOfflineOutbox({ ...context, kind: "position" }))[0].attempted,
+    "saving a retry does not erase its transmission evidence");
+  check((await s.getReadySnapshot({ ...context, bookID })).localPosition.op_id === latestPosition.op_id,
+    "saving an older retry cannot replace the local head");
+  await rejected(() => s.saveOfflinePosition({ ...context, bookID,
+    op: { ...firstPosition.payload, progression: 0.9 } }), "queued position IDs have immutable payloads");
+  await drainOfflineOutbox(context, async (path, options) => {
+    if (path !== "v1/ops") return reply({ results: [] });
+    const op = JSON.parse(options.body).ops[0];
+    positionPosts.push(op.op_id);
+    return reply({ results: [{ op_id: op.op_id, status: "applied" }] });
+  });
+  check(positionPosts.join(",") === "local-position,local-position,a-newer-position",
+    "recovery sends the old position before the latest, including a deliberate backward move");
+  const originalNow = Date.now;
+  try {
+    Date.now = () => 100;
+    await s.saveOfflinePosition({ ...context, bookID, op: { ...latestPosition, op_id: "z-first" } });
+    Date.now = () => 50;
+    await s.saveOfflinePosition({ ...context, bookID, op: { ...latestPosition, op_id: "a-last" } });
+  } finally { Date.now = originalNow; }
+  check((await s.listOfflineOutbox({ ...context, kind: "position" })).map(row => row.id).join(",") === "z-first,a-last",
+    "a clock moving backwards cannot reorder page turns");
+
   // The coordinator uses actual IndexedDB, Web Locks, account/token handshakes
   // and transport-bound identity checks, with only HTTP replaced by fixtures.
   await s.clearOfflineAccount(partition, account);
@@ -301,9 +334,12 @@ async function storageChecks() {
   const bounded = offlineSync({ context, base: partition });
   try {
     await bounded.trigger();
-    for (let i = 0; i < 4; i++) await scheduled[i].callback();
-    check(scheduled.map(item => item.delay).join(",") === "1000,3000,10000,30000",
-      "foreground retry budget must stop after four bounded retries");
+    for (let i = 0; i < 5; i++) await scheduled[i].callback();
+    check(scheduled.map(item => item.delay).join(",") === "1000,3000,10000,30000,30000,30000",
+      "foreground retries continue at a bounded rate through a long outage");
+    signedIn = true;
+    await scheduled[5].callback();
+    check(posts === 5, "recovery needs neither a page turn nor a new online event");
   } finally {
     bounded.stop();
     globalThis.setTimeout = originalTimeout;

@@ -120,11 +120,41 @@ try {
   assert.notEqual(inspect.title, 'pwned');
   assert.equal(inspect.hostile, false);
   assert(inspect.nonce, 'offline reader has a script nonce');
+  await offline.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
+  const saved = await wait(offline, `(async () => {
+    const s = await import('../assets/offline-storage.js');
+    const book = await s.getReadySnapshot({ bookID: ${JSON.stringify(book)} });
+    const rows = await s.listOfflineOutbox({ partition: book.partition, account: book.account, kind: 'position' });
+    return book.localPosition?.progression > 0.9 && rows.length ? book.localPosition : null;
+  })()`, 'offline page turn is durably queued');
   await offline.call('Page.reload', { ignoreCache: true });
-  await wait(offline, probe, 'offline reader survives reload');
+  await wait(offline, `(() => {
+    const view = document.querySelector('readium-view');
+    return view?.renderer?.getContents?.().some(({doc}) => doc?.body?.textContent.length > 0) &&
+      parseFloat(document.getElementById('reader-progress-text')?.textContent) >= 90;
+  })()`, 'offline reader restores the saved page after reload');
   assert.notEqual(await offline.evaluate('document.querySelector("script[nonce]")?.nonce'), inspect.nonce,
     'each cached reader navigation receives a fresh nonce');
   console.log('PASS cold /sync/ offline navigation, real positions, inert EPUB script and fresh nonce on reload');
+  await offline.call('Network.emulateNetworkConditions', {
+    offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+  });
+  await wait(offline, `(async () => {
+    const s = await import('../assets/offline-storage.js');
+    const book = await s.getReadySnapshot({ bookID: ${JSON.stringify(book)} });
+    return !(await s.listOfflineOutbox({ partition: book.partition, account: book.account, kind: 'position' })).length;
+  })()`, 'reconnection acknowledges the durable position');
+  const remote = await offline.evaluate(`(async () => {
+    const { readerAuth } = await import('../assets/reader-auth.js');
+    const base = ${JSON.stringify(base)};
+    const account = await (await fetch(base + 'ui/offline/account')).json();
+    const auth = readerAuth({ apiBase: base, tokenURL: base + 'ui/reader/token', csrf: account.csrf });
+    return (await (await auth.request('v1/works/' + ${JSON.stringify(saved.work_id)} + '/positions?limit=1')).json()).ops[0];
+  })()`);
+  assert.equal(remote.op_id, saved.op_id, 'reconnect replays the persisted operation ID');
+  assert.equal(remote.progression, saved.progression, 'server receives the page saved before reload');
+  assert.deepEqual(remote.locator, saved.locator, 'exact locator survives offline reload and upload');
+  console.log('PASS offline page turn survives reload and reconnect uploads the identical operation');
 } catch (error) {
   console.error(error, JSON.stringify(diagnostics));
   process.exitCode = 1;
