@@ -697,6 +697,10 @@ const chromeState = () => evalIn(`JSON.stringify({
   bar: getComputedStyle(document.querySelector('.reader-bar')).opacity,
   arrow: getComputedStyle(document.getElementById('reader-next')).opacity,
   footer: getComputedStyle(document.getElementById('reader-footer')).display,
+  bookTop: document.getElementById('reader-view').getBoundingClientRect().top,
+  bookHeight: document.getElementById('reader-view').getBoundingClientRect().height,
+  stageTop: document.querySelector('.reader-stage').getBoundingClientRect().top,
+  barBottom: document.querySelector('.reader-bar').getBoundingClientRect().bottom,
 })`);
 // Negative checks must observe the full idle interval even when focus or a
 // setting keeps the chrome visible; there is no state change to wait for.
@@ -754,6 +758,8 @@ const parked = JSON.parse(await chromeState());
 check('the chrome steps aside while reading',
   parked.state === 'hidden' && parked.bar === '0' && parked.arrow === '0',
   JSON.stringify(parked));
+check('auto-hide leaves no empty toolbar strip above the book',
+  parked.bookTop === parked.stageTop, JSON.stringify(parked));
 // The footer is the one piece of chrome that stays: the figures are
 // what a reader glances at mid-page, bars or no bars.
 check('the footer stays while the chrome is hidden',
@@ -780,6 +786,9 @@ await new Promise((r) => setTimeout(r, 400)); // the bar fades in
 const reached = JSON.parse(await chromeState());
 check('reaching for the top of the window brings the chrome back',
   reached.state === 'visible' && reached.bar === '1', JSON.stringify(reached));
+check('revealing auto-hide chrome does not resize the book',
+  reached.bookTop === parked.bookTop && reached.bookHeight === parked.bookHeight,
+  JSON.stringify({ parked, reached }));
 
 await idle();
 const beforeTap = JSON.parse(await evalIn(probe));
@@ -1348,6 +1357,8 @@ const pinned = JSON.parse(await chromeState());
 const savedChrome = await evalIn(`localStorage.getItem('liseur.reader.settings')`);
 check('the chrome stays put once auto-hiding is switched off',
   pinned.state === 'visible' && pinned.bar === '1', JSON.stringify(pinned));
+check('switching auto-hide off restores space for the toolbar',
+  pinned.bookTop >= pinned.barBottom, JSON.stringify(pinned));
 check('the auto-hide choice persists in the browser',
   typeof savedChrome === 'string' && savedChrome.includes('"autohide":false'),
   String(savedChrome));

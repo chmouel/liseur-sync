@@ -884,11 +884,10 @@ button.linkish:hover, button.linkish:focus-visible {
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left.
 
-   The progress line and status float over the stage. The bar has a
-   permanently reserved inset at its top, so it can be taken away and
-   brought back without covering text or resizing the reading viewport:
-   a viewport that changes height makes the engine repaginate, which
-   would move the page out from under whoever is reading it. */
+   The progress line and status float over the stage. Only an always
+   visible bar reserves an inset. Auto-hide bars float over the book,
+   keeping the viewport height steady as they appear and disappear so
+   the engine does not repaginate while somebody is reading. */
 .reader-body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
@@ -1050,6 +1049,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .ann-color-orange{border-left:4px solid #ffb74d}
 .reader-stage{flex:1;display:flex;min-height:0;position:relative;
   box-sizing:border-box;padding-top:3rem}
+.reader-body[data-reader-autohide="true"] .reader-stage{padding-top:0}
 #reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden;position:relative}
 readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:block}
 .reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;
