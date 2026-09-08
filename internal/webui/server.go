@@ -250,7 +250,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		mux.Handle("GET /ui/offline/assets/{name...}", pagePolicy(handleOfflineReaderAsset))
 	}
 
-	// /ui normalizes to /ui/ so the dashboard shares the /ui/ base
+	// /ui normalizes to /ui/ so the front door shares the /ui/ base
 	// directory with the other top-level pages and relative links
 	// resolve identically everywhere.
 	mux.Handle("GET /ui", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -263,13 +263,24 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		}
 		redirectRel(w, to, http.StatusMovedPermanently)
 	}))
+	frontDoor := s.requireAuth(func(w http.ResponseWriter, r *http.Request, _ store.AuthSession, _ *store.User) {
+		// The library is what a reader comes here for, so it is what
+		// the front door opens onto. Not a permanent redirect: which
+		// page is home is a decision, and a 301 would outlive it in
+		// every browser that saw one. It stays behind the sign-in
+		// check so a stranger is still asked who they are first.
+		redirectRel(w, "library", http.StatusFound)
+	})
 	mux.Handle("GET /ui/", sec(func(w http.ResponseWriter, r *http.Request) {
+		// A path nothing claimed is a 404 for everybody. Sending a
+		// stranger to sign in first would tell them the page exists.
 		if r.URL.Path != "/ui/" {
 			http.NotFound(w, r)
 			return
 		}
-		s.requireAuth(s.handleDashboard)(w, r)
+		frontDoor(w, r)
 	}))
+	mux.Handle("GET /ui/insights", sec(s.requireAuth(s.handleInsights)))
 	mux.Handle("GET /ui/login", sec(func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := s.session(r); ok {
 			redirectRel(w, "./", http.StatusSeeOther)

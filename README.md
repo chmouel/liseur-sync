@@ -8,9 +8,9 @@ Self-hosted server for book libraries and reading-position synchronization.
 
 The server is a single Go binary with SQLite by default, optional PostgreSQL, and multi-user support.
 
-![Dashboard](docs/screenshots/dashboard.png)
-
 ![Library](docs/screenshots/library.png)
+
+![Insights](docs/screenshots/insights.png)
 
 ## Interfaces
 

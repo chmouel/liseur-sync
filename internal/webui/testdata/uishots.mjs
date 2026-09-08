@@ -146,7 +146,7 @@ for (const width of widths) {
       format: 'png', captureBeyondViewport: (clips[i] || '').trim() !== 'viewport',
     })
     const derived = (path.replace(/[^a-z0-9]+/gi, '-') || 'root').replace(/^-|-$/g, '')
-    const label = (names[i] || '').trim() || derived || 'dashboard'
+    const label = (names[i] || '').trim() || derived || 'page'
     const suffix = names[i] && widths.length === 1 ? '' : `-${width}`
     writeFileSync(join(outDir, `${process.env.SHOT_TAG || ''}${label}${suffix}.png`), Buffer.from(data, 'base64'))
     console.log(`shot ${width} ${path}`)

@@ -185,7 +185,7 @@ done
 
 # A shelf where nothing has been read is a file listing. Two books get
 # positions and a week of sessions, pushed the way a real client pushes
-# them, so the dashboard has something useful to show.
+# them, so the insights page has something useful to show.
 resolve_work() {
 	local book=$1
 	local work
@@ -275,8 +275,8 @@ SHOT_CHROME="$CHROME" \
 	SHOT_COOKIE="$SESSION" \
 	SHOT_DIR="$ROOT/$OUT" \
 	SHOT_WIDTHS=1440 \
-	SHOT_PATHS="/ui,/ui/library,/ui/books/$READER/read,/ui/books/$BOOK,/ui/settings?section=admin&view=users" \
-	SHOT_NAMES="dashboard,library,reader,book,admin" \
+	SHOT_PATHS="/ui/library,/ui/insights,/ui/books/$READER/read,/ui/books/$BOOK,/ui/settings?section=admin&view=users" \
+	SHOT_NAMES="library,insights,reader,book,admin" \
 	SHOT_WAIT="$WAIT" \
 	SHOT_EVAL="$EVAL" \
 	SHOT_CLIP=",,viewport,," \
@@ -287,7 +287,7 @@ rm -rf "$OUT/profile"
 # Preserve the UI gradients and book artwork in full colour. Strip
 # metadata, then compress losslessly for the README.
 if command -v magick >/dev/null; then
-	for name in dashboard library reader book admin; do
+	for name in library insights reader book admin; do
 		magick "$OUT/$name.png" -strip -depth 8 "$OUT/$name.png"
 	done
 fi

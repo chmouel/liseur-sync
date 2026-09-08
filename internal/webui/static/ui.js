@@ -65,7 +65,7 @@
     }
   });
 
-  // Choosing a library, or a span on the dashboard, goes there at once.
+  // Choosing a library, or a span on the insights page, goes there at once.
   // Without this the forms still work — their <noscript> buttons submit
   // them — so this is the same behaviour the onchange attribute used to
   // give, minus the attribute the CSP now refuses.

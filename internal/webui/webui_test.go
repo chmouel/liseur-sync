@@ -225,15 +225,15 @@ func TestAuthFlowAndPages(t *testing.T) {
 			}
 		}
 	}
-	// Dashboard shows the day chart, the stat cards and the span picker.
+	// Insights shows the day chart, the stat cards and the span picker.
 	// Thirty days is the default span, which is drawn as bars; the
 	// heatmap has its own test below.
-	_, body = page(t, ts, cookie, "/ui")
+	_, body = page(t, ts, cookie, "/ui/insights")
 	if !strings.Contains(body, "daybars") || !strings.Contains(body, "day streak") {
-		t.Fatal("dashboard missing chart/stats")
+		t.Fatal("insights missing chart/stats")
 	}
 	if !strings.Contains(body, `id="span-pick"`) {
-		t.Fatal("dashboard missing the span picker")
+		t.Fatal("insights missing the span picker")
 	}
 	// The admin tab is forbidden to an ordinary account, and the rail does
 	// not advertise it in the first place.
