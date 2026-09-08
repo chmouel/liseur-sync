@@ -1631,12 +1631,14 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   check('a disagreement is marked as one',
     await evalIn("document.getElementById('reader-catchup').classList.contains('conflict')"));
 
-  // Staying is an answer: it settles the other device's position without
-  // giving up the page this browser still owes.
+  // Staying is an answer: it settles the other device's position and
+  // publishes the page this browser still wants to keep.
   await evalIn("document.getElementById('reader-catchup-dismiss').click()");
   await pause(300);
   check('staying keeps this browser where it was', Math.abs(await position() - 0.42) > 0.01);
-  check('staying does not withdraw the page this browser owes', await positions() === owed, await positions());
+  const staying = await positions();
+  check('staying keeps the page this browser chose',
+    staying.startsWith(owed + ',') && staying.split(',').length === 2, staying);
   await visibility(true); await visibility(false);
   await pause(500);
   check('an answered disagreement is not asked again',
@@ -1645,14 +1647,15 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   // The network comes back. Nothing prompts it: the queue drains itself.
   await evalIn('window.__liveBlockOps = false');
   await evalIn("window.dispatchEvent(new Event('online'))");
-  check('the owed page reaches the server once the network returns',
-    await wait(`window.__liveDelivered.includes(${JSON.stringify(owed.split(',')[0])})`),
+  check('the chosen pages reach the server once the network returns',
+    await wait(`window.__liveDelivered.includes(${JSON.stringify(owed.split(',')[0])}) &&
+      window.__liveDelivered.includes(${JSON.stringify(staying.split(',')[1])})`),
     String(await evalIn('JSON.stringify(window.__liveDelivered)')));
   check('a delivered page leaves the queue',
     await wait(`(${drained}).then(n => n === 0)`), String(await positions()));
   reading = JSON.parse(await stored() || 'null');
   check('delivery is what moves the agreed baseline',
-    reading && reading.baseline && reading.baseline.op_id === owed.split(',')[0],
+    reading && reading.baseline && reading.baseline.op_id === staying.split(',')[1],
     JSON.stringify(reading && reading.baseline));
   check('nothing is owed once it has been agreed', !reading.local, JSON.stringify(reading));
 }
