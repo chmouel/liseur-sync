@@ -1,15 +1,19 @@
 package webui
 
 templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
-	@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, v))
+	if v.Section == settingsAdmin && v.Admin.View == settingsAdminFolders {
+		@layout("Folders", prefix, u, csrf, adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash))
+	} else {
+		@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, v))
+	}
 }
 
 templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
 	<header class="settings-heading">
+		<p class="eyebrow">Account & preferences</p>
 		<h1>Settings</h1>
 		<p class="muted">
-			Your account, connected readers and instance administration in one
-			place.
+			Your account, your readers, and the way your library works.
 		</p>
 	</header>
 	<nav class="settings-tabs" aria-label="Settings sections">

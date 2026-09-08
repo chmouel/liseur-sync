@@ -63,15 +63,18 @@ func offlineShellRevision(assets fs.FS, reader []byte) (string, error) {
 }
 
 var offlineAssetTypes = map[string]string{
-	"icon.svg":             "image/svg+xml",
-	"icon-512.svg":         "image/svg+xml",
-	"apple-touch-icon.png": "image/png",
-	"manifest.json":        "application/manifest+json",
-	"offline.css":          "text/css; charset=utf-8",
-	"offline.js":           "application/javascript; charset=utf-8",
-	"offline-shelf.js":     "application/javascript; charset=utf-8",
-	"shell.html":           "text/html; charset=utf-8",
-	"sw.js":                "application/javascript; charset=utf-8",
+	"icon.svg":              "image/svg+xml",
+	"icon-512.svg":          "image/svg+xml",
+	"icon-192.png":          "image/png",
+	"icon-512.png":          "image/png",
+	"icon-maskable-512.png": "image/png",
+	"apple-touch-icon.png":  "image/png",
+	"manifest.json":         "application/manifest+json",
+	"offline.css":           "text/css; charset=utf-8",
+	"offline.js":            "application/javascript; charset=utf-8",
+	"offline-shelf.js":      "application/javascript; charset=utf-8",
+	"shell.html":            "text/html; charset=utf-8",
+	"sw.js":                 "application/javascript; charset=utf-8",
 }
 
 var offlineReaderAssets = map[string]string{

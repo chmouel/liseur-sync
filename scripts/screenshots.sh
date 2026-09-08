@@ -284,13 +284,12 @@ SHOT_CHROME="$CHROME" \
 cd "$ROOT"
 rm -rf "$OUT/profile"
 
-# Chrome writes bigger PNGs than it needs to, and a screenshot in a
-# README should not be the largest file in the repository. Two hundred
-# and fifty-six colours is plenty for a dark UI and a few cover
-# paintings, and cuts these to a third; without ImageMagick, lossless
-# squeezing is still better than nothing.
+# Preserve the UI gradients and book artwork in full colour. Strip
+# metadata, then compress losslessly for the README.
 if command -v magick >/dev/null; then
-	for png in "$OUT"/*.png; do magick "$png" -colors 256 -depth 8 "$png"; done
+	for name in dashboard library reader book admin; do
+		magick "$OUT/$name.png" -strip -depth 8 "$OUT/$name.png"
+	done
 fi
 if command -v oxipng >/dev/null; then
 	oxipng -q -o 4 --strip safe "$OUT"/*.png

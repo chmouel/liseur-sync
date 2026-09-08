@@ -20,7 +20,10 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 			// add live in style.css instead, spelled the same way.
 			<meta name="htmx-config" content="{&#34;includeIndicatorStyles&#34;:false}"/>
 			<title>{ title } · liseur-sync</title>
+			<link rel="shortcut icon" href={ prefix + "static/favicon.ico" }/>
 			<link rel="icon" href={ prefix + "static/icon.png" }/>
+			<link rel="icon" type="image/svg+xml" sizes="any" href={ prefix + "static/favicon.svg" }/>
+			<link rel="apple-touch-icon" sizes="180x180" href={ prefix + "static/apple-touch-icon.png" }/>
 			if u.Offline {
 				<link rel="manifest" href={ prefix + "offline/manifest.json" }/>
 			}
@@ -43,12 +46,13 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<span class="visually-hidden">Menu</span>
 						</label>
 						<a class="brand" href={ prefix + "." }>
-							<span class="brandmark" role="img" aria-label="Liseur sync"></span>
-							<span class="suffix" aria-hidden="true">sync</span>
+							<img class="brand-icon" src={ prefix + "static/icon.svg" } width="32" height="32" alt=""/>
+							<span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span>
 						</a>
+						<span class="topbar-context">{ title }</span>
 						<div class="account">
 							@themeToggle(prefix, csrf, u)
-							<span class="who">{ u.User.Name }</span>
+							<span class="who"><span class="account-avatar" aria-hidden="true">@uiIcon("Account")</span>{ u.User.Name }</span>
 							<form method="post" action={ prefix + "logout" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
 								<button class="link" type="submit">Log out</button>
@@ -57,24 +61,28 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					</header>
 					<label class="nav-scrim" for="nav-toggle" aria-hidden="true"></label>
 					<aside class="rail">
+						<p class="rail-caption">Your reading space</p>
 						<nav aria-label="Sections">
 							@railLink(prefix+".", "Dashboard", u.Section == "dashboard")
 							@railLink(prefix+"library", "Library", u.Section == "library")
-							if u.Offline {
-								@railLink(prefix+"offline/", "Offline shelf", u.Section == "offline")
+							if u.IsAdmin {
+								@railLink(settingsAdminHref(prefix, settingsAdminFolders), "Folders", u.Section == "folders")
 							}
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")
 						</nav>
+						<div class="rail-note">
+							<p>A library<br/><em>of your own.</em></p>
+						</div>
 					</aside>
 					<main id="content">
 						<div class="page">
 							@body
-							<footer class="foot">liseur-sync · self-hosted reading sync</footer>
+							<footer class="foot">Liseur Sync</footer>
 						</div>
 					</main>
 				</div>
 			} else {
-				<main id="content">
+				<main id="content" class="auth-main">
 					@body
 				</main>
 			}
@@ -87,10 +95,34 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 // drift apart.
 templ railLink(href string, label string, current bool) {
 	if current {
-		<a href={ href } aria-current="page">{ label }</a>
+		<a href={ href } aria-current="page">@uiIcon(label)<span>{ label }</span></a>
 	} else {
-		<a href={ href }>{ label }</a>
+		<a href={ href }>@uiIcon(label)<span>{ label }</span></a>
 	}
+}
+
+// Shared line icons keep navigation and reading summaries visually consistent.
+templ uiIcon(name string) {
+	<svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		switch name {
+			case "Dashboard":
+				<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>
+			case "Library":
+				<path d="M12 6v15M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/>
+			case "Folders":
+				<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 2h18"/>
+			case "Settings":
+				<path d="M4 7h7m4 0h5M4 17h3m4 0h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>
+			case "Account":
+				<circle cx="12" cy="8" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/>
+			case "Minutes":
+				<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+			case "Sessions":
+				<path d="M4 20V10m8 10V4m8 16v-7"/>
+			case "Streak":
+				<path d="M13 3c1 5 5 6 5 11a6 6 0 0 1-12 0c0-3 2-5 3-6 0 3 1 4 2 4 2-2 3-5 2-9Z"/>
+		}
+	</svg>
 }
 
 // themeToggle cycles dark → light → system → Tokyo Night → Rosé Pine. One
@@ -138,17 +170,37 @@ templ loginPage(prefix string, u userCtx, errMsg string) {
 }
 
 templ loginBody(prefix string, errMsg string) {
-	<section class="card narrow">
-		<h1>Sign in</h1>
+	@authFrame(prefix) {
+		<p class="auth-eyebrow">Your reading space</p>
+		<h1>Welcome back.</h1>
+		<p class="auth-intro">Sign in and pick up your next chapter.</p>
 		if errMsg != "" {
-			<p class="error">{ errMsg }</p>
+			<p class="error" role="alert">{ errMsg }</p>
 		}
-		<form method="post" action={ prefix + "login" }>
-			<label>Username <input name="username" required autofocus/></label>
-			<label>Password <input name="password" type="password" required/></label>
-			<button type="submit" class="primary">Sign in</button>
+		<form class="auth-form" method="post" action={ prefix + "login" }>
+			<label>Username <input name="username" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false"/></label>
+			<label>Password <input name="password" type="password" required autocomplete="current-password"/></label>
+			<button type="submit" class="auth-submit">Sign in <span aria-hidden="true">→</span></button>
 		</form>
-	</section>
+	}
+}
+
+templ authFrame(prefix string) {
+	<div class="auth-wrap">
+		<div class="auth-shell">
+			<aside class="auth-story" aria-label="Liseur Sync">
+				<p class="auth-brand">Liseur <span>sync</span></p>
+				<img class="auth-icon" src={ prefix + "static/icon.svg" } width="112" height="112" alt=""/>
+				<p class="auth-headline">Every book.<br/>Right where<br/><em>you left it.</em></p>
+				<p class="auth-story-copy">A home for your books, with your reading place kept across devices.</p>
+				<p class="auth-story-foot"><span aria-hidden="true">✦</span> Self-hosted. Made for readers.</p>
+			</aside>
+			<section class="auth-panel">
+				{ children... }
+			</section>
+		</div>
+		<p class="auth-footer">Liseur Sync</p>
+	</div>
 }
 
 // setupPage is the first-run screen: the only page in the UI that an
@@ -159,25 +211,23 @@ templ setupPage(prefix string, u userCtx, errMsg string) {
 }
 
 templ setupBody(prefix string, errMsg string) {
-	<section class="card narrow">
-		<h1>Welcome</h1>
-		<p class="muted">
-			This instance has no accounts yet. The account you make here is the
-			first one, and it is an administrator: it can create the others,
-			reset passwords and reach the admin section. This page closes as
-			soon as it exists.
-		</p>
+	@authFrame(prefix) {
+		<p class="auth-eyebrow">Your first chapter</p>
+		<h1>Make yourself at home.</h1>
+		<p class="auth-intro">Create your account to start your library.</p>
 		if errMsg != "" {
-			<p class="error">{ errMsg }</p>
+			<p class="error" role="alert">{ errMsg }</p>
 		}
-		<form method="post" action={ prefix + "setup" }>
-			<label>Username <input name="username" required autofocus autocomplete="username"/></label>
+		<form class="auth-form" method="post" action={ prefix + "setup" }>
+			<label>Username <input name="username" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false"/></label>
 			<label>
 				Password
-				<input name="password" type="password" required autocomplete="new-password" minlength={ minPasswordLength }/>
+				<input name="password" type="password" required autocomplete="new-password" minlength={ minPasswordLength } aria-describedby="password-hint"/>
+				<span class="auth-hint" id="password-hint">At least { minPasswordLength } characters.</span>
 			</label>
-			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
-			<button type="submit" class="primary">Create administrator</button>
+			<label>Confirm password <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			<button type="submit" class="auth-submit">Create administrator <span aria-hidden="true">→</span></button>
 		</form>
-	</section>
+		<p class="auth-note">This first account manages your library and other accounts. You can add readers once you’re in.</p>
+	}
 }
