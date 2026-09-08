@@ -234,6 +234,9 @@ templ readerPage(v ReaderView, csrf string) {
 				</label>
 				<button type="button" data-annotation-action="cancel">Cancel</button>
 			</div>
+			// Both buttons are relabelled at runtime: an offer says where it
+			// would take the reader, and a disagreement says that for each
+			// side. The label here names the panel, not either position.
 			<aside id="reader-catchup" class="reader-catchup" aria-label="Reading position on another device" hidden>
 				<p id="reader-catchup-text" role="status" aria-live="polite"></p>
 				<div>
