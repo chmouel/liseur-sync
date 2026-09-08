@@ -8,6 +8,7 @@ type WorkRow struct {
 	ID          string
 	BookID      string
 	Title       string
+	Subtitle    string
 	Author      string
 	Progression *float64
 	LastActive  string
@@ -40,11 +41,18 @@ func workCardHint(w WorkRow) string {
 
 type WorkDetail struct {
 	Work        store.Work
-	Minutes     float64
+	Duration    string
 	Pages       float64
 	Sessions    int
+	Sittings    string
 	CurrentProg float64
 	ETAHuman    string
+	// Started, ReadingFor and LastRead are the shape of the reading
+	// rather than its size: when it began, how long it has been going
+	// on, and when it was last picked up.
+	Started    string
+	ReadingFor string
+	LastRead   string
 	// BookID and CanRead are the catalog book this work is mapped to,
 	// when there is one, so the page that shows the numbers can also be
 	// the way back into the book.
@@ -101,16 +109,28 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 		</p>
 	}
 	<section class="cards" id="stats">
-		<div class="stat"><span class="num">{ pct(d.CurrentProg) }</span><span class="lbl">read</span></div>
-		<div class="stat"><span class="num">{ f0(d.Minutes) }</span><span class="lbl">minutes</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Library")</span><span class="num">{ pct(d.CurrentProg) }</span><span class="lbl">read</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Minutes")</span><span class="num words">{ d.Duration }</span><span class="lbl">time spent reading</span></div>
 		if d.Pages > 0 {
-			<div class="stat"><span class="num">{ f0(d.Pages) }</span><span class="lbl">pages</span></div>
+			<div class="stat"><span class="stat-icon">@uiIcon("Pages")</span><span class="num">{ f0(d.Pages) }</span><span class="lbl">pages</span></div>
 		}
-		<div class="stat"><span class="num">{ i2s(d.Sessions) }</span><span class="lbl">sessions</span></div>
-		if d.ETAHuman != "" {
-			<div class="stat"><span class="num">{ d.ETAHuman }</span><span class="lbl">left (est.)</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Sessions")</span><span class="num">{ i2s(d.Sessions) }</span><span class="lbl">sittings</span></div>
+		if d.Started != "" {
+			<div class="stat"><span class="stat-icon">@uiIcon("Calendar")</span><span class="num words">{ d.Started }</span><span class="lbl">started</span></div>
+		}
+		if d.ReadingFor != "" {
+			<div class="stat"><span class="stat-icon">@uiIcon("Span")</span><span class="num words">{ d.ReadingFor }</span><span class="lbl">reading for</span></div>
+		}
+		if d.LastRead != "" {
+			<div class="stat"><span class="stat-icon">@uiIcon("Calendar")</span><span class="num words">{ d.LastRead }</span><span class="lbl">last read</span></div>
 		}
 	</section>
+	if d.ETAHuman != "" {
+		<p class="work-eta">
+			<span class="work-eta-icon">@uiIcon("Pace")</span>
+			{ "About " + d.ETAHuman + " left, at the pace you have been reading" }
+		</p>
+	}
 	// Highlights and notes synced from the reader's devices (ADR-0028),
 	// view-only here. Each links back into the book when the viewer's
 	// folder grants reach one to open; otherwise it is simply listed.
@@ -148,7 +168,7 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 	<section class="card" id="sessions">
 		<h2>Sessions</h2>
 		if len(sessions) == 0 {
-			<p class="muted">No sessions recorded yet — they appear once a device reports reading time.</p>
+			<p class="muted">You have not read any of this one yet.</p>
 		} else {
 			<table>
 				<tr><th>When</th><th>Device</th><th>Duration</th><th>Progress</th></tr>
@@ -156,7 +176,7 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 					<tr>
 						<td>{ s.When }</td>
 						<td><code>{ s.DeviceID }</code></td>
-						<td>{ i2s(s.Minutes) } min</td>
+						<td>{ s.Duration }</td>
 						<td>{ pct(s.StartProg) } → { pct(s.EndProg) }</td>
 					</tr>
 				}

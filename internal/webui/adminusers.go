@@ -2,6 +2,7 @@ package webui
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -412,8 +413,19 @@ func (s *Server) handleAdminPairingCode(
 				return "", "", err
 			}
 			return code, "kosync pairing code for " + target.Name +
-				" (" + humanDuration(ttl) + ", single use)", nil
+				" (" + ttlWords(ttl) + ", single use)", nil
 		})
+}
+
+// ttlWords is how long a freshly minted pairing credential lasts,
+// approximately. It is a lifetime rather than a stretch of reading, so
+// it keeps its own rough form: the exact minute a code expires is not
+// what somebody about to type it needs to know.
+func ttlWords(d time.Duration) string {
+	if h := int(d.Hours()); h >= 1 {
+		return fmt.Sprintf("~%dh", h)
+	}
+	return fmt.Sprintf("~%dm", int(d.Minutes()))
 }
 
 // handleAdminCreateKoplugin mints a statistics-plugin capability for

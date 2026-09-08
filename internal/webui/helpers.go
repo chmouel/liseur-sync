@@ -180,13 +180,22 @@ type SessionRow struct {
 	DeviceName    string
 	DeviceIDShort string
 	Minutes       int
-	StartProg     float64
-	EndProg       float64
+	// Duration is the sitting written out the way the rest of the
+	// statistics are, so a table cell and a headline are in the same
+	// units.
+	Duration  string
+	StartProg float64
+	EndProg   float64
 }
 
-func pct(f float64) string { return strconv.Itoa(int(f*100)) + "%" }
-func f0(f float64) string  { return strconv.FormatFloat(f, 'f', 0, 64) }
-func i2s(i int) string     { return strconv.Itoa(i) }
+func pct(f float64) string { return pctNum(f) + "%" }
+
+// pctNum is the same figure without the sign, for the places that want a
+// number rather than something to read: aria-valuenow is measured
+// against aria-valuemin and aria-valuemax, so "42%" is not a value.
+func pctNum(f float64) string { return strconv.Itoa(int(f * 100)) }
+func f0(f float64) string     { return strconv.FormatFloat(f, 'f', 0, 64) }
+func i2s(i int) string        { return strconv.Itoa(i) }
 
 // plural counts things in words, because "1 books" reads as a bug even
 // when the number is right.

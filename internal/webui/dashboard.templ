@@ -9,15 +9,34 @@ type SummaryData struct {
 	// that came to, which is nought for all time.
 	Span      insights.Span
 	RangeDays int
-	// Bars says whether the span is short enough to read as one bar a
-	// day. Decided in the handler, which is the only place that knows
-	// the reader's timezone and the moment being asked about.
-	Bars          bool
+	// Bucket is how wide one bar of the activity chart is. Decided in
+	// the handler, which is the only place that knows the reader's
+	// timezone and the moment being asked about.
+	Bucket insights.Bucket
+	// Chart is which view of the activity card is on screen, and
+	// Calendar whether the other one is worth offering at all.
+	Chart         string
+	Calendar      bool
 	ActiveMinutes float64
 	Pages         float64
 	Sessions      int
 	StreakDays    int
 	SpeedPerHour  float64 // progression fraction per hour
+	BooksRead     int
+	BooksFinished int
+}
+
+// BookStatRow is one book in the dashboard's breakdown of where the
+// span's reading went.
+type BookStatRow struct {
+	WorkID      string
+	BookID      string
+	Title       string
+	Author      string
+	Duration    string
+	Sittings    string
+	Progression float64
+	Finished    bool
 }
 
 type DayCell struct {
@@ -27,14 +46,14 @@ type DayCell struct {
 
 templ dashboard(
 	prefix string, u userCtx, csrf string,
-	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow, books []BookStatRow,
 ) {
-	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, days, recent, reading))
+	@layout("Dashboard", prefix, u, csrf, dashboardBody(prefix, csrf, sum, days, recent, reading, books))
 }
 
 templ dashboardBody(
 	prefix string, csrf string,
-	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow,
+	sum SummaryData, days []DayCell, recent []SessionRow, reading []WorkRow, books []BookStatRow,
 ) {
 	<header class="dashhead">
 		<div>
@@ -44,37 +63,61 @@ templ dashboardBody(
 		</div>
 		@spanPicker(sum.Span)
 	</header>
-	<section class="cards">
-		<div class="stat"><span class="stat-icon">@uiIcon("Minutes")</span><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes</span></div>
-		if sum.Pages > 0 {
-			<div class="stat"><span class="stat-icon">@uiIcon("Library")</span><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+	if len(reading) > 0 {
+		@dashboardHero(prefix, reading[0])
+		if len(reading) > 1 {
+			@recentShelf(prefix, reading[1:])
 		}
-		<div class="stat"><span class="stat-icon">@uiIcon("Sessions")</span><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
+	} else {
+		@emptyReadingDesk(prefix)
+	}
+	@headlineTotal(sum)
+	<section class="cards">
+		<div class="stat"><span class="stat-icon">@uiIcon("Library")</span><span class="num">{ i2s(sum.BooksRead) }</span><span class="lbl">books read from</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Finished")</span><span class="num">{ i2s(sum.BooksFinished) }</span><span class="lbl">books finished</span></div>
 		// The streak deliberately reaches back past the span, so it says
 		// so rather than being left to look like another figure about
 		// the last week.
-		<div class="stat"><span class="stat-icon">@uiIcon("Streak")</span><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak (all time)</span></div>
-	</section>
-	if len(reading) > 0 {
-		<section class="card reading-shelf">
-			<div class="cardhead"><div><p class="eyebrow">Your next chapter</p><h2>Continue reading</h2></div><a class="section-link" href={ prefix + "library" }>Your library <span aria-hidden="true">→</span></a></div>
-			<div class="grid shelf">
-				for _, w := range reading {
-					@workCard(prefix, w)
-				}
-			</div>
-		</section>
-	}
-	<section class="card">
-		<div class="cardhead"><div><p class="eyebrow">The reading habit</p><h2>{ chartHeading(sum.Span) }</h2></div></div>
-		if len(days) == 0 {
-			<p class="muted">Nothing recorded in this span.</p>
-		} else if sum.Bars {
-			@dayBars(days)
-		} else {
-			@readingHeatmap(days)
+		<div class="stat accent"><span class="stat-icon">@uiIcon("Streak")</span><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak (all time)</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Sessions")</span><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sittings</span></div>
+		if sum.Pages > 0 {
+			<div class="stat"><span class="stat-icon">@uiIcon("Pages")</span><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+		}
+		// Pace is only known where the reading was measured rather than
+		// inferred, so an unknown one is left out rather than shown as
+		// nought — which would read as "you got nowhere".
+		if sum.SpeedPerHour > 0 {
+			<div class="stat"><span class="stat-icon">@uiIcon("Pace")</span><span class="num">{ paceValue(sum.SpeedPerHour) }</span><span class="lbl">pace</span></div>
 		}
 	</section>
+	<section class="card">
+		<div class="cardhead">
+			<div><p class="eyebrow">The reading habit</p><h2>{ chartHeading(sum.Span, sum.Chart) }</h2></div>
+			if sum.Calendar {
+				@chartTabs(sum)
+			}
+		</div>
+		if len(days) == 0 {
+			<p class="muted">Nothing read in this span. Try a longer one.</p>
+		} else if sum.Chart == chartCalendar {
+			@readingHeatmap(days)
+		} else {
+			@dayBars(days, sum.Bucket)
+		}
+	</section>
+	if len(books) > 0 {
+		<section class="card" id="by-book">
+			<div class="cardhead">
+				<div><p class="eyebrow">Where the time went</p><h2>By book</h2></div>
+				<span class="count-badge">{ i2s(len(books)) }</span>
+			</div>
+			<ul class="bookstats">
+				for _, b := range books {
+					@bookStatRow(prefix, b)
+				}
+			</ul>
+		</section>
+	}
 	<section class="card">
 		<h2>Recent sessions</h2>
 		if len(recent) == 0 {
@@ -92,12 +135,260 @@ templ dashboardBody(
 							}
 							<code class="device-id" title={ s.DeviceID }>{ s.DeviceIDShort }</code>
 						</td>
-						<td>{ i2s(s.Minutes) } min</td>
+						<td>{ s.Duration }</td>
 						<td>{ pct(s.StartProg) } → { pct(s.EndProg) }</td>
 					</tr>
 				}
 			</table>
 		}
+	</section>
+}
+
+// headlineTotal is the one number the page is about, said once and
+// said large: how long this reader spent reading over the span they
+// asked about.
+templ headlineTotal(sum SummaryData) {
+	<section class="card headline-total">
+		<p class="headline-label"><span class="headline-icon">@uiIcon("Minutes")</span> Time spent reading</p>
+		<p class="headline-value">{ readingMinutes(sum.ActiveMinutes) }</p>
+		<p class="headline-caption">{ spanCaption(sum.Span) }</p>
+	</section>
+}
+
+// chartTabs switches the activity card between how much and when.
+//
+// Two links rather than a control: they carry the span with them, so
+// each is a URL that means what it says and can be bookmarked, and
+// there is no script and no inline style between the reader and the
+// other view.
+templ chartTabs(sum SummaryData) {
+	<nav class="charttabs" aria-label="Chart view">
+		if sum.Chart == chartCalendar {
+			<a href={ chartHref(sum.Span, chartBars) }>Bars</a>
+			<span aria-current="true">Calendar</span>
+		} else {
+			<span aria-current="true">Bars</span>
+			<a href={ chartHref(sum.Span, chartCalendar) }>Calendar</a>
+		}
+	</nav>
+}
+
+// bookStatRow is one book's share of the span.
+templ bookStatRow(prefix string, b BookStatRow) {
+	<li class="bookstat">
+		<div class="bookstat-what">
+			<a class="bookstat-title" href={ prefix + "works/" + b.WorkID }>{ b.Title }</a>
+			if b.Author != "" {
+				<span class="bookstat-author">{ b.Author }</span>
+			}
+			if b.Finished {
+				<span class="bookstat-state finished">@uiIcon("Finished") Finished</span>
+			} else if b.Progression > 0 {
+				<span class="bookstat-state">
+					<span class="bookstat-track"><span class={ "bookstat-fill " + pctClass(b.Progression) }></span></span>
+					{ pct(b.Progression) + " through" }
+				</span>
+			}
+		</div>
+		<div class="bookstat-much">
+			<span class="bookstat-duration">{ b.Duration }</span>
+			<span class="bookstat-sittings">{ b.Sittings }</span>
+		</div>
+	</li>
+}
+
+// dashboardHero showcases the reader's latest active book in an editorial 3D layout.
+templ dashboardHero(prefix string, w WorkRow) {
+	<section class="dash-hero-card">
+		<div class="dash-hero-ambient" aria-hidden="true"></div>
+		<div class="dash-hero-content">
+			<div class="dash-hero-book-wrap">
+				<div class="book-3d">
+					if w.BookID != "" {
+						<a class="book-cover-link" href={ w.readURL(prefix) } title={ workCardHint(w) }>
+							<div class="book-spine" aria-hidden="true"></div>
+							<div class="book-cover">
+								<img
+									src={ prefix + "books/" + w.BookID + "/cover?size=full" }
+									alt=""
+									loading="eager"
+									decoding="async"
+									width="333"
+									height="500"
+								/>
+								<div class="book-glare" aria-hidden="true"></div>
+							</div>
+							<div class="book-pages-edge" aria-hidden="true"></div>
+						</a>
+					} else {
+						<a class="book-cover-link book-cover-textual" href={ prefix + "works/" + w.ID } title={ workCardHint(w) }>
+							<div class="book-spine" aria-hidden="true"></div>
+							<div class="book-cover text-cover">
+								<span class="text-cover-title">{ orPlaceholder(w.Title) }</span>
+								if w.Author != "" {
+									<span class="text-cover-author">{ w.Author }</span>
+								}
+								if w.Progression != nil {
+									<span class="text-cover-pct">{ pct(*w.Progression) }</span>
+								}
+								<div class="book-glare" aria-hidden="true"></div>
+							</div>
+							<div class="book-pages-edge" aria-hidden="true"></div>
+						</a>
+					}
+				</div>
+			</div>
+			<div class="dash-hero-details">
+				<div class="hero-status-row">
+					<span class="hero-badge">
+						<span class="hero-badge-pulse" aria-hidden="true"></span>
+						Currently Reading
+					</span>
+					if w.Pending {
+						<span class="chip warn">Sync pending</span>
+					} else if w.LastActive != "" {
+						<span class="hero-last-active">
+							<span class="hero-clock-icon" aria-hidden="true">@uiIcon("Minutes")</span>
+							{ "Active " + w.LastActive }
+						</span>
+					}
+				</div>
+				<h2 class="hero-title">
+					<a href={ w.readURL(prefix) }>{ orPlaceholder(w.Title) }</a>
+				</h2>
+				if w.Author != "" {
+					<p class="hero-author">{ "by " + w.Author }</p>
+				}
+				if w.Subtitle != "" {
+					<p class="hero-subtitle">{ w.Subtitle }</p>
+				}
+				if w.Progression != nil {
+					<div class="hero-progress-block">
+						<div class="hero-prog-header">
+							<span class="hero-prog-label">Progress</span>
+							<span class="hero-prog-val">{ pct(*w.Progression) }</span>
+						</div>
+						<div class="hero-prog-track" role="progressbar" aria-valuenow={ pctNum(*w.Progression) } aria-valuetext={ pct(*w.Progression) } aria-valuemin="0" aria-valuemax="100">
+							<span class={ "hero-prog-fill " + pctClass(*w.Progression) }></span>
+						</div>
+					</div>
+				}
+				<div class="hero-actions">
+					if w.CanRead && w.BookID != "" {
+						<a class="btn primary hero-btn-read" href={ w.readURL(prefix) }>
+							<span>Resume Reading</span>
+							<span class="btn-arrow" aria-hidden="true">→</span>
+						</a>
+					} else {
+						<a class="btn primary hero-btn-read" href={ prefix + "works/" + w.ID }>
+							<span>View Work</span>
+							<span class="btn-arrow" aria-hidden="true">→</span>
+						</a>
+					}
+					<a class="btn hero-btn-sec" href={ prefix + "works/" + w.ID }>Stats & Sessions</a>
+					if w.BookID != "" {
+						<a class="btn hero-btn-sec" href={ prefix + "books/" + w.BookID }>Book Details</a>
+					}
+				</div>
+			</div>
+		</div>
+	</section>
+}
+
+// recentShelf presents additional in-progress books on the reader's desk.
+templ recentShelf(prefix string, reading []WorkRow) {
+	<section class="card dash-shelf-card">
+		<div class="cardhead">
+			<div>
+				<p class="eyebrow">On your desk</p>
+				<h2>More books in progress</h2>
+			</div>
+			<a class="section-link" href={ prefix + "library" }>Your library <span aria-hidden="true">→</span></a>
+		</div>
+		<div class="dash-shelf-grid">
+			for _, w := range reading {
+				@shelfWorkCard(prefix, w)
+			}
+		</div>
+	</section>
+}
+
+// shelfWorkCard is one secondary active book on the shelf.
+templ shelfWorkCard(prefix string, w WorkRow) {
+	<article class="shelf-book-card">
+		<div class="shelf-art-wrap">
+			<div class="shelf-book-3d">
+				if w.BookID != "" {
+					<a class="shelf-cover-link" href={ w.readURL(prefix) } title={ workCardHint(w) }>
+						<div class="shelf-book-spine" aria-hidden="true"></div>
+						<div class="shelf-book-cover">
+							<img
+								src={ prefix + "books/" + w.BookID + "/cover?size=thumbnail" }
+								alt=""
+								loading="lazy"
+								decoding="async"
+								width="333"
+								height="500"
+							/>
+						</div>
+						<div class="shelf-book-edge" aria-hidden="true"></div>
+					</a>
+				} else {
+					<a class="shelf-cover-link shelf-text-cover" href={ prefix + "works/" + w.ID } title={ workCardHint(w) }>
+						<div class="shelf-book-spine" aria-hidden="true"></div>
+						<div class="shelf-book-cover text-cover">
+							<span class="shelf-text-title">{ orPlaceholder(w.Title) }</span>
+							if w.Progression != nil {
+								<span class="shelf-text-pct">{ pct(*w.Progression) }</span>
+							}
+						</div>
+						<div class="shelf-book-edge" aria-hidden="true"></div>
+					</a>
+				}
+			</div>
+			if w.CanRead && w.BookID != "" {
+				<div class="shelf-actions">
+					<a class="btn primary" href={ prefix + "books/" + w.BookID + "/read" }>Read</a>
+				</div>
+			}
+		</div>
+		<div class="shelf-info">
+			<a class="shelf-title" href={ w.readURL(prefix) }>{ orPlaceholder(w.Title) }</a>
+			if w.Author != "" {
+				<span class="shelf-author">{ w.Author }</span>
+			}
+			if w.Progression != nil {
+				<div class="shelf-prog-row">
+					<div class="shelf-prog-track">
+						<span class={ "shelf-prog-fill " + pctClass(*w.Progression) }></span>
+					</div>
+					<span class="shelf-prog-pct">{ pct(*w.Progression) }</span>
+				</div>
+			}
+			<nav class="shelf-sublinks">
+				<a href={ prefix + "works/" + w.ID }>Stats</a>
+				if w.BookID != "" {
+					<a href={ prefix + "books/" + w.BookID }>Book</a>
+				}
+				if w.LastActive != "" {
+					<span class="shelf-last-active">{ "· " + w.LastActive }</span>
+				}
+			</nav>
+		</div>
+	</article>
+}
+
+// emptyReadingDesk is shown when there are no currently started books.
+templ emptyReadingDesk(prefix string) {
+	<section class="card dash-empty-desk">
+		<div class="empty-desk-icon" aria-hidden="true">
+			@uiIcon("Library")
+		</div>
+		<h2>Your reading desk is clear</h2>
+		<p class="muted">No books currently in progress. Open a book from your library or sync from a device to resume right where you left off.</p>
+		<div class="empty-desk-action">
+			<a class="btn primary" href={ prefix + "library" }>Browse Your Library <span aria-hidden="true">→</span></a>
+		</div>
 	</section>
 }
 
@@ -126,18 +417,22 @@ templ spanPicker(current insights.Span) {
 	</form>
 }
 
-// dayBars is one bar a day, for a span short enough that a day is still
-// a readable unit.
+// dayBars is one bar per bucket: a day where the days still fit, a
+// week, a month or a year where they do not.
 //
-// Only every seventh day is captioned, counted back from the last so
-// that today always carries its own label. Captioning all thirty turns
-// the axis into a smear; captioning every fifth lands on a different
-// weekday each time the span changes.
-templ dayBars(days []DayCell) {
-	{{ chart := layOutBars(days) }}
-	<div class="daybars" role="img" aria-label={ chart.Label }>
+// Only every seventh daily bar is captioned, counted back from the last
+// so that today always carries its own label. Captioning all thirty
+// turns the axis into a smear; captioning every fifth lands on a
+// different weekday each time the span changes. Wider buckets are few
+// enough to name one for one.
+templ dayBars(days []DayCell, bucket insights.Bucket) {
+	{{ chart := layOutBars(days, bucket) }}
+	<div class={ "daybars bars-" + string(bucket) } role="img" aria-label={ chart.Label }>
 		for _, b := range chart.Bars {
 			<div class="daybar" title={ b.Title }>
+				if b.Amount != "" {
+					<span class="daybar-amt">{ b.Amount }</span>
+				}
 				<div class="daybar-track"><span class={ b.Class }></span></div>
 				<span class="daybar-cap">{ b.Caption }</span>
 			</div>
@@ -145,7 +440,8 @@ templ dayBars(days []DayCell) {
 	</div>
 }
 
-// readingHeatmap is a square a day, for a span too long to read as bars.
+// readingHeatmap is a square a day: the calendar view of the activity
+// card.
 //
 // Where the bars show how much, this shows when: months of daily bars
 // are a picket fence nobody can read a date off, but the same months as
