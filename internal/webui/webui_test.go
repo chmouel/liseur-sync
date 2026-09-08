@@ -878,7 +878,16 @@ func TestSettingsRailAndAdminTab(t *testing.T) {
 	if strings.Contains(body, `href="admin`) {
 		t.Fatal("the rail still exposes a separate Admin entry")
 	}
-	rail := strings.SplitN(strings.SplitN(body, `<nav aria-label="Sections">`, 2)[1], "</nav>", 2)[0]
+	navStart := strings.Index(body, `<nav aria-label="Sections">`)
+	if navStart < 0 {
+		t.Fatal(`the library page does not contain the Sections navigation`)
+	}
+	railBody := body[navStart+len(`<nav aria-label="Sections">`):]
+	navEnd := strings.Index(railBody, "</nav>")
+	if navEnd < 0 {
+		t.Fatal(`the Sections navigation is not closed`)
+	}
+	rail := railBody[:navEnd]
 	folders := strings.Index(rail, `settings?section=admin&amp;view=folders`)
 	settings := strings.Index(rail, `href="settings"`)
 	if folders < 0 || settings < folders || strings.Contains(rail, "Offline shelf") {
