@@ -264,7 +264,10 @@ export async function saveOfflinePosition({
             return;
           }
           const outbox = tx.objectStore(OUTBOX);
-          const queued = outbox.getAll();
+          const queued = outbox.index("account").getAll(IDBKeyRange.bound(
+            [partition, account, "", 0],
+            [partition, account, "\uffff", Number.MAX_SAFE_INTEGER],
+          ));
           queued.onsuccess = () => {
             const records = queued.result.filter(row => row.partition === partition && row.account === account);
             const existing = records.find(row => row.kind === "position" && row.id === op.op_id);
