@@ -1,3 +1,18 @@
+// Match Android's bounded fallback past malformed position records. A real
+// zero is readable; missing, null and out-of-range fractions are not.
+export function latestReadablePosition(ops, workID) {
+  if (!Array.isArray(ops)) return null;
+  const fraction = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+  return ops.find(op => op?.op_id && op.work_id === workID && fraction(op.progression) &&
+    (!op.locator?.locations || !Object.hasOwn(op.locator.locations, "totalProgression") ||
+      fraction(op.locator.locations.totalProgression))) || null;
+}
+
+export function positionAcknowledged(body, op) {
+  const result = body?.results?.[0];
+  return result?.op_id === op.op_id && ["applied", "duplicate"].includes(result.status);
+}
+
 // Coalescing is per topic. An event during a read owes one more read; failure
 // keeps that obligation even if no later event arrives.
 export function topicRefresh({
