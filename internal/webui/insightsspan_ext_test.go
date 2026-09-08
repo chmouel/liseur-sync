@@ -39,10 +39,10 @@ func seedSession(t *testing.T, st store.Store, id string, ed store.Edition, star
 	}
 }
 
-// TestDashboardSpanPicker is the picker doing what a picker is for: the
+// TestInsightsSpanPicker is the picker doing what a picker is for: the
 // page comes back describing the span that was asked for, and offering
 // the others.
-func TestDashboardSpanPicker(t *testing.T) {
+func TestInsightsSpanPicker(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
@@ -54,7 +54,7 @@ func TestDashboardSpanPicker(t *testing.T) {
 		{insights.Span90Days, "Week by week"},
 		{insights.SpanAllTime, "Year by year"},
 	} {
-		_, body := page(t, ts, cookie, "/ui?span="+string(tc.span))
+		_, body := page(t, ts, cookie, "/ui/insights?span="+string(tc.span))
 		if !strings.Contains(body, tc.wants) {
 			t.Errorf("span %s: heading %q missing", tc.span, tc.wants)
 		}
@@ -67,7 +67,7 @@ func TestDashboardSpanPicker(t *testing.T) {
 	}
 }
 
-func TestDashboardSessionUsesDeviceName(t *testing.T) {
+func TestInsightsSessionUsesDeviceName(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 	ed := seedWork(t, st, "named-work", "A named book")
@@ -80,34 +80,34 @@ func TestDashboardSessionUsesDeviceName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	want := `<span class="device-name" title="Boox Palma">Boox Palma</span>`
 	if !strings.Contains(body, want) {
-		t.Fatalf("dashboard did not show the device name %q: %s", want, body)
+		t.Fatalf("insights did not show the device name %q: %s", want, body)
 	}
 }
 
-// TestDashboardSpanFallsBackToDefault is a span nobody offers. An
+// TestInsightsSpanFallsBackToDefault is a span nobody offers. An
 // unknown token in a URL must not be an error page or an empty chart;
 // it is the default, which is what a reader who typed nothing gets.
-func TestDashboardSpanFallsBackToDefault(t *testing.T) {
+func TestInsightsSpanFallsBackToDefault(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, body := page(t, ts, cookie, "/ui?span=fortnight")
+	_, body := page(t, ts, cookie, "/ui/insights?span=fortnight")
 	if !strings.Contains(body, `value="`+string(insights.DefaultSpan)+`" selected`) {
 		t.Fatal("an unknown span did not fall back to the default")
 	}
 }
 
-// TestDashboardSpanRemembered is the point of writing it to the cookie:
+// TestInsightsSpanRemembered is the point of writing it to the cookie:
 // a reader who chose ninety days and comes back to a bare /ui gets
 // ninety days, not thirty.
-func TestDashboardSpanRemembered(t *testing.T) {
+func TestInsightsSpanRemembered(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	req, _ := http.NewRequest("GET", ts.URL+"/ui?span=90d", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/insights?span=90d", nil)
 	req.AddCookie(cookie)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestDashboardSpanRemembered(t *testing.T) {
 	}
 
 	// And a bare /ui carrying it back comes up on ninety days.
-	req, _ = http.NewRequest("GET", ts.URL+"/ui", nil)
+	req, _ = http.NewRequest("GET", ts.URL+"/ui/insights", nil)
 	req.AddCookie(cookie)
 	req.AddCookie(prefs)
 	resp, err = http.DefaultClient.Do(req)
@@ -143,13 +143,13 @@ func TestDashboardSpanRemembered(t *testing.T) {
 	}
 }
 
-// TestDashboardSpanQueryBeatsCookie: a link to a span is a link to that
+// TestInsightsSpanQueryBeatsCookie: a link to a span is a link to that
 // span, whatever the browser last chose.
-func TestDashboardSpanQueryBeatsCookie(t *testing.T) {
+func TestInsightsSpanQueryBeatsCookie(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	req, _ := http.NewRequest("GET", ts.URL+"/ui?span=7d", nil)
+	req, _ := http.NewRequest("GET", ts.URL+"/ui/insights?span=7d", nil)
 	req.AddCookie(cookie)
 	req.AddCookie(&http.Cookie{Name: prefsCookie, Value: "dark.grid.series.span-365d"})
 	resp, err := http.DefaultClient.Do(req)
@@ -162,10 +162,10 @@ func TestDashboardSpanQueryBeatsCookie(t *testing.T) {
 	}
 }
 
-// TestDashboardPlacesSessionOnTheDayItEnded is the disagreement this
+// TestInsightsPlacesSessionOnTheDayItEnded is the disagreement this
 // set out to remove. A sitting that runs past midnight belongs to one
 // day, and the API, the app and this page have to name the same one.
-func TestDashboardPlacesSessionOnTheDayItEnded(t *testing.T) {
+func TestInsightsPlacesSessionOnTheDayItEnded(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 	ed := seedWork(t, st, "late-work", "Read past midnight")
@@ -174,7 +174,7 @@ func TestDashboardPlacesSessionOnTheDayItEnded(t *testing.T) {
 	end := time.Now().Truncate(24 * time.Hour).Add(10 * time.Minute)
 	seedSession(t, st, "midnight", ed, end.Add(-40*time.Minute), end)
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	today := end.Format("2 Jan 2006")
 	yesterday := end.AddDate(0, 0, -1).Format("2 Jan 2006")
 	if !strings.Contains(body, "40 min during "+today) {
@@ -185,10 +185,10 @@ func TestDashboardPlacesSessionOnTheDayItEnded(t *testing.T) {
 	}
 }
 
-// TestDashboardChartShape: the bars follow the span. A day is worth a
+// TestInsightsChartShape: the bars follow the span. A day is worth a
 // bar while the days still fit; past that they are grouped, because a
 // year of daily bars is a picket fence.
-func TestDashboardChartShape(t *testing.T) {
+func TestInsightsChartShape(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 	// Something to draw: an empty span is an empty card, whatever the
@@ -205,7 +205,7 @@ func TestDashboardChartShape(t *testing.T) {
 		"365d":       "bars-month",
 		"all":        "bars-year",
 	} {
-		_, body := page(t, ts, cookie, "/ui?span="+span)
+		_, body := page(t, ts, cookie, "/ui/insights?span="+span)
 		if !strings.Contains(body, bucket) {
 			t.Errorf("span %s: chart is not %s", span, bucket)
 		}
@@ -215,19 +215,19 @@ func TestDashboardChartShape(t *testing.T) {
 	}
 }
 
-// TestDashboardChartTabs: the calendar is the other view of the same
+// TestInsightsChartTabs: the calendar is the other view of the same
 // card, offered only where a grid of it would say something, and
 // reachable without a line of script.
-func TestDashboardChartTabs(t *testing.T) {
+func TestInsightsChartTabs(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, short := page(t, ts, cookie, "/ui?span=7d")
+	_, short := page(t, ts, cookie, "/ui/insights?span=7d")
 	if strings.Contains(short, "charttabs") {
 		t.Error("a week is too short to be worth a calendar grid")
 	}
 
-	_, long := page(t, ts, cookie, "/ui?span=365d")
+	_, long := page(t, ts, cookie, "/ui/insights?span=365d")
 	if !strings.Contains(long, "charttabs") {
 		t.Error("a year should offer the calendar")
 	}
@@ -238,7 +238,7 @@ func TestDashboardChartTabs(t *testing.T) {
 		t.Error("the tab drops the span, so switching view switches span")
 	}
 
-	_, cal := page(t, ts, cookie, "/ui?span=365d&chart=chart-calendar")
+	_, cal := page(t, ts, cookie, "/ui/insights?span=365d&chart=chart-calendar")
 	if !strings.Contains(cal, "heatweek") {
 		t.Error("asking for the calendar did not draw it")
 	}
@@ -256,19 +256,19 @@ func TestDashboardChartTabs(t *testing.T) {
 
 	// A span too short for a grid gets the bars whatever was last
 	// chosen, rather than an empty card.
-	_, week := page(t, ts, cookie, "/ui?span=7d")
+	_, week := page(t, ts, cookie, "/ui/insights?span=7d")
 	if !strings.Contains(week, "daybars") || strings.Contains(week, "heatweek") {
 		t.Error("a week should fall back to the bars")
 	}
 }
 
-// TestDashboardHeatmapAlignsWeekdays: every column is a Monday-to-Sunday
+// TestInsightsHeatmapAlignsWeekdays: every column is a Monday-to-Sunday
 // week, which is the only reason a square's row means anything.
-func TestDashboardHeatmapAlignsWeekdays(t *testing.T) {
+func TestInsightsHeatmapAlignsWeekdays(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
 
-	_, body := page(t, ts, cookie, "/ui?span=365d&chart=chart-calendar")
+	_, body := page(t, ts, cookie, "/ui/insights?span=365d&chart=chart-calendar")
 	weeks := strings.Count(body, `class="heatweek"`)
 	if weeks < 52 {
 		t.Fatalf("a year is %d columns, want at least 52", weeks)
@@ -283,9 +283,9 @@ func TestDashboardHeatmapAlignsWeekdays(t *testing.T) {
 	}
 }
 
-// TestDashboardShowsEmptyDays: a fortnight with two gaps in it is the
+// TestInsightsShowsEmptyDays: a fortnight with two gaps in it is the
 // information. A chart that quietly skipped them would read as a run.
-func TestDashboardShowsEmptyDays(t *testing.T) {
+func TestInsightsShowsEmptyDays(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 	ed := seedWork(t, st, "gap-work", "One sitting only")
@@ -293,7 +293,7 @@ func TestDashboardShowsEmptyDays(t *testing.T) {
 	end := time.Now().Add(-2 * time.Hour)
 	seedSession(t, st, "one", ed, end.Add(-30*time.Minute), end)
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	if bars := strings.Count(body, `class="daybar"`); bars != 7 {
 		t.Fatalf("%d bars for a seven-day span, want 7", bars)
 	}
@@ -390,14 +390,14 @@ func (*failedStatsStore) StatisticsSnapshot(context.Context, string, []string) (
 	return store.StatsSnapshot{}, errors.New("statistics read failed")
 }
 
-func TestDashboardAndWorkRefusePartialStatistics(t *testing.T) {
+func TestInsightsAndWorkRefusePartialStatistics(t *testing.T) {
 	s := &Server{St: &failedStatsStore{}}
 	for _, path := range []string{"/ui", "/ui/works/w"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.SetPathValue("id", "w")
 		w := httptest.NewRecorder()
 		if path == "/ui" {
-			s.handleDashboard(w, req, store.AuthSession{}, &store.User{ID: "u1"})
+			s.handleInsights(w, req, store.AuthSession{}, &store.User{ID: "u1"})
 		} else {
 			s.handleWork(w, req, store.AuthSession{}, &store.User{ID: "u1"})
 		}
@@ -407,51 +407,7 @@ func TestDashboardAndWorkRefusePartialStatistics(t *testing.T) {
 	}
 }
 
-type dashboardLinksStore struct {
-	store.Store
-	lookups []string
-	err     error
-}
-
-func (s *dashboardLinksStore) WorkBookIDs(_ context.Context, _, workID string) ([]string, error) {
-	s.lookups = append(s.lookups, workID)
-	return nil, s.err
-}
-
-func TestDashboardResolvesOnlyDisplayedWorks(t *testing.T) {
-	works := make([]store.WorkSummary, 100)
-	progression := 0.5
-	for i := range works {
-		at := time.Now().Add(-time.Duration(i) * time.Hour)
-		works[i] = store.WorkSummary{
-			Work:        store.Work{ID: fmt.Sprintf("w-%d", i)},
-			Progression: &progression, LastActive: &at,
-		}
-	}
-	st := &dashboardLinksStore{}
-	s := &Server{St: st}
-	rows, err := s.linkReadingWorks(httptest.NewRequest(http.MethodGet, "/ui", nil), "u1",
-		continueReading(works, nil, time.UTC))
-	if err != nil || len(rows) != continueReadingLimit || len(st.lookups) != continueReadingLimit {
-		t.Fatalf("rows=%d lookups=%d err=%v", len(rows), len(st.lookups), err)
-	}
-	for i, id := range st.lookups {
-		if id != fmt.Sprintf("w-%d", i) {
-			t.Fatalf("resolved an undisplayed work: %s", id)
-		}
-	}
-}
-
-func TestDashboardLinkErrorsPropagate(t *testing.T) {
-	failed := errors.New("store unavailable")
-	s := &Server{St: &dashboardLinksStore{err: failed}}
-	if _, err := s.linkReadingWorks(httptest.NewRequest(http.MethodGet, "/ui", nil), "u1",
-		[]WorkRow{{ID: "w"}}); !errors.Is(err, failed) {
-		t.Fatalf("got %v, want store failure", err)
-	}
-}
-
-func TestDashboardStreakRequiresPositiveActivity(t *testing.T) {
+func TestInsightsStreakRequiresPositiveActivity(t *testing.T) {
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	snapshot := store.StatsSnapshot{Timezone: "UTC", Sessions: []store.Session{{
 		StartedAt: now.Add(-time.Hour), EndedAt: now, IdleMs: int64(time.Hour / time.Millisecond),
@@ -462,19 +418,19 @@ func TestDashboardStreakRequiresPositiveActivity(t *testing.T) {
 	}
 }
 
-func TestDashboardUsesReportedPagesWithoutEdition(t *testing.T) {
+func TestInsightsUsesReportedPagesWithoutEdition(t *testing.T) {
 	pages := 1.0
 	if got, err := insights.Pages(store.Session{ReportedPages: &pages}, nil); err != nil || got != 1 {
 		t.Fatalf("reported page count lost: %f: %v", got, err)
 	}
 }
 
-// TestDashboardExcludesSessionEndingPastTheSpan: the store answers with
+// TestInsightsExcludesSessionEndingPastTheSpan: the store answers with
 // an overlap, so a sitting that started inside the span and ran out the
 // far end of it comes back too. The window counts by the day a sitting
 // ended, and so must this page, or the totals include reading that has
 // not finished happening.
-func TestDashboardExcludesSessionEndingPastTheSpan(t *testing.T) {
+func TestInsightsExcludesSessionEndingPastTheSpan(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 	ed := seedWork(t, st, "overrun", "Still being read")
@@ -487,7 +443,7 @@ func TestDashboardExcludesSessionEndingPastTheSpan(t *testing.T) {
 	today := time.Now().Add(-2 * time.Hour)
 	seedSession(t, st, "today-1", ed, today, today.Add(time.Hour))
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	if !strings.Contains(body, `<p class="headline-value">1 h</p>`) {
 		t.Error("the sitting running past the span was counted in the total")
 	}
@@ -496,10 +452,10 @@ func TestDashboardExcludesSessionEndingPastTheSpan(t *testing.T) {
 	}
 }
 
-// TestDashboardCountsPagesFromSessions: the page card was fed only by
+// TestInsightsCountsPagesFromSessions: the page card was fed only by
 // rollups, so a reader whose history had not been compacted yet saw no
 // pages at all.
-func TestDashboardCountsPagesFromSessions(t *testing.T) {
+func TestInsightsCountsPagesFromSessions(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 
@@ -519,7 +475,7 @@ func TestDashboardCountsPagesFromSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	// A tenth of four hundred pages.
 	if !strings.Contains(body, `<span class="num">40</span><span class="lbl">pages</span>`) {
 		t.Error("pages read in sittings still held in full are not counted")
@@ -564,92 +520,7 @@ func TestDaySeriesStartsAtRealReading(t *testing.T) {
 	}
 }
 
-func TestDashboardHeroSpotlight(t *testing.T) {
-	ts, st := testServer(t)
-	cookie := loginCookie(t, ts)
-
-	ed := seedWork(t, st, "hero-work", "The Star Rover")
-	end := time.Now().Add(-10 * time.Minute)
-	if _, err := st.AppendOps(t.Context(), "u1", "reader", []store.Op{{
-		OpID: "op-hero", WorkID: ed.WorkID, ClientTS: end, Progression: 0.42,
-		Origin: store.OriginNative,
-	}}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, body := page(t, ts, cookie, "/ui")
-	if !strings.Contains(body, `class="dash-hero-card"`) {
-		t.Error("dashboard does not contain dash-hero-card")
-	}
-	if !strings.Contains(body, "The Star Rover") {
-		t.Error("hero card does not contain work title")
-	}
-	if !strings.Contains(body, "Currently Reading") {
-		t.Error("hero card missing Currently Reading badge")
-	}
-	if !strings.Contains(body, "42%") {
-		t.Error("hero card missing progress 42%")
-	}
-}
-
-func TestDashboardSecondaryShelf(t *testing.T) {
-	ts, st := testServer(t)
-	cookie := loginCookie(t, ts)
-
-	ed1 := seedWork(t, st, "first-work", "First Book")
-	ed2 := seedWork(t, st, "second-work", "Second Book")
-
-	t1 := time.Now().Add(-10 * time.Minute)
-	t2 := time.Now().Add(-2 * time.Hour)
-
-	if _, err := st.AppendOps(t.Context(), "u1", "reader", []store.Op{
-		{
-			OpID: "op-1", WorkID: ed1.WorkID, ClientTS: t1, Progression: 0.65,
-			Origin: store.OriginNative,
-		},
-		{
-			OpID: "op-2", WorkID: ed2.WorkID, ClientTS: t2, Progression: 0.20,
-			Origin: store.OriginNative,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, body := page(t, ts, cookie, "/ui")
-	if !strings.Contains(body, `class="dash-hero-card"`) {
-		t.Error("missing hero card")
-	}
-	if !strings.Contains(body, "First Book") {
-		t.Error("missing first book in hero")
-	}
-	if !strings.Contains(body, `class="card dash-shelf-card"`) {
-		t.Error("missing secondary shelf card")
-	}
-	if !strings.Contains(body, "More books in progress") {
-		t.Error("missing More books in progress header")
-	}
-	if !strings.Contains(body, "Second Book") {
-		t.Error("missing second book on shelf")
-	}
-}
-
-func TestDashboardEmptyReadingDesk(t *testing.T) {
-	ts, _ := testServer(t)
-	cookie := loginCookie(t, ts)
-
-	_, body := page(t, ts, cookie, "/ui")
-	if !strings.Contains(body, `class="card dash-empty-desk"`) {
-		t.Error("missing dash-empty-desk when no books in progress")
-	}
-	if !strings.Contains(body, "Your reading desk is clear") {
-		t.Error("missing clear desk message")
-	}
-}
-
-// TestDashboardThisMonthSpan is the span the app has and the web did
-// not: it starts on the first of the month, so a sitting from last
-// month is outside it while today's is inside.
-func TestDashboardThisMonthSpan(t *testing.T) {
+func TestInsightsThisMonthSpan(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 
@@ -664,7 +535,7 @@ func TestDashboardThisMonthSpan(t *testing.T) {
 	before := first.Add(-26 * time.Hour)
 	seedSession(t, st, "before-1", lastMonth, before, before.Add(time.Hour))
 
-	_, body := page(t, ts, cookie, "/ui?span=this_month")
+	_, body := page(t, ts, cookie, "/ui/insights?span=this_month")
 	if !strings.Contains(body, `value="this_month" selected`) {
 		t.Error("this_month not selected in the picker")
 	}
@@ -682,10 +553,10 @@ func TestDashboardThisMonthSpan(t *testing.T) {
 	}
 }
 
-// TestDashboardCountsBooksReadAndFinished pins what the two counts
+// TestInsightsCountsBooksReadAndFinished pins what the two counts
 // mean: read from is works with a sitting in the span, finished is
 // those of them now at or past the finished mark.
-func TestDashboardCountsBooksReadAndFinished(t *testing.T) {
+func TestInsightsCountsBooksReadAndFinished(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
 
@@ -713,7 +584,7 @@ func TestDashboardCountsBooksReadAndFinished(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, body := page(t, ts, cookie, "/ui?span=7d")
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
 	for _, want := range []string{
 		`<span class="num">2</span><span class="lbl">books read from</span>`,
 		`<span class="num">1</span><span class="lbl">books finished</span>`,
@@ -727,9 +598,9 @@ func TestDashboardCountsBooksReadAndFinished(t *testing.T) {
 	}
 }
 
-// dashboardCookies fetches a page and hands back what it asked the
+// insightsCookies fetches a page and hands back what it asked the
 // browser to remember alongside the body.
-func dashboardCookies(
+func insightsCookies(
 	t *testing.T, ts *httptest.Server, jar []*http.Cookie, path string,
 ) ([]*http.Cookie, string) {
 	t.Helper()
@@ -746,19 +617,19 @@ func dashboardCookies(
 	return resp.Cookies(), string(b)
 }
 
-// TestDashboardRemembersBothSpanAndChart is the bug a link carrying two
+// TestInsightsRemembersBothSpanAndChart is the bug a link carrying two
 // preferences used to have: each was read from the request's cookie and
 // written back separately, so the second write undid the first and the
-// next bare dashboard came back on the old span.
-func TestDashboardRemembersBothSpanAndChart(t *testing.T) {
+// next bare insights page came back on the old span.
+func TestInsightsRemembersBothSpanAndChart(t *testing.T) {
 	ts, _ := testServer(t)
 	login := loginCookie(t, ts)
 
 	// Somewhere to come back from.
-	page(t, ts, login, "/ui?span=30d&chart=chart-bars")
+	page(t, ts, login, "/ui/insights?span=30d&chart=chart-bars")
 
-	set, _ := dashboardCookies(t, ts, []*http.Cookie{login},
-		"/ui?span=365d&chart=chart-calendar")
+	set, _ := insightsCookies(t, ts, []*http.Cookie{login},
+		"/ui/insights?span=365d&chart=chart-calendar")
 	var saved *http.Cookie
 	for _, c := range set {
 		if c.Name == "liseur_ui" {
@@ -766,13 +637,13 @@ func TestDashboardRemembersBothSpanAndChart(t *testing.T) {
 		}
 	}
 	if saved == nil {
-		t.Fatal("the dashboard did not write the preference cookie")
+		t.Fatal("insights did not write the preference cookie")
 	}
 	if !strings.Contains(saved.Value, "365d") || !strings.Contains(saved.Value, chartCalendar) {
 		t.Fatalf("one of the two preferences was dropped: %q", saved.Value)
 	}
 
-	_, back := dashboardCookies(t, ts, []*http.Cookie{login, saved}, "/ui")
+	_, back := insightsCookies(t, ts, []*http.Cookie{login, saved}, "/ui/insights")
 	if !strings.Contains(back, `value="365d" selected`) {
 		t.Error("coming back, the span was not the one that was asked for")
 	}
@@ -800,5 +671,39 @@ func TestWorkStartedOnTheDayReadingEnded(t *testing.T) {
 	}
 	if strings.Contains(body, "1 Sep 2026") {
 		t.Error("the page dates the reading by the day it began")
+	}
+}
+
+// TestWorkWithOnlyRollupsDoesNotDenyTheReading keeps the sessions card
+// from contradicting the totals above it. Once every sitting has aged
+// into a daily rollup the list is empty, but the reading still happened
+// and is still counted; "You have not read any of this one yet" would
+// be the page arguing with itself.
+func TestWorkWithOnlyRollupsDoesNotDenyTheReading(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	ed := seedWork(t, st, "all-rolled-up", "A book read long ago")
+
+	err := st.ApplyRollups(t.Context(), "u1", []store.SessionRollup{{
+		UserID: "u1", WorkID: ed.WorkID, Day: "2024-01-01",
+		ActiveSeconds: 3600, Pages: 40, ProgDelta: 0.2, SessionCount: 2,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := page(t, ts, cookie, "/ui/works/"+ed.WorkID)
+	if strings.Contains(body, "not read any of this one yet") {
+		t.Error("the page denies reading its own totals count")
+	}
+	if !strings.Contains(body, "No individual sittings are kept") {
+		t.Error("the page does not say why the list is empty")
+	}
+
+	// A work nothing was ever read of still says so.
+	other := seedWork(t, st, "never-opened", "A book never opened")
+	_, body = page(t, ts, cookie, "/ui/works/"+other.WorkID)
+	if !strings.Contains(body, "not read any of this one yet") {
+		t.Error("an unread work is not described as unread")
 	}
 }

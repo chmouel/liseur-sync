@@ -10,7 +10,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/insights"
 )
 
-// Laying out the dashboard's two charts.
+// Laying out the insights page's two charts.
 //
 // Both are computed here rather than in the template because both need
 // arithmetic — a week boundary, a running month, a bar height as a
@@ -43,8 +43,17 @@ func spanCaption(span insights.Span) string {
 
 // paceValue is progression per hour as a percentage, which is the one
 // pace figure that means anything across books of different lengths.
+//
+// A measured pace slower than half a point an hour is written as
+// "<1%/h" rather than rounded down to nought. The card is only drawn
+// when the pace is known and positive, so a nought on it would
+// contradict the reason it is there.
 func paceValue(perHour float64) string {
-	return strconv.Itoa(int(math.Round(perHour*100))) + "%/h"
+	pct := perHour * 100
+	if pct > 0 && pct < 0.5 {
+		return "<1%/h"
+	}
+	return strconv.Itoa(int(math.Round(pct))) + "%/h"
 }
 
 // chartHref is a link to the other view of the activity card, carrying

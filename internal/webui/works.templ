@@ -167,8 +167,14 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 	// be shorter than the session count.
 	<section class="card" id="sessions">
 		<h2>Sessions</h2>
-		if len(sessions) == 0 {
+		if len(sessions) == 0 && d.Sessions == 0 {
 			<p class="muted">You have not read any of this one yet.</p>
+		} else if len(sessions) == 0 {
+			// Every sitting has aged into a daily total. The reading
+			// happened and is counted above; it is the sitting-by-sitting
+			// record that is gone, and saying nothing was read would
+			// contradict the totals on the same page.
+			<p class="muted">No individual sittings are kept for this one any more. The totals above still count them.</p>
 		} else {
 			<table>
 				<tr><th>When</th><th>Device</th><th>Duration</th><th>Progress</th></tr>

@@ -44,9 +44,9 @@ const (
 	seriesUngrouped = "series-ungrouped"
 )
 
-// spanTokenPrefix is how the dashboard's chosen span is written into
-// the cookie: "span-30d" and so on, so that an old cookie without one
-// falls through to the default like any other missing token.
+// spanTokenPrefix is how the chosen span is written into the cookie:
+// "span-30d" and so on, so that an old cookie without one falls
+// through to the default like any other missing token.
 const spanTokenPrefix = "span-"
 
 // Which view of the activity card the reader last had open. The bars
@@ -217,7 +217,7 @@ func themeGlyph(current string) string {
 	}
 }
 
-// dashboardView is the span and the chart view the dashboard should
+// insightsView is the span and the chart view the insights page should
 // draw, and remembers both.
 //
 // A `span` or `chart` in the query wins, so that a link to a particular
@@ -244,7 +244,7 @@ func themeGlyph(current string) string {
 // and buy nothing. Theme, view mode and series grouping still go
 // through the CSRF-checked POST, because those are set from a control
 // that has no page of its own to render.
-func dashboardView(
+func insightsView(
 	w http.ResponseWriter, r *http.Request, now time.Time, loc *time.Location,
 ) (insights.Span, string) {
 	p := readPrefs(r)

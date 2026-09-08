@@ -63,7 +63,7 @@ func TestFirstRunSetupOnboarding(t *testing.T) {
 		t.Fatalf("empty instance /ui/login: got %d %q",
 			resp.StatusCode, resp.Header.Get("Location"))
 	}
-	// So does the dashboard, via the sign-in redirect.
+	// So does the front door, via the sign-in redirect.
 	resp, _ = get(t, ts, nil, "/ui/")
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "login" {
 		t.Fatalf("empty instance /ui/: got %d %q",
@@ -158,7 +158,7 @@ func TestFirstRunSetupOnboarding(t *testing.T) {
 	}
 }
 
-func TestFirstRunSetupWithExistingFolderKeepsDashboard(t *testing.T) {
+func TestFirstRunSetupWithExistingFolderKeepsTheFrontDoor(t *testing.T) {
 	ts, st := emptyServer(t)
 	if err := st.CreateFolder(t.Context(), store.Folder{
 		ID: "existing-folder", Name: "Existing", RootPath: t.TempDir(),
@@ -184,7 +184,7 @@ func TestFirstRunSetupWithExistingFolderKeepsDashboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	if landed.Path != "/ui/" {
-		t.Fatalf("setup landed at %q, want the dashboard", resp.Header.Get("Location"))
+		t.Fatalf("setup landed at %q, want the front door", resp.Header.Get("Location"))
 	}
 }
 

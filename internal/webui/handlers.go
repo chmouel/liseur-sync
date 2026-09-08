@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,9 +14,9 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// --- dashboard ---
+// --- insights ---
 
-// handleDashboard draws the reading dashboard over the span the reader
+// handleInsights draws the reading statistics over the span the reader
 // picked.
 //
 // One span, one window, one read. The two separate reads this replaced —
@@ -25,7 +24,7 @@ import (
 // describe different stretches of time on the same screen, and neither
 // of them was the stretch the reader had asked about, because there was
 // no way to ask.
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	now := time.Now()
 	snapshot, err := s.St.StatisticsSnapshot(r.Context(), u.ID, nil)
 	if err != nil {
@@ -33,7 +32,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		return
 	}
 	loc := userLoc(&store.User{Timezone: snapshot.Timezone})
-	span, chart := dashboardView(w, r, now, loc)
+	span, chart := insightsView(w, r, now, loc)
 	win := span.Window(now, loc)
 
 	stats, err := insights.Build(snapshot, win, now)
@@ -47,11 +46,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		if win.HoldsSession(ses) {
 			sessions = append(sessions, ses)
 		}
-	}
-	works, err := s.St.ListWorks(r.Context(), u.ID)
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
 	}
 	titles := map[string]string{}
 	for _, work := range snapshot.Works {
@@ -76,17 +70,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, a store
 		dayMin[day.Date] = day.Minutes
 	}
 
-	reading, err := s.linkReadingWorks(r, u.ID, continueReading(works, nil, loc))
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
 	labels := deviceLabels(r.Context(), s.St, u.ID)
-	dashboard(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
+	insightsPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a),
 		sum,
 		daySeries(win, dayMin, now, loc),
 		recentSessions(sessions, titles, loc, labels),
-		reading,
 		byBook(stats.Works)).
 		Render(r.Context(), w)
 }
@@ -115,7 +103,7 @@ func booksFinished(works []insights.Work) int {
 	return n
 }
 
-// byBookLimit is how many books the breakdown names. The dashboard is a
+// byBookLimit is how many books the breakdown names. The page is a
 // glance at where the reading went, and there is no fuller statistics
 // page to send anybody to; a list past ten is a report.
 const byBookLimit = 10
@@ -193,42 +181,6 @@ func recentSessions(sessions []store.Session, titles map[string]string, loc *tim
 	return rows
 }
 
-// continueReadingLimit is a shelf, not a list: the point is to get back
-// into the book you put down, and a wall of half-read books is a guilt
-// trip rather than a shortcut.
-const continueReadingLimit = 6
-
-// continueReading is the works that are started and not finished, newest
-// first. It reads nothing extra — the dashboard has already listed the
-// works to name them in the session table.
-func continueReading(works []store.WorkSummary, bookIDs map[string]string, loc *time.Location) []WorkRow {
-	started := make([]store.WorkSummary, 0, len(works))
-	for _, ws := range works {
-		if ws.Progression == nil || *ws.Progression <= 0 || *ws.Progression >= 0.999 {
-			continue
-		}
-		if ws.LastActive == nil {
-			continue
-		}
-		started = append(started, ws)
-	}
-	sort.Slice(started, func(i, j int) bool {
-		return started[i].LastActive.After(*started[j].LastActive)
-	})
-	if len(started) > continueReadingLimit {
-		started = started[:continueReadingLimit]
-	}
-	rows := make([]WorkRow, 0, len(started))
-	for _, ws := range started {
-		rows = append(rows, WorkRow{
-			ID: ws.Work.ID, BookID: bookIDs[ws.Work.ID], Title: ws.Work.Title, Author: ws.Work.Author,
-			Progression: ws.Progression, Pending: ws.Pending,
-			LastActive: ws.LastActive.In(loc).Format("Jan 2"),
-		})
-	}
-	return rows
-}
-
 func userLoc(u *store.User) *time.Location {
 	loc, err := time.LoadLocation(u.Timezone)
 	if err != nil {
@@ -238,35 +190,6 @@ func userLoc(u *store.User) *time.Location {
 }
 
 // --- works ---
-
-// Resolve catalog links only after selecting the six displayed works.
-// The dashboard needs neither the rest of the library nor deletion eligibility.
-func (s *Server) linkReadingWorks(r *http.Request, userID string, rows []WorkRow) ([]WorkRow, error) {
-	for i := range rows {
-		ids, err := s.St.WorkBookIDs(r.Context(), userID, rows[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range ids {
-			book, err := s.St.CatalogBookByID(r.Context(), userID, id)
-			if errors.Is(err, store.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			if book.Status == store.BookActive {
-				rows[i].BookID = id
-				rows[i].CanRead = bookReadable(book)
-				if rows[i].Subtitle == "" && book.Subtitle != "" {
-					rows[i].Subtitle = book.Subtitle
-				}
-				break
-			}
-		}
-	}
-	return rows, nil
-}
 
 func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 	workID := r.PathValue("id")
