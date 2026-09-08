@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <title>Liseur Sync</title>
+  <rect width="32" height="32" rx="7" fill="#102631"/>
+  <path d="M6 11A11 11 0 0 1 25 9" stroke="#a2efd2" stroke-width="2" stroke-linecap="round"/>
+  <path d="m22 9 4 2V6" fill="#a2efd2"/>
+  <path d="M26 21A11 11 0 0 1 7 23" stroke="#f5d291" stroke-width="2" stroke-linecap="round"/>
+  <path d="m10 23-4-2v5" fill="#f5d291"/>
+  <path d="M8 11Q12 11 16 14V23Q12 20 8 20Z" fill="#fffbee"/>
+  <path d="M24 11Q20 11 16 14V23Q20 20 24 20Z" fill="#80d9bc"/>
+  <path d="M16 14Q18 11 21 10V19Q18 20 16 23Z" fill="#e9fff0"/>
+</svg>

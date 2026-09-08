@@ -207,6 +207,9 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 func settingsContext(r *http.Request, u *store.User, section, view, userID string) userCtx {
 	ctx := uiCtx(r, u)
 	ctx.Section = settingsSection
+	if section == settingsAdmin && view == settingsAdminFolders {
+		ctx.Section = "folders"
+	}
 	ctx.Back = settingsBack(section, view, userID)
 	return ctx
 }

@@ -18,8 +18,8 @@ import (
 // here. Nothing about a colour is worth a database column.
 const prefsCookie = "liseur_ui"
 
-// Theme values. Dark is the default because that is what a reading
-// application is for; system defers to the browser.
+// Light is the default; an explicit theme cookie always takes precedence.
+// System follows the browser's preferred colour scheme.
 const (
 	themeDark       = "dark"
 	themeLight      = "light"
@@ -59,7 +59,7 @@ type prefs struct {
 // defaultPrefs is what a browser that has never said otherwise gets.
 func defaultPrefs() prefs {
 	return prefs{
-		Theme: themeDark, View: viewGrid, GroupSeries: true,
+		Theme: themeLight, View: viewGrid, GroupSeries: true,
 		Span: insights.DefaultSpan,
 	}
 }

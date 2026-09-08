@@ -40,23 +40,24 @@ templ dashboardBody(
 		<div>
 			<p class="eyebrow">{ sum.Span.Label() }</p>
 			<h1>Dashboard</h1>
+			<p class="page-intro">Reading activity and recent sessions.</p>
 		</div>
 		@spanPicker(sum.Span)
 	</header>
 	<section class="cards">
-		<div class="stat"><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Minutes")</span><span class="num">{ f0(sum.ActiveMinutes) }</span><span class="lbl">minutes</span></div>
 		if sum.Pages > 0 {
-			<div class="stat"><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
+			<div class="stat"><span class="stat-icon">@uiIcon("Library")</span><span class="num">{ f0(sum.Pages) }</span><span class="lbl">pages</span></div>
 		}
-		<div class="stat"><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Sessions")</span><span class="num">{ i2s(sum.Sessions) }</span><span class="lbl">sessions</span></div>
 		// The streak deliberately reaches back past the span, so it says
 		// so rather than being left to look like another figure about
 		// the last week.
-		<div class="stat"><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak (all time)</span></div>
+		<div class="stat"><span class="stat-icon">@uiIcon("Streak")</span><span class="num">{ i2s(sum.StreakDays) }</span><span class="lbl">day streak (all time)</span></div>
 	</section>
 	if len(reading) > 0 {
-		<section class="card">
-			<h2>Continue reading</h2>
+		<section class="card reading-shelf">
+			<div class="cardhead"><div><p class="eyebrow">Your next chapter</p><h2>Continue reading</h2></div><a class="section-link" href={ prefix + "library" }>Your library <span aria-hidden="true">→</span></a></div>
 			<div class="grid shelf">
 				for _, w := range reading {
 					@workCard(prefix, w)
@@ -65,7 +66,7 @@ templ dashboardBody(
 		</section>
 	}
 	<section class="card">
-		<h2>{ chartHeading(sum.Span) }</h2>
+		<div class="cardhead"><div><p class="eyebrow">The reading habit</p><h2>{ chartHeading(sum.Span) }</h2></div></div>
 		if len(days) == 0 {
 			<p class="muted">Nothing recorded in this span.</p>
 		} else if sum.Bars {
