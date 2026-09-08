@@ -738,6 +738,10 @@ func TestUIScreenshots(t *testing.T) {
 		progressOn(t, f, m.work, fmt.Sprintf("018e6f1a-0000-7000-8000-00000000005%d", i),
 			m.at, now)
 	}
+	// And sittings behind that progress, because the statistics half of
+	// the dashboard is drawn from sessions, not positions: without them
+	// every tile reads zero and the chart is a blank rule.
+	sittingsFor(t, f, now)
 
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")
@@ -749,7 +753,10 @@ func TestUIScreenshots(t *testing.T) {
 		"SHOT_URL="+ts.URL,
 		"SHOT_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SHOT_DIR="+outDir,
-		"SHOT_PATHS=/ui/,/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
+		// The calendar view of the reading habit is only offered on a
+		// span longer than a month, so the walk asks for one outright.
+		"SHOT_PATHS=/ui/,/ui/?span=365d&chart=chart-calendar,"+
+			"/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
 			"/ui/entities/contributors,/ui/settings?section=devices,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
 		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),
@@ -885,5 +892,49 @@ func TestReaderRecordsReadingSessions(t *testing.T) {
 		if s.Origin != store.OriginNative || s.DeviceID == "" {
 			t.Errorf("session %s: origin %q device %q", s.SessionID, s.Origin, s.DeviceID)
 		}
+	}
+}
+
+// sittingsFor writes a plausible few months of reading behind the two
+// works the screenshot walk puts progress on: a finished book read in a
+// burst back in the spring, and a current one still being read most
+// evenings. It is shaped so every span the picker offers has something
+// in it — a streak in the last week, weeks to bucket at ninety days,
+// months to bucket at a year.
+func sittingsFor(t *testing.T, f *booksFixture, now time.Time) {
+	t.Helper()
+	evening := func(daysAgo int) time.Time {
+		d := now.AddDate(0, 0, -daysAgo)
+		return time.Date(d.Year(), d.Month(), d.Day(), 21, 10, 0, 0, time.UTC)
+	}
+	var out []store.Session
+	sitting := func(work string, daysAgo, minutes int, from, to float64) {
+		start := evening(daysAgo)
+		pages := float64(minutes) / 2.2
+		out = append(out, store.Session{
+			SessionID: fmt.Sprintf("018e6f1b-0000-7000-8000-%012d", len(out)+1),
+			WorkID:    work, DeviceID: "d-test",
+			StartedAt: start, EndedAt: start.Add(time.Duration(minutes) * time.Minute),
+			StartProg: from, EndProg: to, ReportedPages: &pages,
+			Origin: store.OriginNative,
+		})
+	}
+
+	// Neuromancer, read to the end over a fortnight a couple of months back.
+	for i, minutes := range []int{35, 50, 20, 65, 40, 55, 30, 80} {
+		day := 78 - i*2
+		from := float64(i) / 8
+		sitting("w-neuromancer", day, minutes, from, from+0.125)
+	}
+	// Dune, still going: a scattering, then most of this past week.
+	for i, minutes := range []int{45, 25, 60, 35} {
+		sitting("w-dune", 40-i*7, minutes, 0.05+float64(i)*0.04, 0.09+float64(i)*0.04)
+	}
+	for i, minutes := range []int{50, 30, 70, 25, 40, 55} {
+		sitting("w-dune", 6-i, minutes, 0.21+float64(i)*0.035, 0.245+float64(i)*0.035)
+	}
+
+	if err := f.st.AppendSessions(t.Context(), "u1", out); err != nil {
+		t.Fatal(err)
 	}
 }
