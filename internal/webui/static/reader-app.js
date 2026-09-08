@@ -1530,6 +1530,7 @@ function chapterCSS(s) {
 
 function applySettings() {
   document.body.dataset.readerTheme = settings.theme;
+  document.body.dataset.readerAutohide = String(!!settings.autohide);
   document.body.dataset.readerFlow =
     settings.flow === "scrolled" ? "scrolled" : "paginated";
   document.body.dataset.readerFooter = FOOTER_MODES.includes(settings.footer)
