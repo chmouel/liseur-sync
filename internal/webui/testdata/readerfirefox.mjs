@@ -183,9 +183,9 @@ const probe = `(() => {
     selectionBackground: body ? doc.defaultView.getComputedStyle(body, '::selection').backgroundColor : '',
     selectionColour: body ? doc.defaultView.getComputedStyle(body, '::selection').color : '',
     selectionTokenBackground: doc
-      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--selection-bg').trim() : '',
+      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--liseur-selection-bg').trim() : '',
     selectionTokenColour: doc
-      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--selection-fg').trim() : '',
+      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--liseur-selection-fg').trim() : '',
     stageBackground: document.getElementById('reader-view')
       ? getComputedStyle(document.getElementById('reader-view')).backgroundColor : '',
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,

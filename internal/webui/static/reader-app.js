@@ -1717,12 +1717,12 @@ function chapterCSS(s) {
   const theme = THEMES[s.theme];
   if (theme) {
     rules.push(
-      `html { color-scheme: ${theme.scheme}; --selection-bg: ${theme.selectionBg}; --selection-fg: ${theme.selectionFg}; }`,
+      `html { color-scheme: ${theme.scheme}; --liseur-selection-bg: ${theme.selectionBg}; --liseur-selection-fg: ${theme.selectionFg}; }`,
       `html, body { background: ${theme.bg} !important; color: ${theme.fg} !important; }`,
       `body * { background-color: transparent !important; color: ${theme.fg} !important; }`,
       `a:any-link { color: ${theme.link} !important; }`,
-      "body::selection, body *::selection { background: var(--selection-bg) !important; color: var(--selection-fg) !important; }",
-      "body::-moz-selection, body *::-moz-selection { background: var(--selection-bg) !important; color: var(--selection-fg) !important; }",
+      "body::selection, body *::selection { background-color: var(--liseur-selection-bg) !important; color: var(--liseur-selection-fg) !important; }",
+      "body::-moz-selection, body *::-moz-selection { background-color: var(--liseur-selection-bg) !important; color: var(--liseur-selection-fg) !important; }",
     );
   }
   if (FONTS[s.font]) {
