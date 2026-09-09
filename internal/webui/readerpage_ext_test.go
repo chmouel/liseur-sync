@@ -198,20 +198,20 @@ func TestReaderPageOffersTheChromeControls(t *testing.T) {
 			t.Errorf("the reader page is missing %q", want)
 		}
 	}
+}
 
-	func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
-		f := newBooksFixture(t)
-		bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
-		_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
-		for _, unwanted := range []string{
-			`id="reader-add-note"`,
-			`id="reader-annotation-actions"`,
-			`id="reader-annotations"`,
-		} {
-			if strings.Contains(page, unwanted) {
-				t.Errorf("the reader page still contains %q", unwanted)
-			}
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, unwanted := range []string{
+		`id="reader-add-note"`,
+		`id="reader-annotation-actions"`,
+		`id="reader-annotations"`,
+	} {
+		if strings.Contains(page, unwanted) {
+			t.Errorf("the reader page still contains %q", unwanted)
 		}
 	}
 }
