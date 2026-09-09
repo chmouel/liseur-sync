@@ -1126,21 +1126,23 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
-  display:flex;align-items:center;gap:.6rem;padding:.35rem .75rem;
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
+  align-items:center;gap:.6rem;padding:.35rem .75rem;
   border-bottom:1px solid var(--line);
   background:color-mix(in srgb,var(--surface) 88%,transparent);
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
   box-shadow:0 4px 18px rgba(0,0,0,.28);
   transition:opacity .18s ease,transform .18s ease}
+.reader-navigation{display:flex;align-items:center;gap:.6rem;min-width:0}
 .reader-back{display:inline-flex;align-items:center;gap:.3rem;
   color:var(--muted);text-decoration:none;white-space:nowrap;
   font-size:.9rem;padding:.25rem .45rem;border-radius:8px}
 .reader-back:hover{color:var(--ink);background:var(--surface-3)}
 .reader-back svg{flex:none}
 .reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:.95rem;letter-spacing:.005em}
+  text-align:center;font-size:.95rem;letter-spacing:.005em}
 .reader-title strong{font-weight:600}
-.reader-actions{display:flex;align-items:center;gap:.35rem;flex:none}
+.reader-actions{display:flex;align-items:center;justify-self:end;gap:.35rem;min-width:0}
 /* One shape for every control on the bar: TOC, Aa, full screen. */
 .reader-icon-btn{display:inline-flex;align-items:center;justify-content:center;
   box-sizing:border-box;width:2rem;height:2rem;padding:0;

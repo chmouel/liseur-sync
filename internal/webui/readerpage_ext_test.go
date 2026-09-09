@@ -200,6 +200,35 @@ func TestReaderPageOffersTheChromeControls(t *testing.T) {
 	}
 }
 
+func TestReaderTitleIsCenteredInTheViewport(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, want := range []string{
+		`class="reader-navigation"`,
+		`class="reader-title"`,
+		`class="reader-actions"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the reader header is missing %q", want)
+		}
+	}
+
+	_, css := f.get(t, "/ui/static/style.css", f.cookie)
+	for _, want := range []string{
+		".reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;\n" +
+			"  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);",
+		".reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\n" +
+			"  text-align:center;",
+		".reader-actions{display:flex;align-items:center;justify-self:end;",
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("the reader title is not safely centered: missing %q", want)
+		}
+	}
+}
+
 func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
