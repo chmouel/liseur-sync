@@ -72,7 +72,7 @@ test('a fetch failure does not leave a stale cache entry', async () => {
 // plain Node has. Standing in for them keeps these tests on the part
 // that is actually under test: which chapters get built, how often, and
 // when the built document is released.
-function building(hrefs) {
+function building(t, hrefs) {
   const made = fixture(hrefs);
   const built = [];
   made.pub.document = async href => {
@@ -80,22 +80,30 @@ function building(hrefs) {
     await made.pub.bytes(href, href);
     return { href };
   };
-  globalThis.XMLSerializer ??= class {
+  // Scoped to the test that asked for it, so a test that should fail for
+  // want of a DOM still does.
+  const had = Object.hasOwn(globalThis, 'XMLSerializer');
+  const previous = globalThis.XMLSerializer;
+  globalThis.XMLSerializer = class {
     serializeToString(doc) { return `<x href="${doc.href}"/>`; }
   };
+  t.after(() => {
+    if (had) globalThis.XMLSerializer = previous;
+    else delete globalThis.XMLSerializer;
+  });
   return { ...made, built };
 }
 
-test('build() builds a spine document once and reuses it', async () => {
-  const { pub, built } = building(['c1.xhtml']);
+test('build() builds a spine document once and reuses it', async t => {
+  const { pub, built } = building(t, ['c1.xhtml']);
   const first = await pub.build('c1.xhtml');
   const second = await pub.build('c1.xhtml');
   assert.deepEqual(built, ['c1.xhtml']);
   assert.equal(first, second);
 });
 
-test('warm() builds a chapter nobody has asked for yet', async () => {
-  const { pub, built } = building(['c1.xhtml', 'c2.xhtml']);
+test('warm() builds a chapter nobody has asked for yet', async t => {
+  const { pub, built } = building(t, ['c1.xhtml', 'c2.xhtml']);
   pub.warm('c2.xhtml');
   await pub.documents.get('c2.xhtml');
   assert.deepEqual(built, ['c2.xhtml']);
@@ -104,16 +112,16 @@ test('warm() builds a chapter nobody has asked for yet', async () => {
   assert.deepEqual(built, ['c2.xhtml']);
 });
 
-test('warm() ignores a chapter that is not in the publication', async () => {
-  const { pub, built } = building(['c1.xhtml']);
+test('warm() ignores a chapter that is not in the publication', async t => {
+  const { pub, built } = building(t, ['c1.xhtml']);
   pub.warm('nowhere.xhtml');
   pub.warm(undefined);
   assert.deepEqual(built, []);
   assert.ok(!pub.documents.has('nowhere.xhtml'));
 });
 
-test('a warm that fails is swallowed and leaves no stale entry', async () => {
-  const { pub } = building(['c1.xhtml']);
+test('a warm that fails is swallowed and leaves no stale entry', async t => {
+  const { pub } = building(t, ['c1.xhtml']);
   pub.document = async () => { throw new Error('no'); };
   pub.warm('c1.xhtml');
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -122,8 +130,8 @@ test('a warm that fails is swallowed and leaves no stale entry', async () => {
   await assert.rejects(() => pub.get({ href: 'c1.xhtml' }).read());
 });
 
-test('retain() releases a built document with the blobs it points at', async () => {
-  const { pub, built } = building(['c1.xhtml', 'c2.xhtml']);
+test('retain() releases a built document with the blobs it points at', async t => {
+  const { pub, built } = building(t, ['c1.xhtml', 'c2.xhtml']);
   await pub.build('c1.xhtml');
   await pub.build('c2.xhtml');
   // A serialised chapter names blob URLs by reference. Keeping it after
@@ -135,15 +143,15 @@ test('retain() releases a built document with the blobs it points at', async () 
   assert.deepEqual(built, ['c1.xhtml', 'c2.xhtml', 'c1.xhtml'], 'c1 must be rebuilt, not served stale');
 });
 
-test('close() drops the built documents too', async () => {
-  const { pub } = building(['c1.xhtml']);
+test('close() drops the built documents too', async t => {
+  const { pub } = building(t, ['c1.xhtml']);
   await pub.build('c1.xhtml');
   pub.close();
   assert.equal(pub.documents.size, 0);
 });
 
-test('a build released mid-flight refuses to hand back a stale document', async () => {
-  const { pub } = building(['c1.xhtml', 'c2.xhtml']);
+test('a build released mid-flight refuses to hand back a stale document', async t => {
+  const { pub } = building(t, ['c1.xhtml', 'c2.xhtml']);
   let release;
   pub.document = href => new Promise(resolve => {
     pub.addReferrer(href, href); // As bytes() would, before the fetch returns.
@@ -158,8 +166,8 @@ test('a build released mid-flight refuses to hand back a stale document', async 
   assert.ok(!pub.documents.has('c1.xhtml'));
 });
 
-test('a failed build does not evict the entry that replaced it', async () => {
-  const { pub } = building(['c1.xhtml']);
+test('a failed build does not evict the entry that replaced it', async t => {
+  const { pub } = building(t, ['c1.xhtml']);
   let fail;
   pub.document = () => new Promise((_, reject) => { fail = () => reject(new Error('gone')); });
   const first = pub.build('c1.xhtml');
