@@ -66,43 +66,45 @@ templ readerPage(v ReaderView, csrf string) {
 				hidden
 			></div>
 			<header class="reader-bar">
-				<button
-					type="button"
-					id="reader-toc-button"
-					class="reader-icon-btn reader-toc-button"
-					title="Table of contents (t)"
-					aria-label="Table of contents"
-				>
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
+				<div class="reader-navigation">
+					<button
+						type="button"
+						id="reader-toc-button"
+						class="reader-icon-btn reader-toc-button"
+						title="Table of contents (t)"
+						aria-label="Table of contents"
 					>
-						<path d="M4 6h16M4 12h16M4 18h16"></path>
-					</svg>
-				</button>
-				<a class="reader-back" href={ templ.SafeURL(v.BackURL) } title="Back">
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
-					>
-						<path d="M19 12H5m7-7l-7 7 7 7"></path>
-					</svg>
-					<span class="reader-back-label">Back</span>
-				</a>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M4 6h16M4 12h16M4 18h16"></path>
+						</svg>
+					</button>
+					<a class="reader-back" href={ templ.SafeURL(v.BackURL) } title="Back">
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M19 12H5m7-7l-7 7 7 7"></path>
+						</svg>
+						<span class="reader-back-label">Back</span>
+					</a>
+				</div>
 				<div class="reader-title">
 					<strong id="reader-title-text">{ v.Title }</strong>
 				</div>
