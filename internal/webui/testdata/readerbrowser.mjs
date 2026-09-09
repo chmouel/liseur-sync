@@ -399,6 +399,30 @@ check('the page painted something', png.length > 8000 && uniq > 40,
 // stopped two pages in. One click is not evidence of a working reader —
 // the reported bug survived one click — so this turns the page until the
 // book ends and asks how far it got.
+
+// Issue #60: the next chapter has to be fetched and built while this one
+// is still being read. Readium's own preload window is measured in
+// positions — roughly a kilobyte of text each — so left to itself it
+// does not reach for the next chapter until the reader is already
+// standing on the last screen or two of this one, and the turn then
+// waits for a network round trip. reader-engine.js warms both
+// neighbours on every section change instead; what that leaves behind is
+// a built document in the publication's cache, before anyone asks.
+const nextChapter = await evalIn("document.querySelector('readium-view').book.sections[1].id");
+// Assert the built document, not merely that a build was started: the
+// map entry appears the moment warming begins, so a check for its
+// presence would pass while the chapter was still on the wire — the very
+// thing this is here to prevent.
+const built = `!!document.querySelector('readium-view').resources?.documents?.has(${JSON.stringify(nextChapter)})`;
+let preloaded = false;
+for (let i = 0; i < 100 && !preloaded; i++) {
+  preloaded = await evalIn(built);
+  if (!preloaded) await new Promise(resolve => setTimeout(resolve, 50));
+}
+const bytes = preloaded && await evalIn(
+  `document.querySelector('readium-view').resources.documents.get(${JSON.stringify(nextChapter)}).then(b => b.length)`);
+check('the next chapter is built before the reader turns into it', bytes > 0, `${nextChapter}, ${bytes} bytes`);
+
 const seen = [];
 for (let i = 0; i < 10; i++) {
   const before = await evalIn("JSON.stringify(document.querySelector('readium-view').lastLocation.locator)");

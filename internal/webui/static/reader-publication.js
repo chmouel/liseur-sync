@@ -92,6 +92,16 @@ export class ReaderPublication {
     this.canonicalEntries = new Map([...this.entries.keys()].map(key => [canonicalize(key), key]));
     this.raw = new Map();
     this.blobs = new Map();
+    // Spine documents already parsed, rewritten and serialised, keyed by
+    // href. Building one costs a fetch, a parse, a walk of every element
+    // and a fetch per asset it names, so it is worth keeping: Readium
+    // rebuilds a frame whenever it re-enters its window, and warm() below
+    // fills this in before the reader ever asks. Released by retain()
+    // together with the blob URLs the serialised document points at.
+    this.documents = new Map();
+    // The build attempt currently owning each entry in `documents`, so a
+    // build still running when its entry is released can detect that.
+    this.builds = new Map();
     this.urls = new Set();
     // Which spine document(s) a cached entry (raw bytes or a derived blob)
     // was reached from. retain() below uses this to release entries no
@@ -124,7 +134,9 @@ export class ReaderPublication {
         return new Uint8Array(bytes);
       })();
       this.raw.set(key, pending);
-      pending.catch(() => this.raw.delete(key));
+      // Only ever forget this attempt. A failure that arrives after the
+      // entry was released and refetched must not delete its successor.
+      pending.catch(() => { if (this.raw.get(key) === pending) this.raw.delete(key); });
     }
     return this.raw.get(key);
   }
@@ -139,6 +151,11 @@ export class ReaderPublication {
       if (key === this.packageHref) continue;
       if ([...referrers].some(root => keepRoots.has(root))) continue;
       this.raw.delete(key);
+      // A serialised spine document names the blob URLs revoked just
+      // below, so it cannot outlive them: keeping it would hand Readium a
+      // chapter whose every image and stylesheet is a dead URL.
+      this.documents.delete(key);
+      this.builds.delete(key);
       const blob = this.blobs.get(key);
       if (blob) {
         this.blobs.delete(key);
@@ -207,7 +224,7 @@ export class ReaderPublication {
         return url;
       })();
       this.blobs.set(key, pending);
-      pending.catch(() => this.blobs.delete(key));
+      pending.catch(() => { if (this.blobs.get(key) === pending) this.blobs.delete(key); });
     }
     return await this.blobs.get(key) + (fragment ? "#" + fragment : "");
   }
@@ -282,18 +299,49 @@ export class ReaderPublication {
     return doc;
   }
 
+  // Builds the frame document for one spine item: the whole fetch, parse,
+  // rewrite and serialise pipeline, memoised so re-entering a chapter
+  // costs nothing and so warm() can pay for it in advance.
+  build(href) {
+    if (!this.documents.has(href)) {
+      // Identifies this attempt. retain() and close() drop the token, so a
+      // build that was still running when its blobs were revoked can tell
+      // that it is now stale and refuse to hand back a document naming
+      // dead URLs, instead of quietly resolving with one.
+      const token = {};
+      this.builds.set(href, token);
+      const pending = (async () => {
+        const entry = this.entries.get(href);
+        const doc = imageSpineTypes.has(entry?.type)
+          ? await this.imageSpineDocument(href, entry.type)
+          : await this.document(href);
+        if (this.closed || this.builds.get(href) !== token) throw Error("Publication resource released");
+        return new TextEncoder().encode(new XMLSerializer().serializeToString(doc));
+      })();
+      this.documents.set(href, pending);
+      pending.catch(() => { if (this.documents.get(href) === pending) this.documents.delete(href); });
+    }
+    return this.documents.get(href);
+  }
+
+  // Asks for a spine document nobody has requested yet. Readium only
+  // reaches for the next chapter once the reader is a position or two
+  // from the end of this one, which over a real network means the turn
+  // waits for a fetch that could have happened minutes earlier. This is a
+  // hint and nothing more: a failure here is swallowed so the reader is
+  // left exactly as it was, and the real read() can fail on its own terms
+  // with its own message.
+  warm(href) {
+    if (this.closed || !href || !this.entries.has(href)) return;
+    this.build(href).catch(() => {});
+  }
+
   get(link) {
     const owner = this;
     return new class extends Resource {
       async link() { return link; }
       async length() { return (await owner.bytes(link.href)).length; }
-      async read() {
-        const entry = owner.entries.get(link.href);
-        const doc = imageSpineTypes.has(entry?.type)
-          ? await owner.imageSpineDocument(link.href, entry.type)
-          : await owner.document(link.href);
-        return new TextEncoder().encode(new XMLSerializer().serializeToString(doc));
-      }
+      async read() { return owner.build(link.href); }
       close() {}
     }();
   }
@@ -302,6 +350,6 @@ export class ReaderPublication {
     this.closed = true;
     this.controller.abort();
     for (const url of this.urls) URL.revokeObjectURL(url);
-    this.urls.clear(); this.raw.clear(); this.blobs.clear(); this.referrers.clear();
+    this.urls.clear(); this.raw.clear(); this.blobs.clear(); this.documents.clear(); this.builds.clear(); this.referrers.clear();
   }
 }
