@@ -621,7 +621,6 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
 		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
-		"SMOKE_ANNOTATIONS=1",
 		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
 	)
 	out, err := cmd.CombinedOutput()

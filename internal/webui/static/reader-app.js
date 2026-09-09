@@ -49,6 +49,7 @@ const cfg = {
   offline: el.dataset.offline === "1",
   handed: null,
 };
+const annotationsEnabled = false;
 
 if (cfg.offline) {
   cfg.bookID = new URL(location.href).searchParams.get("book") || "";
@@ -215,7 +216,6 @@ function prepareOfflineSync() {
   offlineCoordinator = offlineSync({
     context: offlineContext, base: offlineBase,
     onChange: async () => {
-      await loadAnnotations();
       const fresh = await getReadySnapshot({ ...offlineContext, bookID: cfg.bookID });
       if (fresh?.localPosition && !readingDirty) {
         catchup.observe(fresh.localPosition);
@@ -401,7 +401,7 @@ const refreshes = topicRefresh({
     if (!ready || document.hidden || !workID) return false;
     const run = lifecycle;
     const activity = activityGeneration;
-    if (topic === "annotations") return loadAnnotations();
+    if (topic === "annotations") return true;
     const result = await lastPosition();
     if (!result.ok || document.hidden || run !== lifecycle ||
         activity !== activityGeneration) return false;
@@ -420,7 +420,7 @@ function startLive() {
   if (!workID) return;
   refreshes.start();
   // This also refreshes on resume against a server without /v1/events.
-  refreshes.owe(["positions", "annotations"]);
+  refreshes.owe(["positions"]);
   live.start();
 }
 
@@ -2794,7 +2794,7 @@ window.addEventListener("beforeunload", () => {
     view.addEventListener("load", (e) => {
       e.detail.doc.addEventListener("keydown", handleKeys);
       wireChapterPointer(e.detail.doc);
-      wireSelection(e.detail.doc);
+      if (annotationsEnabled) wireSelection(e.detail.doc);
     });
     view.addEventListener("link", (e) => {
       if (!noteNavigation()) e.preventDefault();
@@ -2948,13 +2948,7 @@ window.addEventListener("beforeunload", () => {
     restoring = false;
     ready = !cfg.offline && !syncExpired;
     beginSession();
-    // The annotations arrive after the book is on screen: they are
-    // decoration on the text, never the reason the text waits.
-    if (cfg.offline) {
-      await loadAnnotations().catch(error =>
-        console.warn("Annotations could not be loaded:", error));
-      prepareOfflineSync();
-    }
+    if (cfg.offline) prepareOfflineSync();
     if (!cfg.offline && ready && !document.hidden) startLive();
     if (document.hidden) catchup.hide();
     if (!syncExpired) say("");

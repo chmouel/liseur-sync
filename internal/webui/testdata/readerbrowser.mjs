@@ -1447,14 +1447,6 @@ async function liveGuard(evalIn, check, S) {
     return false;
   };
   const position = () => evalIn("document.querySelector('readium-view').lastLocation.fraction");
-  const overlay = `(() => {
-    const content = document.querySelector('readium-view').renderer.getContents()[0];
-    const doc = content?.doc;
-    const registry = doc?.defaultView?.CSS?.highlights;
-    if (!registry || !registry.size) return null;
-    const [name] = [...registry][0];
-    return doc.defaultView.getComputedStyle(doc.body, '::highlight(' + name + ')').backgroundColor || null;
-  })()`;
   const original = await position();
   check('opening restore creates no position op', await evalIn('window.__liveOwnOps.length === 0'));
   check('one live stream is open', await evalIn('window.__liveStreams.length === 1 && !window.__liveStreams[0].aborted'));
@@ -1470,29 +1462,6 @@ async function liveGuard(evalIn, check, S) {
     };
     return true;
   })()`);
-  // Recolour and delete the seeded range while remaining on its chapter.
-  const recoloured = await evalIn(`(async () => {
-    const page = await window.__liveCall('v1/works/' + window.__liveWork + '/annotations');
-    const a = page.annotations.find((a) => a.id.endsWith('a1'));
-    const out = await window.__liveCall('v1/annotations', 'POST', { annotations: [{
-      id: a.id, base_rev: a.rev, work_id: window.__liveWork, kind: a.kind,
-      color: 'pink', excerpt: a.excerpt, progression: a.progression,
-      locator: a.locator, client_ts: new Date().toISOString(),
-    }] });
-    return out.results[0].status;
-  })()`);
-  check('remote recolour commits', recoloured === 'applied', recoloured);
-  check('recolour reaches the open chapter without a page turn',
-    await wait(`(${overlay}) === 'rgb(240, 98, 146)' || (${overlay}) === '#f06292'`));
-  await evalIn(`(async () => {
-    const page = await window.__liveCall('v1/works/' + window.__liveWork + '/annotations');
-    const a = page.annotations.find((a) => a.id.endsWith('a1'));
-    await window.__liveCall('v1/annotations/' + a.id + '?rev=' + a.rev, 'DELETE');
-    return true;
-  })()`);
-  check('remote deletion removes its overlay without a page turn', await wait(`(${overlay}) === null`));
-  check('annotation refresh does not move the book', await position() === original);
-
   const remote = (id, fraction) => evalIn(`(async () => {
     const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
       op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
