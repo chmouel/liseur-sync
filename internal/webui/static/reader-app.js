@@ -1646,22 +1646,38 @@ const SETTINGS_DEFAULTS = Object.freeze({
 // this ring, the way a tap does in the app.
 const FOOTER_MODES = ["chapter", "time-chapter", "time-book", "empty"];
 const THEMES = {
-  light: { bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light" },
-  sepia: { bg: "#f6ecd9", fg: "#5b4636", link: "#8a5a2b", scheme: "light" },
-  dark: { bg: "#202124", fg: "#cfcfd4", link: "#8ab4f8", scheme: "dark" },
+  light: {
+    bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light",
+    selectionBg: "#cfe3ff", selectionFg: "#1b1b1f",
+  },
+  sepia: {
+    bg: "#f6ecd9", fg: "#5b4636", link: "#8a5a2b", scheme: "light",
+    selectionBg: "#d8c2a0", selectionFg: "#4a392c",
+  },
+  dark: {
+    bg: "#202124", fg: "#cfcfd4", link: "#8ab4f8", scheme: "dark",
+    selectionBg: "#4f6fbe", selectionFg: "#f5f7ff",
+  },
   "tokyo-night": {
     bg: "#1a1b26",
     fg: "#c0caf5",
     link: "#7aa2f7",
     scheme: "dark",
+    selectionBg: "#445c9b",
+    selectionFg: "#eef2ff",
   },
   "rose-pine": {
     bg: "#191724",
     fg: "#e0def4",
     link: "#c4a7e7",
     scheme: "dark",
+    selectionBg: "#5c4a88",
+    selectionFg: "#f7f4ff",
   },
-  black: { bg: "#000000", fg: "#ababae", link: "#7aa2d8", scheme: "dark" },
+  black: {
+    bg: "#000000", fg: "#ababae", link: "#7aa2d8", scheme: "dark",
+    selectionBg: "#375f9d", selectionFg: "#f5f7ff",
+  },
 };
 const FONTS = {
   serif: 'Georgia, "Times New Roman", "Liberation Serif", serif',
@@ -1701,10 +1717,12 @@ function chapterCSS(s) {
   const theme = THEMES[s.theme];
   if (theme) {
     rules.push(
-      `html { color-scheme: ${theme.scheme}; }`,
+      `html { color-scheme: ${theme.scheme}; --selection-bg: ${theme.selectionBg}; --selection-fg: ${theme.selectionFg}; }`,
       `html, body { background: ${theme.bg} !important; color: ${theme.fg} !important; }`,
       `body * { background-color: transparent !important; color: ${theme.fg} !important; }`,
       `a:any-link { color: ${theme.link} !important; }`,
+      "body::selection, body *::selection { background: var(--selection-bg) !important; color: var(--selection-fg) !important; }",
+      "body::-moz-selection, body *::-moz-selection { background: var(--selection-bg) !important; color: var(--selection-fg) !important; }",
     );
   }
   if (FONTS[s.font]) {

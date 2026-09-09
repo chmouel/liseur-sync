@@ -251,6 +251,12 @@ const probe = `(() => {
     frameReachable: !!document.querySelector('#reader-view iframe'),
     text: body ? (body.innerText || '').slice(0, 60) : '',
     colour: body ? doc.defaultView.getComputedStyle(body).color : '',
+    selectionBackground: body ? doc.defaultView.getComputedStyle(body, '::selection').backgroundColor : '',
+    selectionColour: body ? doc.defaultView.getComputedStyle(body, '::selection').color : '',
+    selectionTokenBackground: doc
+      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--selection-bg').trim() : '',
+    selectionTokenColour: doc
+      ? doc.defaultView.getComputedStyle(doc.documentElement).getPropertyValue('--selection-fg').trim() : '',
     stageBackground: document.getElementById('reader-view')
       ? getComputedStyle(document.getElementById('reader-view')).backgroundColor : '',
     fraction: typeof loc?.fraction === 'number' ? +loc.fraction.toFixed(4) : -1,
@@ -494,13 +500,17 @@ check('the book pages backwards',
   back.cfi !== wasAt.cfi,
   `${wasAt.chapter} @${wasAt.fraction} -> ${back.chapter} @${back.fraction}`);
 
-// The appearance settings must reach inside the publication: choose each
-// named palette and verify both chapter text and the stage background. This
-// also proves the user stylesheet survives the engine's page lifecycle
-// rather than styling a page that is repainted away.
-for (const [value, label, colour, background] of [
-  ['tokyo-night', 'Tokyo Night', 'rgb(192,202,245)', 'rgb(26,27,38)'],
-  ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)'],
+// The appearance settings must reach inside the publication: each reader
+// palette owns both the text/stage colours and the live selection colours,
+// and a theme switch must update all of them without reopening the book.
+for (const [value, label, colour, background, selectionTokenBackground, selectionTokenColour,
+  selectionBackground, selectionColour] of [
+  ['light', 'Light', 'rgb(27,27,31)', 'rgb(255,255,255)', '#cfe3ff', '#1b1b1f', 'rgb(207,227,255)', 'rgb(27,27,31)'],
+  ['sepia', 'Sepia', 'rgb(91,70,54)', 'rgb(246,236,217)', '#d8c2a0', '#4a392c', 'rgb(216,194,160)', 'rgb(74,57,44)'],
+  ['dark', 'Dark', 'rgb(207,207,212)', 'rgb(32,33,36)', '#4f6fbe', '#f5f7ff', 'rgb(79,111,190)', 'rgb(245,247,255)'],
+  ['tokyo-night', 'Tokyo Night', 'rgb(192,202,245)', 'rgb(26,27,38)', '#445c9b', '#eef2ff', 'rgb(68,92,155)', 'rgb(238,242,255)'],
+  ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)', '#5c4a88', '#f7f4ff', 'rgb(92,74,136)', 'rgb(247,244,255)'],
+  ['black', 'Black', 'rgb(171,171,174)', 'rgb(0,0,0)', '#375f9d', '#f5f7ff', 'rgb(55,95,157)', 'rgb(245,247,255)'],
 ]) {
   await evalIn(`(() => {
     const radio = document.querySelector(
@@ -516,6 +526,21 @@ for (const [value, label, colour, background] of [
   check(`the ${label} theme colors the reader stage`,
     themed.stageBackground.replace(/\s/g, '') === background,
     themed.stageBackground);
+  check(`the ${label} theme updates selection tokens`,
+    themed.selectionTokenBackground !== '' &&
+      themed.selectionTokenBackground.toLowerCase() === selectionTokenBackground &&
+      themed.selectionTokenColour.toLowerCase() === selectionTokenColour,
+    JSON.stringify({
+      bg: themed.selectionTokenBackground,
+      fg: themed.selectionTokenColour,
+    }));
+  check(`the ${label} theme styles browser text selection`,
+    themed.selectionBackground.replace(/\s/g, '') === selectionBackground &&
+      themed.selectionColour.replace(/\s/g, '') === selectionColour,
+    JSON.stringify({
+      bg: themed.selectionBackground,
+      fg: themed.selectionColour,
+    }));
   const saved = await evalIn(`localStorage.getItem('liseur.reader.settings')`);
   check(`${label} settings persist in the browser`,
     typeof saved === 'string' && saved.includes(`"theme":"${value}"`),
