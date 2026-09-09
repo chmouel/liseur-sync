@@ -160,7 +160,42 @@ export class ReaderEngine extends HTMLElement {
     };
     this.dispatchEvent(new CustomEvent("relocate", { detail: this.lastLocation }));
     this.drawAnnotations().catch(() => {});
-    if (index !== this.lastWindowIndex) { this.lastWindowIndex = index; this.releaseOutOfWindow(index); }
+    if (index !== this.lastWindowIndex) {
+      this.lastWindowIndex = index;
+      this.releaseOutOfWindow(index);
+      this.warmNeighbours(index);
+    }
+  }
+
+  // Fetches and builds the chapters on either side of this one while the
+  // reader is still reading this one.
+  //
+  // Readium's frame pool measures its preload window in positions, not in
+  // chapters, and a position is about a kilobyte of text: it does not
+  // reach for the next chapter until the reader is already standing on
+  // the last screen or two of this one, and the turn then waits for the
+  // fetch. Over a real network that wait is the whole complaint in issue
+  // #60. A chapter takes minutes to read and a few hundred milliseconds
+  // to fetch, so there is no reason to spend them at the same moment.
+  //
+  // Only the immediate neighbours, both of which are well inside the
+  // retain window above, so nothing warmed here is released before it is
+  // used. Forward first and on its own: that is the way almost everyone
+  // turns, and the chapter behind should not compete with it for the
+  // link. A fixed-layout book is left alone — its frame pool builds every
+  // spine item up front, so there is nothing to be early for.
+  warmNeighbours(index) {
+    if (this.fixed || !this.resources?.warm) return;
+    const forward = this.book.sections[index + 1];
+    const back = this.book.sections[index - 1];
+    // The reader may have moved on by the time the chapter ahead is
+    // ready; warming behind them then would only evict what they need.
+    const behind = () => {
+      if (back && this.lastWindowIndex === index) this.resources.warm(back.id);
+    };
+    if (!forward) return behind();
+    this.resources.warm(forward.id);
+    this.resources.documents.get(forward.id)?.then(behind, behind);
   }
 
   // Coordinates our own resource cache (raw bytes, decoded blobs) with
