@@ -103,7 +103,9 @@ Its verdicts are a port of `BookSyncChoice`, in
 `reader-sync-choice.js`, decided on two positions and a flag with no
 navigator, database or server in sight:
 
-- nothing on the server;
+- nothing on the server, and this page on its way up to meet it;
+- nothing anywhere yet, which is not the same answer and does not
+  claim to be sending a page nobody has;
 - in step, including a difference the reader has already answered;
 - **owed** — only this device has moved, so there is one position and
   the server has an older copy of it: nothing was preserved to adopt,
