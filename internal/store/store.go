@@ -1891,12 +1891,13 @@ type Store interface {
 	RevokeAuthSession(ctx context.Context, userID, id string) error
 	// ExtendAuthSession pushes a live session's expiry out to
 	// expiresAt, which is how a web session in regular use stays signed
-	// in without ever being reissued. It only ever moves the expiry
-	// forward, and it refuses a session that is revoked or already
-	// lapsed at now: a request racing a sign-out must not bring the
-	// session back. Neither case is an error the caller can act on, so
-	// both are ErrNotFound.
-	ExtendAuthSession(ctx context.Context, userID, id string, expiresAt, now time.Time) error
+	// in without ever being reissued. It only updates a row whose
+	// current expiry is before renewBefore, making the renewal throttle
+	// atomic. It refuses a session that is revoked or already lapsed at
+	// now: a request racing a sign-out must not bring the session back.
+	// Neither case is an error the caller can act on, so both are
+	// ErrNotFound.
+	ExtendAuthSession(ctx context.Context, userID, id string, expiresAt, renewBefore, now time.Time) error
 
 	// kosync pairing codes and device credentials.
 	CreatePairingCode(ctx context.Context, p PairingCode) error

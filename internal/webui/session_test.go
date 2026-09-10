@@ -72,7 +72,8 @@ func TestSessionLifetimeIsConfigured(t *testing.T) {
 	if c.Path != "/ui/" {
 		t.Fatalf("cookie path %q, want /ui/", c.Path)
 	}
-	if got := sessionExpiry(t, st, c.Value); got.Sub(want) > time.Minute {
+	if got := sessionExpiry(t, st, c.Value); got.Sub(want) > time.Minute ||
+		want.Sub(got) > time.Minute {
 		t.Fatalf("stored expiry %v, want about %v", got, want)
 	}
 
