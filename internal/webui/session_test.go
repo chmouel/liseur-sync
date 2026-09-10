@@ -19,7 +19,7 @@ func mintSession(t *testing.T, st store.Store, id, secret string, expires time.T
 	t.Helper()
 	if err := st.CreateAuthSession(t.Context(), store.AuthSession{
 		ID: id, UserID: "u1", SHA256: auth.HashSecret(secret), Kind: "web",
-		CSRFHash: auth.HashSecret("csrf-" + id),
+		CSRFHash:  auth.HashSecret("csrf-" + id),
 		CreatedAt: time.Now(), ExpiresAt: expires,
 	}); err != nil {
 		t.Fatal(err)
