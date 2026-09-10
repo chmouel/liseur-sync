@@ -563,10 +563,7 @@ func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, a store.Au
 	if ttl := s.Cfg.WebSessionTTL(); ttl <= floor {
 		floor = ttl / 2
 	}
-	if want.Sub(a.ExpiresAt) < floor {
-		return
-	}
-	if err := s.St.ExtendAuthSession(r.Context(), a.UserID, a.ID, want, now); err != nil {
+	if err := s.St.ExtendAuthSession(r.Context(), a.UserID, a.ID, want, want.Add(-floor), now); err != nil {
 		return
 	}
 	s.setSessionCookie(w, c.Value, want)
