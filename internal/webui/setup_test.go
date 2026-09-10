@@ -20,9 +20,21 @@ import (
 // because every other helper plants alice first.
 func emptyServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
+	return emptyServerCfg(t, nil)
+}
+
+// emptyServerCfg is emptyServer with the configuration open to the
+// caller, for the tests whose subject is a setting rather than the flow.
+func emptyServerCfg(
+	t *testing.T, mutate func(*config.Config),
+) (*httptest.Server, store.Store) {
+	t.Helper()
 	st := NewTestStore(t)
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	s := &Server{St: st, Auth: auth.NewService(st), Cfg: cfg}
 	mux := http.NewServeMux()
 	s.Mount(mux, func(h http.Handler) http.Handler {
@@ -359,5 +371,27 @@ func TestFirstRunSetupKeepsTheAccountWhenTheFolderIsRefused(t *testing.T) {
 		!strings.Contains(body, `data-auto-open="true"`) ||
 		!strings.Contains(body, "Add your book folder") {
 		t.Fatalf("second attempt is not offered: %d\n%s", code, body)
+	}
+}
+
+// The setup page is open to anybody who can reach the port while the
+// instance has no accounts, so it must not describe the host's
+// filesystem. The configured roots are absolute paths: listing them
+// there would hand an anonymous visitor the layout of the machine, which
+// is the disclosure the rest of first run avoids by resolving a root
+// only once an administrator exists. The folders page still lists them,
+// behind requireAdmin.
+func TestFirstRunSetupDoesNotNameTheAllowedRoots(t *testing.T) {
+	root := t.TempDir()
+	ts, _ := emptyServerCfg(t, func(c *config.Config) {
+		c.Content.FolderRoots = []string{root}
+	})
+
+	_, body := get(t, ts, nil, "/ui/setup")
+	if !strings.Contains(body, `name="folder_root"`) {
+		t.Fatal("the setup page lost its folder field")
+	}
+	if strings.Contains(body, root) {
+		t.Errorf("the open setup page names the allowed root %q", root)
 	}
 }
