@@ -904,12 +904,18 @@ function presentBookSync(remote, note) {
       localDirty: readingDirty || catchup.pending(),
       resolvable: startCandidates(remote).length > 0,
     });
-  const choosable = decision.verdict === "ask" || decision.verdict === "no-local";
+  // Taking the other side and keeping this one are two questions, and
+  // only a real choice asks both. With no page here there is nothing to
+  // keep: a Keep button would put the other device's position away
+  // without publishing anything in its place, leaving the reader with
+  // neither.
+  const takeable = decision.verdict === "ask" || decision.verdict === "no-local";
+  const keepable = decision.verdict === "ask" || decision.verdict === "unreadable";
   if (decision.verdict === "no-remote" || decision.verdict === "owed") sendMineNow();
   // A second side is shown when there is one to compare with. This
   // reader's own position sitting on the server is not another device,
   // and putting it under that heading would say something untrue.
-  const other = choosable || decision.verdict === "unreadable" ? remote : null;
+  const other = takeable || keepable ? remote : null;
   const there = placeOf(other, seen);
   syncOffered = other;
 
@@ -920,8 +926,8 @@ function presentBookSync(remote, note) {
   syncThereSide.hidden = !other;
   showExcerpt(syncExcerpt, there);
 
-  syncTake.hidden = !choosable;
-  syncKeep.hidden = !(choosable || decision.verdict === "unreadable");
+  syncTake.hidden = !takeable;
+  syncKeep.hidden = !keepable;
   // With nothing to choose between, the only button left is the way
   // out, and calling it "Cancel" would suggest something was pending.
   syncCancel.textContent = syncTake.hidden && syncKeep.hidden ? "Close" : "Cancel";

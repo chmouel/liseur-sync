@@ -937,3 +937,41 @@ func sittingsFor(t *testing.T, f *booksFixture, now time.Time) {
 		t.Fatal(err)
 	}
 }
+
+// A refresh that redraws the wrong thing looks exactly like one that
+// works: the shelf is still there, just stale, or gone and replaced by a
+// reload. Asking this route the way htmx asks returns a fragment of the
+// card list without the page around it, so the region a refresh replaces
+// would be swapped away. Only a browser catches that.
+func TestLibraryRefreshInARealBrowser(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	f.addBook(t, "refreshed-novel", browserTestEPUB(t))
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	cmd := exec.Command(node, filepath.Join("testdata", "librarybrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/",
+		"SMOKE_TITLE=Moby-Dick",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the library refresh did not work in a browser: %v", err)
+	}
+}
