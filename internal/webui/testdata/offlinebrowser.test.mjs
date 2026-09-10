@@ -456,19 +456,20 @@ async function storageChecks() {
     "discarding a never-accepted annotation takes the note with it");
 
   // An annotation the server already holds survives a discard: only the
-  // rejected mutation goes. A refused edit stops counting as a local
-  // change, which is what lets the server's version replace it, and a
-  // refused deletion brings the note back.
+  // rejected mutation goes. The note keeps the refused text but stays
+  // marked unsaved, because the reader's words were not accepted and
+  // only the server can say what replaced them. A refused deletion
+  // brings the note back the same way.
   await queue("kept-note", "my edit", "rejected-edit", false, 3);
   const tookEdit = await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "rejected-edit" });
   let kept = (await s.listOfflineAnnotations({ ...context, bookID })).find(row => row.id === "kept-note");
-  check(tookEdit === "kept-note" && kept && !kept.pending && !kept.deleted,
-    "discarding a refused edit owns the note and leaves it clean at the acknowledged revision: " +
+  check(tookEdit === "kept-note" && kept && kept.pending && !kept.deleted,
+    "discarding a refused edit owns the note and leaves it marked unsaved: " +
     JSON.stringify({ tookEdit, kept }));
   await queue("kept-note", "my edit", "rejected-delete", true, 3);
   await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "rejected-delete" });
   kept = (await s.listOfflineAnnotations({ ...context, bookID })).find(row => row.id === "kept-note");
-  check(kept && !kept.deleted && !kept.pending,
+  check(kept && !kept.deleted && kept.pending,
     "discarding a refused deletion brings the note back: " + JSON.stringify(kept));
 
   // *Try again* is not *Discard*: it must leave the reader's payload and
@@ -520,6 +521,23 @@ async function storageChecks() {
   check(accepted && (await s.listOfflineAnnotations({ ...context, bookID }))
     .find(row => row.id === "superseded-note")?.body === "server words",
     "with the queue empty the server's version is what the reader keeps");
+
+  // A page the server refused is only a claim about where the reader
+  // was, and the next page turn makes it wrong. It leaves the queue
+  // then, because reviving it afterwards would land it behind the newer
+  // page and make an old position the server's newest one.
+  const ordering = "ordering-book";
+  const turn = (id, progression) => ({ op_id: id, work_id: workID, progression });
+  await s.saveReadingPosition({ ...context, bookID: ordering, workID,
+    op: turn("refused-page", 0.31), requireSnapshot: false });
+  await s.markOfflineOutbox({ ...context, kind: "position", id: "refused-page",
+    state: "failed", error: "HTTP 403" });
+  await s.saveReadingPosition({ ...context, bookID: ordering, workID,
+    op: turn("newer-page", 0.32), requireSnapshot: false });
+  const pages = (await s.listOfflineOutbox({ ...context, kind: "position", state: null }))
+    .filter(row => row.bookID === ordering).map(row => row.id);
+  check(pages.join(",") === "newer-page",
+    "a newer page retires one the server refused for good: " + JSON.stringify(pages));
 
 
   await s.clearOfflineAccount(partition, account);

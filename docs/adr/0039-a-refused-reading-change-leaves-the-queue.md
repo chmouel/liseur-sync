@@ -97,9 +97,12 @@ That last case is the one the store cannot finish by itself. A rejected
 flag alone would present it as saved. So discarding an annotation is
 followed by re-reading the book's annotations from the server and
 setting both the store and the page to what comes back: restored where
-the server has a version, removed where it has none. The installed app
-reaches the same state through its next reconcile, which is why the
-local store is left provisional rather than guessed at.
+the server has a version, removed where it has none. A reader who
+cannot reach the server keeps the refused text marked unsaved rather
+than clean: the reader's own words are still there, but nothing yet
+says they were accepted, and drawing them as saved would be the same
+lie the panel exists to stop telling. The next drain asks again, since a
+drain only runs when there is something to ask.
 
 The discard transaction reports which annotation it actually spoke for,
 and only those are restored — and only by a discard, never by a retry:
@@ -110,11 +113,7 @@ a request, and a reader in another tab can author while it is in the
 air, so the restoring write is itself conditional and in one
 transaction: anything queued for that annotation, or a local copy that
 has been claimed again, means the newer mutation owns it and nothing is
-written. Only what was written reaches the page. A reader who cannot
-reach the server at all is in neither position — it holds text the
-server refused and cannot learn what replaced it — so the annotation is
-marked unsaved rather than drawn as settled, and the next drain asks
-again.
+written. Only what was written reaches the page.
 
 **Anything else that is stuck is named, and offered the two answers
 there are.** A refusal the queue cannot classify raises a panel in the
@@ -131,6 +130,15 @@ named it, so the reader is never offered a catch-up to a page that
 exists nowhere. A discarded sitting leaves no tombstone: the tombstone
 exists to stop a delivered sitting going out twice, and this one was
 never delivered.
+
+**A page the reader turns retires the refused page before it.** A
+position that carries a terminal verdict leaves the queue as soon as a
+newer position for the same work and device is queued. The drain only
+holds newer pages behind a position still in flight, so without this a
+newer page would go out first and a revived older one would land behind
+it with a later `seq`, making a page the reader has already left the
+server's newest position. Nothing is lost by it: the newest position is
+the one the queue exists to deliver.
 
 **The durable write spends the session id before the page speaks.** On
 an unload the reader now finalizes the sitting into the queue first and
