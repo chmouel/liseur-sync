@@ -72,9 +72,15 @@ export function placeOf(op, view = {}) {
     const href = sectionHrefIn(op.locator?.href, view.sections, view.resolveKey);
     const index = (view.sections || []).findIndex((section) => section && section.id === href);
     if (href && index >= 0) {
-      const within = fractionOf(locations.progression) ?? 0;
-      const page = pageAt(table, index, within);
-      if (page) return { ...place, page, exact: true };
+      // A locator may name a resource without saying how far into it the
+      // reader was — a whole-book progression and an href is all some
+      // clients write. Its first page is then the honest answer: right
+      // about the chapter, a guess about the page, and *near* rather
+      // than exact. Claiming exactness there would put a made-up page
+      // number under a button the reader is choosing with.
+      const within = fractionOf(locations.progression);
+      const page = pageAt(table, index, within ?? 0);
+      if (page) return { ...place, page, exact: within !== null };
     }
   }
   // No resource to stand on: interpolate, and admit that is what it is.

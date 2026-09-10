@@ -815,6 +815,17 @@ function positionHere() {
   return { progression: here.fraction, locator: locatorFor(here) || {} };
 }
 
+// Two of the summaries below promise this page is on its way up. The
+// reader asked for that now, which is the whole point of the button, so
+// it is sent rather than left to a retry timer that may be half a
+// minute away. The op carries its own retry key, so a page already
+// queued is delivered rather than written a second time.
+function sendMineNow() {
+  if (!view || !here || !finite(here.fraction) || restoring) return;
+  readingDirty = true;
+  void push().catch(() => {}).then(() => { readingCoordinator?.trigger(); });
+}
+
 const SYNC_SUMMARIES = {
   "no-remote": "No other device has a position for this book yet. This page is being sent, and will be there when one asks.",
   "in-step": "Both devices are in the same place. Nothing to do.",
@@ -842,7 +853,13 @@ async function askBookSync() {
       return;
     }
     const stamp = snapshot();
-    const result = ready && workID ? await lastPosition() : null;
+    // A server that cannot be reached at all rejects rather than
+    // answering, and a button that turns an unreachable server into an
+    // unhandled rejection and no dialog is the silence this exists to
+    // end. Both failures mean the same thing to a reader.
+    const result = ready && workID
+      ? await lastPosition().catch(() => ({ ok: false }))
+      : null;
     if (!current(stamp)) return;
     if (!result) {
       presentBookSync(null, "This book is not syncing on this device.");
@@ -871,10 +888,15 @@ function presentBookSync(remote, note) {
       local: positionHere(),
       remote,
       baseline: catchup.agreed(),
-      localDirty: readingDirty,
+      // `readingDirty` goes false the moment the page is written to the
+      // durable queue, which is before anyone has delivered it. Asking
+      // the queue instead is what keeps a page still waiting there from
+      // being reported as in step with a server that has never seen it.
+      localDirty: readingDirty || catchup.pending(),
       resolvable: startCandidates(remote).length > 0,
     });
   const choosable = decision.verdict === "ask" || decision.verdict === "no-local";
+  if (decision.verdict === "no-remote" || decision.verdict === "owed") sendMineNow();
   // A second side is shown when there is one to compare with. This
   // reader's own position sitting on the server is not another device,
   // and putting it under that heading would say something untrue.

@@ -193,6 +193,15 @@ test("a refresh that failed is reported, not thrown", async () => {
   assert.deepEqual(states, [["refreshing", undefined], ["failed", boom]]);
 });
 
+test("work that half succeeded names its own outcome", async () => {
+  const states = [];
+  const runner = refreshRunner({
+    work: async () => "partial", onState: (state) => states.push(state),
+  });
+  assert.equal(await runner.ask(), true);
+  assert.deepEqual(states, ["refreshing", "partial"]);
+});
+
 test("nobody asked, so nothing spins", async () => {
   const states = [];
   const runner = refreshRunner({

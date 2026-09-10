@@ -28,7 +28,7 @@ const account = document.body?.dataset.offlineAccount || "";
 // refresh a page, so it is fetched only when there is an account whose
 // queue could hold anything.
 async function drainQueue() {
-  if (!account) return;
+  if (!account) return true;
   const [storage, sync] = await Promise.all([
     import("./offline-storage.js"),
     import("./offline-sync.js"),
@@ -36,21 +36,34 @@ async function drainQueue() {
   const partition = storage.storagePartition();
   const queued = await storage.listOfflineOutbox({ partition, account, state: null });
   const devices = new Set(queued.map(record => record.deviceID).filter(Boolean));
-  if (!devices.size) return;
+  if (!devices.size) return true;
   const context = await storage.accountContext(partition, account);
   const base = storage.deploymentPrefix();
+  let delivered = true;
   // One coordinator per device, exactly as the installed shelf builds
   // them, and stopped again afterwards: this is a single errand, not a
-  // background service. A device's failure is its own — the others
-  // still get their turn.
+  // background service. A device's failure is its own; the others still
+  // get their turn.
   await Promise.all([...devices].map(async deviceID => {
-    const coordinator = sync.offlineSync({ context: { ...context, deviceID }, base });
+    // A coordinator swallows the upload it could not make and says so
+    // through `onStatus`, so it resolves whether or not the queue is
+    // empty. Without a listener the drain would look like a success
+    // every time. The last thing it says is how the pass ended.
+    let trouble = "";
+    const coordinator = sync.offlineSync({
+      context: { ...context, deviceID }, base,
+      onStatus: message => { trouble = message || ""; },
+    });
     try {
       await coordinator.trigger();
+    } catch {
+      trouble = "undelivered";
     } finally {
+      if (trouble) delivered = false;
       coordinator.stop();
     }
   }));
+  return delivered;
 }
 
 // htmx swaps the page's content in place, which keeps the scroll
@@ -73,10 +86,16 @@ async function redraw() {
 const runner = refreshRunner({
   async work() {
     // A queue nobody could empty is not a reason to refuse the shelf.
-    await drainQueue().catch(error => {
+    const delivered = await drainQueue().catch(error => {
       console.warn("offline changes could not be delivered", error);
+      return false;
     });
     await redraw();
+    // The shelf is current either way. Saying "Refreshed" over a queue
+    // that is still full would tell the reader their offline reading
+    // had gone up when it has not, and this is the one moment they are
+    // watching for an answer.
+    return delivered ? "done" : "partial";
   },
   onState: (state) => {
     if (state === "refreshing") indicator.paint("refreshing");

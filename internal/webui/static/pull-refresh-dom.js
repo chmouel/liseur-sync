@@ -60,7 +60,9 @@ export function pullIndicator(element, win = window) {
     // is noise. Only what happened is worth saying.
     element.textContent = state === "failed"
       ? "Could not refresh."
-      : state === "done" ? "Refreshed." : "";
+      : state === "partial"
+        ? "Refreshed. Offline changes are still waiting."
+        : state === "done" ? "Refreshed." : "";
   };
   return {
     paint,
@@ -91,6 +93,12 @@ export function armPull({ scroller, indicator, runner, win = window }) {
 
   let claiming = false;
   const onStart = (event) => {
+    // Another finger landing is not a continuation of the pull under
+    // way. Abandoning it here, rather than letting `start` reset the
+    // state underneath, is what takes the mark off screen with it and
+    // stops the second finger's `touchend` releasing the first
+    // finger's travel as a refresh nobody asked for.
+    if (pull.cancel()) paint("idle");
     claiming = claimable(event.target);
     if (claiming) pull.start(event.touches);
   };
