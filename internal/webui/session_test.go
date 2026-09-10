@@ -69,6 +69,9 @@ func TestSessionLifetimeIsConfigured(t *testing.T) {
 	if d := c.Expires.Sub(want); d > time.Minute || d < -time.Minute {
 		t.Fatalf("cookie expiry %v, want about %v", c.Expires, want)
 	}
+	if c.Path != "/ui/" {
+		t.Fatalf("cookie path %q, want /ui/", c.Path)
+	}
 	if got := sessionExpiry(t, st, c.Value); got.Sub(want) > time.Minute {
 		t.Fatalf("stored expiry %v, want about %v", got, want)
 	}
@@ -91,9 +94,9 @@ func TestSessionSlidesOnUse(t *testing.T) {
 	// A session near the end of its life is pushed back out, in the
 	// cookie and in the store.
 	old := mintSession(t, st, "old", "old-secret", time.Now().Add(time.Hour))
-	resp := getWithCookie(t, ts, old, "/ui/library")
-	if resp.StatusCode != 200 {
-		t.Fatalf("library: %d", resp.StatusCode)
+	resp := getWithCookie(t, ts, old, "/ui/books/missing/read")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("reader: %d", resp.StatusCode)
 	}
 	got := sessionCookie(resp)
 	if got == nil {
@@ -110,6 +113,9 @@ func TestSessionSlidesOnUse(t *testing.T) {
 	if got.Value != old.Value {
 		t.Fatal("renewal reissued the session secret instead of extending it")
 	}
+	if got.Path != "/ui/" {
+		t.Fatalf("renewed cookie path %q, want /ui/", got.Path)
+	}
 
 	// A session renewed moments ago is left alone: the expiry would
 	// move by less than a day, which is not worth a write.
@@ -120,6 +126,22 @@ func TestSessionSlidesOnUse(t *testing.T) {
 	}
 	if c := sessionCookie(resp); c != nil {
 		t.Fatalf("a fresh session was rewritten: %+v", c)
+	}
+}
+
+// TestOneDaySessionSlides confirms the shortest accepted TTL still renews
+// before the session expires.
+func TestOneDaySessionSlides(t *testing.T) {
+	ts, st := testServerCfg(t, func(cfg *config.Config) {
+		cfg.WebSessionTTLDays = 1
+	}, nil)
+	c := mintSession(t, st, "one-day", "one-day-secret", time.Now().Add(11*time.Hour))
+	resp := getWithCookie(t, ts, c, "/ui/library")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("library: %d", resp.StatusCode)
+	}
+	if got := sessionCookie(resp); got == nil {
+		t.Fatal("a one-day session was not renewed")
 	}
 }
 

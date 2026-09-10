@@ -528,14 +528,15 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u store.Us
 // written, so minting a session and extending one cannot drift apart in
 // how the browser is told to keep it.
 //
-// No Path attribute: the RFC 6265 default-path (the directory of the
-// request URL) scopes the cookie to /ui/ — or to the proxy subpath
-// (e.g. /sync/ui/) when served under one.
+// Path remains at the UI root even when a nested page renews it. Without
+// this, the browser gives the renewed cookie the nested request's
+// directory, leaving the original /ui/ cookie to expire.
 func (s *Server) setSessionCookie(w http.ResponseWriter, secret string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: secret,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Secure:  !s.Cfg.InsecureHTTP,
+		Path:    "/ui/",
 		Expires: expires,
 	})
 }
@@ -558,7 +559,11 @@ func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, a store.Au
 	}
 	now := time.Now()
 	want := now.Add(s.Cfg.WebSessionTTL())
-	if want.Sub(a.ExpiresAt) < renewalFloor {
+	floor := renewalFloor
+	if ttl := s.Cfg.WebSessionTTL(); ttl <= floor {
+		floor = ttl / 2
+	}
+	if want.Sub(a.ExpiresAt) < floor {
 		return
 	}
 	if err := s.St.ExtendAuthSession(r.Context(), a.UserID, a.ID, want, now); err != nil {
@@ -578,6 +583,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		_ = s.Auth.RevokeReaderTokens(r.Context(), a.UserID)
 		_ = s.St.RevokeAuthSession(r.Context(), a.UserID, a.ID)
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{
+		Name: cookieName, Value: "", Path: "/ui/", MaxAge: -1,
+	})
 	redirectRel(w, "./", http.StatusSeeOther)
 }
