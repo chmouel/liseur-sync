@@ -24,8 +24,11 @@ import {
   listOfflineAnnotations,
   listOfflineOutbox,
   removeOfflineOutbox,
+  retryOfflineOutbox,
+  discardOfflineOutbox,
   queueOfflineAnnotation,
   removeOfflineAnnotation,
+  restoreOfflineAnnotation,
   saveReadingPosition,
   readingState,
   agreeReadingBaseline,
@@ -139,6 +142,139 @@ function say(message, isError) {
   status.hidden = !message;
 }
 
+// ------------------------------------------- refused reading changes
+
+const stuckPanel = document.getElementById("reader-stuck");
+const stuckText = document.getElementById("reader-stuck-text");
+const stuckRetry = document.getElementById("reader-stuck-retry");
+const stuckDiscard = document.getElementById("reader-stuck-discard");
+let stuck = [];
+
+const stuckNames = {
+  position: "reading position",
+  session: "reading session",
+  annotation: "annotation",
+};
+
+function stuckSentence(records) {
+  if (records.length > 1) return `${records.length} reading changes could not be saved.`;
+  const [only] = records;
+  const name = stuckNames[only.kind] || "reading change";
+  return only.error
+    ? `A ${name} could not be saved: ${only.error}.`
+    : `A ${name} could not be saved.`;
+}
+
+// showStuck names what the queue is holding and offers the two answers
+// there are. An empty list takes the panel away, which is the whole
+// point: every refusal must have an end.
+function showStuck(records) {
+  stuck = records;
+  if (!stuckPanel) return;
+  stuckPanel.hidden = !records.length;
+  if (!records.length) return;
+  stuckText.textContent = stuckSentence(records);
+}
+
+// Editing the queue takes the queue's own lock, so a drain already in
+// flight finishes before a record is revived or thrown away underneath
+// it.
+async function answerStuck(act, discarding) {
+  if (!offlineContext || !stuck.length) return;
+  const records = stuck;
+  showStuck([]);
+  const owned = [];
+  const work = async () => {
+    for (const record of records) {
+      const took = await act({ ...offlineContext, kind: record.kind, id: record.id });
+      if (took) owned.push(took);
+    }
+  };
+  let settled = false;
+  try {
+    if (navigator.locks) await navigator.locks.request(outboxLock(offlineContext), work);
+    else await work();
+    settled = true;
+  } catch { /* the queue is best-effort; the next drain reports again */ }
+  // Only a discard, and only for the annotations that discard actually
+  // spoke for. *Try again* restores nothing: it leaves the reader's
+  // payload queued, and the local copy is what that payload will
+  // deliver, so replacing it with the server's version would send one
+  // thing and show another. A record a newer mutation replaced owns
+  // nothing, and one whose discard threw never entered this list — so a
+  // later failure does not strand an earlier success unrestored.
+  if (discarding && owned.length) await restoreDiscardedAnnotations(owned);
+  if (!settled) console.warn("Not every stuck change could be answered.");
+  (readingCoordinator || offlineCoordinator)?.trigger();
+}
+
+// Discarding an annotation leaves a question the local store cannot
+// answer. A rejected *edit* is still the reader's rejected text, and
+// clearing its pending flag alone would present it as though it had
+// been saved. Only the server knows what the annotation really says, so
+// the book's annotations are re-read and both the store and the page
+// are set to what comes back: restored where the server has a version,
+// removed where it has none. Offline there is no one to ask, and the
+// installed app's next reconcile does the same job; there the local
+// store is authoritative in the meantime.
+async function restoreDiscardedAnnotations(ids) {
+  const owned = [...new Set(ids)];
+  if (!owned.length) return;
+  try {
+    // A mutation queued between the transaction and this request owns
+    // the annotation now, and its payload is what will be delivered.
+    const queued = await listOfflineOutbox({
+      ...offlineContext, kind: "annotation", state: null,
+    }).catch(() => []);
+    const touched = owned.filter(id =>
+      !queued.some(record => record.annotationID === id));
+    if (!touched.length) return;
+    let server = null;
+    if (!cfg.offline && workID) {
+      const response = await api(
+        "v1/works/" + encodeURIComponent(workID) + "/annotations",
+      ).catch(() => null);
+      const data = response?.ok ? await response.json().catch(() => null) : null;
+      if (Array.isArray(data?.annotations)) server = data.annotations;
+    }
+    const resolved = new Map();
+    for (const id of touched) {
+      if (!server) {
+        // Offline there is nothing authoritative to write, so the store
+        // is only read: the page stops drawing a note the discard took,
+        // and the next reconcile settles the rest.
+        const local = await listOfflineAnnotations({
+          partition: storagePartition(), account: offlineAccount, bookID: cfg.bookID,
+        });
+        resolved.set(id, local.find(value => value.id === id) || null);
+        continue;
+      }
+      const fresh = server.find(value => value.id === id);
+      const annotation = fresh ? { ...fresh, pending: false } : null;
+      // The write refuses if a mutation arrived while the request was in
+      // the air, and only what was written may reach the page.
+      if (await restoreOfflineAnnotation({
+        ...offlineContext, bookID: cfg.bookID, id, annotation,
+      })) resolved.set(id, annotation);
+    }
+    const drawn = annotationDrawing.annotations();
+    const next = drawn
+      .filter(value => !resolved.has(value.id) || resolved.get(value.id))
+      .map(value => resolved.get(value.id) || value);
+    // A discarded deletion is an annotation coming back, so it may not
+    // be on the page at all.
+    for (const [id, annotation] of resolved) {
+      if (annotation && !drawn.some(value => value.id === id)) next.push(annotation);
+    }
+    await replaceAnnotations(next);
+  } catch (error) {
+    console.warn("The annotation list could not be refreshed:", error);
+  }
+}
+
+stuckRetry?.addEventListener("click", () => { answerStuck(retryOfflineOutbox, false); });
+stuckDiscard?.addEventListener("click", () => { answerStuck(discardOfflineOutbox, true); });
+
 // ------------------------------------------------------------ auth
 
 const auth = readerAuth({
@@ -221,8 +357,10 @@ function prepareOfflineSync() {
         catchup.observe(fresh.localPosition);
         showCatchup();
       }
+      await resolveAnnotationConflicts();
     },
     onStatus: message => say(message, !!message),
+    onStuck: showStuck,
   });
   const retry = document.createElement("button");
   retry.type = "button";
@@ -259,8 +397,18 @@ async function prepareReadingSync(identity) {
   readingCoordinator = readingSync({
     context: offlineContext,
     request: (path, options) => api(path, options),
-    onChange: async () => { await refreshLocalReadingState(); },
+    bookID: cfg.bookID,
+    onChange: async () => {
+      await refreshLocalReadingState();
+      await resolveAnnotationConflicts();
+    },
     onStatus: message => { if (!syncExpired) say(message, !!message); },
+    onStuck: records => {
+      showStuck(records);
+      // The drain no longer speaks through the status line, so this is
+      // what clears a transient failure the coordinator put there.
+      if (!records.length && !syncExpired) say("");
+    },
   });
 }
 
@@ -759,8 +907,19 @@ async function handleAnnotationConflict(local, server, record = null) {
     value.id === local.id ? server : value));
 }
 
+// A conflicted annotation is a disagreement about the reader's own
+// words, and the page holding the book is where it is settled. That is
+// true of an online reader too: it drains the same queue and raises the
+// same conflicts, and leaving them for the installed app would strand
+// them on a device that may never open this book again.
+//
+// It is the only answer an annotation gets. The stuck panel deliberately
+// does not offer one, because discarding an annotation's outbox row
+// would leave the annotation itself marked unsaved with nothing left to
+// save it; both answers here settle the annotation store as well.
 async function resolveStoredAnnotationConflicts() {
-  if (!cfg.offline) return;
+  if (!cfg.offline && !offlineContext) return;
+  if (!offlineAccount) return;
   const conflicts = await listOfflineOutbox({
     partition: storagePartition(),
     account: offlineAccount,
@@ -778,6 +937,19 @@ async function resolveStoredAnnotationConflicts() {
     const annotation = local.find(value => value.id === record.annotationID);
     if (annotation) await handleAnnotationConflict(annotation, record.details, record);
   }
+}
+
+// Every drain ends by asking whether it raised an annotation conflict,
+// and two drains can overlap. One at a time, then: `window.confirm` is
+// modal, and a second run would queue a dialog about an annotation the
+// first run is already settling.
+let resolvingConflicts = null;
+function resolveAnnotationConflicts() {
+  if (resolvingConflicts) return resolvingConflicts;
+  resolvingConflicts = resolveStoredAnnotationConflicts()
+    .catch(error => { console.warn("An annotation conflict is unresolved:", error); })
+    .finally(() => { resolvingConflicts = null; });
+  return resolvingConflicts;
 }
 
 function selectionFromDocument(doc) {
@@ -1401,10 +1573,10 @@ function noteProgress() {
 }
 
 // True once the page is going away. Only then does a finished sitting go
-// out directly as well as durably: an IndexedDB write cannot finish
-// during an unload, so the keepalive attempt is the only voice left. On
-// any other path the queue is both the guarantee and prompt enough, and
-// posting the same sitting twice at once races itself at the server.
+// out directly as well as durably: an unload is the last moment another
+// device could hear about this sitting promptly. On any other path the
+// queue is both the guarantee and prompt enough, and posting the same
+// sitting twice at once races itself at the server.
 let leaving = false;
 
 async function endSession() {
@@ -1416,14 +1588,6 @@ async function endSession() {
     here && here.fraction,
   );
   session = null;
-  if (!cfg.offline && offlineContext && payload && leaving) {
-    // On an unload this is the last moment the page can speak, and an
-    // IndexedDB write is not something a closing tab can wait for. The
-    // queued copy below is the guarantee; this is only promptness, and
-    // a session id is an idempotency key, so both landing is harmless.
-    unsent = [payload];
-    pushSession(true);
-  }
   if (cfg.offline || offlineContext) {
     try {
       if (payload) {
@@ -1432,6 +1596,21 @@ async function endSession() {
           bookID: cfg.bookID,
           payload,
         });
+        // Only now may the page speak directly. The durable write is
+        // what spends the session id: it removes the checkpoint, so no
+        // later page can resume this sitting and close it again with a
+        // different ending. Sending first and queueing afterwards lost
+        // that race on an unload — the request went, the IndexedDB
+        // write did not finish, and the next open finalized the same
+        // id with different bytes, which the server refuses forever as
+        // a reused id.
+        //
+        // An unload that kills the page before this point sent nothing
+        // either, so the checkpoint that survives is still true.
+        if (!cfg.offline && leaving) {
+          unsent = [payload];
+          pushSession(true);
+        }
       } else {
         await clearOfflineSessionCheckpoint({
           ...offlineContext,

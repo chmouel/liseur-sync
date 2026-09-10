@@ -619,9 +619,14 @@ export async function removeOfflineAnnotation({
 export async function removeOfflineOutbox({
   partition = storagePartition(), account, epoch, kind, id, settle = true,
 } = {}) {
-  if (!partition || !account || !kind || !id) return;
-  return withDB(async db => {
-    await guardedWork(db, [OUTBOX, READING], { partition, account, epoch }, tx => {
+  if (!partition || !account || !kind || !id) return null;
+  // The annotation id this call actually took ownership of, if any. The
+  // page has more to do for that annotation than one transaction can,
+  // and it must not act on an annotation this record no longer speaks
+  // for: a newer mutation may have replaced it while the panel was open.
+  let owned = null;
+  await withDB(async db => {
+    await guardedWork(db, [OUTBOX, READING, SNAPSHOTS, ANNOTATIONS], { partition, account, epoch }, tx => {
       const store = tx.objectStore(OUTBOX);
       const key = keyForOutbox({ partition, account, kind, id });
       const request = store.get(key);
@@ -633,9 +638,12 @@ export async function removeOfflineOutbox({
         // is known to have landed, online and offline alike.
         //
         // `settle: false` is the other way a record leaves the queue:
-        // the reader withdrew it. It is dropped without ever becoming
-        // anything either side agreed on.
-        if (settle && record && kind === "position" && record.payload) {
+        // the reader withdrew it, or the server refused it for good. It
+        // is dropped without ever becoming anything either side agreed
+        // on — and it must stop being this device's local position too,
+        // or the reader is offered a catch-up to a page that exists
+        // nowhere any more.
+        if (record && kind === "position" && record.payload) {
           const reading = tx.objectStore(READING);
           const identity = {
             partition, account, deviceID: record.deviceID, bookID: record.bookID,
@@ -643,15 +651,54 @@ export async function removeOfflineOutbox({
           const readingKey = keyForReading(identity);
           const existing = reading.get(readingKey);
           existing.onsuccess = () => {
-            const state = existing.result || { key: readingKey, ...identity, local: null };
-            state.workID = state.workID || record.payload.work_id || "";
-            state.baseline = record.payload;
-            if (state.local?.op_id === record.id) state.local = null;
-            state.updatedAt = Date.now();
-            reading.put(state);
+            const state = existing.result;
+            const authored = state?.local?.op_id === record.id;
+            // A withdrawn position that was never this device's local
+            // state leaves nothing behind: writing here would only bump
+            // updatedAt and shadow a newer page from another tab.
+            if (!settle && !authored) return;
+            const value = state || { key: readingKey, ...identity, baseline: null, local: null };
+            value.workID = value.workID || record.payload.work_id || "";
+            if (settle) value.baseline = record.payload;
+            if (authored) value.local = null;
+            value.updatedAt = Date.now();
+            reading.put(value);
+          };
+          if (!settle) forgetSnapshotPosition(tx.objectStore(SNAPSHOTS),
+            { partition, account, bookID: record.bookID }, record.id);
+        }
+        // Throwing away an annotation's queued mutation has to leave the
+        // annotation itself somewhere honest, or the reader keeps a note
+        // marked unsaved with nothing left to save it. `intent` names the
+        // mutation the local copy came from: if a newer one has replaced
+        // it, this record is already superseded and owns nothing. A copy
+        // the server never acknowledged existed only as the change being
+        // discarded, so it goes with it. One the server does know goes
+        // back to being clean at the revision it acknowledged, which
+        // stops it counting as a local mutation — and the next reconcile
+        // then replaces it with what the server actually holds.
+        if (record && kind === "annotation" && !settle && record.annotationID) {
+          const annotations = tx.objectStore(ANNOTATIONS);
+          const localKey = keyForAnnotation({
+            partition, account, bookID: record.bookID, id: record.annotationID,
+          });
+          const localRequest = annotations.get(localKey);
+          localRequest.onsuccess = () => {
+            const local = localRequest.result;
+            if (!local || local.intent !== record.id) return;
+            owned = record.annotationID;
+            if (!local.annotation?.rev) { annotations.delete(localKey); return; }
+            local.annotation = { ...local.annotation, pending: false, deleted: false };
+            local.intent = null;
+            local.updatedAt = Date.now();
+            annotations.put(local);
           };
         }
-        if (kind !== "session") { store.delete(key); return; }
+        // A settled session leaves a compact tombstone so the same
+        // sitting cannot go out twice. A discarded one leaves nothing:
+        // it was never delivered, so there is no second delivery to
+        // guard against.
+        if (kind !== "session" || !settle) { store.delete(key); return; }
         if (record) {
           const delivered = { ...record, state: "delivered" };
           if (delivered.fingerprint) delete delivered.payload;
@@ -660,6 +707,110 @@ export async function removeOfflineOutbox({
       };
     });
   });
+  return owned;
+}
+
+// forgetSnapshotPosition drops a downloaded copy's memory of a position
+// that no longer exists. `reconcileOfflineBook` re-derives the same
+// field from the queue on the next sync; this keeps the copy honest in
+// between, without waiting for the network.
+function forgetSnapshotPosition(store, { partition, account, bookID }, opID) {
+  const request = store.index("book").getAll([partition, account, bookID]);
+  request.onsuccess = () => {
+    for (const copy of request.result) {
+      if (copy.localPosition?.op_id !== opID) continue;
+      copy.localPosition = null;
+      store.put(copy);
+    }
+  };
+}
+
+/**
+ * retryOfflineOutbox puts a change the server refused back in the
+ * queue, at the reader's request.
+ *
+ * Only a record that already carries a terminal verdict may be revived:
+ * a `pending` record may still be in flight, and moving it would be a
+ * second delivery of the same change under the same id. `attempted` is
+ * cleared because the next drain is a fresh attempt; `attempts` is
+ * kept, because it is history.
+ */
+export async function retryOfflineOutbox({
+  partition = storagePartition(), account, epoch, kind, id,
+} = {}) {
+  if (!partition || !account || !kind || !id) return;
+  return withDB(db => guardedWork(db, OUTBOX, { partition, account, epoch }, tx => {
+    const store = tx.objectStore(OUTBOX);
+    const request = store.get(keyForOutbox({ partition, account, kind, id }));
+    request.onsuccess = () => {
+      const record = request.result;
+      if (!record || !["failed", "conflict"].includes(record.state)) return;
+      record.state = "pending";
+      record.attempted = false;
+      record.error = "";
+      record.details = null;
+      record.updatedAt = Date.now();
+      store.put(record);
+    };
+  }));
+}
+
+// discardOfflineOutbox throws a change away. It leaves no tombstone,
+// because it was never delivered: a discarded sitting is a sitting the
+// server has never heard of and never will.
+export async function discardOfflineOutbox(options) {
+  return removeOfflineOutbox({ ...options, settle: false });
+}
+
+/**
+ * restoreOfflineAnnotation writes what the server holds over a copy a
+ * discard left provisional — or removes it, when the server holds
+ * nothing.
+ *
+ * The check and the write are one transaction on purpose. Fetching the
+ * server's version takes a request, and a reader in another tab can
+ * author a new mutation while it is in the air; that mutation owns the
+ * annotation and its payload is what will be delivered, so writing the
+ * server's version over it would show one thing and send another. Any
+ * queued record for this annotation, or a local copy that has acquired
+ * an `intent` again, means exactly that, and nothing is written.
+ */
+export async function restoreOfflineAnnotation({
+  partition = storagePartition(), account, epoch, bookID, id, annotation = null,
+} = {}) {
+  if (!partition || !account || !bookID || !id) return false;
+  let restored = false;
+  await withDB(db => guardedWork(db, [ANNOTATIONS, OUTBOX], { partition, account, epoch }, tx => {
+    const annotations = tx.objectStore(ANNOTATIONS);
+    const key = keyForAnnotation({ partition, account, bookID, id });
+    let queued = false;
+    const cursorRequest = tx.objectStore(OUTBOX).index("account").openCursor(IDBKeyRange.bound(
+      [partition, account, "", 0],
+      [partition, account, "\uffff", Number.MAX_SAFE_INTEGER],
+    ));
+    cursorRequest.onerror = () => tx.abort();
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result;
+      if (cursor) {
+        const record = cursor.value;
+        if (record.bookID === bookID && record.kind === "annotation" &&
+            record.annotationID === id) queued = true;
+        cursor.continue();
+        return;
+      }
+      if (queued) return;
+      const existing = annotations.get(key);
+      existing.onsuccess = () => {
+        if (existing.result?.intent) return;
+        restored = true;
+        if (annotation) annotations.put({
+          key, partition, account, bookID, annotation, updatedAt: Date.now(),
+        });
+        else annotations.delete(key);
+      };
+    };
+  }));
+  return restored;
 }
 
 // Mark before transport: an uncertain request is immutable until acknowledged.
