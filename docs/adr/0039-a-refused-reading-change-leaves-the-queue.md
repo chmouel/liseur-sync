@@ -110,7 +110,11 @@ a request, and a reader in another tab can author while it is in the
 air, so the restoring write is itself conditional and in one
 transaction: anything queued for that annotation, or a local copy that
 has been claimed again, means the newer mutation owns it and nothing is
-written. Only what was written reaches the page.
+written. Only what was written reaches the page. A reader who cannot
+reach the server at all is in neither position — it holds text the
+server refused and cannot learn what replaced it — so the annotation is
+marked unsaved rather than drawn as settled, and the next drain asks
+again.
 
 **Anything else that is stuck is named, and offered the two answers
 there are.** A refusal the queue cannot classify raises a panel in the
