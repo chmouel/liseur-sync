@@ -1578,3 +1578,6 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
    devices are in different places and needs a decision, so it is marked
    rather than left looking like an ordinary offer. */
 .reader-catchup.conflict { border-width: 2px; }
+/* Two questions can be open at once — a position on another device and a
+   change that will not go. They stack rather than cover each other. */
+.reader-catchup:not([hidden]) ~ .reader-stuck { bottom: 13rem; }

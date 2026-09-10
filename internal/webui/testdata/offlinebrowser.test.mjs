@@ -288,6 +288,13 @@ async function storageChecks() {
   check(reading.baseline.op_id === "elsewhere" &&
     !(await s.listOfflineOutbox({ ...context, kind: "position" })).some(row => row.id === "online-2"),
     "a withdrawn page leaves the queue without ever being agreed on");
+  // A withdrawn page must stop being this device's position too, or the
+  // reader is offered a catch-up to a page that exists nowhere.
+  await s.saveReadingPosition({ ...context, bookID: online, workID, requireSnapshot: false, op: page("online-3", 0.55) });
+  await s.discardOfflineOutbox({ ...context, kind: "position", id: "online-3" });
+  reading = await s.readingState({ ...context, bookID: online });
+  check(!reading.local && reading.baseline.op_id === "elsewhere",
+    "a discarded page stops being this device's local position");
 
   // Two windows of one account share one queue and one lock. Whichever
   // holds the lock does the sending; the other finds nothing left to do
@@ -335,6 +342,184 @@ async function storageChecks() {
   check(seen.at(-1) === "new:handoff-2:0.4" && !(await owed()),
     "the renewed credential replays the same bytes from the surviving window", seen.join(","));
   tabB.stop();
+
+  // A verdict the server will repeat forever ends the change instead of
+  // parking it. `id_reused` is the one worth being sure about: it does
+  // not say the sitting was lost, it says the server already has it, so
+  // there is nothing to ask the reader and nothing to keep.
+  let stuckSeen = [];
+  const spentCalls = [];
+  const spentRequest = async (path, options) => {
+    if (path === "v1/sessions") {
+      spentCalls.push("session");
+      return reply({ code: "id_reused", session_id: "spent-session" }, "", 409);
+    }
+    const op = JSON.parse(options.body).ops[0];
+    spentCalls.push(op.op_id);
+    return reply({ results: [{ op_id: op.op_id, status: "conflict",
+      reason: "op_id reused with a different payload" }] });
+  };
+  await queuePage("spent-page", 0.6);
+  await s.finishOfflineSession({ ...context, bookID: "handoff-book",
+    payload: { session_id: "spent-session", work_id: handoffWork, active_ms: 1 } });
+  const spending = readingSync({ context, request: spentRequest, bookID: "handoff-book",
+    onStuck: records => { stuckSeen = records; } });
+  await spending.trigger();
+  spending.stop();
+  check(spentCalls.includes("spent-page") && spentCalls.includes("session"),
+    "both changes were offered once", spentCalls.join(","));
+  check(!(await s.listOfflineOutbox({ ...context, kind: "session", state: null }))
+    .some(row => row.id === "spent-session"),
+    "a spent session id leaves the queue without a tombstone");
+  // An op conflict is not that sentence in another shape. It says a
+  // *different* position already owns that id, so this page was never
+  // stored, and dropping it would lose it quietly.
+  check(stuckSeen.length === 1 && stuckSeen[0].id === "spent-page",
+    "an op refused as a conflict is named to the reader", JSON.stringify(stuckSeen));
+  await s.discardOfflineOutbox({ ...context, kind: "position", id: "spent-page" });
+
+  // A refusal the queue cannot classify is the reader's to answer, and
+  // the answer has to actually end it.
+  let forbidden = true;
+  const answerRequest = async (path, options) => {
+    if (path !== "v1/ops") return reply({ results: [] });
+    const op = JSON.parse(options.body).ops[0];
+    return forbidden ? reply({ error: "not yours" }, "", 403)
+      : reply({ results: [{ op_id: op.op_id, status: "applied" }] });
+  };
+  const answering = readingSync({ context, request: answerRequest, bookID: "handoff-book",
+    onStuck: records => { stuckSeen = records; } });
+  await queuePage("answerable", 0.7);
+  await answering.trigger();
+  check(stuckSeen.length === 1 && stuckSeen[0].id === "answerable" && stuckSeen[0].error === "not yours",
+    "a refusal nothing can classify is named to the reader", JSON.stringify(stuckSeen));
+  const elsewhere = readingSync({ context, request: answerRequest, bookID: "another-book",
+    onStuck: records => { stuckSeen = records; } });
+  await elsewhere.trigger();
+  elsewhere.stop();
+  check(!stuckSeen.length, "a stuck change from another book is not raised over this one");
+  await s.retryOfflineOutbox({ ...context, kind: "position", id: "answerable" });
+  forbidden = false;
+  await answering.trigger();
+  check(!stuckSeen.length && !(await owed()),
+    "trying again delivers the refused change and empties the report", await owed());
+  forbidden = true;
+  await queuePage("discardable", 0.8);
+  await answering.trigger();
+  check(stuckSeen.length === 1 && stuckSeen[0].id === "discardable", "the next refusal is reported too");
+  await s.discardOfflineOutbox({ ...context, kind: "position", id: "discardable" });
+  await answering.trigger();
+  answering.stop();
+  check(!stuckSeen.length && !(await owed()), "discarding ends the change for good", await owed());
+
+  // An annotation is never one of these. Discarding its outbox row would
+  // leave the reader's own words in the annotation store still marked
+  // unsaved, with nothing left to save them, so a refused annotation is
+  // settled by its own dialog and never offered a Discard button here.
+  await queue("stuck-note", "mine", "conflicted");
+  const conflicting = readingSync({
+    context, bookID,
+    request: async path => path.startsWith("v1/annotations")
+      ? reply({ server: { id: "stuck-note", body: "theirs", rev: 9 } }, "", 409)
+      : reply({ results: [] }),
+    onStuck: records => { stuckSeen = records; },
+  });
+  await conflicting.trigger();
+  conflicting.stop();
+  const conflicted = (await s.listOfflineOutbox({ ...context, kind: "annotation", state: null }))
+    .find(row => row.id === "conflicted");
+  check(conflicted?.state === "conflict" && !stuckSeen.some(row => row.id === "conflicted"),
+    "a conflicted annotation waits for its own dialog, not for the stuck panel: " +
+    JSON.stringify({ state: conflicted?.state, stuck: stuckSeen.map(row => row.id) }));
+
+  // A refused annotation is not a conflict and gets no dialog. It must
+  // still be able to end, and ending it takes the note with it when the
+  // server never accepted a version of it — otherwise the reader keeps a
+  // note marked unsaved that nothing will ever save.
+  await queue("bad-note", "mine", "refused");
+  const refusing = readingSync({
+    context, bookID,
+    request: async path => path.startsWith("v1/annotations")
+      ? reply({ results: [{ id: "bad-note", status: "invalid", reason: "a note requires a body" }] })
+      : reply({ results: [] }),
+    onStuck: records => { stuckSeen = records; },
+  });
+  await refusing.trigger();
+  refusing.stop();
+  check(stuckSeen.some(row => row.id === "refused"),
+    "an annotation the server called invalid is named to the reader: " +
+    JSON.stringify(stuckSeen.map(row => row.id)));
+  await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "refused" });
+  check(!(await s.listOfflineAnnotations({ ...context, bookID })).some(row => row.id === "bad-note") &&
+    !(await s.listOfflineOutbox({ ...context, kind: "annotation", state: null }))
+      .some(row => row.id === "refused"),
+    "discarding a never-accepted annotation takes the note with it");
+
+  // An annotation the server already holds survives a discard: only the
+  // rejected mutation goes. A refused edit stops counting as a local
+  // change, which is what lets the server's version replace it, and a
+  // refused deletion brings the note back.
+  await queue("kept-note", "my edit", "rejected-edit", false, 3);
+  const tookEdit = await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "rejected-edit" });
+  let kept = (await s.listOfflineAnnotations({ ...context, bookID })).find(row => row.id === "kept-note");
+  check(tookEdit === "kept-note" && kept && !kept.pending && !kept.deleted,
+    "discarding a refused edit owns the note and leaves it clean at the acknowledged revision: " +
+    JSON.stringify({ tookEdit, kept }));
+  await queue("kept-note", "my edit", "rejected-delete", true, 3);
+  await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "rejected-delete" });
+  kept = (await s.listOfflineAnnotations({ ...context, bookID })).find(row => row.id === "kept-note");
+  check(kept && !kept.deleted && !kept.pending,
+    "discarding a refused deletion brings the note back: " + JSON.stringify(kept));
+
+  // *Try again* is not *Discard*: it must leave the reader's payload and
+  // the local copy it will deliver exactly where they are.
+  await queue("retried-note", "my words", "retried", false, 3);
+  await s.markOfflineOutbox({ ...context, kind: "annotation", id: "retried",
+    state: "failed", error: "a note requires a body" });
+  await s.retryOfflineOutbox({ ...context, kind: "annotation", id: "retried" });
+  const revived = (await s.listOfflineOutbox({ ...context, kind: "annotation" }))
+    .find(row => row.id === "retried");
+  const untouched = (await s.listOfflineAnnotations({ ...context, bookID }))
+    .find(row => row.id === "retried-note");
+  check(revived?.state === "pending" && revived.payload.annotation.body === "my words" &&
+    untouched?.body === "my words" && untouched.pending,
+    "trying again keeps the reader's words queued and local: " +
+    JSON.stringify({ state: revived?.state, local: untouched }));
+
+  // A stale selection must not reach past the record it named. Queueing
+  // a newer mutation replaces the failed one, so discarding the stale
+  // record owns nothing and the newer words are left to be delivered.
+  await queue("superseded-note", "first words", "stale", false, 3);
+  await s.markOfflineOutbox({ ...context, kind: "annotation", id: "stale",
+    state: "failed", error: "nope" });
+  await queue("superseded-note", "second words", "fresh", false, 3);
+  const claimed = await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "stale" });
+  const survivor = (await s.listOfflineAnnotations({ ...context, bookID }))
+    .find(row => row.id === "superseded-note");
+  const newer = (await s.listOfflineOutbox({ ...context, kind: "annotation" }))
+    .find(row => row.id === "fresh");
+  check(!claimed && survivor?.body === "second words" && survivor.pending &&
+    newer?.payload.annotation.body === "second words",
+    "discarding a superseded annotation record owns nothing and leaves the newer words: " +
+    JSON.stringify({ claimed, survivor, queued: newer?.payload?.annotation?.body }));
+
+  // The restore that follows a discard takes a request, and a reader in
+  // another tab can author in the meantime. The write refuses while
+  // anything is queued for that annotation, so the server's version
+  // never lands on top of words that are still going out.
+  const refused = await s.restoreOfflineAnnotation({ ...context, bookID,
+    id: "superseded-note", annotation: { id: "superseded-note", body: "server words", rev: 4 } });
+  const guarded = (await s.listOfflineAnnotations({ ...context, bookID }))
+    .find(row => row.id === "superseded-note");
+  check(!refused && guarded?.body === "second words",
+    "a restore refuses while a mutation is queued for that annotation: " +
+    JSON.stringify({ refused, guarded }));
+  await s.discardOfflineOutbox({ ...context, kind: "annotation", id: "fresh" });
+  const accepted = await s.restoreOfflineAnnotation({ ...context, bookID,
+    id: "superseded-note", annotation: { id: "superseded-note", body: "server words", rev: 4 } });
+  check(accepted && (await s.listOfflineAnnotations({ ...context, bookID }))
+    .find(row => row.id === "superseded-note")?.body === "server words",
+    "with the queue empty the server's version is what the reader keeps");
 
 
   await s.clearOfflineAccount(partition, account);

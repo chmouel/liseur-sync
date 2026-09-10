@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Scope:** Now
 **Amends:** [ADR-0007](0007-web-reader.md), [ADR-0030](0030-web-reader-reading-sessions.md), and [ADR-0036](0036-one-bounded-offline-web-reader.md)
+**Amended by:** [ADR-0039](0039-a-refused-reading-change-leaves-the-queue.md)
 
 ## Context
 

@@ -223,6 +223,18 @@ templ readerPage(v ReaderView, csrf string) {
 					<button type="button" id="reader-catchup-dismiss">Stay here</button>
 				</div>
 			</aside>
+			// A change the server refused for good is not news, it is a
+			// question: the queue cannot deliver it and cannot decide for
+			// the reader either. These are the only two answers there are,
+			// and without them a refusal is a sentence on the page that
+			// nothing can remove.
+			<aside id="reader-stuck" class="reader-catchup reader-stuck" aria-label="Reading changes that could not be saved" hidden>
+				<p id="reader-stuck-text" role="status" aria-live="polite"></p>
+				<div>
+					<button type="button" id="reader-stuck-retry">Try again</button>
+					<button type="button" id="reader-stuck-discard">Discard</button>
+				</div>
+			</aside>
 			// The table of contents, filled in from the publication's own
 			// navigation once the book is open. A drawer over the left
 			// edge, the way Komga does it: every entry is the book's, so
