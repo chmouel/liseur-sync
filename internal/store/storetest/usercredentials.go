@@ -168,3 +168,56 @@ func names(us []store.User) []string {
 	}
 	return out
 }
+
+// testExtendAuthSession covers the sliding web session: a session in
+// use moves its own expiry out, and the two states that must never be
+// revived by a request that arrives at the wrong moment.
+func testExtendAuthSession(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "sliding")
+	now := time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC)
+
+	mk := func(id string, expires time.Time) {
+		if err := s.CreateAuthSession(ctx, store.AuthSession{
+			ID: id, UserID: u.ID, SHA256: "sha-" + id, Kind: "web",
+			CreatedAt: now, ExpiresAt: expires,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("live", now.Add(24*time.Hour))
+	mk("revoked", now.Add(24*time.Hour))
+	mk("lapsed", now.Add(-time.Hour))
+
+	want := now.Add(180 * 24 * time.Hour)
+	if err := s.ExtendAuthSession(ctx, u.ID, "live", want, now); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.AuthSessionByHash(ctx, "sha-live")
+	if err != nil || !a.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry not moved: %v %v", a.ExpiresAt, err)
+	}
+	// Backwards is a no-op, so lowering the configured window cannot
+	// silently shorten a session that was issued under a longer one.
+	if err := s.ExtendAuthSession(ctx, u.ID, "live", now.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("backwards: want ErrNotFound, got %v", err)
+	}
+	if a, err := s.AuthSessionByHash(ctx, "sha-live"); err != nil || !a.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry moved backwards: %v %v", a.ExpiresAt, err)
+	}
+
+	if err := s.RevokeAuthSession(ctx, u.ID, "revoked"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"revoked", "lapsed", "nosuch"} {
+		if err := s.ExtendAuthSession(ctx, u.ID, id, want, now); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("%s: want ErrNotFound, got %v", id, err)
+		}
+	}
+	// Another account cannot extend a session it does not own.
+	other := MkUser(t, s, "sliding-other")
+	if err := s.ExtendAuthSession(ctx, other.ID, "live", want.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-account: want ErrNotFound, got %v", err)
+	}
+}

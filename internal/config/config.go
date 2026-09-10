@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/epub"
 )
@@ -115,6 +116,17 @@ type Config struct {
 	} `toml:"ops"`
 
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
+
+	// WebSessionTTLDays is how long a browser session stays valid
+	// without being used. It slides: every authenticated request pushes
+	// the expiry back to now + this, so an account somebody reads with
+	// never gets signed out, and one left alone lapses. Default 180.
+	WebSessionTTLDays int `toml:"web_session_ttl_days"`
+}
+
+// WebSessionTTL is the browser session window as a duration.
+func (c Config) WebSessionTTL() time.Duration {
+	return time.Duration(c.WebSessionTTLDays) * 24 * time.Hour
 }
 
 // Default returns the configuration with all documented defaults.
@@ -150,6 +162,7 @@ func Default() Config {
 	c.Ops.AnnotationMaxPerWork = 2000
 	c.Ops.AnnotationRetentionDays = 180
 	c.PairingCodeTTLMin = 15
+	c.WebSessionTTLDays = 180
 	return c
 }
 
@@ -267,6 +280,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Ops.InferenceLateHours < minLateHours {
 		return fmt.Errorf("ops.inference_late_hours must cover ops.inference_gap_min")
+	}
+	if c.WebSessionTTLDays < 1 || c.WebSessionTTLDays > 3650 {
+		return fmt.Errorf("web_session_ttl_days must be between 1 and 3650")
 	}
 	return nil
 }

@@ -42,6 +42,25 @@ func (s *Store) AuthSessionByHash(ctx context.Context, sha256 string) (store.Aut
 	return a, err
 }
 
+func (s *Store) ExtendAuthSession(ctx context.Context, userID, id string, expiresAt, now time.Time) error {
+	res, err := s.db.ExecContext(ctx, q(
+		`UPDATE auth_sessions SET expires_at = ?
+		 WHERE user_id = ? AND id = ? AND revoked_at IS NULL
+		   AND expires_at > ? AND expires_at < ?`),
+		expiresAt.UTC(), userID, id, now.UTC(), expiresAt.UTC())
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) RevokeAuthSession(ctx context.Context, userID, id string) error {
 	res, err := s.db.ExecContext(ctx, q(
 		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND id = ? AND revoked_at IS NULL`),

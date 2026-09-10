@@ -181,9 +181,8 @@ templ loginPage(prefix string, u userCtx, errMsg string) {
 
 templ loginBody(prefix string, errMsg string) {
 	@authFrame(prefix) {
-		<p class="auth-eyebrow">Your reading space</p>
-		<h1>Welcome back.</h1>
-		<p class="auth-intro">Sign in and pick up your next chapter.</p>
+		<p class="auth-eyebrow">Liseur Sync</p>
+		<h1>Sign in</h1>
 		if errMsg != "" {
 			<p class="error" role="alert">{ errMsg }</p>
 		}
@@ -201,9 +200,9 @@ templ authFrame(prefix string) {
 			<aside class="auth-story" aria-label="Liseur Sync">
 				<p class="auth-brand">Liseur <span>sync</span></p>
 				<img class="auth-icon" src={ prefix + "static/icon.svg" } width="112" height="112" alt=""/>
-				<p class="auth-headline">Every book.<br/>Right where<br/><em>you left it.</em></p>
-				<p class="auth-story-copy">A home for your books, with your reading place kept across devices.</p>
-				<p class="auth-story-foot"><span aria-hidden="true">✦</span> Self-hosted. Made for readers.</p>
+				<p class="auth-headline">Your books.<br/><em>Your place in them.</em></p>
+				<p class="auth-story-copy">Liseur Sync keeps your library and your reading position on your own server.</p>
+				<p class="auth-story-foot">Self-hosted reading sync.</p>
 			</aside>
 			<section class="auth-panel">
 				{ children... }
@@ -222,9 +221,9 @@ templ setupPage(prefix string, u userCtx, errMsg string) {
 
 templ setupBody(prefix string, errMsg string) {
 	@authFrame(prefix) {
-		<p class="auth-eyebrow">Your first chapter</p>
-		<h1>Make yourself at home.</h1>
-		<p class="auth-intro">Create your account to start your library.</p>
+		<p class="auth-eyebrow">First run</p>
+		<h1>Create the first account</h1>
+		<p class="auth-intro">No accounts exist on this server yet.</p>
 		if errMsg != "" {
 			<p class="error" role="alert">{ errMsg }</p>
 		}

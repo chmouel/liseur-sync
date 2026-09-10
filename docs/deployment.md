@@ -539,6 +539,28 @@ roots. `LISEUR_LISTEN_ADDR`, `LISEUR_DATABASE_DRIVER`,
 `LISEUR_TRUSTED_PROXIES`, and `LISEUR_READER_ORIGIN` keep their usual
 meanings.
 
+### Staying signed in
+
+A browser that signs in gets a session good for `web_session_ttl_days`,
+180 by default, and the window slides: every page view pushes the expiry
+back to a fresh 180 days. So a browser somebody reads in is never signed
+out, while one left alone lapses after half a year. There is no "keep me
+signed in" box — every sign-in is on the same terms, and the way to end
+a session early is to sign out, which also revokes the account's reader
+tokens.
+
+```toml
+web_session_ttl_days = 180
+```
+
+It is a top-level key, so it belongs above the first `[table]` header.
+Shorten it on a shared machine. Two things are worth knowing before you
+do: lowering it does not shorten sessions that were already issued —
+those keep the window they were minted with until they lapse — and the
+value is a lifetime for the cookie only. Disabling an account, resetting
+its password, or revoking its credentials cuts every session at once,
+whatever the setting says.
+
 ## Backup
 
 Back up the database. It holds users, tokens, reading state, folder rows
