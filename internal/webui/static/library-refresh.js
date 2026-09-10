@@ -77,41 +77,50 @@ async function drainQueue() {
   return delivered;
 }
 
-// htmx swaps the page's content in place, which keeps the scroll
-// position and the focus ring where the reader left them. A browser
-// without it reloads, which is the same wish said less gracefully.
+// Revealing the button here is the whole of its feature detection: with
+// no module running, a control that would do nothing is never shown.
+function reveal() {
+  document.querySelectorAll("[data-refresh][hidden]").forEach(button => {
+    button.hidden = false;
+  });
+}
+
+// The page is redrawn in place, so the scroll position and the focus
+// ring stay where the reader left them.
+//
+// This deliberately does not go through htmx. htmx announces itself
+// with `HX-Request`, and this route answers that header with a fragment
+// of the card list rather than the page around it, which is right for
+// the reveal sentinel and wrong for a refresh: a refresh wants the
+// whole shelf, hero and counts included. So the page is fetched the way
+// the browser fetched it, and the one region is swapped over.
 async function redraw() {
-  const htmx = window.htmx;
-  if (!htmx?.ajax) {
+  const target = document.querySelector("#content .page");
+  if (!target) {
     window.location.reload();
     return;
   }
-  // htmx settles its promise for a refused response as readily as for a
-  // good one: only a transport failure rejects. Leaving the shelf that
-  // is already on screen is the right answer to a 500, but calling it
-  // "Refreshed" is not, so the events are what this waits on.
-  let refused = false;
-  const noted = () => { refused = true; };
-  const events = ["htmx:responseError", "htmx:sendError", "htmx:swapError"];
-  events.forEach(name => document.body.addEventListener(name, noted));
-  try {
-    await htmx.ajax("GET", window.location.href, {
-      source: document.body,
-      target: "#content .page",
-      select: "#content .page",
-      swap: "outerHTML",
-    });
-  } finally {
-    events.forEach(name => document.body.removeEventListener(name, noted));
-  }
-  // A session that expired mid-refresh answers with a sign-in page,
-  // which holds no shelf to select and can leave the region empty. Let
-  // the browser go there properly rather than sitting on the hole.
-  if (!document.querySelector("#content .page")) {
-    window.location.reload();
+  const response = await fetch(window.location.href, {
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { Accept: "text/html" },
+  });
+  // A session that expired mid-refresh answers with the sign-in page.
+  // Let the browser go there rather than pasting it into the shelf.
+  if (response.redirected) {
+    window.location.assign(response.url);
     return;
   }
-  if (refused) throw new Error("The shelf could not be refreshed.");
+  if (!response.ok) throw new Error("The shelf could not be refreshed.");
+  const fresh = new DOMParser()
+    .parseFromString(await response.text(), "text/html")
+    .querySelector("#content .page");
+  if (!fresh) throw new Error("The shelf could not be refreshed.");
+  target.replaceWith(document.adoptNode(fresh));
+  // The new markup carries the reveal sentinel and the rest of the
+  // page's own attributes; without this they are inert markup.
+  window.htmx?.process?.(document.querySelector("#content"));
+  reveal();
 }
 
 const runner = refreshRunner({
@@ -146,12 +155,7 @@ document.addEventListener("click", (event) => {
   void runner.ask();
 });
 
-// Revealing it here is the whole of its feature detection: with no
-// module running, a control that does nothing is never shown.
-const reveal = () => {
-  document.querySelectorAll("[data-refresh][hidden]").forEach(button => {
-    button.hidden = false;
-  });
-};
 reveal();
+// A reveal-paged list swapping more cards in brings its own copy of
+// nothing, but a fragment can still replace the toolbar around it.
 document.body.addEventListener("htmx:afterSwap", reveal);
