@@ -504,6 +504,24 @@ a password. Once anybody has an account the page is gone — it is not a
 registration form, and invites remain the only way to add accounts from
 outside the admin panel.
 
+The page also carries the first folder, optionally, so that a fresh
+instance is one form rather than two. That does not make it one
+operation: the account is created, the session is started, and only then
+is the folder root resolved, because `admin.ResolveFolderRoot` stats the
+filesystem and `/ui/setup` is open to anybody who can reach the port.
+Resolving a path before the account exists would turn first-run setup
+into a filesystem oracle for an anonymous visitor, so the checks that
+touch no disk — the folder name, and the refusal to accept half a folder
+— run early, and everything that reads the disk runs after the session
+exists. The folder is created through `admin.NewFolder` with the new
+administrator as grantee, which is what writes the single ADR-0029 grant
+in the same transaction. Leaving the fields blank keeps the older
+behaviour exactly: the redirect to Administration → Folders with the
+first-folder form open. A folder refused after the account is made does
+not roll the account back — setup has closed by then, so re-rendering
+the setup form would be a lie; the administrator stays signed in and
+lands on Folders with the error.
+
 **Phase 4 — Libraries.** `AdminListLibraries`, `AdminUserLibraries`,
 `AdminLibraryGrants`, `AdminSetLibraryAccess`, `AdminSetLibraryConfig`,
 the paginated library list, create managed library, grants, and layout.

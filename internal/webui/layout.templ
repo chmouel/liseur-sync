@@ -1,5 +1,7 @@
 package webui
 
+import "github.com/chmouel/liseur-sync/internal/buildinfo"
+
 // The shell (ADR-0011): a top bar, a persistent left rail, and a content
 // column. prefix is the relative path back to the UI root ("" or "../"),
 // so every URL below stays correct when the app is served under a
@@ -77,7 +79,9 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 					<main id="content">
 						<div class="page">
 							@body
-							<footer class="foot">Liseur Sync</footer>
+							<footer class="foot">
+								@creditLine()
+							</footer>
 						</div>
 					</main>
 				</div>
@@ -208,18 +212,78 @@ templ authFrame(prefix string) {
 				{ children... }
 			</section>
 		</div>
-		<p class="auth-footer">Liseur Sync</p>
+		<div class="auth-footer">
+			@creditLine()
+		</div>
 	</div>
+}
+
+// creditLine is the small print: where the source is, who wrote it, and
+// which build is running.
+//
+// These are the only links in this UI that leave the server, so they
+// carry rel="noopener noreferrer" and open in a new tab — a reader
+// halfway through signing in should not lose the page. Nothing leaks by
+// following one: every /ui response already sets
+// Referrer-Policy: same-origin, so github.com is told nothing about
+// where this instance lives.
+templ creditLine() {
+	<p class="credit">
+		<a
+			class="credit-link"
+			href="https://github.com/chmouel/liseur-sync"
+			target="_blank"
+			rel="noopener noreferrer"
+		>
+			@githubIcon()
+			<span>Source code</span>
+		</a>
+		<span class="credit-dot" aria-hidden="true">·</span>
+		<a
+			class="credit-link"
+			href="https://github.com/chmouel/liseur"
+			target="_blank"
+			rel="noopener noreferrer"
+		>Liseur, the reader</a>
+		<span class="credit-dot" aria-hidden="true">·</span>
+		<span>
+			{ "© 2026" }
+			<a
+				class="credit-link"
+				href="https://github.com/chmouel"
+				target="_blank"
+				rel="noopener noreferrer"
+			>Chmouel Boudjnah</a>
+		</span>
+		<span class="credit-dot" aria-hidden="true">·</span>
+		<span class="credit-build">{ buildinfo.Get().Short() }</span>
+	</p>
+}
+
+// githubIcon is drawn rather than fetched, like every other icon here:
+// no icon font, no sprite, nothing from a CDN the page's CSP would have
+// to be widened for. It is filled rather than stroked, so it does not
+// belong in the uiIcon set.
+templ githubIcon() {
+	<svg class="credit-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
+		<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+	</svg>
 }
 
 // setupPage is the first-run screen: the only page in the UI that an
 // anonymous visitor may act on, and only while the instance has no
 // accounts.
-templ setupPage(prefix string, u userCtx, errMsg string) {
-	@layout("Set up", prefix, u, "", setupBody(prefix, errMsg))
+//
+// It asks for the folder as well as the account, because those are the
+// two things a fresh instance is missing and there is no reason to make
+// them two screens (#53). The folder half is optional and says so: an
+// operator who does not yet know where the books will live should not
+// be blocked from creating their account.
+templ setupPage(prefix string, u userCtx, roots []string, form setupForm, errMsg string) {
+	@layout("Set up", prefix, u, "", setupBody(prefix, roots, form, errMsg))
 }
 
-templ setupBody(prefix string, errMsg string) {
+templ setupBody(prefix string, roots []string, form setupForm, errMsg string) {
 	@authFrame(prefix) {
 		<p class="auth-eyebrow">First run</p>
 		<h1>Create the first account</h1>
@@ -228,15 +292,38 @@ templ setupBody(prefix string, errMsg string) {
 			<p class="error" role="alert">{ errMsg }</p>
 		}
 		<form class="auth-form" method="post" action={ prefix + "setup" }>
-			<label>Username <input name="username" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false"/></label>
+			<label>Username <input name="username" value={ form.Username } required autofocus autocomplete="username" autocapitalize="none" spellcheck="false"/></label>
 			<label>
 				Password
 				<input name="password" type="password" required autocomplete="new-password" minlength={ minPasswordLength } aria-describedby="password-hint"/>
 				<span class="auth-hint" id="password-hint">At least { minPasswordLength } characters.</span>
 			</label>
 			<label>Confirm password <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			<fieldset class="auth-folder">
+				<legend>Your books <span class="auth-optional">optional</span></legend>
+				<p class="auth-hint">
+					Name a directory your books already live in and this server
+					starts reading it straight away. A Calibre library is
+					recognised by its <code>metadata.db</code> and read through
+					Calibre's own catalog; anything else is read as a tree of
+					books. Nothing on disk is changed either way.
+				</p>
+				if len(roots) > 0 {
+					<p class="auth-hint">
+						This server accepts roots under:
+						for i, root := range roots {
+							if i > 0 {
+								{ ", " }
+							}
+							<code>{ root }</code>
+						}
+					</p>
+				}
+				<label>Folder name <input name="folder_name" value={ form.FolderName } maxlength="120" autocomplete="off" placeholder="My books"/></label>
+				<label>Root path <input name="folder_root" value={ form.FolderRoot } autocomplete="off" placeholder="/srv/books"/></label>
+			</fieldset>
 			<button type="submit" class="auth-submit">Create administrator <span aria-hidden="true">→</span></button>
 		</form>
-		<p class="auth-note">This first account manages your library and other accounts. You can add readers once you’re in.</p>
+		<p class="auth-note">This first account manages your library and other accounts. You can add readers, and more folders, once you’re in.</p>
 	}
 }

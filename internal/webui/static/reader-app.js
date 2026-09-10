@@ -1871,9 +1871,17 @@ function startCandidates(op) {
 // Reader appearance, Komga-style: theme, font, size, spacing, layout.
 // All of it is a browser preference — stored in localStorage, applied
 // through the engine's user stylesheet and layout attributes, never
-// sent to the server. The default for everything is "what the
-// publisher said": a fresh reader renders the book exactly as shipped,
-// and every override below exists only once the user asks for it.
+// sent to the server. Typography defaults to "what the publisher said":
+// a fresh reader sets the book in the face it was shipped in, and every
+// override below exists only once the user asks for it.
+//
+// Colour is the exception, and deliberately so. The publisher's own
+// palette is whatever that EPUB's stylesheet happens to declare, which
+// across a shelf means every book opening a different colour — and a
+// book that declares nothing inherits the page, which is not a decision
+// anybody made. So a fresh reader opens Light, matching the web UI's
+// own default, and Publisher stays one radio away for the books whose
+// design is the point.
 const SETTINGS_KEY = "liseur.reader.settings";
 // On a phone the browser chrome already consumes part of the viewport, and
 // leaving our own bar visible takes another useful slice from the page. This
@@ -1882,7 +1890,7 @@ const SETTINGS_KEY = "liseur.reader.settings";
 const COMPACT_READER = /Android/i.test(navigator.userAgent) ||
   window.matchMedia("(max-width: 700px)").matches;
 const SETTINGS_DEFAULTS = Object.freeze({
-  theme: "original",
+  theme: "light",
   font: "publisher",
   size: 100,
   spacing: "0",
