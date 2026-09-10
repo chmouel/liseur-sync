@@ -410,6 +410,7 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store
 			redirectRel(w, relPrefix(r.URL.Path)+"login", http.StatusSeeOther)
 			return
 		}
+		s.renewSession(w, r, a)
 		next(w, withAdmin(r, s.adminFlag(r, u)), a, u)
 	}
 }
@@ -515,20 +516,55 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u store.Us
 	if err := s.St.CreateAuthSession(r.Context(), store.AuthSession{
 		ID: id, UserID: u.ID, SHA256: auth.HashSecret(secret), Kind: "web",
 		CSRFHash: auth.HashSecret(csrf), CreatedAt: now,
-		ExpiresAt: now.Add(7 * 24 * time.Hour),
+		ExpiresAt: now.Add(s.Cfg.WebSessionTTL()),
 	}); err != nil {
 		return err
 	}
-	// No Path attribute: the RFC 6265 default-path (the directory of
-	// the request URL) scopes the cookie to /ui/ — or to the proxy
-	// subpath (e.g. /sync/ui/) when served under one.
+	s.setSessionCookie(w, secret, now.Add(s.Cfg.WebSessionTTL()))
+	return nil
+}
+
+// setSessionCookie is the one place the cookie's attributes are
+// written, so minting a session and extending one cannot drift apart in
+// how the browser is told to keep it.
+//
+// No Path attribute: the RFC 6265 default-path (the directory of the
+// request URL) scopes the cookie to /ui/ — or to the proxy subpath
+// (e.g. /sync/ui/) when served under one.
+func (s *Server) setSessionCookie(w http.ResponseWriter, secret string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: secret,
 		HttpOnly: true, SameSite: http.SameSiteStrictMode,
 		Secure:  !s.Cfg.InsecureHTTP,
-		Expires: now.Add(7 * 24 * time.Hour),
+		Expires: expires,
 	})
-	return nil
+}
+
+// renewalFloor is how far the expiry must move before a request is
+// worth a write. The window is measured in months, so refreshing it at
+// most once a day per session costs nothing a reader would notice and
+// keeps a busy tab from writing a row on every page.
+const renewalFloor = 24 * time.Hour
+
+// renewSession slides a live session's expiry forward, so that a
+// browser somebody actually reads in is never signed out while a
+// browser left alone still lapses. It is deliberately best-effort:
+// a store that refuses the update leaves the session exactly as valid
+// as it was, and a page must not fail over a housekeeping write.
+func (s *Server) renewSession(w http.ResponseWriter, r *http.Request, a store.AuthSession) {
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	want := now.Add(s.Cfg.WebSessionTTL())
+	if want.Sub(a.ExpiresAt) < renewalFloor {
+		return
+	}
+	if err := s.St.ExtendAuthSession(r.Context(), a.UserID, a.ID, want, now); err != nil {
+		return
+	}
+	s.setSessionCookie(w, c.Value, want)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

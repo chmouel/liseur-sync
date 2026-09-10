@@ -41,6 +41,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("UserCredentialOperations", func(t *testing.T) {
 		testUserCredentialOperations(t, open)
 	})
+	t.Run("ExtendAuthSession", func(t *testing.T) { testExtendAuthSession(t, open) })
 	t.Run("ListUsersPage", func(t *testing.T) { testListUsersPage(t, open) })
 	t.Run("DisabledUser", func(t *testing.T) { testDisabledUser(t, open) })
 	t.Run("Tokens", func(t *testing.T) { testTokens(t, open) })
