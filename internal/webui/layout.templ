@@ -279,11 +279,17 @@ templ githubIcon() {
 // them two screens (#53). The folder half is optional and says so: an
 // operator who does not yet know where the books will live should not
 // be blocked from creating their account.
-templ setupPage(prefix string, u userCtx, roots []string, form setupForm, errMsg string) {
-	@layout("Set up", prefix, u, "", setupBody(prefix, roots, form, errMsg))
+// setupPage takes no allowed roots, deliberately. This page is open to
+// anyone while the instance has no accounts, and the configured roots
+// are absolute paths: naming them here would describe the server's
+// filesystem to an anonymous visitor, which is the disclosure the rest
+// of first run is careful to avoid. The folders page lists them, behind
+// requireAdmin, where they belong.
+templ setupPage(prefix string, u userCtx, form setupForm, errMsg string) {
+	@layout("Set up", prefix, u, "", setupBody(prefix, form, errMsg))
 }
 
-templ setupBody(prefix string, roots []string, form setupForm, errMsg string) {
+templ setupBody(prefix string, form setupForm, errMsg string) {
 	@authFrame(prefix) {
 		<p class="auth-eyebrow">First run</p>
 		<h1>Create the first account</h1>
@@ -308,17 +314,11 @@ templ setupBody(prefix string, roots []string, form setupForm, errMsg string) {
 					Calibre's own catalog; anything else is read as a tree of
 					books. Nothing on disk is changed either way.
 				</p>
-				if len(roots) > 0 {
-					<p class="auth-hint">
-						This server accepts roots under:
-						for i, root := range roots {
-							if i > 0 {
-								{ ", " }
-							}
-							<code>{ root }</code>
-						}
-					</p>
-				}
+				<p class="auth-hint">
+					It has to be a directory this server is configured to read.
+					If it refuses the one you name, the account is still made
+					and you can try another path from Folders.
+				</p>
 				<label>Folder name <input name="folder_name" value={ form.FolderName } maxlength="120" autocomplete="off" placeholder="My books"/></label>
 				<label>Root path <input name="folder_root" value={ form.FolderRoot } autocomplete="off" placeholder="/srv/books"/></label>
 			</fieldset>

@@ -88,8 +88,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, prefix+"login", http.StatusSeeOther)
 		return
 	}
-	setupPage(prefix, uiCtx(r, nil), s.Cfg.Content.FolderRoots,
-		setupForm{}, "").Render(r.Context(), w)
+	setupPage(prefix, uiCtx(r, nil), setupForm{}, "").Render(r.Context(), w)
 }
 
 // handleSetup creates the first account, makes it an administrator,
@@ -114,8 +113,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		FolderRoot: strings.TrimSpace(r.FormValue("folder_root")),
 	}
 	fail := func(msg string) {
-		setupPage(prefix, uiCtx(r, nil), s.Cfg.Content.FolderRoots,
-			form, msg).Render(r.Context(), w)
+		setupPage(prefix, uiCtx(r, nil), form, msg).Render(r.Context(), w)
 	}
 	if !s.instanceEmpty(r) {
 		redirectRel(w, prefix+"login", http.StatusSeeOther)
