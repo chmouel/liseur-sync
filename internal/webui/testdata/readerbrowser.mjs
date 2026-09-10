@@ -228,6 +228,19 @@ if (detached) {
 // through that API rather than depending on its frame layout: the
 // chapter documents via renderer.getContents(), the position via
 // lastLocation.
+// setReaderTheme picks a palette the way a reader does and waits for the
+// engine to restyle the open chapter.
+const setReaderTheme = async (value) => {
+  await evalIn(`(() => {
+    const radio = document.querySelector(
+      '#reader-settings-form input[name="theme"][value="${value}"]',
+    );
+    radio.checked = true;
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 700));
+};
+
 const probe = `(() => {
   const view = document.querySelector('readium-view');
   const contents = view?.renderer?.getContents?.() ?? [];
@@ -347,8 +360,17 @@ check('the chapter frame is sandboxed and uses a blob URL', await evalIn(`(() =>
 
 // The publication's own stylesheet is a separate zip entry. The engine
 // rewrites the link to a blob URL, which the page CSP has to permit.
+//
+// Seeing it means asking for the Publisher theme first. A fresh reader
+// opens Light, and every theme but Publisher deliberately overrides the
+// publication's own colours — so under the default this reads the
+// reader's palette rather than the book's, and would pass whether the
+// stylesheet had loaded or not.
+await setReaderTheme('original');
+const published = JSON.parse(await evalIn(probe));
 check('publication stylesheet was applied',
-  diag.colour.replace(/\s/g, '') === 'rgb(17,34,51)', diag.colour);
+  published.colour.replace(/\s/g, '') === 'rgb(17,34,51)', published.colour);
+await setReaderTheme('light');
 
 // The publication's script must not have run. It sets a data attribute
 // on the documentElement; the reader strips script elements from every
@@ -536,14 +558,7 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
   ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)', '#5c4a88', '#f7f4ff', 'rgb(92,74,136)', 'rgb(247,244,255)'],
   ['black', 'Black', 'rgb(171,171,174)', 'rgb(0,0,0)', '#375f9d', '#f5f7ff', 'rgb(55,95,157)', 'rgb(245,247,255)'],
 ]) {
-  await evalIn(`(() => {
-    const radio = document.querySelector(
-      '#reader-settings-form input[name="theme"][value="${value}"]',
-    );
-    radio.checked = true;
-    radio.dispatchEvent(new Event('input', { bubbles: true }));
-  })()`);
-  await new Promise((r) => setTimeout(r, 700));
+  await setReaderTheme(value);
   const themed = JSON.parse(await evalIn(probe));
   check(`the ${label} theme restyles the publication`,
     themed.colour.replace(/\s/g, '') === colour, themed.colour);
@@ -573,8 +588,11 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
 await evalIn(`document.getElementById('reader-settings-reset').click()`);
 await new Promise((r) => setTimeout(r, 700));
 const unthemed = JSON.parse(await evalIn(probe));
-check('reset restores the publisher styling',
-  unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
+// Reset restores the defaults, and the default palette is Light — not
+// the publisher's, which is now one radio away rather than where a
+// fresh reader starts.
+check('reset restores the default Light palette',
+  unthemed.colour.replace(/\s/g, '') === 'rgb(27,27,31)', unthemed.colour);
 
 // In scroll mode the text runs under the bottom edge, so the footer
 // goes: a line drawn there would print itself over the book. It is back

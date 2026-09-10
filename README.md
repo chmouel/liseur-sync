@@ -181,7 +181,7 @@ The web interface is available at:
 /ui/
 ```
 
-When the database contains no accounts, the setup page creates the initial administrator account.
+When the database contains no accounts, the setup page creates the initial administrator account and can watch a first folder of books in the same step.
 
 Users, folders, API tokens, folder grants, and reader pairing can be managed from the administration interface or with the `admin` CLI.
 

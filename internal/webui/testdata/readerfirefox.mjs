@@ -197,6 +197,22 @@ const probe = `(() => {
   });
 })()`;
 
+// setReaderTheme picks a palette the way a reader does, and waits for the
+// engine to restyle the open chapter rather than for a fixed delay.
+async function setReaderTheme(value, colour, description) {
+  await evalIn(`(() => {
+    const radio = document.querySelector(
+      '#reader-settings-form input[name="theme"][value="${value}"]',
+    );
+    radio.checked = true;
+    radio.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await waitFor(`(() => {
+    const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+    return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === ${JSON.stringify(colour)};
+  })()`, description);
+}
+
 at('first probe');
 const diag = JSON.parse(await evalIn(probe));
 console.log('diag:', JSON.stringify(diag));
@@ -207,8 +223,14 @@ check('the engine rendered a chapter', diag.hasDoc && diag.text.length > 10,
 check('the title came out of the publication', diag.title === 'Moby-Dick', diag.title);
 check('reader shows the book: own chapter label',
   diag.chapter === 'Title Page', diag.chapter);
+// Seeing the publication's own stylesheet means asking for the
+// Publisher theme first: a fresh reader opens Light, and every theme but
+// Publisher deliberately overrides the book's colours.
+await setReaderTheme('original', 'rgb(17,34,51)', 'the publisher styling');
+const published = JSON.parse(await evalIn(probe));
 check('publication stylesheet was applied',
-  diag.colour.replace(/\s/g, '') === 'rgb(17,34,51)', diag.colour);
+  published.colour.replace(/\s/g, '') === 'rgb(17,34,51)', published.colour);
+await setReaderTheme('light', 'rgb(27,27,31)', 'the Light palette');
 check('publication script did not run', diag.ran === false, String(diag.ran));
 
 at('turning pages');
@@ -251,17 +273,7 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
   ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)', '#5c4a88', '#f7f4ff', 'rgb(92,74,136)', 'rgb(247,244,255)'],
   ['black', 'Black', 'rgb(171,171,174)', 'rgb(0,0,0)', '#375f9d', '#f5f7ff', 'rgb(55,95,157)', 'rgb(245,247,255)'],
 ]) {
-  await evalIn(`(() => {
-    const radio = document.querySelector(
-      '#reader-settings-form input[name="theme"][value="${value}"]',
-    );
-    radio.checked = true;
-    radio.dispatchEvent(new Event('input', { bubbles: true }));
-  })()`);
-  await waitFor(`(() => {
-    const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
-    return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === ${JSON.stringify(colour)};
-  })()`, 'the ' + label + ' publication theme');
+  await setReaderTheme(value, colour, 'the ' + label + ' publication theme');
   const themed = JSON.parse(await evalIn(probe));
   check(`the ${label} theme restyles the publication`,
     themed.colour.replace(/\s/g, '') === colour, themed.colour);
@@ -287,11 +299,12 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
 await evalIn(`document.getElementById('reader-settings-reset').click()`);
 await waitFor(`(() => {
   const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
-  return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === 'rgb(17,34,51)';
-})()`, 'the publisher styling');
+  return doc && doc.defaultView.getComputedStyle(doc.body).color.replace(/\\s/g, '') === 'rgb(27,27,31)';
+})()`, 'the default Light palette');
 const unthemed = JSON.parse(await evalIn(probe));
-check('reset restores the publisher styling',
-  unthemed.colour.replace(/\s/g, '') === 'rgb(17,34,51)', unthemed.colour);
+// Reset restores the defaults, and the default palette is Light.
+check('reset restores the default Light palette',
+  unthemed.colour.replace(/\s/g, '') === 'rgb(27,27,31)', unthemed.colour);
 
 // A risk-focused slice of the Chromium chrome/tap matrix. Gecko is
 // where this can differ: frameElement coordinates, PointerEvent
