@@ -530,6 +530,27 @@ export async function markOfflineOutbox({
   });
 }
 
+export async function replaceOfflineOutboxPayload({
+  partition = storagePartition(), account, epoch, kind, id, payload,
+} = {}) {
+  if (!partition || !account || !kind || !id || !payload) return false;
+  let replaced = false;
+  await withDB(db => guardedWork(db, OUTBOX, { partition, account, epoch }, tx => {
+    const store = tx.objectStore(OUTBOX);
+    const request = store.get(keyForOutbox({ partition, account, kind, id }));
+    request.onsuccess = () => {
+      const record = request.result;
+      if (!record || record.state !== "pending") return;
+      record.payload = payload;
+      record.attempted = false;
+      record.updatedAt = Date.now();
+      store.put(record);
+      replaced = true;
+    };
+  }));
+  return replaced;
+}
+
 export async function listOfflineAnnotations({
   partition = storagePartition(), account, bookID,
 } = {}) {

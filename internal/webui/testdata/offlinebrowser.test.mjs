@@ -250,6 +250,32 @@ async function storageChecks() {
   });
   check(positionPosts.join(",") === "local-position,local-position,a-newer-position",
     "recovery sends the old position before the latest, including a deliberate backward move");
+
+  const oversized = { op_id: "oversized-position", work_id: workID, progression: 0.4,
+    locator: { href: "chapter.xhtml", text: { highlight: "x".repeat(20000) } } };
+  await s.saveReadingPosition({ ...context, bookID, op: oversized, requireSnapshot: false });
+  let oversizedAttempts = 0;
+  await drainOfflineOutbox(context, async (path, options) => {
+    if (path !== "v1/ops") return reply({ results: [] });
+    oversizedAttempts++;
+    const op = JSON.parse(options.body).ops[0];
+    if (oversizedAttempts === 1) {
+      check(op.locator, "the first oversized attempt keeps its locator");
+      return reply({ code: "locator_too_large", limit: 128 }, "", 413);
+    }
+    check(!op.locator, "the retry drops only the refused locator");
+    return reply({ results: [{ op_id: op.op_id, status: "applied" }] });
+  });
+  check(oversizedAttempts === 1, "a size refusal leaves the reduced payload for a later drain");
+  await drainOfflineOutbox(context, async (path, options) => {
+    if (path !== "v1/ops") return reply({ results: [] });
+    const op = JSON.parse(options.body).ops[0];
+    check(!op.locator, "the later drain retries the reduced payload");
+    return reply({ results: [{ op_id: op.op_id, status: "applied" }] });
+  });
+  check(!(await s.listOfflineOutbox({ ...context, kind: "position" }))
+    .some(row => row.id === oversized.op_id), "the reduced retry is acknowledged");
+
   const originalNow = Date.now;
   try {
     Date.now = () => 100;

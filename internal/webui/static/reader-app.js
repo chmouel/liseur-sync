@@ -9,6 +9,8 @@ import { offlineSync, readingSync, outboxLock } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
+import { agreedEdition, startCandidates as restoreCandidates } from "./reader-restore.js";
+import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import {
   clearOfflineSessionCheckpoint,
@@ -94,6 +96,11 @@ const fullscreenBtn = document.getElementById("reader-fullscreen");
 
 let view = null;
 let workID = null;
+let catalogEditionSHA = "";
+// What a locator may weigh. The server's own default; it names a
+// smaller one when it refuses a batch for size, and that is the only
+// way to learn it, so this starts conservative rather than unbounded.
+let locatorLimitBytes = 16 * 1024;
 let pending = null;
 let here = null;
 let faviconObjectURL = null;
@@ -336,6 +343,7 @@ const auth = readerAuth({
     ready = false;
     lifecycle++;
     workID = null;
+    catalogEditionSHA = "";
     session = null;
     unsent = [];
     retryOp = null;
@@ -512,7 +520,25 @@ async function resolveWork() {
   );
   if (!resp.ok) return null;
   const data = await resp.json();
-  return auth.responseCurrent(resp) ? data.work_id || null : null;
+  if (!auth.responseCurrent(resp)) return null;
+  // The catalog's own digest for this book, kept so a position can name
+  // the edition it was read in. Cross-checked against the digest the
+  // engine actually opened rather than trusted on its own: the two can
+  // differ if the file changed between the manifest request and this
+  // one, and a locator filed under the wrong edition is worse than one
+  // filed under none.
+  catalogEditionSHA = (data.identifiers || [])
+    .find(id => id && id.kind === "sha256")?.value || "";
+  return data.work_id || null;
+}
+
+// editionSHA is the digest both the opened publication and the catalog
+// agree on, or "" when they do not agree or either is unknown. An op
+// carries it so the other client can tell whether this position is a
+// place in the same bytes it has; an op without it is read as a
+// position in an unnamed edition, which is what every op said before.
+function editionSHA() {
+  return agreedEdition((view && view.editionSHA) || "", catalogEditionSHA);
 }
 
 async function lastPosition() {
@@ -1265,12 +1291,12 @@ function finite(v) {
 // A non-finite fraction yields null: there is no position to push, and
 // the caller asks the engine to remeasure rather than record a wrong one.
 function locatorFor(location) {
-  if (location.locator && finite(location.fraction)) return location.locator;
+  if (location.locator && finite(location.fraction)) return withAnchor(location.locator);
   if (!finite(location.fraction)) return null;
   const section = location.section || {};
   const index = typeof section.current === "number" ? section.current : 0;
   const sections = (view.book && view.book.sections) || [];
-  return {
+  return withAnchor({
     href: (sections[index] && sections[index].id) || "",
     type: "application/xhtml+xml",
     title: bookTitle(),
@@ -1280,7 +1306,23 @@ function locatorFor(location) {
       totalProgression: location.fraction,
       position: index + 1,
     },
-  };
+  });
+}
+
+// withAnchor describes the passage on screen well enough for another
+// client to find it again, when it can. A CFI says the same thing but
+// only to a reader that speaks CFI; the app on a phone does not, and a
+// percentage lands it in the wrong paragraph. When there is no anchor
+// to be had — nothing visible yet, a quote that appears twice in its
+// block, a locator that would grow past what the server accepts — the
+// locator goes as it was, and the resource and its progression are
+// still a good place to reopen at.
+function withAnchor(locator) {
+  try {
+    return markLocator(locator, view.visibleAnchor(), locatorLimitBytes);
+  } catch (err) {
+    return locator;
+  }
 }
 
 // sectionProgression recovers the fraction within the current section
@@ -1374,6 +1416,30 @@ async function push() {
   return positionInFlight;
 }
 
+// recoverRefusal answers the one refusal a position can recover from
+// by itself.
+//
+// A batch refused for the size of its locator stored nothing, so the
+// op id is still free — and `docs/integrating.md` names resending the
+// same op without its locator as the recovery. That is the protocol's
+// deliberate exception to replaying the same bytes: everything else
+// about the op, its id included, stays as it was, so the reading is
+// recorded once and under the identity it was first given. The
+// progression alone still says where the reader is.
+async function recoverRefusal(resp, op) {
+  const body = await resp.json().catch(() => null);
+  if (body?.code !== "locator_too_large") return;
+  if (Number.isFinite(body.limit) && body.limit > 0) locatorLimitBytes = body.limit;
+  if (!op.locator || retryOp?.op !== op) return;
+  const { locator: _dropped, ...bare } = op;
+  // Left in retryOp under the same key, so the next push — a page turn,
+  // a foreground retry, the flush on the way out — sends this reduced
+  // copy rather than building the refused one again. A reader who has
+  // since moved on gets a different key and a new op, which is right:
+  // the newer page is the one worth recording.
+  retryOp = { key: retryOp.key, op: bare };
+}
+
 async function pushPosition() {
   if (!workID || !here || !readingDirty || restoring) return;
   const stamp = snapshot();
@@ -1386,10 +1452,18 @@ async function pushPosition() {
     scheduleFractionRetry();
     return;
   }
+  const edition = editionSHA();
+  // The retry key is what makes a repeat of the same position replay the
+  // same bytes rather than mint a new op. The edition belongs in it: the
+  // same chapter fraction in a re-uploaded file is a different place,
+  // and reusing the old op for it would file the new reading under the
+  // old bytes.
   const key =
     (locator.locations.fragments[0] || "") +
     "@" +
-    locator.locations.totalProgression;
+    locator.locations.totalProgression +
+    "@" +
+    edition;
   const op =
     retryOp && retryOp.key === key
       ? retryOp.op
@@ -1399,6 +1473,10 @@ async function pushPosition() {
           client_ts: new Date().toISOString(),
           progression: locator.locations.totalProgression,
           locator: locator,
+          // Named only when it is known and agreed. An absent field is
+          // how every op read before this, and the other client treats
+          // it as an edition nobody vouched for.
+          ...(edition ? { edition_sha: edition } : {}),
         };
   retryOp = { key, op };
   catchup.wrote(op);
@@ -1457,7 +1535,11 @@ async function pushPosition() {
   try {
     const resp = await request;
     stamp.identity = auth.responseIdentity(resp) || stamp.identity;
-    if (!resp.ok || !current(stamp) || !auth.responseCurrent(resp)) return;
+    if (!resp.ok) {
+      if (current(stamp) && auth.responseCurrent(resp)) await recoverRefusal(resp, op);
+      return;
+    }
+    if (!current(stamp) || !auth.responseCurrent(resp)) return;
     const out = await resp.json().catch(() => null);
     if (!current(stamp) || !auth.responseCurrent(resp)) return;
     const result = out?.results?.[0];
@@ -1756,67 +1838,32 @@ setInterval(() => {
   readingCoordinator?.trigger();
 }, 30000);
 
-function cfiOf(op) {
-  const fragments =
-    (op &&
-      op.locator &&
-      op.locator.locations &&
-      op.locator.locations.fragments) ||
-    [];
-  for (const fragment of fragments) {
-    if (typeof fragment === "string" && fragment.indexOf("epubcfi(") === 0) {
-      return fragment;
-    }
-  }
-  return null;
+// The ladder itself is in reader-restore.js, which knows nothing about
+// this page. All that is decided here is what the open publication can
+// answer: which edition it is, what its spine is called, and whether a
+// CFI names a chapter in it.
+function restoreView() {
+  return {
+    editionSHA: editionSHA(),
+    sections: (view.book && view.book.sections) || [],
+    resolveKey: (key) => view.resources?.resolveKey(key) ?? null,
+    cfiResolves: (cfi) => {
+      try {
+        const resolved = view.resolveNavigation(cfi);
+        return (
+          resolved != null &&
+          typeof resolved.index === "number" &&
+          !!view.book.sections[resolved.index]
+        );
+      } catch (err) {
+        return false;
+      }
+    },
+  };
 }
 
-// startCandidates lists where to try opening, best pointer first. It
-// prefers what the writing client actually said — a CFI from this
-// reader, or the resource another one named — and keeps the fraction
-// every client agrees on as the fallback, which is why a book started
-// on a phone opens in roughly the right place here. A stored pointer
-// is only offered after the engine confirms it resolves against *this*
-// copy of the book; but resolution here checks only the spine step, and
-// a CFI's path inside the chapter is walked lazily after the chapter
-// loads, where a pointer from another engine or edition can still fail.
-// That is why this returns a ladder for the caller to descend rather
-// than a single answer.
 function startCandidates(op) {
-  if (!op) return [];
-  const resolves = (target) => {
-    try {
-      const resolved = view.resolveNavigation(target);
-      return (
-        resolved != null &&
-        typeof resolved.index === "number" &&
-        !!view.book.sections[resolved.index]
-      );
-    } catch (err) {
-      return false;
-    }
-  };
-  const out = [];
-  const cfi = cfiOf(op);
-  if (cfi && resolves(cfi)) out.push(cfi);
-  if (op.locator?.href && resolves(op.locator)) {
-    // The old reader used position for a spine index. Resource-relative
-    // anchors/progression survive the engine change; that index does not.
-    const locator = structuredClone(op.locator);
-    if (cfi) delete locator.locations.position;
-    out.push(locator);
-  }
-  const locations = (op.locator && op.locator.locations) || {};
-  const fraction =
-    typeof locations.totalProgression === "number"
-      ? locations.totalProgression
-      : op.progression;
-  if (finite(fraction) && fraction >= 0) {
-    out.push({ fraction: Math.min(0.999, fraction) });
-  }
-  const href = op.locator && op.locator.href;
-  if (href && resolves(href)) out.push(href);
-  return out;
+  return op ? restoreCandidates(op, restoreView()) : [];
 }
 
 // ------------------------------------------------------ appearance
@@ -3028,6 +3075,12 @@ window.addEventListener("beforeunload", () => {
     if (cfg.offline && !local) throw Error("This book is not available offline.");
     if (cfg.offline) {
       offlineSnapshot = local;
+      // Offline the catalog cannot be asked, but it already was: a
+      // snapshot is only stored ready once its publication URLs were
+      // checked against the digest the catalog named at download time.
+      // That is the same agreement resolveWork() reaches online, made
+      // earlier, so a position read on a plane still names its edition.
+      catalogEditionSHA = local.digest || "";
       offlineAccount = local.account;
       offlineContext = {
         ...await accountContext(offlinePartition, offlineAccount), deviceID: local.deviceID,

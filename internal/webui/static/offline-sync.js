@@ -3,7 +3,7 @@ import { permanentCodes, uploadSessions } from "./reader-session-upload.js";
 import {
   assertOfflineContext, attemptOfflineRecord, acknowledgeOfflineAnnotation,
   discardOfflineOutbox, listOfflineOutbox, listReadySnapshots, markOfflineOutbox,
-  removeOfflineOutbox, reconcileOfflineBook,
+  removeOfflineOutbox, reconcileOfflineBook, replaceOfflineOutboxPayload,
 } from "./offline-storage.js";
 
 /**
@@ -12,9 +12,8 @@ import {
  * `docs/integrating.md` gives both of these a recovery: `unknown_work`
  * is repaired by re-resolving the book and rebuilding the change under
  * the fresh work, and `locator_too_large` by sending the same op again
- * without its locator. This queue implements neither, so it must not
- * pretend the change is worthless — it says so and lets the reader
- * decide.
+ * without its locator. The latter is handled below; unknown work still
+ * remains visible for the reader to resolve.
  */
 const answerableVerdicts = new Set(["unknown_work", "locator_too_large"]);
 
@@ -108,6 +107,14 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
       continue;
     }
     if (!response.ok) {
+      if (record.kind === "position" && body?.code === "locator_too_large" &&
+          record.payload?.locator) {
+        const { locator: _dropped, ...bare } = record.payload;
+        const replaced = await replaceOfflineOutboxPayload({
+          ...context, kind: record.kind, id: record.id, payload: bare,
+        });
+        if (replaced) continue;
+      }
       if (spent(body?.code)) await drop(body.code);
       else if (response.status === 409) await failed("conflict", "revision conflict", body?.server);
       else if ([400, 403, 404, 413, 422].includes(response.status))
