@@ -6,7 +6,7 @@
 // This runs the same checks as the Chromium harness against Firefox, so
 // "works here" means something.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,7 +24,7 @@ let step = 'starting firefox';
 const at = (s) => { step = s; };
 setTimeout(() => {
   console.error('firefox harness stuck at: ' + step);
-  process.exit(2);
+  finish(2);
 }, 120000);
 
 const profile = mkdtempSync(join(tmpdir(), 'ffsmoke-'));
@@ -46,8 +46,63 @@ const proc = spawn(firefox, [
   '--headless', '--no-remote', '--profile', profile,
   '--remote-debugging-port=0', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
-process.on('exit', () => proc.kill());
+// The profile is a real Firefox profile directory, and this
+// harness runs several times per suite. Left behind they fill /tmp
+// within a few dozen runs, and what breaks then is whatever wants space
+// next, which is rarely this test. So every way out removes one.
+const removeProfile = () => {
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // A profile left behind is untidy; a cleanup that fails the run is
+    // worse, and by here the answer is already printed.
+  }
+};
+
+// The last resort, for the ways out that are not finish(): a crash, or a
+// signal. The browser may still be writing when this runs, so it is
+// best-effort by nature.
+process.on('exit', () => {
+  proc.kill();
+  removeProfile();
+});
 process.on('SIGTERM', () => process.exit(1));
+process.on('SIGINT', () => process.exit(1));
+
+// finish is the ordinary way out. It waits for the browser to actually
+// go before deleting its profile: asking it to quit and deleting in the
+// same breath leaves the directory behind half emptied, because the
+// browser writes a few more files on its way out. The wait is bounded,
+// since a browser that will not close must not hold up the run.
+let finishing = false;
+const finish = async (code) => {
+  // A second caller waits here rather than killing the browser twice.
+  if (finishing) return new Promise(() => {});
+  finishing = true;
+  proc.kill();
+  await new Promise((resolve) => {
+    const giveUp = setTimeout(resolve, 5000);
+    proc.once('close', () => {
+      clearTimeout(giveUp);
+      resolve();
+    });
+  });
+  removeProfile();
+  process.exit(code);
+};
+
+// A failed check throws, and Node's own answer to that is to exit
+// straight away — which lands on the synchronous net above and races the
+// browser to its own directory. Losing that race is how a failing run
+// used to leave a hundred megabytes behind. So a throw takes the same
+// way out as everything else, and the error still reaches the log first.
+const abort = (err) => {
+  console.error(err);
+  finish(1);
+};
+process.on('uncaughtException', abort);
+process.on('unhandledRejection', abort);
+
 
 const wsURL = await new Promise((res, rej) => {
   let buf = '';
@@ -66,7 +121,7 @@ at('opening the bidi socket');
 const ws = new WebSocket(wsURL + '/session');
 ws.addEventListener('error', (e) => {
   console.error('bidi socket failed: ' + (e.message || 'unknown'));
-  process.exit(2);
+  finish(2);
 });
 await new Promise((r) => ws.addEventListener('open', r, { once: true }));
 
@@ -457,5 +512,4 @@ if (unexpected.length) console.log('console errors:\n  ' + unexpected.join('\n  
 check('no console errors', unexpected.length === 0);
 
 ws.close();
-proc.kill();
-process.exit(fail.length ? 1 : 0);
+await finish(fail.length ? 1 : 0);
