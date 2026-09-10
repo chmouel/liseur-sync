@@ -703,26 +703,35 @@ async function withdrawQueuedPositions() {
 
 // Every way of saying no goes through here: an answered offer settles
 // durably, or the next open raises the same disagreement again.
-function dismissCatchup() {
+async function dismissCatchup() {
   const shown = catchup.shown();
   hideCatchup();
-  keepHere(shown ? shown.op : null);
+  if (!await keepHere(shown ? shown.op : null)) showCatchup();
 }
 
 // Staying put is an answer about the other device's position, not a
 // refusal to answer: that position becomes the agreed baseline, and
 // this device's own page is sent so the other side learns it too.
-function keepHere(op) {
-  catchup.refuse(op);
-  rememberAnswer(op, false);
+//
+// The sending comes first, because the refusal is durable and the page
+// it is answering with may not be. A baseline written on top of a page
+// this device never managed to record would survive the reload that
+// the page did not: the other position would count as answered and
+// this one would be gone. So nothing is settled until the local page
+// is safely in the queue, and the caller is told to put the question
+// back up.
+async function keepHere(op) {
   if (op && view && here && finite(here.fraction)) {
     readingDirty = true;
     // Through the single-flight, never straight at `pushPosition`: an
     // earlier page may still be uploading, and two positions in the air
     // at once can land in the wrong order and make the older one this
     // device's head — the server walked backwards.
-    void push();
+    if (!await settleBeforeAnswer()) return false;
   }
+  catchup.refuse(op);
+  rememberAnswer(op, false);
+  return true;
 }
 
 // An answer must not be given on top of a page this device has not
@@ -776,7 +785,7 @@ catchupDismiss?.addEventListener("click", dismissCatchup);
 catchupPanel?.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
-    dismissCatchup();
+    void dismissCatchup();
   }
 });
 catchupAccept?.addEventListener("click", async () => {
@@ -982,12 +991,19 @@ syncTake?.addEventListener("click", async () => {
   await goThere(catchup.adopt(op), stamp, activity);
 });
 
-syncKeep?.addEventListener("click", () => {
+syncKeep?.addEventListener("click", async () => {
   const op = syncOffered;
+  // Same rule as Take: an answer is only given once the page it is
+  // given from has been recorded. If it will not go, nothing is
+  // settled and the question stays where it is.
+  if (!await keepHere(op)) {
+    syncSummary.textContent =
+      "This page could not be sent, so nothing was settled. Try again in a moment.";
+    return;
+  }
   syncCovered = false;
   syncDialog.close();
   hideCatchup();
-  keepHere(op);
 });
 
 // ------------------------------------------------------ annotations
@@ -3225,7 +3241,7 @@ function handleKeys(e) {
   // it, the same as the drawer above.
   if (catchupPanel && !catchupPanel.hidden && e.key === "Escape") {
     e.preventDefault();
-    dismissCatchup();
+    void dismissCatchup();
     return;
   }
   // "?" summons the help from anywhere, including from inside a
