@@ -217,6 +217,13 @@ async function answerStuck(act, discarding) {
 // removed where it has none. Offline there is no one to ask, and the
 // installed app's next reconcile does the same job; there the local
 // store is authoritative in the meantime.
+//
+// An online reader whose re-read fails is in neither position: it has
+// text the server refused and no way to learn what replaced it. Such an
+// annotation is marked unsaved rather than drawn as settled, and it is
+// asked about again after the next drain.
+const unrestored = new Set();
+
 async function restoreDiscardedAnnotations(ids) {
   const owned = [...new Set(ids)];
   if (!owned.length) return;
@@ -228,34 +235,51 @@ async function restoreDiscardedAnnotations(ids) {
     }).catch(() => []);
     const touched = owned.filter(id =>
       !queued.some(record => record.annotationID === id));
+    for (const id of owned) {
+      if (!touched.includes(id)) unrestored.delete(id);
+    }
     if (!touched.length) return;
+    const online = !cfg.offline && !!workID;
     let server = null;
-    if (!cfg.offline && workID) {
+    if (online) {
       const response = await api(
         "v1/works/" + encodeURIComponent(workID) + "/annotations",
       ).catch(() => null);
       const data = response?.ok ? await response.json().catch(() => null) : null;
       if (Array.isArray(data?.annotations)) server = data.annotations;
     }
+    const stored = server ? [] : await listOfflineAnnotations({
+      partition: storagePartition(), account: offlineAccount, bookID: cfg.bookID,
+    });
     const resolved = new Map();
     for (const id of touched) {
-      if (!server) {
+      if (server) {
+        const fresh = server.find(value => value.id === id);
+        const annotation = fresh ? { ...fresh, pending: false } : null;
+        // The write refuses if a mutation arrived while the request was
+        // in the air, and only what was written may reach the page.
+        if (await restoreOfflineAnnotation({
+          ...offlineContext, bookID: cfg.bookID, id, annotation,
+        })) {
+          resolved.set(id, annotation);
+          unrestored.delete(id);
+        }
+        continue;
+      }
+      const local = stored.find(value => value.id === id) || null;
+      if (!online) {
         // Offline there is nothing authoritative to write, so the store
         // is only read: the page stops drawing a note the discard took,
         // and the next reconcile settles the rest.
-        const local = await listOfflineAnnotations({
-          partition: storagePartition(), account: offlineAccount, bookID: cfg.bookID,
-        });
-        resolved.set(id, local.find(value => value.id === id) || null);
+        resolved.set(id, local);
         continue;
       }
-      const fresh = server.find(value => value.id === id);
-      const annotation = fresh ? { ...fresh, pending: false } : null;
-      // The write refuses if a mutation arrived while the request was in
-      // the air, and only what was written may reach the page.
+      unrestored.add(id);
+      if (!local) { resolved.set(id, null); continue; }
+      const provisional = { ...local, pending: true };
       if (await restoreOfflineAnnotation({
-        ...offlineContext, bookID: cfg.bookID, id, annotation,
-      })) resolved.set(id, annotation);
+        ...offlineContext, bookID: cfg.bookID, id, annotation: provisional,
+      })) resolved.set(id, provisional);
     }
     const drawn = annotationDrawing.annotations();
     const next = drawn
@@ -270,6 +294,17 @@ async function restoreDiscardedAnnotations(ids) {
   } catch (error) {
     console.warn("The annotation list could not be refreshed:", error);
   }
+}
+
+// Two drains can overlap, and the button can fire during one, so the
+// re-ask runs one at a time like the conflict resolver above it.
+let restoring = null;
+function retryUnrestoredAnnotations() {
+  if (restoring) return restoring;
+  if (cfg.offline || !unrestored.size) return Promise.resolve();
+  restoring = restoreDiscardedAnnotations([...unrestored])
+    .finally(() => { restoring = null; });
+  return restoring;
 }
 
 stuckRetry?.addEventListener("click", () => { answerStuck(retryOfflineOutbox, false); });
@@ -401,6 +436,7 @@ async function prepareReadingSync(identity) {
     onChange: async () => {
       await refreshLocalReadingState();
       await resolveAnnotationConflicts();
+      await retryUnrestoredAnnotations();
     },
     onStatus: message => { if (!syncExpired) say(message, !!message); },
     onStuck: records => {
