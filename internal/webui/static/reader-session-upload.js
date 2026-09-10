@@ -1,5 +1,14 @@
-const permanentCodes = new Set([
-  "id_reused", "missing_field", "bad_time", "time_in_future",
+// Codes the server will repeat for as long as the same bytes are
+// offered. Retrying one of these is a loop, not a delivery, so the
+// sitting is handed back to the caller to settle.
+//
+// `unknown_work` is in the list because this client cannot do what the
+// protocol's recovery asks: re-resolving the book and rebuilding the
+// batch under a fresh `work_id` is not something the reader's queue
+// knows how to do. Stopping is honest; retrying forever is not. It is
+// still not a code anything discards silently — see `offline-sync.js`.
+export const permanentCodes = new Set([
+  "id_reused", "unknown_work", "missing_field", "bad_time", "time_in_future",
   "progression_out_of_range", "idle_out_of_range", "active_out_of_range",
 ]);
 const encoder = new TextEncoder();

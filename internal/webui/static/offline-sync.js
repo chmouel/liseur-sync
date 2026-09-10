@@ -1,10 +1,50 @@
 import { readerAuth } from "./reader-auth.js";
-import { uploadSessions } from "./reader-session-upload.js";
+import { permanentCodes, uploadSessions } from "./reader-session-upload.js";
 import {
   assertOfflineContext, attemptOfflineRecord, acknowledgeOfflineAnnotation,
-  listOfflineOutbox, listReadySnapshots, markOfflineOutbox, removeOfflineOutbox,
-  reconcileOfflineBook,
+  discardOfflineOutbox, listOfflineOutbox, listReadySnapshots, markOfflineOutbox,
+  removeOfflineOutbox, reconcileOfflineBook,
 } from "./offline-storage.js";
+
+/**
+ * Verdicts that are permanent but that the reader could still answer.
+ *
+ * `docs/integrating.md` gives both of these a recovery: `unknown_work`
+ * is repaired by re-resolving the book and rebuilding the change under
+ * the fresh work, and `locator_too_large` by sending the same op again
+ * without its locator. This queue implements neither, so it must not
+ * pretend the change is worthless — it says so and lets the reader
+ * decide.
+ */
+const answerableVerdicts = new Set(["unknown_work", "locator_too_large"]);
+
+/**
+ * spentVerdicts are the refusals that cost nothing to forget.
+ *
+ * They are `permanentCodes` minus the two above, kept as one list so
+ * the sender and the queue cannot drift apart about what is permanent.
+ * `id_reused` is the one that matters, and it is easily misread: it
+ * does not say the change was lost. It says the server already holds
+ * that id, so what is queued here is a variant of something already
+ * accepted — the reading is recorded and this copy is worth nothing.
+ * The rest name a payload that is malformed and that no retry and no
+ * reader can turn into a delivery.
+ */
+const spentVerdicts = new Set(
+  [...permanentCodes].filter(code => !answerableVerdicts.has(code)),
+);
+
+/**
+ * reportable decides what the stuck panel names to the reader.
+ *
+ * An annotation *conflict* is not one of them, because it has a better
+ * answer: `resolveStoredAnnotationConflicts` runs first, on every drain,
+ * and settles it with both versions in hand. Everything else the server
+ * refused for good — including an annotation it called invalid — belongs
+ * in the panel, or it becomes exactly the silent permanent resident this
+ * whole change exists to abolish.
+ */
+const reportable = record => record.kind !== "annotation" || record.state !== "conflict";
 
 export async function drainOfflineOutbox(context, request, { keepalive = false } = {}) {
   const records = await listOfflineOutbox({ ...context });
@@ -17,6 +57,17 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
     if (!record) continue;
     const options = { method: "POST", headers: { "Content-Type": "application/json" }, keepalive };
     const done = () => removeOfflineOutbox({ ...context, kind: record.kind, id: record.id });
+    // An annotation is the reader's own words, and it is never thrown
+    // away on the server's say-so: a refused one waits to be answered.
+    // A position and a sitting are records of something that happened,
+    // and once the server has refused them for good there is nobody to
+    // ask and nothing to decide.
+    const spent = code => record.kind !== "annotation" && spentVerdicts.has(code);
+    const drop = code => {
+      console.warn("A reading change was refused for good and dropped:",
+        record.kind, record.id, code);
+      return discardOfflineOutbox({ ...context, kind: record.kind, id: record.id });
+    };
     const failed = (state, error, details = null) => {
       // Sending the next page before this one is acknowledged lets a later
       // retry of the older page become the server's newest position.
@@ -31,7 +82,8 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
         send: body => request("v1/sessions", { ...options, body }),
         responseCurrent: () => true,
         accepted: done,
-        refused: (_, code) => failed("failed", code || "session rejected"),
+        refused: (_, code) => spent(code)
+          ? drop(code) : failed("failed", code || "session rejected"),
         deferred: (status, code) => failed(
           "pending", code || `HTTP ${status || "unknown"}`,
         ),
@@ -56,7 +108,8 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
       continue;
     }
     if (!response.ok) {
-      if (response.status === 409) await failed("conflict", "revision conflict", body?.server);
+      if (spent(body?.code)) await drop(body.code);
+      else if (response.status === 409) await failed("conflict", "revision conflict", body?.server);
       else if ([400, 403, 404, 413, 422].includes(response.status))
         await failed("failed", body?.error || `HTTP ${response.status}`);
       else await failed("pending", body?.error || `HTTP ${response.status}`);
@@ -75,7 +128,16 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
         await acknowledgeOfflineAnnotation(context, record, server);
       } else await done();
     } else if (result.status === "conflict") {
-      await failed("conflict", result.reason || "revision conflict", result.server || result);
+      // A conflict never says the change landed. It says the id is
+      // already spent on a *different* payload, so this change was not
+      // stored and sending the same bytes again cannot store it. The
+      // protocol's answer is to send it under a fresh id, which this
+      // queue does not do, so the reader is told instead of being told
+      // nothing.
+      await failed("conflict", annotation
+        ? (result.reason || "revision conflict")
+        : (result.reason || "this position id is already used by a different position"),
+      result.server || result);
     } else await failed(result.status === "invalid" ? "failed" : "pending",
       result.reason || "change not acknowledged", result);
   }
@@ -156,7 +218,8 @@ export function syncCoordinator({ lock, run, onStatus = () => {}, partition, wai
 // takes its turn instead of racing a send already in flight.
 export const outboxLock = context => "offline-sync:" + context.partition + context.account;
 
-export function offlineSync({ context, base, onChange = () => {}, onStatus = () => {} }) {
+export function offlineSync({ context, base, onChange = () => {}, onStatus = () => {},
+  onStuck = () => {} }) {
   let csrf = "";
   const auth = readerAuth({ apiBase: base, tokenURL: base + "ui/reader/token",
     csrf: () => csrf, onExhausted: () => {} });
@@ -196,8 +259,13 @@ export function offlineSync({ context, base, onChange = () => {}, onStatus = () 
     }
     await onChange();
     const pending = await listOfflineOutbox({ ...context, state: null });
-    onStatus(pending.length ? `${pending.length} offline change(s) waiting; retry sync or review conflicts.` : "");
-    return pending.some(record => record.state === "pending" && record.deviceID === context.deviceID);
+    const waiting = pending.filter(record => record.state === "pending");
+    // The installed app answers for the whole account, not for one open
+    // book, so nothing is filtered by book here.
+    await onStuck(pending.filter(record => record.state !== "pending" &&
+      reportable(record) && record.deviceID === context.deviceID));
+    onStatus(waiting.length ? `${waiting.length} offline change(s) waiting to sync.` : "");
+    return waiting.some(record => record.deviceID === context.deviceID);
   };
   const coordinator = syncCoordinator({
     lock: outboxLock(context), run, onStatus, partition: context.partition,
@@ -219,8 +287,17 @@ export function offlineSync({ context, base, onChange = () => {}, onStatus = () 
  * `request` is the reader's own authenticated transport, so a token
  * renewal mid-drain is the auth layer's problem and not a second
  * credential racing the first.
+ *
+ * `onStuck` receives the records this book still owes that the server
+ * refused in a way no retry resolves by itself. It is given the records
+ * rather than a sentence, because the page has to offer something to do
+ * about them: a queue that can only complain is a queue nobody can
+ * empty.
  */
-export function readingSync({ context, request, onChange = () => {}, onStatus = () => {} }) {
+export function readingSync({
+  context, request, bookID = "", onChange = () => {}, onStatus = () => {},
+  onStuck = () => {},
+}) {
   const mine = record => record.deviceID === context.deviceID;
   const run = async () => {
     // No hidden-tab check here: a sitting ends when the tab is hidden,
@@ -232,9 +309,12 @@ export function readingSync({ context, request, onChange = () => {}, onStatus = 
     if (coordinator.stopped()) return false;
     await onChange();
     const pending = await listOfflineOutbox({ ...context, state: null });
-    const stuck = pending.filter(record => mine(record) && record.state !== "pending");
-    onStatus(stuck.length
-      ? `${stuck.length} reading change(s) could not be saved; retry sync.` : "");
+    // Only this book's stuck changes are the reader's business here.
+    // A change belonging to a book they are not reading is not
+    // something to answer on top of the page they are.
+    await onStuck(pending.filter(record => mine(record) &&
+      record.state !== "pending" && reportable(record) &&
+      (!bookID || record.bookID === bookID)));
     return pending.some(record => record.state === "pending" && mine(record));
   };
   const coordinator = syncCoordinator({
