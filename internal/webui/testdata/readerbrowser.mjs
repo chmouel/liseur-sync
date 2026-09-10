@@ -1596,7 +1596,12 @@ async function liveGuard(evalIn, check, S) {
     const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
       op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
       client_ts: new Date().toISOString(), progression: ${fraction},
-      locator: { locations: { totalProgression: ${fraction}, fragments: ['epubcfi(/6/9998!/4/2)'] } },
+      locator: {
+        locations: { totalProgression: ${fraction}, fragments: ['epubcfi(/6/9998!/4/2)'] },
+        // Another device's text, and deliberately something that would
+        // be markup if anybody were careless enough to parse it.
+        text: { highlight: 'the passage <b>another device</b> had on screen' },
+      },
     }] });
     return out.results[0].status;
   })()`);
@@ -1621,20 +1626,23 @@ async function liveGuard(evalIn, check, S) {
   check('hidden closes the stream', await evalIn('window.__liveStreams.at(-1).aborted'));
   await visibility(false);
   check('resume offers the remote page', await wait("!document.getElementById('reader-catchup').hidden"));
-  const offered = await evalIn("document.getElementById('reader-catchup-text').textContent");
+  // The whole panel: the question names a page where the book has been
+  // measured, and the detail line under it carries the percentage every
+  // client agrees on.
+  const offered = await evalIn("document.getElementById('reader-catchup').textContent");
   check('offer names the held position', offered.includes('70%'), offered);
   before = await evalIn('window.__liveReads');
   await remote('second', 0.8);
   await wait(`window.__liveReads > ${before}`);
   await pause(300);
   check('new remote position does not retarget the shown offer',
-    await evalIn("document.getElementById('reader-catchup-text').textContent") === offered);
+    await evalIn("document.getElementById('reader-catchup').textContent") === offered);
   await evalIn("document.getElementById('reader-catchup-accept').click()");
   await pause(300);
   check('stale offer acceptance cannot navigate', await position() === original);
 
   await visibility(true); await visibility(false);
-  check('next resume offers the newer snapshot', await wait("!document.getElementById('reader-catchup').hidden && document.getElementById('reader-catchup-text').textContent.includes('80%')"));
+  check('next resume offers the newer snapshot', await wait("!document.getElementById('reader-catchup').hidden && document.getElementById('reader-catchup').textContent.includes('80%')"));
   if (process.env.SMOKE_SHOT) {
     const shot = await S('Page.captureScreenshot', { format: 'png' });
     (await import('node:fs')).writeFileSync(process.env.SMOKE_SHOT, Buffer.from(shot.data, 'base64'));
@@ -1722,11 +1730,20 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   await visibility(false);
   check('a page turn on both sides is presented as a disagreement',
     await wait("!document.getElementById('reader-catchup').hidden"));
-  const text = await evalIn("document.getElementById('reader-catchup-text').textContent");
+  const text = await evalIn("document.getElementById('reader-catchup').textContent");
   const accept = await evalIn("document.getElementById('reader-catchup-accept').textContent");
   const stay = await evalIn("document.getElementById('reader-catchup-dismiss').textContent");
   check('the disagreement names both positions', text.includes('42%') && /\d+%.*42%|42%.*\d+%/.test(text), text);
-  check('each button says where it goes', accept.includes('42%') && /\d/.test(stay), accept + ' / ' + stay);
+  // A measured book says "page n of m" on the buttons and keeps the
+  // percentages for the detail line, so what is checked here is that
+  // each button names a place and that the two are not the same place.
+  check('each button says where it goes',
+    /\d/.test(accept) && /\d/.test(stay) && accept !== stay, accept + ' / ' + stay);
+  const excerpt = await evalIn("document.getElementById('reader-catchup-excerpt').textContent");
+  check('the disagreement shows what the other device had on screen',
+    excerpt.includes('another device') && excerpt.includes('<b>'), excerpt);
+  check('another device\'s passage is text, never markup',
+    await evalIn("!document.getElementById('reader-catchup-excerpt').querySelector('b')"));
   check('a disagreement is marked as one',
     await evalIn("document.getElementById('reader-catchup').classList.contains('conflict')"));
 
@@ -1757,6 +1774,67 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
     reading && reading.baseline && reading.baseline.op_id === staying.split(',')[1],
     JSON.stringify(reading && reading.baseline));
   check('nothing is owed once it has been agreed', !reading.local, JSON.stringify(reading));
+
+  // ------------------------------------------------- asked for, not offered
+  //
+  // The panel above appears when the reader happens to be at a quiet
+  // moment. This is the other half of ADR-0040: the reader asks, and
+  // gets an answer even when the answer is that there is nothing to do.
+  const syncDialog = "document.getElementById('reader-sync-dialog')";
+  const syncText = `${syncDialog}.textContent`;
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('asking opens the dialog', await wait(`${syncDialog}.open`));
+  // The newest position on the server is the one this browser just
+  // delivered, so there is no second side: an answer either way, but
+  // never a choice between a device and itself.
+  check('asking always says something', (await evalIn(syncText)).trim().length > 0);
+  check('there is nothing to choose between, so nothing is offered',
+    await evalIn("document.getElementById('reader-sync-take').hidden && " +
+      "document.getElementById('reader-sync-keep').hidden"),
+    await evalIn(syncText));
+  check('with nothing to compare, no second side is shown',
+    await evalIn("document.getElementById('reader-sync-there-side').hidden"));
+  check('the only button left is the way out',
+    (await evalIn("document.getElementById('reader-sync-cancel').textContent")) === 'Close');
+  const settled = await position();
+  await evalIn("document.getElementById('reader-sync-cancel').click()");
+  check('the dialog closes', await wait(`!${syncDialog}.open`));
+
+  // A real choice: the other device has read further, and this one is
+  // asked which page it meant.
+  await remote('asked', 0.9);
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('a position on the other device is a question',
+    await wait(`${syncDialog}.open && !document.getElementById('reader-sync-take').hidden`));
+  check('both sides are shown',
+    (await evalIn("document.getElementById('reader-sync-here').textContent")).length > 0 &&
+    (await evalIn("document.getElementById('reader-sync-there').textContent")).length > 0,
+    await evalIn(syncText));
+  check('the other side says how long ago it was',
+    (await evalIn("document.getElementById('reader-sync-there').textContent")).includes('just now'),
+    await evalIn("document.getElementById('reader-sync-there').textContent"));
+
+  // Cancelling is a real answer and changes nothing: not the page, not
+  // what the two sides have agreed on. Asking again asks the same thing.
+  await evalIn("document.getElementById('reader-sync-cancel').click()");
+  await pause(300);
+  check('cancelling moves nothing', await position() === settled);
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('a cancelled question can be asked again',
+    await wait(`${syncDialog}.open && !document.getElementById('reader-sync-take').hidden`));
+  await evalIn("document.getElementById('reader-sync-take').click()");
+  // The fixture has thirteen positions in ten chapters, so a fraction
+  // of 0.9 lands on the page that starts below it rather than on 0.9
+  // itself: what is checked is the trip, not an exact landing.
+  check('taking the other position goes there',
+    await wait(`document.querySelector('readium-view').lastLocation.fraction > 0.8 &&
+      document.querySelector('readium-view').lastLocation.fraction !== ${settled}`),
+    String(await position()));
+  // Answering in the dialog answers the panel too: the same position
+  // must not still be sitting there as an open question.
+  check('an answered position is not left open in the panel',
+    await evalIn("document.getElementById('reader-catchup').hidden"),
+    await evalIn("document.getElementById('reader-catchup').textContent"));
 }
 
 // svgGuard proves finding #1 of the streaming-reader review: a spine

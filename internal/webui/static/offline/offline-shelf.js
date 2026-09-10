@@ -11,17 +11,35 @@ import {
   notifyOfflineChange,
 } from "./assets/offline-storage.js";
 import { offlineSync } from "./assets/offline-sync.js";
+import { refreshRunner } from "./assets/pull-refresh.js";
+import { armPull, pullIndicator } from "./assets/pull-refresh-dom.js";
 
 const status = document.getElementById("offline-status");
 const books = document.getElementById("offline-books");
 let coordinators = [];
 let renderGeneration = 0;
+
+// Pulling the shelf down and pressing the button are the same errand:
+// send what this device owes, then draw what is actually saved here.
+// The runner is what keeps a second ask from starting a second send.
+const indicator = pullIndicator(document.getElementById("pull-indicator"));
+const runner = refreshRunner({
+  async work() {
+    await Promise.all(coordinators.map(sync => sync.trigger()));
+    await render();
+  },
+  onState: (state) => {
+    if (state === "refreshing") indicator.paint("refreshing");
+    else indicator.settle(state);
+  },
+});
 const retry = document.createElement("button");
 retry.type = "button";
 retry.className = "button secondary";
 retry.textContent = "Retry sync";
-retry.addEventListener("click", () => coordinators.forEach(sync => sync.trigger()));
+retry.addEventListener("click", () => runner.ask());
 status?.after(retry);
+armPull({ scroller: document.scrollingElement, indicator, runner });
 
 function message(text, error = false) {
   if (!status) return;
