@@ -259,15 +259,15 @@ BOOK=${BOOK_IDS[1]}
 READER=${BOOK_IDS[0]}
 
 # The reader unpacks its book in the browser, so it is photographed only
-# once the engine has a rendered chapter to show — in the dark theme,
-# which is a browser-local preference rather than something the server
-# knows, and clipped to the window, because a full-page capture resizes
-# the frame the book is in and gets a white rectangle. Auto-hiding is
-# switched off in the same breath: the bar steps aside after a couple of
-# idle seconds, and a photograph of the reader with no bar in it says
-# nothing about the reader. Everything else is ready when the page is.
+# once the engine has a rendered chapter to show, and clipped to the
+# window, because a full-page capture resizes the frame the book is in
+# and gets a white rectangle. Nothing sets a theme: the shot is of the
+# reader a new arrival opens, which is the light one. Auto-hiding is
+# switched off, though: the bar steps aside after a couple of idle
+# seconds, and a photograph of the reader with no bar in it says nothing
+# about the reader. Everything else is ready when the page is.
 WAIT=$'\n\n'"document.querySelector('readium-view')?.renderer?.getContents?.()[0]?.doc"$'\n\n'
-EVAL=$'\n\n'"(async () => { const r = document.querySelector('#reader-settings-form input[name=\"theme\"][value=\"dark\"]'); r.checked = true; r.dispatchEvent(new Event('input', { bubbles: true })); const a = document.querySelector('#reader-settings-form input[name=\"autohide\"]'); a.checked = false; a.dispatchEvent(new Event('input', { bubbles: true })); await document.querySelector('readium-view').goToFraction(0.3); return 'dark' })()"$'\n\n'
+EVAL=$'\n\n'"(async () => { const a = document.querySelector('#reader-settings-form input[name=\"autohide\"]'); a.checked = false; a.dispatchEvent(new Event('input', { bubbles: true })); await document.querySelector('readium-view').goToFraction(0.3); return 'ready' })()"$'\n\n'
 
 cd internal/webui
 SHOT_CHROME="$CHROME" \
