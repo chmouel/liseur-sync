@@ -10,6 +10,8 @@ import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
 import { agreedEdition, startCandidates as restoreCandidates } from "./reader-restore.js";
+import { placeOf, placeHere, placeLabel, placeSentence, relativeAge } from "./reader-place.js";
+import { decideBookSync } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import {
@@ -114,6 +116,8 @@ let syncExpired = false;
 const catchup = catchupState();
 const catchupPanel = document.getElementById("reader-catchup");
 const catchupText = document.getElementById("reader-catchup-text");
+const catchupDetail = document.getElementById("reader-catchup-detail");
+const catchupExcerpt = document.getElementById("reader-catchup-excerpt");
 const catchupAccept = document.getElementById("reader-catchup-accept");
 const catchupDismiss = document.getElementById("reader-catchup-dismiss");
 // The book's positions, counted once when it opens. Null for a book
@@ -570,30 +574,67 @@ function hideCatchup() {
 const percent = (fraction) =>
   finite(fraction) ? `${Math.round(fraction * 100)}%` : null;
 
+// The detail line carries what the question above it leaves out: the
+// percentage behind a page number, and how long ago the other device
+// was there. The percentage is repeated on purpose — it is the one
+// number every client agrees on, and so the one to quote when two page
+// counts disagree.
+function placeDetail(place, name) {
+  if (!place) return null;
+  const said = [name, percent(place.fraction)].filter(Boolean).join(" ");
+  if (!said) return null;
+  const age = relativeAge(place.at);
+  return age ? `${said}, ${age}` : said;
+}
+
+// Another device's text, so it is set as a text node and nothing else.
+// It is capped by the presenter; the two-line clamp is in the CSS.
+function showExcerpt(element, place) {
+  if (!element) return;
+  const excerpt = place?.excerpt;
+  element.textContent = excerpt ? `“${excerpt}”` : "";
+  element.hidden = !excerpt;
+}
+
 function showCatchup() {
   const offer = catchup.offer();
   if (!offer || !catchupPanel) return;
-  const there = percent(offer.op.progression);
+  const seen = placeView();
+  const there = placeOf(offer.op, seen);
+  // The near side is the page actually on screen, which is the one the
+  // reader can check by looking down; the op is only what to fall back
+  // on before the book has painted.
+  const mine = placeHere(here, seen) || placeOf(offer.local, seen);
+  const thereLabel = placeLabel(there);
+  const mineLabel = placeLabel(mine);
   catchupPanel.classList.toggle("conflict", offer.kind === "conflict");
   if (offer.kind === "conflict") {
     // Both sides moved since they last agreed. Say what both of them
     // are; deciding which one the reader meant is not this program's
-    // business. The near side is the page actually on screen, which is
-    // the one the reader can check.
-    const local = percent(here?.fraction) || percent(offer.local?.progression);
-    catchupText.textContent = local && there
-      ? `This device is at ${local}; another device reached ${there}. Which one is where you are?`
+    // business.
+    catchupText.textContent = mineLabel && thereLabel
+      ? `This device is at ${mineLabel}; another device reached ${thereLabel}. Which one is where you are?`
       : "This device and another device are in different places in this book.";
-    catchupAccept.textContent = there ? `Go to ${there}` : "Go to the other position";
-    catchupDismiss.textContent = local ? `Stay at ${local}` : "Stay here";
+    catchupAccept.textContent = thereLabel ? `Go to ${thereLabel}` : "Go to the other position";
+    catchupDismiss.textContent = mineLabel ? `Stay at ${mineLabel}` : "Stay here";
+    setDetail([placeDetail(mine, "Here"), placeDetail(there, "Another device")]);
   } else {
-    catchupText.textContent = there
-      ? `Continue from ${there} read on another device?`
+    catchupText.textContent = thereLabel
+      ? `Continue from ${thereLabel} read on another device?`
       : "Continue from the position read on another device?";
     catchupAccept.textContent = "Continue there";
     catchupDismiss.textContent = "Stay here";
+    setDetail([placeDetail(there, "")]);
   }
+  showExcerpt(catchupExcerpt, there);
   catchupPanel.hidden = false;
+}
+
+function setDetail(parts) {
+  if (!catchupDetail) return;
+  const line = parts.filter(Boolean).join(" · ");
+  catchupDetail.textContent = line;
+  catchupDetail.hidden = !line;
 }
 
 const refreshes = topicRefresh({
@@ -664,35 +705,36 @@ async function withdrawQueuedPositions() {
 // durably, or the next open raises the same disagreement again.
 function dismissCatchup() {
   const shown = catchup.shown();
-  catchup.dismiss();
   hideCatchup();
-  rememberAnswer(shown?.op, false);
-  if (shown && view && here && finite(here.fraction)) {
+  keepHere(shown ? shown.op : null);
+}
+
+// Staying put is an answer about the other device's position, not a
+// refusal to answer: that position becomes the agreed baseline, and
+// this device's own page is sent so the other side learns it too.
+function keepHere(op) {
+  catchup.refuse(op);
+  rememberAnswer(op, false);
+  if (op && view && here && finite(here.fraction)) {
     readingDirty = true;
     void pushPosition();
   }
 }
 
-catchupDismiss?.addEventListener("click", dismissCatchup);
-catchupPanel?.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    dismissCatchup();
-  }
-});
-catchupAccept?.addEventListener("click", async () => {
-  const shown = catchup.shown();
-  const activity = activityGeneration;
-  hideCatchup();
-  if (!shown || !view) return;
+// An answer must not be given on top of a page this device has not
+// managed to send. A failed flush leaves the local page dirty on
+// purpose, so adopting the remote position now would lose it for good
+// the moment retryOp and readingDirty are cleared.
+async function settleBeforeAnswer() {
   cancelScheduledPush();
   await settlePosition();
-  // A failed flush leaves the local page dirty on purpose, so adopting
-  // the remote offer now would lose it for good the moment retryOp and
-  // readingDirty are cleared below.
-  if (readingDirty) return;
-  const stamp = snapshot();
-  const op = current(stamp) ? catchup.accept(shown) : null;
+  return !readingDirty;
+}
+
+// Going to the other device's position: the same journey whether the
+// panel offered it or the reader asked. The answer itself has already
+// been recorded by the caller; this is only the trip.
+async function goThere(op, stamp, activity) {
   if (!op || !view) return;
   retryOp = null;
   readingDirty = false;
@@ -724,6 +766,162 @@ catchupAccept?.addEventListener("click", async () => {
     // A restored page starts accounting only when the reader next interacts.
     rememberAnswer(op, true);
   }
+}
+
+catchupDismiss?.addEventListener("click", dismissCatchup);
+catchupPanel?.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    dismissCatchup();
+  }
+});
+catchupAccept?.addEventListener("click", async () => {
+  const shown = catchup.shown();
+  const activity = activityGeneration;
+  hideCatchup();
+  if (!shown || !view) return;
+  if (!await settleBeforeAnswer()) return;
+  const stamp = snapshot();
+  await goThere(current(stamp) ? catchup.accept(shown) : null, stamp, activity);
+});
+
+// ------------------------------------------- syncing on request
+
+// The passive panel above appears when this reader happens to notice a
+// disagreement. This is the other half (ADR-0040): the reader asks, and
+// gets an answer even when the answer is "you are in step" — that is
+// worth knowing, and a button that silently does nothing is not.
+const syncButton = document.getElementById("reader-sync");
+const syncDialog = document.getElementById("reader-sync-dialog");
+const syncSummary = document.getElementById("reader-sync-summary");
+const syncHereText = document.getElementById("reader-sync-here");
+const syncThereText = document.getElementById("reader-sync-there");
+const syncThereSide = document.getElementById("reader-sync-there-side");
+const syncExcerpt = document.getElementById("reader-sync-excerpt");
+const syncTake = document.getElementById("reader-sync-take");
+const syncKeep = document.getElementById("reader-sync-keep");
+const syncCancel = document.getElementById("reader-sync-cancel");
+// The position the open dialog is asking about. Cleared when it closes,
+// so an answer can never be given about a question no longer on screen.
+let syncOffered = null;
+let syncAsking = false;
+
+// This device's side, as an op, so the decision is made on the same two
+// shapes everywhere: the same fields, the same anchor comparison the
+// reconciler uses. It is never a position of zero when there is none —
+// that would invent a side.
+function positionHere() {
+  if (!view || !here || !finite(here.fraction)) return null;
+  return { progression: here.fraction, locator: locatorFor(here) || {} };
+}
+
+const SYNC_SUMMARIES = {
+  "no-remote": "No other device has a position for this book yet. This page is being sent, and will be there when one asks.",
+  "in-step": "Both devices are in the same place. Nothing to do.",
+  "no-local": "Only your other device has read this book so far.",
+  "owed": "The server has an older copy of this device's own position. Nothing else has read this book, so this page is simply on its way up.",
+  "unreadable": "The position from your other device cannot be opened in this copy of the book. Keeping this page sends it instead.",
+  "ahead": "Your other device has read further than this one.",
+  "behind": "This device has read further than your other one.",
+  "same-page": "The same page, but not the same spot. The passage below is what the other device had on screen.",
+};
+
+async function askBookSync() {
+  if (!syncDialog || syncAsking) return;
+  syncAsking = true;
+  syncButton?.setAttribute("aria-busy", "true");
+  try {
+    hideCatchup();
+    // The offline reader has no server to ask: its positions are
+    // queued on this device and go up when it is next online. Saying
+    // so is the whole of the answer, and nudging the queue is the
+    // whole of the action.
+    if (cfg.offline) {
+      offlineCoordinator?.trigger();
+      presentBookSync(null, "This copy is offline. Your reading is saved here and syncs when this device is next online.");
+      return;
+    }
+    const stamp = snapshot();
+    const result = ready && workID ? await lastPosition() : null;
+    if (!current(stamp)) return;
+    if (!result) {
+      presentBookSync(null, "This book is not syncing on this device.");
+      return;
+    }
+    if (!result.ok) {
+      presentBookSync(null, "The server could not be reached. Your reading is safe here and will be sent when it can.");
+      return;
+    }
+    catchup.observe(result.op);
+    presentBookSync(result.op, null);
+  } finally {
+    syncAsking = false;
+    syncButton?.removeAttribute("aria-busy");
+  }
+}
+
+// Nothing has been applied by the time this runs: the server's answer
+// has been read, and neither side has been changed.
+function presentBookSync(remote, note) {
+  const seen = placeView();
+  const mine = placeHere(here, seen);
+  const decision = note
+    ? { verdict: "note" }
+    : decideBookSync({
+      local: positionHere(),
+      remote,
+      baseline: catchup.agreed(),
+      localDirty: readingDirty,
+      resolvable: startCandidates(remote).length > 0,
+    });
+  const choosable = decision.verdict === "ask" || decision.verdict === "no-local";
+  // A second side is shown when there is one to compare with. This
+  // reader's own position sitting on the server is not another device,
+  // and putting it under that heading would say something untrue.
+  const other = choosable || decision.verdict === "unreadable" ? remote : null;
+  const there = placeOf(other, seen);
+  syncOffered = other;
+
+  syncSummary.textContent = note ||
+    SYNC_SUMMARIES[decision.relation || decision.verdict] || "";
+  syncHereText.textContent = placeLabel(mine) || "Not known yet";
+  syncThereText.textContent = placeSentence(there) || "";
+  syncThereSide.hidden = !other;
+  showExcerpt(syncExcerpt, there);
+
+  syncTake.hidden = !choosable;
+  syncKeep.hidden = !(choosable || decision.verdict === "unreadable");
+  // With nothing to choose between, the only button left is the way
+  // out, and calling it "Cancel" would suggest something was pending.
+  syncCancel.textContent = syncTake.hidden && syncKeep.hidden ? "Close" : "Cancel";
+  if (!syncDialog.open) syncDialog.showModal();
+}
+
+syncButton?.addEventListener("click", () => void askBookSync());
+syncCancel?.addEventListener("click", () => syncDialog.close());
+// Cancelling is a real answer — "not this way" — and changes nothing at
+// all, neither the page nor what the two sides have agreed on.
+syncDialog?.addEventListener("close", () => { syncOffered = null; });
+
+syncTake?.addEventListener("click", async () => {
+  const op = syncOffered;
+  const activity = activityGeneration;
+  syncDialog.close();
+  // The panel may be up behind the dialog, asking about this very
+  // position. Answering here answers it.
+  hideCatchup();
+  if (!op || !view) return;
+  if (!await settleBeforeAnswer()) return;
+  const stamp = snapshot();
+  if (!current(stamp)) return;
+  await goThere(catchup.adopt(op), stamp, activity);
+});
+
+syncKeep?.addEventListener("click", () => {
+  const op = syncOffered;
+  syncDialog.close();
+  hideCatchup();
+  keepHere(op);
 });
 
 // ------------------------------------------------------ annotations
@@ -1866,6 +2064,14 @@ function startCandidates(op) {
   return op ? restoreCandidates(op, restoreView()) : [];
 }
 
+// What the presenter needs to turn an op into a page a reader can
+// check: the same facts the restore ladder stands on, plus the position
+// table. Before the book has opened there is only the table, which is
+// enough for a percentage and honest about the rest.
+function placeView() {
+  return view ? { ...restoreView(), table: positions } : { table: positions };
+}
+
 // ------------------------------------------------------ appearance
 
 // Reader appearance, Komga-style: theme, font, size, spacing, layout.
@@ -2966,6 +3172,10 @@ function handleKeys(e) {
     return;
   }
   if (helpDialog && helpDialog.open) return;
+  // A modal dialog owns the keyboard while it is up: the platform
+  // handles Escape and focus, and a page turn behind it would move the
+  // book out from under the question being asked.
+  if (syncDialog && syncDialog.open) return;
   // Modified keys belong to the browser, and keys aimed at a form
   // field belong to the field.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -3004,6 +3214,11 @@ function handleKeys(e) {
       e.preventDefault();
       revealChrome();
       openGoto("percent");
+      break;
+    case "s":
+      e.preventDefault();
+      revealChrome();
+      void askBookSync();
       break;
     case "f":
       e.preventDefault();

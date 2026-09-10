@@ -107,6 +107,8 @@ See:
 
 The reader uses the same synchronization API as other clients, so reading state is shared with Liseur, KOReader, and other compatible clients.
 
+When another device has read further, the reader offers to continue there, naming both pages, how long ago the other device was there, and the passage it had on screen. The same comparison can be asked for at any time with the sync button in the reader bar (`s`), which shows both positions and offers to take the other one, keep this page, or cancel and change nothing. The library and the offline shelf refresh on a pull-down, or with their refresh button: pending reading is delivered first, then the page is redrawn. See [ADR-0040](docs/adr/0040-asking-rather-than-waiting-to-be-asked.md).
+
 EPUB content is unpacked and rendered without exposing publisher files through normal application routes. Scripts embedded in EPUBs are not executed.
 
 The reader design and security model are documented in [ADR-0007](docs/adr/0007-web-reader.md), including support for running the reader on a separate hostname.

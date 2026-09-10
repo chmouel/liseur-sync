@@ -1250,6 +1250,36 @@ button.linkish:hover, button.linkish:focus-visible {
   font-variant-numeric:tabular-nums}
 .reader-goto-unit{font-size:.85rem;opacity:.75;font-variant-numeric:tabular-nums;white-space:nowrap}
 .reader-goto-actions{margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end}
+/* The book's two positions, side by side, asked for rather than
+   offered (ADR-0040). Two columns where there is room and one where
+   there is not: the point of the dialog is that the reader compares
+   them, and a comparison that scrolls is not one. */
+.reader-sync-dialog{background:var(--surface);color:inherit;border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
+  width:min(32rem,calc(100vw - 2rem));font-size:.9rem}
+.reader-sync-dialog::backdrop{background:rgba(0,0,0,.55)}
+.reader-sync-dialog h2{margin:0 0 .7rem;font-size:1rem}
+.reader-sync-summary{margin:0 0 .9rem}
+.reader-sync-sides{display:flex;flex-wrap:wrap;gap:.9rem}
+.reader-sync-side{flex:1 1 12rem;min-width:0;padding:.6rem .7rem;
+  border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+.reader-sync-side[hidden]{display:none}
+.reader-sync-side h3{margin:0 0 .3rem;font-size:.75rem;text-transform:uppercase;
+  letter-spacing:.04em;opacity:.7}
+.reader-sync-place{margin:0;font-variant-numeric:tabular-nums}
+.reader-sync-actions{margin-top:1rem;display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end}
+.reader-sync-actions button[hidden]{display:none}
+/* The percentage behind a page number, and how long ago: quieter than
+   the question, because it is what settles the question rather than
+   what asks it. */
+.reader-catchup-detail{font-size:.85rem;opacity:.75;font-variant-numeric:tabular-nums}
+/* Another device's text, and possibly a great deal of it. Two lines is
+   enough to recognise a passage, and a partner sending a chapter must
+   not push the buttons off the screen. */
+.reader-catchup-excerpt{margin:0 0 .75rem;font-size:.85rem;font-style:italic;opacity:.8;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+  overflow:hidden}
+.reader-catchup-detail[hidden],.reader-catchup-excerpt[hidden]{display:none}
 .reader-toc{position:fixed;top:0;bottom:0;left:0;z-index:60;
   width:min(22rem,85vw);overflow-y:auto;padding:1rem 1.1rem;
   background:var(--surface);border-right:1px solid var(--line);
@@ -1581,3 +1611,40 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 /* Two questions can be open at once — a position on another device and a
    change that will not go. They stack rather than cover each other. */
 .reader-catchup:not([hidden]) ~ .reader-stuck { bottom: 13rem; }
+
+/* The pull indicator and the refresh button.
+
+   Both are the same command: deliver what this browser read offline,
+   then draw the shelf the server has now. The pill is fixed rather than
+   in the flow so that showing it never moves the page under a finger
+   that is mid-gesture, and it leaves `transform` alone — the gesture
+   writes into that as the finger moves. */
+.pullindicator {
+	position: fixed; z-index: 25;
+	top: calc(var(--topbar) + .75rem); left: 0; right: 0;
+	margin-inline: auto; width: max-content; max-width: 80vw;
+	display: flex; align-items: center; gap: .5rem;
+	padding: .4rem .85rem;
+	border: 1px solid var(--line); border-radius: 999px;
+	background: var(--surface); color: var(--ink-dim);
+	font-size: .78rem; box-shadow: var(--shadow);
+}
+.pullindicator[hidden] { display: none; }
+.pullindicator::before {
+	content: ""; flex: none; width: .8rem; height: .8rem;
+	border: 2px solid currentColor; border-right-color: transparent;
+	border-radius: 50%; opacity: .45;
+}
+.pullindicator.armed::before { opacity: 1; color: var(--primary); }
+.pullindicator[data-state="refreshing"]::before {
+	opacity: 1; animation: spin 600ms linear infinite;
+}
+.pullindicator[data-state="done"]::before { color: var(--ok); opacity: 1; }
+.pullindicator[data-state="failed"] { color: var(--danger); }
+
+.refreshbtn {
+	display: inline-flex; align-items: center; gap: .35rem;
+	cursor: pointer;
+}
+.refreshbtn[hidden] { display: none; }
+.refreshbtn .ui-icon { width: 1rem; height: 1rem; }
