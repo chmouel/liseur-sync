@@ -40,7 +40,11 @@ import { EPSILON, sameSpot, reconcileReadingState } from "./reader-reconcile.js"
 export function decideBookSync({
   local, remote, baseline = null, localDirty = false, resolvable = true,
 }) {
-  if (!remote) return { verdict: "no-remote" };
+  // Nothing on the server. What that means depends on whether this
+  // device has read anything: a page waiting to go up is a different
+  // answer from a book neither side has opened, and telling a reader
+  // their page is on its way when there is no page is a small lie.
+  if (!remote) return { verdict: local ? "no-remote" : "no-position" };
   if (local && sameSpot(local, remote)) return { verdict: "in-step" };
   const { decision } = reconcileReadingState({ local, remote, baseline, localDirty });
   // Nothing has moved away from what was agreed, whatever the two

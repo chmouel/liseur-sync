@@ -828,6 +828,7 @@ function sendMineNow() {
 
 const SYNC_SUMMARIES = {
   "no-remote": "No other device has a position for this book yet. This page is being sent, and will be there when one asks.",
+  "no-position": "Nothing has been read in this book yet, here or anywhere else. Your place will sync as soon as you have one.",
   "in-step": "Both devices are in the same place. Nothing to do.",
   "no-local": "Only your other device has read this book so far.",
   "owed": "The server has an older copy of this device's own position. Nothing else has read this book, so this page is simply on its way up.",
