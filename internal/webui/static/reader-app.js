@@ -209,19 +209,16 @@ async function answerStuck(act, discarding) {
 }
 
 // Discarding an annotation leaves a question the local store cannot
-// answer. A rejected *edit* is still the reader's rejected text, and
-// clearing its pending flag alone would present it as though it had
-// been saved. Only the server knows what the annotation really says, so
-// the book's annotations are re-read and both the store and the page
-// are set to what comes back: restored where the server has a version,
-// removed where it has none. Offline there is no one to ask, and the
-// installed app's next reconcile does the same job; there the local
-// store is authoritative in the meantime.
+// answer. A rejected *edit* is still the reader's rejected text, so the
+// discard leaves it marked unsaved, and only the server can say what
+// the annotation really holds. The book's annotations are re-read and
+// both the store and the page are set to what comes back: restored
+// where the server has a version, removed where it has none.
 //
-// An online reader whose re-read fails is in neither position: it has
-// text the server refused and no way to learn what replaced it. Such an
-// annotation is marked unsaved rather than drawn as settled, and it is
-// asked about again after the next drain.
+// A reader who cannot reach the server keeps the unsaved marking and
+// the page follows the local store, which is honest about what is
+// known. The next drain asks again, because a drain only runs when
+// there is something to talk to.
 const unrestored = new Set();
 
 async function restoreDiscardedAnnotations(ids) {
@@ -239,9 +236,8 @@ async function restoreDiscardedAnnotations(ids) {
       if (!touched.includes(id)) unrestored.delete(id);
     }
     if (!touched.length) return;
-    const online = !cfg.offline && !!workID;
     let server = null;
-    if (online) {
+    if (workID) {
       const response = await api(
         "v1/works/" + encodeURIComponent(workID) + "/annotations",
       ).catch(() => null);
@@ -253,33 +249,24 @@ async function restoreDiscardedAnnotations(ids) {
     });
     const resolved = new Map();
     for (const id of touched) {
-      if (server) {
-        const fresh = server.find(value => value.id === id);
-        const annotation = fresh ? { ...fresh, pending: false } : null;
-        // The write refuses if a mutation arrived while the request was
-        // in the air, and only what was written may reach the page.
-        if (await restoreOfflineAnnotation({
-          ...offlineContext, bookID: cfg.bookID, id, annotation,
-        })) {
-          resolved.set(id, annotation);
-          unrestored.delete(id);
-        }
+      if (!server) {
+        // Nothing authoritative to write, so the store is only read: the
+        // page stops drawing a note the discard took and keeps the rest
+        // marked unsaved.
+        resolved.set(id, stored.find(value => value.id === id) || null);
+        unrestored.add(id);
         continue;
       }
-      const local = stored.find(value => value.id === id) || null;
-      if (!online) {
-        // Offline there is nothing authoritative to write, so the store
-        // is only read: the page stops drawing a note the discard took,
-        // and the next reconcile settles the rest.
-        resolved.set(id, local);
-        continue;
-      }
-      unrestored.add(id);
-      if (!local) { resolved.set(id, null); continue; }
-      const provisional = { ...local, pending: true };
+      const fresh = server.find(value => value.id === id);
+      const annotation = fresh ? { ...fresh, pending: false } : null;
+      // The write refuses if a mutation arrived while the request was in
+      // the air, and only what was written may reach the page.
       if (await restoreOfflineAnnotation({
-        ...offlineContext, bookID: cfg.bookID, id, annotation: provisional,
-      })) resolved.set(id, provisional);
+        ...offlineContext, bookID: cfg.bookID, id, annotation,
+      })) {
+        resolved.set(id, annotation);
+        unrestored.delete(id);
+      }
     }
     const drawn = annotationDrawing.annotations();
     const next = drawn
@@ -297,14 +284,16 @@ async function restoreDiscardedAnnotations(ids) {
 }
 
 // Two drains can overlap, and the button can fire during one, so the
-// re-ask runs one at a time like the conflict resolver above it.
-let restoring = null;
+// re-ask runs one at a time like the conflict resolver above it. A
+// drain is also the right moment for it: it only runs when there is a
+// server to ask.
+let restoringAnnotations = null;
 function retryUnrestoredAnnotations() {
-  if (restoring) return restoring;
-  if (cfg.offline || !unrestored.size) return Promise.resolve();
-  restoring = restoreDiscardedAnnotations([...unrestored])
-    .finally(() => { restoring = null; });
-  return restoring;
+  if (restoringAnnotations) return restoringAnnotations;
+  if (!unrestored.size) return Promise.resolve();
+  restoringAnnotations = restoreDiscardedAnnotations([...unrestored])
+    .finally(() => { restoringAnnotations = null; });
+  return restoringAnnotations;
 }
 
 stuckRetry?.addEventListener("click", () => { answerStuck(retryOfflineOutbox, false); });
@@ -393,6 +382,7 @@ function prepareOfflineSync() {
         showCatchup();
       }
       await resolveAnnotationConflicts();
+      await retryUnrestoredAnnotations();
     },
     onStatus: message => say(message, !!message),
     onStuck: showStuck,

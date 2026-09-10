@@ -305,6 +305,18 @@ export async function saveReadingPosition({
             // Wall clocks can move backwards and two page turns can share a
             // millisecond. Transaction order, not UUID order, decides the head.
             const createdAt = records.reduce((latest, row) => Math.max(latest, (row.createdAt || 0) + 1), Date.now());
+            // A newer page retires an older one this device could not
+            // deliver. The queue's promise is the newest position, not
+            // every position, and a refused page the reader revived
+            // after this one went out would land with a later `seq` and
+            // become the server's head — sending the reader backwards.
+            const work = op.work_id || bookID;
+            for (const row of records) {
+              if (row.kind !== "position" || row.state === "pending") continue;
+              if (row.deviceID !== device) continue;
+              if ((row.payload?.work_id || row.bookID) !== work) continue;
+              outbox.delete(row.key);
+            }
             if (current) {
               current.localPosition = op;
               snapshots.put(current);
@@ -673,10 +685,11 @@ export async function removeOfflineOutbox({
         // mutation the local copy came from: if a newer one has replaced
         // it, this record is already superseded and owns nothing. A copy
         // the server never acknowledged existed only as the change being
-        // discarded, so it goes with it. One the server does know goes
-        // back to being clean at the revision it acknowledged, which
-        // stops it counting as a local mutation — and the next reconcile
-        // then replaces it with what the server actually holds.
+        // discarded, so it goes with it. One the server does know keeps
+        // the text of the mutation that was refused, so it stays marked
+        // unsaved — drawing it as clean would present the reader's
+        // rejected words as saved. Only the server's own version, read
+        // back by the page or by the next reconcile, settles it.
         if (record && kind === "annotation" && !settle && record.annotationID) {
           const annotations = tx.objectStore(ANNOTATIONS);
           const localKey = keyForAnnotation({
@@ -688,7 +701,7 @@ export async function removeOfflineOutbox({
             if (!local || local.intent !== record.id) return;
             owned = record.annotationID;
             if (!local.annotation?.rev) { annotations.delete(localKey); return; }
-            local.annotation = { ...local.annotation, pending: false, deleted: false };
+            local.annotation = { ...local.annotation, pending: true, deleted: false };
             local.intent = null;
             local.updatedAt = Date.now();
             annotations.put(local);
