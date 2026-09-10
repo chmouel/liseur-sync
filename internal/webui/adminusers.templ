@@ -419,8 +419,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 }
 
 // adminPasswordField is the re-verification every high-impact action
-// carries. A seven-day session cookie is not a good enough
-// authorization for taking over somebody else's account.
+// carries. A session cookie that renews itself for as long as somebody
+// keeps reading is not a good enough authorization for taking over
+// somebody else's account.
 templ adminPasswordField(csrf string) {
 	<label>
 		Confirm with your password

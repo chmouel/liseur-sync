@@ -62,6 +62,7 @@ loose ends that must come before any of it, are in
 | [0035](0035-naming-a-shelf-is-one-request.md) | Naming a shelf is one request | Client | Accepted; implemented | `POST /v1/books/resolve` for up to 500 books, one transaction and one answer each, `200` with per-item `not_found`/`ambiguous`; same `library-read` + `sync` pair; amends [0003](0003-catalog-work-identity.md) |
 | [0036](0036-one-bounded-offline-web-reader.md) | One bounded offline web reader | Later | Accepted; implemented pending iOS acceptance | Same-origin multi-book PWA under `/ui/offline/`, private IndexedDB publication/state storage, foreground-only reconnect, and explicit annotation conflict handling; separate reader origins leave it disabled |
 | [0037](0037-durable-online-reading.md) | Durable online reading, and a disagreement the reader answers | Now | Accepted; implemented | The online reader queues positions and sittings to the same IndexedDB outbox, drains through one shared lock and sender, keeps an agreed baseline per book and device, and presents a two-sided move as a conflict; same-origin deployments only; amends [0007](0007-web-reader.md), [0030](0030-web-reader-reading-sessions.md), [0036](0036-one-bounded-offline-web-reader.md) |
+| [0038](0038-a-web-session-that-renews-itself.md) | A web session that renews itself | Now | Accepted; implemented | Browser sessions last `web_session_ttl_days` (default 180) of disuse and slide forward on use, throttled to one write a day, never reviving a revoked or lapsed session; no "keep me signed in" checkbox |
 
 ## Convention
 

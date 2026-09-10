@@ -33,6 +33,7 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	for from, to := range map[string]string{
 		"insecure_http = false":                                "insecure_http = true",
 		"pairing_code_ttl_min = 15":                            "pairing_code_ttl_min = 42",
+		"web_session_ttl_days = 180":                           "web_session_ttl_days = 30",
 		`# trusted_proxies = ["10.0.0.0/8", "192.168.0.0/16"]`: `trusted_proxies = ["10.0.0.0/8"]`,
 		`# cors_allowed_origins = ["https://app.example.com"]`: `cors_allowed_origins = ["https://app.example.com"]`,
 		`# reader_origin = "https://read.example.com"`:         `reader_origin = "https://read.example.com"`,
@@ -60,6 +61,9 @@ func TestShippedExampleParsesIntoTheSettingsItNames(t *testing.T) {
 	}
 	if cfg.ReaderOrigin != "https://read.example.com" {
 		t.Fatalf("reader_origin: got %q", cfg.ReaderOrigin)
+	}
+	if cfg.WebSessionTTLDays != 30 {
+		t.Fatalf("web_session_ttl_days: got %d", cfg.WebSessionTTLDays)
 	}
 }
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestDefaultEnablesCompaction(t *testing.T) {
@@ -62,5 +63,28 @@ func TestCacheDirEnvironmentOverride(t *testing.T) {
 func TestFolderRootsAreUnsetByDefault(t *testing.T) {
 	if roots := Default().Content.FolderRoots; len(roots) != 0 {
 		t.Fatalf("default folder roots: %v", roots)
+	}
+}
+
+// TestWebSessionLifetimeDefaultsAndValidation pins the browser session
+// window. It is a security default, so it is stated in a test rather
+// than only in the struct.
+func TestWebSessionLifetimeDefaultsAndValidation(t *testing.T) {
+	c := Default()
+	c.Content.CacheDir = "c"
+	if c.WebSessionTTLDays != 180 {
+		t.Fatalf("default: got %d days", c.WebSessionTTLDays)
+	}
+	if got := c.WebSessionTTL(); got != 180*24*time.Hour {
+		t.Fatalf("duration: got %v", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("default config invalid: %v", err)
+	}
+	for _, days := range []int{0, -1, 3651} {
+		c.WebSessionTTLDays = days
+		if err := c.Validate(); err == nil {
+			t.Fatalf("%d days accepted", days)
+		}
 	}
 }

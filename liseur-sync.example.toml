@@ -32,6 +32,12 @@ insecure_http = false
 
 pairing_code_ttl_min = 15
 
+# How long a signed-in browser stays signed in without being used. The
+# window slides: every page view pushes it back, so a browser in regular
+# use is never signed out, and one left alone lapses after this many
+# days. Lowering it does not shorten sessions already issued.
+web_session_ttl_days = 180
+
 [database]
 driver = "sqlite"                  # sqlite | postgres
 url = "liseur-sync.db"             # sqlite path, or postgres DSN
