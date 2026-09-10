@@ -35,14 +35,16 @@ async function run(pending, responses, extra = {}) {
 }
 
 test('a named refusal removes only the bad sitting and retries its peers', async () => {
-  const pending = [item('a'), item('bad'), item('b')];
-  const result = await run(pending, [
-    reply(409, { code: 'id_reused', item_index: 1, session_id: 'bad' }),
-    reply(200, { accepted: 2 }),
-  ]);
-  assert.deepEqual(result.requests[1].sessions.map((v) => v.session_id), ['a', 'b']);
-  assert.equal(result.failures.length, 1);
-  assert.deepEqual(pending, []);
+  for (const [status, code] of [[409, 'id_reused'], [400, 'unknown_work']]) {
+    const pending = [item('a'), item('bad'), item('b')];
+    const result = await run(pending, [
+      reply(status, { code, item_index: 1, session_id: 'bad' }),
+      reply(200, { accepted: 2 }),
+    ]);
+    assert.deepEqual(result.requests[1].sessions.map((v) => v.session_id), ['a', 'b'], code);
+    assert.equal(result.failures.length, 1, code);
+    assert.deepEqual(pending, [], code);
+  }
 });
 
 test('an item index takes precedence over an ambiguous id', async () => {
@@ -81,7 +83,7 @@ test('a singleton still refused for size remains queued', async () => {
 
 test('retryable and unknown refusals leave even named items queued', async () => {
   for (const [status, code] of [[429, 'limited'], [503, 'unavailable'],
-    [400, 'new_refusal'], [400, 'unknown_work'], [403, 'forbidden'], [409, undefined]]) {
+    [400, 'new_refusal'], [403, 'forbidden'], [409, undefined]]) {
     const pending = [item('a'), item('b')];
     await run(pending, [reply(status, { code, item_index: 0, session_id: 'a' })]);
     assert.equal(pending.length, 2, `${status} ${code}`);
