@@ -822,6 +822,14 @@ function positionHere() {
 // queued is delivered rather than written a second time.
 function sendMineNow() {
   if (!view || !here || !finite(here.fraction) || restoring) return;
+  // A page already written to the queue wants delivering, not writing
+  // again. The durable path drops the retry key the moment it has
+  // saved, so a second push here would mint a second op id for the
+  // same spot and file the reader's place twice for pressing twice.
+  if (!readingDirty && catchup.pending()) {
+    readingCoordinator?.trigger();
+    return;
+  }
   readingDirty = true;
   void push().catch(() => {}).then(() => { readingCoordinator?.trigger(); });
 }
