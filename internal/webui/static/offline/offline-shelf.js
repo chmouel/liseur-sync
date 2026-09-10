@@ -167,7 +167,10 @@ async function render() {
       books.append(item);
     }
   } catch (error) {
-    message(error.message || "Offline storage is unavailable.", true);
+    // The runner reads this: a shelf that could not be drawn is not a
+    // refresh that succeeded, whatever the coordinators managed.
+    trouble = error.message || "Offline storage is unavailable.";
+    message(trouble, true);
   }
 }
 

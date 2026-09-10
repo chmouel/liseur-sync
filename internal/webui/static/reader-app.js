@@ -706,7 +706,7 @@ async function withdrawQueuedPositions() {
 async function dismissCatchup() {
   const shown = catchup.shown();
   hideCatchup();
-  if (!await keepHere(shown ? shown.op : null)) showCatchup();
+  if (await keepHere(shown ? shown.op : null) === "unsent") showCatchup();
 }
 
 // Staying put is an answer about the other device's position, not a
@@ -718,20 +718,28 @@ async function dismissCatchup() {
 // this device never managed to record would survive the reload that
 // the page did not: the other position would count as answered and
 // this one would be gone. So nothing is settled until the local page
-// is safely in the queue, and the caller is told to put the question
-// back up.
-async function keepHere(op) {
+// is safely in the queue.
+//
+// Sending takes as long as it takes, and the question stays usable
+// while it does, so `still` is asked once more at the end: a reader who
+// withdrew the question in the meantime gets no answer written on their
+// behalf. Three outcomes — "kept", the answer stands; "unsent", the
+// page would not go and nothing was settled, so put the question back;
+// "withdrawn", the page went but the question is gone and whatever is
+// on screen now belongs to somebody else.
+async function keepHere(op, still) {
   if (op && view && here && finite(here.fraction)) {
     readingDirty = true;
     // Through the single-flight, never straight at `pushPosition`: an
     // earlier page may still be uploading, and two positions in the air
     // at once can land in the wrong order and make the older one this
     // device's head — the server walked backwards.
-    if (!await settleBeforeAnswer()) return false;
+    if (!await settleBeforeAnswer()) return "unsent";
   }
+  if (still && !still()) return "withdrawn";
   catchup.refuse(op);
   rememberAnswer(op, false);
-  return true;
+  return "kept";
 }
 
 // An answer must not be given on top of a page this device has not
@@ -981,6 +989,11 @@ syncTake?.addEventListener("click", async () => {
       "This page could not be sent, so the other position was not taken. Try again in a moment.";
     return;
   }
+  // Sending can take a moment, and Cancel and Escape both keep working
+  // while it does. A reader who took the question away in the meantime
+  // has answered it: the page went up, which is never wrong, and
+  // nothing else here happens.
+  if (syncOffered !== op) return;
   syncCovered = false;
   syncDialog.close();
   // The panel may be up behind the dialog, asking about this very
@@ -994,9 +1007,11 @@ syncTake?.addEventListener("click", async () => {
 syncKeep?.addEventListener("click", async () => {
   const op = syncOffered;
   // Same rule as Take: an answer is only given once the page it is
-  // given from has been recorded. If it will not go, nothing is
-  // settled and the question stays where it is.
-  if (!await keepHere(op)) {
+  // given from has been recorded, and only if the question is still
+  // being asked by the time it has been.
+  const answer = await keepHere(op, () => syncOffered === op);
+  if (answer === "withdrawn" || syncOffered !== op) return;
+  if (answer === "unsent") {
     syncSummary.textContent =
       "This page could not be sent, so nothing was settled. Try again in a moment.";
     return;
