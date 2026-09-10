@@ -191,7 +191,7 @@ func testExtendAuthSession(t *testing.T, open OpenFunc) {
 	mk("lapsed", now.Add(-time.Hour))
 
 	want := now.Add(180 * 24 * time.Hour)
-	if err := s.ExtendAuthSession(ctx, u.ID, "live", want, now); err != nil {
+	if err := s.ExtendAuthSession(ctx, u.ID, "live", want, want, now); err != nil {
 		t.Fatal(err)
 	}
 	a, err := s.AuthSessionByHash(ctx, "sha-live")
@@ -200,24 +200,29 @@ func testExtendAuthSession(t *testing.T, open OpenFunc) {
 	}
 	// Backwards is a no-op, so lowering the configured window cannot
 	// silently shorten a session that was issued under a longer one.
-	if err := s.ExtendAuthSession(ctx, u.ID, "live", now.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
+	if err := s.ExtendAuthSession(ctx, u.ID, "live", now.Add(time.Hour), now.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("backwards: want ErrNotFound, got %v", err)
 	}
 	if a, err := s.AuthSessionByHash(ctx, "sha-live"); err != nil || !a.ExpiresAt.Equal(want) {
 		t.Fatalf("expiry moved backwards: %v %v", a.ExpiresAt, err)
+	}
+	// The throttle is part of the conditional update, so concurrent
+	// requests that observed the old expiry cannot all extend it.
+	if err := s.ExtendAuthSession(ctx, u.ID, "live", want.Add(24*time.Hour), want, now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("throttled renewal: want ErrNotFound, got %v", err)
 	}
 
 	if err := s.RevokeAuthSession(ctx, u.ID, "revoked"); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"revoked", "lapsed", "nosuch"} {
-		if err := s.ExtendAuthSession(ctx, u.ID, id, want, now); !errors.Is(err, store.ErrNotFound) {
+		if err := s.ExtendAuthSession(ctx, u.ID, id, want, want, now); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("%s: want ErrNotFound, got %v", id, err)
 		}
 	}
 	// Another account cannot extend a session it does not own.
 	other := MkUser(t, s, "sliding-other")
-	if err := s.ExtendAuthSession(ctx, other.ID, "live", want.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
+	if err := s.ExtendAuthSession(ctx, other.ID, "live", want.Add(time.Hour), want.Add(time.Hour), now); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-account: want ErrNotFound, got %v", err)
 	}
 }
