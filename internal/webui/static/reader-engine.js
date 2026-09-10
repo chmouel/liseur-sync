@@ -1,6 +1,7 @@
 import { EpubNavigator, Publication, Manifest, Locator, setScriptNonce } from "./vendor/readium/readium.js";
 import * as CFI from "./vendor/foliate/epubcfi.js";
 import { ReaderPublication, publicationHref, imageSpineTypes } from "./reader-publication.js";
+import { captureAnchor } from "./reader-anchor.js";
 
 const archiveProperty = "https://readium.org/webpub-manifest/properties#archive";
 const colors = { yellow: "#ffd54f", green: "#81c784", blue: "#64b5f6", pink: "#f06292", purple: "#ba68c8", orange: "#ffb74d" };
@@ -30,6 +31,7 @@ export class ReaderEngine extends HTMLElement {
     this.styleText = "";
     this.preferences = {};
     this.history = { pushState() {} };
+    this.editionSHA = "";
   }
 
   connectedCallback() {
@@ -47,6 +49,15 @@ export class ReaderEngine extends HTMLElement {
     const packageLink = raw.links.find(link => relations(link).includes("package"));
     if (!positionLink || !packageLink) throw Error("The publication has no positions or package document.");
     const prefix = packageLink.href.slice(0, packageLink.href.indexOf("/resources/") + 11);
+    // The publication path names the exact bytes being read:
+    // /v1/books/<id>/publication/<sha256>/resources/... . That digest is
+    // the server's own edition identifier, the same value /resolve
+    // reports as a "sha256" identifier, so reading it off the URL of the
+    // publication actually opened costs nothing and cannot describe a
+    // different file. A cached offline snapshot is stored under the same
+    // shape, so it answers identically. Owned here rather than derived
+    // at push time: only this method knows which copy was opened.
+    this.editionSHA = /\/publication\/([0-9a-f]{64})\/resources\//.exec(prefix)?.[1] || "";
     const packageHref = packageLink.href.slice(prefix.length);
     const positionResponse = await request(positionLink.href.replace(/^\//, ""));
     if (!positionResponse.ok) throw Error("Publication positions could not be loaded.");
@@ -90,6 +101,23 @@ export class ReaderEngine extends HTMLElement {
     const nonce = document.querySelector('script[type="module"][nonce]')?.nonce;
     if (!nonce) throw Error("The reader's script policy is missing.");
     setScriptNonce(nonce);
+  }
+
+  // visibleAnchor describes the first visible word of the page on
+  // screen, in the shape the Android app writes and reads. Taken from
+  // the frame actually showing, and only when exactly one is: mid-turn
+  // there can be two, and describing the wrong one is worse than
+  // describing none.
+  visibleAnchor() {
+    const frames = [...this.renderer.querySelectorAll("iframe")].filter(
+      frame => frame.style.visibility !== "hidden" && frame.contentDocument?.body,
+    );
+    if (frames.length !== 1) return null;
+    try {
+      return captureAnchor(frames[0].contentDocument, frames[0].contentWindow);
+    } catch (err) {
+      return null;
+    }
   }
 
   contents() {
@@ -420,6 +448,6 @@ export class ReaderEngine extends HTMLElement {
     }
   }
 
-  async destroy() { this.resources?.close(); await this.navigator?.destroy(); }
+  async destroy() { this.editionSHA = ""; this.resources?.close(); await this.navigator?.destroy(); }
 }
 customElements.define("readium-view", ReaderEngine);
