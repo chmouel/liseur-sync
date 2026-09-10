@@ -181,6 +181,12 @@ export function catchupState() {
     agreed() {
       return baseline ? structuredClone(baseline) : null;
     },
+    // Whether this device's own position is still owed to the server.
+    // It is the durable answer, not a timer: a page written to the
+    // queue and not yet delivered still counts as this device moving.
+    pending() {
+      return localDirty;
+    },
     observe(op) {
       remote = op ? structuredClone(op) : null;
       evaluate();

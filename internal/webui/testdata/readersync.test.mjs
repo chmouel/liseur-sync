@@ -306,6 +306,18 @@ test("the agreed baseline can be read back", () => {
   assert.equal(s.agreed().op_id, "taken");
 });
 
+// A page written to the durable queue clears the in-memory dirty flag
+// long before anyone delivers it, so whoever asks whether this device
+// owes the server a position has to ask the queue.
+test("a page still queued counts as owed", () => {
+  const s = state();
+  assert.equal(s.pending(), false);
+  s.local(op("written"));
+  assert.equal(s.pending(), true);
+  s.settled(op("written"));
+  assert.equal(s.pending(), false, "an acknowledgement is the end of owing it");
+});
+
 test("a book with nothing agreed yet says so rather than inventing one", () => {
   const s = catchupState();
   s.bind("account", "work", "browser");
