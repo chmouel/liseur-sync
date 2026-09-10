@@ -10,22 +10,22 @@
 
 :root {
 	color-scheme: light;
-	--bg: #f6f8f6;
+	--bg: #f8f7fb;
 	--surface: #fff;
-	--surface-2: #f0f4f1;
-	--surface-3: #e4ece6;
-	--line: #dce5df;
-	--line-soft: #edf1ed;
-	--ink: #17342f;
-	--ink-dim: #50635b;
-	--muted: #627168;
-	--primary: #246452;
-	--primary-dim: #1b4e40;
+	--surface-2: #f3f1f8;
+	--surface-3: #e9e4f3;
+	--line: #e2ddec;
+	--line-soft: #efecf5;
+	--ink: #221d2e;
+	--ink-dim: #574e68;
+	--muted: #6b6379;
+	--primary: #7c4dbe;
+	--primary-dim: #63399e;
 	--on-primary: #fff;
 	--danger: #b53c3c;
 	--ok: #2c7658;
 	--warn: #926727;
-	--c1: #e3eee7; --c2: #b5d7c4; --c3: #77b699; --c4: #34765c;
+	--c1: #eee6f9; --c2: #d3bdee; --c3: #a986dc; --c4: #7c4dbe;
 	--rail: 16rem;
 	--topbar: 4.5rem;
 	--gap: 1.5rem;
@@ -33,30 +33,30 @@
 	--radius-sm: .55rem;
 	--radius-md: var(--radius);
 	--surface-1: var(--surface);
-	--shadow: 0 8px 30px rgb(23 52 47 / .07);
-	--shadow-sm: 0 2px 8px rgb(23 52 47 / .04);
+	--shadow: 0 8px 30px rgb(34 29 46 / .07);
+	--shadow-sm: 0 2px 8px rgb(34 29 46 / .04);
 	--cover-ratio: 2 / 3;
 	--card-min: 10.5rem;
 }
 
 [data-theme="dark"], .reader-body[data-reader-theme="dark"], .reader-body[data-reader-theme="black"] {
 	color-scheme: dark;
-	--bg: #101b1d;
-	--surface: #172529;
-	--surface-2: #203136;
-	--surface-3: #2b4145;
-	--line: #34494b;
-	--line-soft: #25383a;
-	--ink: #e9f0e9;
-	--ink-dim: #b3c6bf;
-	--muted: #91a9a0;
-	--primary: #9edec9;
-	--primary-dim: #b9eedc;
-	--on-primary: #102631;
+	--bg: #101017;
+	--surface: #16161e;
+	--surface-2: #1f1e2a;
+	--surface-3: #2b2939;
+	--line: #37344a;
+	--line-soft: #262433;
+	--ink: #eae7f2;
+	--ink-dim: #bcb6cc;
+	--muted: #9891ab;
+	--primary: #c4a7e7;
+	--primary-dim: #d7c2f2;
+	--on-primary: #1d1526;
 	--danger: #f28c8c;
 	--ok: #86ceab;
 	--warn: #e1bb78;
-	--c1: #233f37; --c2: #326451; --c3: #529e7c; --c4: #9edec9;
+	--c1: #2a2340; --c2: #453a68; --c3: #6f5aa0; --c4: #c4a7e7;
 	--shadow: 0 8px 30px rgb(0 0 0 / .2);
 	--shadow-sm: 0 2px 8px rgb(0 0 0 / .15);
 }
@@ -109,22 +109,22 @@
 @media (prefers-color-scheme: dark) {
 	[data-theme="system"] {
 		color-scheme: dark;
-		--bg: #101b1d;
-		--surface: #172529;
-		--surface-2: #203136;
-		--surface-3: #2b4145;
-		--line: #34494b;
-		--line-soft: #25383a;
-		--ink: #e9f0e9;
-		--ink-dim: #b3c6bf;
-		--muted: #91a9a0;
-		--primary: #9edec9;
-		--primary-dim: #b9eedc;
-		--on-primary: #102631;
+		--bg: #101017;
+		--surface: #16161e;
+		--surface-2: #1f1e2a;
+		--surface-3: #2b2939;
+		--line: #37344a;
+		--line-soft: #262433;
+		--ink: #eae7f2;
+		--ink-dim: #bcb6cc;
+		--muted: #9891ab;
+		--primary: #c4a7e7;
+		--primary-dim: #d7c2f2;
+		--on-primary: #1d1526;
 		--danger: #f28c8c;
 		--ok: #86ceab;
 		--warn: #e1bb78;
-		--c1: #233f37; --c2: #326451; --c3: #529e7c; --c4: #9edec9;
+		--c1: #2a2340; --c2: #453a68; --c3: #6f5aa0; --c4: #c4a7e7;
 		--shadow: 0 8px 30px rgb(0 0 0 / .2);
 		--shadow-sm: 0 2px 8px rgb(0 0 0 / .15);
 	}
@@ -250,7 +250,7 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 main { grid-area: main; padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) 3rem; min-width: 0; }
 .page { max-width: 78rem; margin: 0 auto; }
 .page-intro { color: var(--muted); margin: .65rem 0 0; font-size: .9rem; }
-.foot { color: var(--muted); font-size: .7rem; text-align: center; padding: 2rem 0 0; letter-spacing: .025em; }
+.foot { padding: 2.5rem 0 0; }
 
 /* The drawer. A checkbox rather than a script, so navigation on a phone
    does not depend on JavaScript any more than the rest of this UI does. */
@@ -361,6 +361,7 @@ details.advanced[open] > summary::before { content: "−"; }
 .folder-form { max-width: 42rem; }
 .folder-form .folder-roots { margin: .2rem 0 .8rem; }
 .folder-form .folder-roots code { overflow-wrap: anywhere; }
+.folder-form .folder-hint { margin: -.35rem 0 0; font-size: .78rem; }
 .folder-form .form-actions { margin-top: .9rem; }
 .folder-dialog {
 	display: none;
@@ -618,22 +619,22 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 .auth-story {
 	position: relative; isolation: isolate; overflow: hidden;
 	display: flex; flex-direction: column; align-items: flex-start;
-	padding: 2.75rem; color: #edf4e9;
-	background: radial-gradient(ellipse at 0 0, #294951, transparent 75%), #102631;
+	padding: 2.75rem; color: #f1edf7;
+	background: radial-gradient(ellipse at 0 0, #3d2c5c, transparent 75%), #1d1526;
 }
 .auth-story::after {
 	content: ""; position: absolute; z-index: -1;
 	width: 34rem; height: 34rem; right: -22rem; bottom: -20rem;
-	border: 1px solid #a2e7cf24; border-radius: 50%;
-	box-shadow: 0 0 0 3rem #a2e7cf05, 0 0 0 6rem #a2e7cf04;
+	border: 1px solid #c4a7e724; border-radius: 50%;
+	box-shadow: 0 0 0 3rem #c4a7e705, 0 0 0 6rem #c4a7e704;
 }
 .auth-brand { margin: 0 0 2.5rem; font: 1.7rem Georgia, serif; letter-spacing: .02em; }
-.auth-brand span { margin-left: .4rem; color: #a4c0bf; font: 500 .7rem ui-sans-serif, system-ui, sans-serif; letter-spacing: .18em; }
+.auth-brand span { margin-left: .4rem; color: #b9aecd; font: 500 .7rem ui-sans-serif, system-ui, sans-serif; letter-spacing: .18em; }
 .auth-icon { display: block; width: 7rem; height: 7rem; margin-bottom: 1.8rem; }
 .auth-headline { margin: 0 0 1.3rem; font: 400 clamp(2.4rem, 4vw, 3.15rem)/1.1 Georgia, serif; letter-spacing: -.035em; }
-.auth-headline em { color: #a2e7cf; font-weight: 400; }
-.auth-story-copy { max-width: 25ch; margin: 0 0 2.5rem; color: #b0c6c7; font-size: .95rem; line-height: 1.7; }
-.auth-story-foot { margin: auto 0 0; padding-top: 1rem; font-size: .72rem; letter-spacing: .035em; color: #b0c6c7; }
+.auth-headline em { color: #c4a7e7; font-weight: 400; }
+.auth-story-copy { max-width: 25ch; margin: 0 0 2.5rem; color: #c2b8d4; font-size: .95rem; line-height: 1.7; }
+.auth-story-foot { margin: auto 0 0; padding-top: 1rem; font-size: .72rem; letter-spacing: .035em; color: #c2b8d4; }
 .auth-panel { padding: 3.75rem 3rem; align-self: center; min-width: 0; }
 .auth-eyebrow { margin: 0 0 .85rem; color: var(--ink-dim); font-size: .68rem; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; }
 .auth-panel h1 { margin: 0 0 .75rem; max-width: 14ch; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 2rem; line-height: 1.18; letter-spacing: -.045em; font-weight: 650; }
@@ -647,18 +648,39 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 	transition: border-color .15s, box-shadow .15s;
 }
 .auth-form input:hover { border-color: var(--muted); }
-.auth-form input:focus-visible { border-color: #70bba4; outline: 2px solid #70bba480; outline-offset: 2px; }
+.auth-form input:focus-visible { border-color: #9d7fd0; outline: 2px solid #9d7fd080; outline-offset: 2px; }
 .auth-hint { font-size: .73rem; font-weight: 400; color: var(--ink-dim); }
 .auth-form .auth-submit {
 	justify-content: space-between; width: 100%; min-height: 3.1rem; margin-top: .4rem;
-	padding: .8rem 1rem; border: 1px solid #a2e7cf; border-radius: .6rem;
-	background: #a2e7cf; color: #102631; font-size: .87rem; font-weight: 650;
+	padding: .8rem 1rem; border: 1px solid #c4a7e7; border-radius: .6rem;
+	background: #c4a7e7; color: #1d1526; font-size: .87rem; font-weight: 650;
 	transition: background .15s;
 }
-.auth-form .auth-submit:hover { background: #bdf3df; }
+.auth-form .auth-submit:hover { background: #d7c2f2; }
 .auth-submit span { font-size: 1.25rem; line-height: 1; }
 .auth-note { margin: 1.4rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--line-soft); color: var(--ink-dim); font-size: .75rem; line-height: 1.7; }
-.auth-footer { margin: 1.5rem 0 0; text-align: center; font-size: .72rem; color: var(--ink-dim); letter-spacing: .025em; }
+
+/* The optional folder half of the first-run form (#53). It is set apart
+ * from the account fields rather than listed with them, so that "you can
+ * leave this" is legible before anything is typed. */
+.auth-folder { margin: .4rem 0 0; padding: 1.1rem 1.1rem 1.2rem; display: grid; gap: .9rem; border-radius: .7rem; border-color: var(--line-soft); background: var(--surface-2); }
+.auth-folder legend { display: flex; align-items: center; gap: .5rem; padding: 0 .4rem; color: var(--ink); font-size: .8rem; font-weight: 600; }
+.auth-folder .auth-hint { margin: 0; line-height: 1.6; }
+.auth-folder .auth-hint code { font-size: .95em; }
+.auth-optional { padding: .1rem .4rem; border-radius: .3rem; background: var(--surface-3); color: var(--muted); font-size: .62rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+
+.auth-footer { margin: 1.5rem 0 0; text-align: center; }
+
+/* The credit line: small print in the shell footer and on the auth
+ * screens — everywhere but the reader, which owns its whole viewport.
+ * Low contrast on purpose — it should be
+ * findable, not loud. */
+.credit { margin: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .45rem; color: var(--ink-dim); font-size: .72rem; letter-spacing: .025em; }
+.credit-link { display: inline-flex; align-items: center; gap: .3rem; color: var(--ink-dim); text-decoration: none; border-bottom: 1px solid transparent; }
+.credit-link:hover, .credit-link:focus-visible { color: var(--primary); border-bottom-color: currentColor; }
+.credit-icon { flex: none; vertical-align: -.15em; }
+.credit-dot { color: var(--line); }
+.credit-build { color: var(--muted); font-variant-numeric: tabular-nums; }
 @media (max-width: 44em) {
 	.auth-main { padding: 1.5rem 1rem; }
 	.auth-wrap { max-width: 29rem; }

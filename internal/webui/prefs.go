@@ -21,6 +21,14 @@ const prefsCookie = "liseur_ui"
 
 // Light is the default; an explicit theme cookie always takes precedence.
 // System follows the browser's preferred colour scheme.
+//
+// A cookie outliving a change of default is worth stating, because the
+// symptom is confusing: this default moved from dark to light, and every
+// browser that had ever pressed the toggle carried on rendering dark for
+// up to a year. That is correct — a stored preference is a decision
+// somebody made, and the server cannot tell it apart from one made
+// yesterday — but a dark screenshot of a light-first UI looks like a bug
+// and is not one. Clearing liseur_ui is the fix.
 const (
 	themeDark       = "dark"
 	themeLight      = "light"

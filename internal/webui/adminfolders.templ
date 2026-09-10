@@ -50,8 +50,10 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				<h2>Add your book folder</h2>
 				<p>
 					Point liseur-sync at the directory where your books already
-					live. The server will detect the folder type, read its books,
-					and keep the library up to date.
+					live. A Calibre library is recognised by its
+					<code>metadata.db</code> and read through Calibre's own
+					catalog; anything else is read as a tree of books. Either
+					way the server reads it and keeps the library up to date.
 				</p>
 				<p class="muted">
 					Nothing on disk is changed. Uploads stay off until you
@@ -193,7 +195,9 @@ templ adminFolderDialogBody(prefix string, csrf string, roots []string) {
 	</div>
 	<p class="muted">
 		Choose an existing directory. liseur-sync reads it without changing
-		the files inside.
+		the files inside. A Calibre library is recognised by its
+		<code>metadata.db</code> and read through Calibre's own catalog —
+		there is nothing to configure and nothing there is written to.
 	</p>
 	@adminFolderForm(prefix, csrf, roots)
 }
@@ -218,8 +222,12 @@ templ adminFolderForm(prefix string, csrf string, roots []string) {
 		</label>
 		<label>
 			Root path
-			<input type="text" name="root" required placeholder="/srv/books" autocomplete="off"/>
+			<input type="text" name="root" required placeholder="/srv/books" autocomplete="off" aria-describedby="folder-root-hint"/>
 		</label>
+		<p class="muted folder-hint" id="folder-root-hint">
+			A Calibre library or a plain tree of books; the kind is read off
+			the disk, not chosen here.
+		</p>
 		<div class="form-actions">
 			<button type="submit" class="primary">Watch this folder</button>
 		</div>

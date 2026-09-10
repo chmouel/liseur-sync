@@ -111,9 +111,7 @@ func (s *Server) handleAdminCreateFolder(
 		defer cancel()
 		s.Watching.Add(ctx, folder)
 	}
-	notice := "Watching " + folder.Name +
-		". Its books appear in your library as the server reads them. " +
-		"Other accounts see it once you assign it to them from Users."
+	notice := watchingNotice(folder.Name)
 	// Nothing on the Folders page is worth stopping at once the server
 	// has gone from no folders to one: the point of that first folder
 	// was to see books, so go see them.
@@ -123,6 +121,16 @@ func (s *Server) handleAdminCreateFolder(
 		return
 	}
 	s.renderAdminFolders(w, r, a, u, Flash{Notice: notice})
+}
+
+// watchingNotice is what a newly watched folder says for itself, from
+// the folders page and from first-run setup alike. One sentence in one
+// place: a folder added on the first screen and a folder added on the
+// fiftieth day are the same act and should report the same thing.
+func watchingNotice(name string) string {
+	return "Watching " + name +
+		". Its books appear in your library as the server reads them. " +
+		"Other accounts see it once you assign it to them from Users."
 }
 
 // handleAdminScanFolder runs a pass over one folder now and waits for

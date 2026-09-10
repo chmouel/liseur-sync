@@ -290,3 +290,39 @@ func TestNewRoutesRequireASession(t *testing.T) {
 		t.Errorf("unauth POST /ui/preferences: want a redirect to login, got %d", code)
 	}
 }
+
+// The credit belongs on every page the shell frames, and on the signed
+// out screens — but never in the reader, which owns the whole viewport
+// and must not grow furniture around the text.
+func TestCreditIsOnEveryPageButTheReader(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+
+	for _, path := range []string{"/ui/library", "/ui/insights", "/ui/settings"} {
+		_, body := page(t, ts, cookie, path)
+		for _, want := range []string{
+			"Chmouel Boudjnah",
+			"https://github.com/chmouel/liseur-sync",
+			"https://github.com/chmouel/liseur",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s is missing %q", path, want)
+			}
+		}
+	}
+
+	// Signed out, the same line sits under the auth panel.
+	_, body := page(t, ts, nil, "/ui/login")
+	if !strings.Contains(body, "Chmouel Boudjnah") {
+		t.Error("the login page is missing the credit")
+	}
+
+	// The reader renders its own document, outside the shell.
+	var reader strings.Builder
+	if err := readerPage(offlineReaderView("n0nce"), "").Render(t.Context(), &reader); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(reader.String(), "Chmouel Boudjnah") {
+		t.Error("the reader must not carry the credit line")
+	}
+}

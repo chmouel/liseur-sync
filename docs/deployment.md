@@ -185,7 +185,10 @@ its own credentials either way.
 Start the server and open `/ui/`. While the instance has no accounts at
 all, it offers a one-time setup page instead of a sign-in form: pick a
 name and a password and the account it makes is the first administrator.
-The page closes for good the moment that account exists.
+The same page also asks for the folder your books already live in, which
+is optional — fill it in and the instance is set up in one step, leave it
+blank and you land on the first-folder form instead. The page closes for
+good the moment that account exists.
 
 The same thing from a shell, when you would rather not open a browser
 first:
@@ -205,14 +208,20 @@ promotes and demotes accounts. The role lives on the account, so
 granting it hands nobody a secret, and the last enabled administrator
 cannot be demoted.
 
-When the first administrator is created from the web setup page, a fresh
-instance with no folders goes straight to Administration → Folders and
-opens the first-folder form. Point it at the directory that already holds
-the books; the server detects whether it is a plain folder or a Calibre
-library, reads it immediately and keeps watching it. Closing the form or
-using a browser without JavaScript leaves the same form available on the
-Folders page. Submitting it goes straight to the library rather than back
-to Folders — watching that first folder was the whole point of the trip.
+When the first administrator is created from the web setup page and the
+folder fields were filled in, the folder is created and watched as part
+of the same submission and you land in the library. Leave them blank and
+a fresh instance with no folders goes straight to Administration →
+Folders and opens the first-folder form. Either way, point it at the
+directory that already holds the books; the server detects whether it is
+a plain folder or a Calibre library, reads it immediately and keeps
+watching it. Closing the form or using a browser without JavaScript
+leaves the same form available on the Folders page. Submitting it goes
+straight to the library rather than back to Folders — watching that first
+folder was the whole point of the trip. A folder the server refuses (a
+path outside the roots it may serve, say) does not cost you the account:
+it exists, you are signed in, and the Folders page opens with the error
+so you can correct the path.
 The same is true any other time a folder is added while the server had
 none: the admin panel is otherwise unchanged, so a folder added after
 one already exists still lands back on Folders with its usual notice.
