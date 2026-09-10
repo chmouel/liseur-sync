@@ -160,8 +160,11 @@ export function refreshRunner({
     if (loud) announce("refreshing");
     running = (async () => {
       try {
-        await work();
-        if (visible) announce("done");
+        // Work that finished may still name what it finished as: a
+        // refresh where one half of the errand failed is neither a
+        // failure nor a plain success, and only the caller knows.
+        const outcome = await work();
+        if (visible) announce(typeof outcome === "string" ? outcome : "done");
         return true;
       } catch (error) {
         if (visible) announce("failed", error);

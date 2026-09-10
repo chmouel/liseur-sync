@@ -47,6 +47,28 @@ test("a bare fraction is interpolated, and says so", () => {
   assert.equal(placeLabel(place), "Near page 3 of 6");
 });
 
+test("a resource named without an offset into it is near, not exact", () => {
+  // Some clients write an href and a whole-book progression and nothing
+  // else. The chapter is known, the page within it is not, and a page
+  // presented as exact there is a number nobody measured.
+  const place = placeOf(op({
+    href: "two.xhtml",
+    locations: { totalProgression: 0.9 },
+  }), view);
+  assert.equal(place.exact, false);
+  assert.equal(place.page, 2, "the first page of the named chapter");
+  assert.equal(placeLabel(place), "Near page 2 of 6");
+});
+
+test("the start of a resource is an exact page, not a missing one", () => {
+  const place = placeOf(op({
+    href: "two.xhtml",
+    locations: { progression: 0, totalProgression: 0.2 },
+  }), view);
+  assert.equal(place.exact, true);
+  assert.equal(place.page, 2);
+});
+
 test("a resource from another edition is not stood on", () => {
   const place = placeOf(op({
     href: "two.xhtml",
