@@ -224,13 +224,13 @@ if (detached) {
   check('the reader origin holds no cookie', at.cookie === '', at.cookie);
 }
 
-// The engine keeps its frame pool behind a public API, so the probe goes
-// through that API rather than depending on its frame layout: the
-// chapter documents via renderer.getContents(), the position via
-// lastLocation.
-// setReaderTheme picks a palette the way a reader does and waits for the
-// engine to restyle the open chapter.
-const setReaderTheme = async (value) => {
+// setReaderTheme picks a palette the way a reader does, then waits for
+// the chapter to actually carry it. Ticking the radio only starts the
+// work: the engine restyles each chapter document afterwards, so reading
+// a colour straight away reads the palette on its way out. The caller
+// passes the colour it is about to assert, which is what makes the wait
+// a wait rather than a guess at how long the engine needs.
+const setReaderTheme = async (value, colour) => {
   await evalIn(`(() => {
     const radio = document.querySelector(
       '#reader-settings-form input[name="theme"][value="${value}"]',
@@ -238,9 +238,22 @@ const setReaderTheme = async (value) => {
     radio.checked = true;
     radio.dispatchEvent(new Event('input', { bubbles: true }));
   })()`);
-  await new Promise((r) => setTimeout(r, 700));
+  await waitFor(
+    `(() => {
+      const doc = document.querySelector('readium-view')
+        ?.renderer?.getContents?.()[0]?.doc;
+      if (!doc) return false;
+      return doc.defaultView.getComputedStyle(doc.body).color
+        .replace(/\\s/g, '') === ${JSON.stringify(colour)};
+    })()`,
+    `the ${value} theme to restyle the chapter`,
+  );
 };
 
+// The engine keeps its frame pool behind a public API, so the probe goes
+// through that API rather than depending on its frame layout: the
+// chapter documents via renderer.getContents(), the position via
+// lastLocation.
 const probe = `(() => {
   const view = document.querySelector('readium-view');
   const contents = view?.renderer?.getContents?.() ?? [];
@@ -366,11 +379,11 @@ check('the chapter frame is sandboxed and uses a blob URL', await evalIn(`(() =>
 // publication's own colours — so under the default this reads the
 // reader's palette rather than the book's, and would pass whether the
 // stylesheet had loaded or not.
-await setReaderTheme('original');
+await setReaderTheme('original', 'rgb(17,34,51)');
 const published = JSON.parse(await evalIn(probe));
 check('publication stylesheet was applied',
   published.colour.replace(/\s/g, '') === 'rgb(17,34,51)', published.colour);
-await setReaderTheme('light');
+await setReaderTheme('light', 'rgb(27,27,31)');
 
 // The publication's script must not have run. It sets a data attribute
 // on the documentElement; the reader strips script elements from every
@@ -558,7 +571,7 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
   ['rose-pine', 'Rosé Pine', 'rgb(224,222,244)', 'rgb(25,23,36)', '#5c4a88', '#f7f4ff', 'rgb(92,74,136)', 'rgb(247,244,255)'],
   ['black', 'Black', 'rgb(171,171,174)', 'rgb(0,0,0)', '#375f9d', '#f5f7ff', 'rgb(55,95,157)', 'rgb(245,247,255)'],
 ]) {
-  await setReaderTheme(value);
+  await setReaderTheme(value, colour);
   const themed = JSON.parse(await evalIn(probe));
   check(`the ${label} theme restyles the publication`,
     themed.colour.replace(/\s/g, '') === colour, themed.colour);
