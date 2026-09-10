@@ -49,17 +49,24 @@ async function drainQueue() {
     // through `onStatus`, so it resolves whether or not the queue is
     // empty. Without a listener the drain would look like a success
     // every time. The last thing it says is how the pass ended.
+    //
+    // A record already given up on is reported down the other channel
+    // and counts for nothing in `onStatus`, so a shelf holding only
+    // stuck records would drain to a clean "Refreshed" while the
+    // reading in them stayed where it was.
     let trouble = "";
+    let stuck = false;
     const coordinator = sync.offlineSync({
       context: { ...context, deviceID }, base,
       onStatus: message => { trouble = message || ""; },
+      onStuck: records => { if (records?.length) stuck = true; },
     });
     try {
       await coordinator.trigger();
     } catch {
       trouble = "undelivered";
     } finally {
-      if (trouble) delivered = false;
+      if (trouble || stuck) delivered = false;
       coordinator.stop();
     }
   }));
