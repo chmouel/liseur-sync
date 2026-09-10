@@ -327,6 +327,51 @@ is your reader's exact position: a Readium locator, a CFI, whatever
 your engine uses. The server stores and replays it verbatim and never
 reads it.
 
+#### Writing a locator another reader can use
+
+A whole-book `progression` is a poor address. Two engines compute it
+from different things — one interpolates a position list by byte
+weight, another interpolates its own synthetic pagination — so the same
+page is a slightly different number in each, and on a book with a few
+large chapters that difference is pages of drift. Send it, because it
+is what every client understands; do not expect anyone to land on your
+paragraph with it.
+
+What does travel is the resource and how far into it you were. Send a
+Readium-shaped locator with:
+
+- `href` — the reading-order resource, spelled as the manifest spells
+  it. A reader receiving it should tolerate an equivalent
+  percent-encoding or a leading slash rather than reject the chapter.
+- `locations.progression` — the fraction **within that resource**.
+  Between 0 and 1. Zero is a real place: the top of the chapter.
+- `locations.totalProgression` — the whole-book fraction, as the
+  fallback.
+- Optionally an anchor your reader can verify after the chapter has
+  laid out: `locations.cssSelector` with `text.before` / `text.highlight`
+  / `text.after`. Liseur marks its own with `locations.liseurAnchor: 1`
+  and only trusts a marked one, because unmarked engine text may
+  describe the *next* position rather than the visible one. This
+  server's own browser reader writes them too, from the first visible
+  word of the page on screen: 32 characters of context before, up to 64
+  of the word itself, 32 after, and the block's selector. It writes none
+  when the quote appears more than once in its block, since an anchor
+  that names two places names neither.
+
+Send `edition_sha` — the file's SHA-256, which the catalog reports as a
+`sha256` identifier — alongside it. Anything below the whole-book
+fraction only means something in the bytes it was written against, and
+a reader that cannot confirm it is looking at those bytes should use
+the fraction alone. An op that names no edition is read as an edition
+nobody vouched for; that is what every op said before this field
+existed, and old ops keep working.
+
+Do not send another engine's pagination as if it were your own.
+`locations.position` in particular means different things in different
+readers — a spine index in one, a count of pages through the whole book
+in another — so a receiver should drop one it cannot account for rather
+than index into it.
+
 ### Pulling
 
 Keep a cursor: the highest `seq` you have reconciled, starting at 0.

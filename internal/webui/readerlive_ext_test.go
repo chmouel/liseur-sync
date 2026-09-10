@@ -28,3 +28,13 @@ func TestOfflinePublicationStorageCore(t *testing.T) {
 func TestReadingStateReconciliation(t *testing.T) {
 	runNodeTests(t, "readerreconcile.test.mjs")
 }
+
+// Where a book reopens is decided without a browser: which chapter a
+// foreign locator names, and what of it is worth following.
+func TestReadingRestoreLadder(t *testing.T) {
+	runNodeTests(t, "readerrestore.test.mjs")
+}
+
+func TestReadingAnchorCapture(t *testing.T) {
+	runNodeTests(t, "readeranchor.test.mjs")
+}
