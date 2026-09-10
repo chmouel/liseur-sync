@@ -718,7 +718,8 @@ async function dismissCatchup() {
 // this device never managed to record would survive the reload that
 // the page did not: the other position would count as answered and
 // this one would be gone. So nothing is settled until the local page
-// is safely in the queue.
+// is safely in the queue — which, when it is already sitting there
+// waiting to go up, it is.
 //
 // Sending takes as long as it takes, and the question stays usable
 // while it does, so `still` is asked once more at the end: a reader who
@@ -729,12 +730,19 @@ async function dismissCatchup() {
 // on screen now belongs to somebody else.
 async function keepHere(op, still) {
   if (op && view && here && finite(here.fraction)) {
-    readingDirty = true;
-    // Through the single-flight, never straight at `pushPosition`: an
-    // earlier page may still be uploading, and two positions in the air
-    // at once can land in the wrong order and make the older one this
-    // device's head — the server walked backwards.
-    if (!await settleBeforeAnswer()) return "unsent";
+    if (readingDirty) {
+      // Through the single-flight, never straight at `pushPosition`: an
+      // earlier page may still be uploading, and two positions in the
+      // air at once can land in the wrong order and make the older one
+      // this device's head — the server walked backwards.
+      if (!await settleBeforeAnswer()) return "unsent";
+    } else if (catchup.pending()) {
+      // Already written to the durable queue, which is all this answer
+      // needs; what it wants now is delivering, not writing again.
+      // `pushPosition` drops the retry key as soon as it has saved, so
+      // a push here would file the same spot under a second op id.
+      readingCoordinator?.trigger();
+    }
   }
   if (still && !still()) return "withdrawn";
   catchup.refuse(op);
@@ -869,7 +877,21 @@ const SYNC_SUMMARIES = {
   "ahead": "Your other device has read further than this one.",
   "behind": "This device has read further than your other one.",
   "same-page": "The same page, but not the same spot. The passage below is what the other device had on screen.",
+  "near-page": "Within a whisker of each other, but not the same spot. The passage below is what the other device had on screen.",
 };
+
+// `same-page` from the decision means only that the two progressions
+// are within rounding of each other, and in a long book that is not
+// enough to claim a page: a book with a thousand positions has several
+// of them inside the same rounding. The numbers actually on screen are
+// what settle it, and where there are none it says only what it knows.
+function relationWording(decision, mine, there) {
+  const key = decision.relation || decision.verdict;
+  if (key !== "same-page") return key;
+  const here = mine?.page, other = there?.page;
+  if (!mine?.exact || !there?.exact) return "near-page";
+  return here && other && here === other ? "same-page" : "near-page";
+}
 
 async function askBookSync() {
   if (!syncDialog || syncAsking) return;
@@ -946,7 +968,7 @@ function presentBookSync(remote, note) {
   syncOffered = other;
 
   syncSummary.textContent = note ||
-    SYNC_SUMMARIES[decision.relation || decision.verdict] || "";
+    SYNC_SUMMARIES[relationWording(decision, mine, there)] || "";
   syncHereText.textContent = placeLabel(mine) || "Not known yet";
   syncThereText.textContent = placeSentence(there) || "";
   syncThereSide.hidden = !other;
