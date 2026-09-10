@@ -37,6 +37,10 @@ async function drainQueue() {
   const queued = await storage.listOfflineOutbox({ partition, account, state: null });
   const devices = new Set(queued.map(record => record.deviceID).filter(Boolean));
   if (!devices.size) return true;
+  // A coordinator declines outright when the browser says it is
+  // offline, before it has said anything through either channel. A
+  // queue that was never even attempted is not a queue that emptied.
+  if (navigator.onLine === false) return false;
   const context = await storage.accountContext(partition, account);
   const base = storage.deploymentPrefix();
   let delivered = true;
@@ -82,12 +86,32 @@ async function redraw() {
     window.location.reload();
     return;
   }
-  await htmx.ajax("GET", window.location.href, {
-    source: document.body,
-    target: "#content .page",
-    select: "#content .page",
-    swap: "outerHTML",
-  });
+  // htmx settles its promise for a refused response as readily as for a
+  // good one: only a transport failure rejects. Leaving the shelf that
+  // is already on screen is the right answer to a 500, but calling it
+  // "Refreshed" is not, so the events are what this waits on.
+  let refused = false;
+  const noted = () => { refused = true; };
+  const events = ["htmx:responseError", "htmx:sendError", "htmx:swapError"];
+  events.forEach(name => document.body.addEventListener(name, noted));
+  try {
+    await htmx.ajax("GET", window.location.href, {
+      source: document.body,
+      target: "#content .page",
+      select: "#content .page",
+      swap: "outerHTML",
+    });
+  } finally {
+    events.forEach(name => document.body.removeEventListener(name, noted));
+  }
+  // A session that expired mid-refresh answers with a sign-in page,
+  // which holds no shelf to select and can leave the region empty. Let
+  // the browser go there properly rather than sitting on the hole.
+  if (!document.querySelector("#content .page")) {
+    window.location.reload();
+    return;
+  }
+  if (refused) throw new Error("The shelf could not be refreshed.");
 }
 
 const runner = refreshRunner({

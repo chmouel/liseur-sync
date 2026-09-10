@@ -34,6 +34,13 @@ const runner = refreshRunner({
     trouble = "";
     await Promise.all(coordinators.map(sync => sync.trigger()));
     await render();
+    // A coordinator declines outright when the browser says it is
+    // offline, without a word through either channel. On this page of
+    // all pages that is a likely way to press refresh, and a queue
+    // nobody attempted must not read as a queue that emptied.
+    if (!trouble && navigator.onLine === false && await queueWaiting()) {
+      trouble = "Offline. Your reading syncs when this device is back online.";
+    }
     if (!trouble) return "done";
     message(trouble, true);
     return "partial";
@@ -63,6 +70,19 @@ function titleFor(snapshot) {
     : "Untitled book";
   const author = typeof snapshot.author === "string" ? snapshot.author.trim() : "";
   return author ? `${title} — ${author}` : title;
+}
+
+// Whether this device is still holding reading nobody has taken.
+async function queueWaiting() {
+  try {
+    const partition = storagePartition();
+    const account = await activeAccount(partition);
+    if (!account) return false;
+    const outbox = await listOfflineOutbox({ partition, account, state: null });
+    return outbox.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function render() {
