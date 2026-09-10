@@ -36,6 +36,9 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 				<script type="module" src={ prefix + "static/offline-account.js" } defer></script>
 				<script type="module" src={ prefix + "static/offline-download.js" } defer></script>
 			}
+			if u.Section == "library" {
+				<script type="module" src={ prefix + "static/library-refresh.js" } defer></script>
+			}
 		</head>
 		<body data-pwa-base={ pwaBase(prefix, u.Offline) } data-offline-account={ offlineAccount(u) }>
 			<a class="skip" href="#content">Skip to content</a>
@@ -77,6 +80,10 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 						</div>
 					</aside>
 					<main id="content">
+						// The pull indicator lives outside the region a refresh
+						// replaces. Inside it, the spinner would be swapped away
+						// by the very thing it is reporting on.
+						<div id="pull-indicator" class="pullindicator" role="status" aria-live="polite" hidden></div>
 						<div class="page">
 							@body
 							<footer class="foot">

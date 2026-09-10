@@ -121,6 +121,29 @@ export function catchupState() {
       local: structuredClone(localOp || baseline), generation,
     };
   };
+  // The reader has answered about this remote position by staying where
+  // they are. It becomes the agreed baseline — it has been seen and
+  // answered — and its id is remembered so it is never raised again.
+  const refuse = (op) => {
+    const id = op && identify(op);
+    if (id) {
+      ignored.add(id);
+      baseline = structuredClone(op);
+    }
+    if (ignored.size > 256) ignored.delete(ignored.values().next().value);
+    offer = null; resume = false;
+    evaluate();
+  };
+  // The reader is going there. It is now both the agreed baseline and
+  // this device's own position, and this device owes nothing.
+  const adopt = (op) => {
+    if (!op) return null;
+    baseline = structuredClone(op);
+    localOp = structuredClone(op);
+    localDirty = false;
+    candidate = null; offer = null; resume = false;
+    return structuredClone(op);
+  };
   return {
     bind(nextAccount, nextWork, nextDevice) {
       const sameBook = account === nextAccount && work === nextWork;
@@ -152,6 +175,12 @@ export function catchupState() {
       authored.set(op.op_id, device);
       if (authored.size > 256) authored.delete(authored.keys().next().value);
     },
+    // The position this device and the server last agreed on, which is
+    // what tells this reader's own stale copy on the server apart from
+    // another device having moved.
+    agreed() {
+      return baseline ? structuredClone(baseline) : null;
+    },
     observe(op) {
       remote = op ? structuredClone(op) : null;
       evaluate();
@@ -182,28 +211,16 @@ export function catchupState() {
         evaluate();
       }
     },
-    dismiss() {
-      if (offer) {
-        ignored.add(offer.id);
-        // Choosing to stay is an answer about this remote position, so
-        // it becomes the agreed baseline: it must not be asked again.
-        baseline = structuredClone(offer.op);
-      }
-      if (ignored.size > 256) ignored.delete(ignored.values().next().value);
-      offer = null; resume = false;
-      evaluate();
-    },
+    dismiss() { refuse(offer ? offer.op : null); },
+    refuse,
+    adopt,
     accept(shown) {
       if (!shown || hidden || offer !== shown || shown.generation !== generation ||
           shown.id !== identify(shown.op) || candidate?.id !== shown.id) {
         offer = null;
         return null;
       }
-      baseline = structuredClone(shown.op);
-      localOp = structuredClone(shown.op);
-      localDirty = false;
-      candidate = null; offer = null; resume = false;
-      return structuredClone(shown.op);
+      return adopt(shown.op);
     },
   };
 }

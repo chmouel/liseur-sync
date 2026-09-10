@@ -286,3 +286,28 @@ test("failure from a previous account does not requeue on the new account", asyn
   assert.equal(pending(), false);
   assert.deepEqual(calls, ["positions"]);
 });
+
+// Telling this reader's own stale copy on the server apart from another
+// device having moved is what the baseline is for, so the baseline has
+// to be readable by whoever is doing the telling.
+test("the agreed baseline can be read back", () => {
+  const s = state();
+  assert.equal(s.agreed().op_id, "opening");
+  const answered = op("answered");
+  s.observe(answered);
+  s.hide(); s.resume();
+  s.offer();
+  s.dismiss();
+  assert.equal(s.agreed().op_id, "answered", "staying agrees the position stayed away from");
+  const taken = op("taken");
+  s.observe(taken);
+  s.hide(); s.resume();
+  assert.deepEqual(s.accept(s.offer()), taken);
+  assert.equal(s.agreed().op_id, "taken");
+});
+
+test("a book with nothing agreed yet says so rather than inventing one", () => {
+  const s = catchupState();
+  s.bind("account", "work", "browser");
+  assert.equal(s.agreed(), null);
+});

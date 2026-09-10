@@ -190,6 +190,28 @@ templ readerPage(v ReaderView, csrf string) {
 					</details>
 					<button
 						type="button"
+						id="reader-sync"
+						class="reader-icon-btn reader-sync-btn"
+						title="Sync this book (s)"
+						aria-label="Sync this book"
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+							<path d="M21 3v6h-6"></path>
+						</svg>
+					</button>
+					<button
+						type="button"
 						id="reader-fullscreen"
 						class="reader-icon-btn reader-fullscreen-btn"
 						title="Full screen (f)"
@@ -216,8 +238,16 @@ templ readerPage(v ReaderView, csrf string) {
 			// Both buttons are relabelled at runtime: an offer says where it
 			// would take the reader, and a disagreement says that for each
 			// side. The label here names the panel, not either position.
+			//
+			// Under the question go the two things that let a reader
+			// recognise their own evening: how far through the other
+			// device was, how long ago, and the passage it had on screen.
+			// The excerpt is another device's text and arrives as a text
+			// node only.
 			<aside id="reader-catchup" class="reader-catchup" aria-label="Reading position on another device" hidden>
 				<p id="reader-catchup-text" role="status" aria-live="polite"></p>
+				<p id="reader-catchup-detail" class="reader-catchup-detail" hidden></p>
+				<p id="reader-catchup-excerpt" class="reader-catchup-excerpt" hidden></p>
 				<div>
 					<button type="button" id="reader-catchup-accept">Continue there</button>
 					<button type="button" id="reader-catchup-dismiss">Stay here</button>
@@ -304,6 +334,7 @@ templ readerPage(v ReaderView, csrf string) {
 						<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Beginning / end of book</td></tr>
 						<tr><td><kbd>t</kbd></td><td>Table of contents</td></tr>
 						<tr><td><kbd>g</kbd></td><td>Go to page or percentage</td></tr>
+						<tr><td><kbd>s</kbd></td><td>Sync this book</td></tr>
 						<tr><td><kbd>f</kbd></td><td>Full screen</td></tr>
 						<tr><td><kbd>z</kbd></td><td>Show or hide the bars</td></tr>
 						<tr><td><kbd>?</kbd></td><td>This help</td></tr>
@@ -336,6 +367,36 @@ templ readerPage(v ReaderView, csrf string) {
 						<button type="submit" id="reader-goto-submit" class="btn primary">Go</button>
 					</div>
 				</form>
+			</dialog>
+			// Asked for rather than offered (ADR-0040). Nothing has been
+			// applied by the time this opens: the server's answer has been
+			// read, and neither side has been changed. It shows both
+			// positions even when they agree, because the reader asked and
+			// "you are in step" is an answer worth having.
+			//
+			// Cancelling is a real answer — "not this way" — and changes
+			// nothing. It is deliberately not "not now": an ordinary sync
+			// settles the same disagreement later exactly as it would have
+			// done, so cancelling buys no delay.
+			<dialog id="reader-sync-dialog" class="reader-sync-dialog" aria-labelledby="reader-sync-title">
+				<h2 id="reader-sync-title">This book on your devices</h2>
+				<p id="reader-sync-summary" class="reader-sync-summary"></p>
+				<div class="reader-sync-sides">
+					<section class="reader-sync-side">
+						<h3>Here</h3>
+						<p id="reader-sync-here" class="reader-sync-place"></p>
+					</section>
+					<section class="reader-sync-side" id="reader-sync-there-side">
+						<h3>Another device</h3>
+						<p id="reader-sync-there" class="reader-sync-place"></p>
+						<p id="reader-sync-excerpt" class="reader-catchup-excerpt" hidden></p>
+					</section>
+				</div>
+				<div class="reader-sync-actions">
+					<button type="button" id="reader-sync-take">Go to the other position</button>
+					<button type="button" id="reader-sync-keep">Keep this page</button>
+					<button type="button" id="reader-sync-cancel">Cancel</button>
+				</div>
 			</dialog>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>

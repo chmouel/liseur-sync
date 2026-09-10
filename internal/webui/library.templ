@@ -103,6 +103,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				<a class="chip" href={ prefix + "entities/tags" }>Tags</a>
 			</nav>
 			<span class="spacer"></span>
+			@refreshButton()
 			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>
 		if v.CanUpload {
@@ -548,6 +549,32 @@ templ uploadForm(prefix, csrf, folder string) {
 		<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
 		<button type="submit">Send a book</button>
 	</form>
+}
+
+// refreshButton is the pull gesture said with a pointer: deliver what
+// this browser read offline, then draw the shelf the server has now.
+//
+// It is not the Scan button beside it and does not do its work. Scan
+// asks the server to walk its folders and look at the disk; this asks
+// nothing of the disk at all. A reader who has just read a chapter on
+// their phone wants this one.
+//
+// Served hidden, because with no script running it would be a control
+// that does nothing. library-refresh.js reveals it.
+templ refreshButton() {
+	<button
+		type="button"
+		class="refreshbtn"
+		data-refresh
+		title="Sync and refresh this shelf"
+		hidden
+	>
+		<svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+			<path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+			<path d="M21 3v6h-6"></path>
+		</svg>
+		<span class="refreshlabel">Refresh</span>
+	</button>
 }
 
 // scanButton asks for a pass over the libraries this reader can see and

@@ -38,3 +38,23 @@ func TestReadingRestoreLadder(t *testing.T) {
 func TestReadingAnchorCapture(t *testing.T) {
 	runNodeTests(t, "readeranchor.test.mjs")
 }
+
+// Whether a drag was a pull is decided from points alone, so it is
+// pinned away from a browser: a gesture that claims a sideways swipe
+// or a scroll is one that has taken something from the reader.
+func TestPullToRefreshGesture(t *testing.T) {
+	runNodeTests(t, "pullrefresh.test.mjs")
+}
+
+// What a reader is told about two positions decides which one they
+// pick, and an interpolated page presented as an exact one is a lie
+// with consequences.
+func TestReadingPlaceDescription(t *testing.T) {
+	runNodeTests(t, "readerplace.test.mjs")
+}
+
+// Syncing one book by hand is a decision made on two doubles and a
+// flag, so it is pinned without a navigator, a database or a server.
+func TestBookSyncChoice(t *testing.T) {
+	runNodeTests(t, "readersyncchoice.test.mjs")
+}
