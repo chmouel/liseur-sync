@@ -62,11 +62,13 @@ export function decideBookSync({
 /**
  * How the server's position sits against this device's.
  *
- * `same-page` is the same page but not the same spot: two progressions
- * within rounding of each other while the anchors disagree outright.
- * Rare, and worth its own words — two identical page numbers over two
+ * `same-page` is neither ahead nor behind: two progressions within
+ * rounding of each other while the anchors disagree outright. Rare, and
+ * worth its own answer — two nearly identical positions over two
  * different buttons is a riddle, and the excerpt is the only thing that
- * tells the sides apart.
+ * tells the sides apart. Whether that rounding really is one page is a
+ * question for the edition's page table, which the reader holds and
+ * this module deliberately does not.
  */
 function relationOf(local, remote) {
   const here = fractionOf(local), there = fractionOf(remote);

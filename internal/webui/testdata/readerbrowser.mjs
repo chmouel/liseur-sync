@@ -1753,8 +1753,12 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   await pause(300);
   check('staying keeps this browser where it was', Math.abs(await position() - 0.42) > 0.01);
   const staying = await positions();
+  // The page this browser wants to keep is already in the queue — the
+  // turn the network refused a moment ago is that page. Staying
+  // publishes it by delivering it, not by writing it down a second
+  // time: a second op id for one spot would file this reading twice.
   check('staying keeps the page this browser chose',
-    staying.startsWith(owed + ',') && staying.split(',').length === 2, staying);
+    staying === owed && staying.split(',').length === 1, staying);
   await visibility(true); await visibility(false);
   await pause(500);
   check('an answered disagreement is not asked again',
@@ -1764,14 +1768,13 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   await evalIn('window.__liveBlockOps = false');
   await evalIn("window.dispatchEvent(new Event('online'))");
   check('the chosen pages reach the server once the network returns',
-    await wait(`window.__liveDelivered.includes(${JSON.stringify(owed.split(',')[0])}) &&
-      window.__liveDelivered.includes(${JSON.stringify(staying.split(',')[1])})`),
+    await wait(`window.__liveDelivered.includes(${JSON.stringify(owed.split(',')[0])})`),
     String(await evalIn('JSON.stringify(window.__liveDelivered)')));
   check('a delivered page leaves the queue',
     await wait(`(${drained}).then(n => n === 0)`), String(await positions()));
   reading = JSON.parse(await stored() || 'null');
   check('delivery is what moves the agreed baseline',
-    reading && reading.baseline && reading.baseline.op_id === staying.split(',')[1],
+    reading && reading.baseline && reading.baseline.op_id === owed.split(',')[0],
     JSON.stringify(reading && reading.baseline));
   check('nothing is owed once it has been agreed', !reading.local, JSON.stringify(reading));
 

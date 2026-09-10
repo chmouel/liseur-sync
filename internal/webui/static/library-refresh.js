@@ -100,6 +100,17 @@ async function redraw() {
     window.location.reload();
     return;
   }
+  // The button that asked for this lives inside the region about to be
+  // replaced. Replacing it drops focus on the body, and a keyboard
+  // reader's next Tab starts somewhere else entirely, so where the
+  // focus was is noted now and given back to the same control in the
+  // new markup: by id where there is one, and by the refresh marker
+  // otherwise, which is the control this module owns.
+  const focused = target.contains(document.activeElement) ? document.activeElement : null;
+  const refocus = !focused ? null
+    : focused.id ? `#${CSS.escape(focused.id)}`
+    : focused.matches("[data-refresh]") ? "[data-refresh]"
+    : null;
   const response = await fetch(window.location.href, {
     credentials: "same-origin",
     cache: "no-store",
@@ -120,6 +131,7 @@ async function redraw() {
   // The new markup carries the reveal sentinel and the rest of the
   // page's own attributes; without this they are inert markup.
   window.htmx?.process?.(document.querySelector("#content"));
+  if (refocus) document.querySelector(`#content ${refocus}`)?.focus?.({ preventScroll: true });
   reveal();
 }
 
