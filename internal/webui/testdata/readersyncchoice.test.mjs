@@ -14,7 +14,12 @@ const at = (fraction, cfi) => ({
 
 test("no position on the server is not a choice", () => {
   assert.deepEqual(decideBookSync({ local: at(0.4), remote: null }), { verdict: "no-remote" });
-  assert.deepEqual(decideBookSync({ local: null, remote: null }), { verdict: "no-remote" });
+});
+
+// The dialog says a page is on its way up for `no-remote`. With nothing
+// read on this device either, there is no page to say that about.
+test("a book neither side has read is not a page waiting to be sent", () => {
+  assert.deepEqual(decideBookSync({ local: null, remote: null }), { verdict: "no-position" });
 });
 
 test("the same spot is reported rather than passed over", () => {
