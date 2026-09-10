@@ -23,10 +23,20 @@ let renderGeneration = 0;
 // send what this device owes, then draw what is actually saved here.
 // The runner is what keeps a second ask from starting a second send.
 const indicator = pullIndicator(document.getElementById("pull-indicator"));
+// What the last pass had to say about the queue. A coordinator reports
+// an upload it could not make and then resolves anyway, and `render`
+// runs afterwards and writes the book count over whatever it said, so
+// without holding on to it here a failed send would leave no trace at
+// all a minute later.
+let trouble = "";
 const runner = refreshRunner({
   async work() {
+    trouble = "";
     await Promise.all(coordinators.map(sync => sync.trigger()));
     await render();
+    if (!trouble) return "done";
+    message(trouble, true);
+    return "partial";
   },
   onState: (state) => {
     if (state === "refreshing") indicator.paint("refreshing");
@@ -91,7 +101,13 @@ async function render() {
     for (const deviceID of devices) {
       const sync = offlineSync({
         context: { ...context, deviceID }, base: deploymentPrefix(),
-        onStatus: text => { if (text) message(text, true); },
+        onStatus: text => { if (text) { trouble = text; message(text, true); } },
+        // A record already given up on is reported here rather than as
+        // something waiting, so a shelf whose queue is entirely stuck
+        // would otherwise read as a clean sync.
+        onStuck: records => {
+          if (records?.length) trouble = "Some offline changes could not be synced.";
+        },
       });
       coordinators.push(sync);
       sync.trigger();
