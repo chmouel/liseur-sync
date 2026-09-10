@@ -717,7 +717,11 @@ function keepHere(op) {
   rememberAnswer(op, false);
   if (op && view && here && finite(here.fraction)) {
     readingDirty = true;
-    void pushPosition();
+    // Through the single-flight, never straight at `pushPosition`: an
+    // earlier page may still be uploading, and two positions in the air
+    // at once can land in the wrong order and make the older one this
+    // device's head — the server walked backwards.
+    void push();
   }
 }
 
@@ -805,6 +809,10 @@ const syncCancel = document.getElementById("reader-sync-cancel");
 // so an answer can never be given about a question no longer on screen.
 let syncOffered = null;
 let syncAsking = false;
+// Whether the catch-up panel was up when this dialog opened. Cancelling
+// changes nothing, and a disagreement that was already on screen and
+// still unanswered is part of the nothing that must not change.
+let syncCovered = false;
 
 // This device's side, as an op, so the decision is made on the same two
 // shapes everywhere: the same fields, the same anchor comparison the
@@ -851,6 +859,7 @@ async function askBookSync() {
   syncAsking = true;
   syncButton?.setAttribute("aria-busy", "true");
   try {
+    syncCovered = !!catchupPanel && !catchupPanel.hidden;
     hideCatchup();
     // The offline reader has no server to ask: its positions are
     // queued on this device and go up when it is next online. Saying
@@ -937,18 +946,37 @@ function presentBookSync(remote, note) {
 syncButton?.addEventListener("click", () => void askBookSync());
 syncCancel?.addEventListener("click", () => syncDialog.close());
 // Cancelling is a real answer — "not this way" — and changes nothing at
-// all, neither the page nor what the two sides have agreed on.
-syncDialog?.addEventListener("close", () => { syncOffered = null; });
+// all, neither the page, nor what the two sides have agreed on, nor a
+// question that was already waiting. An answer below clears the flag
+// first, because answering the dialog answers the panel with it.
+syncDialog?.addEventListener("close", () => {
+  syncOffered = null;
+  if (syncCovered) showCatchup();
+  syncCovered = false;
+});
 
 syncTake?.addEventListener("click", async () => {
   const op = syncOffered;
   const activity = activityGeneration;
+  if (!op || !view) {
+    syncCovered = false;
+    syncDialog.close();
+    return;
+  }
+  // The page this device has not managed to send goes up before the
+  // other one is adopted, or it is lost. If it will not go, the
+  // question stays open and says so: closing on a failure would take
+  // away the answer and the chance to give it again in one move.
+  if (!await settleBeforeAnswer()) {
+    syncSummary.textContent =
+      "This page could not be sent, so the other position was not taken. Try again in a moment.";
+    return;
+  }
+  syncCovered = false;
   syncDialog.close();
   // The panel may be up behind the dialog, asking about this very
   // position. Answering here answers it.
   hideCatchup();
-  if (!op || !view) return;
-  if (!await settleBeforeAnswer()) return;
   const stamp = snapshot();
   if (!current(stamp)) return;
   await goThere(catchup.adopt(op), stamp, activity);
@@ -956,6 +984,7 @@ syncTake?.addEventListener("click", async () => {
 
 syncKeep?.addEventListener("click", () => {
   const op = syncOffered;
+  syncCovered = false;
   syncDialog.close();
   hideCatchup();
   keepHere(op);
