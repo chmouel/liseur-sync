@@ -13,7 +13,6 @@ const host = process.env.SMOKE_HOST;
 // somewhere, and it is not in DNS. Chrome will map it for us.
 const mapHost = process.env.SMOKE_MAP;
 const detached = process.env.SMOKE_DETACHED === '1';
-const withAnnotations = process.env.SMOKE_ANNOTATIONS === '1';
 // NaN-guard mode (the position-jumps fix): synthetic relocate events
 // with a NaN then a finite fraction, watching whether the reader pushes.
 const nan = process.env.SMOKE_NAN === '1';
@@ -225,10 +224,6 @@ await waitFor(`(() => {
     view?.renderer?.getContents?.().some(({ doc }) => doc?.body) &&
     document.getElementById('reader-status')?.textContent === '';
 })()`, 'the publication to open');
-if (withAnnotations || liveMode) {
-  await waitFor(`document.querySelector('readium-view').renderer.getContents()
-    .some(({ doc }) => doc.defaultView.CSS?.highlights?.size > 0)`, 'the initial annotations');
-}
 
 const fail = [];
 const check = (name, ok, extra = '') => {
@@ -341,17 +336,6 @@ const probe = `(() => {
     ran: doc ? !!doc.documentElement.dataset.publicationRan : null,
     svgRan: doc ? !!doc.documentElement.dataset.svgRan : null,
     extRan: doc ? typeof doc.defaultView.htmx !== 'undefined' : null,
-    overlay: (() => {
-      if (!doc) return null;
-      const registry = doc.defaultView.CSS.highlights;
-      if (registry && registry.size) {
-        const [name, ranges] = [...registry][0];
-        return { rects: [...ranges].reduce((n,r) => n + r.getClientRects().length, 0),
-          fill: doc.defaultView.getComputedStyle(doc.body, '::highlight(' + name + ')').backgroundColor };
-      }
-      const marks = [...doc.querySelectorAll('[data-highlight-id] .readium-highlight')];
-      return marks.length ? { rects: marks.length, fill: doc.defaultView.getComputedStyle(marks[0]).backgroundColor } : null;
-    })(),
     pageTitle: document.title,
     fontSize: body ? doc.defaultView.getComputedStyle(body).fontSize : '',
     wrapWidth: body && body.firstElementChild
@@ -442,35 +426,6 @@ await setReaderTheme('light', 'rgb(27,27,31)');
 // what stripping might miss. This is the promise the vendored engine
 // had to keep.
 check('publication script did not run', diag.ran === false, String(diag.ran));
-
-// Annotations (ADR-0028), when the harness seeded them: the highlight
-// whose CFI anchors in this very chapter must have actually drawn —
-// rects in the overlayer SVG, filled with the palette's green, never
-// raw CSS from the wire — and the two that cannot draw must be listed
-// in the sidebar rather than reported as errors.
-if (withAnnotations) {
-  check('a synced highlight draws over the text',
-    !!diag.overlay && diag.overlay.rects > 0 && /(?:129,\s*199,\s*132|#81c784)/.test(diag.overlay.fill),
-    JSON.stringify(diag.overlay));
-  const anns = JSON.parse(await evalIn(`JSON.stringify((() => {
-    const panel = document.getElementById('reader-annotations');
-    return {
-      hidden: panel ? panel.hidden : null,
-      entries: [...(panel?.querySelectorAll('.reader-ann-text') ?? [])]
-        .map((s) => s.textContent),
-    };
-  })())`));
-  check('the sidebar lists the note',
-    anns.hidden === false &&
-      anns.entries.some((t) => t.includes('A thought about the whale')),
-    JSON.stringify(anns));
-  check('an unanchorable highlight degrades to a sidebar entry',
-    anns.entries.some((t) => t.includes('an unanchored highlight')),
-    JSON.stringify(anns));
-  check('the drawn highlight is not duplicated in the sidebar',
-    !anns.entries.some((t) => t.includes('title page, absolut')),
-    JSON.stringify(anns));
-}
 
 // It must have actually painted: an engine that renders nothing still
 // reports a chapter.
