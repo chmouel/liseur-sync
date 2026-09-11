@@ -547,13 +547,14 @@ check('the page number counts forward with the turns',
   await new Promise((r) => setTimeout(r, 300));
   const after = JSON.parse(await evalIn(probe));
   check('a click on the footer cycles the middle slot',
-    before.footerMode === 'chapter' && after.footerMode === 'time-chapter' &&
-      /left in chapter$/.test(after.chapter || ''),
+    before.footerMode === 'chapter' && after.footerMode === 'positions-chapter' &&
+      /(?:page|pages) left in chapter$|Last page in chapter$/.test(after.chapter || ''),
     `${before.footerMode} -> ${after.footerMode}: ${JSON.stringify(after.chapter)}`);
   check('a click on the footer turns no page',
     before.cfi === after.cfi && before.fraction === after.fraction && before.page === after.page,
     `${before.page} -> ${after.page}`);
-  // Twice more and it is back to the chapter's name.
+  // Cycle through the remaining modes and come back to the chapter's name.
+  await evalIn(`document.getElementById('reader-footer').click()`);
   await evalIn(`document.getElementById('reader-footer').click()`);
   await evalIn(`document.getElementById('reader-footer').click()`);
   await evalIn(`document.getElementById('reader-footer').click()`);
