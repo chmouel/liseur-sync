@@ -27,6 +27,7 @@ export class ReaderEngine extends HTMLElement {
     this.renderer.goTo = target => this.goTo(target);
     this.renderer.render = () => { if (this.navigator) this.relocate(this.navigator.currentLocator); };
     this.annotations = new Map();
+    this.announced = new WeakSet();
     this.settings = {};
     this.styleText = "";
     this.preferences = {};
@@ -128,7 +129,20 @@ export class ReaderEngine extends HTMLElement {
   }
 
   frameLoaded(wnd) {
-    const doc = wnd.document;
+    this.announce(wnd.document);
+  }
+
+  // announce is the one place a chapter document is handed to the rest
+  // of the reader, and it is idempotent because the navigator's own
+  // announcement cannot be relied on. Gecko drops most of them: over a
+  // whole reading walk Firefox reported one document out of eleven, and
+  // everything hung on that report — the reading keys, the tap that
+  // turns a page — was simply missing from the chapter on screen. So
+  // every relocation looks at what is rendered and announces anything
+  // nobody has seen yet.
+  announce(doc) {
+    if (!doc || !doc.documentElement || this.announced.has(doc)) return;
+    this.announced.add(doc);
     const href = doc.documentElement.getAttribute("data-reader-href");
     this.applyDocumentStyle(doc);
     doc.addEventListener("click", event => {
@@ -190,6 +204,7 @@ export class ReaderEngine extends HTMLElement {
 
   relocate(locator) {
     if (!locator) return;
+    for (const { doc } of this.contents()) this.announce(doc);
     const index = this.book.sections.findIndex(s => s.id === locator.href);
     if (index < 0) return;
     const sectionFraction = locator.locations.progression || 0;

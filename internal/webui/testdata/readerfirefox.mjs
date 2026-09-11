@@ -432,26 +432,32 @@ const ffReached = JSON.parse(await chromeState());
 check('reaching for the top of the window brings the chrome back',
   ffReached.state === 'visible' && ffReached.bar === '1', JSON.stringify(ffReached));
 
+// The page fraction is read raw here rather than through the probe,
+// which rounds it to four places. A rounded reading is usually already
+// smaller than the live one it is compared against, so the wait below
+// would be satisfied by a page that never turned, and the check would
+// then report two equal numbers with nothing to explain them.
+const ffFraction = () => evalIn(
+  `document.querySelector('readium-view').lastLocation.fraction`);
+
 await new Promise((r) => setTimeout(r, 2600));
-const ffBefore = JSON.parse(await evalIn(probe));
+const ffBefore = await ffFraction();
 await ffTap('right', 'touch');
-await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffBefore.fraction} &&
+await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffBefore} &&
   document.querySelector('readium-view').renderer.getContents().some(({ doc }) => doc?.body)`, 'the touch page turn');
-const ffForward = JSON.parse(await evalIn(probe));
+const ffForward = await ffFraction();
 check('a tap on the right of the text turns the page',
-  ffForward.fraction > ffBefore.fraction,
-  `${ffBefore.fraction} -> ${ffForward.fraction}`);
+  ffForward > ffBefore, `${ffBefore} -> ${ffForward}`);
 
 // The mouse path is the one that has to ask Gecko where the caret is.
 // Let the 700ms suppression of synthetic mouse events after touch expire.
 await new Promise(resolve => setTimeout(resolve, 750));
 await ffTap('right', 'mouse');
-await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffForward.fraction} &&
+await waitFor(`document.querySelector('readium-view').lastLocation.fraction > ${ffForward} &&
   document.querySelector('readium-view').renderer.getContents().some(({ doc }) => doc?.body)`, 'the mouse page turn');
-const ffMouse = JSON.parse(await evalIn(probe));
+const ffMouse = await ffFraction();
 check('a mouse click on the right of the text turns the page',
-  ffMouse.fraction > ffForward.fraction,
-  `${ffForward.fraction} -> ${ffMouse.fraction}`);
+  ffMouse > ffForward, `${ffForward} -> ${ffMouse}`);
 
 await evalIn(`(() => {
   const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
@@ -465,10 +471,10 @@ await evalIn(`(() => {
   return true;
 })()`);
 await new Promise((r) => setTimeout(r, 1200));
-const ffSelected = JSON.parse(await evalIn(probe));
+const ffSelected = await ffFraction();
 check('a click while text is selected is not a page turn',
-  ffSelected.fraction === ffMouse.fraction,
-  `${ffMouse.fraction} -> ${ffSelected.fraction}`);
+  ffSelected === ffMouse,
+  `${ffMouse} -> ${ffSelected}`);
 await evalIn(`(() => {
   document.querySelector('readium-view').renderer.getContents()[0]
     .doc.getSelection().removeAllRanges();
