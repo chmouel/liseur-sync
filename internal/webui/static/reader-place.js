@@ -34,6 +34,57 @@ const finite = (value) => typeof value === "number" && Number.isFinite(value);
 const fractionOf = (value) =>
   finite(value) && value >= 0 && value <= 1 ? value : null;
 
+const squash = (value) =>
+  typeof value === "string" ? value.replace(/\s+/g, " ") : "";
+
+const ELLIPSIS = "…";
+
+// Both context fields are cut at a fixed number of code points, so both
+// ends usually land inside a word. Half a word is not worth reading and
+// is not the writer's text either, so it goes; a side with no space at
+// all is one long partial word and goes whole.
+const dropPartialHead = (text) => text.replace(/^\S*\s*/, "");
+const dropPartialTail = (text) => text.replace(/\s*\S*$/, "");
+
+const cap = (text) => {
+  const points = Array.from(text);
+  if (points.length <= EXCERPT_CHARS) return text;
+  return points.slice(0, EXCERPT_CHARS - 1).join("") + ELLIPSIS;
+};
+
+/**
+ * passageOf reads an anchor's three text fields as one passage.
+ *
+ * `before`, `highlight` and `after` are a single continuous run of text
+ * from one block — the words leading up to the first visible word, that
+ * word, and the words following it — so they are joined with nothing
+ * between them. Any whitespace inside them is a line in a document
+ * rather than a pause in a sentence, so it collapses.
+ *
+ * An anchor's context is the whole point of this: `highlight` alone is
+ * one word by construction (`reader-anchor.js` pins the first visible
+ * word, exactly as Android's `ExactLocatorAnchor` does), and one word
+ * places nobody. Capturing *more* text instead is not the lever it
+ * looks like: the phone compares the three fields verbatim to decide
+ * that two devices are on the same spot, so a client that captured a
+ * longer `after` would never agree with one that did not. The fields
+ * are a wire contract; how much of them a reader is shown is not.
+ *
+ * A locator carrying only `highlight` is left as it is. Some clients
+ * write a whole selection there and no context at all, and dressing
+ * that up as an elided fragment would say something untrue about it.
+ */
+export function passageOf(text) {
+  const highlight = squash(text?.highlight).trim();
+  if (!highlight) return null;
+  const before = dropPartialHead(squash(text?.before));
+  const after = dropPartialTail(squash(text?.after));
+  if (!before && !after) return cap(highlight);
+  return cap(
+    (before ? ELLIPSIS + before : "") + highlight + (after ? after + ELLIPSIS : ""),
+  );
+}
+
 /**
  * excerptOf is the passage the writing client had on screen.
  *
@@ -42,10 +93,7 @@ const fractionOf = (value) =>
  * point of display so that every caller gets it.
  */
 export function excerptOf(op) {
-  const text = op?.locator?.text;
-  const highlight = typeof text?.highlight === "string" ? text.highlight.trim() : "";
-  if (!highlight) return null;
-  return Array.from(highlight).slice(0, EXCERPT_CHARS).join("");
+  return passageOf(op?.locator?.text);
 }
 
 /**
@@ -95,13 +143,20 @@ export function placeOf(op, view = {}) {
  * It is the side the reader can check by looking down, so it is never
  * interpolated: the engine says which section and how far into it, and
  * that is the same arithmetic the footer does.
+ *
+ * `view.anchor` is this page's own first visible word and its context,
+ * captured the way a position is written. Two sides a page apart are
+ * told apart by their numbers; two sides on the same page and not the
+ * same spot are told apart by nothing else at all. Nothing is read from
+ * the document here — the anchor arrives already taken.
  */
 export function placeHere(location, view = {}) {
   if (!location) return null;
   const table = view.table || null;
   const place = {
     fraction: fractionOf(location.fraction), page: null,
-    total: table?.total || null, exact: false, excerpt: null, at: null,
+    total: table?.total || null, exact: false,
+    excerpt: passageOf(view.anchor), at: null,
   };
   if (!table) return place;
   const page = pageAt(table, location.section?.current, location.sectionFraction);

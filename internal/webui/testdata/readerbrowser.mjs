@@ -1598,9 +1598,16 @@ async function liveGuard(evalIn, check, S) {
       client_ts: new Date().toISOString(), progression: ${fraction},
       locator: {
         locations: { totalProgression: ${fraction}, fragments: ['epubcfi(/6/9998!/4/2)'] },
-        // Another device's text, and deliberately something that would
-        // be markup if anybody were careless enough to parse it.
-        text: { highlight: 'the passage <b>another device</b> had on screen' },
+        // Another device's text, in the shape an anchor is written in:
+        // the first visible word, and the words either side of it cut
+        // mid-word the way a fixed-length capture cuts them. And
+        // deliberately something that would be markup if anybody were
+        // careless enough to parse it.
+        text: {
+          before: 'oking up at ',
+          highlight: 'the passage <b>another device</b> had on screen',
+          after: ' before the night fel',
+        },
       },
     }] });
     return out.results[0].status;
@@ -1742,6 +1749,12 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   const excerpt = await evalIn("document.getElementById('reader-catchup-excerpt').textContent");
   check('the disagreement shows what the other device had on screen',
     excerpt.includes('another device') && excerpt.includes('<b>'), excerpt);
+  // An anchor's highlight is one word — the first one visible there —
+  // so a panel that quoted only it would place nobody.
+  check('the passage carries the words either side of it',
+    excerpt.includes('up at') && excerpt.includes('before the night'), excerpt);
+  check('the halves of a word the capture cut are not shown',
+    !excerpt.includes('oking') && !excerpt.includes('fel'), excerpt);
   check('another device\'s passage is text, never markup',
     await evalIn("!document.getElementById('reader-catchup-excerpt').querySelector('b')"));
   check('a disagreement is marked as one',
@@ -1816,6 +1829,21 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   check('the other side says how long ago it was',
     (await evalIn("document.getElementById('reader-sync-there').textContent")).includes('just now'),
     await evalIn("document.getElementById('reader-sync-there').textContent"));
+  check('the other side quotes its passage, with its context',
+    (await evalIn("document.getElementById('reader-sync-excerpt').textContent"))
+      .includes('up at the passage'),
+    await evalIn("document.getElementById('reader-sync-excerpt').textContent"));
+  // This side's passage is taken from the page on screen, and a page
+  // whose first visible word is not unique in its block yields no
+  // anchor. So what is asked is that it says nothing or quotes text —
+  // never that it has something to say.
+  check('this side quotes text, or says nothing at all',
+    await evalIn(`(() => {
+      const el = document.getElementById('reader-sync-here-excerpt');
+      if (el.hidden) return el.textContent === '';
+      return el.textContent.trim().length > 0 && el.children.length === 0;
+    })()`),
+    await evalIn("document.getElementById('reader-sync-here-excerpt').textContent"));
 
   // Cancelling is a real answer and changes nothing: not the page, not
   // what the two sides have agreed on. Asking again asks the same thing.

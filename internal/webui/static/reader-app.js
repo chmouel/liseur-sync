@@ -589,8 +589,9 @@ function placeDetail(place, name) {
   return age ? `${said}, ${age}` : said;
 }
 
-// Another device's text, so it is set as a text node and nothing else.
-// It is capped by the presenter; the two-line clamp is in the CSS.
+// A passage from a document, so it is set as a text node and nothing
+// else — another device's most of all. It is capped by the presenter;
+// the two-line clamp is in the CSS.
 function showExcerpt(element, place) {
   if (!element) return;
   const excerpt = place?.excerpt;
@@ -826,6 +827,7 @@ const syncButton = document.getElementById("reader-sync");
 const syncDialog = document.getElementById("reader-sync-dialog");
 const syncSummary = document.getElementById("reader-sync-summary");
 const syncHereText = document.getElementById("reader-sync-here");
+const syncHereExcerpt = document.getElementById("reader-sync-here-excerpt");
 const syncThereText = document.getElementById("reader-sync-there");
 const syncThereSide = document.getElementById("reader-sync-there-side");
 const syncExcerpt = document.getElementById("reader-sync-excerpt");
@@ -974,6 +976,7 @@ function presentBookSync(remote, note) {
   syncHereText.textContent = placeLabel(mine) || "Not known yet";
   syncThereText.textContent = placeSentence(there) || "";
   syncThereSide.hidden = !other;
+  showExcerpt(syncHereExcerpt, mine);
   showExcerpt(syncExcerpt, there);
 
   syncTake.hidden = !takeable;
@@ -2187,10 +2190,12 @@ function startCandidates(op) {
 
 // What the presenter needs to turn an op into a page a reader can
 // check: the same facts the restore ladder stands on, plus the position
-// table. Before the book has opened there is only the table, which is
-// enough for a percentage and honest about the rest.
+// table and this page's own anchor. Before the book has opened there is
+// only the table, which is enough for a percentage and honest about the
+// rest.
 function placeView() {
-  return view ? { ...restoreView(), table: positions } : { table: positions };
+  if (!view) return { table: positions };
+  return { ...restoreView(), table: positions, anchor: view.visibleAnchor() };
 }
 
 // ------------------------------------------------------ appearance
