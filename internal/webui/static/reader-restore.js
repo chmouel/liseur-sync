@@ -1,8 +1,9 @@
 // Where to reopen a book, given what some client wrote down about where
 // its reader was.
 //
-// The clients do not agree on much. This reader records a CFI and a
-// spine index; the Android app records a resource, a fraction of that
+// The clients do not agree on much. This reader records a resource, a
+// fraction of that resource and a page number from the list it was
+// served; the Android app records a resource, a fraction of that
 // resource, and sometimes a quote of the passage on screen. The one
 // thing everything writes is a fraction of the whole book — and that is
 // the least useful of them, because the two clients do not compute it
@@ -101,16 +102,22 @@ export function startCandidates(op, view) {
       const locator = structuredClone(op.locator);
       locator.href = href;
       locator.locations = { ...locations };
-      // This reader writes `position` as the spine index plus one, and
-      // relies on it to reopen a page it saved with no CFI. The app on
-      // a phone writes Readium's synthetic position into the same field
-      // — a count of pages through the whole book, which indexes into
-      // somewhere else entirely here. The field is kept only while it
-      // still says what this reader means by it, which a foreign one
-      // will not. The resource and the progression within it are what
-      // travel between clients.
-      const spine = (view.sections || []).findIndex((s) => s && s.id === href);
-      if (locator.locations.position !== spine + 1) delete locator.locations.position;
+      // `position` is a count of pages through the whole book, and the
+      // count is the writing toolkit's: the app on a phone numbers the
+      // same book differently from the list this reader was served,
+      // and even this reader's own number is only good against the
+      // list it had that day. The engine keys the open by its own list
+      // and the resource named here; the resource and the progression
+      // within it are what travel between clients.
+      delete locator.locations.position;
+      // A fragment spelled on the href names an element in the chapter,
+      // and the engine looks for one in `fragments`; carry it there
+      // rather than lose it with the spelling.
+      const hash = op.locator.href.indexOf("#");
+      if (hash >= 0 && hash < op.locator.href.length - 1 && !cfiOf(op) &&
+          !(Array.isArray(locator.locations.fragments) && locator.locations.fragments.length)) {
+        locator.locations.fragments = [op.locator.href.slice(hash + 1)];
+      }
       out.push(locator);
     }
   }
