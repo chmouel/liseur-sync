@@ -59,8 +59,9 @@ is the engine's honest measure of the book, not a guess.
 > positions. Everything else in this section stands — including why it
 > is neither the print page-list nor the server's edition count.
 
-**The middle slot cycles.** Chapter title by default, then time left
-in chapter, then time left in book, then empty, then round again. A
+**The middle slot cycles.** Chapter title by default, then positions left
+in chapter, then time left in chapter, then time left in book, then empty,
+then round again. A
 click or a key on the footer advances it; the same choice has a home
 in the Aa panel as a "Footer" fieldset. It is a browser preference,
 kept alongside the other appearance settings in `localStorage` and
@@ -94,3 +95,6 @@ title, and three controls of one shape.
   (16px) it is small. That is the trade the app makes too, and the
   margin values are unchanged so nobody's pagination moved.
 - No server change, no API change, nothing new stored server-side.
+- The positions-left mode follows the Android reader's chapter ranges:
+  named navigation entries start chapters, and unnamed resources continue
+  the preceding chapter when an EPUB splits one chapter across files.

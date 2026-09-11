@@ -22,6 +22,7 @@ const ASSETS = [
   new URL('./assets/reader-annotations.js', self.location).href,
   new URL('./assets/reader-app.js', self.location).href,
   new URL('./assets/reader-auth.js', self.location).href,
+  new URL('./assets/reader-chapters.js', self.location).href,
   new URL('./assets/reader-engine.js', self.location).href,
   new URL('./assets/reader-live.js', self.location).href,
   new URL('./assets/reader-place.js', self.location).href,

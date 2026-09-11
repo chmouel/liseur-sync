@@ -93,7 +93,8 @@ export class ReaderEngine extends HTMLElement {
     this.book = {
       metadata: raw.metadata,
       toc: tocItems(raw.toc),
-      sections: raw.readingOrder.map(link => ({ id: link.href, size: link.size || 0, compressedSize: link.properties?.[archiveProperty]?.entryLength, linear: "yes" })),
+      sections: raw.readingOrder.map(link => ({ id: link.href, title: link.title ?? null, size: link.size || 0, compressedSize: link.properties?.[archiveProperty]?.entryLength, linear: "yes" })),
+      packageHref,
     };
     this.fixed = raw.metadata?.presentation?.layout === "fixed" || raw.metadata?.layout === "fixed";
     if (this.fixed) for (const section of this.book.sections) section.compressedSize = 1;
