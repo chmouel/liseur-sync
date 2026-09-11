@@ -14,6 +14,7 @@ import { placeOf, placeHere, placeLabel, placeSentence, relativeAge } from "./re
 import { decideBookSync } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
+import { buildChapters, chapterForLocation, pagesLeftInChapter } from "./reader-chapters.js";
 import {
   clearOfflineSessionCheckpoint,
   accountContext,
@@ -124,6 +125,7 @@ const catchupDismiss = document.getElementById("reader-catchup-dismiss");
 // this recipe cannot measure, which leaves the engine's own locations
 // to say what page it is.
 let positions = null;
+let chapters = null;
 let offlineSnapshot = null;
 let offlineAccount = null;
 let offlineCSRF = "";
@@ -2228,8 +2230,9 @@ const SETTINGS_DEFAULTS = Object.freeze({
   footer: "chapter",
 });
 // What the footer's middle slot shows; a click on the footer walks
-// this ring, the way a tap does in the app.
-const FOOTER_MODES = ["chapter", "time-chapter", "time-book", "empty"];
+// this ring, the way a tap does in the app. "positions-chapter" shows
+// how many Readium positions remain in the current chapter.
+const FOOTER_MODES = ["chapter", "positions-chapter", "time-chapter", "time-book", "empty"];
 const THEMES = {
   light: {
     bg: "#ffffff", fg: "#1b1b1f", link: "#1a63c4", scheme: "light",
@@ -2896,6 +2899,18 @@ function footerMiddle(location) {
     : SETTINGS_DEFAULTS.footer;
   const time = location.time || {};
   switch (mode) {
+    case "positions-chapter": {
+      // Show how many Readium positions remain in the current chapter.
+      if (!chapters || !positions || chapters.length === 0) return "";
+      const section = location.section || {};
+      const currentPage = pageAt(positions, section.current, location.sectionFraction);
+      if (!currentPage) return "";
+      const chapter = chapterForLocation(chapters, view.book.sections, section.current, currentPage);
+      const pagesLeft = pagesLeftInChapter(chapter, currentPage);
+      if (pagesLeft === null) return "";
+      if (pagesLeft === 0) return "Last page in chapter";
+      return pagesLeft + (pagesLeft === 1 ? " page" : " pages") + " left in chapter";
+    }
     case "time-chapter":
       return finite(time.section)
         ? durationText(time.section) + " left in chapter"
@@ -3446,6 +3461,7 @@ window.addEventListener("beforeunload", () => {
     // Counted before the first relocate paints a footer, so the very
     // first page the reader sees is already the app's number.
     positions = positionTable(view.book.sections);
+    chapters = buildChapters(view.book.toc, view.book.sections, positions);
     buildTOC(view.book.toc);
     // The renderer exists once the book is open; settings applied here
     // shape the very first page rather than repainting it.
