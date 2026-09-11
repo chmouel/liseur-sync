@@ -1604,9 +1604,9 @@ async function liveGuard(evalIn, check, S) {
         // deliberately something that would be markup if anybody were
         // careless enough to parse it.
         text: {
-          before: 'oking up at ',
+          before: 'e was standing there, looking up at ',
           highlight: 'the passage <b>another device</b> had on screen',
-          after: ' before the night fel',
+          after: ' before the night fell over the whole harbour',
         },
       },
     }] });
@@ -1752,9 +1752,10 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   // An anchor's highlight is one word — the first one visible there —
   // so a panel that quoted only it would place nobody.
   check('the passage carries the words either side of it',
-    excerpt.includes('up at') && excerpt.includes('before the night'), excerpt);
+    excerpt.includes('standing there, looking up at') &&
+    excerpt.includes('before the night fell over the whole'), excerpt);
   check('the halves of a word the capture cut are not shown',
-    !excerpt.includes('oking') && !excerpt.includes('fel'), excerpt);
+    !excerpt.includes('e was standing') && !excerpt.includes('harbour'), excerpt);
   check('another device\'s passage is text, never markup',
     await evalIn("!document.getElementById('reader-catchup-excerpt').querySelector('b')"));
   check('a disagreement is marked as one',
@@ -1831,7 +1832,7 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
     await evalIn("document.getElementById('reader-sync-there').textContent"));
   check('the other side quotes its passage, with its context',
     (await evalIn("document.getElementById('reader-sync-excerpt').textContent"))
-      .includes('up at the passage'),
+      .includes('looking up at the passage'),
     await evalIn("document.getElementById('reader-sync-excerpt').textContent"));
   // This side's passage is taken from the page on screen, and a page
   // whose first visible word is not unique in its block yields no
