@@ -1,168 +1,131 @@
-// Chapter extraction and position calculation for the reader footer.
+// Chapter ranges for the reader footer.
 //
-// Chapters are extracted from the EPUB's table of contents and mapped to
-// Readium positions. The footer can show how many positions remain in the
-// current chapter, matching the Android app's behavior (ADR-0029).
+// The resource-to-chapter rules mirror the Android reader: a named resource
+// starts a chapter, while an unnamed resource continues the previous one.
 
-import { pageAt } from "./reader-positions.js";
+const VIRTUAL_ORIGIN = "https://publication.invalid/";
 
 /**
- * BookChapter represents a chapter with its position range.
  * @typedef {Object} BookChapter
- * @property {string|null} title - Chapter title, or null for unnamed chapters
- * @property {number} firstPosition - Starting Readium position (1-based)
- * @property {number} lastPosition - Ending Readium position (1-based)
+ * @property {string|null} title
+ * @property {number} firstPosition
+ * @property {number} lastPosition
  */
 
-/**
- * buildChapters extracts chapters from the EPUB's table of contents and
- * maps them to Readium position ranges.
- *
- * The TOC is a nested structure where each item has label, href, and subitems.
- * A chapter is an entry with a label (named chapter) that references a resource.
- * Chapters are keyed by their resource href; multiple TOC entries pointing to
- * the same resource collapse into one chapter.
- *
- * A nameless chapter (one without a label or with only whitespace) is excluded,
- * matching the Android app logic.
- *
- * @param {Array} toc - The publication's table of contents from view.book.toc
- * @param {Array} sections - The publication's reading order from view.book.sections
- * @param {Object} table - The position table from positionTable(sections)
- * @returns {Array<BookChapter>} Array of chapters sorted by position, or [] if no chapters
- */
-export function buildChapters(toc, sections, table) {
-  if (!toc || !sections || !table) return [];
-
-  const chapters = [];
-  const seenHrefs = new Set();
-
-  /**
-   * Flatten the nested TOC tree and extract chapters.
-   * We only include items that have both a label and an href, and we skip
-   * duplicates (same href appears in multiple places in the TOC).
-   */
-  const flattenTOC = (items) => {
-    if (!Array.isArray(items)) return;
-    for (const item of items) {
-      // Include only items with both a label (named chapter) and an href (resource reference)
-      const label = (item.label || "").trim();
-      if (label && item.href && !seenHrefs.has(item.href)) {
-        seenHrefs.add(item.href);
-        chapters.push({ label, href: item.href });
+function archiveKey(reference, base = "") {
+  if (typeof reference !== "string" || !reference.trim()) return null;
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(reference.trim())) return null;
+  if (/%(?:2f|5c)/i.test(reference)) return null;
+  try {
+    const url = new URL(reference, new URL(base || ".", new URL(VIRTUAL_ORIGIN)));
+    if (url.origin !== VIRTUAL_ORIGIN.slice(0, -1) || url.username || url.password) return null;
+    const path = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    if (!path || path.split("/").some(part => part === "..")) return null;
+    const parts = [];
+    for (const part of path.split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") {
+        if (!parts.length) return null;
+        parts.pop();
+      } else {
+        parts.push(part);
       }
-      // Recurse into subitems
-      if (item.subitems) flattenTOC(item.subitems);
+    }
+    return parts.join("/") || null;
+  } catch {
+    return null;
+  }
+}
+
+function resourceIndexByHref(sections) {
+  const indexes = new Map();
+  sections.forEach((section, index) => {
+    const key = archiveKey(section?.id);
+    if (key) indexes.set(key, index);
+  });
+  return indexes;
+}
+
+function tocItems(items, sections, packageHref) {
+  const indexes = resourceIndexByHref(sections);
+  const packageBase = packageHref ? packageHref.slice(0, packageHref.lastIndexOf("/") + 1) : "";
+  const titles = new Map();
+  const visit = list => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const label = typeof item?.label === "string" ? item.label.trim() : "";
+      if (label && item.href) {
+        const direct = archiveKey(item.href);
+        const relative = archiveKey(item.href, packageBase);
+        const index = indexes.has(direct) ? indexes.get(direct) : indexes.get(relative);
+        if (index !== undefined && !titles.has(index)) titles.set(index, label);
+      }
+      visit(item?.subitems);
     }
   };
+  visit(items);
+  return titles;
+}
 
-  flattenTOC(toc);
-
-  if (chapters.length === 0) return [];
-
-  // Map chapters to position ranges.
-  // Each chapter starts at the resource it references and ends just before
-  // the next chapter (or at the end of the book).
-  const bookChapters = [];
-  for (let i = 0; i < chapters.length; i++) {
-    const chapter = chapters[i];
-    const sectionIndex = sections.findIndex((s) => s && s.id === chapter.href);
-    if (sectionIndex < 0) continue; // Chapter's resource not in reading order, skip it
-
-    // First position is the start of this chapter's resource
-    const firstPosition = (table.starts[sectionIndex] || 0) + 1; // 1-based
-
-    // Last position is just before the next chapter's resource, or the end of the book
-    let lastPosition;
-    if (i + 1 < chapters.length) {
-      // Find the next chapter's starting position
-      const nextChapterHref = chapters[i + 1].href;
-      const nextSectionIndex = sections.findIndex((s) => s && s.id === nextChapterHref);
-      if (nextSectionIndex > 0) {
-        // Last position is the last position of the section before the next chapter
-        lastPosition = (table.starts[nextSectionIndex] || 0);
-      } else {
-        // Next chapter's resource not found, go to end of book
-        lastPosition = table.total;
-      }
-    } else {
-      // This is the last chapter, goes to end of book
-      lastPosition = table.total;
-    }
-
-    // Ensure lastPosition is valid (at least equal to firstPosition)
-    lastPosition = Math.max(lastPosition, firstPosition);
-
-    bookChapters.push({
-      title: chapter.label,
-      firstPosition,
-      lastPosition,
-    });
+function usableTable(table, sections) {
+  if (!table || !Array.isArray(table.counts) || !Array.isArray(table.starts) ||
+      table.counts.length !== sections.length || table.starts.length !== sections.length ||
+      !Number.isFinite(table.total) || table.total < 0) return false;
+  let total = 0;
+  for (let i = 0; i < sections.length; i++) {
+    if (!Number.isFinite(table.counts[i]) || table.counts[i] < 0 ||
+        !Number.isFinite(table.starts[i]) || table.starts[i] < 0 ||
+        table.starts[i] !== total) return false;
+    total += table.counts[i];
   }
-
-  return bookChapters;
+  return total === table.total;
 }
 
 /**
- * pagesLeftInChapter calculates how many Readium positions remain in the
- * current chapter, or null if there is no chapter or the position is out of range.
- *
- * Following ADR-0029:
- * - A nameless chapter (title is null) counts as no chapter
- * - A position out of the chapter's range returns null
- * - Zero means the reader is on the last position of the chapter
- *
- * @param {BookChapter|null} chapter - The chapter containing the current position
- * @param {number} position - The current Readium position (1-based)
- * @returns {number|null} Remaining positions in chapter, or null
+ * @returns {{chapters: Array<BookChapter>, chapterIndexByResource: Map<number, number>}}
  */
+export function buildChapters(toc, sections, table, packageHref = "") {
+  if (!Array.isArray(sections) || !usableTable(table, sections)) {
+    return { chapters: [], chapterIndexByResource: new Map() };
+  }
+  const titles = tocItems(toc, sections, packageHref);
+  const chapters = [];
+  const chapterIndexByResource = new Map();
+  for (let index = 0; index < sections.length; index++) {
+    const count = table.counts[index];
+    if (count <= 0) continue;
+    const firstPosition = table.starts[index] + 1;
+    const lastPosition = table.starts[index] + count;
+    const title = titles.get(index) ?? sections[index]?.title ?? null;
+    const previous = chapters.at(-1);
+    if (title === null && previous) {
+      previous.lastPosition = lastPosition;
+    } else {
+      chapters.push({ title, firstPosition, lastPosition, href: sections[index]?.id || null });
+    }
+    chapterIndexByResource.set(index, chapters.length - 1);
+  }
+  return { chapters, chapterIndexByResource };
+}
+
 export function pagesLeftInChapter(chapter, position) {
-  if (!chapter) return null;
-  if (!chapter.title) return null; // Nameless chapters don't count
+  if (!chapter || !chapter.title) return null;
   if (position < chapter.firstPosition || position > chapter.lastPosition) return null;
   return chapter.lastPosition - position;
 }
 
-/**
- * chapterAt finds the chapter containing the given Readium position.
- *
- * @param {Array<BookChapter>} chapters - Array of chapters
- * @param {number} position - The Readium position to look up (1-based)
- * @returns {BookChapter|null} The chapter at this position, or null
- */
 export function chapterAt(chapters, position) {
   if (!Array.isArray(chapters) || !Number.isInteger(position)) return null;
-  return chapters.find((ch) => position >= ch.firstPosition && position <= ch.lastPosition) || null;
+  return chapters.find(ch => position >= ch.firstPosition && position <= ch.lastPosition) || null;
 }
 
-/**
- * chapterForLocation finds the chapter for a location in the reader,
- * using the section index as a hint.
- *
- * When the resource (section) and position disagree about which chapter the
- * reader is in, we return null, matching the Android app (ADR-0029).
- *
- * @param {Array<BookChapter>} chapters - Array of chapters
- * @param {Array} sections - Reading order sections
- * @param {number|null} sectionIndex - Current section index
- * @param {number} position - Current Readium position
- * @returns {BookChapter|null} The chapter at this location
- */
-export function chapterForLocation(chapters, sections, sectionIndex, position) {
+export function chapterForLocation(chapters, chapterIndexByResource, sectionIndex, position) {
   const positionChapter = chapterAt(chapters, position);
-
-  if (sectionIndex !== null && sectionIndex !== undefined && Number.isInteger(sectionIndex)) {
-    const section = sections && sections[sectionIndex];
-    if (section && section.id) {
-      const sectionChapter = chapters.find((ch) => ch && ch.href === section.id) || null;
-      // If section and position agree, return it
-      if (sectionChapter && sectionChapter === positionChapter) {
-        return sectionChapter;
-      }
-      // If they disagree, report nothing to avoid false claims
-      if (sectionChapter && !positionChapter) return null;
-    }
-  }
-
-  return positionChapter;
+  const resourceChapter = Number.isInteger(sectionIndex)
+    ? chapters[chapterIndexByResource?.get(sectionIndex)]
+    : null;
+  return resourceChapter && position >= resourceChapter.firstPosition &&
+    position <= resourceChapter.lastPosition ? resourceChapter : positionChapter;
 }
+
+export { archiveKey };

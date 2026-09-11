@@ -165,7 +165,7 @@ func TestOfflineAssetsArePublicAndRelative(t *testing.T) {
 			t.Errorf("%s contains personalized data", name)
 		}
 	}
-	for _, name := range []string{"reader-app.js", "reader-engine.js", "reader-publication.js", "vendor/readium/readium.js"} {
+	for _, name := range []string{"reader-app.js", "reader-chapters.js", "reader-engine.js", "reader-publication.js", "vendor/readium/readium.js"} {
 		resp, err := noRedirect().Get(ts.URL + "/ui/offline/assets/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -218,6 +218,7 @@ func TestOfflineServiceWorkerIsBoundedToShellAssets(t *testing.T) {
 		"./assets/offline-account.js",
 		"./assets/offline-storage.js",
 		"./assets/reader-app.js",
+		"./assets/reader-chapters.js",
 		"./assets/vendor/readium/readium.js",
 	} {
 		if !strings.Contains(script, asset) {

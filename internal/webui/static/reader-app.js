@@ -2901,11 +2901,11 @@ function footerMiddle(location) {
   switch (mode) {
     case "positions-chapter": {
       // Show how many Readium positions remain in the current chapter.
-      if (!chapters || !positions || chapters.length === 0) return "";
+      if (!chapters || !positions || chapters.chapters.length === 0) return "";
       const section = location.section || {};
       const currentPage = pageAt(positions, section.current, location.sectionFraction);
       if (!currentPage) return "";
-      const chapter = chapterForLocation(chapters, view.book.sections, section.current, currentPage);
+      const chapter = chapterForLocation(chapters.chapters, chapters.chapterIndexByResource, section.current, currentPage);
       const pagesLeft = pagesLeftInChapter(chapter, currentPage);
       if (pagesLeft === null) return "";
       if (pagesLeft === 0) return "Last page in chapter";
@@ -3461,7 +3461,7 @@ window.addEventListener("beforeunload", () => {
     // Counted before the first relocate paints a footer, so the very
     // first page the reader sees is already the app's number.
     positions = positionTable(view.book.sections);
-    chapters = buildChapters(view.book.toc, view.book.sections, positions);
+    chapters = buildChapters(view.book.toc, view.book.sections, positions, view.book.packageHref);
     buildTOC(view.book.toc);
     // The renderer exists once the book is open; settings applied here
     // shape the very first page rather than repainting it.
