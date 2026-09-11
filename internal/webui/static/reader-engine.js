@@ -150,10 +150,41 @@ export class ReaderEngine extends HTMLElement {
       tap: () => true,
       click: () => true,
       handleLocator: () => false,
-    }, this.positionList, target, { preferences: this.preferences, defaults: {} });
+    }, this.positionList, this.positioned(target), { preferences: this.preferences, defaults: {} });
     try { await this.navigator.load(); }
     catch (error) { await this.navigator.destroy(); this.navigator = null; throw error; }
     this.relocate(this.navigator.currentLocator);
+    // The first load shows the resource at its progression and nothing
+    // finer. A locator that quotes the passage, or names a fragment, is
+    // then walked the way any navigation is: that is the path where the
+    // navigator searches the quote inside its block. The progression
+    // page is already on screen, so a quote that is not found costs
+    // nothing.
+    if (target.text?.highlight || target.locations.fragments?.length) {
+      await this.navigate(target).catch(() => {});
+    }
+  }
+
+  // positioned keys a locator by this publication's own position list.
+  //
+  // The navigator's first load looks its starting locator up in that
+  // list by `locations.position`, and throws when nothing matches. Only
+  // the resource is decided by that lookup — the page inside it comes
+  // from `locations.progression` — so the position is taken from the
+  // list's entry for the locator's resource, never from the locator
+  // itself: another client's position counts pages by its own toolkit's
+  // reckoning, and a locator built from a fraction or a bare href never
+  // had one.
+  positioned(locator) {
+    const href = locator.href.split("#")[0];
+    const own = this.positionList.filter(entry => entry.href === href);
+    if (!own.length) return locator;
+    const progression = locator.locations.progression || 0;
+    let entry = own[0];
+    for (const candidate of own) {
+      if ((candidate.locations.progression || 0) <= progression) entry = candidate;
+    }
+    return locator.copyWithLocations({ position: entry.locations.position });
   }
 
   relocate(locator) {

@@ -79,23 +79,51 @@ test("the chapter is tried before the fraction", () => {
 
 test("another client's page number does not come along", () => {
   // 812 is Readium's synthetic position on a phone: a count of pages
-  // through the whole book. This reader means the spine index by that
-  // field, so a foreign one indexes into somewhere else entirely.
+  // through the whole book by the phone's reckoning, which is not the
+  // list this reader was served. The engine keys the open by its own
+  // list and the resource named here.
   const out = startCandidates(phoneOp(), view());
   assert.equal("position" in out[0].locations, false);
 });
 
-test("this reader's own spine index survives, because it means that", () => {
-  // A page saved here with no CFI reopens on it.
+test("this reader's own page number does not come along either", () => {
+  // A page saved here carries the position the list of that day gave
+  // it. A list can be regenerated; the resource and the progression
+  // within it are what reopen the page, whoever wrote them.
   const own = phoneOp({
     edition_sha: undefined,
     locator: {
       href: "OEBPS/ch2 the%20long one.xhtml",
-      locations: { progression: 0.74, totalProgression: 0.31, position: 3 },
+      locations: { progression: 0.74, totalProgression: 0.31, position: 285 },
     },
   });
   const out = startCandidates(own, view());
-  assert.equal(out[0].locations.position, 3);
+  assert.equal("position" in out[0].locations, false);
+  assert.equal(out[0].locations.progression, 0.74);
+});
+
+test("a fragment spelled on the href is kept as a fragment", () => {
+  // The href is canonicalized to this book's spelling, which drops the
+  // fragment; an element it named must still be there for the engine
+  // to walk to.
+  const out = startCandidates(
+    phoneOp({ locator: { href: "/OEBPS/ch2 the%20long one.xhtml#p42", locations: {} } }),
+    view(),
+  );
+  assert.equal(out[0].href, "OEBPS/ch2 the%20long one.xhtml");
+  assert.deepEqual(out[0].locations.fragments, ["p42"]);
+  // A CFI already in `fragments` is the finer pointer and is left alone.
+  const cfi = startCandidates(
+    phoneOp({
+      locator: {
+        href: "/OEBPS/ch2 the%20long one.xhtml#p42",
+        locations: { fragments: ["epubcfi(/6/4!/4/2)"] },
+      },
+    }),
+    view(),
+  );
+  assert.equal(cfi[0], "epubcfi(/6/4!/4/2)");
+  assert.deepEqual(cfi[1].locations.fragments, ["epubcfi(/6/4!/4/2)"]);
 });
 
 test("a position in another edition falls to the fraction", () => {
@@ -202,7 +230,7 @@ test("an op the phone actually wrote climbs the ladder here", () => {
   assert.equal(cfiOf(fromPhone), null);
   assert.equal(out[0].href, "OEBPS/ch1.xhtml");
   assert.equal(out[0].locations.progression, 0.74);
-  // 812 is a page number in the phone's book, and spine slot 812 here.
+  // 812 is a page number in the phone's book, not in this list.
   assert.equal(out[0].locations.position, undefined);
   // The anchor is carried through untouched for the engine to walk.
   assert.equal(out[0].locations.cssSelector, "body > p:nth-of-type(3)");

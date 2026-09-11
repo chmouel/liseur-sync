@@ -118,8 +118,11 @@ func browserTestEPUB(t *testing.T) []byte {
 	if _, err := stored.Write([]byte("application/epub+zip")); err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Repeat(
-		"<p>Call me Ishmael. Some years ago, never mind how long precisely.</p>\n", 60)
+	// The fortieth paragraph carries an id so a position can name it.
+	paragraph := "<p>Call me Ishmael. Some years ago, never mind how long precisely.</p>\n"
+	body := strings.Repeat(paragraph, 39) +
+		strings.Replace(paragraph, "<p>", `<p id="ishmael40">`, 1) +
+		strings.Repeat(paragraph, 20)
 	// Announced but never seen. epub.js measures the whole document, so
 	// this is what used to make a chapter forty blank pages long.
 	offscreen := `<h2 class="offscreen">Chapter heading for a screen reader</h2>`
@@ -419,65 +422,7 @@ const seededStaleOpID = "00000000-0000-4000-8000-00000000feed"
 
 func seedStalePosition(t *testing.T, base string, cookie *http.Cookie, bookID string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, base+"/ui/books/"+bookID+"/read", nil)
-	req.AddCookie(cookie)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	html := string(raw)
-	const marker = `data-csrf="`
-	i := strings.Index(html, marker)
-	if i < 0 {
-		t.Fatal("no csrf on the reader page")
-	}
-	csrf := html[i+len(marker):]
-	csrf = csrf[:strings.Index(csrf, `"`)]
-
-	// The same credential path the reader itself takes: a short-lived
-	// token from the session, then the native API with it.
-	req, _ = http.NewRequest(http.MethodPost, base+"/ui/reader/token",
-		strings.NewReader(url.Values{"csrf": {csrf}}.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var minted struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-
-	api := func(path, body string) map[string]any {
-		req, _ := http.NewRequest(http.MethodPost, base+path, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+minted.Token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			raw, _ := io.ReadAll(resp.Body)
-			t.Fatalf("%s: %d %s", path, resp.StatusCode, raw)
-		}
-		var out map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-
-	workID, _ := api("/v1/books/"+bookID+"/resolve", "{}")["work_id"].(string)
-	if workID == "" {
-		t.Fatal("the book did not resolve to a work")
-	}
+	api, workID := readerAPIFor(t, base, cookie, bookID)
 	op := map[string]any{
 		"op_id": seededStaleOpID, "work_id": workID,
 		"client_ts":   time.Now().UTC().Format(time.RFC3339),
@@ -541,6 +486,90 @@ func seedStalePosition(t *testing.T, base string, cookie *http.Cookie, bookID st
 			}
 		}
 	}
+}
+
+// seedPosition files one position op for the book the way a device
+// would, so the browser check can watch the reader reopen on it.
+func seedPosition(t *testing.T, base string, cookie *http.Cookie, bookID, opID string, progression float64, locator map[string]any) {
+	t.Helper()
+	api, workID := readerAPIFor(t, base, cookie, bookID)
+	op := map[string]any{
+		"op_id": opID, "work_id": workID,
+		"client_ts":   time.Now().UTC().Format(time.RFC3339),
+		"progression": progression,
+		"locator":     locator,
+	}
+	payload, _ := json.Marshal(map[string]any{"ops": []any{op}})
+	out := api("/v1/ops", string(payload))
+	if results, ok := out["results"].([]any); !ok || len(results) != 1 ||
+		results[0].(map[string]any)["status"] != "applied" {
+		t.Fatalf("position seeding: %v", out)
+	}
+}
+
+// readerAPIFor takes the same credential path the reader itself takes —
+// a short-lived token from the session, then the native API with it —
+// and returns a JSON POST bound to that token plus the book's work id.
+func readerAPIFor(t *testing.T, base string, cookie *http.Cookie, bookID string) (func(path, body string) map[string]any, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/ui/books/"+bookID+"/read", nil)
+	req.AddCookie(cookie)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	html := string(raw)
+	const marker = `data-csrf="`
+	i := strings.Index(html, marker)
+	if i < 0 {
+		t.Fatal("no csrf on the reader page")
+	}
+	csrf := html[i+len(marker):]
+	csrf = csrf[:strings.Index(csrf, `"`)]
+
+	req, _ = http.NewRequest(http.MethodPost, base+"/ui/reader/token",
+		strings.NewReader(url.Values{"csrf": {csrf}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&minted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	api := func(path, body string) map[string]any {
+		req, _ := http.NewRequest(http.MethodPost, base+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+minted.Token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			raw, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%s: %d %s", path, resp.StatusCode, raw)
+		}
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	workID, _ := api("/v1/books/"+bookID+"/resolve", "{}")["work_id"].(string)
+	if workID == "" {
+		t.Fatal("the book did not resolve to a work")
+	}
+	return api, workID
 }
 
 // TestReaderOpensInARealBrowser is the only test that can judge whether
@@ -825,6 +854,118 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 	if !recovered {
 		t.Error("the finite position pushed after the NaN never reached the op log")
 	}
+}
+
+// reopenCheck seeds one stored position for alice, opens the book in a
+// browser and runs testdata/readerreload.mjs against it with the given
+// expectations (RELOAD_* variables).
+func reopenCheck(t *testing.T, opID string, progression float64, locator map[string]any, expect ...string) {
+	t.Helper()
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+	seedPosition(t, ts.URL, cookie, bookID, opID, progression, locator)
+
+	cmd := exec.Command(node, filepath.Join("testdata", "readerreload.mjs"))
+	cmd.Env = append(append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+	), expect...)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the reader did not reopen where it should have: %v", err)
+	}
+}
+
+// TestReaderReopensWhereItWasAfterAReload is the check the other
+// browser tests never make: they open a book once. A reload is where a
+// stored position is read back and handed to the engine's first load,
+// and that load looks its starting locator up in the position list by
+// `position` — a number another client, or a regenerated list, spells
+// differently. The seeded op carries a foreign one and no CFI, which is
+// exactly what every position written since the reader switched to
+// Readium's positions looks like; a reader that trusted it, or dropped
+// it and let the load throw, opened every reloaded book at page one.
+func TestReaderReopensWhereItWasAfterAReload(t *testing.T) {
+	// Spine slot 3 is chapter3; 812 is a page count from some other list.
+	reopenCheck(t, "00000000-0000-4000-8000-00000000c0de", 0.3,
+		map[string]any{
+			"href": "OEBPS/chapter3.xhtml", "type": "application/xhtml+xml",
+			"locations": map[string]any{
+				"fragments": []string{}, "progression": 0, "totalProgression": 0.3, "position": 812,
+			},
+		},
+		"RELOAD_SECTION=3", "RELOAD_RELOAD=1")
+}
+
+// TestReaderReopensByFractionAlone is the last rung of the ladder: a
+// position whose chapter this copy of the book does not have — another
+// edition's file name — leaves only the fraction of the whole, and the
+// locator the reader builds from it has no `position` either. It has to
+// open the chapter that fraction falls in, not page one.
+func TestReaderReopensByFractionAlone(t *testing.T) {
+	reopenCheck(t, "00000000-0000-4000-8000-00000000f4ac", 0.3,
+		map[string]any{
+			"href": "OEBPS/elsewhere.xhtml", "type": "application/xhtml+xml",
+			"locations": map[string]any{
+				"fragments": []string{}, "progression": 0.5, "totalProgression": 0.3, "position": 812,
+			},
+		},
+		"RELOAD_SECTION=3")
+}
+
+// TestReaderReopensOnTheQuotedPassage pins the finer half of a restore:
+// a position that quotes the passage on screen — the shape both this
+// reader and the app write (reader-anchor.js) — reopens on that
+// passage, not merely at the progression beside it. The seeded op says
+// the start of the chapter by progression and its fortieth paragraph by
+// quote, in the app's spelling of the href, and the quote must win.
+func TestReaderReopensOnTheQuotedPassage(t *testing.T) {
+	reopenCheck(t, "00000000-0000-4000-8000-00000000a11c", 0.1,
+		map[string]any{
+			"href": "/OEBPS/chapter1.xhtml", "type": "application/xhtml+xml",
+			"locations": map[string]any{
+				"fragments": []string{}, "progression": 0, "totalProgression": 0.1, "position": 812,
+				"liseurAnchor": 1,
+				"cssSelector":  "body > div:nth-of-type(1) > div:nth-of-type(1) > p:nth-of-type(40)",
+			},
+			"text": map[string]any{
+				"before": "", "highlight": "Call me Ishmael", "after": ". Some years ago, never mind",
+			},
+		},
+		"RELOAD_SECTION=1", "RELOAD_INSIDE=1")
+}
+
+// TestReaderReopensOnTheNamedFragment is the same promise for a
+// position that names an element instead of quoting one, with the
+// fragment spelled on the href the way a link does. The restore ladder
+// canonicalizes the href against this book's spine; the fragment must
+// survive that and choose the page.
+func TestReaderReopensOnTheNamedFragment(t *testing.T) {
+	reopenCheck(t, "00000000-0000-4000-8000-00000000f7a6", 0.1,
+		map[string]any{
+			"href": "OEBPS/chapter1.xhtml#ishmael40", "type": "application/xhtml+xml",
+			"locations": map[string]any{
+				"fragments": []string{}, "progression": 0, "totalProgression": 0.1, "position": 812,
+			},
+		},
+		"RELOAD_SECTION=1", "RELOAD_INSIDE=1")
 }
 
 // TestReaderRecordsReadingSessions is the browser side of ADR-0030: a
