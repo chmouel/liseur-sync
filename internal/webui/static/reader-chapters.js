@@ -15,10 +15,10 @@ const VIRTUAL_ORIGIN = "https://publication.invalid/";
 function archiveKey(reference, base = "") {
   if (typeof reference !== "string" || !reference.trim()) return null;
   if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(reference.trim())) return null;
-  if (/%(?:2f|5c)/i.test(reference)) return null;
   try {
     const url = new URL(reference, new URL(base || ".", new URL(VIRTUAL_ORIGIN)));
     if (url.origin !== VIRTUAL_ORIGIN.slice(0, -1) || url.username || url.password) return null;
+    if (/%(?:2f|5c)/i.test(url.pathname)) return null;
     const path = decodeURIComponent(url.pathname).replace(/^\/+/, "");
     if (!path || path.split("/").some(part => part === "..")) return null;
     const parts = [];

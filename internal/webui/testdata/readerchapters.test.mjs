@@ -18,6 +18,7 @@ const table = { counts: [1, 2, 2, 1], starts: [0, 1, 3, 5], total: 6 };
 
 test('archive keys are local, normalized, and fragment/query free', () => {
   assert.equal(archiveKey('OPS/chapter.xhtml#part-1'), 'OPS/chapter.xhtml');
+  assert.equal(archiveKey('OPS/chapter.xhtml#part%2F1'), 'OPS/chapter.xhtml');
   assert.equal(archiveKey('./chapter.xhtml?x=1', 'OPS/package.opf'), 'OPS/chapter.xhtml');
   assert.equal(archiveKey('OPS/%63hapter.xhtml'), 'OPS/chapter.xhtml');
   assert.equal(archiveKey('../outside.xhtml', 'OPS/package.opf'), 'outside.xhtml');
