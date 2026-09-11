@@ -54,6 +54,14 @@ test('reading-order titles name resources without TOC entries', () => {
   assert.equal(result.chapters[1].title, 'Reading order title');
 });
 
+test('blank reading-order titles continue the previous chapter', () => {
+  const result = buildChapters([], sections([null, 'Named', '   ', null]), table);
+  assert.deepEqual(result.chapters.map(ch => [ch.title, ch.firstPosition, ch.lastPosition]), [
+    [null, 1, 1],
+    ['Named', 2, 6],
+  ]);
+});
+
 test('unusable resources are skipped without extending a chapter', () => {
   const result = buildChapters(
     [{ label: 'First', href: 'first.xhtml' }, { label: 'Last', href: 'last.xhtml' }],

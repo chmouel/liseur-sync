@@ -96,7 +96,10 @@ export function buildChapters(toc, sections, table, packageHref = "") {
     if (count <= 0) continue;
     const firstPosition = table.starts[index] + 1;
     const lastPosition = table.starts[index] + count;
-    const title = titles.get(index) ?? sections[index]?.title ?? null;
+    const sectionTitle = typeof sections[index]?.title === "string"
+      ? sections[index].title.trim() || null
+      : null;
+    const title = titles.get(index) ?? sectionTitle;
     const previous = chapters.at(-1);
     if (title === null && previous) {
       previous.lastPosition = lastPosition;
