@@ -23,6 +23,7 @@
 // Nothing here touches the DOM, the network or a clock it was not
 // given.
 
+import { MAX_AFTER, MAX_BEFORE } from "./reader-anchor.js";
 import { pageAt } from "./reader-positions.js";
 import { sameEdition, sectionHrefIn } from "./reader-restore.js";
 
@@ -39,12 +40,29 @@ const squash = (value) =>
 
 const ELLIPSIS = "…";
 
-// Both context fields are cut at a fixed number of code points, so both
-// ends usually land inside a word. Half a word is not worth reading and
-// is not the writer's text either, so it goes; a side with no space at
-// all is one long partial word and goes whole.
+// A context field is cut only when the capture ran out of room: it
+// takes a fixed number of code points, and a shorter one stopped
+// because the block did. So a short side is whole text, kept whole and
+// claiming no elision, and only a side at the limit is treated as
+// ending inside a word.
+const wasCut = (value, limit) => Array.from(value || "").length >= limit;
+
 const dropPartialHead = (text) => text.replace(/^\S*\s*/, "");
 const dropPartialTail = (text) => text.replace(/\s*\S*$/, "");
+
+// A side of the passage: the text to show, and whether text was taken
+// off this end. Dropping the half word at a cut is worth it in a script
+// that separates words; in one that does not — Japanese, Chinese, Thai
+// — there is no word boundary to find, and dropping back to the last
+// space would throw the whole side away and leave the reader with the
+// single word this exists to escape. So the cut text stays.
+function sideOf(raw, limit, drop) {
+  const text = squash(raw);
+  if (!text.trim()) return { text: "", cut: false };
+  if (!wasCut(raw, limit)) return { text, cut: false };
+  const dropped = drop(text);
+  return { text: dropped.trim() ? dropped : text, cut: true };
+}
 
 const cap = (text) => {
   const points = Array.from(text);
@@ -77,11 +95,12 @@ const cap = (text) => {
 export function passageOf(text) {
   const highlight = squash(text?.highlight).trim();
   if (!highlight) return null;
-  const before = dropPartialHead(squash(text?.before));
-  const after = dropPartialTail(squash(text?.after));
-  if (!before && !after) return cap(highlight);
+  const before = sideOf(text?.before, MAX_BEFORE, dropPartialHead);
+  const after = sideOf(text?.after, MAX_AFTER, dropPartialTail);
+  if (!before.text && !after.text) return cap(highlight);
   return cap(
-    (before ? ELLIPSIS + before : "") + highlight + (after ? after + ELLIPSIS : ""),
+    (before.cut ? ELLIPSIS : "") + before.text + highlight + after.text +
+      (after.cut ? ELLIPSIS : ""),
   );
 }
 

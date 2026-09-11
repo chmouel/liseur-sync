@@ -137,33 +137,67 @@ test("the excerpt is the passage, trimmed and capped", () => {
 
 // The highlight of an anchor is one word by construction — the first
 // word visible on the other device — so the context either side of it
-// is the whole of what a reader can recognise their place by.
+// is the whole of what a reader can recognise their place by. A capture
+// that filled its 32 code points stopped where it ran out of room,
+// which is usually inside a word.
 test("an anchor's context is read with its word", () => {
   assert.equal(
     excerptOf(op({
       text: {
-        before: "é de ses mots. ", highlight: "Alors", after: ", je me levai et par",
+        before: "é de ses mots. Il leva les yeux. ",
+        highlight: "Alors",
+        after: ", je me levai et partis vers la porte",
       },
     })),
-    "…de ses mots. Alors, je me levai et…",
+    "…de ses mots. Il leva les yeux. Alors, je me levai et partis vers la…",
   );
 });
 
-test("the halves of a word at each cut are not shown", () => {
-  // Nothing but a partial word on a side: there is no whole word to
-  // keep, so the side goes rather than showing half of one.
+test("context the capture did not have to cut is kept whole", () => {
+  // `captureAnchor` cuts only when the block outruns the limit. A short
+  // side stopped at the block's own edge, so its first and last words
+  // are the writer's, and an ellipsis there would mark a cut nobody
+  // made.
   assert.equal(
-    excerptOf(op({ text: { before: "Alo", highlight: "Alors", after: "sui" } })),
-    "Alors",
+    excerptOf(op({ text: { before: "The ", highlight: "Carpet", after: "-Bag ends." } })),
+    "The Carpet-Bag ends.",
+  );
+});
+
+test("a script that does not space its words keeps its context", () => {
+  // Japanese has no word boundary to drop back to, so dropping one
+  // would throw the whole side away and leave the single word this
+  // exists to escape.
+  const before = "むかしむかし、あるところにおじいさんとおばあさんがすんでいましたと";
+  const after = "。おじいさんは山へしばかりに、おばあさんは川へせんたくにいきました";
+  const passage = excerptOf(op({ text: { before, highlight: "た", after } }));
+  assert.ok(passage.includes("おじいさん"), passage);
+  assert.equal(passage, "…" + before + "た" + after + "…");
+});
+
+test("the half of a word the capture cut is not shown", () => {
+  assert.equal(
+    excerptOf(op({
+      text: {
+        before: "orning he stood there and looked up ",
+        highlight: "at",
+        after: " the sky and then the night fell over everyth",
+      },
+    })),
+    "…he stood there and looked up at the sky and then the night fell over…",
   );
 });
 
 test("a line in a document is not a pause in a sentence", () => {
   assert.equal(
     excerptOf(op({
-      text: { before: "the\n  sky was ", highlight: "very", after: " blue\nthat\tday xx" },
+      text: {
+        before: "the\n  sky was\nbright and wide and very ",
+        highlight: "very",
+        after: " blue\nthat\tday and the next one after that xx",
+      },
     })),
-    "…sky was very blue that day…",
+    "…sky was bright and wide and very very blue that day and the next one after that…",
   );
 });
 
@@ -186,7 +220,7 @@ test("this device's side shows its own passage when one was taken", () => {
   const place = placeHere(
     { fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, { ...view, anchor },
   );
-  assert.equal(place.excerpt, "…the beginning of it…");
+  assert.equal(place.excerpt, "in the beginning of it all");
   // A page whose first word is not unique in its block yields no
   // anchor, and a side with nothing to quote quotes nothing.
   assert.equal(
