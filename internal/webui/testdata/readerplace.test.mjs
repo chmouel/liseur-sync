@@ -132,11 +132,67 @@ test("the excerpt is the passage, trimmed and capped", () => {
   assert.equal(excerptOf(null), null);
   const long = excerptOf(op({ text: { highlight: "x".repeat(1000) } }));
   assert.equal(long.length, EXCERPT_CHARS);
+  assert.ok(long.endsWith("…"), "a passage the cap cut says so");
+});
+
+// The highlight of an anchor is one word by construction — the first
+// word visible on the other device — so the context either side of it
+// is the whole of what a reader can recognise their place by.
+test("an anchor's context is read with its word", () => {
+  assert.equal(
+    excerptOf(op({
+      text: {
+        before: "é de ses mots. ", highlight: "Alors", after: ", je me levai et par",
+      },
+    })),
+    "…de ses mots. Alors, je me levai et…",
+  );
+});
+
+test("the halves of a word at each cut are not shown", () => {
+  // Nothing but a partial word on a side: there is no whole word to
+  // keep, so the side goes rather than showing half of one.
+  assert.equal(
+    excerptOf(op({ text: { before: "Alo", highlight: "Alors", after: "sui" } })),
+    "Alors",
+  );
+});
+
+test("a line in a document is not a pause in a sentence", () => {
+  assert.equal(
+    excerptOf(op({
+      text: { before: "the\n  sky was ", highlight: "very", after: " blue\nthat\tday xx" },
+    })),
+    "…sky was very blue that day…",
+  );
+});
+
+test("a passage with no context is not dressed up as a fragment", () => {
+  // Some clients write a whole selection into `highlight` and no
+  // context at all. Ellipses would claim something was cut away.
+  assert.equal(
+    excerptOf(op({ text: { highlight: "Call me Ishmael.", before: "", after: "" } })),
+    "Call me Ishmael.",
+  );
 });
 
 test("an excerpt is counted in characters a reader would count", () => {
   const emoji = "🙂".repeat(EXCERPT_CHARS + 10);
   assert.equal(Array.from(excerptOf(op({ text: { highlight: emoji } }))).length, EXCERPT_CHARS);
+});
+
+test("this device's side shows its own passage when one was taken", () => {
+  const anchor = { before: "in the ", highlight: "beginning", after: " of it all" };
+  const place = placeHere(
+    { fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, { ...view, anchor },
+  );
+  assert.equal(place.excerpt, "…the beginning of it…");
+  // A page whose first word is not unique in its block yields no
+  // anchor, and a side with nothing to quote quotes nothing.
+  assert.equal(
+    placeHere({ fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, view).excerpt,
+    null,
+  );
 });
 
 test("how long ago, said the way a person would", () => {

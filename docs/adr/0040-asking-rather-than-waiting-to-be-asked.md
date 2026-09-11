@@ -83,11 +83,20 @@ position *is*:
 - **How long ago.** A clock is not evidence about which position is
   right — that is decided by movement away from an agreed baseline, and
   never here — but it is what lets a reader recognise their own evening.
-- **The passage that was on screen**, from `locator.text.highlight`,
-  which `reader-anchor.js` already writes in exactly the shape Android's
-  `ExactLocatorAnchor` reads. It is another device's text: it is set as
-  a text node, capped by the presenter and clamped to two lines, because
-  a partner sending a chapter must not push the buttons off the screen.
+- **The passage that was on screen**, from the three text fields
+  `reader-anchor.js` writes in exactly the shape Android's
+  `ExactLocatorAnchor` reads: the words before the first visible word,
+  that word, and the words after it, read back as one passage the way
+  `ExactLocatorAnchor.excerpt` reads them. `highlight` alone is a single
+  word by construction — that is what an anchor pins — and a single word
+  places nobody. Showing more of the page by *capturing* more is not the
+  lever it looks like: the phone compares the three fields verbatim to
+  decide two devices are on the same spot, so a client that captured a
+  longer `after` would never agree with one that did not. The fields are
+  a wire contract; how much of them a reader is shown is not. It is
+  another device's text: it is set as a text node, capped by the
+  presenter and clamped to two lines, because a partner sending a
+  chapter must not push the buttons off the screen.
 
 **The catch-up panel gains those three facts** and changes nothing else:
 it still appears only at a quiet moment, and either answer still settles
@@ -118,7 +127,13 @@ navigator, database or server in sight:
 
 That last one is worth its own words. Two identical page numbers over
 two different buttons is a riddle, and the excerpt is the only thing
-that tells the sides apart.
+that tells the sides apart. So the dialog quotes *both* passages: this
+device's comes from the anchor the page on screen would be written with,
+so the two sides are described by the same capture and can be read
+against each other. A page whose first visible word is not unique in its
+block yields no anchor, and a side with nothing to quote quotes nothing.
+(The catch-up panel still shows one passage, the other device's. It is a
+small panel that already carries two places and two buttons.)
 
 **The agreed baseline is what makes this answerable.** This reader's own
 last position, read back from the server, has exactly the shape of
