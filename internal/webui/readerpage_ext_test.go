@@ -262,10 +262,15 @@ func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
 		`id="reader-page"`,
 		`id="reader-goto"`,
 		`id="reader-goto-input"`,
-		`name="footer" value="chapter"`,
-		`name="footer" value="time-chapter"`,
-		`name="footer" value="time-book"`,
-		`name="footer" value="empty"`,
+		`id="reader-size-down"`,
+		`id="reader-size-up"`,
+		`<label for="reader-footer-mode">Footer</label>`,
+		`<select id="reader-footer-mode" name="footer">`,
+		`<option value="chapter">Chapter</option>`,
+		`<option value="positions-chapter">Positions left in chapter</option>`,
+		`<option value="time-chapter">Time left in chapter</option>`,
+		`<option value="time-book">Time left in book</option>`,
+		`<option value="empty">Empty</option>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the reader page is missing %q", want)

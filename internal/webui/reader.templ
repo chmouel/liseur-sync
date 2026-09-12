@@ -133,11 +133,15 @@ templ readerPage(v ReaderView, csrf string) {
 								<label class="chip"><input type="radio" name="font" value="serif"/> Serif</label>
 								<label class="chip"><input type="radio" name="font" value="sans"/> Sans-serif</label>
 							</fieldset>
-							<label class="row">
-								Font size
-								<input type="range" name="size" min="70" max="350" step="5"/>
+							<div class="row row-size">
+								<label for="reader-size-range">Font size</label>
+								<div class="reader-size-control">
+									<button type="button" id="reader-size-down" class="reader-size-step" aria-label="Decrease font size">−</button>
+									<input id="reader-size-range" type="range" name="size" min="70" max="350" step="5"/>
+									<button type="button" id="reader-size-up" class="reader-size-step" aria-label="Increase font size">+</button>
+								</div>
 								<output id="reader-size-out"></output>
-							</label>
+							</div>
 							<label class="row">
 								Line spacing
 								<select name="spacing">
@@ -178,14 +182,16 @@ templ readerPage(v ReaderView, csrf string) {
 							<div class="row2">
 								<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
 							</div>
-							<fieldset>
-								<legend>Footer</legend>
-								<label class="chip"><input type="radio" name="footer" value="chapter"/> Chapter</label>
-								<label class="chip"><input type="radio" name="footer" value="positions-chapter"/> Positions left in chapter</label>
-								<label class="chip"><input type="radio" name="footer" value="time-chapter"/> Time left in chapter</label>
-								<label class="chip"><input type="radio" name="footer" value="time-book"/> Time left in book</label>
-								<label class="chip"><input type="radio" name="footer" value="empty"/> Empty</label>
-							</fieldset>
+							<div class="row">
+								<label for="reader-footer-mode">Footer</label>
+								<select id="reader-footer-mode" name="footer">
+									<option value="chapter">Chapter</option>
+									<option value="positions-chapter">Positions left in chapter</option>
+									<option value="time-chapter">Time left in chapter</option>
+									<option value="time-book">Time left in book</option>
+									<option value="empty">Empty</option>
+								</select>
+							</div>
 							<button type="button" id="reader-settings-reset">Reset to defaults</button>
 						</form>
 					</details>
