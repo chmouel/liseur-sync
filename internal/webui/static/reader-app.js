@@ -2430,6 +2430,12 @@ function bumpSize(direction) {
   field.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function syncSizeControls() {
+  if (sizeOut) sizeOut.textContent = settings.size + "%";
+  if (sizeDown) sizeDown.disabled = settings.size <= Number(sizeField()?.min || 0);
+  if (sizeUp) sizeUp.disabled = settings.size >= Number(sizeField()?.max || Infinity);
+}
+
 function syncSettingsForm() {
   if (!settingsForm) return;
   for (const field of settingsForm.elements) {
@@ -2439,9 +2445,7 @@ function syncSettingsForm() {
     else if (field.type === "checkbox") field.checked = !!settings[field.name];
     else field.value = String(settings[field.name]);
   }
-  if (sizeOut) sizeOut.textContent = settings.size + "%";
-  if (sizeDown) sizeDown.disabled = settings.size <= Number(sizeField()?.min || 0);
-  if (sizeUp) sizeUp.disabled = settings.size >= Number(sizeField()?.max || Infinity);
+  syncSizeControls();
 }
 
 function readSettingsForm() {
@@ -2459,7 +2463,7 @@ function readSettingsForm() {
     autohide: data.has("autohide"),
     footer: String(data.get("footer") || SETTINGS_DEFAULTS.footer),
   };
-  if (sizeOut) sizeOut.textContent = settings.size + "%";
+  syncSizeControls();
 }
 
 if (settingsForm) {
