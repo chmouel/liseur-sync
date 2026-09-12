@@ -497,6 +497,29 @@ check('the page number counts forward with the turns',
 // A click on the footer changes what its middle says and nothing else:
 // it is not a stage surface, so the page under it stays where it was.
 {
+  const footerControl = await evalIn(`(() => {
+    const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+    return sel ? { tag: sel.tagName, value: sel.value } : null;
+  })()`);
+  check('the footer mode picker is a list',
+    footerControl?.tag === 'SELECT' && footerControl.value === 'chapter',
+    JSON.stringify(footerControl));
+  await evalIn(`(() => {
+    const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+    sel.value = 'time-book';
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const picked = JSON.parse(await evalIn(probe));
+  check('the footer list changes the middle slot',
+    picked.footerMode === 'time-book' && /left in book$/.test(picked.chapter || ''),
+    `${picked.footerMode}: ${JSON.stringify(picked.chapter)}`);
+  await evalIn(`(() => {
+    const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+    sel.value = 'chapter';
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await new Promise((r) => setTimeout(r, 300));
   const before = JSON.parse(await evalIn(probe));
   await evalIn(`document.getElementById('reader-footer').click()`);
   await new Promise((r) => setTimeout(r, 300));
@@ -822,6 +845,24 @@ check('the font-size slider actually sizes the type',
 check("the slider lifts the publication's own width caps",
   sized.wrapMaxWidth === 'none' && sized.wrapWidth !== '480px',
   `max-width ${sized.wrapMaxWidth}, width ${sized.wrapWidth}`);
+await evalIn(`document.getElementById('reader-size-down').click()`);
+await new Promise((r) => setTimeout(r, 500));
+const steppedDown = JSON.parse(await evalIn(probe));
+const steppedValue = await evalIn(
+  `document.querySelector('#reader-settings-form input[name="size"]').value`,
+);
+check('the minus button decreases the font size',
+  steppedValue === '245' && parseFloat(steppedDown.fontSize) < 40,
+  `${steppedValue} / ${steppedDown.fontSize}`);
+await evalIn(`document.getElementById('reader-size-up').click()`);
+await new Promise((r) => setTimeout(r, 500));
+const steppedUp = JSON.parse(await evalIn(probe));
+const steppedUpValue = await evalIn(
+  `document.querySelector('#reader-settings-form input[name="size"]').value`,
+);
+check('the plus button increases the font size',
+  steppedUpValue === '250' && steppedUp.fontSize === '40px',
+  `${steppedUpValue} / ${steppedUp.fontSize}`);
 
 // The chrome (top bar and the two arrows) steps aside while nobody is
 // reaching for it, and what replaces it is the tap model: the sides of
