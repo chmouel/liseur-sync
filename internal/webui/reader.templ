@@ -133,15 +133,15 @@ templ readerPage(v ReaderView, csrf string) {
 								<label class="chip"><input type="radio" name="font" value="serif"/> Serif</label>
 								<label class="chip"><input type="radio" name="font" value="sans"/> Sans-serif</label>
 							</fieldset>
-							<label class="row row-size">
-								Font size
+							<div class="row row-size">
+								<label for="reader-size-range">Font size</label>
 								<div class="reader-size-control">
 									<button type="button" id="reader-size-down" class="reader-size-step" aria-label="Decrease font size">−</button>
-									<input type="range" name="size" min="70" max="350" step="5"/>
+									<input id="reader-size-range" type="range" name="size" min="70" max="350" step="5"/>
 									<button type="button" id="reader-size-up" class="reader-size-step" aria-label="Increase font size">+</button>
 								</div>
 								<output id="reader-size-out"></output>
-							</label>
+							</div>
 							<label class="row">
 								Line spacing
 								<select name="spacing">
