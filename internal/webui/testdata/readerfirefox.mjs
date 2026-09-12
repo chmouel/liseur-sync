@@ -351,6 +351,59 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
       fg: themed.selectionColour,
     }));
 }
+const footerControl = await evalIn(`(() => {
+  const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+  return sel ? { tag: sel.tagName, value: sel.value } : null;
+})()`);
+check('the footer mode picker is a list',
+  footerControl?.tag === 'SELECT' && footerControl.value === 'chapter',
+  JSON.stringify(footerControl));
+await evalIn(`(() => {
+  const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+  sel.value = 'time-book';
+  sel.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await waitFor(`document.body.dataset.readerFooter === 'time-book'`, 'the footer mode change');
+const pickedFooter = await evalIn(`document.getElementById('reader-chapter')?.textContent || ''`);
+check('the footer list changes the middle slot',
+  /left in book$/.test(pickedFooter), pickedFooter);
+await evalIn(`(() => {
+  const sel = document.querySelector('#reader-settings-form select[name="footer"]');
+  sel.value = 'chapter';
+  sel.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await waitFor(`document.body.dataset.readerFooter === 'chapter'`, 'the chapter footer mode');
+await evalIn(`(() => {
+  const slider = document.querySelector('#reader-settings-form input[name="size"]');
+  slider.value = '250';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await waitFor(`(() => {
+  const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+  return doc && doc.defaultView.getComputedStyle(doc.body).fontSize === '40px';
+})()`, 'the larger font size');
+await evalIn(`document.getElementById('reader-size-down').click()`);
+await waitFor(
+  `document.querySelector('#reader-settings-form input[name="size"]').value === '245'`,
+  'the smaller font-size value',
+);
+const ffSmallerFont = await evalIn(`(() => {
+  const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+  return doc ? doc.defaultView.getComputedStyle(doc.body).fontSize : '';
+})()`);
+check('the minus button decreases the font size',
+  parseFloat(ffSmallerFont) < 40, ffSmallerFont);
+await evalIn(`document.getElementById('reader-size-up').click()`);
+await waitFor(
+  `document.querySelector('#reader-settings-form input[name="size"]').value === '250'`,
+  'the larger font-size value',
+);
+const ffLargerFont = await evalIn(`(() => {
+  const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;
+  return doc ? doc.defaultView.getComputedStyle(doc.body).fontSize : '';
+})()`);
+check('the plus button increases the font size',
+  ffLargerFont === '40px', ffLargerFont);
 await evalIn(`document.getElementById('reader-settings-reset').click()`);
 await waitFor(`(() => {
   const doc = document.querySelector('readium-view').renderer.getContents()[0]?.doc;

@@ -2402,6 +2402,33 @@ function applySettings() {
 const settingsPanel = document.getElementById("reader-settings");
 const settingsForm = document.getElementById("reader-settings-form");
 const sizeOut = document.getElementById("reader-size-out");
+const sizeDown = document.getElementById("reader-size-down");
+const sizeUp = document.getElementById("reader-size-up");
+
+function sizeField() {
+  return settingsForm?.elements?.namedItem("size");
+}
+
+function clampSize(size) {
+  const field = sizeField();
+  const min = Number(field?.min || SETTINGS_DEFAULTS.size);
+  const max = Number(field?.max || SETTINGS_DEFAULTS.size);
+  if (!Number.isFinite(size)) return SETTINGS_DEFAULTS.size;
+  return Math.min(Math.max(size, min), max);
+}
+
+function sizeStep() {
+  const step = Number(sizeField()?.step || 5);
+  return Number.isFinite(step) && step > 0 ? step : 5;
+}
+
+function bumpSize(direction) {
+  const field = sizeField();
+  if (!field) return;
+  const next = clampSize((Number(field.value) || settings.size) + direction * sizeStep());
+  field.value = String(next);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
 
 function syncSettingsForm() {
   if (!settingsForm) return;
@@ -2413,6 +2440,8 @@ function syncSettingsForm() {
     else field.value = String(settings[field.name]);
   }
   if (sizeOut) sizeOut.textContent = settings.size + "%";
+  if (sizeDown) sizeDown.disabled = settings.size <= Number(sizeField()?.min || 0);
+  if (sizeUp) sizeUp.disabled = settings.size >= Number(sizeField()?.max || Infinity);
 }
 
 function readSettingsForm() {
@@ -2420,7 +2449,7 @@ function readSettingsForm() {
   settings = {
     theme: String(data.get("theme") || SETTINGS_DEFAULTS.theme),
     font: String(data.get("font") || SETTINGS_DEFAULTS.font),
-    size: Number(data.get("size")) || SETTINGS_DEFAULTS.size,
+    size: clampSize(Number(data.get("size")) || SETTINGS_DEFAULTS.size),
     spacing: String(data.get("spacing") || SETTINGS_DEFAULTS.spacing),
     justify: data.has("justify"),
     hyphenate: data.has("hyphenate"),
@@ -2453,6 +2482,8 @@ if (settingsForm) {
       settingsPanel.open = false;
     }
   });
+  sizeDown?.addEventListener("click", () => bumpSize(-1));
+  sizeUp?.addEventListener("click", () => bumpSize(1));
 }
 // -------------------------------------------------------- fullscreen
 
