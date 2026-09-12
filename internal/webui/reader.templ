@@ -182,16 +182,16 @@ templ readerPage(v ReaderView, csrf string) {
 							<div class="row2">
 								<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
 							</div>
-							<label class="row">
-								Footer
-								<select name="footer">
+							<div class="row">
+								<label for="reader-footer-mode">Footer</label>
+								<select id="reader-footer-mode" name="footer">
 									<option value="chapter">Chapter</option>
 									<option value="positions-chapter">Positions left in chapter</option>
 									<option value="time-chapter">Time left in chapter</option>
 									<option value="time-book">Time left in book</option>
 									<option value="empty">Empty</option>
 								</select>
-							</label>
+							</div>
 							<button type="button" id="reader-settings-reset">Reset to defaults</button>
 						</form>
 					</details>
