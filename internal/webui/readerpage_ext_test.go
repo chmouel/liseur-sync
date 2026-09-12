@@ -266,6 +266,7 @@ func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
 		`id="reader-size-up"`,
 		`<select name="footer">`,
 		`<option value="chapter">Chapter</option>`,
+		`<option value="positions-chapter">Positions left in chapter</option>`,
 		`<option value="time-chapter">Time left in chapter</option>`,
 		`<option value="time-book">Time left in book</option>`,
 		`<option value="empty">Empty</option>`,
