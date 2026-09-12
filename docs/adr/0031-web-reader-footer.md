@@ -63,7 +63,7 @@ is the engine's honest measure of the book, not a guess.
 in chapter, then time left in chapter, then time left in book, then empty,
 then round again. A
 click or a key on the footer advances it; the same choice has a home
-in the Aa panel as a "Footer" fieldset. It is a browser preference,
+in the Aa panel as a "Footer" selector. It is a browser preference,
 kept alongside the other appearance settings in `localStorage` and
 never sent to the server, exactly as ADR-0012 decided for fonts and
 themes. A slot with nothing honest to say — a book whose navigation
