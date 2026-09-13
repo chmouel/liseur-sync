@@ -281,7 +281,10 @@ async function render({ syncFirst = false } = {}) {
     for (const deviceID of devices) {
       const sync = offlineSync({
         context: { ...context, deviceID }, base: deploymentPrefix(),
-        onChange: async () => refreshBooks(partition, account, context, generation, redraw),
+        onChange: async () => {
+          if (generation !== renderGeneration) return;
+          await refreshBooks(partition, account, context, generation, shelfRedrawGeneration);
+        },
         onStatus: text => { if (text) { trouble = text; message(text, true); } },
         // A record already given up on is reported here rather than as
         // something waiting, so a shelf whose queue is entirely stuck
