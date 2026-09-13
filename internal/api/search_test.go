@@ -20,7 +20,7 @@ func (f *folderFixture) searchPath(values url.Values) string {
 }
 
 // makeEPUBWithSubject is makeEPUB plus a dc:subject, which the reconciler
-// reads straight into a book's tags (pass_linux.go: obs.Tags =
+// reads straight into a book's tags (pass.go: obs.Tags =
 // m.Subjects). It exists because the metadata-edit route that used to
 // attach a tag after the fact is gone; a tag now only ever comes from the
 // publication itself.

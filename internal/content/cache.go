@@ -1,4 +1,4 @@
-//go:build linux
+//go:build unix
 
 package content
 
@@ -127,10 +127,31 @@ func validateDirectoryFD(fd int) error {
 	return nil
 }
 
+// canonicalPath resolves symlinks in the existing prefix of an absolute
+// path. macOS exposes /var as a symlink to /private/var; walking there
+// with O_NOFOLLOW treats the link as a non-directory and refuses to
+// reach $TMPDIR. Watched folders still open with O_NOFOLLOW throughout;
+// this helper is only for the cache root this server creates.
+func canonicalPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+		return filepath.Join(resolved, filepath.Base(path))
+	}
+	return path
+}
+
 func openOrCreateRoot(path string) (int, error) {
 	if !filepath.IsAbs(path) {
 		return -1, ErrUnsafePath
 	}
+	path = canonicalPath(path)
 	parentFD, err := unix.Open(string(filepath.Separator),
 		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {

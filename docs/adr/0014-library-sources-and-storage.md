@@ -648,7 +648,7 @@ and write-back in particular is a promise about somebody else's schema.
 - A fourth metadata source (`calibre`) enters the precedence ladder,
   which every place that renders or reasons about provenance must know
   about.
-- `internal/content` is `//go:build linux`. `internal/calibre`'s
+- `internal/content` is `//go:build unix`. `internal/calibre`'s
   parsing and mapping stay portable and testable anywhere; its rooted
   `O_NOFOLLOW` opener does not, and lives behind a small
   platform-guarded helper rather than pretending the package as a whole

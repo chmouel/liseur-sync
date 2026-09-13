@@ -1,4 +1,4 @@
-//go:build linux
+//go:build unix
 
 package content
 
@@ -13,7 +13,7 @@ import (
 //
 // It exists so that nothing above this package has to know that a book's
 // path is relative to a folder root, or where that root is. A handler
-// asks for a book's file; the rooted, read-only open of open_linux.go is
+// asks for a book's file; the rooted, read-only open of open.go is
 // what it gets.
 type Files struct {
 	folders FolderSource
