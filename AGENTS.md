@@ -79,7 +79,7 @@ a book whose position was already syncing does not appear twice.)
 ([ADR-0025](docs/adr/0025-deleting-a-book.md)), bounded by the same
 flag: the file goes and then the row, and only in a folder that accepts
 uploads. One watcher goroutine
-(`internal/content/watch_linux.go`) triggers a pass at startup, on a
+(`internal/content/watch.go`) triggers a pass at startup, on a
 debounced fsnotify event, and on a slow safety timer. There is no ingest
 job, no content-addressed store, no quota, no trash and no review queue:
 an upload is a file written into a folder and nothing more, and the
