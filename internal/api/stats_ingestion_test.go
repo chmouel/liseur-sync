@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -9,6 +10,16 @@ import (
 	"github.com/chmouel/liseur-sync/internal/insights"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+type countingStatsStore struct {
+	store.Store
+	statisticsSnapshotCalls int
+}
+
+func (c *countingStatsStore) StatisticsSnapshot(ctx context.Context, userID string, candidateIDs []string) (store.StatsSnapshot, error) {
+	c.statisticsSnapshotCalls++
+	return c.Store.StatisticsSnapshot(ctx, userID, candidateIDs)
+}
 
 func TestNativeSessionActiveMsOptionalZeroAndBounded(t *testing.T) {
 	ts, st := testServer(t)
@@ -153,5 +164,41 @@ func TestMaterializerUsesExplicitActiveAndEndDayV2Archive(t *testing.T) {
 	}
 	if got := insights.ActiveSeconds(sessions[0]); got != 7200 {
 		t.Fatalf("explicit active should exceed wall without cap, got %v", got)
+	}
+}
+
+func TestRollupDoesNotLoadFullStatisticsSnapshot(t *testing.T) {
+	_, st := testServer(t)
+	wrapped := &countingStatsStore{Store: st}
+	ctx := t.Context()
+	u := store.User{ID: "rollup-nosnap", Name: "reader", Argon2Hash: "x", Timezone: "UTC", CreatedAt: time.Now()}
+	if err := st.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	w := store.Work{ID: "w-nosnap", UserID: u.ID, CreatedAt: time.Now()}
+	ed := &store.Edition{UserID: u.ID, SHA256: "ed-nosnap", WorkID: w.ID, PageCount: ptrI64(100)}
+	if err := st.CreateWork(ctx, w, ed, nil); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	ses := store.Session{
+		SessionID: "nosnap-session", WorkID: w.ID, EditionSHA: &ed.SHA256, DeviceID: "phone",
+		StartedAt: start, EndedAt: start.Add(30 * time.Minute),
+		StartProg: 0.1, EndProg: 0.2, Origin: store.OriginNative,
+	}
+	if err := st.AppendSessions(ctx, u.ID, []store.Session{ses}); err != nil {
+		t.Fatal(err)
+	}
+	wrapped.statisticsSnapshotCalls = 0
+	(&Server{St: wrapped}).rollupSessionsOnce(ctx, 24*time.Hour)
+	if wrapped.statisticsSnapshotCalls != 0 {
+		t.Fatalf("rollup loaded full snapshot %d times", wrapped.statisticsSnapshotCalls)
+	}
+	rollups, err := st.RollupsForWork(ctx, u.ID, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rollups) != 1 || rollups[0].SessionCount != 1 {
+		t.Fatalf("rollup did not archive session: %+v", rollups)
 	}
 }

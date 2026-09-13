@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -44,6 +45,9 @@ func (s *Server) insightInput(w http.ResponseWriter, r *http.Request, ids []stri
 func buildInsights(w http.ResponseWriter, snap store.StatsSnapshot, win insights.Window, now time.Time) (insights.Result, bool) {
 	result, err := insights.Build(snap, win, now)
 	if err != nil {
+		if insights.IsMissingEdition(err) {
+			slog.Warn("insights: missing edition metadata", "err", err)
+		}
 		writeError(w, http.StatusInternalServerError, "statistics aggregation failed")
 		return result, false
 	}

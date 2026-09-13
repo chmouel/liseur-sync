@@ -1,6 +1,7 @@
 package insights
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+// ErrMissingEdition means a session names an edition SHA absent from the snapshot.
+var ErrMissingEdition = errors.New("missing edition")
 
 type Summary struct {
 	TotalActiveMinutes float64 `json:"total_active_minutes"`
@@ -62,7 +66,7 @@ func Pages(ses store.Session, editions map[string]store.Edition) (float64, error
 	}
 	edition, ok := editions[*ses.EditionSHA]
 	if !ok {
-		return 0, fmt.Errorf("missing edition for session %s", ses.SessionID)
+		return 0, fmt.Errorf("%w for session %s sha %s", ErrMissingEdition, ses.SessionID, *ses.EditionSHA)
 	}
 	if edition.PageCount == nil {
 		return 0, nil
