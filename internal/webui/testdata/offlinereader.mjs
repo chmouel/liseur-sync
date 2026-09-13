@@ -84,6 +84,52 @@ try {
   await online.call('Page.navigate', { url: `${base}ui/offline/` });
   await wait(online, '!!navigator.serviceWorker.controller', 'service worker control');
   await wait(online, '!!document.querySelector("#offline-books a")', 'saved book on shelf');
+  const shelf = await online.evaluate(`(() => ({
+    copyTag: document.querySelector('.offline-book-copy')?.tagName || '',
+    hasProgressLabel: !!document.querySelector('.offline-book-progress-label'),
+    hasProgressRail: !!document.querySelector('.offline-book-progress'),
+  }))()`);
+  assert.equal(shelf.copyTag, 'DIV', 'offline shelf copy wrapper must allow heading content');
+  assert.equal(shelf.hasProgressLabel, false, 'a book with no local position shows no progress label');
+  assert.equal(shelf.hasProgressRail, false, 'a book with no local position shows no progress rail');
+  await online.evaluate(`(async () => {
+    const { readerAuth } = await import('./assets/reader-auth.js');
+    const base = ${JSON.stringify(base)};
+    const bookID = ${JSON.stringify(book)};
+    const account = await (await fetch('./account', {
+      cache: 'no-store', credentials: 'same-origin',
+    })).json();
+    const auth = readerAuth({ apiBase: base, tokenURL: base + 'ui/reader/token', csrf: account.csrf });
+    const resolved = await (await auth.request('v1/books/' + encodeURIComponent(bookID) + '/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })).json();
+    if (!resolved.work_id) throw new Error('resolved book has no work');
+    const applied = await auth.request('v1/ops', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ops: [{
+          op_id: 'shelf-remote-progress',
+          work_id: resolved.work_id,
+          progression: 1,
+          client_ts: new Date().toISOString(),
+        }],
+      }),
+    });
+    if (!applied.ok) throw new Error('server position was not accepted');
+    dispatchEvent(new CustomEvent('offline-change', { detail: { partition: base } }));
+  })()`);
+  await wait(online, `(() => {
+    const label = document.querySelector('.offline-book-progress-label')?.textContent?.trim();
+    const rail = document.querySelector('.offline-book-progress');
+    return label === 'Finished'
+      && rail?.getAttribute('role') === 'progressbar'
+      && rail?.getAttribute('aria-valuenow') === '100'
+      && rail?.getAttribute('aria-valuetext') === 'Finished';
+  })()`, 'shelf redraws progress after background reconciliation');
+  console.log('PASS shelf redraws progress after background reconciliation');
   await online.evaluate('navigator.serviceWorker.ready.then(() => true)');
 
   // A new target has no reader modules or publication objects in memory.
