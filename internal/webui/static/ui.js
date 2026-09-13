@@ -91,6 +91,9 @@
   // The worker is scoped to the data-free offline shelf only. The
   // runtime-relative base keeps registration under a reverse-proxy prefix.
   const pwaBase = document.body && document.body.dataset.pwaBase;
+  if (pwaBase && navigator.storage?.persist) {
+    navigator.storage.persist().catch(function () {});
+  }
   if (pwaBase && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register(pwaBase + 'sw.js', { scope: pwaBase })
       .catch(function (err) {

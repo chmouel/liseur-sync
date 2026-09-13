@@ -851,16 +851,33 @@ export async function restoreOfflineAnnotation({
 export async function attemptOfflineRecord(context, key) {
   return withDB(db => guardedWork(db, OUTBOX, context, (tx, set) => {
     const store = tx.objectStore(OUTBOX);
-    const request = store.getAll();
+    const request = store.get(key);
     request.onsuccess = () => {
-      const record = request.result.find(value => value.key === key);
+      const record = request.result;
       if (!record || record.state !== "pending" || record.epoch !== context.epoch) return;
-      if (record.kind === "annotation" && request.result.some(value =>
-        value.key !== key && value.partition === record.partition && value.account === record.account &&
-        value.annotationID === record.annotationID && value.attempted)) return;
-      record.attempted = true;
-      store.put(record);
-      set(record);
+      const mark = () => {
+        record.attempted = true;
+        store.put(record);
+        set(record);
+      };
+      if (record.kind !== "annotation") {
+        mark();
+        return;
+      }
+      const cursorRequest = store.index("account").openCursor(IDBKeyRange.bound(
+        [record.partition, record.account, "", 0],
+        [record.partition, record.account, "\uffff", Number.MAX_SAFE_INTEGER],
+      ));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (cursor) {
+          const other = cursor.value;
+          if (other.key !== key && other.annotationID === record.annotationID && other.attempted) return;
+          cursor.continue();
+          return;
+        }
+        mark();
+      };
     };
   }));
 }
