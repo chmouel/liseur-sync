@@ -1,3 +1,5 @@
+//go:build unix
+
 package content
 
 import (
@@ -12,7 +14,7 @@ import (
 
 // Removing a book's file, ADR-0025.
 //
-// This is the counterpart of ingest_linux.go and carries the same
+// This is the counterpart of ingest.go and carries the same
 // bound: a folder the administrator did not mark as accepting uploads
 // is untouchable, and this server may only unmake there what it could
 // have made. Everything else in this package still opens read-only.
