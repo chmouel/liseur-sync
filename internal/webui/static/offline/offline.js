@@ -8,6 +8,10 @@ for (const theme of (appearance || "").split(".")) {
   }
 }
 
+if (navigator.storage?.persist) {
+  navigator.storage.persist().catch(() => {});
+}
+
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch((error) => {
     console.warn("offline shell could not be installed", error);

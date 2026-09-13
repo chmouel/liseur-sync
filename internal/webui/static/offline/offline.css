@@ -17,44 +17,150 @@
 
 .offline-shell .eyebrow { margin: 0 0 .65rem; }
 .offline-shell .lead { max-width: 45rem; color: var(--ink-dim); }
-.offline-shell .muted { font-size: .85rem; }
+.offline-shell .muted { font-size: .9rem; }
 
 .offline-books {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
-  gap: 1rem;
+  gap: 1.15rem;
   margin: 2rem 0;
 }
 
 .offline-book {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.25rem;
-  padding: 1.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  padding: 1.2rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 0%, var(--surface) 100%);
   box-shadow: var(--shadow-sm);
 }
 
-.offline-book > a {
+.offline-book-main {
   min-width: 0;
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
   color: var(--ink);
   text-decoration: none;
 }
 
-.offline-book > a:hover { color: var(--primary); }
-.offline-book-title, .offline-book-author { display: block; overflow-wrap: anywhere; }
-.offline-book-title { font: 400 1.35rem/1.3 Georgia, serif; }
-.offline-book-author { color: var(--muted); margin-top: .4rem; font-size: .85rem; }
-.offline-book button { flex: none; font-size: .75rem; }
+.offline-book-main:hover .offline-book-title,
+.offline-book-main:focus-visible .offline-book-title { color: var(--primary); }
+
+.offline-book-art {
+  width: 4.5rem;
+  aspect-ratio: var(--cover-ratio);
+  display: grid;
+  place-items: center;
+  border-radius: calc(var(--radius) - .35rem);
+  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--line));
+  background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 16%, var(--surface-3)), var(--surface-2));
+  box-shadow: var(--shadow-sm);
+  color: var(--primary);
+  font: 600 1.6rem/1 Georgia, serif;
+}
+
+.offline-book-copy {
+  min-width: 0;
+  display: grid;
+  gap: .2rem;
+}
+
+.offline-book-eyebrow,
+.offline-book-author,
+.offline-book-meta {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.offline-book-eyebrow {
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.offline-book-heading { margin: 0; }
+.offline-book-title {
+  font: 400 1.3rem/1.2 Georgia, serif;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.offline-book-author { color: var(--ink-dim); font-size: .92rem; }
+.offline-book-meta { color: var(--muted); font-size: .8rem; }
+.offline-book-progress-label { color: var(--ink-dim); font-size: .82rem; }
+.offline-book-progress {
+  width: min(14rem, 100%);
+  height: .35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.offline-book-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: inherit;
+}
+.offline-book-progress > .p0 { width: 0 }
+.offline-book-progress > .p5 { width: 5% }
+.offline-book-progress > .p10 { width: 10% }
+.offline-book-progress > .p15 { width: 15% }
+.offline-book-progress > .p20 { width: 20% }
+.offline-book-progress > .p25 { width: 25% }
+.offline-book-progress > .p30 { width: 30% }
+.offline-book-progress > .p35 { width: 35% }
+.offline-book-progress > .p40 { width: 40% }
+.offline-book-progress > .p45 { width: 45% }
+.offline-book-progress > .p50 { width: 50% }
+.offline-book-progress > .p55 { width: 55% }
+.offline-book-progress > .p60 { width: 60% }
+.offline-book-progress > .p65 { width: 65% }
+.offline-book-progress > .p70 { width: 70% }
+.offline-book-progress > .p75 { width: 75% }
+.offline-book-progress > .p80 { width: 80% }
+.offline-book-progress > .p85 { width: 85% }
+.offline-book-progress > .p90 { width: 90% }
+.offline-book-progress > .p95 { width: 95% }
+.offline-book-progress > .p100 { width: 100% }
+
+.offline-book-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .55rem;
+  justify-content: center;
+}
+
+.offline-book-actions .button {
+  justify-content: center;
+  min-width: 7rem;
+}
+
+.offline-book button { flex: none; font-size: .82rem; }
 .offline-shell .button { display: inline-flex; padding: .6rem .9rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
 .offline-shell .button:hover { background: var(--surface-2); }
 .offline-shell .problem { color: var(--danger); }
 
 @media (max-width: 36em) {
   .offline-shell { padding-top: 2rem; }
-  .offline-book { padding: 1.1rem; gap: .8rem; }
+  .offline-book {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 1rem;
+    gap: .9rem;
+  }
+  .offline-book-main {
+    grid-template-columns: 3.8rem minmax(0, 1fr);
+    gap: .8rem;
+    align-items: start;
+  }
+  .offline-book-art { width: 3.8rem; font-size: 1.35rem; }
+  .offline-book-title { font-size: 1.1rem; }
+  .offline-book-actions { flex-direction: row; }
+  .offline-book-actions .button { flex: 1 1 0; min-width: 0; }
   .offline-header .btn { font-size: .75rem; }
 }
