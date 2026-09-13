@@ -37,6 +37,9 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.
 
 	stats, err := insights.Build(snapshot, win, now)
 	if err != nil {
+		if insights.IsMissingEdition(err) {
+			slog.Warn("insights: missing edition metadata", "err", err)
+		}
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
@@ -217,6 +220,9 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	}
 	stats, err := insights.Build(snapshot, insights.Window{}, time.Now())
 	if err != nil {
+		if insights.IsMissingEdition(err) {
+			slog.Warn("insights: missing edition metadata", "err", err)
+		}
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}

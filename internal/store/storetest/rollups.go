@@ -60,7 +60,7 @@ func RollupsRejectStaleEditionPageCount(t *testing.T, s store.Store, updatePages
 				pages += 0.375 * float64(*edition.PageCount)
 			}
 			rollup := store.SessionRollup{
-				UserID: user.ID, WorkID: work.ID, Day: now.Format("2006-01-02"), Timezone: "UTC",
+				UserID: user.ID, WorkID: work.ID, Day: now.Format("2006-01-02"), Timezone: user.Timezone,
 				AttributionVersion: 2, ActiveSeconds: 960, Pages: pages, ProgDelta: 0.625,
 				SessionCount: 3, MeasuredActiveSeconds: 360, MeasuredProgDelta: 0.5,
 			}
@@ -145,7 +145,7 @@ func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 	}
 	active := ses.EndedAt.Sub(ses.StartedAt).Seconds() - float64(ses.IdleMs)/1000
 	rollup := store.SessionRollup{
-		UserID: user.ID, WorkID: work.ID, Day: "2026-09-04", Timezone: "UTC", AttributionVersion: 2,
+		UserID: user.ID, WorkID: work.ID, Day: "2026-09-04", Timezone: user.Timezone, AttributionVersion: 2,
 		ActiveSeconds: active, Pages: 12.5, ProgDelta: 0.25, SessionCount: 1,
 		MeasuredActiveSeconds: active, MeasuredProgDelta: 0.25,
 	}
@@ -177,7 +177,7 @@ func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 	}{
 		{"duplicate-bucket", []store.SessionRollup{rollup, rollup}},
 		{"unbacked-bucket", []store.SessionRollup{rollup, {
-			UserID: user.ID, WorkID: work.ID, Day: "2026-09-05", Timezone: "UTC",
+			UserID: user.ID, WorkID: work.ID, Day: "2026-09-05", Timezone: user.Timezone,
 			AttributionVersion: 2, SessionCount: 1,
 		}}},
 		{"unbacked-timezone", []store.SessionRollup{rollup, {

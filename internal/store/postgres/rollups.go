@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/insights"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -37,14 +39,24 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 	if err := lockWorkGraph(ctx, tx, userID); err != nil {
 		return err
 	}
+	currentTZ, err := currentAccountTimezone(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
 	v2 := rollupsV2(rollups)
 	for _, r := range v2 {
 		if r.Timezone == "" {
 			return store.ErrInvalidInput
 		}
+		if r.Timezone != currentTZ {
+			return store.ErrConflict
+		}
 	}
 	proofs := make([]store.ArchivedSession, 0, len(deleteSessions))
-	pageCounts := make(map[string]sql.NullInt64)
+	pageCounts, err := preloadEditionPageCounts(ctx, tx, userID, editionSHAsFrom(deleteSessions))
+	if err != nil {
+		return err
+	}
 	for _, expected := range deleteSessions {
 		current, err := scanSession(tx.QueryRowContext(ctx, q(
 			`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
@@ -237,6 +249,66 @@ func sessionProgDelta(ses store.Session) float64 {
 		return 0
 	}
 	return delta
+}
+
+func currentAccountTimezone(ctx context.Context, tx *sql.Tx, userID string) (string, error) {
+	var tz string
+	err := tx.QueryRowContext(ctx, q(
+		`SELECT COALESCE(NULLIF(timezone, ''), 'UTC') FROM users WHERE id = ?`), userID).Scan(&tz)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", store.ErrNotFound
+	}
+	return tz, err
+}
+
+func editionSHAsFrom(sessions []store.Session) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, ses := range sessions {
+		if ses.EditionSHA == nil || seen[*ses.EditionSHA] {
+			continue
+		}
+		seen[*ses.EditionSHA] = true
+		out = append(out, *ses.EditionSHA)
+	}
+	return out
+}
+
+func preloadEditionPageCounts(ctx context.Context, tx *sql.Tx, userID string, shas []string) (map[string]sql.NullInt64, error) {
+	out := make(map[string]sql.NullInt64)
+	if len(shas) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(shas))
+	args := make([]any, 0, len(shas)+1)
+	args = append(args, userID)
+	for i, sha := range shas {
+		placeholders[i] = "?"
+		args = append(args, sha)
+	}
+	query := q(`SELECT sha256, page_count FROM editions WHERE user_id = ? AND sha256 IN (` + strings.Join(placeholders, ",") + `)`)
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sha string
+		var pages sql.NullInt64
+		if err := rows.Scan(&sha, &pages); err != nil {
+			return nil, err
+		}
+		out[sha] = pages
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, sha := range shas {
+		if _, ok := out[sha]; !ok {
+			return nil, insights.ErrMissingEdition
+		}
+	}
+	return out, nil
 }
 
 func sessionPages(ctx context.Context, tx *sql.Tx, userID string, ses store.Session, progDelta float64, pageCounts map[string]sql.NullInt64) (float64, error) {

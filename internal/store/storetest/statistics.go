@@ -63,6 +63,13 @@ func testStatisticsStorage(t *testing.T, open OpenFunc) {
 	if _, ok := snap.Editions["stats-sha"]; !ok {
 		t.Fatalf("snapshot did not batch editions: %+v", snap.Editions)
 	}
+	editions, err := s.EditionsForWorks(ctx, u.ID, []string{w.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(editions) != 1 || editions["stats-sha"].WorkID != w.ID {
+		t.Fatalf("EditionsForWorks: %+v", editions)
+	}
 
 	day := ses.EndedAt.In(time.FixedZone("CEST", 2*60*60)).Format("2006-01-02")
 	ru := store.SessionRollup{

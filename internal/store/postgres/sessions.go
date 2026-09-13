@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -306,4 +307,33 @@ func (s *Store) EditionBySHA(ctx context.Context, userID, sha256 string) (store.
 		return e, store.ErrNotFound
 	}
 	return e, err
+}
+
+func (s *Store) EditionsForWorks(ctx context.Context, userID string, workIDs []string) (map[string]store.Edition, error) {
+	out := make(map[string]store.Edition)
+	if len(workIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(workIDs))
+	args := make([]any, 0, len(workIDs)+1)
+	args = append(args, userID)
+	for i, id := range workIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	query := q(`SELECT user_id, sha256, work_id, page_count, char_count, meta_json
+		 FROM editions WHERE user_id = ? AND work_id IN (` + strings.Join(placeholders, ",") + `)`)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e store.Edition
+		if err := rows.Scan(&e.UserID, &e.SHA256, &e.WorkID, &e.PageCount, &e.CharCount, &e.MetaJSON); err != nil {
+			return nil, err
+		}
+		out[e.SHA256] = e
+	}
+	return out, rows.Err()
 }

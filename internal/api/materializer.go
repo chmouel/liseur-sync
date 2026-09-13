@@ -11,6 +11,8 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
+const rollupBatchSize = 500
+
 // RunMaterializer periodically materializes closed inferred sessions
 // and (when enabled) compacts the op log. Runs in-process (v1 is
 // single-replica; the store transactions serialize the work).
@@ -132,68 +134,104 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 		if len(sessions) == 0 {
 			continue
 		}
-		ids := make([]string, 0, len(sessions))
-		var aggregateErr error
-		for _, ses := range sessions {
-			ids = append(ids, ses.SessionID)
-		}
-		snap, err := s.St.StatisticsSnapshot(ctx, userID, ids)
+		user, err := s.St.UserByID(ctx, userID)
 		if err != nil {
-			slog.Warn("session rollup: snapshot", "user", userID, "err", err)
+			slog.Warn("session rollup: user", "user", userID, "err", err)
 			continue
 		}
-		timezone := snap.Timezone
+		timezone := user.Timezone
+		if timezone == "" {
+			timezone = "UTC"
+		}
 		loc, err := time.LoadLocation(timezone)
 		if err != nil {
 			slog.Warn("session rollup: timezone", "user", userID, "err", err)
 			continue
 		}
-
-		type key struct{ workID, day string }
-		byDay := make(map[key]*store.SessionRollup)
-		for _, ses := range sessions {
-			day := ses.EndedAt.In(loc).Format(insights.DayFormat)
-			k := key{ses.WorkID, day}
-			ru := byDay[k]
-			if ru == nil {
-				ru = &store.SessionRollup{
-					UserID:             userID,
-					WorkID:             ses.WorkID,
-					Day:                day,
-					Timezone:           timezone,
-					AttributionVersion: 2,
-				}
-				byDay[k] = ru
+		for start := 0; start < len(sessions); start += rollupBatchSize {
+			end := start + rollupBatchSize
+			if end > len(sessions) {
+				end = len(sessions)
 			}
-
-			active := insights.ActiveSeconds(ses)
-			progDelta := positiveProgDelta(ses)
-			pages, err := insights.Pages(ses, snap.Editions)
+			batch := sessions[start:end]
+			workIDs := uniqueWorkIDs(batch)
+			editions, err := s.St.EditionsForWorks(ctx, userID, workIDs)
 			if err != nil {
-				aggregateErr = err
+				slog.Warn("session rollup: editions", "user", userID, "err", err)
 				break
 			}
-			ru.ActiveSeconds += active
-			ru.Pages += pages
-			ru.ProgDelta += progDelta
-			ru.SessionCount++
-			if ses.Origin != store.OriginInferred {
-				ru.MeasuredActiveSeconds += active
-				ru.MeasuredProgDelta += progDelta
+			rollups, aggregateErr := buildSessionRollups(batch, userID, timezone, loc, editions)
+			if aggregateErr != nil {
+				if insights.IsMissingEdition(aggregateErr) {
+					slog.Warn("session rollup: missing edition", "user", userID, "err", aggregateErr)
+				} else {
+					slog.Warn("session rollup: aggregate", "user", userID, "err", aggregateErr)
+				}
+				break
+			}
+			if err := s.St.ApplyRollups(ctx, userID, rollups, batch); err != nil {
+				if errors.Is(err, store.ErrConflict) {
+					slog.Info("session rollup: deferred batch", "user", userID, "sessions", len(batch))
+					break
+				}
+				slog.Warn("session rollup", "user", userID, "err", err)
+				break
 			}
 		}
-		if aggregateErr != nil {
-			slog.Warn("session rollup: aggregate", "user", userID, "err", aggregateErr)
+	}
+}
+
+func uniqueWorkIDs(sessions []store.Session) []string {
+	seen := make(map[string]bool, len(sessions))
+	out := make([]string, 0, len(sessions))
+	for _, ses := range sessions {
+		if seen[ses.WorkID] {
 			continue
 		}
-		rollups := make([]store.SessionRollup, 0, len(byDay))
-		for _, ru := range byDay {
-			rollups = append(rollups, *ru)
+		seen[ses.WorkID] = true
+		out = append(out, ses.WorkID)
+	}
+	return out
+}
+
+func buildSessionRollups(sessions []store.Session, userID, timezone string, loc *time.Location, editions map[string]store.Edition) ([]store.SessionRollup, error) {
+	type key struct{ workID, day string }
+	byDay := make(map[key]*store.SessionRollup)
+	for _, ses := range sessions {
+		day := ses.EndedAt.In(loc).Format(insights.DayFormat)
+		k := key{ses.WorkID, day}
+		ru := byDay[k]
+		if ru == nil {
+			ru = &store.SessionRollup{
+				UserID:             userID,
+				WorkID:             ses.WorkID,
+				Day:                day,
+				Timezone:           timezone,
+				AttributionVersion: 2,
+			}
+			byDay[k] = ru
 		}
-		if err := s.St.ApplyRollups(ctx, userID, rollups, sessions); err != nil {
-			slog.Warn("session rollup", "user", userID, "err", err)
+
+		active := insights.ActiveSeconds(ses)
+		progDelta := positiveProgDelta(ses)
+		pages, err := insights.Pages(ses, editions)
+		if err != nil {
+			return nil, err
+		}
+		ru.ActiveSeconds += active
+		ru.Pages += pages
+		ru.ProgDelta += progDelta
+		ru.SessionCount++
+		if ses.Origin != store.OriginInferred {
+			ru.MeasuredActiveSeconds += active
+			ru.MeasuredProgDelta += progDelta
 		}
 	}
+	rollups := make([]store.SessionRollup, 0, len(byDay))
+	for _, ru := range byDay {
+		rollups = append(rollups, *ru)
+	}
+	return rollups, nil
 }
 
 func positiveProgDelta(ses store.Session) float64 {

@@ -1868,6 +1868,8 @@ type Store interface {
 	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	WorkIDsWithInsights(ctx context.Context, userID string) ([]string, error)
 	EditionBySHA(ctx context.Context, userID, sha256 string) (Edition, error)
+	// EditionsForWorks returns editions for the given works, keyed by SHA256.
+	EditionsForWorks(ctx context.Context, userID string, workIDs []string) (map[string]Edition, error)
 	StatisticsSnapshot(ctx context.Context, userID string, candidateIDs []string) (StatsSnapshot, error)
 
 	// Session rollups (retention). SessionsEndedBefore feeds the rollup
