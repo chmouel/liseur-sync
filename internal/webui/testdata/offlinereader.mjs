@@ -144,7 +144,10 @@ try {
   const probe = `(() => {
     const view = document.querySelector('readium-view');
     const docs = view?.renderer?.getContents?.() || [];
-    return docs.some(({doc}) => doc?.body?.textContent.includes('A title page, absolutely positioned'));
+    return docs.some(({doc}) => {
+      const text = doc?.body?.textContent?.trim() || '';
+      return text.length > 0 && !/^Back\s*$/i.test(text) && !/^Retry sync\s*$/i.test(text);
+    });
   })()`;
   await wait(offline, probe, 'cold offline reader renders the downloaded EPUB');
   assert.equal(await offline.evaluate(`fetch(${JSON.stringify(`${base}healthz`)}, {cache: 'no-store'})

@@ -1136,6 +1136,7 @@ function linkedPublicationReferences(bytes, type, base) {
       }))
       .filter(reference => reference.value);
   }
+  const sanitized = text.replace(/<(script|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
   const refs = new Map();
   const add = value => {
     if (!value) return;
@@ -1144,19 +1145,25 @@ function linkedPublicationReferences(bytes, type, base) {
     const key = resolved + "\u0000" + inferType(value);
     if (!refs.has(key)) refs.set(key, { value: resolved, type: inferType(value) });
   };
-  for (const match of text.matchAll(/<([a-z0-9:-]+)([^>]*)>/gi)) {
+  for (const match of sanitized.matchAll(/<([a-z0-9:-]+)([^>]*)>/gi)) {
     const tag = match[1].toLowerCase();
     const attrs = match[2];
+    if (["script", "iframe", "object", "embed", "base", "form"].includes(tag) ||
+        (tag === "meta" && /(?:^|\s)http-equiv\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`]+)/i.test(attrs))) {
+      continue;
+    }
     if (tag === "a") continue;
     if (tag === "link") {
-      const rel = attrs.match(/(?:^|\s)rel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s\"'<>`]+))/i);
+      const rel = attrs.match(/(?:^|\s)rel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/i);
       const relValue = rel?.[1] ?? rel?.[2] ?? rel?.[3] ?? "";
       if (!/^(stylesheet|icon)$/i.test(relValue)) continue;
     }
-    for (const attr of attrs.matchAll(/(?:href|src|poster|background|srcset|style)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s\"'<>`]+))/gi)) {
+    for (const attr of attrs.matchAll(/(?:href|src|poster|background|srcset|style)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi)) {
       const name = attr[0].split("=")[0].toLowerCase();
       const value = attr[1] ?? attr[2] ?? attr[3];
       if (!value) continue;
+      if (/^on/i.test(name) || ["nonce", "srcdoc", "action", "formaction", "ping"].includes(name)) continue;
+      if (/^(href|src)$/i.test(name) && /^\s*javascript:/i.test(value)) continue;
       if (name === "srcset") {
         for (const candidate of value.split(",")) {
           add(candidate.trim().split(/\s+/)[0]);
