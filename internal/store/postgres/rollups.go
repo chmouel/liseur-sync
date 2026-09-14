@@ -268,8 +268,17 @@ func sessionProgDelta(ses store.Session) float64 {
 
 func currentAccountTimezone(ctx context.Context, tx *sql.Tx, userID string) (string, error) {
 	var tz string
+	// FOR UPDATE, because the check is only worth making if the answer
+	// still holds at commit. A plain read takes no lock under READ
+	// COMMITTED, so UpdateUserSettings could move the account's zone
+	// between this row being read and the batch being written, and the
+	// sittings would be filed under a zone the account no longer keeps.
+	// Locking the row makes that update wait for this transaction, or
+	// land before it and be seen. The SQLite copy needs no equivalent:
+	// that store holds a single connection and opens its transactions
+	// IMMEDIATE, so no other writer can commit inside this one.
 	err := tx.QueryRowContext(ctx, q(
-		`SELECT COALESCE(NULLIF(timezone, ''), 'UTC') FROM users WHERE id = ?`), userID).Scan(&tz)
+		`SELECT COALESCE(NULLIF(timezone, ''), 'UTC') FROM users WHERE id = ? FOR UPDATE`), userID).Scan(&tz)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", store.ErrNotFound
 	}

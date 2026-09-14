@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/storetest"
@@ -90,5 +91,57 @@ func TestSessionPagesCachesNullableCountsAndPropagatesErrors(t *testing.T) {
 	}
 	if len(cache) != 0 {
 		t.Fatalf("failed lookup was cached: %v", cache)
+	}
+}
+
+// TestCurrentAccountTimezoneLocksTheRow proves the timezone guard is
+// worth making. Reading the zone without locking it takes no lock under
+// READ COMMITTED, so a settings change could commit between the check
+// and the rollup, and the batch would be filed under a zone the account
+// had already left. The lock makes that update wait.
+func TestCurrentAccountTimezoneLocksTheRow(t *testing.T) {
+	s := openRollupStore(t)
+	ctx := t.Context()
+	u := store.User{ID: "tz-lock", Name: "reader", Argon2Hash: "x", Timezone: "Europe/Paris", CreatedAt: time.Now()}
+	if err := s.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	tz, err := currentAccountTimezone(ctx, tx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tz != "Europe/Paris" {
+		t.Fatalf("read the wrong zone: %q", tz)
+	}
+
+	// A second connection may not move the zone while that read is held.
+	other, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.ExecContext(ctx, `SET LOCAL lock_timeout = '500ms'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.ExecContext(ctx, q(`UPDATE users SET timezone = ? WHERE id = ?`),
+		"America/New_York", u.ID)
+	if err == nil {
+		t.Fatal("the account zone moved while the rollup held it")
+	}
+	if err := other.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	// And may once it is released.
+	if _, err := s.db.ExecContext(ctx, q(`UPDATE users SET timezone = ? WHERE id = ?`),
+		"America/New_York", u.ID); err != nil {
+		t.Fatalf("the zone stayed locked after the rollup finished: %v", err)
 	}
 }
