@@ -5,12 +5,18 @@
 
 ## Context
 
-A sitting arrives as a row in `sessions`. An hour later the rollup job
-folds it into a `session_rollups_v2` bucket — one row per work, per day,
-per timezone — writes a `session_tombstones` row as proof it was counted,
-and deletes the raw row. That is already a compaction, and it is the only
-one. Everything downstream of it grows without bound:
+A sitting arrives as a row in `sessions` and stays one for a long time.
+The rollup job runs hourly, but it only looks at sittings that ended
+before the retention horizon — `ops.retention_days`, 180 by default — so
+a row lives untouched for half a year. When its turn comes the job folds
+it into a `session_rollups_v2` bucket — one row per work, per day, per
+timezone — writes a `session_tombstones` row as proof it was counted, and
+deletes the raw row. That is already a compaction, and it is the only one
+sittings get. Everything on either side of it grows without bound:
 
+- **`sessions`** holds six months of raw rows at any time, which is the
+  intended cost of letting a device re-offer a sitting. It also holds
+  koplugin sittings permanently: see below.
 - **`session_rollups_v2`** gains a row for every work the reader touched
   on every day they touched it. A reader with a book on the go every day
   adds 365 rows a year; a reader who dips into several adds a multiple of
@@ -22,8 +28,14 @@ one. Everything downstream of it grows without bound:
   rather than counted twice.
 - **koplugin** sittings arrive at whatever granularity KOReader recorded
   them, which can be one per page turn on a device that suspends often.
-  They are rolled up like any other, so they inflate the tombstone table
-  at the rate the e-reader chose.
+  They never reach the rollup at all: `SessionsEndedBefore` selects
+  `source_key IS NULL`, and the koplugin adapter sets one. So they are
+  not what inflates the tombstone table — they and their
+  `session_supersessions` rows stay raw in `sessions` for the life of the
+  account, and the only compaction the server has does not apply to them.
+  Whether that exclusion is deliberate (a superseded sitting is mutable,
+  and the rollup writes a number nothing revisits) or merely untouched is
+  itself part of what this record has to settle.
 
 None of this is a problem at the scale liseur-sync runs at today, and
 that is precisely why it should be decided now rather than when it is.
@@ -63,15 +75,16 @@ keeps an unacknowledged sitting, not by the life of the account.
 
 ### The three candidates, and what each costs
 
-**Compacting koplugin sittings before they are rolled up.** Merge
-adjacent sittings from the same device and work that are separated by
-less than some gap, at ingestion, so the tombstone table grows at the
-rate of *reading* rather than the rate of *page turns*. Cheapest by far,
-and it is the only one of the three that reduces what is written rather
-than what is kept. Its cost is that `uploaded_at` is not overlap proof
-and merging changes session ids, so the merged sitting needs an id
-derived from its parts or the device will re-offer the parts it still
-holds. This interacts directly with ADR-0039's refusal handling.
+**Compacting koplugin sittings at ingestion.** Merge adjacent sittings
+from the same device and work that are separated by less than some gap,
+as they arrive, so `sessions` grows at the rate of *reading* rather than
+the rate of *page turns*. Since these rows never reach the rollup, this
+is the only lever there is on them short of admitting them to it.
+Cheapest by far, and the only one of the three that reduces what is
+written rather than what is kept. Its cost is that `uploaded_at` is not
+overlap proof and merging changes session ids, so the merged sitting
+needs an id derived from its parts or the device will re-offer the parts
+it still holds. This interacts directly with ADR-0039's refusal handling.
 
 **Aging tombstones out past a horizon.** Drop tombstones older than some
 period. The risk is exactly the resurrection problem the annotation
