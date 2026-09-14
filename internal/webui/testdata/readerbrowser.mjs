@@ -2083,6 +2083,98 @@ async function samePageGuard(evalIn, check, { pause, wait, visibility, position,
   check('and it can still be answered', await wait(
     "document.getElementById('reader-catchup').hidden"));
 
+  // ----------------------------------- walking onto the asked-about page
+  //
+  // A question already on screen when its reason goes away. Every page
+  // turn takes the panel down with it, so the only way to arrive on the
+  // asked-about page with the question still up is a relocate nobody
+  // asked for: a resize, a font change, a reflow. The reader ends up
+  // looking at the page a panel above them is offering to take them to,
+  // with live buttons on it.
+  //
+  // `goTo` is that relocate: it moves the book without the interaction
+  // a page turn carries, which is what a reflow amounts to. What brings
+  // the reader back round to the question afterwards is the other
+  // device speaking again, because coming back to the tab would take
+  // the panel down by itself and prove nothing.
+  const onOther = await settledPage();
+  await evalIn("document.getElementById('reader-prev').click()");
+  const behind = await settledPage(onOther);
+  // The other device's page is visited, photographed and left: an echo
+  // has to be built from a real locator to name an exact page, and it
+  // has to be the newest position there is to be a question at all. So
+  // the reader goes back to their own page and lets it land first, and
+  // only then does the other device speak.
+  await evalIn(`(() => {
+    const loc = document.querySelector('readium-view').lastLocation;
+    window.__liveSaved = {
+      href: loc.locator.href, section: loc.sectionFraction, fraction: loc.fraction,
+    };
+    return true;
+  })()`);
+  await evalIn("document.getElementById('reader-next').click()");
+  check('the reader returns to their own page',
+    await settledPage(behind) === onOther &&
+    await wait(`(${drained}).then(n => n === 0)`), await pageNow());
+  // The same photographed page, said again under a new name and a new
+  // anchor. Once to raise the question, once more to bring a refresh
+  // round while it is still up.
+  const echoSaved = (id) => evalIn(`(async () => {
+    const saved = window.__liveSaved;
+    const drift = Math.min(saved.fraction + 0.012, 1);
+    window.__liveEchoes = (window.__liveEchoes || 0) + 1;
+    const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
+      op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
+      client_ts: new Date().toISOString(), progression: drift,
+      locator: {
+        href: saved.href,
+        locations: {
+          progression: saved.section, totalProgression: drift,
+          fragments: ['epubcfi(/6/9997!/4/2/16/1:' + window.__liveEchoes + ')'],
+        },
+        text: {
+          before: 'still a page behind, in ', highlight: 'another',
+          after: ' room on another device',
+        },
+      },
+    }] });
+    return out.results[0].status;
+  })()`);
+  const said = await echoSaved('echo-walk');
+  check('the other device is a page back', said === 'applied' &&
+    await pageNow() === onOther, said + ' ' + behind + ' vs ' + await pageNow());
+  await resume();
+  check('a page the reader is not on is a question',
+    await wait("!document.getElementById('reader-catchup').hidden"), await panelText());
+  check('and it is named exactly, not guessed at',
+    (await panelText()).includes(`Page ${behind}`) &&
+    !/near page/i.test(await panelText()), await panelText());
+  // The relocate nobody asked for. It is given the same locator the
+  // echo carries, not a fraction: a fraction is the number the page
+  // table and the reader disagree about, which is the whole reason an
+  // interpolated page is only ever *near*.
+  await evalIn(`(() => {
+    const saved = window.__liveSaved;
+    document.querySelector('readium-view').goTo({
+      href: saved.href, type: 'application/xhtml+xml',
+      locations: { progression: saved.section },
+    }).catch(() => {});
+    return true;
+  })()`);
+  check('the reader arrives on it without turning a page',
+    await settledPage(onOther) === behind &&
+    !await panelHidden(), await pageNow() + ' ' + await panelHidden());
+  const reads = await evalIn('window.__liveReads');
+  check('the other device says the same page again',
+    await echoSaved('echo-walk-again') === 'applied' &&
+    await wait(`window.__liveReads > ${reads}`));
+  check('the question does not survive being walked into', await wait(
+    "document.getElementById('reader-catchup').hidden"), await panelText());
+  check('it went because it was answered, not merely taken down',
+    await settlesTo('live-test-echo-walk'), await baseline());
+  await resume();
+  check('and it is not asked again', await panelHidden(), await panelText());
+
   // ------------------------------------------- a page that is a guess
   //
   // The same page *number*, arrived at by arithmetic across a fraction

@@ -743,11 +743,26 @@ async function agreeSamePage(offer) {
     // silent answer this exists to prevent. A flush that settled its own
     // acknowledged page on the way is right and stands; only the other
     // device's position is left unanswered, for a later quiet moment.
-    await keepHere(offer.op, () => {
+    const answered = await keepHere(offer.op, () => {
       const seen = placeView();
       return catchup.shown() === offer && current(stamp) &&
         samePage(placeHere(here, seen), placeOf(offer.op, seen));
     });
+    // Usually there is no panel to take down: the page is checked
+    // before the question is drawn. But an offer already on screen can
+    // come to match, when a resize or a reflow moves the reader onto
+    // its page without a page turn, and a live refresh then re-enters
+    // here. An answered question must not be left standing with its
+    // buttons still live.
+    //
+    // It is taken down afterwards rather than first, and only when the
+    // answer was really recorded. Hiding first would have to put the
+    // panel back when the page would not go, and putting it back runs
+    // this gate again, which would fail the same way: a question that
+    // flickers for as long as the network is down. Left up, it is a
+    // question the reader can answer themselves, which is the honest
+    // state of it.
+    if (answered === "kept") hideCatchup();
   } finally {
     if (agreeingSamePage === key) agreeingSamePage = null;
   }
