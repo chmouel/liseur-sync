@@ -802,10 +802,287 @@ ALTER TABLE session_rollups_v2 ADD COLUMN comparison_active_ms INTEGER;
 ALTER TABLE session_tombstones ADD COLUMN comparison_active_ms INTEGER;
 `
 
+// statsRevisionUpsertSafe repairs every stats-revision trigger.
+//
+// SQLite overrides a trigger body's own conflict clause with the one on
+// the statement that fired it, so the defensive
+// "INSERT OR IGNORE INTO stats_revisions" aborted rather than ignored
+// whenever an upsert took its DO UPDATE branch. The row it guards
+// against is created by the users trigger and by the backfill above, so
+// it always exists, and the guard fired every time: rolling a work/day
+// bucket up a second time — a device uploading older sittings for a day
+// already archived — failed the whole transaction, and those sittings
+// deferred forever. Postgres was never affected; its bump function is a
+// real upsert.
+//
+// The replacement asks whether the row exists instead of colliding with
+// it, so no conflict policy applies. Every trigger is recreated, not
+// only the two the rollup reaches today, because a half-fixed set is
+// the same landmine for the next upsert someone writes.
+const statsRevisionUpsertSafe = `
+DROP TRIGGER IF EXISTS stats_revisions_users_insert;
+CREATE TRIGGER stats_revisions_users_insert
+AFTER INSERT ON users
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.id);
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_users_timezone_update;
+CREATE TRIGGER stats_revisions_users_timezone_update
+AFTER UPDATE OF timezone ON users
+WHEN OLD.timezone IS NOT NEW.timezone
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_sessions_insert;
+CREATE TRIGGER stats_revisions_sessions_insert AFTER INSERT ON sessions BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_sessions_update;
+CREATE TRIGGER stats_revisions_sessions_update AFTER UPDATE ON sessions BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_sessions_delete;
+CREATE TRIGGER stats_revisions_sessions_delete AFTER DELETE ON sessions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_supersessions_insert;
+CREATE TRIGGER stats_revisions_supersessions_insert AFTER INSERT ON session_supersessions BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_supersessions_delete;
+CREATE TRIGGER stats_revisions_supersessions_delete AFTER DELETE ON session_supersessions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_insert;
+CREATE TRIGGER stats_revisions_rollups_insert AFTER INSERT ON session_rollups BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_update;
+CREATE TRIGGER stats_revisions_rollups_update AFTER UPDATE ON session_rollups BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_delete;
+CREATE TRIGGER stats_revisions_rollups_delete AFTER DELETE ON session_rollups
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_v2_insert;
+CREATE TRIGGER stats_revisions_rollups_v2_insert AFTER INSERT ON session_rollups_v2 BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_v2_update;
+CREATE TRIGGER stats_revisions_rollups_v2_update AFTER UPDATE ON session_rollups_v2 BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_rollups_v2_delete;
+CREATE TRIGGER stats_revisions_rollups_v2_delete AFTER DELETE ON session_rollups_v2
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_tombstones_insert;
+CREATE TRIGGER stats_revisions_tombstones_insert AFTER INSERT ON session_tombstones BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_tombstones_update;
+CREATE TRIGGER stats_revisions_tombstones_update AFTER UPDATE ON session_tombstones BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_tombstones_delete;
+CREATE TRIGGER stats_revisions_tombstones_delete AFTER DELETE ON session_tombstones
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_ops_insert;
+CREATE TRIGGER stats_revisions_ops_insert AFTER INSERT ON ops BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_ops_update;
+CREATE TRIGGER stats_revisions_ops_update AFTER UPDATE ON ops BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_ops_delete;
+CREATE TRIGGER stats_revisions_ops_delete AFTER DELETE ON ops
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_works_insert;
+CREATE TRIGGER stats_revisions_works_insert AFTER INSERT ON works BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_works_update;
+CREATE TRIGGER stats_revisions_works_update AFTER UPDATE ON works BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_works_delete;
+CREATE TRIGGER stats_revisions_works_delete AFTER DELETE ON works
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_editions_insert;
+CREATE TRIGGER stats_revisions_editions_insert AFTER INSERT ON editions BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_editions_update;
+CREATE TRIGGER stats_revisions_editions_update AFTER UPDATE ON editions BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT NEW.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = NEW.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = NEW.user_id;
+END;
+
+DROP TRIGGER IF EXISTS stats_revisions_editions_delete;
+CREATE TRIGGER stats_revisions_editions_delete AFTER DELETE ON editions
+WHEN EXISTS (SELECT 1 FROM users WHERE id = OLD.user_id)
+BEGIN
+    INSERT INTO stats_revisions (user_id, revision)
+    SELECT OLD.user_id, 0 WHERE NOT EXISTS (
+        SELECT 1 FROM stats_revisions WHERE user_id = OLD.user_id);
+    UPDATE stats_revisions SET revision = revision + 1 WHERE user_id = OLD.user_id;
+END;
+`
+
+// rollupOldestPageIndex serves the rollup job's bounded oldest-first
+// read. sessions_work_started leads with work_id, so it cannot answer
+// "the oldest sittings across every work" without scanning and sorting
+// the account's whole eligible history every hour.
+const rollupOldestPageIndex = `
+CREATE INDEX IF NOT EXISTS sessions_rollup_page
+    ON sessions(user_id, started_at, session_id)
+    WHERE source_key IS NULL;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
+	statsRevisionUpsertSafe, rollupOldestPageIndex,
+}
+
+// migrationsThrough returns the migrations up to but not including the
+// named one. Tests build historical databases with it: a boundary
+// written as migrations[:len(migrations)-n] silently slides forward the
+// next time a migration is appended, and the fixture stops reproducing
+// the deployment it was written to catch.
+func migrationsThrough(name string) ([]string, bool) {
+	named := map[string]string{
+		"schema": schema, "claimRevisions": claimRevisions,
+		"folderUploads": folderUploads, "folderAccess": folderAccess,
+		"annotationSync": annotationSync, "folderBackfill": folderBackfill,
+		"statisticsStorage":        statisticsStorage,
+		"comparisonRollupEvidence": comparisonRollupEvidence,
+		"statsRevisionUpsertSafe":  statsRevisionUpsertSafe,
+		"rollupOldestPageIndex":    rollupOldestPageIndex,
+	}
+	want, ok := named[name]
+	if !ok {
+		return nil, false
+	}
+	for i, m := range migrations {
+		if m == want {
+			return migrations[:i], true
+		}
+	}
+	return nil, false
 }

@@ -351,20 +351,23 @@ func (s *Store) EditionBySHA(ctx context.Context, userID, sha256 string) (store.
 	return e, err
 }
 
-func (s *Store) EditionsForWorks(ctx context.Context, userID string, workIDs []string) (map[string]store.Edition, error) {
+// EditionsBySHA returns the named editions keyed by SHA256. The rollup
+// looks editions up by a session's EditionSHA, so asking by SHA avoids
+// dragging in every other edition that happens to share the work.
+func (s *Store) EditionsBySHA(ctx context.Context, userID string, sha256s []string) (map[string]store.Edition, error) {
 	out := make(map[string]store.Edition)
-	if len(workIDs) == 0 {
+	if len(sha256s) == 0 {
 		return out, nil
 	}
-	placeholders := make([]string, len(workIDs))
-	args := make([]any, 0, len(workIDs)+1)
+	placeholders := make([]string, len(sha256s))
+	args := make([]any, 0, len(sha256s)+1)
 	args = append(args, userID)
-	for i, id := range workIDs {
+	for i, sha := range sha256s {
 		placeholders[i] = "?"
-		args = append(args, id)
+		args = append(args, sha)
 	}
 	query := `SELECT user_id, sha256, work_id, page_count, char_count, meta_json
-		 FROM editions WHERE user_id = ? AND work_id IN (` + strings.Join(placeholders, ",") + `)`
+		 FROM editions WHERE user_id = ? AND sha256 IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

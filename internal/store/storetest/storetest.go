@@ -251,6 +251,18 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("V2RollupsRejectMismatchedContributions", func(t *testing.T) {
 		testV2RollupsRejectMismatchedContributions(t, open)
 	})
+	t.Run("RollupsCountSessionsThatNeedNoEdition", func(t *testing.T) {
+		testRollupsCountSessionsThatNeedNoEdition(t, open)
+	})
+	t.Run("EditionSHAsNeedingPages", func(t *testing.T) {
+		testEditionSHAsNeedingPages(t)
+	})
+	t.Run("RollupsRejectForeignAccountTimezone", func(t *testing.T) {
+		testRollupsRejectForeignAccountTimezone(t, open)
+	})
+	t.Run("RollupsAccumulateIntoAnExistingBucket", func(t *testing.T) {
+		testRollupsAccumulateIntoAnExistingBucket(t, open)
+	})
 	t.Run("Housekeeping", func(t *testing.T) { testHousekeeping(t, open) })
 	t.Run("ConcurrentAppendGapFreeSeq", func(t *testing.T) { testConcurrentAppend(t, open) })
 	t.Run("AnnotationPushIdempotencyAndRevConflict", func(t *testing.T) {
@@ -987,7 +999,7 @@ func testSessionRollups(t *testing.T, open OpenFunc) {
 	if err := s.AppendSessions(ctx, u.ID, []store.Session{ses}); err != nil {
 		t.Fatal(err)
 	}
-	ended, err := s.SessionsEndedBefore(ctx, u.ID, time.Now().Add(-180*24*time.Hour))
+	ended, err := s.SessionsEndedBefore(ctx, u.ID, time.Now().Add(-180*24*time.Hour), 0)
 	if err != nil || len(ended) != 1 {
 		t.Fatalf("sessions for rollup: %d %v", len(ended), err)
 	}
@@ -1042,7 +1054,7 @@ func testSessionRollups(t *testing.T, open OpenFunc) {
 	if err := s.AppendSessions(ctx, staleUser.ID, []store.Session{staleSession}); err != nil {
 		t.Fatal(err)
 	}
-	staleSnapshot, err := s.SessionsEndedBefore(ctx, staleUser.ID, time.Now())
+	staleSnapshot, err := s.SessionsEndedBefore(ctx, staleUser.ID, time.Now(), 0)
 	if err != nil || len(staleSnapshot) != 1 {
 		t.Fatalf("stale snapshot: %+v %v", staleSnapshot, err)
 	}

@@ -49,7 +49,7 @@ func testSessionRangeAndCompactionReadsPreserveOptionalMeasurements(t *testing.T
 			return s.SessionsInRange(ctx, user.ID, start, until)
 		}},
 		{"SessionsEndedBefore", func() ([]store.Session, error) {
-			return s.SessionsEndedBefore(ctx, user.ID, until)
+			return s.SessionsEndedBefore(ctx, user.ID, until, 0)
 		}},
 	} {
 		t.Run(read.name, func(t *testing.T) {
