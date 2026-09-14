@@ -3249,12 +3249,17 @@ document.addEventListener("click", (e) => {
   if (tocButton && tocButton.contains(e.target)) return;
   toggleTOC(false);
 });
+let tocWarmToken = 0;
 const warmTOCHref = (target) => {
   const a = target && target.closest && target.closest("a[data-href]");
-  if (a && view?.resources?.warm) {
-    const href = a.dataset.href?.split("#")[0];
-    if (href) view.resources.warm(href);
-  }
+  if (!a || !view?.resources?.warm) return;
+  const href = a.dataset.href?.split("#")[0];
+  if (!href) return;
+  const token = ++tocWarmToken;
+  window.setTimeout(() => {
+    if (token !== tocWarmToken) return;
+    view.resources.warm(href);
+  }, 150);
 };
 tocList.addEventListener("pointerenter", (e) => warmTOCHref(e.target), true);
 tocList.addEventListener("touchstart", (e) => warmTOCHref(e.target), { passive: true, capture: true });
