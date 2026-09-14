@@ -79,7 +79,10 @@ const stage = document.getElementById("reader-view");
 const stageArea = stage.closest(".reader-stage") || stage;
 const status = document.getElementById("reader-status");
 const progressBar = document.getElementById("reader-progress-bar");
+const progressRail = progressBar ? progressBar.closest(".reader-progress") : null;
 const progressText = document.getElementById("reader-progress-text");
+const chapterLoader = document.getElementById("reader-chapter-loader");
+const chapterLoaderText = document.getElementById("reader-chapter-loader-text");
 const chapterText = document.getElementById("reader-chapter");
 const pageText = document.getElementById("reader-page");
 const footer = document.getElementById("reader-footer");
@@ -96,6 +99,51 @@ const tocPanel = document.getElementById("reader-toc");
 const tocList = document.getElementById("reader-toc-list");
 const tocButton = document.getElementById("reader-toc-button");
 const fullscreenBtn = document.getElementById("reader-fullscreen");
+
+let chapterLoadingTimer = null;
+let chapterLoadingGeneration = 0;
+const CHAPTER_LOADING_MIN_MS = 250;
+
+function startChapterLoading(message = "Loading chapter…", delay = 0) {
+  const generation = ++chapterLoadingGeneration;
+  clearTimeout(chapterLoadingTimer);
+  if (!chapterLoader && !progressRail) return { show() {}, stop() {} };
+  let shownAt = 0;
+  const show = (nextMessage = message) => {
+    if (generation !== chapterLoadingGeneration) return;
+    if (!shownAt) shownAt = performance.now();
+    if (chapterLoaderText) chapterLoaderText.textContent = nextMessage;
+    if (progressRail) progressRail.classList.add("loading");
+    if (chapterLoader) chapterLoader.hidden = false;
+  };
+  if (delay > 0) {
+    chapterLoadingTimer = setTimeout(show, delay);
+  } else {
+    show();
+  }
+  const stop = () => {
+    if (generation !== chapterLoadingGeneration) return;
+    clearTimeout(chapterLoadingTimer);
+    const hide = () => {
+      if (generation !== chapterLoadingGeneration) return;
+      if (progressRail) progressRail.classList.remove("loading");
+      if (chapterLoader) chapterLoader.hidden = true;
+    };
+    const remaining = shownAt
+      ? CHAPTER_LOADING_MIN_MS - (performance.now() - shownAt)
+      : 0;
+    if (remaining > 0) chapterLoadingTimer = setTimeout(hide, remaining);
+    else hide();
+  };
+  return { show, stop };
+}
+
+function isChapterEdge(direction) {
+  if (!finite(here?.sectionFraction)) return false;
+  return direction > 0
+    ? here.sectionFraction >= 0.99
+    : here.sectionFraction <= 0.01;
+}
 
 let view = null;
 let workID = null;
@@ -781,6 +829,7 @@ async function goThere(op, stamp, activity) {
   // Close the old sitting at its actual page, not at the remote destination.
   endSession();
   restoring = true;
+  const loading = startChapterLoading("Syncing to reading position…");
   try {
     for (const target of startCandidates(op)) {
       if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
@@ -794,6 +843,7 @@ async function goThere(op, stamp, activity) {
       } catch { /* try the coarser locator */ }
     }
   } finally {
+    loading.stop();
     restoring = false;
     // A restored page starts accounting only when the reader next interacts.
     rememberAnswer(op, true);
@@ -2387,12 +2437,9 @@ function applySettings() {
   document.body.dataset.readerFooter = FOOTER_MODES.includes(settings.footer)
     ? settings.footer
     : SETTINGS_DEFAULTS.footer;
-  // The footer lives in the bottom margin the engine leaves under the
-  // text, so its height is that margin, whatever the setting says.
-  document.body.style.setProperty(
-    "--reader-margin",
-    MARGINS[settings.margin] || MARGINS.normal,
-  );
+  document.body.dataset.readerMargin = settings.margin in MARGINS
+    ? settings.margin
+    : SETTINGS_DEFAULTS.margin;
   applyChrome();
   if (here) chapterText.textContent = footerMiddle(here);
   if (!view || !view.renderer) return;
@@ -2894,8 +2941,9 @@ function paint(location) {
   // transient NaN does not flash the progress back to 0%.
   if (finite(location.fraction)) {
     const fraction = location.fraction;
-    progressBar.style.width = (fraction * 100).toFixed(1) + "%";
-    progressText.textContent = Math.round(fraction * 100) + "%";
+    const percent = Math.round(fraction * 100);
+    progressBar.dataset.readerProgress = String(percent);
+    progressText.textContent = percent + "%";
   }
   // The page is a Readium position: a fixed slice of the book as it is
   // stored, so the count does not move when the font does and it is the
@@ -3001,29 +3049,34 @@ function cycleFooter() {
 
 async function goToPage(page) {
   if (!view) return;
-  if (positions) {
-    const loc = pageLocation(positions, page);
-    if (loc && view.renderer) {
-      try {
-        await view.renderer.goTo(loc);
-        const landedIndex = view.lastLocation?.section?.current;
-        const state =
-          landedIndex === loc.index && view.lastLocation?.cfi
-            ? view.lastLocation.cfi
-            : loc.index;
-        if (view.history && view.history.pushState) {
-          view.history.pushState(state);
+  const loading = startChapterLoading(`Loading page ${page}…`);
+  try {
+    if (positions) {
+      const loc = pageLocation(positions, page);
+      if (loc && view.renderer) {
+        try {
+          await view.renderer.goTo(loc);
+          const landedIndex = view.lastLocation?.section?.current;
+          const state =
+            landedIndex === loc.index && view.lastLocation?.cfi
+              ? view.lastLocation.cfi
+              : loc.index;
+          if (view.history && view.history.pushState) {
+            view.history.pushState(state);
+          }
+          return;
+        } catch (e) {
+          /* fall through to engine fraction fallback */
         }
-        return;
-      } catch (e) {
-        /* fall through to engine fraction fallback */
       }
     }
-  }
-  const loc = here && here.location;
-  if (loc && finite(loc.total) && loc.total > 0) {
-    const frac = Math.min(Math.max((page - 0.5) / loc.total, 0), 1);
-    await view.goToFraction(frac).catch(() => {});
+    const loc = here && here.location;
+    if (loc && finite(loc.total) && loc.total > 0) {
+      const frac = Math.min(Math.max((page - 0.5) / loc.total, 0), 1);
+      await view.goToFraction(frac).catch(() => {});
+    }
+  } finally {
+    loading.stop();
   }
 }
 
@@ -3093,7 +3146,12 @@ if (gotoForm) {
     if (!noteNavigation()) return;
     if (gotoKind === "percent") {
       const pct = Math.min(Math.max(val, 0), 100);
-      if (view) await view.goToFraction(pct / 100).catch(() => {});
+      if (view) {
+        const loading = startChapterLoading(`Loading ${pct}%…`);
+        await view.goToFraction(pct / 100)
+          .catch(() => {})
+          .finally(loading.stop);
+      }
     } else {
       await goToPage(val);
     }
@@ -3191,18 +3249,50 @@ document.addEventListener("click", (e) => {
   if (tocButton && tocButton.contains(e.target)) return;
   toggleTOC(false);
 });
+const warmTOCHref = (target) => {
+  const a = target && target.closest && target.closest("a[data-href]");
+  if (a && view?.resources?.warm) {
+    const href = a.dataset.href?.split("#")[0];
+    if (href) view.resources.warm(href);
+  }
+};
+tocList.addEventListener("pointerenter", (e) => warmTOCHref(e.target), true);
+tocList.addEventListener("touchstart", (e) => warmTOCHref(e.target), { passive: true, capture: true });
+
 tocList.addEventListener("click", (e) => {
   const a = e.target && e.target.closest && e.target.closest("a[data-href]");
   if (!a) return;
   e.preventDefault();
   if (!noteNavigation()) return;
   toggleTOC(false);
-  if (view) view.goTo(a.dataset.href).catch(() => {});
+  const title = a.textContent?.trim();
+  if (view) {
+    const loading = startChapterLoading(title ? `Loading ${title}…` : "Loading chapter…");
+    view.goTo(a.dataset.href)
+      .catch(() => {})
+      .finally(loading.stop);
+  }
 });
 
 function turn(direction) {
   if (!noteNavigation()) return undefined;
-  return direction > 0 ? view.goRight() : view.goLeft();
+  const chapterMessage = direction > 0 ? "Loading next chapter…" : "Loading previous chapter…";
+  const atEdge = isChapterEdge(direction);
+  const loading = startChapterLoading(atEdge ? chapterMessage : "Loading page…", atEdge ? 0 : 80);
+  const beforeSection = view.lastLocation?.section?.current;
+  const promise = direction > 0 ? view.goRight() : view.goLeft();
+  const finished = () => {
+    if (view.lastLocation?.section?.current !== beforeSection) {
+      loading.show(chapterMessage);
+    }
+    loading.stop();
+  };
+  if (promise && typeof promise.then === "function") {
+    promise.then(finished, finished);
+  } else {
+    finished();
+  }
+  return promise;
 }
 
 document.getElementById("reader-next").addEventListener("click", () => turn(1));
@@ -3411,10 +3501,16 @@ function handleKeys(e) {
       toggleChrome();
       break;
     case "Home":
-      if (noteNavigation()) view.goToFraction(0);
+      if (noteNavigation()) {
+        const loading = startChapterLoading("Loading beginning…");
+        view.goToFraction(0).catch(() => {}).finally(loading.stop);
+      }
       break;
     case "End":
-      if (noteNavigation()) view.goToFraction(1);
+      if (noteNavigation()) {
+        const loading = startChapterLoading("Loading end…");
+        view.goToFraction(1).catch(() => {}).finally(loading.stop);
+      }
       break;
   }
 }
@@ -3464,7 +3560,14 @@ window.addEventListener("beforeunload", () => {
       if (annotationsEnabled) wireSelection(e.detail.doc);
     });
     view.addEventListener("link", (e) => {
-      if (!noteNavigation()) e.preventDefault();
+      e.preventDefault();
+      if (!noteNavigation()) {
+        return;
+      }
+      const href = e.detail?.href;
+      if (!href) return;
+      const loading = startChapterLoading("Loading chapter…");
+      view.goTo(href).catch(() => {}).finally(loading.stop);
     });
     const local = cfg.offline
       ? await getReadySnapshot({ partition: storagePartition(), bookID: cfg.bookID })

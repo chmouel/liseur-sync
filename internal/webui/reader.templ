@@ -241,6 +241,10 @@ templ readerPage(v ReaderView, csrf string) {
 				</div>
 			</header>
 			<div class="reader-progress"><div id="reader-progress-bar"></div></div>
+			<div id="reader-chapter-loader" class="reader-chapter-loader" role="status" aria-live="polite" hidden>
+				<span class="reader-chapter-spinner" aria-hidden="true"></span>
+				<span id="reader-chapter-loader-text">Loading chapter…</span>
+			</div>
 			<p id="reader-status" class="reader-status">Loading…</p>
 			// Both buttons are relabelled at runtime: an offer says where it
 			// would take the reader, and a disagreement says that for each

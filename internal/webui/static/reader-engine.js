@@ -149,7 +149,10 @@ export class ReaderEngine extends HTMLElement {
       const link = event.target.closest?.("a[data-reader-href]");
       if (!link) return;
       event.preventDefault(); event.stopPropagation();
-      const navigation = new CustomEvent("link", { cancelable: true });
+      const navigation = new CustomEvent("link", {
+        cancelable: true,
+        detail: { href: link.dataset.readerHref },
+      });
       if (this.dispatchEvent(navigation)) this.goTo(link.dataset.readerHref).catch(() => {});
     }, true);
     this.dispatchEvent(new CustomEvent("load", { detail: { doc, index: this.book.sections.findIndex(s => s.id === href) } }));
