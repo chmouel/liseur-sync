@@ -1864,6 +1864,299 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   check('an answered position is not left open in the panel',
     await evalIn("document.getElementById('reader-catchup').hidden"),
     await evalIn("document.getElementById('reader-catchup').textContent"));
+
+  await samePageGuard(evalIn, check, { pause, wait, visibility, position, stored, drained, remote });
+}
+
+// samePageGuard is the panel's other half: a position that names the
+// page already on screen is not a question, and asking it is how a
+// reader ends up being offered a trip to where they are standing. Two
+// clients almost never spell a CFI the same way, so the merge is right
+// to call that movement — it decides what to store. This decides what
+// to ask, and the page table is what settles it.
+async function samePageGuard(evalIn, check, { pause, wait, visibility, position, stored, drained, remote }) {
+  // Another device on this very page: the resource and the progression
+  // within it that this reader would write for itself, a whole-book
+  // fraction a little off this one's, and an anchor of its own. That
+  // last part is not decoration — an echo that reuses the anchor of a
+  // position already settled is the same spot as far as the merge is
+  // concerned, and would be no question at all.
+  //
+  // The drifting fraction is not a contrivance either: it is why an
+  // interpolated page is only ever *near*. Clients do not compute that
+  // fraction alike, so two of them on one page disagree about it by
+  // more than the reconciler's tolerance, which is what makes this a
+  // question in the first place.
+  const echoHere = (id) => evalIn(`(async () => {
+    const loc = document.querySelector('readium-view').lastLocation;
+    // Read together, so the page reported back is the page the locator
+    // was built from and not whatever the footer says once the server
+    // has answered.
+    const from = document.getElementById('reader-page').textContent;
+    const drift = Math.min(loc.fraction + 0.012, 1);
+    window.__liveEchoes = (window.__liveEchoes || 0) + 1;
+    const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
+      op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
+      client_ts: new Date().toISOString(), progression: drift,
+      locator: {
+        href: loc.locator.href,
+        locations: {
+          progression: loc.sectionFraction, totalProgression: drift,
+          fragments: ['epubcfi(/6/9997!/4/2/16/1:' + window.__liveEchoes + ')'],
+        },
+        text: {
+          before: 'reading the same page in ', highlight: 'another',
+          after: ' room on another device',
+        },
+      },
+    }] });
+    return { status: out.results[0].status, page: from };
+  })()`);
+  // The page the footer names, once it has stopped changing. A click on
+  // *next* is answered by a relocate and then by the page table, and an
+  // echo built from a location the reader is still leaving would be a
+  // position on the page before this one — a different question, asked
+  // by accident.
+  const pageNow = () => evalIn("document.getElementById('reader-page').textContent");
+  const settledPage = async (leaving = null) => {
+    // A relocate can start late, so a page asked to leave one behind
+    // waits to see it go before it waits for quiet: two identical reads
+    // taken before the move began are not stillness, they are the old
+    // page. It is a short wait, because at the end of the book a page
+    // turn honestly changes nothing.
+    for (let i = 0; leaving !== null && i < 12; i++) {
+      if (await pageNow() !== leaving) break;
+      await pause(250);
+    }
+    let last = await pageNow();
+    for (let i = 0; i < 30; i++) {
+      await pause(250);
+      const now = await pageNow();
+      if (now && now === last) return now;
+      last = now;
+    }
+    return last;
+  };
+  // Every echo is checked twice over: that the server took it, and that
+  // the page it was built from is the page the reader is still on.
+  const echoOn = async (id, where) => {
+    const out = await echoHere(id);
+    return out.status === 'applied' && out.page === where && await pageNow() === where;
+  };
+  const baseline = async () => {
+    const reading = JSON.parse(await stored() || 'null');
+    return reading?.baseline?.op_id || '';
+  };
+  const localOp = async () => {
+    const reading = JSON.parse(await stored() || 'null');
+    return reading?.local?.op_id || '';
+  };
+  // Coming back to the tab is a refresh of the positions feed, so what
+  // the wait is for is that read having happened, not a guess at how
+  // long it takes.
+  const resume = async () => {
+    const reads = await evalIn('window.__liveReads');
+    await visibility(true);
+    await visibility(false);
+    await wait(`window.__liveReads > ${reads}`);
+    await pause(400);
+  };
+  const panelHidden = () => evalIn("document.getElementById('reader-catchup').hidden");
+  const panelText = () => evalIn("document.getElementById('reader-catchup').textContent");
+  // The durable answer is written after the panel is done with, so it
+  // is waited for rather than read once.
+  const settlesTo = async (id) => {
+    for (let i = 0; i < 40; i++) {
+      if (await baseline() === id) return true;
+      await pause(200);
+    }
+    return false;
+  };
+
+  // A page this browser turned and delivered, so the baseline is its
+  // own and nothing is owed. Both halves are waited for in that order:
+  // an empty queue read before the turn has been queued is the queue
+  // of the phase before this one, and a count of ops that begins above
+  // zero proves nothing about this click. So the new op is waited for
+  // first, and only then the queue emptying.
+  const before = await pageNow();
+  const ownBefore = await evalIn('window.__liveOwnOps.length');
+  await evalIn("document.getElementById('reader-next').click()");
+  check('the reader turns a page of its own to be answered about',
+    await wait(`window.__liveOwnOps.length > ${ownBefore}`) &&
+    await wait(`(${drained}).then(n => n === 0)`));
+  // Leaving and coming back is itself how a reader's last page reaches
+  // the server: the sitting ends, the page goes up and the delivery
+  // moves the agreed baseline. So the counters are read after one of
+  // those, not before — otherwise what the answer below is measured
+  // against would include an ordinary page turn finishing.
+  await resume();
+  await pause(1500);
+  const mine = await evalIn('window.__liveOwnOps.at(-1).op_id');
+  // What makes the next question a *pull* rather than a conflict is
+  // that this device owes nothing: its own last page is the one both
+  // sides agree on, the queue is empty, and the durable record holds no
+  // movement away from that page at all — an acknowledged page turn
+  // clears it, which is what "nothing owed" is written down as. Said
+  // out loud, because every assertion below is about the difference
+  // between that case and the one after it.
+  check('this browser owes nothing before it is asked anything',
+    await settlesTo(mine) && await localOp() === '' &&
+    await evalIn(`(${drained})`) === 0,
+    mine + ' / ' + await localOp() + ' / ' + await evalIn(`(${drained})`));
+  const where = await position();
+  const minted = await evalIn('window.__liveOwnOps.length');
+  const onPage = await settledPage(before);
+
+  check('the other device is on this page', await echoOn('echo', onPage), onPage);
+  await resume();
+  check('a position on the page in your hand is not a question', await panelHidden(),
+    await panelText());
+  // Hidden is not enough: an unanswered question is raised again. The
+  // durable baseline moving to the other device's position is what
+  // says it was answered, the way staying answers it — and it also
+  // says the two positions really did disagree, rather than the panel
+  // having had nothing to say in the first place.
+  check('it is answered as staying, durably', await settlesTo('live-test-echo'),
+    mine + ' -> ' + await baseline());
+  check('answering a page already on screen sends nothing new',
+    await evalIn('window.__liveOwnOps.length') === minted,
+    String(await evalIn('window.__liveOwnOps.length')) + ' vs ' + minted);
+  check('the reader is not moved by an answer they did not give',
+    await position() === where);
+  await resume();
+  check('an answered page is not raised again', await panelHidden(), await panelText());
+
+  // ---------------------------------------------- both sides moved
+  //
+  // A disagreement on one page is the same non-question. This side owes
+  // a page, though, and an answer is never recorded on top of a page
+  // that is not recorded anywhere. The durable queue is what "recorded"
+  // means: a page sitting in it survives the reload the network outage
+  // does not, so the answer may rest on it while delivery is still
+  // impossible — and the page itself is not lost by being answered on.
+  await evalIn('window.__liveBlockOps = true');
+  const beforeBlocked = await pageNow();
+  const blockedBefore = await evalIn('window.__liveOwnOps.length');
+  await evalIn("document.getElementById('reader-next').click()");
+  check('the page this browser cannot send is still its own',
+    await wait(`window.__liveOwnOps.length > ${blockedBefore}`) &&
+    await wait(`(${drained}).then(n => n > 0)`));
+  // Named once, here, rather than read back later: a queue that holds
+  // the op this click minted is the premise, and "whatever the last op
+  // happens to be by then" is not the same statement.
+  const queuedOp = await evalIn('window.__liveOwnOps.at(-1).op_id');
+  const turnedTo = await settledPage(beforeBlocked);
+  check('the other device is on that page too',
+    await echoOn('echo-conflict', turnedTo), turnedTo);
+  await resume();
+  check('a disagreement on one page is not a question either', await panelHidden(),
+    await panelText());
+  check('it is answered even though the page cannot go yet',
+    await settlesTo('live-test-echo-conflict'), await baseline());
+  check('and the page that cannot go is still owed',
+    await evalIn(`(${drained})`) > 0 && await localOp() === queuedOp,
+    queuedOp + ' / ' + await localOp());
+
+  await evalIn('window.__liveBlockOps = false');
+  await evalIn("window.dispatchEvent(new Event('online'))");
+  check('the page goes up once it can', await wait(`(${drained}).then(n => n === 0)`));
+  await resume();
+  check('and the answer still stands', await panelHidden(), await panelText());
+  // Delivery is the last word on what the two sides agree about, as it
+  // is after any other answer: this device's page is now the newest
+  // position there is, named rather than merely "not the other one".
+  const delivered = await evalIn('window.__liveOwnOps.at(-1).op_id');
+  check('what was owed is what the server ends up holding',
+    await settlesTo(delivered), delivered + ' -> ' + await baseline());
+
+  // None of this has made the panel shy. A position on a page the
+  // reader is not looking at is a question, and it is asked in the
+  // ordinary way.
+  await remote('after-hold', 0.42);
+  await resume();
+  check('a position on another page is still a question',
+    await wait("!document.getElementById('reader-catchup').hidden"), await panelText());
+  check('and it names where it would go',
+    /page \d+ of \d+/i.test(await panelText()), await panelText());
+  await evalIn("document.getElementById('reader-catchup-dismiss').click()");
+  check('and it can still be answered', await wait(
+    "document.getElementById('reader-catchup').hidden"));
+
+  // ------------------------------------------- a page that is a guess
+  //
+  // The same page *number*, arrived at by arithmetic across a fraction
+  // rather than read off the page table. "Near page 12" is this
+  // reader's estimate of where a position without a resource to stand
+  // on would land, and an estimate must not be allowed to silence a
+  // question. This one names the page on screen and is still asked.
+  const footer = await settledPage();
+  const [guessPage, ofPages] = footer.split(' of ').map(Number);
+  check('the footer names a page to aim at', guessPage > 0 && ofPages > 0, footer);
+  await evalIn(`(async () => {
+    const at = ${(guessPage - 0.25) / ofPages};
+    const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
+      op_id: 'live-test-echo-near', work_id: window.__liveWork,
+      client_ts: new Date().toISOString(), progression: at,
+      locator: {
+        href: 'liseur-test-no-such-resource.xhtml',
+        locations: { totalProgression: at, fragments: ['epubcfi(/6/9996!/4/2)'] },
+      },
+    }] });
+    return out.results[0].status;
+  })()`);
+  await resume();
+  check('a guess at the page on screen is still a question',
+    await wait("!document.getElementById('reader-catchup').hidden"), await panelText());
+  check('and it says it is a guess', /near page/i.test(await panelText()), await panelText());
+  await evalIn("document.getElementById('reader-catchup-dismiss').click()");
+  await wait("document.getElementById('reader-catchup').hidden");
+
+  // ------------------------------------------ asked about the same page
+  //
+  // The panel declined to ask, but a reader who asks is owed an answer
+  // either way (ADR-0040). Two sides naming one page while a real
+  // choice is still offered between them is also what makes the panel's
+  // silence above meaningful: those positions genuinely disagree, and
+  // what was suppressed was a question, not a nullity.
+  check('the other device is on this page again',
+    await echoOn('echo-asked', await settledPage()));
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('asked about, it is still two positions',
+    await wait("document.getElementById('reader-sync-dialog').open && " +
+      "!document.getElementById('reader-sync-take').hidden"));
+  const hereSide = await evalIn("document.getElementById('reader-sync-here').textContent");
+  const thereSide = await evalIn("document.getElementById('reader-sync-there').textContent");
+  check('and both of them name the same page',
+    /^Page \d+ of \d+$/.test(hereSide) && thereSide.startsWith(hereSide),
+    hereSide + ' / ' + thereSide);
+  await evalIn("document.getElementById('reader-sync-cancel').click()");
+  check('the dialog closes without answering',
+    await wait("!document.getElementById('reader-sync-dialog').open"));
+
+  // ------------------------------------------------- opening into it
+  //
+  // The case from the report, and the worst one: a book opened cold
+  // with another device's position already waiting. A `pull` opens the
+  // book *at* that position, so the panel used to go up asking whether
+  // to go where the reader had just been taken. The page table is only
+  // built once the book has painted, so this also proves the gate has
+  // something to compare by the time the offer is presented.
+  const opened = await settledPage();
+  check('the other device has been reading while this one was shut',
+    await echoOn('echo-open', opened), opened);
+  await evalIn('(() => { location.reload(); return true; })()');
+  await waitFor(`(() => {
+    const view = document.querySelector('readium-view');
+    return Number.isFinite(view?.lastLocation?.fraction) &&
+      view?.renderer?.getContents?.().some(({ doc }) => doc?.body) &&
+      document.getElementById('reader-status')?.textContent === '';
+  })()`, 'the publication to open again', 20000);
+  await pause(2000);
+  check('a book opened at the other device\'s page asks nothing',
+    await panelHidden(), await panelText());
+  check('and it opened on that page', await settledPage() === opened,
+    opened + ' -> ' + await pageNow());
 }
 
 // svgGuard proves finding #1 of the streaming-reader review: a spine

@@ -448,7 +448,13 @@ or changed overlays before drawing the replacement. For `insights`,
 re-fetch the queries currently displayed; do not upload sessions or run
 position sync. A remote position should not turn an open book's page.
 Present a catch-up choice on resume and bind acceptance to the position
-actually offered.
+actually offered. Do not present one the reader cannot act on: when the
+remote position resolves to the same rendered page as the one on
+screen, answer it as "stay here" — record it as the agreed baseline so
+it is not raised again — rather than asking. Anchor comparison is right
+for deciding what to store and wrong for deciding what to ask: two
+clients on one page rarely spell an anchor alike. Only an exact page on
+both sides counts; an interpolated page is a guess and still asks.
 
 Coalesce repeated events by union of topics. An event received while a
 refresh runs still requires a follow-up unless that refresh demonstrably

@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   EXCERPT_CHARS, excerptOf, placeHere, placeLabel, placeOf, placeSentence, relativeAge,
+  samePage,
 } from "../static/reader-place.js";
 import { positionTable } from "../static/reader-positions.js";
 
@@ -123,6 +124,68 @@ test("the page on screen in an unmeasured book is still a percentage", () => {
   const place = placeHere({ fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, {});
   assert.equal(placeLabel(place), "50%");
   assert.equal(placeHere(null, view), null);
+});
+
+// Two places are the same page only when both of them were counted
+// from a resource this copy has. The question this answers is whether
+// a reader would see any difference at all, and an interpolated page
+// cannot answer it: it is a whole-book fraction wearing a page number.
+test("the same page is two exact pages with the same number", () => {
+  const painted = placeHere(
+    { fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, view,
+  );
+  const named = placeOf(op({
+    href: "two.xhtml", locations: { progression: 0.5, totalProgression: 0.5 },
+  }), view);
+  assert.equal(painted.page, 4);
+  assert.equal(named.page, 4);
+  assert.equal(samePage(painted, named), true);
+});
+
+test("two different pages are not the same page", () => {
+  const painted = placeHere(
+    { fraction: 0.5, section: { current: 1 }, sectionFraction: 0.99 }, view,
+  );
+  const named = placeOf(op({
+    href: "two.xhtml", locations: { progression: 0.5, totalProgression: 0.5 },
+  }), view);
+  assert.equal(painted.page, 5);
+  assert.equal(named.page, 4);
+  assert.equal(samePage(painted, named), false);
+});
+
+test("an interpolated page is never the same page as anything", () => {
+  const painted = placeHere(
+    { fraction: 0.5, section: { current: 1 }, sectionFraction: 0.5 }, view,
+  );
+  // No href this copy has, so only the whole-book fraction survives and
+  // the page is a guess that happens to land on the same number.
+  const guessed = placeOf(op({
+    href: "gone.xhtml", locations: { totalProgression: 0.6 },
+  }), view);
+  assert.equal(guessed.page, 4);
+  assert.equal(guessed.exact, false);
+  assert.equal(samePage(painted, guessed), false);
+  assert.equal(samePage(guessed, guessed), false);
+});
+
+test("a page of one book is not a page of another", () => {
+  const one = { page: 5, total: 6, exact: true };
+  assert.equal(samePage(one, { page: 5, total: 10, exact: true }), false);
+  assert.equal(samePage(one, { ...one }), true);
+});
+
+test("a page that is not a counted page is no page at all", () => {
+  const sound = { page: 4, total: 6, exact: true };
+  assert.equal(samePage(sound, null), false);
+  assert.equal(samePage(null, null), false);
+  assert.equal(samePage(sound, { page: 0, total: 6, exact: true }), false);
+  assert.equal(samePage(sound, { page: NaN, total: 6, exact: true }), false);
+  assert.equal(samePage(sound, { page: 4.5, total: 6, exact: true }), false);
+  assert.equal(samePage(sound, { page: 4, total: 0, exact: true }), false);
+  assert.equal(samePage(sound, { page: 4, exact: true }), false);
+  // A book with no position table gives a percentage and no page.
+  assert.equal(samePage(sound, placeHere({ fraction: 0.5 }, {})), false);
 });
 
 test("the excerpt is the passage, trimmed and capped", () => {
