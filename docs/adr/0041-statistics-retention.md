@@ -1,6 +1,6 @@
 # ADR-0041: What the server keeps of a reading life
 
-**Status:** Draft
+**Status:** Deferred
 **Scope:** Later
 
 ## Context
