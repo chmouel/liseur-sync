@@ -10,7 +10,7 @@ import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
 import { agreedEdition, startCandidates as restoreCandidates } from "./reader-restore.js";
-import { placeOf, placeHere, placeLabel, placeSentence, relativeAge } from "./reader-place.js";
+import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } from "./reader-place.js";
 import { decideBookSync } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
@@ -655,7 +655,12 @@ function showCatchup() {
   // The near side is the page actually on screen, which is the one the
   // reader can check by looking down; the op is only what to fall back
   // on before the book has painted.
-  const mine = placeHere(here, seen) || placeOf(offer.local, seen);
+  const painted = placeHere(here, seen);
+  const mine = painted || placeOf(offer.local, seen);
+  if (samePage(painted, there)) {
+    void agreeSamePage(offer);
+    return;
+  }
   const thereLabel = placeLabel(there);
   const mineLabel = placeLabel(mine);
   catchupPanel.classList.toggle("conflict", offer.kind === "conflict");
@@ -750,6 +755,50 @@ async function withdrawQueuedPositions() {
     if (navigator.locks) await navigator.locks.request(outboxLock(offlineContext), withdraw);
     else await withdraw();
   } catch { /* the queue is best-effort; a stale op is not worth an error */ }
+}
+
+// A question whose answer is the page in the reader's hand is not a
+// question. Two clients on the same page almost never spell a CFI the
+// same way, and the merge is right to call that movement — it is
+// deciding what to *store*. This is deciding what to *ask*, and what
+// settles that is the page table: an offer that names the page already
+// on screen is answered the way the reader would answer it, by staying,
+// and is never raised again.
+//
+// It costs nothing on the wire that was not owed already. `keepHere`
+// writes no position when this page is clean, so a pull the book opened
+// at is silent, exactly as an accepted restore is. A conflict is dirty
+// by definition, so there the page being answered with goes up first,
+// like every other answer.
+let agreeingSamePage = null;
+async function agreeSamePage(offer) {
+  // Keyed by the candidate *and* the binding it belongs to. The same
+  // remote position presented again under a new generation — a renewed
+  // credential rebinds the state — is a different question, and the
+  // answer in flight cannot answer it: that one is about to find its
+  // own stamp stale and stand down. Clearing is conditional for the
+  // same reason, so an older invocation finishing does not drop a
+  // guard a newer one now holds.
+  const key = offer.id + "\u0000" + offer.generation;
+  if (agreeingSamePage === key) return;
+  agreeingSamePage = key;
+  const stamp = snapshot();
+  try {
+    // The premise is read again at the end rather than trusted from the
+    // start: a flush takes as long as the network takes, and a resize, a
+    // font change or a reflow moves the reader without a page turn's
+    // `moved()`. An offer refused after its reason has gone would be the
+    // silent answer this exists to prevent. A flush that settled its own
+    // acknowledged page on the way is right and stands; only the other
+    // device's position is left unanswered, for a later quiet moment.
+    await keepHere(offer.op, () => {
+      const seen = placeView();
+      return catchup.shown() === offer && current(stamp) &&
+        samePage(placeHere(here, seen), placeOf(offer.op, seen));
+    });
+  } finally {
+    if (agreeingSamePage === key) agreeingSamePage = null;
+  }
 }
 
 // Every way of saying no goes through here: an answered offer settles
@@ -942,9 +991,7 @@ const SYNC_SUMMARIES = {
 function relationWording(decision, mine, there) {
   const key = decision.relation || decision.verdict;
   if (key !== "same-page") return key;
-  const here = mine?.page, other = there?.page;
-  if (!mine?.exact || !there?.exact) return "near-page";
-  return here && other && here === other ? "same-page" : "near-page";
+  return samePage(mine, there) ? "same-page" : "near-page";
 }
 
 async function askBookSync() {

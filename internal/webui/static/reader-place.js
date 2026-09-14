@@ -200,6 +200,30 @@ export function placeLabel(place) {
 }
 
 /**
+ * samePage asks whether two places are the same page of the same book.
+ *
+ * It is a stricter question than it looks. A page number is only worth
+ * comparing when both sides were counted from a resource this copy has
+ * — an interpolated *near page* is a whole-book fraction dressed in a
+ * page's clothes, and two of them landing on the same number is a
+ * coincidence of arithmetic rather than evidence about where anyone is.
+ * So both sides must be exact.
+ *
+ * The totals must agree too. Both callers here read the same position
+ * table, but an exported helper that read "page 5 of 6" as "page 5 of
+ * 10" would be wrong the first time somebody gave it two.
+ */
+export function samePage(one, two) {
+  const page = (place) =>
+    place?.exact && Number.isInteger(place.page) && place.page > 0 &&
+      Number.isInteger(place.total) && place.total > 0
+      ? place : null;
+  const here = page(one), there = page(two);
+  if (!here || !there) return false;
+  return here.total === there.total && here.page === there.page;
+}
+
+/**
  * relativeAge is how long ago, said the way a person would.
  *
  * A clock is not evidence about which position is right — that is
