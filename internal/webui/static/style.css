@@ -1145,6 +1145,10 @@ button.linkish:hover, button.linkish:focus-visible {
    the engine does not repaginate while somebody is reading. */
 .reader-body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
+.reader-body[data-reader-margin="none"]{--reader-margin:8px}
+.reader-body[data-reader-margin="narrow"]{--reader-margin:16px}
+.reader-body[data-reader-margin="normal"]{--reader-margin:48px}
+.reader-body[data-reader-margin="wide"]{--reader-margin:72px}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
   display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
   align-items:center;gap:.6rem;padding:.35rem .75rem;
@@ -1215,8 +1219,139 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body[data-reader-theme="rose-pine"] .reader-footer{--reader-footer-fg:#e0def4}
 .reader-body[data-reader-theme="black"] .reader-footer{--reader-footer-fg:#ababae}
 .reader-progress{position:fixed;top:0;left:0;right:0;z-index:70;
-  height:3px;background:var(--surface-3)}
+  height:3px;background:var(--surface-3);overflow:hidden}
 #reader-progress-bar{height:100%;width:0;background:var(--primary);transition:width .2s}
+#reader-progress-bar[data-reader-progress="0"]{width:0%}
+#reader-progress-bar[data-reader-progress="1"]{width:1%}
+#reader-progress-bar[data-reader-progress="2"]{width:2%}
+#reader-progress-bar[data-reader-progress="3"]{width:3%}
+#reader-progress-bar[data-reader-progress="4"]{width:4%}
+#reader-progress-bar[data-reader-progress="5"]{width:5%}
+#reader-progress-bar[data-reader-progress="6"]{width:6%}
+#reader-progress-bar[data-reader-progress="7"]{width:7%}
+#reader-progress-bar[data-reader-progress="8"]{width:8%}
+#reader-progress-bar[data-reader-progress="9"]{width:9%}
+#reader-progress-bar[data-reader-progress="10"]{width:10%}
+#reader-progress-bar[data-reader-progress="11"]{width:11%}
+#reader-progress-bar[data-reader-progress="12"]{width:12%}
+#reader-progress-bar[data-reader-progress="13"]{width:13%}
+#reader-progress-bar[data-reader-progress="14"]{width:14%}
+#reader-progress-bar[data-reader-progress="15"]{width:15%}
+#reader-progress-bar[data-reader-progress="16"]{width:16%}
+#reader-progress-bar[data-reader-progress="17"]{width:17%}
+#reader-progress-bar[data-reader-progress="18"]{width:18%}
+#reader-progress-bar[data-reader-progress="19"]{width:19%}
+#reader-progress-bar[data-reader-progress="20"]{width:20%}
+#reader-progress-bar[data-reader-progress="21"]{width:21%}
+#reader-progress-bar[data-reader-progress="22"]{width:22%}
+#reader-progress-bar[data-reader-progress="23"]{width:23%}
+#reader-progress-bar[data-reader-progress="24"]{width:24%}
+#reader-progress-bar[data-reader-progress="25"]{width:25%}
+#reader-progress-bar[data-reader-progress="26"]{width:26%}
+#reader-progress-bar[data-reader-progress="27"]{width:27%}
+#reader-progress-bar[data-reader-progress="28"]{width:28%}
+#reader-progress-bar[data-reader-progress="29"]{width:29%}
+#reader-progress-bar[data-reader-progress="30"]{width:30%}
+#reader-progress-bar[data-reader-progress="31"]{width:31%}
+#reader-progress-bar[data-reader-progress="32"]{width:32%}
+#reader-progress-bar[data-reader-progress="33"]{width:33%}
+#reader-progress-bar[data-reader-progress="34"]{width:34%}
+#reader-progress-bar[data-reader-progress="35"]{width:35%}
+#reader-progress-bar[data-reader-progress="36"]{width:36%}
+#reader-progress-bar[data-reader-progress="37"]{width:37%}
+#reader-progress-bar[data-reader-progress="38"]{width:38%}
+#reader-progress-bar[data-reader-progress="39"]{width:39%}
+#reader-progress-bar[data-reader-progress="40"]{width:40%}
+#reader-progress-bar[data-reader-progress="41"]{width:41%}
+#reader-progress-bar[data-reader-progress="42"]{width:42%}
+#reader-progress-bar[data-reader-progress="43"]{width:43%}
+#reader-progress-bar[data-reader-progress="44"]{width:44%}
+#reader-progress-bar[data-reader-progress="45"]{width:45%}
+#reader-progress-bar[data-reader-progress="46"]{width:46%}
+#reader-progress-bar[data-reader-progress="47"]{width:47%}
+#reader-progress-bar[data-reader-progress="48"]{width:48%}
+#reader-progress-bar[data-reader-progress="49"]{width:49%}
+#reader-progress-bar[data-reader-progress="50"]{width:50%}
+#reader-progress-bar[data-reader-progress="51"]{width:51%}
+#reader-progress-bar[data-reader-progress="52"]{width:52%}
+#reader-progress-bar[data-reader-progress="53"]{width:53%}
+#reader-progress-bar[data-reader-progress="54"]{width:54%}
+#reader-progress-bar[data-reader-progress="55"]{width:55%}
+#reader-progress-bar[data-reader-progress="56"]{width:56%}
+#reader-progress-bar[data-reader-progress="57"]{width:57%}
+#reader-progress-bar[data-reader-progress="58"]{width:58%}
+#reader-progress-bar[data-reader-progress="59"]{width:59%}
+#reader-progress-bar[data-reader-progress="60"]{width:60%}
+#reader-progress-bar[data-reader-progress="61"]{width:61%}
+#reader-progress-bar[data-reader-progress="62"]{width:62%}
+#reader-progress-bar[data-reader-progress="63"]{width:63%}
+#reader-progress-bar[data-reader-progress="64"]{width:64%}
+#reader-progress-bar[data-reader-progress="65"]{width:65%}
+#reader-progress-bar[data-reader-progress="66"]{width:66%}
+#reader-progress-bar[data-reader-progress="67"]{width:67%}
+#reader-progress-bar[data-reader-progress="68"]{width:68%}
+#reader-progress-bar[data-reader-progress="69"]{width:69%}
+#reader-progress-bar[data-reader-progress="70"]{width:70%}
+#reader-progress-bar[data-reader-progress="71"]{width:71%}
+#reader-progress-bar[data-reader-progress="72"]{width:72%}
+#reader-progress-bar[data-reader-progress="73"]{width:73%}
+#reader-progress-bar[data-reader-progress="74"]{width:74%}
+#reader-progress-bar[data-reader-progress="75"]{width:75%}
+#reader-progress-bar[data-reader-progress="76"]{width:76%}
+#reader-progress-bar[data-reader-progress="77"]{width:77%}
+#reader-progress-bar[data-reader-progress="78"]{width:78%}
+#reader-progress-bar[data-reader-progress="79"]{width:79%}
+#reader-progress-bar[data-reader-progress="80"]{width:80%}
+#reader-progress-bar[data-reader-progress="81"]{width:81%}
+#reader-progress-bar[data-reader-progress="82"]{width:82%}
+#reader-progress-bar[data-reader-progress="83"]{width:83%}
+#reader-progress-bar[data-reader-progress="84"]{width:84%}
+#reader-progress-bar[data-reader-progress="85"]{width:85%}
+#reader-progress-bar[data-reader-progress="86"]{width:86%}
+#reader-progress-bar[data-reader-progress="87"]{width:87%}
+#reader-progress-bar[data-reader-progress="88"]{width:88%}
+#reader-progress-bar[data-reader-progress="89"]{width:89%}
+#reader-progress-bar[data-reader-progress="90"]{width:90%}
+#reader-progress-bar[data-reader-progress="91"]{width:91%}
+#reader-progress-bar[data-reader-progress="92"]{width:92%}
+#reader-progress-bar[data-reader-progress="93"]{width:93%}
+#reader-progress-bar[data-reader-progress="94"]{width:94%}
+#reader-progress-bar[data-reader-progress="95"]{width:95%}
+#reader-progress-bar[data-reader-progress="96"]{width:96%}
+#reader-progress-bar[data-reader-progress="97"]{width:97%}
+#reader-progress-bar[data-reader-progress="98"]{width:98%}
+#reader-progress-bar[data-reader-progress="99"]{width:99%}
+#reader-progress-bar[data-reader-progress="100"]{width:100%}
+.reader-progress.loading::after{
+  content:"";position:absolute;top:0;left:0;bottom:0;width:45%;
+  background:linear-gradient(90deg,transparent 0%,color-mix(in srgb,var(--primary) 25%,transparent) 20%,var(--primary) 50%,color-mix(in srgb,var(--primary) 25%,transparent) 80%,transparent 100%);
+  animation:reader-progress-sweep 1.25s cubic-bezier(.4,0,.2,1) infinite;
+  box-shadow:0 0 12px var(--primary)}
+@keyframes reader-progress-sweep{
+  0%{transform:translateX(-100%)}
+  100%{transform:translateX(320%)}
+}
+.reader-chapter-loader{
+  position:fixed;z-index:60;top:3.8rem;left:50%;
+  transform:translate(-50%,-4px) scale(.96);
+  display:inline-flex;align-items:center;gap:.65rem;
+  padding:.45rem 1.05rem;font-size:.82rem;font-weight:500;
+  letter-spacing:.01em;white-space:nowrap;
+  color:var(--ink);background:color-mix(in srgb,var(--surface) 90%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  border:1px solid color-mix(in srgb,var(--line) 85%,transparent);border-radius:9999px;
+  box-shadow:0 4px 20px rgba(0,0,0,.16),0 1px 3px rgba(0,0,0,.08);
+  pointer-events:none;opacity:0;
+  transition:top .2s cubic-bezier(.16,1,.3,1),opacity .2s cubic-bezier(.16,1,.3,1),transform .2s cubic-bezier(.16,1,.3,1)}
+.reader-body[data-reader-chrome="hidden"] .reader-chapter-loader{top:1.1rem}
+.reader-chapter-loader:not([hidden]){
+  opacity:1;transform:translate(-50%,0) scale(1)}
+.reader-chapter-loader[hidden]{display:none}
+.reader-chapter-spinner{
+  width:.85rem;height:.85rem;flex-shrink:0;
+  border:2px solid color-mix(in srgb,var(--primary) 25%,transparent);
+  border-top-color:var(--primary);
+  border-radius:50%;animation:spin .75s linear infinite}
 /* The status is only on screen while the book is loading or when it
    failed to; centred, it can say so whether or not the bar is up. */
 .reader-status{position:fixed;z-index:45;top:50%;left:50%;transform:translate(-50%,-50%);
@@ -1246,7 +1381,9 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body[data-reader-chrome="hidden"]:has(.reader-bar:focus-within) .reader-bar{
   opacity:1;transform:none;pointer-events:auto}
 @media (prefers-reduced-motion:reduce){
-  .reader-bar,.reader-turn,.reader-footer{transition:none}
+  .reader-bar,.reader-turn,.reader-footer,.reader-chapter-loader{transition:none}
+  .reader-progress.loading::after{animation:none;width:100%;opacity:.4}
+  .reader-chapter-spinner{animation:none}
 }
 .reader-help{background:var(--surface);color:inherit;border:1px solid var(--line);
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;

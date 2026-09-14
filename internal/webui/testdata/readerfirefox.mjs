@@ -353,10 +353,10 @@ for (const [value, label, colour, background, selectionTokenBackground, selectio
 }
 const footerControl = await evalIn(`(() => {
   const sel = document.querySelector('#reader-settings-form select[name="footer"]');
-  return sel ? { tag: sel.tagName, value: sel.value } : null;
+  return sel ? sel.tagName + '|' + sel.value : '';
 })()`);
 check('the footer mode picker is a list',
-  footerControl?.tag === 'SELECT' && footerControl.value === 'chapter',
+  footerControl === 'SELECT|chapter',
   JSON.stringify(footerControl));
 await evalIn(`(() => {
   const sel = document.querySelector('#reader-settings-form select[name="footer"]');

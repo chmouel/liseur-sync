@@ -464,6 +464,42 @@ const bytes = preloaded && await evalIn(
   `document.querySelector('readium-view').resources.documents.get(${JSON.stringify(nextChapter)}).then(b => b.length)`);
 check('the next chapter is built before the reader turns into it', bytes > 0, `${nextChapter}, ${bytes} bytes`);
 
+// A warmed chapter can finish its turn in the same frame as the click. The
+// loading bar still has to reach a paint; otherwise its show and hide DOM
+// changes collapse into one and the reader never sees it at all.
+await evalIn(`(() => {
+  const view = document.querySelector('readium-view');
+  window.__readerRealGoRight = view.goRight;
+  window.__readerRealLocation = view.lastLocation;
+  view.goRight = () => {
+    view.lastLocation = {
+      ...view.lastLocation,
+      section: { ...view.lastLocation.section, current: view.lastLocation.section.current + 1 },
+    };
+    return Promise.resolve();
+  };
+  document.getElementById('reader-next').click();
+  return true;
+})()`);
+await new Promise(resolve => setTimeout(resolve, 50));
+const loadingChapter = JSON.parse(await evalIn(`JSON.stringify({
+  loader: !document.getElementById('reader-chapter-loader').hidden,
+  rail: document.querySelector('.reader-progress').classList.contains('loading'),
+})`));
+check('a fast chapter turn still paints its loading state',
+  loadingChapter.loader && loadingChapter.rail, JSON.stringify(loadingChapter));
+await new Promise(resolve => setTimeout(resolve, 300));
+const finishedLoading = await evalIn(`(() => {
+  const view = document.querySelector('readium-view');
+  view.goRight = window.__readerRealGoRight;
+  view.lastLocation = window.__readerRealLocation;
+  delete window.__readerRealGoRight;
+  delete window.__readerRealLocation;
+  return document.getElementById('reader-chapter-loader').hidden &&
+    !document.querySelector('.reader-progress').classList.contains('loading');
+})()`);
+check('the chapter loading state clears after the turn', finishedLoading, String(finishedLoading));
+
 const seen = [];
 for (let i = 0; i < 10; i++) {
   const before = await evalIn("JSON.stringify(document.querySelector('readium-view').lastLocation.locator)");
@@ -499,10 +535,10 @@ check('the page number counts forward with the turns',
 {
   const footerControl = await evalIn(`(() => {
     const sel = document.querySelector('#reader-settings-form select[name="footer"]');
-    return sel ? { tag: sel.tagName, value: sel.value } : null;
+    return sel ? sel.tagName + '|' + sel.value : '';
   })()`);
   check('the footer mode picker is a list',
-    footerControl?.tag === 'SELECT' && footerControl.value === 'chapter',
+    footerControl === 'SELECT|chapter',
     JSON.stringify(footerControl));
   await evalIn(`(() => {
     const sel = document.querySelector('#reader-settings-form select[name="footer"]');
