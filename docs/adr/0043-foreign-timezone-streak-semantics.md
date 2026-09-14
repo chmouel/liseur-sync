@@ -80,9 +80,43 @@ which is the subject of liseur ADR-0030.
 ### The deployment note
 
 Whatever is decided, `docs/deployment.md` should say plainly that an
-account's timezone is not a cosmetic setting: changing it defers the next
-rollup batch and creates a seam in the day history. An operator changing
-it on a reader's behalf should know that.
+account's timezone is not a cosmetic setting: it decides which day every
+future sitting is filed under, and changing it creates a seam in the day
+history that nothing repairs.
+
+It should not claim the change defers the next rollup batch, because
+usually it does not. `rollupSessionsOnce` re-reads the zone from
+`UserByID` at the top of every pass, so a change made between passes is
+simply the zone the next batch is built with, and `ApplyRollups` accepts
+it. Deferral is the narrow case where the change commits after a batch
+has been built under the old zone: that batch is refused, and the pass
+that follows builds a fresh one and succeeds.
+
+## Consequences
+
+The race is already closed: a batch built under a zone the account no
+longer keeps is refused, and the next pass rebuilds it under the current
+zone. Deferring the rest leaves the seam where it is. Buckets filed under
+an old zone stay filed that way, and the day history of a reader who has
+moved has a discontinuity at the move that nothing repairs.
+
+Since the client side of the same question is open (liseur ADR-0030),
+deciding here alone would be deciding for both.
+
+## Implementation and acceptance
+
+`ApplyRollups` refusing a foreign-zone batch is implemented and covered.
+Nothing else is. Whatever is chosen for the buckets already filed is
+accepted only when:
+
+- A reader who changes zone sees a streak that is defensible across the
+  change, under a rule the record states rather than one that emerges.
+- The client and server agree on which zone decides a day, so the
+  combined screen does not add two definitions together.
+- `docs/deployment.md` describes what an operator changing an account's
+  timezone is actually doing.
+- Anything that rewrites existing buckets is idempotent and leaves the
+  streak unchanged where the zone did not move.
 
 ## Open questions
 

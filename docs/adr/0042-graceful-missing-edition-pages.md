@@ -81,6 +81,29 @@ successful statistics response that carries a named incompleteness. That
 is the same idea as `SyncOutcome.Incomplete` on the client side, and it
 should probably borrow the vocabulary rather than invent one.
 
+## Consequences
+
+Until this is decided, one book whose edition the server cannot measure
+fails the whole statistics read for the account, so a reader loses every
+figure rather than one. That is the cost of deferring, and it is paid by
+whoever hits it first.
+
+Splitting the answer means two code paths that treat the same error
+differently, which is a thing to keep honest: the rollup must keep
+failing closed, because it writes a number nothing revisits.
+
+## Implementation and acceptance
+
+Nothing is implemented. The split is accepted only when:
+
+- A read whose account holds one unmeasurable edition returns the other
+  books' figures and names the incompleteness, rather than an error.
+- The rollup still refuses that account's batch, and a test asserts the
+  two paths disagree on purpose.
+- The reason travels to the client in the vocabulary it already has for
+  partial answers, so the app needs no new concept to show it.
+- No path returns 0 pages for a book it could not measure.
+
 ## Open questions
 
 - What does the Android stats screen do with "and some reading we could
