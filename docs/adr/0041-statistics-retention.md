@@ -68,10 +68,24 @@ is very small: a bit per day, or a row per day, for the life of the
 account.
 
 **The proof that a sitting was counted.** Not the same as keeping the
-sitting. A tombstone answers one question — *have I already counted this
-id?* — and it only has to answer it for as long as some device might
-re-offer that id. That window is bounded in practice by how long a device
-keeps an unacknowledged sitting, not by the life of the account.
+sitting, and it answers more than one question. The first is *have I
+already counted this id?*, which only has to hold for as long as some
+device might re-offer that id — a window bounded by how long a device
+keeps an unacknowledged sitting, not by the life of the account. The
+second is the one that constrains a horizon much harder: the snapshot
+endpoint reads a tombstone's fingerprint, timezone, work and day, and
+its exact archived contribution, to prove how much of a candidate the
+server already holds and subtract it (`insights_snapshot.go:272-300`).
+That is what makes a combined figure *server + local - overlap* rather
+than a guess. Sweep a proof and the reader does not get a smaller number
+with a warning; they get an overlap the server cannot demonstrate, which
+is either an answer marked incomplete or the same reading counted twice.
+
+So a tombstone horizon must cover both: the re-offer window *and* the
+span over which any client may still ask for a combined answer, which is
+the whole of the history the stats screen offers. A horizon shorter than
+that is a decision to degrade combined figures for old periods, and it
+has to be taken deliberately rather than fall out of a storage rule.
 
 ### The three candidates, and what each costs
 
@@ -90,9 +104,12 @@ it still holds. This interacts directly with ADR-0039's refusal handling.
 period. The risk is exactly the resurrection problem the annotation
 reconcile phase exists to prevent: a device that was offline longer than
 the horizon re-offers a sitting whose proof has been swept, and it is
-counted twice. Any horizon must therefore be longer than the longest
-plausible offline stretch, announced to clients rather than assumed, and
-the client must be able to tell a swept proof from an unknown one.
+counted twice. The overlap obligation above binds tighter still, so a
+horizon has to clear both the longest plausible offline stretch and the
+oldest period a client may ask for a combined answer about. It must be
+announced to clients rather than assumed, and the client must be able to
+tell a swept proof from an unknown one. Of the three candidates this is
+the one whose cost is least contained by storage reasoning alone.
 
 **Coarsening old rollups.** Fold per-work daily buckets older than some
 period into per-day totals, losing which book was read but keeping how
@@ -108,6 +125,36 @@ the window the caller actually wants, with the streak answered from a
 separate and deliberately cheap read over the day set rather than over
 the rollups. That is a change worth making on its own merits and does
 not depend on any retention rule.
+
+## Consequences
+
+Deferring costs nothing today and is the reason to write this down now:
+the server keeps everything, which is the only position that forecloses
+no option. Every candidate below throws something away, and a thing
+thrown away cannot be reconsidered.
+
+What deferring does cost is that koplugin accounts keep accumulating raw
+sittings with no compaction reaching them, so the longer the decision
+waits the more of that history has to be handled by whatever is chosen.
+
+## Implementation and acceptance
+
+Nothing is implemented. Whichever candidate is taken, it is accepted only
+when all of these hold:
+
+- A reader's streak is identical before and after the rule runs, over the
+  whole history of an account, proven by a test that builds a long day
+  set and compacts it.
+- A combined snapshot over any period the client offers still returns
+  `complete: true` where it did before, or the narrowing is deliberate,
+  documented, and visible to the client rather than silent.
+- A device re-offering a sitting from beyond the horizon is recognised as
+  a swept proof rather than as an unknown id, and the client can tell the
+  two apart.
+- The horizon is in the capabilities document, not a server constant a
+  client has to guess.
+- The rule is covered by the shared backend suite, so SQLite and
+  PostgreSQL cannot drift on what they discard.
 
 ## Open questions
 
