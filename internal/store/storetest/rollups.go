@@ -114,6 +114,198 @@ func RollupsRejectStaleEditionPageCount(t *testing.T, s store.Store, updatePages
 	}
 }
 
+func testRollupsCountSessionsThatNeedNoEdition(t *testing.T, open OpenFunc) {
+	ctx := t.Context()
+	s := open(t)
+	user := MkUser(t, s, "no-edition-needed")
+	work := MkWork(t, s, user, "no-edition-work", "no-edition-sha")
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	day := now.In(mustLoad(t, user.Timezone)).Format("2006-01-02")
+
+	// A sitting that reports its own page count and one that made no
+	// progress. Neither multiplies a page count by anything, so the
+	// rollup must not make its edition's metadata a precondition.
+	reported := store.Session{
+		SessionID: "reported", WorkID: work.ID, EditionSHA: Ptr("no-edition-sha"),
+		DeviceID: "reader", StartedAt: now, EndedAt: now.Add(time.Minute),
+		StartProg: 0, EndProg: 0.25, ReportedPages: Ptr(12.5), Origin: store.OriginNative,
+	}
+	idle := store.Session{
+		SessionID: "idle", WorkID: work.ID, EditionSHA: Ptr("no-edition-sha"),
+		DeviceID: "reader", StartedAt: now, EndedAt: now.Add(time.Minute),
+		StartProg: 0.5, EndProg: 0.5, Origin: store.OriginNative,
+	}
+	if err := s.AppendSessions(ctx, user.ID, []store.Session{reported, idle}); err != nil {
+		t.Fatal(err)
+	}
+	if shas := store.EditionSHAsNeedingPages([]store.Session{reported, idle}); len(shas) != 0 {
+		t.Fatalf("rollup would read editions it never consults: %v", shas)
+	}
+	active := 60.0
+	rollup := store.SessionRollup{
+		UserID: user.ID, WorkID: work.ID, Day: day, Timezone: user.Timezone,
+		AttributionVersion: 2, ActiveSeconds: 2 * active, Pages: 12.5,
+		ProgDelta: 0.25, SessionCount: 2,
+		MeasuredActiveSeconds: 2 * active, MeasuredProgDelta: 0.25,
+	}
+	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup},
+		[]store.Session{reported, idle}); err != nil {
+		t.Fatalf("sittings whose pages never read an edition were refused: %v", err)
+	}
+	after, err := s.StatisticsSnapshot(ctx, user.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Rollups) != 1 || after.Rollups[0].Pages != 12.5 ||
+		after.Rollups[0].SessionCount != 2 {
+		t.Fatalf("reported pages did not survive the rollup: %+v", after.Rollups)
+	}
+}
+
+// testEditionSHAsNeedingPages pins the predicate that keeps the rollup's
+// edition preload in step with what actually reads an edition. A preload
+// that asks for more than this refuses sittings that would have counted
+// fine; one that asks for less falls back to a per-session query.
+func testEditionSHAsNeedingPages(t *testing.T) {
+	sha := Ptr("sha")
+	for _, tc := range []struct {
+		name string
+		ses  store.Session
+		want bool
+	}{
+		{"reads-its-edition", store.Session{EditionSHA: sha, StartProg: 0, EndProg: 0.25}, true},
+		{"reports-its-own-pages", store.Session{EditionSHA: sha, StartProg: 0, EndProg: 0.25,
+			ReportedPages: Ptr(12.5)}, false},
+		{"no-progression", store.Session{EditionSHA: sha, StartProg: 0.5, EndProg: 0.5}, false},
+		{"backwards", store.Session{EditionSHA: sha, StartProg: 0.5, EndProg: 0.25}, false},
+		{"names-no-edition", store.Session{StartProg: 0, EndProg: 0.25}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := store.SessionNeedsEditionPages(tc.ses); got != tc.want {
+				t.Fatalf("SessionNeedsEditionPages = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	mixed := []store.Session{
+		{EditionSHA: Ptr("a"), StartProg: 0, EndProg: 0.25},
+		{EditionSHA: Ptr("b"), StartProg: 0, EndProg: 0.25, ReportedPages: Ptr(1.0)},
+		{EditionSHA: Ptr("a"), StartProg: 0, EndProg: 0.5},
+	}
+	if got := store.EditionSHAsNeedingPages(mixed); !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("EditionSHAsNeedingPages = %v, want [a]", got)
+	}
+}
+
+// testRollupsRejectForeignAccountTimezone covers the guard that reads the
+// account's zone inside the transaction: a zone changed after the batch
+// was built defers the batch instead of filing it under the wrong day.
+func testRollupsRejectForeignAccountTimezone(t *testing.T, open OpenFunc) {
+	ctx := t.Context()
+	s := open(t)
+	user := MkUser(t, s, "tz-race")
+	work := MkWork(t, s, user, "tz-race-work", "tz-race-sha")
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	ses := store.Session{
+		SessionID: "tz-race-ses", WorkID: work.ID, EditionSHA: Ptr("tz-race-sha"),
+		DeviceID: "reader", StartedAt: now, EndedAt: now.Add(10 * time.Minute),
+		StartProg: 0, EndProg: 0.25, ActiveMs: Ptr(int64(300000)), Origin: store.OriginNative,
+	}
+	if err := s.AppendSessions(ctx, user.ID, []store.Session{ses}); err != nil {
+		t.Fatal(err)
+	}
+	// Built against the account's zone, then the reader moves.
+	rollup := store.SessionRollup{
+		UserID: user.ID, WorkID: work.ID,
+		Day:      now.In(mustLoad(t, user.Timezone)).Format("2006-01-02"),
+		Timezone: user.Timezone, AttributionVersion: 2,
+		ActiveSeconds: 300, Pages: 0.25 * 462, ProgDelta: 0.25, SessionCount: 1,
+		MeasuredActiveSeconds: 300, MeasuredProgDelta: 0.25,
+	}
+	if err := s.UpdateUserSettings(ctx, user.ID, "America/New_York",
+		user.KosyncEnabled, user.KopluginEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup},
+		[]store.Session{ses}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a rollup in a zone the account no longer keeps must defer, got %v", err)
+	}
+	after, err := s.StatisticsSnapshot(ctx, user.ID, []string{ses.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Sessions) != 1 || len(after.Rollups) != 0 || len(after.Archived) != 0 {
+		t.Fatalf("a deferred batch changed history: %+v", after)
+	}
+}
+
+// testRollupsAccumulateIntoAnExistingBucket covers a day that is rolled
+// up more than once: a device uploading older sittings for a day already
+// archived, or a work/day straddling a rollup batch. The second apply
+// takes the upsert's DO UPDATE branch, which SQLite used to fail
+// outright, because it overrode the stats-revision trigger's own
+// OR IGNORE with the firing statement's conflict policy. A batch that
+// cannot be applied is never deleted, so those sittings deferred every
+// hour, forever.
+func testRollupsAccumulateIntoAnExistingBucket(t *testing.T, open OpenFunc) {
+	ctx := t.Context()
+	s := open(t)
+	user := MkUser(t, s, "rebucket")
+	work := MkWork(t, s, user, "rebucket-work", "rebucket-sha")
+	day := "2026-09-04"
+	at := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+
+	apply := func(id string, minutes int) error {
+		ses := store.Session{
+			SessionID: id, WorkID: work.ID, EditionSHA: Ptr("rebucket-sha"),
+			DeviceID: "reader", StartedAt: at, EndedAt: at.Add(time.Duration(minutes) * time.Minute),
+			StartProg: 0, EndProg: 0.1, ActiveMs: Ptr(int64(minutes) * 60000),
+			Origin: store.OriginNative,
+		}
+		if err := s.AppendSessions(ctx, user.ID, []store.Session{ses}); err != nil {
+			t.Fatal(err)
+		}
+		rollup := store.SessionRollup{
+			UserID: user.ID, WorkID: work.ID, Day: day,
+			Timezone: user.Timezone, AttributionVersion: 2,
+			ActiveSeconds: float64(minutes) * 60, Pages: 0.1 * 462, ProgDelta: 0.1, SessionCount: 1,
+			MeasuredActiveSeconds: float64(minutes) * 60, MeasuredProgDelta: 0.1,
+		}
+		return s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup}, []store.Session{ses})
+	}
+	if err := apply("rebucket-first", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := apply("rebucket-second", 7); err != nil {
+		t.Fatalf("a second sitting for an archived day must accumulate, got %v", err)
+	}
+	got, err := s.RollupsForWork(ctx, user.ID, work.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want one accumulated bucket, got %+v", got)
+	}
+	if got[0].SessionCount != 2 || got[0].ActiveSeconds != 720 {
+		t.Fatalf("the second sitting did not accumulate: %+v", got[0])
+	}
+	left, err := s.SessionsEndedBefore(ctx, user.ID, at.Add(time.Hour), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("an applied batch must be deleted, %d left", len(left))
+	}
+}
+
+func mustLoad(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
+}
+
 func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 	first, second := int64(math.MaxInt64-1), int64(2)
 	overflowing := []store.SessionRollup{{
@@ -181,7 +373,10 @@ func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 			AttributionVersion: 2, SessionCount: 1,
 		}}},
 		{"unbacked-timezone", []store.SessionRollup{rollup, {
-			UserID: user.ID, WorkID: work.ID, Day: rollup.Day, Timezone: "Europe/Paris",
+			// A third zone: the base rollup now carries the account's own
+			// (Europe/Paris), so reusing that here would make this case a
+			// duplicate bucket and it would stop testing timezones at all.
+			UserID: user.ID, WorkID: work.ID, Day: rollup.Day, Timezone: "America/New_York",
 			AttributionVersion: 2, SessionCount: 1,
 		}}},
 	} {

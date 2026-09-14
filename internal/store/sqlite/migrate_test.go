@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,8 +125,14 @@ func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
 			}
 			t.Cleanup(func() { s.Close() })
 			// Everything up to but not including the backfill, which is
-			// where a server running the broken image sits.
-			for i, m := range migrations[:len(migrations)-3] {
+			// where a server running the broken image sits. Named, not
+			// counted back from the end: appending a migration must not
+			// quietly move this boundary.
+			through, ok := migrationsThrough("folderBackfill")
+			if !ok {
+				t.Fatal("folderBackfill is no longer a known migration")
+			}
+			for i, m := range through {
 				if _, err := s.db.ExecContext(ctx, m); err != nil {
 					t.Fatal(err)
 				}
@@ -240,6 +247,59 @@ func TestBaselineIsFrozen(t *testing.T) {
 	}
 	if migrations[0] != schema {
 		t.Fatal("migrations[0] is no longer the baseline")
+	}
+}
+
+// TestMigrationBoundariesAreNamed keeps the historical fixtures honest.
+// A boundary resolved by name survives an appended migration; one
+// counted back from the end does not, and quietly rebuilds a different
+// database than the test says it does.
+func TestMigrationBoundariesAreNamed(t *testing.T) {
+	through, ok := migrationsThrough("folderBackfill")
+	if !ok {
+		t.Fatal("folderBackfill is no longer a known migration")
+	}
+	if len(through) != 5 || through[len(through)-1] != annotationSync {
+		t.Fatalf("the pre-backfill boundary moved: %d migrations", len(through))
+	}
+	if _, ok := migrationsThrough("no-such-migration"); ok {
+		t.Fatal("an unknown migration name must not resolve to a boundary")
+	}
+	if first, ok := migrationsThrough("schema"); !ok || len(first) != 0 {
+		t.Fatalf("the baseline boundary must be empty: %d", len(first))
+	}
+}
+
+// TestRollupPageUsesItsIndex proves the bounded oldest-first read is
+// served by the appended index rather than scanning and sorting the
+// account's whole eligible history.
+func TestRollupPageUsesItsIndex(t *testing.T) {
+	s := openStore(t).(*Store)
+	rows, err := s.db.QueryContext(t.Context(),
+		`EXPLAIN QUERY PLAN SELECT session_id FROM sessions s
+		 WHERE user_id = ? AND ended_at < ? AND source_key IS NULL
+		 ORDER BY started_at, session_id LIMIT 500`, "u1", "2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "sessions_rollup_page") {
+		t.Fatalf("the rollup page does not use its index:\n%s", plan)
+	}
+	if strings.Contains(plan, "TEMP B-TREE") {
+		t.Fatalf("the rollup page still sorts the whole history:\n%s", plan)
 	}
 }
 

@@ -1089,6 +1089,35 @@ type Session struct {
 	ReceivedAt    time.Time
 }
 
+// SessionNeedsEditionPages reports whether counting a session's pages
+// has to read its edition row. It is the single definition of that
+// question: insights.Pages and the backends' rollup page lookups both
+// short-circuit before touching an edition when the session reports its
+// own page count, names no edition, or made no forward progress. A
+// preload that asks for more editions than this is stricter than the
+// code it feeds, and refuses sessions that would have counted fine.
+func SessionNeedsEditionPages(s Session) bool {
+	if s.ReportedPages != nil || s.EditionSHA == nil {
+		return false
+	}
+	return s.EndProg-s.StartProg > 0
+}
+
+// EditionSHAsNeedingPages lists the distinct editions a batch actually
+// has to read, in first-seen order.
+func EditionSHAsNeedingPages(sessions []Session) []string {
+	seen := make(map[string]bool, len(sessions))
+	var out []string
+	for _, s := range sessions {
+		if !SessionNeedsEditionPages(s) || seen[*s.EditionSHA] {
+			continue
+		}
+		seen[*s.EditionSHA] = true
+		out = append(out, *s.EditionSHA)
+	}
+	return out
+}
+
 // SessionFingerprint identifies the immutable client payload. It is
 // retained after rollup so old inferred/native sessions remain
 // idempotent without keeping their full rows.
@@ -1868,15 +1897,22 @@ type Store interface {
 	CurrentSessionsForWork(ctx context.Context, userID, workID string, limit int) ([]Session, error)
 	WorkIDsWithInsights(ctx context.Context, userID string) ([]string, error)
 	EditionBySHA(ctx context.Context, userID, sha256 string) (Edition, error)
-	// EditionsForWorks returns editions for the given works, keyed by SHA256.
-	EditionsForWorks(ctx context.Context, userID string, workIDs []string) (map[string]Edition, error)
+	// EditionsBySHA returns the named editions, keyed by SHA256. The
+	// rollup only ever looks an edition up by a session's EditionSHA, so
+	// this asks for exactly those rather than every edition of a work.
+	EditionsBySHA(ctx context.Context, userID string, sha256s []string) (map[string]Edition, error)
 	StatisticsSnapshot(ctx context.Context, userID string, candidateIDs []string) (StatsSnapshot, error)
 
 	// Session rollups (retention). SessionsEndedBefore feeds the rollup
 	// job; ApplyRollups additively upserts daily aggregates and deletes
 	// the rolled-up raw sessions in one transaction (supersession rows
 	// cascade). Day bounds are inclusive YYYY-MM-DD strings.
-	SessionsEndedBefore(ctx context.Context, userID string, before time.Time) ([]Session, error)
+	//
+	// SessionsEndedBefore returns the oldest sessions first, ordered by
+	// (started_at, session_id) so that a limited read is a stable page
+	// rather than an arbitrary one when sittings share a timestamp. A
+	// limit of zero or less returns every eligible session.
+	SessionsEndedBefore(ctx context.Context, userID string, before time.Time, limit int) ([]Session, error)
 	ApplyRollups(ctx context.Context, userID string, rollups []SessionRollup, deleteSessions []Session) error
 	RollupsInRange(ctx context.Context, userID, fromDay, toDay string) ([]SessionRollup, error)
 	RollupsForWork(ctx context.Context, userID, workID string) ([]SessionRollup, error)

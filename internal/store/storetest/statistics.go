@@ -63,12 +63,34 @@ func testStatisticsStorage(t *testing.T, open OpenFunc) {
 	if _, ok := snap.Editions["stats-sha"]; !ok {
 		t.Fatalf("snapshot did not batch editions: %+v", snap.Editions)
 	}
-	editions, err := s.EditionsForWorks(ctx, u.ID, []string{w.ID})
+	editions, err := s.EditionsBySHA(ctx, u.ID, []string{"stats-sha"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(editions) != 1 || editions["stats-sha"].WorkID != w.ID {
-		t.Fatalf("EditionsForWorks: %+v", editions)
+		t.Fatalf("EditionsBySHA: %+v", editions)
+	}
+	if empty, err := s.EditionsBySHA(ctx, u.ID, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("empty request must not query: %+v %v", empty, err)
+	}
+	// Another account holding the very same SHA must not leak through,
+	// and must not be shadowed by it either.
+	other := MkUser(t, s, "stats-other-tenant")
+	otherWork := MkWork(t, s, other, "stats-other-work", "stats-sha")
+	mine, err := s.EditionsBySHA(ctx, u.ID, []string{"stats-sha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mine) != 1 || mine["stats-sha"].WorkID != w.ID || mine["stats-sha"].UserID != u.ID {
+		t.Fatalf("EditionsBySHA crossed accounts: %+v", mine)
+	}
+	theirs, err := s.EditionsBySHA(ctx, other.ID, []string{"stats-sha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(theirs) != 1 || theirs["stats-sha"].WorkID != otherWork.ID ||
+		theirs["stats-sha"].UserID != other.ID {
+		t.Fatalf("EditionsBySHA returned the wrong account's edition: %+v", theirs)
 	}
 
 	day := ses.EndedAt.In(time.FixedZone("CEST", 2*60*60)).Format("2006-01-02")

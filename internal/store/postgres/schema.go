@@ -656,8 +656,45 @@ ALTER TABLE session_rollups_v2 ADD COLUMN comparison_active_ms BIGINT;
 ALTER TABLE session_tombstones ADD COLUMN comparison_active_ms BIGINT;
 `
 
+// rollupOldestPageIndex serves the rollup job's bounded oldest-first
+// read. sessions_work_started leads with work_id, so it cannot answer
+// "the oldest sittings across every work" without scanning and sorting
+// the account's whole eligible history every hour.
+const rollupOldestPageIndex = `
+CREATE INDEX IF NOT EXISTS sessions_rollup_page
+    ON sessions(user_id, started_at, session_id)
+    WHERE source_key IS NULL;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
+	rollupOldestPageIndex,
+}
+
+// migrationsThrough returns the migrations up to but not including the
+// named one. Tests build historical databases with it: a boundary
+// written as migrations[:len(migrations)-n] silently slides forward the
+// next time a migration is appended, and the fixture stops reproducing
+// the deployment it was written to catch.
+func migrationsThrough(name string) ([]string, bool) {
+	named := map[string]string{
+		"schema": schema, "claimRevisions": claimRevisions,
+		"folderUploads": folderUploads, "folderAccess": folderAccess,
+		"annotationSync": annotationSync, "folderBackfill": folderBackfill,
+		"statisticsStorage":        statisticsStorage,
+		"comparisonRollupEvidence": comparisonRollupEvidence,
+		"rollupOldestPageIndex":    rollupOldestPageIndex,
+	}
+	want, ok := named[name]
+	if !ok {
+		return nil, false
+	}
+	for i, m := range migrations {
+		if m == want {
+			return migrations[:i], true
+		}
+	}
+	return nil, false
 }

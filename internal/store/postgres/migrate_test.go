@@ -112,7 +112,15 @@ func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reset(t, s)
-			for i, m := range migrations[:len(migrations)-3] {
+			// Everything up to but not including the backfill, which is
+			// where a server running the broken image sits. Named, not
+			// counted back from the end: appending a migration must not
+			// quietly move this boundary.
+			through, ok := migrationsThrough("folderBackfill")
+			if !ok {
+				t.Fatal("folderBackfill is no longer a known migration")
+			}
+			for i, m := range through {
 				if _, err := s.db.ExecContext(ctx, m); err != nil {
 					t.Fatal(err)
 				}
