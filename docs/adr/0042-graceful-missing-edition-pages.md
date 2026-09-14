@@ -1,6 +1,6 @@
 # ADR-0042: A page count the server does not have
 
-**Status:** Draft
+**Status:** Deferred
 **Scope:** Later
 
 ## Context

@@ -1,6 +1,6 @@
 # ADR-0043: Which day a sitting happened on
 
-**Status:** Draft
+**Status:** Deferred
 **Scope:** Later
 
 ## Context
