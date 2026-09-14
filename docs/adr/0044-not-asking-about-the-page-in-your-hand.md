@@ -105,6 +105,16 @@ the way to that spot is still one button away.
 - Because the answer settles the remote position as the baseline, a
   later position from that device is still offered normally; only the
   one already on screen is spent.
+- A question can come to be about the page in the reader's hand after it
+  has been drawn. Every page turn takes the panel down with it, but a
+  resize, a font change or a reflow moves the reader without one, so an
+  offer can end up pointing at the page underneath it with its buttons
+  still live. The panel is taken down when the silent answer is
+  recorded, and only then: taken down first, it would have to be put
+  back whenever the page would not go, and putting it back runs the same
+  check again, which flickers the question for as long as the network is
+  down. An unanswerable question left standing is one the reader can
+  answer themselves.
 
 ## Implementation and acceptance
 
@@ -118,6 +128,8 @@ the way to that spot is still one button away.
 - [x] Browser coverage: a same-page `pull` is silent, durable and sends
       nothing new; a same-page `conflict` is answered on a page that is
       queued but undeliverable, and that page is still owed afterwards
-      and still becomes the agreed one when it lands; a different page
-      and a *near* page of the same number are both still asked; and a
-      book opened cold at the other device's position asks nothing.
+      and still becomes the agreed one when it lands; a question already
+      on screen comes down when a relocate nobody asked for carries the
+      reader onto the page it names; a different page and a *near* page
+      of the same number are both still asked; and a book opened cold at
+      the other device's position asks nothing.
