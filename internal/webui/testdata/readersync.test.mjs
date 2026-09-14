@@ -169,6 +169,29 @@ test("dismissed and baseline operations do not reappear", () => {
   assert.equal(s.offer(), null);
 });
 
+test("an answer given to the page on screen does not swallow a newer position", () => {
+  // The suppressed offer is answered with `refuse`, which may take a
+  // moment to write. A newer position arriving in that moment is
+  // answered by nothing: the reader has said where they are, not that
+  // they have seen everything since.
+  const s = state();
+  s.observe(op("remote")); s.hide(); s.resume();
+  const shown = s.offer();
+  assert.equal(shown.op.op_id, "remote");
+  s.observe(op("newer"));
+  s.refuse(shown.op);
+  assert.equal(s.offer(), null); // never mid-page
+  s.hide(); s.resume();
+  const next = s.offer();
+  assert.equal(next.op.op_id, "newer");
+  // And the one that was answered stays answered, whichever way it
+  // arrives again.
+  s.refuse(next.op);
+  s.observe(op("remote"));
+  s.hide(); s.resume();
+  assert.equal(s.offer(), null);
+});
+
 test("self-authorship requires actual op/device, not shared browser device alone", () => {
   const s = state();
   s.wrote(op("mine", "browser"));
