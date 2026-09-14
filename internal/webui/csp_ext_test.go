@@ -44,7 +44,7 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 		for _, directive := range []string{
 			"default-src 'self'",
 			"script-src 'self'",
-			"style-src 'self' 'unsafe-inline'",
+			"style-src 'self'",
 			"object-src 'none'",
 			"base-uri 'none'",
 			"form-action 'self'",
@@ -54,8 +54,9 @@ func TestUIPagesShipAPolicy(t *testing.T) {
 				t.Errorf("%s: CSP is missing %q: %s", path, directive, csp)
 			}
 		}
-		if strings.Contains(csp, "unsafe-eval") {
-			t.Errorf("%s: CSP has an eval escape hatch: %s", path, csp)
+		// The two holes that would make the rest of it decorative.
+		if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+			t.Errorf("%s: CSP has an escape hatch in it: %s", path, csp)
 		}
 		if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("%s: not nosniff", path)

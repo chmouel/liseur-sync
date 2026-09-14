@@ -151,16 +151,29 @@ func redirectRel(w http.ResponseWriter, loc string, code int) {
 }
 
 // uiPolicy is the Content-Security-Policy every /ui page carries. It is
-// as narrow as this UI actually needs for the server-rendered shell, but
-// the offline save path parses a publication's own markup and CSS while
-// it builds its resource graph, so inline styles are allowed here as a
-// necessary escape hatch for a book's own stylesheet and inline
-// declarations. The rest of the UI still keeps the same strict default,
-// and the reader page replaces this policy entirely with a nonce-based
-// one for the publication frame.
+// as narrow as this UI actually needs, which is very narrow: the whole
+// interface is server-rendered HTML, one vendored copy of htmx, one
+// small script of our own, one stylesheet and same-origin cover images.
+// There is no CDN, no analytics, no font service and no inline anything
+// — ADR-0011 banned style attributes for exactly this reason, so the
+// progress bars are width classes rather than styles a policy would
+// have to permit.
+//
+// The reason it matters is that this UI displays metadata that arrived
+// inside somebody's EPUB: titles, authors, and descriptions that are
+// HTML in practice. The sanitizer parses that markup and lets almost
+// nothing through, but a sanitizer is one mistake away from being no
+// sanitizer at all, and this header is the fence behind it: a script
+// that reaches the page still cannot run, and one that runs anyway
+// cannot phone anywhere.
+//
+// The reader page is not covered by this: it writes its own, stricter,
+// per-response nonce policy (setReaderPolicy) after this middleware
+// runs, because it has to admit the blob: URLs a rendering engine needs
+// while refusing everything a publication might try.
 const uiPolicy = "default-src 'self'; " +
 	"script-src 'self'; " +
-	"style-src 'self' 'unsafe-inline'; " +
+	"style-src 'self'; " +
 	"img-src 'self' data:; " +
 	"font-src 'self'; " +
 	"connect-src 'self'; " +
