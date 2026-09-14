@@ -584,6 +584,8 @@ func TestSessionsAndInsights(t *testing.T) {
 
 func ptrI64(v int64) *int64 { return &v }
 
+func ptrF64(v float64) *float64 { return &v }
+
 // A range narrows what the totals cover but must never narrow what the
 // server knows. The per-book aggregates gain the same window the
 // summary already had, so a dashboard's headline and its rows describe

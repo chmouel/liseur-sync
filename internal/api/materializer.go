@@ -126,14 +126,6 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 	}
 	cutoff := time.Now().Add(-retention)
 	for _, userID := range users {
-		sessions, err := s.St.SessionsEndedBefore(ctx, userID, cutoff)
-		if err != nil {
-			slog.Warn("session rollup: sessions", "user", userID, "err", err)
-			continue
-		}
-		if len(sessions) == 0 {
-			continue
-		}
 		user, err := s.St.UserByID(ctx, userID)
 		if err != nil {
 			slog.Warn("session rollup: user", "user", userID, "err", err)
@@ -148,22 +140,32 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 			slog.Warn("session rollup: timezone", "user", userID, "err", err)
 			continue
 		}
-		for start := 0; start < len(sessions); start += rollupBatchSize {
-			end := start + rollupBatchSize
-			if end > len(sessions) {
-				end = len(sessions)
+		// Each pass asks for the oldest page and rolls it up, so a long
+		// history is never held in memory at once. A rolled-up page is
+		// deleted, so the next read returns the page after it.
+		for {
+			batch, err := s.St.SessionsEndedBefore(ctx, userID, cutoff, rollupBatchSize)
+			if err != nil {
+				slog.Warn("session rollup: sessions", "user", userID, "err", err)
+				break
 			}
-			batch := sessions[start:end]
-			workIDs := uniqueWorkIDs(batch)
-			editions, err := s.St.EditionsForWorks(ctx, userID, workIDs)
+			if len(batch) == 0 {
+				break
+			}
+			editions, err := s.St.EditionsBySHA(ctx, userID, store.EditionSHAsNeedingPages(batch))
 			if err != nil {
 				slog.Warn("session rollup: editions", "user", userID, "err", err)
 				break
 			}
 			rollups, aggregateErr := buildSessionRollups(batch, userID, timezone, loc, editions)
 			if aggregateErr != nil {
-				if insights.IsMissingEdition(aggregateErr) {
-					slog.Warn("session rollup: missing edition", "user", userID, "err", aggregateErr)
+				// Fail closed: a page total that cannot be computed is
+				// not silently recorded as zero. This stops the user's
+				// rollup until the metadata is there, so name the
+				// sitting and the edition that blocked it.
+				if sha, id, ok := missingEditionSession(batch, editions); ok {
+					slog.Warn("session rollup: missing edition", "user", userID,
+						"session", id, "edition_sha", sha, "err", aggregateErr)
 				} else {
 					slog.Warn("session rollup: aggregate", "user", userID, "err", aggregateErr)
 				}
@@ -171,6 +173,8 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 			}
 			if err := s.St.ApplyRollups(ctx, userID, rollups, batch); err != nil {
 				if errors.Is(err, store.ErrConflict) {
+					// The account's zone moved, or a sitting changed
+					// under us. Keep the sessions and retry next hour.
 					slog.Info("session rollup: deferred batch", "user", userID, "sessions", len(batch))
 					break
 				}
@@ -181,17 +185,18 @@ func (s *Server) rollupSessionsOnce(ctx context.Context, retention time.Duration
 	}
 }
 
-func uniqueWorkIDs(sessions []store.Session) []string {
-	seen := make(map[string]bool, len(sessions))
-	out := make([]string, 0, len(sessions))
+// missingEditionSession names the first sitting in the batch whose page
+// count needed an edition that was not returned.
+func missingEditionSession(sessions []store.Session, editions map[string]store.Edition) (sha, sessionID string, ok bool) {
 	for _, ses := range sessions {
-		if seen[ses.WorkID] {
+		if !store.SessionNeedsEditionPages(ses) {
 			continue
 		}
-		seen[ses.WorkID] = true
-		out = append(out, ses.WorkID)
+		if _, found := editions[*ses.EditionSHA]; !found {
+			return *ses.EditionSHA, ses.SessionID, true
+		}
 	}
-	return out
+	return "", "", false
 }
 
 func buildSessionRollups(sessions []store.Session, userID, timezone string, loc *time.Location, editions map[string]store.Edition) ([]store.SessionRollup, error) {

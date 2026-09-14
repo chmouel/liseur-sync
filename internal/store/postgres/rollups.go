@@ -12,13 +12,20 @@ import (
 )
 
 // SessionsEndedBefore returns sessions that ended before the cutoff,
-// oldest first — the input to the rollup job.
-func (s *Store) SessionsEndedBefore(ctx context.Context, userID string, before time.Time) ([]store.Session, error) {
-	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
+// oldest first — the input to the rollup job. The order is
+// (started_at, session_id) so a limited read is a stable page even when
+// sittings share a timestamp; limit <= 0 returns every eligible row.
+func (s *Store) SessionsEndedBefore(ctx context.Context, userID string, before time.Time, limit int) ([]store.Session, error) {
+	query := `SELECT user_id, session_id, work_id, edition_sha, device_id, started_at, ended_at,
 		        start_prog, end_prog, idle_ms, active_ms, reported_pages, origin, origin_alias, source_key, received_at
 		 FROM sessions s WHERE user_id = ? AND ended_at < ? AND source_key IS NULL
-		 ORDER BY started_at`), userID, before.UTC())
+		 ORDER BY started_at, session_id`
+	args := []any{userID, before.UTC()}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q(query), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +60,17 @@ func (s *Store) ApplyRollups(ctx context.Context, userID string, rollups []store
 		}
 	}
 	proofs := make([]store.ArchivedSession, 0, len(deleteSessions))
-	pageCounts, err := preloadEditionPageCounts(ctx, tx, userID, editionSHAsFrom(deleteSessions))
-	if err != nil {
-		return err
+	// Only v2 rollups build proofs, and only proofs read page counts.
+	// Kept non-nil even when nothing preloads into it: sessionPages
+	// memoizes its own lookups there, and only the empty v2 loop stops
+	// it being reached.
+	pageCounts := map[string]sql.NullInt64{}
+	if len(v2) > 0 {
+		pageCounts, err = preloadEditionPageCounts(ctx, tx, userID,
+			store.EditionSHAsNeedingPages(deleteSessions))
+		if err != nil {
+			return err
+		}
 	}
 	for _, expected := range deleteSessions {
 		current, err := scanSession(tx.QueryRowContext(ctx, q(
@@ -259,19 +274,6 @@ func currentAccountTimezone(ctx context.Context, tx *sql.Tx, userID string) (str
 		return "", store.ErrNotFound
 	}
 	return tz, err
-}
-
-func editionSHAsFrom(sessions []store.Session) []string {
-	seen := make(map[string]bool)
-	var out []string
-	for _, ses := range sessions {
-		if ses.EditionSHA == nil || seen[*ses.EditionSHA] {
-			continue
-		}
-		seen[*ses.EditionSHA] = true
-		out = append(out, *ses.EditionSHA)
-	}
-	return out
 }
 
 func preloadEditionPageCounts(ctx context.Context, tx *sql.Tx, userID string, shas []string) (map[string]sql.NullInt64, error) {
