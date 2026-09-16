@@ -577,10 +577,11 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 			false, "", false)
 		return
 	}
-	// A NUL byte only ever arrives from a hand-crafted request (the
-	// textarea cannot produce one) and Postgres refuses it in a TEXT
-	// column, so it is refused here rather than surfacing as a 500.
-	if strings.ContainsRune(prompt, 0) {
+	// A NUL byte or invalid UTF-8 only ever arrives from a hand-crafted
+	// request (the textarea cannot produce either) and Postgres refuses
+	// both in a TEXT column, so they are refused here rather than
+	// surfacing as a 500.
+	if strings.ContainsRune(prompt, 0) || !utf8.ValidString(prompt) {
 		s.renderSettings(w, r, a, u, settingsProfile, "", "",
 			Flash{Error: "That reader prompt contains a character that cannot be saved."},
 			false, "", false)
