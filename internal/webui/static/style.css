@@ -436,13 +436,18 @@ details.advanced[open] > summary::before { content: "−"; }
 }
 .settings-card > form { max-width: 36rem; }
 .card > h2 + .muted { font-size: .87rem; margin-top: -.15rem; max-width: 65ch; }
-.card form > label:not(.check), .card form > p:has(input, select, textarea) {
+.card form > label:not(.check), .card form > p:has(input, select, textarea),
+.card fieldset > label:not(.check) {
 	display: grid; gap: .5rem; max-width: 36rem; margin: 1.1rem 0;
 }
-.card form > label:not(.check) > :is(input, select, textarea) { width: 100%; min-width: 0; }
+.card form > label:not(.check) > :is(input, select, textarea),
+.card fieldset > label:not(.check) > :is(input, select, textarea) { width: 100%; min-width: 0; }
 .card fieldset { margin: 1.5rem 0; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .card fieldset legend { padding: 0 .4rem; color: var(--ink-dim); font-size: .8rem; font-weight: 600; }
 .card fieldset label:last-child { margin-bottom: 0; }
+/* The reader prompt is a piece of writing rather than a field: it gets
+   room to be read back whole, and a grip to make it taller. */
+#reader-prompt-template { min-height: 13rem; line-height: 1.5; resize: vertical; }
 .card form.inline { align-items: flex-end; }
 .card form.inline > label { margin-bottom: 0; }
 
@@ -1175,6 +1180,15 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-icon-btn:hover{background:var(--surface-3)}
 .reader-icon-btn:focus-visible{outline:2px solid var(--primary);outline-offset:1px}
 .reader-icon-btn svg{display:block}
+/* An icon button is a flex box, and a class beats the browser's own
+   rule for the hidden attribute: without this the prompt button would
+   be permanently on the bar. */
+.reader-icon-btn[hidden]{display:none}
+/* The prompt's fallback dialog is a plain box of text to copy by hand. */
+#reader-prompt-fallback textarea{
+  box-sizing:border-box;width:min(60ch,80vw);font:inherit;font-size:.9rem;
+  margin:.6rem 0;padding:.5rem;border:1px solid var(--line);border-radius:8px;
+  background:var(--surface-2);color:inherit}
 @media (max-width:32em){
   .reader-bar{gap:.4rem;padding:.4rem .55rem}
   .reader-back-label{display:none}

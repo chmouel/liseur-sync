@@ -369,6 +369,56 @@ func svgSpineTestEPUB(t *testing.T) []byte {
 	return buf.Bytes()
 }
 
+// TestReaderCopiesAPromptInARealBrowser is ADR-0045 where it lives. The
+// template arrives as an attribute, the passage is selected inside the
+// publication's own frame, the substitution reads the figures the footer
+// draws, and the copy is a clipboard call a browser is free to refuse —
+// none of which a Go test can see.
+func TestReaderCopiesAPromptInARealBrowser(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+
+	// alice writes a prompt; without one there is no button to press,
+	// which is the feature being off.
+	if err := f.st.UpdateUserSettings(t.Context(), "u1", store.UserSettings{
+		Timezone: "UTC",
+		ReaderPromptTemplate: "I am reading {title} by {author}, {chapter}, " +
+			"page {page} of {pages}, {percent}% in. I have highlighted this " +
+			"passage:\n\n\"{text}\"\n\nPlease do not spoil anything past {percent}%.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_PROMPT=1",
+		"SMOKE_SHOT="+os.Getenv("LISEUR_READER_SCREENSHOT"),
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the reader did not copy a prompt in a browser: %v", err)
+	}
+}
+
 // TestReaderRendersSVGSpineItems is finding #1 of the streaming-reader
 // review: a valid EPUB whose spine has an SVG page and a bitmap page,
 // not just XHTML, must still render those pages rather than going blank.

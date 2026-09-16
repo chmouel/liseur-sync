@@ -38,6 +38,10 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 		TokenURL:    prefix + "reader/token",
 		APIBase:     prefix + "../",
 		StaticBase:  prefix + "static/",
+		// This page knows the account, so the prompt travels with it and
+		// the reader asks nobody for it. The detached origin cannot do
+		// that and fetches /v1/me instead.
+		PromptTemplate: u.ReaderPromptTemplate,
 		// The tab icon is the book's own cover, shrunk and squared by
 		// the icon variant; a coverless book gets the placeholder card
 		// from the same route, so this link never 404s.

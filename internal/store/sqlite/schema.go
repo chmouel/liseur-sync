@@ -1051,13 +1051,23 @@ CREATE INDEX IF NOT EXISTS sessions_rollup_page
     WHERE source_key IS NULL;
 `
 
+// readerPromptTemplate holds the prompt the browser reader copies to
+// the clipboard for a highlighted passage. It is the account's own
+// text, stored and never interpreted here; an empty one — which is what
+// every existing account gets — means the reader shows no button at
+// all, so this column changes nothing about a deployment that has not
+// asked for it.
+const readerPromptTemplate = `
+ALTER TABLE users ADD COLUMN reader_prompt_template TEXT NOT NULL DEFAULT '';
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
-	statsRevisionUpsertSafe, rollupOldestPageIndex,
+	statsRevisionUpsertSafe, rollupOldestPageIndex, readerPromptTemplate,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1074,6 +1084,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"comparisonRollupEvidence": comparisonRollupEvidence,
 		"statsRevisionUpsertSafe":  statsRevisionUpsertSafe,
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
+		"readerPromptTemplate":     readerPromptTemplate,
 	}
 	want, ok := named[name]
 	if !ok {

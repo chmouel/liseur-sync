@@ -393,6 +393,59 @@ func TestSettingsSave(t *testing.T) {
 	}
 }
 
+// The reader prompt is the account's own text: it is saved as written,
+// it is refused rather than trimmed when it is absurdly long, and an
+// account that has never set one still has none.
+func TestSettingsSaveReaderPrompt(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings")
+	csrf := extractCSRF(t, body)
+
+	if u, _ := st.UserByID(t.Context(), "u1"); u.ReaderPromptTemplate != "" {
+		t.Fatalf("a fresh account came with a prompt: %q", u.ReaderPromptTemplate)
+	}
+
+	const prompt = "I am reading {title}, {percent}% in:\n\n\"{text}\""
+	code, body := postForm(t, ts, cookie, "/ui/settings", url.Values{
+		"timezone": {"UTC"}, "csrf": {csrf}, "reader_prompt": {prompt},
+	})
+	if code != 200 || !strings.Contains(body, "Saved") {
+		t.Fatalf("saving a reader prompt: %d", code)
+	}
+	u, _ := st.UserByID(t.Context(), "u1")
+	if u.ReaderPromptTemplate != prompt {
+		t.Fatalf("the reader prompt was not saved as written: %q", u.ReaderPromptTemplate)
+	}
+	// The form shows it back, so a reader can edit what they wrote.
+	if _, shown := page(t, ts, cookie, "/ui/settings"); !strings.Contains(shown, "{percent}") {
+		t.Error("the settings form does not show the saved prompt")
+	}
+
+	code, body = postForm(t, ts, cookie, "/ui/settings", url.Values{
+		"timezone":      {"UTC"},
+		"csrf":          {csrf},
+		"reader_prompt": {strings.Repeat("x", 4001)},
+	})
+	if code != 200 || !strings.Contains(body, "too long") {
+		t.Fatalf("an over-long prompt: %d %v", code, strings.Contains(body, "too long"))
+	}
+	if u, _ := st.UserByID(t.Context(), "u1"); u.ReaderPromptTemplate != prompt {
+		t.Fatalf("a refused prompt overwrote the saved one: %q", u.ReaderPromptTemplate)
+	}
+
+	// Saving with an empty box clears it, which is how the reader's
+	// button is turned off again.
+	if code, _ = postForm(t, ts, cookie, "/ui/settings", url.Values{
+		"timezone": {"UTC"}, "csrf": {csrf}, "reader_prompt": {"  "},
+	}); code != 200 {
+		t.Fatalf("clearing the reader prompt: %d", code)
+	}
+	if u, _ := st.UserByID(t.Context(), "u1"); u.ReaderPromptTemplate != "" {
+		t.Fatalf("the reader prompt was not cleared: %q", u.ReaderPromptTemplate)
+	}
+}
+
 func TestAdminInvites(t *testing.T) {
 	ts, st := testServerCfg(t, nil, generousReauth)
 	// Admin is an account property (ADR-0013), not a token.

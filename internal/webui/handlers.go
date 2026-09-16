@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/insights"
@@ -566,13 +567,28 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 	}
 	kosyncOn := r.FormValue("kosync_enabled") == "on"
 	kopluginOn := r.FormValue("koplugin_enabled") == "on"
-	if err := s.St.UpdateUserSettings(r.Context(), u.ID, tz, kosyncOn, kopluginOn); err != nil {
+	// The textarea carries a maxlength, so only a request made by hand
+	// arrives over the cap. It is refused rather than trimmed: half a
+	// prompt is not what anybody asked to save.
+	prompt := strings.ReplaceAll(r.FormValue("reader_prompt"), "\r\n", "\n")
+	if utf8.RuneCountInString(prompt) > readerPromptMax {
+		s.renderSettings(w, r, a, u, settingsProfile, "", "",
+			Flash{Error: "That reader prompt is too long to save."},
+			false, "", false)
+		return
+	}
+	settings := store.UserSettings{
+		Timezone: tz, KosyncEnabled: kosyncOn, KopluginEnabled: kopluginOn,
+		ReaderPromptTemplate: strings.TrimSpace(prompt),
+	}
+	if err := s.St.UpdateUserSettings(r.Context(), u.ID, settings); err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	u.Timezone = tz
 	u.KosyncEnabled = kosyncOn
 	u.KopluginEnabled = kopluginOn
+	u.ReaderPromptTemplate = settings.ReaderPromptTemplate
 	s.renderSettings(w, r, a, u, settingsProfile, "", "", Flash{}, true, "", false)
 }
 

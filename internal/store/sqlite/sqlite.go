@@ -210,7 +210,7 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var created string
 	var disabled sql.NullString
 	err := row.Scan(&u.ID, &u.Name, &u.Argon2Hash, &tz, &kosync, &koplugin,
-		&isAdmin, &disabled, &created)
+		&isAdmin, &disabled, &created, &u.ReaderPromptTemplate)
 	if err != nil {
 		return u, err
 	}

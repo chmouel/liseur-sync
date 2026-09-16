@@ -31,6 +31,14 @@ type ReaderView struct {
 	// smuggles in can present it.
 	ScriptNonce string
 
+	// PromptTemplate is the account's reader prompt: the text the copy
+	// button fills in for a highlighted passage. Empty means the button
+	// never appears, which is what every account gets until it writes
+	// one on the settings page. The detached reader origin has no user
+	// to ask, so it leaves this empty and the page fetches /v1/me
+	// instead.
+	PromptTemplate string
+
 	// Detached says the page is being served from the separate reader
 	// origin (ADR-0007 phase 3), where there is no session and no CSRF
 	// token. Everything the reader needs then arrives in the URL
@@ -63,6 +71,7 @@ templ readerPage(v ReaderView, csrf string) {
 				data-api-base={ v.APIBase }
 				data-detached={ boolAttr(v.Detached) }
 				data-offline={ boolAttr(v.Offline) }
+				data-prompt-template={ v.PromptTemplate }
 				hidden
 			></div>
 			<header class="reader-bar">
@@ -195,6 +204,36 @@ templ readerPage(v ReaderView, csrf string) {
 							<button type="button" id="reader-settings-reset">Reset to defaults</button>
 						</form>
 					</details>
+					// The prompt button (see static/reader-prompt.js). It is
+					// hidden until two things are true at once: the account
+					// keeps a prompt, and there is a passage selected to put
+					// in it. Neither is true for an account that has never
+					// written one, so this bar looks exactly as it did
+					// before the feature existed.
+					<button
+						type="button"
+						id="reader-prompt-copy"
+						class="reader-icon-btn reader-prompt-btn"
+						title="Copy a prompt about this passage"
+						aria-label="Copy a prompt about this passage"
+						hidden
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M9 5h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
+							<path d="M9 3h6"></path>
+							<path d="M10 11h4M10 15h4"></path>
+						</svg>
+					</button>
 					<button
 						type="button"
 						id="reader-sync"
@@ -378,6 +417,15 @@ templ readerPage(v ReaderView, csrf string) {
 						<button type="submit" id="reader-goto-submit" class="btn primary">Go</button>
 					</div>
 				</form>
+			</dialog>
+			// Where the prompt goes when the clipboard is not available:
+			// a plain-HTTP origin has no navigator.clipboard at all, and
+			// a browser may refuse the write anywhere. The text arrives
+			// selected, so copying it is one keystroke.
+			<dialog id="reader-prompt-fallback" class="reader-goto" aria-labelledby="reader-prompt-fallback-title">
+				<h2 id="reader-prompt-fallback-title">Copy this prompt</h2>
+				<textarea id="reader-prompt-fallback-text" rows="10" readonly></textarea>
+				<form method="dialog"><button class="btn primary">Close</button></form>
 			</dialog>
 			// Asked for rather than offered (ADR-0040). Nothing has been
 			// applied by the time this opens: the server's answer has been

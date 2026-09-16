@@ -27,6 +27,7 @@ const ASSETS = [
   new URL('./assets/reader-live.js', self.location).href,
   new URL('./assets/reader-place.js', self.location).href,
   new URL('./assets/reader-positions.js', self.location).href,
+  new URL('./assets/reader-prompt.js', self.location).href,
   new URL('./assets/reader-publication.js', self.location).href,
   new URL('./assets/reader-reconcile.js', self.location).href,
   new URL('./assets/reader-restore.js', self.location).href,

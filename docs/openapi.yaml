@@ -412,6 +412,42 @@ paths:
         "200": { $ref: "#/components/responses/StatusOK" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /v1/me:
+    get:
+      tags: [auth]
+      summary: The account behind this credential
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Reads the token's own account — never a path parameter, so there
+        is no id here to get wrong. It exists for a client that holds a
+        token and nothing else: the browser reader served from the
+        separate reader origin has no session and no user, so it asks
+        once the token is in hand.
+
+        `reader_prompt_template` is the text the account keeps for the
+        reader's "copy a prompt about this passage" button, with
+        `{title} {author} {series} {chapter} {page} {pages} {percent}
+        {text}` substituted at the moment of the copy. The server never
+        interprets it. It is empty unless the account wrote one, and an
+        empty one means the reader shows no button at all.
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, name, timezone, reader_prompt_template]
+                properties:
+                  id: { type: string }
+                  name: { type: string }
+                  timezone:
+                    type: string
+                    description: IANA name; the account-local day statistics are attributed to.
+                  reader_prompt_template:
+                    type: string
+                    description: Empty when the account has not written one.
+
   /v1/works/resolve:
     post:
       tags: [identity]

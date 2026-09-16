@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/buildinfo"
@@ -27,6 +28,32 @@ const (
 	folderOnboardingQuery = "onboarding"
 	folderOnboardingValue = "folder"
 )
+
+// The reader prompt (see static/reader-prompt.js) is the account's own
+// text: the server stores it, hands it to the reader and never
+// interprets it. These three constants are everything the settings form
+// needs to say about it.
+const (
+	// readerPromptMax is what the form accepts. It is generous for a
+	// prompt and small enough that the column is never a place to keep
+	// a document.
+	readerPromptMax = 4000
+
+	readerPromptPlaceholders = "{title}, {author}, {series}, {chapter}, " +
+		"{page}, {pages}, {percent} and {text}"
+
+	// readerPromptExample is the suggestion behind the form's button.
+	// It is a starting point, not a default: an account that has never
+	// pressed it has no prompt and therefore no button in the reader.
+	readerPromptExample = "I am reading {title} by {author}, chapter " +
+		"{chapter}, page {page} of {pages}, {percent}% in. I have " +
+		"highlighted this passage:\n\n\"{text}\"\n\nI would like to ask a " +
+		"few questions about it. Please do not spoil anything past " +
+		"{percent}%."
+)
+
+// readerPromptMaxLength is the cap as the maxlength attribute wants it.
+func readerPromptMaxLength() string { return strconv.Itoa(readerPromptMax) }
 
 func settingsAdminFoldersOnboardingHref(prefix string) string {
 	return settingsAdminHref(prefix, settingsAdminFolders) +

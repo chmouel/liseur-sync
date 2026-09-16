@@ -14,6 +14,7 @@ import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } 
 import { decideBookSync } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
+import { fillPrompt } from "./reader-prompt.js";
 import { buildChapters, chapterForLocation, pagesLeftInChapter } from "./reader-chapters.js";
 import {
   clearOfflineSessionCheckpoint,
@@ -55,6 +56,7 @@ const cfg = {
   apiBase: el.dataset.apiBase,
   detached: el.dataset.detached === "1",
   offline: el.dataset.offline === "1",
+  promptTemplate: el.dataset.promptTemplate || "",
   handed: null,
 };
 const annotationsEnabled = false;
@@ -99,6 +101,9 @@ const tocPanel = document.getElementById("reader-toc");
 const tocList = document.getElementById("reader-toc-list");
 const tocButton = document.getElementById("reader-toc-button");
 const fullscreenBtn = document.getElementById("reader-fullscreen");
+const promptButton = document.getElementById("reader-prompt-copy");
+const promptFallback = document.getElementById("reader-prompt-fallback");
+const promptFallbackText = document.getElementById("reader-prompt-fallback-text");
 
 let chapterLoadingTimer = null;
 let chapterLoadingGeneration = 0;
@@ -370,6 +375,8 @@ const auth = readerAuth({
   handed: cfg.handed,
   onChange(identity, previous) {
     if (!cfg.offline) offlineAccount = identity.account;
+    bindPromptTemplate(identity.account);
+    refreshPromptTemplate(identity.account);
     catchup.bind(identity.account, workID, identity.device);
     hideCatchup();
     if (!previous) return;
@@ -1587,6 +1594,215 @@ annotationActions?.addEventListener("click", event => {
 addNoteButton?.addEventListener("click", () => {
   createStandaloneNote().catch(error =>
     say(error.message || "The note could not be created.", true));
+});
+
+// ---------------------------------------------------- reading prompt
+//
+// The account keeps a prompt about a highlighted passage (see
+// reader-prompt.js), and this is the button that fills it in and puts
+// it on the clipboard. Two things have to be true before it appears at
+// all: the account wrote a prompt, and something is selected. An
+// account that never wrote one never sees a new control.
+//
+// Where the prompt comes from depends on where this page is served. The
+// same-origin page carries it in its config, because the server knew
+// the account when it rendered it. The detached reader origin has no
+// session, so it asks /v1/me once the bearer token is in hand. The
+// offline reader can ask nobody, so every template that arrives is kept
+// in localStorage against the account it belongs to, and that copy is
+// what an offline reader uses.
+const PROMPT_CACHE_PREFIX = "liseur.reader.prompt.";
+const PROMPT_MAX_TEXT = 4096;
+
+let promptTemplate = cfg.promptTemplate || "";
+let promptSelection = null;
+
+function promptCacheKey(account) {
+  return account ? PROMPT_CACHE_PREFIX + account : "";
+}
+
+function recallPromptTemplate(account) {
+  const key = promptCacheKey(account);
+  if (!key) return "";
+  try {
+    return localStorage.getItem(key) || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+function rememberPromptTemplate(account, template) {
+  const key = promptCacheKey(account);
+  if (!key) return;
+  try {
+    if (template) localStorage.setItem(key, template);
+    else localStorage.removeItem(key);
+  } catch (err) {
+    /* private browsing: this page still has the template it was given */
+  }
+}
+
+function setPromptTemplate(next) {
+  promptTemplate = typeof next === "string" ? next : "";
+  updatePromptButton();
+}
+
+// bindPromptTemplate settles what this page will offer for an account.
+// A template the server already put in the page is authoritative and is
+// written to the cache; without one the cached copy is adopted at once,
+// so an offline reader — and a detached one waiting on a request — has
+// its button immediately rather than a second later.
+function bindPromptTemplate(account) {
+  if (!account) return;
+  if (cfg.promptTemplate) {
+    rememberPromptTemplate(account, cfg.promptTemplate);
+    setPromptTemplate(cfg.promptTemplate);
+    return;
+  }
+  setPromptTemplate(recallPromptTemplate(account));
+}
+
+// refreshPromptTemplate asks the server what the account keeps. Only
+// the detached origin needs it — everywhere else the page was rendered
+// by a server that knew the answer — and it is best-effort: a reader
+// whose prompt cannot be fetched is a reader without a button, never an
+// error on the page.
+async function refreshPromptTemplate(account) {
+  if (cfg.offline || !cfg.detached) return;
+  try {
+    const response = await api("v1/me");
+    if (!response.ok || !auth.responseCurrent(response)) return;
+    const body = await response.json();
+    const template = typeof body?.reader_prompt_template === "string"
+      ? body.reader_prompt_template
+      : "";
+    rememberPromptTemplate(account, template);
+    setPromptTemplate(template);
+  } catch (error) {
+    console.warn("The reading prompt could not be read:", error);
+  }
+}
+
+// oneName pulls a person's or a series' name out of whatever the
+// package document put there. Readium keeps a contributor as a string,
+// as an object with a name, as a language map, or as a list of any of
+// those, and a prompt wants one readable string out of all of them.
+function oneName(raw) {
+  if (!raw) return "";
+  if (typeof raw === "string") return raw.trim();
+  if (Array.isArray(raw)) return raw.map(oneName).filter(Boolean).join(", ");
+  if (typeof raw === "object") {
+    if (raw.name) return oneName(raw.name);
+    const values = Object.values(raw);
+    return values.length ? oneName(values[0]) : "";
+  }
+  return String(raw);
+}
+
+function bookAuthor() {
+  return oneName(view?.book?.metadata?.author);
+}
+
+function bookSeries() {
+  const metadata = view?.book?.metadata;
+  return oneName(metadata?.belongsTo?.series ?? metadata?.series);
+}
+
+// promptSelectionFromDocument is the annotation capture without the
+// anchor: a prompt quotes the passage, it does not point at it, so a
+// chapter the engine cannot make a CFI for still gives a usable
+// selection.
+function promptSelectionFromDocument(doc) {
+  const selection = doc.getSelection?.();
+  if (!selection || !selection.rangeCount || selection.isCollapsed) return null;
+  const text = selection.toString().trim();
+  if (!text) return null;
+  return { text: text.slice(0, PROMPT_MAX_TEXT), section: here?.section?.current };
+}
+
+// forgetPromptSelectionOutside drops a held passage once the reader has
+// left the chapter it was in. The document it lives in is gone by then
+// and nothing else would tell this page the quote is stale.
+function forgetPromptSelectionOutside(location) {
+  if (!promptSelection) return;
+  const section = location.section || {};
+  if (promptSelection.section === undefined) return;
+  if (promptSelection.section === section.current) return;
+  promptSelection = null;
+  updatePromptButton();
+}
+
+function updatePromptButton() {
+  if (!promptButton) return;
+  const offer = !!promptTemplate && !!promptSelection;
+  if (offer && promptButton.hidden) revealChrome();
+  promptButton.hidden = !offer;
+}
+
+// promptValues is where the reader is, in the words the template uses.
+// Everything here is already on the page: the same percentage, page and
+// chapter the footer draws.
+function promptValues() {
+  const location = here || {};
+  const pages = readerPagePair(location);
+  return {
+    title: bookTitle(),
+    author: bookAuthor(),
+    series: bookSeries(),
+    chapter: chapterLabel(location),
+    page: pages ? String(pages.page) : "",
+    pages: pages ? String(pages.total) : "",
+    percent: finite(location.fraction)
+      ? String(Math.round(location.fraction * 100))
+      : "",
+    text: promptSelection?.text || "",
+  };
+}
+
+async function copyPrompt() {
+  if (!promptTemplate || !promptSelection) return;
+  const prompt = fillPrompt(promptTemplate, promptValues());
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
+    await navigator.clipboard.writeText(prompt);
+    say("Prompt copied.");
+  } catch (error) {
+    // Over plain HTTP there is no clipboard to write to, and a browser
+    // may refuse the write anywhere. The prompt is still worth having,
+    // so it is handed over to be copied by hand.
+    showPromptFallback(prompt);
+  }
+}
+
+function showPromptFallback(prompt) {
+  if (!promptFallback || !promptFallbackText) {
+    say("This browser would not copy the prompt.", true);
+    return;
+  }
+  promptFallbackText.value = prompt;
+  promptFallback.showModal();
+  promptFallbackText.focus();
+  promptFallbackText.select();
+}
+
+function wirePromptSelection(doc) {
+  const update = () => {
+    const next = promptSelectionFromDocument(doc);
+    // A pointer already on the button is a reader reaching for it: the
+    // selection they are about to quote must outlive the press that
+    // collapses it.
+    if (!next && promptButton?.matches(":hover")) return;
+    promptSelection = next;
+    updatePromptButton();
+  };
+  doc.addEventListener("selectionchange", update);
+  doc.addEventListener("mouseup", () => setTimeout(update, 0));
+  doc.addEventListener("touchend", () => setTimeout(update, 0), { passive: true });
+}
+
+promptButton?.addEventListener("click", () => {
+  copyPrompt().catch(error =>
+    say(error.message || "The prompt could not be copied.", true));
 });
 
 // buildAnnotationList fills the sidebar with the entries that do not
@@ -3020,24 +3236,44 @@ function paint(location) {
   );
   pageText.disabled = !hasPageTotal;
   chapterText.textContent = footerMiddle(location);
+  forgetPromptSelectionOutside(location);
   markTOC(location.tocItem);
 }
 
 // readerPage is the footer's "n of m" for this spot, or null when
 // neither the positions nor the engine can name one.
 function readerPage(location) {
+  const pair = readerPagePair(location);
+  return pair ? pair.page + " of " + pair.total : null;
+}
+
+// readerPagePair is the same answer with the two numbers kept apart,
+// for a caller that wants the page without the sentence around it.
+function readerPagePair(location) {
   const section = location.section || {};
   const n = pageAt(positions, section.current, location.sectionFraction);
-  if (n) return n + " of " + positions.total;
+  if (n) return { page: n, total: positions.total };
   const loc = location.location || {};
   if (finite(loc.current) && finite(loc.total) && loc.total > 0) {
-    return (
-      Math.min(Math.max(1, Math.floor(loc.current) + 1), loc.total) +
-      " of " +
-      loc.total
-    );
+    return {
+      page: Math.min(Math.max(1, Math.floor(loc.current) + 1), loc.total),
+      total: loc.total,
+    };
   }
   return null;
+}
+
+// chapterLabel is the chapter title the book itself gives this spot,
+// falling back to a plain count when the navigation has no entry
+// covering it.
+function chapterLabel(location) {
+  const tocItem = location.tocItem;
+  if (tocItem && tocItem.label) return tocItem.label.trim();
+  const section = location.section || {};
+  if (typeof section.current === "number" && section.total) {
+    return "Chapter " + (section.current + 1) + " of " + section.total;
+  }
+  return "";
 }
 
 // footerMiddle is what the middle slot says for this spot under the
@@ -3069,17 +3305,8 @@ function footerMiddle(location) {
       return finite(time.total) ? durationText(time.total) + " left in book" : "";
     case "empty":
       return "";
-    default: {
-      // The chapter title the book itself gives this spot, falling back
-      // to a plain count when the navigation has no entry covering it.
-      const tocItem = location.tocItem;
-      if (tocItem && tocItem.label) return tocItem.label.trim();
-      const section = location.section || {};
-      if (typeof section.current === "number" && section.total) {
-        return "Chapter " + (section.current + 1) + " of " + section.total;
-      }
-      return "";
-    }
+    default:
+      return chapterLabel(location);
   }
 }
 
@@ -3625,6 +3852,7 @@ window.addEventListener("beforeunload", () => {
       e.detail.doc.addEventListener("keydown", handleKeys);
       wireChapterPointer(e.detail.doc);
       if (annotationsEnabled) wireSelection(e.detail.doc);
+      wirePromptSelection(e.detail.doc);
     });
     view.addEventListener("link", (e) => {
       e.preventDefault();
@@ -3649,6 +3877,7 @@ window.addEventListener("beforeunload", () => {
       // earlier, so a position read on a plane still names its edition.
       catalogEditionSHA = local.digest || "";
       offlineAccount = local.account;
+      bindPromptTemplate(offlineAccount);
       offlineContext = {
         ...await accountContext(offlinePartition, offlineAccount), deviceID: local.deviceID,
       };

@@ -476,7 +476,9 @@ func TestInsightsSnapshotWindowAndCalendarClipBothAggregates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := f.st.UpdateUserSettings(t.Context(), f.user.ID, "Europe/Paris", false, false); err != nil {
+			if err := f.st.UpdateUserSettings(t.Context(), f.user.ID, store.UserSettings{
+				Timezone: "Europe/Paris",
+			}); err != nil {
 				t.Fatal(err)
 			}
 			midnight := time.Date(2024, 1, 2, 0, 0, 0, 0, loc)

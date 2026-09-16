@@ -151,6 +151,39 @@ without `active_ms`. This flag needs no `read-insights` scope, so the
 browser reader can negotiate duration while keeping its restricted
 `sync` and `library-read` scopes.
 
+### Reading the account behind the token
+
+`GET /v1/token` describes the *credential*. `GET /v1/me` describes the
+*account*, and it needs `library-read`:
+
+```json
+{
+  "id": "usr_31b0",
+  "name": "chmouel",
+  "timezone": "Europe/Paris",
+  "reader_prompt_template": "I am reading {title} by {author}, {percent}% in. …"
+}
+```
+
+`timezone` is the IANA name statistics are attributed to, so a client
+drawing its own day boundaries can agree with the server's.
+
+`reader_prompt_template` is a piece of text the account keeps and the
+server never interprets. The built-in reader uses it for one button:
+highlight a passage, press it, and the filled-in text is on the
+clipboard, ready to paste into whatever assistant the reader uses. The
+placeholders are `{title}`, `{author}`, `{series}`, `{chapter}`,
+`{page}`, `{pages}`, `{percent}` and `{text}`; a placeholder with
+nothing behind it becomes an empty string, and an unrecognized `{word}`
+is left exactly as written so the reader's own braces survive. An empty
+template means the reader shows no button at all — that is how the
+feature is turned off, and it is off until somebody writes one on the
+settings page.
+
+There is nothing reader-specific about any of it, so a client on another
+platform is welcome to offer the same button from the same text. Nothing
+is sent anywhere: the prompt is text on a clipboard.
+
 ### A credential for code running in the browser
 
 A reader or dashboard running as a page inside the web UI does not go

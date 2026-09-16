@@ -363,6 +363,11 @@ func testUsers(t *testing.T, open OpenFunc) {
 	if got.ID != u.ID || got.Timezone != "Europe/Paris" || !got.KosyncEnabled {
 		t.Fatalf("bad user: %+v", got)
 	}
+	// A fresh account has no reader prompt, which is what switches the
+	// reader's copy button off.
+	if got.ReaderPromptTemplate != "" {
+		t.Fatalf("a new account starts with a reader prompt: %q", got.ReaderPromptTemplate)
+	}
 	if _, err := s.UserByName(ctx, "nobody"); err != store.ErrNotFound {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
@@ -371,12 +376,41 @@ func testUsers(t *testing.T, open OpenFunc) {
 	}
 
 	// Settings update.
-	if err := s.UpdateUserSettings(ctx, u.ID, "Asia/Tokyo", false, true); err != nil {
+	if err := s.UpdateUserSettings(ctx, u.ID, store.UserSettings{
+		Timezone: "Asia/Tokyo", KopluginEnabled: true,
+		ReaderPromptTemplate: "I am reading {title}, {percent}% in: \"{text}\"",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.UserByID(ctx, u.ID)
 	if got.Timezone != "Asia/Tokyo" || got.KosyncEnabled || !got.KopluginEnabled {
 		t.Fatalf("settings not saved: %+v", got)
+	}
+	if got.ReaderPromptTemplate != "I am reading {title}, {percent}% in: \"{text}\"" {
+		t.Fatalf("the reader prompt did not round-trip: %q", got.ReaderPromptTemplate)
+	}
+	// Listing reads the same column: the admin panel and the settings
+	// form must not disagree about what the account holds.
+	listed, err := s.ListUsers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, other := range listed {
+		if other.ID == u.ID && other.ReaderPromptTemplate != got.ReaderPromptTemplate {
+			t.Fatalf("listing lost the reader prompt: %q", other.ReaderPromptTemplate)
+		}
+	}
+	// Writing the rest of the settings again clears it, because the
+	// form that writes them carries the prompt too: a settings write is
+	// the whole of the settings.
+	if err := s.UpdateUserSettings(ctx, u.ID, store.UserSettings{
+		Timezone: "Asia/Tokyo", KopluginEnabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.UserByID(ctx, u.ID)
+	if got.ReaderPromptTemplate != "" {
+		t.Fatalf("the reader prompt was not cleared: %q", got.ReaderPromptTemplate)
 	}
 }
 

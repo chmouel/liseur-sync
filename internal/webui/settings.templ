@@ -45,6 +45,9 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 	<section class="card settings-card">
 		<h2>Profile</h2>
 		<p class="muted">Choose how reading activity is recorded for your account.</p>
+		if v.Flash.Error != "" {
+			<p class="error">{ v.Flash.Error }</p>
+		}
 		if v.Saved {
 			<p class="ok">Saved.</p>
 		}
@@ -79,6 +82,30 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 					}
 					statistics plugin (koplugin)
 				</label>
+			</fieldset>
+			<fieldset>
+				<legend>Reader prompt</legend>
+				<p class="muted">
+					Highlight a passage in the web reader and a button copies this
+					text to your clipboard with the placeholders filled in, ready
+					to paste into an assistant. Leave it empty and no button
+					appears.
+				</p>
+				<label>
+					Prompt
+					<textarea name="reader_prompt" rows="9" maxlength={ readerPromptMaxLength() } id="reader-prompt-template" spellcheck="true">{ u.User.ReaderPromptTemplate }</textarea>
+				</label>
+				<p class="muted">
+					Placeholders: { readerPromptPlaceholders }. One this book cannot
+					answer is left blank; anything else in braces is kept as you
+					wrote it.
+				</p>
+				<button
+					type="button"
+					class="prompt-example"
+					data-prompt-target="reader-prompt-template"
+					data-prompt={ readerPromptExample }
+				>Use the example prompt</button>
 			</fieldset>
 			<button type="submit" class="primary">Save profile</button>
 		</form>
