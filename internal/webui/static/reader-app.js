@@ -1648,12 +1648,20 @@ function setPromptTemplate(next) {
 }
 
 // bindPromptTemplate settles what this page will offer for an account.
-// A template the server already put in the page is authoritative and is
-// written to the cache; without one the cached copy is adopted at once,
-// so an offline reader — and a detached one waiting on a request — has
-// its button immediately rather than a second later.
+// The same-origin page is rendered by a server that already knows the
+// account, so its template is authoritative even when the account
+// cleared it to an empty string — that empty value is written through,
+// replacing any stale cache entry. An offline or detached page has no
+// such answer of its own, so it falls back to whatever was cached until
+// something says otherwise, and adopts a non-empty template at once so
+// its button appears immediately rather than a second later.
 function bindPromptTemplate(account) {
   if (!account) return;
+  if (!cfg.offline && !cfg.detached) {
+    rememberPromptTemplate(account, cfg.promptTemplate);
+    setPromptTemplate(cfg.promptTemplate);
+    return;
+  }
   if (cfg.promptTemplate) {
     rememberPromptTemplate(account, cfg.promptTemplate);
     setPromptTemplate(cfg.promptTemplate);
