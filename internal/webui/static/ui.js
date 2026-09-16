@@ -118,4 +118,17 @@
     });
   });
 
+  // The settings form's "use the example prompt" button. The example
+  // lives on the button because the page's policy is script-src 'self':
+  // there is nowhere to write it inline, and it is the server's text
+  // rather than this file's.
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest && e.target.closest('.prompt-example');
+    if (!btn) return;
+    const field = document.getElementById(btn.dataset.promptTarget);
+    if (!field) return;
+    field.value = btn.dataset.prompt || '';
+    field.focus();
+  });
+
 })();

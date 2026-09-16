@@ -176,6 +176,9 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /v1/insights/capabilities": gateInsights,
 	"POST /v1/insights/snapshot":    gateInsights,
 
+	// The account behind the credential, which a browser reader token
+	// may read because it already reads the library.
+	"GET /v1/me":                                                       gateLibraryRead,
 	"GET /v1/folders":                                                  gateLibraryRead,
 	"GET /v1/folders/{folder}/books":                                   gateLibraryRead,
 	"GET /v1/folders/{folder}/search":                                  gateLibraryRead,

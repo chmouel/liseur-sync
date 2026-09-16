@@ -38,13 +38,12 @@ func (s *Store) ListWorks(ctx context.Context, userID string) ([]store.WorkSumma
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateUserSettings(ctx context.Context, userID, timezone string, kosyncEnabled, kopluginEnabled bool) error {
-	if timezone == "" {
-		timezone = "UTC"
-	}
+func (s *Store) UpdateUserSettings(ctx context.Context, userID string, settings store.UserSettings) error {
 	res, err := s.db.ExecContext(ctx, q(
-		`UPDATE users SET timezone = ?, kosync_enabled = ?, koplugin_enabled = ? WHERE id = ?`),
-		timezone, kosyncEnabled, kopluginEnabled, userID)
+		`UPDATE users SET timezone = ?, kosync_enabled = ?, koplugin_enabled = ?,
+		        reader_prompt_template = ? WHERE id = ?`),
+		tzOrUTC(settings.Timezone), settings.KosyncEnabled,
+		settings.KopluginEnabled, settings.ReaderPromptTemplate, userID)
 	if err != nil {
 		return err
 	}

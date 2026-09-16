@@ -221,8 +221,10 @@ func testRollupsRejectForeignAccountTimezone(t *testing.T, open OpenFunc) {
 		ActiveSeconds: 300, Pages: 0.25 * 462, ProgDelta: 0.25, SessionCount: 1,
 		MeasuredActiveSeconds: 300, MeasuredProgDelta: 0.25,
 	}
-	if err := s.UpdateUserSettings(ctx, user.ID, "America/New_York",
-		user.KosyncEnabled, user.KopluginEnabled); err != nil {
+	if err := s.UpdateUserSettings(ctx, user.ID, store.UserSettings{
+		Timezone: "America/New_York", KosyncEnabled: user.KosyncEnabled,
+		KopluginEnabled: user.KopluginEnabled,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup},

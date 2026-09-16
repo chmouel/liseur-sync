@@ -24,6 +24,12 @@ const sessions = process.env.SMOKE_SESSIONS === '1';
 // blob URL rather than a blank frame or a direct (nonexistent) archive
 // URL, and that the SVG page's embedded script never ran.
 const svg = process.env.SMOKE_SVG === '1';
+// Prompt mode (ADR-0045): the account keeps a template, so the top bar
+// has a button that copies a filled-in prompt about the selected
+// passage. Watches that it appears only with a selection, that what it
+// copies is substituted from where the reader is, and that a refused
+// clipboard hands the text over in a dialog instead of losing it.
+const promptMode = process.env.SMOKE_PROMPT === '1';
 const liveMode = process.env.SMOKE_LIVE === '1';
 // How many pages the fixture has, counted from the archive by the Go
 // side with Readium's recipe (ADR-0032). The footer has to agree, or the
@@ -248,6 +254,11 @@ if (sessions) {
 }
 if (svg) {
   await svgGuard(evalIn, check);
+  ws.close();
+  await finish(fail.length ? 1 : 0);
+}
+if (promptMode) {
+  await promptGuard(evalIn, check);
   ws.close();
   await finish(fail.length ? 1 : 0);
 }
@@ -2321,6 +2332,130 @@ async function svgGuard(evalIn, check) {
   frame = JSON.parse(await evalIn(frameProbe));
   check('the bitmap spine page renders a decoded image', frame.hasImg && frame.srcIsBlob, JSON.stringify(frame));
   check('the bitmap page has visible dimensions', frame.naturalWidth > 0, String(frame.naturalWidth));
+}
+
+// promptGuard proves ADR-0045's button from the browser's side, which is
+// the only side it has: the template arrives as a data attribute, the
+// selection lives in a frame, the substitution reads the same figures
+// the footer draws, and the copy is a clipboard call a browser is free
+// to refuse. None of that is visible to a Go test.
+//
+// The clipboard is stubbed rather than granted. 127.0.0.1 is a secure
+// context, so `navigator.clipboard` is really there, but whether a
+// headless browser lets an unfocused page write to the real one is not
+// a fact about this reader — and the failure path has to be provoked
+// deliberately anyway.
+async function promptGuard(evalIn, check) {
+  const state = `JSON.stringify((() => {
+    const button = document.getElementById('reader-prompt-copy');
+    const dialog = document.getElementById('reader-prompt-fallback');
+    const box = button ? button.getBoundingClientRect() : { width: 0 };
+    return {
+      present: !!button,
+      hidden: !button || button.hidden,
+      drawn: box.width > 0,
+      status: document.getElementById('reader-status')?.textContent ?? '',
+      copied: window.__copied ?? null,
+      dialogOpen: !!dialog?.open,
+      dialogText: document.getElementById('reader-prompt-fallback-text')?.value ?? '',
+      page: document.getElementById('reader-page')?.textContent ?? '',
+    };
+  })())`;
+
+  // Selecting a run of text inside the chapter is what a reader does
+  // with a finger or a mouse; the engine's frame is where it lands.
+  const select = `(() => {
+    const view = document.querySelector('readium-view');
+    const doc = view.renderer.getContents()[0].doc;
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    let node = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.textContent.trim().length > 30) {
+        node = walker.currentNode;
+        break;
+      }
+    }
+    if (!node) return '';
+    const range = doc.createRange();
+    const start = node.textContent.indexOf(node.textContent.trim()[0]);
+    range.setStart(node, start);
+    range.setEnd(node, start + 30);
+    const selection = doc.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  })()`;
+  const clear = `(() => {
+    const view = document.querySelector('readium-view');
+    view.renderer.getContents()[0].doc.getSelection().removeAllRanges();
+    return true;
+  })()`;
+
+  let now = JSON.parse(await evalIn(state));
+  check('the prompt button is on the page', now.present, JSON.stringify(now));
+  check('a reader who has selected nothing is offered nothing',
+    now.hidden && !now.drawn, JSON.stringify(now));
+
+  await evalIn(`(() => {
+    window.__copied = null;
+    window.__refuse = false;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (text) => {
+        if (window.__refuse) throw new Error('denied');
+        window.__copied = text;
+      } },
+    });
+    return true;
+  })()`);
+
+  const selected = await evalIn(select);
+  check('the fixture has a passage to select', selected.length > 0, selected);
+  await waitFor("!document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to appear with a selection');
+  now = JSON.parse(await evalIn(state));
+  check('a selected passage reveals the button', !now.hidden && now.drawn,
+    JSON.stringify(now));
+
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("typeof window.__copied === 'string'", 'the prompt to be copied');
+  now = JSON.parse(await evalIn(state));
+  check('the copy says so on the status line', now.status === 'Prompt copied.', now.status);
+  check('the prompt quotes the selected passage',
+    now.copied.includes(selected.trim()), now.copied);
+  check('the prompt names the book', now.copied.includes('Moby-Dick'), now.copied);
+  check('the prompt carries a percentage', /\b\d+% in\b/.test(now.copied), now.copied);
+  check('no placeholder survives unsubstituted',
+    !/\{(title|author|series|chapter|page|pages|percent|text)\}/.test(now.copied),
+    now.copied);
+  // The footer and the prompt are two readings of one location: a page
+  // the prompt names must be the page the reader is looking at.
+  const footer = now.page.match(/(\d+)\s*(?:of|\/)\s*(\d+)/);
+  if (footer) {
+    check('the prompt names the page the footer names',
+      now.copied.includes(`page ${footer[1]} of ${footer[2]}`),
+      now.page + ' vs ' + now.copied);
+  }
+
+  // A collapsed selection takes the offer away again.
+  await evalIn(clear);
+  await waitFor("document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to go away with the selection');
+
+  // A refused clipboard must not lose the prompt.
+  await evalIn('(() => { window.__refuse = true; window.__copied = null; return true; })()');
+  await evalIn(select);
+  await waitFor("!document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to come back');
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("document.getElementById('reader-prompt-fallback')?.open",
+    'the fallback dialog to open');
+  now = JSON.parse(await evalIn(state));
+  check('a refused clipboard hands the prompt over instead',
+    now.dialogOpen && now.dialogText.includes(selected.trim()),
+    JSON.stringify({ open: now.dialogOpen, text: now.dialogText }));
+  check('nothing reached the clipboard when it was refused',
+    now.copied === null, String(now.copied));
 }
 
 // nanGuard proves the position-jumps fix from the page's own side. The

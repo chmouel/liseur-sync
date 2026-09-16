@@ -215,10 +215,28 @@ type User struct {
 	// active account.
 	DisabledAt *time.Time
 	CreatedAt  time.Time
+	// ReaderPromptTemplate is the prompt the browser reader copies for
+	// a highlighted passage, with {placeholders} the reader fills in.
+	// The server stores it and never interprets it. Empty — which is
+	// what every account starts with — means the reader offers nothing,
+	// so the feature is off until somebody writes one. Only
+	// UpdateUserSettings writes it; creating an account never does.
+	ReaderPromptTemplate string
 }
 
 // Enabled reports whether the account may authenticate at all.
 func (u User) Enabled() bool { return u.DisabledAt == nil }
+
+// UserSettings is everything the account's own settings form writes. It
+// is a struct rather than a parameter list because two strings and two
+// bools in a row is a call somebody eventually gets the wrong way
+// round.
+type UserSettings struct {
+	Timezone             string // IANA; empty becomes UTC
+	KosyncEnabled        bool
+	KopluginEnabled      bool
+	ReaderPromptTemplate string
+}
 
 // AdminCounts is the whole aggregate state the admin panel reports:
 // integers and timestamps, no identifying strings (ADR-0013). It is one
@@ -1821,7 +1839,7 @@ type Store interface {
 	DeleteWork(ctx context.Context, userID, workID string) error
 
 	// User settings.
-	UpdateUserSettings(ctx context.Context, userID, timezone string, kosyncEnabled, kopluginEnabled bool) error
+	UpdateUserSettings(ctx context.Context, userID string, settings UserSettings) error
 	// SetUserPassword writes the argon2id hash and revokes the
 	// account's auth sessions — web and login both — in one
 	// transaction, so there is no moment where the password has changed

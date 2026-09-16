@@ -18,6 +18,13 @@ func TestReaderAnnotationReplacement(t *testing.T) {
 	runNodeTests(t, "readerannotations.test.mjs")
 }
 
+// What a prompt template means is decided here rather than in a
+// browser: it is the account's own prose, and the rules about leaving
+// an unknown brace alone are the whole of the feature's behaviour.
+func TestReaderPromptSubstitution(t *testing.T) {
+	runNodeTests(t, "readerprompt.test.mjs")
+}
+
 func TestOfflinePublicationStorageCore(t *testing.T) {
 	runNodeTests(t, "offline-storage.test.mjs")
 }
