@@ -96,9 +96,9 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 					<textarea name="reader_prompt" rows="9" maxlength={ readerPromptMaxLength() } id="reader-prompt-template" spellcheck="true">{ u.User.ReaderPromptTemplate }</textarea>
 				</label>
 				<p class="muted">
-					Placeholders: { readerPromptPlaceholders }. One this book cannot
-					answer is left blank; anything else in braces is kept as you
-					wrote it.
+					Placeholders: { readerPromptPlaceholders }. A placeholder this
+					book has no answer for is left blank; anything else in braces
+					is kept as you wrote it.
 				</p>
 				<button
 					type="button"

@@ -577,9 +577,25 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, a st
 			false, "", false)
 		return
 	}
+	// A NUL byte only ever arrives from a hand-crafted request (the
+	// textarea cannot produce one) and Postgres refuses it in a TEXT
+	// column, so it is refused here rather than surfacing as a 500.
+	if strings.ContainsRune(prompt, 0) {
+		s.renderSettings(w, r, a, u, settingsProfile, "", "",
+			Flash{Error: "That reader prompt contains a character that cannot be saved."},
+			false, "", false)
+		return
+	}
+	// Trimming only decides whether an all-whitespace prompt counts as
+	// cleared; the text itself is saved exactly as written, including
+	// any leading or trailing spaces the account meant to keep.
+	promptTemplate := prompt
+	if strings.TrimSpace(prompt) == "" {
+		promptTemplate = ""
+	}
 	settings := store.UserSettings{
 		Timezone: tz, KosyncEnabled: kosyncOn, KopluginEnabled: kopluginOn,
-		ReaderPromptTemplate: strings.TrimSpace(prompt),
+		ReaderPromptTemplate: promptTemplate,
 	}
 	if err := s.St.UpdateUserSettings(r.Context(), u.ID, settings); err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
