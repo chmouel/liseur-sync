@@ -15,7 +15,7 @@ func scanUser(row interface{ Scan(...any) error }) (store.User, error) {
 	var u store.User
 	err := row.Scan(&u.ID, &u.Name, &u.Argon2Hash, &u.Timezone,
 		&u.KosyncEnabled, &u.KopluginEnabled, &u.IsAdmin, &u.DisabledAt,
-		&u.CreatedAt)
+		&u.CreatedAt, &u.ReaderPromptTemplate)
 	return u, err
 }
 
@@ -56,7 +56,7 @@ func (s *Store) CreateUser(ctx context.Context, u store.User) error {
 func (s *Store) UserByName(ctx context.Context, name string) (store.User, error) {
 	u, err := scanUser(s.db.QueryRowContext(ctx, q(
 		`SELECT id, name, argon2_hash, timezone, kosync_enabled, koplugin_enabled,
-		        is_admin, disabled_at, created_at
+		        is_admin, disabled_at, created_at, reader_prompt_template
 		 FROM users WHERE name = ?`), name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, store.ErrNotFound
@@ -67,7 +67,7 @@ func (s *Store) UserByName(ctx context.Context, name string) (store.User, error)
 func (s *Store) UserByID(ctx context.Context, userID string) (store.User, error) {
 	u, err := scanUser(s.db.QueryRowContext(ctx, q(
 		`SELECT id, name, argon2_hash, timezone, kosync_enabled, koplugin_enabled,
-		        is_admin, disabled_at, created_at
+		        is_admin, disabled_at, created_at, reader_prompt_template
 		 FROM users WHERE id = ?`), userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, store.ErrNotFound
@@ -389,7 +389,7 @@ func (s *Store) UserIDs(ctx context.Context) ([]string, error) {
 func (s *Store) ListUsers(ctx context.Context) ([]store.User, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, argon2_hash, timezone, kosync_enabled, koplugin_enabled,
-		        is_admin, disabled_at, created_at
+		        is_admin, disabled_at, created_at, reader_prompt_template
 		 FROM users ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -415,7 +415,7 @@ func (s *Store) ListUsersPage(ctx context.Context, afterName string, limit int) 
 	}
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT id, name, argon2_hash, timezone, kosync_enabled, koplugin_enabled,
-		        is_admin, disabled_at, created_at
+		        is_admin, disabled_at, created_at, reader_prompt_template
 		 FROM users WHERE name > ? ORDER BY name LIMIT ?`), afterName, limit)
 	if err != nil {
 		return nil, err

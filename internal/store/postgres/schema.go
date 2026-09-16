@@ -666,11 +666,18 @@ CREATE INDEX IF NOT EXISTS sessions_rollup_page
     WHERE source_key IS NULL;
 `
 
+// readerPromptTemplate holds the prompt the browser reader copies to
+// the clipboard for a highlighted passage, for the reason the SQLite
+// copy gives.
+const readerPromptTemplate = `
+ALTER TABLE users ADD COLUMN reader_prompt_template TEXT NOT NULL DEFAULT '';
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
-	rollupOldestPageIndex,
+	rollupOldestPageIndex, readerPromptTemplate,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -686,6 +693,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"statisticsStorage":        statisticsStorage,
 		"comparisonRollupEvidence": comparisonRollupEvidence,
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
+		"readerPromptTemplate":     readerPromptTemplate,
 	}
 	want, ok := named[name]
 	if !ok {

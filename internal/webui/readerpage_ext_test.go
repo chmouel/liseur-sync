@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // TestReaderPageIsolatesThePublication is the security half of
@@ -242,6 +244,51 @@ func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
 		if strings.Contains(page, unwanted) {
 			t.Errorf("the reader page still contains %q", unwanted)
 		}
+	}
+}
+
+// TestReaderPageCarriesTheAccountsPrompt: the copy button's text is the
+// account's, so the page that knows the account carries it and the page
+// that does not carries nothing. The button itself is always in the
+// markup and always starts hidden — it is the template and the
+// selection together that reveal it, and neither is the server's to
+// decide.
+func TestReaderPageCarriesTheAccountsPrompt(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	if !strings.Contains(page, `data-prompt-template=""`) {
+		t.Error("an account with no prompt should carry an empty one")
+	}
+	if !strings.Contains(page, `id="reader-prompt-copy"`) ||
+		!strings.Contains(page, `id="reader-prompt-fallback"`) {
+		t.Error("the reader page is missing the prompt button or its fallback")
+	}
+
+	const prompt = `Reading {title} at {percent}%: "{text}"`
+	if err := f.st.UpdateUserSettings(t.Context(), "u1", store.UserSettings{
+		Timezone: "UTC", ReaderPromptTemplate: prompt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, page = f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	if !strings.Contains(page, `{percent}`) || !strings.Contains(page, "{text}") {
+		t.Error("the reader page does not carry the account's prompt")
+	}
+
+	// The other account's reader is its own: one reader's prompt is
+	// never rendered into another's page.
+	bob := f.login(t, "bob")
+	if _, bobs := f.get(t, "/ui/books/"+bookID+"/read", bob); strings.Contains(bobs, "{percent}") {
+		t.Error("one account's reader prompt reached another account's page")
+	}
+
+	// The offline shell has no account at all, so it carries no prompt
+	// and asks its own cache instead.
+	_, offline := f.get(t, "/ui/offline/read/?book="+bookID, nil)
+	if !strings.Contains(offline, `data-prompt-template=""`) {
+		t.Error("the offline reader shell carries a prompt it cannot have")
 	}
 }
 

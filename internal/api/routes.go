@@ -389,6 +389,11 @@ func (s *Server) Routes() *http.ServeMux {
 		return auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryRead, h))
 	}
+	// The account behind the credential. It is under library-read
+	// because that is what a browser reader token carries and what the
+	// page needs before it can offer the account's reader prompt; it
+	// still answers about the token's own account and nothing else.
+	mux.Handle("GET /v1/me", readH(s.HandleMe))
 	// Collection and member paths are kept apart on purpose. A single
 	// /v1/folders/{folder}/... space cannot also hold /v1/folders/books/{id}:
 	// net/http rejects the pair as ambiguous, because "books" is
