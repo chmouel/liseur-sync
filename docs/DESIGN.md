@@ -338,6 +338,36 @@ convergence or position-feed recovery for work merges and deletions.
 [ADR-0034](adr/0034-live-notifications-say-only-that-something-changed.md)
 defines the wire and lifecycle contract.
 
+### 5.6 Account settings, the deliberate exception
+
+`GET`/`PUT /v1/me/settings` hold a small map of account-wide reader
+preferences — typeface, theme, margins, highlight colours — so setting
+up a second device is not setting everything up again. Keys and values
+are opaque strings the server stores and never interprets.
+
+This is the one place the server picks a winner, and it picks it by
+last-writer-wins, which goal 1 rejects for positions. The reasons
+positions need a log do not apply: a setting has no history worth
+keeping, no three-way merge to perform, and no cost to being wrong
+beyond the reader changing it back. A log here would be ceremony.
+
+`updated_at` is supplied by the client and is *when the reader changed
+the setting*, never when the request was sent. Stamping `now()` on
+arrival would order an edit made offline by when the device next found
+a network, which is exactly the failure ADR-0032 records for imported
+reading. Trusting a client's clock needs a bound, so a timestamp more
+than 24 hours ahead is refused with `time_in_future`, the same
+allowance `POST /v1/ops` gives `client_ts`; without it one bad clock
+would pin a key permanently, since there is no delete route.
+
+The upsert is conditional and a losing write is silently not stored, so
+both operations answer with the **merged** state and that response is
+part of the write's contract, not a convenience. Caps are 256 keys per
+account, 128 bytes per key and 4 KiB per value, enforced inside the
+transaction. `docs/integrating.md` states what a client must do with
+the merged reply; Liseur's side is in
+[its ADR-0034](https://github.com/chmouel/liseur/blob/main/docs/adr/0034-settings-travel-by-when-they-were-changed.md).
+
 ## 6. Reading statistics
 
 ### 6.1 Sessions are facts, not derived state
@@ -784,6 +814,7 @@ series_name_overrides       series_id, scope_user, name, normalized_name,
 series_bindings             id, folder_id?, name, normalized_name,
                             series_id, created_at, created_by
 user_book_works    user_id, folder_id, book_id, work_id
+user_settings      user_id, key, value, updated_at
 ```
 
 `series`, `contributors` and `tags` are library-wide: they are keyed by

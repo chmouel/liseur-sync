@@ -38,6 +38,8 @@ This allows the server to resolve updates from multiple devices without an older
 
 Book identity is independent of its filesystem path. Clients can resolve books using content and metadata identifiers, including hashes, before exchanging reading state.
 
+Reader preferences — typeface, theme, margins and the like — sync too, as a small map of opaque strings per account, so a second device does not have to be set up from scratch. Unlike positions, these resolve by last-writer-wins on the time the reader made the change.
+
 ## Library
 
 `liseur-sync` can index either:
