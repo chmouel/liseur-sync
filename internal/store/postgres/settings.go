@@ -93,7 +93,11 @@ func checkSettingsQuota(ctx context.Context, tx *sql.Tx, userID string, settings
 			added++
 		}
 	}
-	if existing+added > maxPerAccount {
+	// Only a request that adds a key can be over the limit. An account
+	// already above it — because an operator lowered the cap — must
+	// still be able to replace what it has, or every key it holds is
+	// frozen with no delete route to get back under.
+	if added > 0 && existing+added > maxPerAccount {
 		return store.ErrQuotaExceeded
 	}
 	return nil
