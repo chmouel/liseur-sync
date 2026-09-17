@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,8 +39,13 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		Settings map[string]struct {
-			Value     string `json:"value"`
-			UpdatedAt string `json:"updated_at"`
+			// RawMessage rather than string: an absent value is
+			// deliberately the empty one, but an explicit null is a
+			// client sending something it should not, and decoding
+			// straight into a string makes the two indistinguishable
+			// while quietly clearing a preference.
+			Value     json.RawMessage `json:"value"`
+			UpdatedAt string          `json:"updated_at"`
 		} `json:"settings"`
 	}
 	max := s.Cfg.Ops.MaxBodyBytes
@@ -52,10 +58,24 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Map iteration order is random, so without this two overlapping
+	// requests can reach the same rows in opposite orders.
+	keys := make([]string, 0, len(body.Settings))
+	for key := range body.Settings {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	now := time.Now()
 	settings := make([]store.UserSetting, 0, len(body.Settings))
-	for key, v := range body.Settings {
-		if err := s.checkSettingKey(key, v.Value); err != nil {
+	for _, key := range keys {
+		v := body.Settings[key]
+		value, err := settingValue(v.Value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error()+" for key "+key)
+			return
+		}
+		if err := s.checkSettingKey(key, value); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -72,9 +92,14 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		settings = append(settings, store.UserSetting{
-			Key:       key,
-			Value:     v.Value,
-			UpdatedAt: t,
+			Key:   key,
+			Value: value,
+			// Truncated here rather than left to the backend. Postgres
+			// TIMESTAMPTZ holds microseconds and SQLite holds whatever
+			// text it is given, so without this the same request means
+			// two different things on the two backends, and the finer
+			// one promises a precision the other cannot keep.
+			UpdatedAt: t.Truncate(time.Microsecond),
 		})
 	}
 
@@ -120,6 +145,25 @@ func (s *Server) settingsSnapshot(ctx context.Context, userID string) (map[strin
 		}
 	}
 	return out, nil
+}
+
+// settingValue reads a setting's value, telling an omitted field apart
+// from an explicit null. Omitted means the empty string, which is a
+// legitimate value a client may want to store. Null is not part of the
+// wire format, and accepting it would let a malformed request clear a
+// preference while answering 200.
+func settingValue(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	if string(raw) == "null" {
+		return "", errors.New("settings value may not be null")
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", errors.New("settings value must be a string")
+	}
+	return value, nil
 }
 
 func (s *Server) checkSettingKey(key, value string) error {

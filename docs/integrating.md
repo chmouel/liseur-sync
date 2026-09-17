@@ -487,15 +487,22 @@ is absent from the response was not stored; record nothing and offer it
 again.
 
 Both responses carry every stored key, with `updated_at` in RFC3339 to
-nanosecond precision. Echo it back unchanged: truncating the fraction
+microsecond precision. Echo it back unchanged: truncating the fraction
 produces a timestamp strictly older than the stored one, which the
-`>` comparison then refuses forever.
+`>` comparison then refuses forever. A timestamp sent with more
+precision than that is rounded down before it is stored, because one
+backend keeps microseconds and the other keeps nanoseconds, and a
+promise only one of them can keep is not a promise.
 
 Treat a value you do not recognise as a value you leave alone. An older
 build that coerces a newer build's font name into its own default will
 push that default back over the reader's choice, and the two devices
 will then fight. Store what you understand, ignore the rest, and record
 nothing for it.
+
+An omitted `value` means the empty string, but an explicit `null` is
+refused with `400`: clearing a preference should be something a client
+asked for, not something its serialiser did.
 
 There is no delete and no null. A client that needs "explicitly unset"
 as distinct from "never chosen" — Liseur's typography has six such

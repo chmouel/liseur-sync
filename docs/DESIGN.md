@@ -364,7 +364,15 @@ The upsert is conditional and a losing write is silently not stored, so
 both operations answer with the **merged** state and that response is
 part of the write's contract, not a convenience. Caps are 256 keys per
 account, 128 bytes per key and 4 KiB per value, enforced inside the
-transaction. `docs/integrating.md` states what a client must do with
+transaction, and the transaction takes the account's own row first so
+two requests arriving together cannot each count the keys, each find
+room, and each write. Locking the account rather than the rows also
+fixes one order for every request, which is what stops two batches
+naming the same keys in different orders from waiting on each other.
+
+Timestamps are stored to microsecond precision, which is the coarser of
+the two backends, so a client that echoes back what it was given is
+never told its own value is stale. `docs/integrating.md` states what a client must do with
 the merged reply; Liseur's side is in
 [its ADR-0034](https://github.com/chmouel/liseur/blob/main/docs/adr/0034-settings-travel-by-when-they-were-changed.md).
 

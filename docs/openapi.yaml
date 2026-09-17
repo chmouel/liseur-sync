@@ -3717,16 +3717,20 @@ components:
           default: ""
           description: |
             Opaque value; the server never interprets it. Absent on the
-            way in is the same as an empty string. There is no delete, so
-            a client that needs to represent "unset" does it with a value
-            of its own choosing.
+            way in is the same as an empty string, but an explicit JSON
+            null is refused, since a client that meant to send nothing
+            and a client whose serialiser dropped a value should not
+            silently clear a preference. There is no delete, so a client
+            that needs to represent "unset" does it with a value of its
+            own choosing.
         updated_at:
           type: string
           format: date-time
           description: |
             When this key was last written, used for last-writer-wins.
-            Sent as RFC 3339; returned with a nanosecond fraction, so a
-            client can echo back exactly what it was given.
+            Sent as RFC 3339 and stored to microsecond precision, so a
+            client can echo back exactly what it was given. Anything
+            finer is rounded down on the way in.
     AnnotationResult:
       type: object
       properties:
