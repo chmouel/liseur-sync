@@ -449,6 +449,68 @@ will be seen by Liseur as a device that keeps moving backwards. The
 behaviour is written out, against Kindle Whispersync as the yardstick,
 in [Liseur's ADR-0023](https://github.com/chmouel/liseur/blob/main/docs/adr/0023-position-sync-versus-whispersync.md).
 
+## Settings
+
+`GET /v1/me/settings` and `PUT /v1/me/settings` hold a small map of
+account-wide preferences, so a reader setting up a second device finds
+their typeface, theme and margins already there. Keys and values are
+opaque strings; the server stores them and never interprets them. Both
+need the `sync` scope.
+
+```http
+PUT /v1/me/settings
+Authorization: Bearer <token>
+
+{"settings": {
+  "reader.font": {"value": "literata", "updated_at": "2026-02-08T09:14:02.481Z"},
+  "reader.theme": {"value": "sepia",    "updated_at": "2026-02-07T21:03:55.117Z"}
+}}
+```
+
+`updated_at` is **when the reader changed the setting**, not when you
+are sending it. This is the whole contract: the upsert keeps whichever
+side is newer, so a change made on a plane on Monday still beats an
+untouched device that syncs on Tuesday. Stamping the moment of the
+request instead turns that into last-*arriver*-wins and loses the edit.
+A timestamp more than 24 hours ahead of the server's clock is refused
+with `time_in_future`, since a key pinned by a bad clock could never be
+moved again and there is no delete route.
+
+**A `PUT` answers `200` whether your value won or lost, and the body is
+the merged state — that is the only way to tell.** Record *both* halves
+of each returned entry as your new baseline, and where the returned
+value differs from what you sent, the server's is the one to apply
+locally. Recording the value you sent against the timestamp that came
+back invents a pair neither side holds, after which neither looks newer
+than the other and the key stays diverged for good. A key you sent that
+is absent from the response was not stored; record nothing and offer it
+again.
+
+Both responses carry every stored key, with `updated_at` in RFC3339 to
+nanosecond precision. Echo it back unchanged: truncating the fraction
+produces a timestamp strictly older than the stored one, which the
+`>` comparison then refuses forever.
+
+Treat a value you do not recognise as a value you leave alone. An older
+build that coerces a newer build's font name into its own default will
+push that default back over the reader's choice, and the two devices
+will then fight. Store what you understand, ignore the rest, and record
+nothing for it.
+
+There is no delete and no null. A client that needs "explicitly unset"
+as distinct from "never chosen" — Liseur's typography has six such
+settings, where unset means *use the publisher's* — should send a
+sentinel value of its own choosing.
+
+Limits are 256 keys per account, 128 bytes per key and 4 KiB per value;
+exceeding the account cap is a `409`. A key must not be empty, and
+neither a key nor a value may contain a NUL byte, which Postgres cannot
+store.
+
+Liseur's side of this, including why a setting is held back while a book
+is open, is in
+[ADR-0034](https://github.com/chmouel/liseur/blob/main/docs/adr/0034-settings-travel-by-when-they-were-changed.md).
+
 ## Live notifications
 
 `GET /v1/events` opens a bearer-authenticated SSE stream under the same
@@ -1400,6 +1462,8 @@ round-trips verbatim to kosync pulls.
   [Pushing](#pushing)).
 - Batch limits: 500 ops, 1000 sessions, 500 books per batch resolve, 1
   MiB body, 16 KiB per `locator`.
+- Settings limits: 256 keys per account, 128 bytes per key, 4 KiB per
+  value; the account cap is a `409`.
 - Auth endpoints are rate-limited per
   IP (429 + `Retry-After`).
 - Credential traffic requires HTTPS; on

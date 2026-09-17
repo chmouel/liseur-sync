@@ -238,6 +238,17 @@ type UserSettings struct {
 	ReaderPromptTemplate string
 }
 
+// UserSetting is one key/value pair the client syncs. The server never
+// interprets Value; both sides agree only on Key. UpdatedAt is supplied
+// by the client, because last-writer-wins has to order an edit made
+// offline by when it was made and not by when it arrived — the API
+// bounds how far into the future it may sit.
+type UserSetting struct {
+	Key       string
+	Value     string
+	UpdatedAt time.Time
+}
+
 // AdminCounts is the whole aggregate state the admin panel reports:
 // integers and timestamps, no identifying strings (ADR-0013). It is one
 // round trip because an overview that issues fifteen queries is an
@@ -1840,6 +1851,15 @@ type Store interface {
 
 	// User settings.
 	UpdateUserSettings(ctx context.Context, userID string, settings UserSettings) error
+	GetUserSettings(ctx context.Context, userID string) ([]UserSetting, error)
+	// PutUserSettings upserts each pair, keeping whichever side carries
+	// the newer UpdatedAt. A pair whose timestamp is not newer than the
+	// stored one is dropped, so a caller must read the result back
+	// rather than assume its write landed. maxPerAccount bounds the
+	// account's whole key set and is checked inside the transaction,
+	// which is the only place the count cannot race; exceeding it
+	// returns ErrQuotaExceeded and writes nothing.
+	PutUserSettings(ctx context.Context, userID string, settings []UserSetting, maxPerAccount int) error
 	// SetUserPassword writes the argon2id hash and revokes the
 	// account's auth sessions — web and login both — in one
 	// transaction, so there is no moment where the password has changed

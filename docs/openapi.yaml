@@ -448,6 +448,90 @@ paths:
                     type: string
                     description: Empty when the account has not written one.
 
+  /v1/me/settings:
+    get:
+      tags: [sync]
+      summary: Read the account's synced settings
+      security: [{ deviceToken: [] }]  # requires sync scope
+      description: |
+        Returns every key/value pair the account has stored. The server
+        treats keys and values as opaque strings; which keys exist and
+        what values mean is the client's business.
+      responses:
+        "200":
+          description: The settings map (empty object when none are stored)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings]
+                properties:
+                  settings:
+                    type: object
+                    additionalProperties:
+                      $ref: "#/components/schemas/SettingEntry"
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [sync]
+      summary: Upsert synced settings (last-writer-wins)
+      security: [{ deviceToken: [] }]  # requires sync scope
+      description: |
+        Each key in the request is upserted only when the supplied
+        `updated_at` is strictly newer than what the server holds for
+        that key; a stale write is silently dropped. Keys not mentioned
+        are untouched — this is a partial update, not a replace.
+
+        The response is the merged result: every key the account holds
+        after the upsert, not just the ones sent. A dropped write is not
+        an error, so a client must compare the response against what it
+        sent rather than read `200` as "my value was stored".
+
+        `updated_at` is supplied by the client, because last-writer-wins
+        has to order an edit made offline by when it was made and not by
+        when it arrived. It may not sit more than 24 hours ahead of the
+        server's clock: without that bound a single write stamped far in
+        the future would pin the key forever, and there is no delete.
+
+        Refused with `400`: an empty `settings` map, an absent or
+        unparseable `updated_at`, one more than 24 hours ahead
+        (`code: time_in_future`), an empty key, a key or value over
+        `ops.settings_max_key_bytes` / `ops.settings_max_value_bytes`,
+        and a NUL byte in either. Refused with `409` when the account
+        already holds `ops.settings_max_per_account` keys and the
+        request would add another; nothing is stored in that case.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: object
+                  additionalProperties:
+                    $ref: "#/components/schemas/SettingEntry"
+      responses:
+        "200":
+          description: The merged settings map after the upsert
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings]
+                properties:
+                  settings:
+                    type: object
+                    additionalProperties:
+                      $ref: "#/components/schemas/SettingEntry"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+
   /v1/works/resolve:
     post:
       tags: [identity]
@@ -3624,6 +3708,25 @@ components:
         updated_at: { type: string, format: date-time }
         deleted: { type: boolean }
         deleted_at: { type: string, format: date-time }
+    SettingEntry:
+      type: object
+      required: [updated_at]
+      properties:
+        value:
+          type: string
+          default: ""
+          description: |
+            Opaque value; the server never interprets it. Absent on the
+            way in is the same as an empty string. There is no delete, so
+            a client that needs to represent "unset" does it with a value
+            of its own choosing.
+        updated_at:
+          type: string
+          format: date-time
+          description: |
+            When this key was last written, used for last-writer-wins.
+            Sent as RFC 3339; returned with a nanosecond fraction, so a
+            client can echo back exactly what it was given.
     AnnotationResult:
       type: object
       properties:

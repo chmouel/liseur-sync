@@ -1061,6 +1061,16 @@ const readerPromptTemplate = `
 ALTER TABLE users ADD COLUMN reader_prompt_template TEXT NOT NULL DEFAULT '';
 `
 
+const userSettingsTable = `
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1068,6 +1078,7 @@ var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
 	statsRevisionUpsertSafe, rollupOldestPageIndex, readerPromptTemplate,
+	userSettingsTable,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1085,6 +1096,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"statsRevisionUpsertSafe":  statsRevisionUpsertSafe,
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
 		"readerPromptTemplate":     readerPromptTemplate,
+		"userSettingsTable":        userSettingsTable,
 	}
 	want, ok := named[name]
 	if !ok {

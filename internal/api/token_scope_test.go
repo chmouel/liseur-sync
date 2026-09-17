@@ -169,6 +169,9 @@ var registeredRouteGates = map[string]routeGate{
 	"DELETE /v1/annotations/{id}":    gateSync,
 	"GET /v1/works/{id}/annotations": gateSync,
 
+	"GET /v1/me/settings": gateSync,
+	"PUT /v1/me/settings": gateSync,
+
 	"GET /v1/insights/summary":      gateInsights,
 	"GET /v1/insights/works":        gateInsights,
 	"GET /v1/insights/works/{id}":   gateInsights,

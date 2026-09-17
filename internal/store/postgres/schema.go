@@ -673,11 +673,21 @@ const readerPromptTemplate = `
 ALTER TABLE users ADD COLUMN reader_prompt_template TEXT NOT NULL DEFAULT '';
 `
 
+const userSettingsTable = `
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
-	rollupOldestPageIndex, readerPromptTemplate,
+	rollupOldestPageIndex, readerPromptTemplate, userSettingsTable,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -694,6 +704,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"comparisonRollupEvidence": comparisonRollupEvidence,
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
 		"readerPromptTemplate":     readerPromptTemplate,
+		"userSettingsTable":        userSettingsTable,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -296,6 +296,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
 	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })
 	t.Run("InferredSessionIdentity", func(t *testing.T) { testInferredSessionIdentity(t, open) })
+	t.Run("UserSettings", func(t *testing.T) { testUserSettings(t, open) })
 }
 
 func Ptr[T any](v T) *T { return &v }

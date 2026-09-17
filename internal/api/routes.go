@@ -355,6 +355,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/annotations/changes", syncH(s.HandleAnnotationChanges))
 	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))
 	mux.Handle("GET /v1/works/{id}/annotations", syncH(s.HandleWorkAnnotations))
+	mux.Handle("GET /v1/me/settings", syncH(s.HandleGetSettings))
+	mux.Handle("PUT /v1/me/settings", syncH(s.HandlePutSettings))
 
 	// Live notifications (ADR-0034). Authenticated like every other
 	// route, then filtered by topic rather than gated on one scope: the
