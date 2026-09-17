@@ -34,6 +34,18 @@ func (s *Store) PutUserSettings(ctx context.Context, userID string, settings []s
 		return err
 	}
 	defer tx.Rollback()
+	// Take the account's row first, so two requests for the same
+	// account cannot both count the settings, both find room, and both
+	// commit. READ COMMITTED lets each transaction see the other's
+	// rows only after it has already decided, so counting inside a
+	// transaction is not by itself enough. Locking here also gives
+	// every writer for this account one order to work in, which is what
+	// keeps two overlapping multi-key upserts from taking the same rows
+	// in opposite orders and deadlocking one of them into a 500.
+	if _, err := tx.ExecContext(ctx, q(
+		`SELECT 1 FROM users WHERE id = ? FOR UPDATE`), userID); err != nil {
+		return err
+	}
 	// Counting inside the transaction is the only place the answer
 	// cannot go stale between the check and the insert. Keys already
 	// present are replacements, not growth, so only the genuinely new
