@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -49,7 +50,15 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 		} `json:"settings"`
 	}
 	max := s.Cfg.Ops.MaxBodyBytes
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, max)).Decode(&body); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, max))
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	// Decode stops at the end of the first value, so without this a
+	// second document, trailing rubbish, or padding past the body limit
+	// would be stored and answered 200 as if the request were clean.
+	if _, err := dec.Token(); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
