@@ -249,3 +249,123 @@ func TestSettingsNonUTCOffsetNormalises(t *testing.T) {
 		t.Fatalf("same instant in another zone overwrote: %v", v)
 	}
 }
+
+// TestSettingsRejectsNullValue pins the difference between a value that
+// was left out, which is the empty string, and one sent as null, which
+// is not part of the wire format. Decoding null straight into a string
+// yields "" without an error, so without this a malformed client clears
+// a preference and is told it succeeded.
+func TestSettingsRejectsNullValue(t *testing.T) {
+	f := newFolderFixture(t)
+	url := f.ts.URL + "/v1/me/settings"
+
+	code, _ := putJSONReq(t, url, f.token,
+		`{"settings":{"k":{"value":"chosen","updated_at":"2026-06-01T12:00:00Z"}}}`)
+	if code != http.StatusOK {
+		t.Fatalf("seed: %d", code)
+	}
+
+	code, body := putJSONReq(t, url, f.token,
+		`{"settings":{"k":{"value":null,"updated_at":"2026-06-02T12:00:00Z"}}}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("null value accepted: %d %v", code, body)
+	}
+
+	code, body = getJSON(t, url, f.token)
+	if code != http.StatusOK {
+		t.Fatalf("get: %d", code)
+	}
+	if v := body["settings"].(map[string]any)["k"].(map[string]any)["value"]; v != "chosen" {
+		t.Fatalf("null cleared the value: %v", v)
+	}
+
+	// A value left out entirely is still the empty string.
+	code, body = putJSONReq(t, url, f.token,
+		`{"settings":{"empty":{"updated_at":"2026-06-02T12:00:00Z"}}}`)
+	if code != http.StatusOK {
+		t.Fatalf("absent value refused: %d %v", code, body)
+	}
+	if v := body["settings"].(map[string]any)["empty"].(map[string]any)["value"]; v != "" {
+		t.Fatalf("absent value not empty: %v", v)
+	}
+
+	// A value of the wrong type is a client fault, not an empty string.
+	code, body = putJSONReq(t, url, f.token,
+		`{"settings":{"n":{"value":12,"updated_at":"2026-06-02T12:00:00Z"}}}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("numeric value accepted: %d %v", code, body)
+	}
+}
+
+// TestSettingsTimestampPrecisionIsMicroseconds pins the precision both
+// backends can actually keep. PostgreSQL's TIMESTAMPTZ holds
+// microseconds while SQLite holds whatever text it is handed, so a
+// nanosecond kept on one and dropped on the other would make the same
+// request mean two different things.
+func TestSettingsTimestampPrecisionIsMicroseconds(t *testing.T) {
+	f := newFolderFixture(t)
+	url := f.ts.URL + "/v1/me/settings"
+
+	code, body := putJSONReq(t, url, f.token,
+		`{"settings":{"k":{"value":"a","updated_at":"2026-06-01T12:00:00.123456789Z"}}}`)
+	if code != http.StatusOK {
+		t.Fatalf("put: %d %v", code, body)
+	}
+	got := body["settings"].(map[string]any)["k"].(map[string]any)["updated_at"].(string)
+	parsed, err := time.Parse(time.RFC3339Nano, got)
+	if err != nil {
+		t.Fatalf("unparseable updated_at %q: %v", got, err)
+	}
+	want := time.Date(2026, 6, 1, 12, 0, 0, 123456000, time.UTC)
+	if !parsed.Equal(want) {
+		t.Fatalf("not truncated to microseconds: got %s, want %s",
+			got, want.Format(time.RFC3339Nano))
+	}
+
+	// Two writes inside one microsecond are the same instant, so the
+	// second does not win. Saying otherwise would promise an ordering
+	// the store cannot hold.
+	code, body = putJSONReq(t, url, f.token,
+		`{"settings":{"k":{"value":"b","updated_at":"2026-06-01T12:00:00.123456999Z"}}}`)
+	if code != http.StatusOK {
+		t.Fatalf("put: %d %v", code, body)
+	}
+	if v := body["settings"].(map[string]any)["k"].(map[string]any)["value"]; v != "a" {
+		t.Fatalf("sub-microsecond difference counted as newer: %v", v)
+	}
+}
+
+// TestSettingsBatchOrderIsDeterministic checks the rows of one request
+// are always taken in the same order. Go map iteration is random, so
+// without sorting two overlapping requests can reach the same rows in
+// opposite orders, which PostgreSQL resolves by aborting one of them.
+func TestSettingsBatchOrderIsDeterministic(t *testing.T) {
+	f := newFolderFixture(t)
+	url := f.ts.URL + "/v1/me/settings"
+
+	// An invalid key placed among valid ones: whichever key is refused
+	// first names itself in the error, so a stable error over many runs
+	// is a stable order.
+	const putBody = `{"settings":{
+		"a":{"value":"1","updated_at":"2026-06-01T12:00:00Z"},
+		"b":{"value":"2","updated_at":"not-a-time"},
+		"c":{"value":"3","updated_at":"also-not-a-time"}
+	}}`
+	first := ""
+	for i := 0; i < 20; i++ {
+		code, body := putJSONReq(t, url, f.token, putBody)
+		if code != http.StatusBadRequest {
+			t.Fatalf("put: %d %v", code, body)
+		}
+		got, _ := body["error"].(string)
+		if first == "" {
+			first = got
+		}
+		if got != first {
+			t.Fatalf("order varies between requests: %q then %q", first, got)
+		}
+	}
+	if !strings.Contains(first, "key b") {
+		t.Fatalf("keys not taken in sorted order: %q", first)
+	}
+}
