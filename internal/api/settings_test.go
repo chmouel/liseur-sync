@@ -389,3 +389,22 @@ func TestSettingsRejectsOversizedBatch(t *testing.T) {
 		t.Fatalf("want 400 for a batch larger than the account cap, got %d %v", code, body)
 	}
 }
+
+func TestSettingsRejectsTrailingContent(t *testing.T) {
+	f := newFolderFixture(t)
+
+	put := `{"settings":{"reader.font":{"value":"literata","updated_at":"2026-06-01T12:00:00Z"}}}{"settings":{}}`
+	code, body := putJSONReq(t, f.ts.URL+"/v1/me/settings", f.token, put)
+	if code != http.StatusBadRequest {
+		t.Fatalf("want 400 for a body with a second document, got %d %v", code, body)
+	}
+
+	// And nothing was stored on the way to refusing it.
+	code, body = getJSON(t, f.ts.URL+"/v1/me/settings", f.token)
+	if code != http.StatusOK {
+		t.Fatalf("get: %d %v", code, body)
+	}
+	if settings := body["settings"].(map[string]any); len(settings) != 0 {
+		t.Fatalf("a refused request stored something: %v", settings)
+	}
+}
