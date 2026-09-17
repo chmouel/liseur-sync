@@ -57,6 +57,14 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "no settings provided")
 		return
 	}
+	// Refused before the store is opened, not inside it. More keys than
+	// an account may hold can never succeed, and letting the request
+	// through means probing every one of them while holding the
+	// account's lock, which is a cheap way to stall that account.
+	if len(body.Settings) > s.Cfg.Ops.SettingsMaxPerAccount {
+		writeError(w, http.StatusBadRequest, "too many settings in one request")
+		return
+	}
 
 	// Map iteration order is random, so without this two overlapping
 	// requests can reach the same rows in opposite orders.
