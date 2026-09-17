@@ -113,6 +113,18 @@ type Config struct {
 		AnnotationMaxBodyBytes    int `toml:"annotation_max_body_bytes"`    // default 16 KiB
 		AnnotationMaxPerWork      int `toml:"annotation_max_per_work"`      // default 2000
 		AnnotationRetentionDays   int `toml:"annotation_retention_days"`    // default 180
+
+		// Settings bounds. A settings key is opaque to the server, so
+		// nothing here reads a value; these only stop one account's
+		// key/value store from growing without limit. The wire format
+		// has no delete — a client represents "unset" as a value — so
+		// nothing ever reclaims a key, and the per-account cap is the
+		// only thing standing between a buggy client and unbounded
+		// rows. Enforced inside the write transaction, as
+		// AnnotationMaxPerWork is.
+		SettingsMaxPerAccount int `toml:"settings_max_per_account"` // default 256
+		SettingsMaxKeyBytes   int `toml:"settings_max_key_bytes"`   // default 128
+		SettingsMaxValueBytes int `toml:"settings_max_value_bytes"` // default 4 KiB
 	} `toml:"ops"`
 
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
@@ -161,6 +173,9 @@ func Default() Config {
 	c.Ops.AnnotationMaxBodyBytes = 16 << 10
 	c.Ops.AnnotationMaxPerWork = 2000
 	c.Ops.AnnotationRetentionDays = 180
+	c.Ops.SettingsMaxPerAccount = 256
+	c.Ops.SettingsMaxKeyBytes = 128
+	c.Ops.SettingsMaxValueBytes = 4 << 10
 	c.PairingCodeTTLMin = 15
 	c.WebSessionTTLDays = 180
 	return c
@@ -267,6 +282,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Ops.AnnotationRetentionDays < 1 {
 		return fmt.Errorf("ops.annotation_retention_days must be >= 1")
+	}
+	if c.Ops.SettingsMaxPerAccount < 1 {
+		return fmt.Errorf("ops.settings_max_per_account must be >= 1")
+	}
+	if c.Ops.SettingsMaxKeyBytes < 1 {
+		return fmt.Errorf("ops.settings_max_key_bytes must be >= 1")
+	}
+	if c.Ops.SettingsMaxValueBytes < 1 {
+		return fmt.Errorf("ops.settings_max_value_bytes must be >= 1")
 	}
 	if c.Ops.InferenceGapMin < 1 {
 		return fmt.Errorf("ops.inference_gap_min must be >= 1")
