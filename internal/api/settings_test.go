@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -367,5 +368,24 @@ func TestSettingsBatchOrderIsDeterministic(t *testing.T) {
 	}
 	if !strings.Contains(first, "key b") {
 		t.Fatalf("keys not taken in sorted order: %q", first)
+	}
+}
+
+func TestSettingsRejectsOversizedBatch(t *testing.T) {
+	f := newFolderFixture(t)
+
+	var b strings.Builder
+	b.WriteString(`{"settings":{`)
+	for i := 0; i <= f.srv.Cfg.Ops.SettingsMaxPerAccount; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `"k%d":{"value":"v","updated_at":"2026-06-01T12:00:00Z"}`, i)
+	}
+	b.WriteString(`}}`)
+
+	code, body := putJSONReq(t, f.ts.URL+"/v1/me/settings", f.token, b.String())
+	if code != http.StatusBadRequest {
+		t.Fatalf("want 400 for a batch larger than the account cap, got %d %v", code, body)
 	}
 }
