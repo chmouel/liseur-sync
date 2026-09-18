@@ -2349,12 +2349,18 @@ async function promptGuard(evalIn, check) {
   const state = `JSON.stringify((() => {
     const button = document.getElementById('reader-prompt-copy');
     const dialog = document.getElementById('reader-prompt-fallback');
+    const statusNode = document.getElementById('reader-status');
     const box = button ? button.getBoundingClientRect() : { width: 0 };
     return {
       present: !!button,
       hidden: !button || button.hidden,
       drawn: box.width > 0,
-      status: document.getElementById('reader-status')?.textContent ?? '',
+      status: statusNode?.textContent ?? '',
+      toast: !!statusNode?.classList.contains('toast'),
+      toastAtTopRight: statusNode && (() => {
+        const style = getComputedStyle(statusNode);
+        return style.top === '16px' && style.right === '16px' && style.left === 'auto';
+      })(),
       copied: window.__copied ?? null,
       dialogOpen: !!dialog?.open,
       dialogText: document.getElementById('reader-prompt-fallback-text')?.value ?? '',
@@ -2421,6 +2427,17 @@ async function promptGuard(evalIn, check) {
   await waitFor("typeof window.__copied === 'string'", 'the prompt to be copied');
   now = JSON.parse(await evalIn(state));
   check('the copy says so on the status line', now.status === 'Prompt copied.', now.status);
+  check('the copy confirmation is a top-right toast', now.toast && now.toastAtTopRight,
+    JSON.stringify(now));
+  await evalIn("document.getElementById('reader-status').click()");
+  await waitFor("document.getElementById('reader-status').hidden",
+    'the copy confirmation to dismiss when clicked');
+
+  await evalIn('(() => { window.__copied = null; return true; })()');
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("typeof window.__copied === 'string'", 'the prompt to be copied again');
+  await waitFor("document.getElementById('reader-status').hidden",
+    'the copy confirmation to disappear');
   check('the prompt quotes the selected passage',
     now.copied.includes(selected.trim()), now.copied);
   check('the prompt names the book', now.copied.includes('Moby-Dick'), now.copied);
