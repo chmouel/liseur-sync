@@ -1373,6 +1373,7 @@ button.linkish:hover, button.linkish:focus-visible {
   background:var(--surface);border:1px solid var(--line);border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .reader-status.problem{color:var(--danger);opacity:1}
+.reader-status.toast{top:1rem;right:1rem;left:auto;transform:none;pointer-events:auto;cursor:pointer}
 .reader-annotation-actions{position:fixed;z-index:55;left:50%;bottom:4.5rem;
   transform:translateX(-50%);display:flex;gap:.35rem;padding:.45rem;
   border:1px solid var(--line);border-radius:10px;background:var(--surface);

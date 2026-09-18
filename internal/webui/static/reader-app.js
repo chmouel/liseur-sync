@@ -201,12 +201,22 @@ const offlinePartition = cfg.detached ? null : storagePartition();
 const offlineBase = cfg.offline ? deploymentPrefix() : "";
 let readingCoordinator = null;
 let sendTimer = null;
+let statusTimer = null;
 
-function say(message, isError) {
+function say(message, isError, duration) {
+  clearTimeout(statusTimer);
   status.textContent = message;
   status.classList.toggle("problem", !!isError);
+  status.classList.toggle("toast", !!duration);
   status.hidden = !message;
+  if (duration) {
+    statusTimer = setTimeout(() => say(""), duration);
+  }
 }
+
+status.addEventListener("click", () => {
+  if (status.classList.contains("toast")) say("");
+});
 
 // ------------------------------------------- refused reading changes
 
@@ -1781,7 +1791,7 @@ async function copyPrompt() {
   try {
     if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
     await navigator.clipboard.writeText(prompt);
-    say("Prompt copied.");
+    say("Prompt copied.", false, 2000);
   } catch (error) {
     // Over plain HTTP there is no clipboard to write to, and a browser
     // may refuse the write anywhere. The prompt is still worth having,
