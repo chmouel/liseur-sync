@@ -204,19 +204,16 @@ templ readerPage(v ReaderView, csrf string) {
 							<button type="button" id="reader-settings-reset">Reset to defaults</button>
 						</form>
 					</details>
-					// The prompt button (see static/reader-prompt.js). It is
-					// hidden until two things are true at once: the account
-					// keeps a prompt, and there is a passage selected to put
-					// in it. Neither is true for an account that has never
-					// written one, so this bar looks exactly as it did
-					// before the feature existed.
+					// The prompt button (see static/reader-prompt.js) is
+					// hidden client-side when the account has no prompt.
+					// With a prompt configured it remains available even
+					// before the reader selects a passage.
 					<button
 						type="button"
 						id="reader-prompt-copy"
 						class="reader-icon-btn reader-prompt-btn"
 						title="Copy a prompt about this passage"
 						aria-label="Copy a prompt about this passage"
-						hidden
 					>
 						<svg
 							width="16"

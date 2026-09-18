@@ -250,9 +250,7 @@ func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
 // TestReaderPageCarriesTheAccountsPrompt: the copy button's text is the
 // account's, so the page that knows the account carries it and the page
 // that does not carries nothing. The button itself is always in the
-// markup and always starts hidden — it is the template and the
-// selection together that reveal it, and neither is the server's to
-// decide.
+// markup; the client reveals it when the account has a template.
 func TestReaderPageCarriesTheAccountsPrompt(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))

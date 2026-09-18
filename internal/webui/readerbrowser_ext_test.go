@@ -388,8 +388,8 @@ func TestReaderCopiesAPromptInARealBrowser(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", browserTestEPUB(t))
 
-	// alice writes a prompt; without one there is no button to press,
-	// which is the feature being off.
+	// alice writes a prompt, which makes the button available even before
+	// the reader selects a passage.
 	if err := f.st.UpdateUserSettings(t.Context(), "u1", store.UserSettings{
 		Timezone: "UTC",
 		ReaderPromptTemplate: "I am reading {title} by {author}, {chapter}, " +
