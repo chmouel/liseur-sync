@@ -1598,11 +1598,10 @@ addNoteButton?.addEventListener("click", () => {
 
 // ---------------------------------------------------- reading prompt
 //
-// The account keeps a prompt about a highlighted passage (see
+// The account keeps a prompt about the page in front of it (see
 // reader-prompt.js), and this is the button that fills it in and puts
-// it on the clipboard. Two things have to be true before it appears at
-// all: the account wrote a prompt, and something is selected. An
-// account that never wrote one never sees a new control.
+// it on the clipboard. An account that wrote a prompt sees the control;
+// a selection, when present, replaces the page's short fallback excerpt.
 //
 // Where the prompt comes from depends on where this page is served. The
 // same-origin page carries it in its config, because the server knew
@@ -1742,9 +1741,18 @@ function forgetPromptSelectionOutside(location) {
 
 function updatePromptButton() {
   if (!promptButton) return;
-  const offer = !!promptTemplate && !!promptSelection;
+  const offer = !!promptTemplate;
   if (offer && promptButton.hidden) revealChrome();
   promptButton.hidden = !offer;
+}
+
+function promptPageText() {
+  const contents = view?.renderer?.getContents?.() || [];
+  const text = contents
+    .map(({ doc }) => doc?.body?.textContent || "")
+    .join(" ")
+    .trim();
+  return text ? text.split(/\s+/).slice(0, 10).join(" ") : "";
 }
 
 // promptValues is where the reader is, in the words the template uses.
@@ -1763,12 +1771,12 @@ function promptValues() {
     percent: finite(location.fraction)
       ? String(Math.round(location.fraction * 100))
       : "",
-    text: promptSelection?.text || "",
+    text: promptSelection?.text || promptPageText(),
   };
 }
 
 async function copyPrompt() {
-  if (!promptTemplate || !promptSelection) return;
+  if (!promptTemplate) return;
   const prompt = fillPrompt(promptTemplate, promptValues());
   try {
     if (!navigator.clipboard?.writeText) throw new Error("no clipboard");

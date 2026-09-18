@@ -2393,8 +2393,8 @@ async function promptGuard(evalIn, check) {
 
   let now = JSON.parse(await evalIn(state));
   check('the prompt button is on the page', now.present, JSON.stringify(now));
-  check('a reader who has selected nothing is offered nothing',
-    now.hidden && !now.drawn, JSON.stringify(now));
+  check('a configured prompt is offered before a selection',
+    !now.hidden && now.drawn, JSON.stringify(now));
 
   await evalIn(`(() => {
     window.__copied = null;
@@ -2437,10 +2437,17 @@ async function promptGuard(evalIn, check) {
       now.page + ' vs ' + now.copied);
   }
 
-  // A collapsed selection takes the offer away again.
+  // A collapsed selection keeps the button available and falls back to
+  // the first words of the currently displayed page.
   await evalIn(clear);
-  await waitFor("document.getElementById('reader-prompt-copy').hidden",
-    'the prompt button to go away with the selection');
+  await waitFor("!document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to remain available without a selection');
+  await evalIn('(() => { window.__refuse = false; window.__copied = null; return true; })()');
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("typeof window.__copied === 'string'", 'the fallback prompt to be copied');
+  now = JSON.parse(await evalIn(state));
+  check('the fallback prompt contains page text',
+    now.copied.includes('It was the best of times'), now.copied);
 
   // A refused clipboard must not lose the prompt.
   await evalIn('(() => { window.__refuse = true; window.__copied = null; return true; })()');

@@ -33,10 +33,10 @@ interprets that text.**
   with a text box that would then be either ignored or secretly
   authoritative. A reader who has nothing to say gets a reader that
   looks exactly as it does today.
-- **No selection, no button.** The prompt is *about a passage*; without
-  one there is nothing to copy. The button is also absent for the same
-  reason it is absent with no template — the bar is quiet until there is
-  something to press.
+- **A configured template keeps the button available.** A selection is
+  preferred when one exists. Without one, the reader uses the first ten
+  words of the currently displayed page as the `{text}` value, so the
+  button remains useful before a passage is highlighted.
 - **`{placeholders}`, substituted in the browser.** `{title}`,
   `{author}`, `{series}`, `{chapter}`, `{page}`, `{pages}`, `{percent}`
   and `{text}`. A known placeholder with nothing behind it becomes an
@@ -109,3 +109,5 @@ the feature; they just press one more key.
       shell.
 - [x] Browser coverage of the button's appearance and its fallback
       dialog, run opt-in with `LISEUR_CHROME`.
+- [ ] Browser coverage of copying the first ten words when no passage is
+      selected, while preserving the selected-passage path.
