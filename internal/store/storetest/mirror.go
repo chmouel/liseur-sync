@@ -161,6 +161,53 @@ func testMirrorCandidatesAreScopedToTheAccount(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testMirrorCandidatesRefuseAmbiguousFingerprints covers ADR-0047's
+// explicit collision rule: a fingerprint matching two catalog books
+// mirrors neither. The aliases table only guarantees one alias row per
+// fingerprint, not that the catalog agrees on which book it names, so
+// the candidate query has to check the catalog itself.
+func testMirrorCandidatesRefuseAmbiguousFingerprints(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "mirror-ambiguous")
+	w := MkWork(t, s, u, "w1", "sha-w1")
+	mirrorOp(t, s, u, w.ID, "sha-w1", "op-1", "phone", 0.3)
+
+	// A work with no catalog book at all still mirrors: the ambiguity
+	// this guard refuses is specifically two active catalog books
+	// sharing a fingerprint, not the absence of one.
+	got, err := s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].WorkID != w.ID {
+		t.Fatalf("candidate missing before any catalog book exists: %+v", got)
+	}
+
+	// Two active catalog books observed with the same KOReader
+	// fingerprint (a real collision KOReader itself accepts, per
+	// ADR-0046).
+	folder := MkFolder(t, s, "ambiguous-mirror", store.FolderPlain)
+	now := time.Now().UTC()
+	const shared = "md5-w1"
+	if _, err := s.ReconcileFolder(ctx, folder.ID, []store.ObservedBook{
+		{RelativePath: "one.epub", SizeBytes: 10, MTime: now,
+			ContentSHA256: "sha-one", PartialMD5: shared, Title: "One"},
+		{RelativePath: "two.epub", SizeBytes: 10, MTime: now,
+			ContentSHA256: "sha-two", PartialMD5: shared, Title: "Two"},
+	}, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("an ambiguous fingerprint was offered as a candidate: %+v", got)
+	}
+}
+
 // testMirrorCursors covers the bookkeeping: what has already crossed,
 // per work and per peer.
 func testMirrorCursors(t *testing.T, open OpenFunc) {

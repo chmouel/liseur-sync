@@ -10,6 +10,7 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -40,6 +41,16 @@ type Server struct {
 	// backend is spoken to over HTTP, so r.TLS is nil even though the
 	// browser is on HTTPS.
 	Cfg config.Config
+	// ConfigPath is the startup TOML file used by the admin mirror form.
+	ConfigPath string
+	// mirrorMu guards mirrorSaved, the mirror settings the admin form
+	// last wrote. Cfg is read by every request goroutine and is never
+	// written after startup, so a save records what it wrote here
+	// instead: the form then shows the file's contents rather than the
+	// values this process booted with. The running mirror still reads
+	// its settings only at startup, which is what the page says.
+	mirrorMu    sync.RWMutex
+	mirrorSaved *config.MirrorConfig
 	// Downloads delegates the content server's byte-handling to the
 	// API's implementation. It is an interface rather than a concrete
 	// server so that this package keeps depending on nothing but the
@@ -359,6 +370,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/entities/series/{entity}/unbind",
 		sec(s.requireAuth(s.handleSeriesUnbind)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
+	mux.Handle("POST /ui/admin/mirror", sec(s.requireAdmin(s.handleSaveMirror)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))
 	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))

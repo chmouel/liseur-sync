@@ -31,6 +31,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("MirrorCandidatesAreScopedToTheAccount", func(t *testing.T) {
 		testMirrorCandidatesAreScopedToTheAccount(t, open)
 	})
+	t.Run("MirrorCandidatesRefuseAmbiguousFingerprints", func(t *testing.T) {
+		testMirrorCandidatesRefuseAmbiguousFingerprints(t, open)
+	})
 	t.Run("MirrorCursors", func(t *testing.T) { testMirrorCursors(t, open) })
 	t.Run("MirrorCursorsAreScopedToPeerAndAccount", func(t *testing.T) {
 		testMirrorCursorsAreScopedToPeerAndAccount(t, open)

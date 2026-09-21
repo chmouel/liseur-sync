@@ -24,6 +24,8 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		    AND o.seq = (SELECT MAX(seq) FROM ops m
 		                  WHERE m.user_id = a.user_id AND m.work_id = a.work_id)
 		    AND o.received_at >= ?
+		    AND (SELECT COUNT(*) FROM books b
+		          WHERE b.partial_md5 = a.value AND b.status = 'active') <= 1
 		  ORDER BY o.seq DESC
 		  LIMIT ?`),
 		userID, "partial-md5", since.UTC(), limit)

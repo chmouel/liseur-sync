@@ -135,6 +135,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminOverview), "Overview", v.Admin.View == settingsAdminOverview)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminUsers), "Users", v.Admin.View == settingsAdminUsers || v.Admin.View == settingsAdminUser)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminFolders), "Folders", v.Admin.View == settingsAdminFolders)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMirror), "Mirror", v.Admin.View == settingsAdminMirror)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMaintenance), "Maintenance", v.Admin.View == settingsAdminMaintenance)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
@@ -143,6 +144,8 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Flash)
 	} else if v.Admin.View == settingsAdminUser && v.Admin.HasUser {
 		@adminUserBody(prefix, csrf, v.Admin.User, v.Flash)
+	} else if v.Admin.View == settingsAdminMirror {
+		@adminMirrorBody(prefix, csrf, v.Admin.Mirror, v.Flash)
 	} else if v.Admin.View == settingsAdminMaintenance {
 		@adminMaintenanceBody(prefix, v.Admin.Maintenance, v.Flash)
 	} else {
