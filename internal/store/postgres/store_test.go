@@ -43,10 +43,11 @@ func reset(t *testing.T, s *Store) {
 		"series_name_overrides", "series_bindings", "book_series", "series",
 		"book_identifiers", "user_book_works", "user_folders",
 		"books", "folders",
+		"mirror_cursors",
 		"session_supersessions", "session_tombstones", "session_rollups_v2", "session_rollups", "sessions", "ops", "annotations", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "stats_revisions", "kosync_devices",
 		"koplugin_devices", "pairing_codes", "invites", "auth_sessions",
-		"token_scopes", "tokens", "users", "schema_migrations",
+		"token_scopes", "tokens", "user_settings", "users", "schema_migrations",
 	}
 	for _, tbl := range tables {
 		if _, err := s.db.ExecContext(context.Background(),

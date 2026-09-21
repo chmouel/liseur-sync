@@ -134,6 +134,72 @@ type Config struct {
 	// the expiry back to now + this, so an account somebody reads with
 	// never gets signed out, and one left alone lapses. Default 180.
 	WebSessionTTLDays int `toml:"web_session_ttl_days"`
+
+	// Mirror configures outbound synchronisation with a peer server
+	// that speaks KOReader's sync protocol (ADR-0047). Disabled by
+	// default, and the only part of this server that dials out.
+	Mirror MirrorConfig `toml:"mirror"`
+}
+
+// MirrorConfig is one peer this server mirrors reading to and from.
+// There is exactly one, for exactly one account: the credential lives
+// here rather than in a table because a secret this server must
+// *present* cannot be hashed, and a single account makes configuration
+// the honest place to keep it (ADR-0047). It is never logged and never
+// appears in a response.
+type MirrorConfig struct {
+	Enabled bool `toml:"enabled"`
+	// Name labels this peer. It is not cosmetic: it keys the mirror's
+	// bookkeeping and prefixes the device id every position taken from
+	// the peer is filed under, so a reader sees where a position came
+	// from. Changing it makes the mirror forget what it has already
+	// exchanged and start filing under a new device, so it is picked
+	// once and left alone.
+	Name string `toml:"name"`
+	// BaseURL is the peer's kosync root, the same URL a KOReader device
+	// would be pointed at. Must be HTTPS unless insecure_http is set,
+	// because the credential travels on every request.
+	BaseURL string `toml:"base_url"`
+	// Account is the liseur-sync username whose reading is mirrored.
+	// The mirror reads and writes nothing outside it.
+	Account string `toml:"account"`
+	// RemoteUser and RemoteKey are the peer's kosync credential: the
+	// username and the MD5-derived key KOReader sends as x-auth-user
+	// and x-auth-key.
+	RemoteUser string `toml:"remote_user"`
+	RemoteKey  string `toml:"remote_key"`
+	// DeviceID is the device name this server writes under on the peer.
+	// It is also how it recognises its own echo coming back, so it must
+	// be stable across restarts.
+	DeviceID string `toml:"device_id"`
+	// PollInterval is how often the peer is asked. It has no push.
+	PollInterval Duration `toml:"poll_interval"`
+	// ActiveDays bounds what is polled: only works read within this
+	// many days are asked about, so the cost does not grow with the
+	// size of the library.
+	ActiveDays int `toml:"active_days"`
+	// Timeout bounds one request to the peer.
+	Timeout Duration `toml:"timeout"`
+}
+
+// Duration is a time.Duration that reads from TOML as a string like
+// "5m". The standard decoder has no duration type and the alternative
+// is a second unit-bearing field name per knob.
+type Duration time.Duration
+
+func (d Duration) Duration() time.Duration { return time.Duration(d) }
+
+func (d *Duration) UnmarshalText(text []byte) error {
+	parsed, err := time.ParseDuration(string(text))
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(d).String()), nil
 }
 
 // WebSessionTTL is the browser session window as a duration.
@@ -178,6 +244,11 @@ func Default() Config {
 	c.Ops.SettingsMaxValueBytes = 4 << 10
 	c.PairingCodeTTLMin = 15
 	c.WebSessionTTLDays = 180
+	c.Mirror.Name = "peer"
+	c.Mirror.DeviceID = "liseur-sync"
+	c.Mirror.PollInterval = Duration(5 * time.Minute)
+	c.Mirror.ActiveDays = 30
+	c.Mirror.Timeout = Duration(20 * time.Second)
 	return c
 }
 
@@ -186,7 +257,15 @@ func Default() Config {
 // LISEUR_CACHE_DIR, LISEUR_INSECURE_HTTP,
 // LISEUR_CORS_ORIGINS (comma-separated), LISEUR_TRUSTED_PROXIES
 // (comma-separated), LISEUR_READER_ORIGIN,
-// LISEUR_FOLDER_ROOTS (comma-separated).
+// LISEUR_FOLDER_ROOTS (comma-separated),
+// LISEUR_MIRROR_ENABLED, LISEUR_MIRROR_NAME, LISEUR_MIRROR_BASE_URL,
+// LISEUR_MIRROR_ACCOUNT,
+// LISEUR_MIRROR_REMOTE_USER, LISEUR_MIRROR_REMOTE_KEY,
+// LISEUR_MIRROR_DEVICE_ID.
+//
+// The mirror's credential is an environment variable on purpose: it
+// belongs beside the database URL in a deployment's .env rather than in
+// a file somebody might commit.
 func (c *Config) applyEnv() {
 	setStr := func(dst *string, key string) {
 		if v, ok := os.LookupEnv(key); ok {
@@ -220,6 +299,14 @@ func (c *Config) applyEnv() {
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
 	setList(&c.Content.FolderRoots, "LISEUR_FOLDER_ROOTS")
+
+	setBool(&c.Mirror.Enabled, "LISEUR_MIRROR_ENABLED")
+	setStr(&c.Mirror.Name, "LISEUR_MIRROR_NAME")
+	setStr(&c.Mirror.BaseURL, "LISEUR_MIRROR_BASE_URL")
+	setStr(&c.Mirror.Account, "LISEUR_MIRROR_ACCOUNT")
+	setStr(&c.Mirror.RemoteUser, "LISEUR_MIRROR_REMOTE_USER")
+	setStr(&c.Mirror.RemoteKey, "LISEUR_MIRROR_REMOTE_KEY")
+	setStr(&c.Mirror.DeviceID, "LISEUR_MIRROR_DEVICE_ID")
 }
 
 // Validate checks the config is coherent.
@@ -307,6 +394,72 @@ func (c *Config) Validate() error {
 	}
 	if c.WebSessionTTLDays < 1 || c.WebSessionTTLDays > 3650 {
 		return fmt.Errorf("web_session_ttl_days must be between 1 and 3650")
+	}
+	if err := c.validateMirror(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateMirror refuses a half-configured mirror rather than starting
+// one that will fail on its first request. A mirror missing any of its
+// four required settings is a deployment mistake, not a degraded mode
+// (ADR-0047).
+func (c *Config) validateMirror() error {
+	m := &c.Mirror
+	m.Name = strings.TrimSpace(m.Name)
+	m.BaseURL = strings.TrimSpace(m.BaseURL)
+	m.Account = strings.TrimSpace(m.Account)
+	m.RemoteUser = strings.TrimSpace(m.RemoteUser)
+	m.DeviceID = strings.TrimSpace(m.DeviceID)
+	if !m.Enabled {
+		return nil
+	}
+	for _, required := range []struct {
+		name  string
+		value string
+	}{
+		{"mirror.name", m.Name},
+		{"mirror.base_url", m.BaseURL},
+		{"mirror.account", m.Account},
+		{"mirror.remote_user", m.RemoteUser},
+		{"mirror.remote_key", m.RemoteKey},
+		{"mirror.device_id", m.DeviceID},
+	} {
+		if required.value == "" {
+			return fmt.Errorf("%s is required when the mirror is enabled", required.name)
+		}
+	}
+	// The name is joined to a remote device id with a colon to make the
+	// device a reader sees, so a name carrying one would make that id
+	// ambiguous about where it split.
+	if strings.ContainsAny(m.Name, ": \t") {
+		return fmt.Errorf("mirror.name must not contain a colon or whitespace, got %q", m.Name)
+	}
+	u, err := url.Parse(m.BaseURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("mirror.base_url must be an absolute URL")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		// The credential is sent on every request, so this is the same
+		// boundary the inbound adapters hold.
+		if !c.InsecureHTTP {
+			return fmt.Errorf("mirror.base_url must be https unless insecure_http is set")
+		}
+	default:
+		return fmt.Errorf("mirror.base_url must be http or https, got %q", u.Scheme)
+	}
+	m.BaseURL = strings.TrimSuffix(u.String(), "/")
+	if m.PollInterval.Duration() < time.Minute {
+		return fmt.Errorf("mirror.poll_interval must be at least 1m")
+	}
+	if m.ActiveDays < 1 {
+		return fmt.Errorf("mirror.active_days must be >= 1")
+	}
+	if m.Timeout.Duration() < time.Second {
+		return fmt.Errorf("mirror.timeout must be at least 1s")
 	}
 	return nil
 }
