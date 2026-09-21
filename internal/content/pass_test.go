@@ -77,10 +77,12 @@ func (c *fakeCatalog) ReconcileFolder(
 	// no row at all.
 	if complete && len(observed) > 0 {
 		prior := map[int64]store.KnownBook{}
+		priorByPath := map[string]store.KnownBook{}
 		for _, b := range c.known[folderID] {
 			if b.CalibreID != nil {
 				prior[*b.CalibreID] = b
 			}
+			priorByPath[b.RelativePath] = b
 		}
 		books := make([]store.KnownBook, 0, len(observed))
 		for _, o := range observed {
@@ -99,8 +101,11 @@ func (c *fakeCatalog) ReconcileFolder(
 				SizeBytes:     o.SizeBytes,
 				MTime:         o.MTime,
 				ContentSHA256: o.ContentSHA256,
-				CalibreID:     o.CalibreID,
-				Status:        store.BookActive,
+				// Filled where it was absent and never overwritten,
+				// which is the rule the real store enforces.
+				PartialMD5: fingerprintAfter(priorByPath[o.RelativePath].PartialMD5, o.PartialMD5),
+				CalibreID:  o.CalibreID,
+				Status:     store.BookActive,
 			})
 		}
 		c.known[folderID] = books
@@ -116,6 +121,15 @@ func (c *fakeCatalog) snapshot() (int, []store.ObservedBook, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.calls, c.observed, c.complete
+}
+
+// fingerprintAfter applies the store's rule: an observation may supply
+// a fingerprint the catalog lacks and may never replace one it has.
+func fingerprintAfter(existing, observed string) string {
+	if existing != "" {
+		return existing
+	}
+	return observed
 }
 
 // ListFolders and FolderByID make the fake a FolderSource too, so a
@@ -271,8 +285,7 @@ func TestPassReadsWhatIsOnDiskAndIsIdempotent(t *testing.T) {
 }
 
 // TestChangedBytesAtAPathAreANewBook is rule 4: content change is not
-// identity transfer.
-func TestChangedBytesAtAPathAreANewBook(t *testing.T) {
+// identity transfer.func TestChangedBytesAtAPathAreANewBook(t *testing.T) {
 	folder := plainFolder(t)
 	writeBook(t, folder.RootPath, "one.epub", "One")
 	catalog := newFakeCatalog()

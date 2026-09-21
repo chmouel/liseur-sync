@@ -1184,11 +1184,18 @@ button.linkish:hover, button.linkish:focus-visible {
    rule for the hidden attribute: without this the prompt button would
    be permanently on the bar. */
 .reader-icon-btn[hidden]{display:none}
-/* The prompt's fallback dialog is a plain box of text to copy by hand. */
+/* The prompt's fallback dialog is a plain box of text to copy by hand.
+   The text box is capped against the *visible* height (dvh, so a
+   phone's retracting toolbar counts) because a centred modal taller
+   than its viewport grows off both edges at once, and the edge that
+   matters is the one carrying the title. */
 #reader-prompt-fallback textarea{
-  box-sizing:border-box;width:min(60ch,80vw);font:inherit;font-size:.9rem;
+  box-sizing:border-box;width:100%;max-height:40dvh;font:inherit;font-size:.9rem;
   margin:.6rem 0;padding:.5rem;border:1px solid var(--line);border-radius:8px;
   background:var(--surface-2);color:inherit}
+.reader-prompt-fallback-actions{margin-top:.2rem;display:flex;gap:.5rem;
+  justify-content:flex-end;align-items:center}
+.reader-prompt-fallback-actions form{margin:0}
 @media (max-width:32em){
   .reader-bar{gap:.4rem;padding:.4rem .55rem}
   .reader-back-label{display:none}
@@ -1373,7 +1380,10 @@ button.linkish:hover, button.linkish:focus-visible {
   background:var(--surface);border:1px solid var(--line);border-radius:8px;
   box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .reader-status.problem{color:var(--danger);opacity:1}
-.reader-status.toast{top:1rem;right:1rem;left:auto;transform:none;pointer-events:auto;cursor:pointer}
+/* A confirmation is not something to answer, and it is drawn over the
+   middle of the page, where a tap toggles the bars. So it lets that tap
+   through rather than swallowing it on its way out. */
+.reader-status.flash{pointer-events:none}
 .reader-annotation-actions{position:fixed;z-index:55;left:50%;bottom:4.5rem;
   transform:translateX(-50%);display:flex;gap:.35rem;padding:.45rem;
   border:1px solid var(--line);border-radius:10px;background:var(--surface);
@@ -1391,6 +1401,11 @@ button.linkish:hover, button.linkish:focus-visible {
    and the buttons stay where a script (or a test) can reach them. */
 .reader-body[data-reader-chrome="hidden"] .reader-bar{
   opacity:0;transform:translateY(-100%);pointer-events:none}
+/* A dialog owns the screen while it is open. The bar is fixed, blurred
+   and shadowed, so a box that reaches its band reads as hidden behind
+   it even when the dialog paints on top; and a bar nobody can press
+   through a modal backdrop has no reason to be drawn. */
+.reader-body:has(dialog[open]) .reader-bar{opacity:0;pointer-events:none}
 .reader-body[data-reader-chrome="hidden"] .reader-turn{opacity:0;pointer-events:none}
 /* Tab is a way of reaching for the bar like any other. */
 .reader-body[data-reader-chrome="hidden"]:has(.reader-bar:focus-within) .reader-bar{
@@ -1414,7 +1429,10 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-help-note{margin:.9rem 0 0;font-size:.85rem;opacity:.75;max-width:26rem}
 .reader-goto{background:var(--surface);color:inherit;border:1px solid var(--line);
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
-  min-width:18rem;font-size:.9rem}
+  box-sizing:border-box;
+  min-width:min(18rem,calc(100vw - 2rem));max-width:calc(100vw - 2rem);
+  max-height:calc(100dvh - 2rem);overflow:auto;font-size:.9rem}
+#reader-prompt-fallback{width:min(60ch,calc(100vw - 2rem))}
 .reader-goto::backdrop{background:rgba(0,0,0,.55)}
 .reader-goto h2{margin:0 0 .7rem;font-size:1rem}
 .reader-goto-row{display:flex;align-items:center;gap:.5rem;margin:.6rem 0}

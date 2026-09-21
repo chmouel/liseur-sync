@@ -15,7 +15,7 @@ import (
 func (s *Store) BooksInFolder(ctx context.Context, folderID string) ([]store.KnownBook, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, status, relative_path, size_bytes, mtime,
-		        content_sha256, calibre_id, cover_sha256
+		        content_sha256, partial_md5, calibre_id, cover_sha256
 		 FROM books WHERE folder_id = ? ORDER BY relative_path`, folderID)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (s *Store) BooksInFolder(ctx context.Context, folderID string) ([]store.Kno
 			coverSHA  sql.NullString
 		)
 		if err := rows.Scan(&b.ID, &status, &b.RelativePath, &b.SizeBytes,
-			&mtime, &b.ContentSHA256, &calibreID, &coverSHA); err != nil {
+			&mtime, &b.ContentSHA256, &b.PartialMD5, &calibreID, &coverSHA); err != nil {
 			return nil, err
 		}
 		b.Status = store.BookStatus(status)
@@ -396,14 +396,15 @@ func insertBookTx(
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO books (
 			id, folder_id, status,
-			relative_path, size_bytes, mtime, content_sha256,
+			relative_path, size_bytes, mtime, content_sha256, partial_md5,
 			original_filename, media_type, calibre_id,
 			cover_relative_path, cover_sha256,
 			title, subtitle, description, publisher, published_date,
 			created_at, updated_at, seen_at, absent_at)
-		 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		 VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 		bookID, folderID,
 		obs.RelativePath, obs.SizeBytes, formatTime(obs.MTime), obs.ContentSHA256,
+		obs.PartialMD5,
 		obs.OriginalFilename, mediaTypeOf(obs), nullInt64(obs.CalibreID),
 		nullStr(obs.CoverRelativePath), obs.CoverSHA256,
 		obs.Title, obs.Subtitle, obs.Description, obs.Publisher, obs.PublishedDate,
@@ -428,12 +429,14 @@ func updateBookTx(
 		`UPDATE books SET
 			status = 'active',
 			relative_path = ?, size_bytes = ?, mtime = ?, content_sha256 = ?,
+			partial_md5 = ?,
 			original_filename = ?, media_type = ?, calibre_id = ?,
 			cover_relative_path = ?, cover_sha256 = ?,
 			title = ?, subtitle = ?, description = ?, publisher = ?,
 			published_date = ?, seen_at = ?, absent_at = NULL
 		 WHERE id = ? AND folder_id = ?`,
 		obs.RelativePath, obs.SizeBytes, formatTime(obs.MTime), obs.ContentSHA256,
+		obs.PartialMD5,
 		obs.OriginalFilename, mediaTypeOf(obs), nullInt64(obs.CalibreID),
 		nullStr(obs.CoverRelativePath), obs.CoverSHA256,
 		obs.Title, obs.Subtitle, obs.Description, obs.Publisher, obs.PublishedDate,
@@ -971,6 +974,13 @@ func nullInt64(p *int64) sql.NullInt64 {
 // touchBookTx records that an unchanged file was seen. It writes the
 // stat and the status and nothing else, because the pass that produced
 // this observation deliberately did not read the file.
+//
+// The one exception is the KOReader fingerprint, and only when the row
+// has none: it is the column books catalogued before it existed are
+// missing, and a pass recognises those files by their stat and never
+// opens them again, so without this they would stay unfingerprinted
+// forever. It is written where it was absent, never over a value, so
+// the touch still cannot change what the catalog says about a book.
 func touchBookTx(
 	ctx context.Context, tx *sql.Tx, folderID, bookID string,
 	obs store.ObservedBook, at time.Time,
@@ -980,6 +990,14 @@ func touchBookTx(
 		`SELECT status FROM books WHERE id = ? AND folder_id = ?`,
 		bookID, folderID).Scan(&status); err != nil {
 		return false, err
+	}
+	if obs.PartialMD5 != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE books SET partial_md5 = ?
+			 WHERE id = ? AND folder_id = ? AND partial_md5 = ''`,
+			obs.PartialMD5, bookID, folderID); err != nil {
+			return false, err
+		}
 	}
 	returned := store.BookStatus(status) == store.BookMissing
 	// A return is a visible change even though no fact moved, so it is

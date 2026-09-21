@@ -258,7 +258,7 @@ if (svg) {
   await finish(fail.length ? 1 : 0);
 }
 if (promptMode) {
-  await promptGuard(evalIn, check);
+  await promptGuard(evalIn, check, S);
   ws.close();
   await finish(fail.length ? 1 : 0);
 }
@@ -2345,7 +2345,7 @@ async function svgGuard(evalIn, check) {
 // headless browser lets an unfocused page write to the real one is not
 // a fact about this reader — and the failure path has to be provoked
 // deliberately anyway.
-async function promptGuard(evalIn, check) {
+async function promptGuard(evalIn, check, S) {
   const state = `JSON.stringify((() => {
     const button = document.getElementById('reader-prompt-copy');
     const dialog = document.getElementById('reader-prompt-fallback');
@@ -2356,12 +2356,10 @@ async function promptGuard(evalIn, check) {
       hidden: !button || button.hidden,
       drawn: box.width > 0,
       status: statusNode?.textContent ?? '',
-      toast: !!statusNode?.classList.contains('toast'),
-      toastAtTopRight: statusNode && (() => {
-        const style = getComputedStyle(statusNode);
-        return style.top === '16px' && style.right === '16px' && style.left === 'auto';
-      })(),
+      statusHidden: !!statusNode?.hidden,
+      statusEvents: statusNode ? getComputedStyle(statusNode).pointerEvents : '',
       copied: window.__copied ?? null,
+      oldWay: window.__oldWay ?? 0,
       dialogOpen: !!dialog?.open,
       dialogText: document.getElementById('reader-prompt-fallback-text')?.value ?? '',
       page: document.getElementById('reader-page')?.textContent ?? '',
@@ -2405,6 +2403,7 @@ async function promptGuard(evalIn, check) {
   await evalIn(`(() => {
     window.__copied = null;
     window.__refuse = false;
+    window.__oldWay = 0;
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText: async (text) => {
@@ -2412,6 +2411,10 @@ async function promptGuard(evalIn, check) {
         window.__copied = text;
       } },
     });
+    // The reader now tries the old execCommand path before giving up,
+    // and a headless browser may well allow it. A refusal under test
+    // has to be a refusal by every route, or the dialog never opens.
+    document.execCommand = () => { window.__oldWay += 1; return !window.__refuse; };
     return true;
   })()`);
 
@@ -2427,17 +2430,8 @@ async function promptGuard(evalIn, check) {
   await waitFor("typeof window.__copied === 'string'", 'the prompt to be copied');
   now = JSON.parse(await evalIn(state));
   check('the copy says so on the status line', now.status === 'Prompt copied.', now.status);
-  check('the copy confirmation is a top-right toast', now.toast && now.toastAtTopRight,
-    JSON.stringify(now));
-  await evalIn("document.getElementById('reader-status').click()");
-  await waitFor("document.getElementById('reader-status').hidden",
-    'the copy confirmation to dismiss when clicked');
-
-  await evalIn('(() => { window.__copied = null; return true; })()');
-  await evalIn("document.getElementById('reader-prompt-copy').click()");
-  await waitFor("typeof window.__copied === 'string'", 'the prompt to be copied again');
-  await waitFor("document.getElementById('reader-status').hidden",
-    'the copy confirmation to disappear');
+  check('the confirmation does not swallow a tap on the page',
+    now.statusEvents === 'none', now.statusEvents);
   check('the prompt quotes the selected passage',
     now.copied.includes(selected.trim()), now.copied);
   check('the prompt names the book', now.copied.includes('Moby-Dick'), now.copied);
@@ -2464,7 +2458,17 @@ async function promptGuard(evalIn, check) {
   await waitFor("typeof window.__copied === 'string'", 'the fallback prompt to be copied');
   now = JSON.parse(await evalIn(state));
   check('the fallback prompt contains page text',
-    now.copied.includes('It was the best of times'), now.copied);
+    now.copied.includes('A title page, absolutely positioned, the way real publishers ship'),
+    now.copied);
+
+  // A confirmation is not something to answer, and it is drawn over the
+  // middle of the page. It has to take itself away rather than sit there
+  // until the next thing the reader happens to do.
+  await waitFor("document.getElementById('reader-status').hidden",
+    'the copy confirmation to take itself away', 4000);
+  now = JSON.parse(await evalIn(state));
+  check('the copy confirmation takes itself away',
+    now.statusHidden && now.status === '', JSON.stringify(now.status));
 
   // A refused clipboard must not lose the prompt.
   await evalIn('(() => { window.__refuse = true; window.__copied = null; return true; })()');
@@ -2480,6 +2484,67 @@ async function promptGuard(evalIn, check) {
     JSON.stringify({ open: now.dialogOpen, text: now.dialogText }));
   check('nothing reached the clipboard when it was refused',
     now.copied === null, String(now.copied));
+  check('the old copy route was tried before the dialog',
+    now.oldWay > 0, String(now.oldWay));
+
+  // The dialog is a box a reader has to read, and a phone is where it
+  // is read. On a short viewport the box must still be whole and on
+  // screen, and nothing — least of all the fixed bar — may be painted
+  // over its title.
+  await evalIn("document.getElementById('reader-prompt-fallback').close()");
+  await S('Emulation.setDeviceMetricsOverride', {
+    width: 412, height: 380, deviceScaleFactor: 1, mobile: true,
+  });
+  await new Promise((r) => setTimeout(r, 400));
+  await evalIn(select);
+  await waitFor("!document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to come back on a short viewport');
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("document.getElementById('reader-prompt-fallback')?.open",
+    'the fallback dialog to open on a short viewport');
+  // The bar fades rather than vanishing, so a reading taken the instant
+  // the dialog opens is a reading of the transition.
+  await new Promise((r) => setTimeout(r, 400));
+  const fit = JSON.parse(await evalIn(`JSON.stringify((() => {
+    const dialog = document.getElementById('reader-prompt-fallback');
+    const title = document.getElementById('reader-prompt-fallback-title');
+    const box = dialog.getBoundingClientRect();
+    const head = title.getBoundingClientRect();
+    const over = document.elementFromPoint(
+      Math.round(head.left + head.width / 2), Math.round(head.top + head.height / 2));
+    const bar = document.querySelector('.reader-bar');
+    return {
+      top: box.top, bottom: box.bottom, left: box.left, right: box.right,
+      height: window.innerHeight, width: window.innerWidth,
+      titleTop: head.top,
+      overTitle: over ? (dialog.contains(over) ? 'dialog' : over.className || over.tagName) : 'nothing',
+      barOpacity: bar ? getComputedStyle(bar).opacity : '',
+      barEvents: bar ? getComputedStyle(bar).pointerEvents : '',
+      hasOpen: document.body.matches(':has(dialog[open])'),
+      chrome: document.body.dataset.readerChrome || '',
+    };
+  })())`));
+  check('the fallback dialog fits the viewport it is read in',
+    fit.top >= 0 && fit.bottom <= fit.height + 1 &&
+      fit.left >= 0 && fit.right <= fit.width + 1,
+    JSON.stringify(fit));
+  check('nothing is painted over the dialog title',
+    fit.overTitle === 'dialog', JSON.stringify(fit));
+  check('the bar steps aside while the dialog is open',
+    fit.barOpacity === '0' && fit.barEvents === 'none', JSON.stringify(fit));
+
+  // The button inside the dialog is a fresh press in this document,
+  // which is often exactly what the refused write was missing. When it
+  // lands, the dialog has nothing left to say and goes.
+  await evalIn('(() => { window.__refuse = false; window.__copied = null; return true; })()');
+  await evalIn("document.getElementById('reader-prompt-fallback-copy').click()");
+  await waitFor("!document.getElementById('reader-prompt-fallback').open",
+    'the dialog to close once the prompt is copied');
+  now = JSON.parse(await evalIn(state));
+  check('the dialog copies the prompt when asked again',
+    typeof now.copied === 'string' && now.copied.includes(selected.trim()),
+    String(now.copied));
+  await S('Emulation.clearDeviceMetricsOverride');
 }
 
 // nanGuard proves the position-jumps fix from the page's own side. The

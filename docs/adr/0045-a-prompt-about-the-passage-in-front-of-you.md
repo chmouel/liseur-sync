@@ -71,6 +71,32 @@ can be refused anywhere, so a failure opens a dialog with the prompt in
 a textarea, already selected. A reader on `http://nas.local:8080` gets
 the feature; they just press one more key.
 
+One refusal is not an answer, though. The passage is selected inside the
+chapter's own frame, so at the moment of the press the reading page may
+hold neither the selection nor — in Firefox — the focus a clipboard
+write is judged against. So the write is tried, tried again with the
+reading page focused, and then made the old way through `execCommand`
+over a textarea of our own. The dialog is what is left when all three
+are refused.
+
+The dialog is read on a phone, so it is sized for one: capped against
+the visible height (`dvh`, which follows a mobile browser's retracting
+toolbar), scrolling inside itself rather than growing past the edges,
+and carrying its own Copy button — a fresh press in the reading page,
+which is usually what the refused write was missing. A centred modal
+taller than its viewport grows off the top as well as the bottom, and
+the top is where the title is; that, with the reader's fixed bar still
+painted across the same band, is how the box came to look hidden behind
+the chrome on Firefox for Android. The bar now steps aside for any open
+dialog, the same way it steps aside while reading.
+
+"Prompt copied." is the other half of the same thought. It is drawn over
+the middle of the page, where the text is and where a tap toggles the
+bars, and the reader has nothing to answer — so it takes itself away
+after a second and a half and lets a tap through while it is up. The
+status line keeps everything else it says: a message about something
+still wrong stays until that is settled.
+
 ## Consequences
 
 - One column, one route, one static module and one button. No reading
@@ -111,3 +137,10 @@ the feature; they just press one more key.
       dialog, run opt-in with `LISEUR_CHROME`.
 - [ ] Browser coverage of copying the first ten words when no passage is
       selected, while preserving the selected-passage path.
+- [x] Coverage that the fallback dialog fits a short viewport and that
+      nothing is painted over its title, in both engines: the Chromium
+      walk shrinks the viewport before provoking the fallback, and a
+      Firefox check of the same shape runs opt-in with `LISEUR_FIREFOX`,
+      since the report came from Gecko.
+- [x] Coverage that the copy confirmation takes itself away and does not
+      swallow a tap while it is up.

@@ -231,6 +231,36 @@ func TestReaderTitleIsCenteredInTheViewport(t *testing.T) {
 	}
 }
 
+// TestReaderPromptFallbackFitsAPhone: the fallback dialog is a box a
+// reader has to read, so it must fit the height a phone actually shows
+// and the bar must not be drawn across the top of it. Both are settled
+// in the stylesheet, and both were wrong: a ten-row box on a short
+// viewport grew off the top edge, taking its title under the fixed bar.
+func TestReaderPromptFallbackFitsAPhone(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	if !strings.Contains(page, `id="reader-prompt-fallback-copy"`) {
+		t.Error("the fallback dialog has no Copy button of its own")
+	}
+	if strings.Contains(page, `rows="10"`) {
+		t.Error("the fallback text box is still ten rows tall")
+	}
+
+	_, css := f.get(t, "/ui/static/style.css", f.cookie)
+	for _, want := range []string{
+		"max-height:calc(100dvh - 2rem);overflow:auto",
+		"#reader-prompt-fallback{width:min(60ch,calc(100vw - 2rem))}",
+		"max-height:40dvh",
+		`.reader-body:has(dialog[open]) .reader-bar{opacity:0;pointer-events:none}`,
+	} {
+		if !strings.Contains(css, want) {
+			t.Errorf("the fallback dialog is not phone-safe: missing %q", want)
+		}
+	}
+}
+
 func TestReaderPageOmitsAnnotationChrome(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))

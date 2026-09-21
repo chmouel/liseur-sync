@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // findFirefox locates a Firefox to drive. Like Chromium it is not a
@@ -39,6 +41,55 @@ func TestFindFirefoxDoesNotAutoDiscoverInCI(t *testing.T) {
 
 	if got := findFirefox(); got != "" {
 		t.Fatalf("findFirefox() = %q in CI without explicit opt-in, want empty", got)
+	}
+}
+
+// TestReaderPromptFallbackFitsAPhoneInFirefox checks the reported bug in
+// the engine it was reported from: Firefox, a short viewport, the
+// fallback dialog open. The box must fit the height it is read in, and
+// the reader's own bar must not be painted across the top of it.
+// Neither is visible to a Go test, and Chromium agreeing proves nothing
+// about Gecko.
+func TestReaderPromptFallbackFitsAPhoneInFirefox(t *testing.T) {
+	firefox := findFirefox()
+	if firefox == "" {
+		t.Skip("no firefox; set LISEUR_FIREFOX to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", browserTestEPUB(t))
+
+	if err := f.st.UpdateUserSettings(t.Context(), "u1", store.UserSettings{
+		Timezone: "UTC",
+		ReaderPromptTemplate: "I am reading {title} by {author}, {chapter}, " +
+			"{percent}% in. I have highlighted this passage:\n\n\"{text}\"",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, filepath.Join("testdata", "readerfirefox.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_FIREFOX="+firefox,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_PROMPT=1",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("the prompt fallback did not fit a phone in firefox: %v", err)
 	}
 }
 

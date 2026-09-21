@@ -14,7 +14,7 @@ import (
 // book goes through it and through scanCatalogBook, so a column added to
 // the table is added in exactly one place.
 const bookColumns = `b.id, b.folder_id, b.status,
-	b.relative_path, b.size_bytes, b.mtime, b.content_sha256,
+	b.relative_path, b.size_bytes, b.mtime, b.content_sha256, b.partial_md5,
 	b.original_filename, b.media_type, b.calibre_id,
 	b.cover_relative_path, b.cover_sha256,
 	b.title, b.subtitle, b.description, b.publisher, b.published_date,
@@ -30,7 +30,7 @@ func scanCatalogBook(row interface{ Scan(...any) error }) (store.CatalogBook, er
 	)
 	if err := row.Scan(
 		&b.ID, &b.FolderID, &status,
-		&b.RelativePath, &b.SizeBytes, &b.MTime, &b.ContentSHA256,
+		&b.RelativePath, &b.SizeBytes, &b.MTime, &b.ContentSHA256, &b.PartialMD5,
 		&b.OriginalFilename, &b.MediaType, &calibreID,
 		&coverPath, &coverSHA,
 		&b.Title, &b.Subtitle, &b.Description, &b.Publisher, &b.PublishedDate,

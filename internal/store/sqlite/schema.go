@@ -1071,6 +1071,18 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 `
 
+// bookPartialMD5 adds KOReader's document fingerprint beside the
+// publication's SHA-256. It is additive and defaults to empty, so no
+// existing row changes meaning and nothing a deployment could see
+// before becomes invisible: a book without a fingerprint resolves on
+// exactly the evidence it always did. Filling the column for books
+// already catalogued is a backfill, not a migration, because a pass
+// recognises an unchanged file by its stat and never opens it again.
+const bookPartialMD5 = `
+ALTER TABLE books ADD COLUMN partial_md5 TEXT NOT NULL DEFAULT '';
+CREATE INDEX books_partial_md5 ON books(partial_md5) WHERE partial_md5 <> '';
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1079,6 +1091,7 @@ var migrations = []string{
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
 	statsRevisionUpsertSafe, rollupOldestPageIndex, readerPromptTemplate,
 	userSettingsTable,
+	bookPartialMD5,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1097,6 +1110,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
 		"readerPromptTemplate":     readerPromptTemplate,
 		"userSettingsTable":        userSettingsTable,
+		"bookPartialMD5":           bookPartialMD5,
 	}
 	want, ok := named[name]
 	if !ok {

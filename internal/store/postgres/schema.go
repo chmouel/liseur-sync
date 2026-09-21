@@ -683,11 +683,20 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 `
 
+// bookPartialMD5 adds KOReader's document fingerprint beside the
+// publication's SHA-256, for the reason the SQLite copy gives.
+const bookPartialMD5 = `
+ALTER TABLE books ADD COLUMN partial_md5 TEXT NOT NULL DEFAULT '';
+CREATE INDEX books_partial_md5 ON books(partial_md5) WHERE partial_md5 <> '';
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
 	folderBackfill, statisticsStorage, comparisonRollupEvidence,
-	rollupOldestPageIndex, readerPromptTemplate, userSettingsTable,
+	rollupOldestPageIndex, readerPromptTemplate,
+	userSettingsTable,
+	bookPartialMD5,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -705,6 +714,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"rollupOldestPageIndex":    rollupOldestPageIndex,
 		"readerPromptTemplate":     readerPromptTemplate,
 		"userSettingsTable":        userSettingsTable,
+		"bookPartialMD5":           bookPartialMD5,
 	}
 	want, ok := named[name]
 	if !ok {

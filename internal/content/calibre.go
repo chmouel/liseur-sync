@@ -15,6 +15,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/calibre"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 // IsCalibreFolder reports whether a directory is a Calibre library,
@@ -242,6 +243,12 @@ func (r *Reconciler) readCalibreBook(
 	if _, err := io.Copy(digest, opened); err != nil {
 		return store.ObservedBook{}, err
 	}
+	// Read positionally, so it does not disturb the offset the copy
+	// above left behind.
+	fingerprint, err := workident.PartialMD5(opened, info.Size())
+	if err != nil {
+		return store.ObservedBook{}, err
+	}
 
 	calibreID := book.ID
 	obs := store.ObservedBook{
@@ -250,6 +257,7 @@ func (r *Reconciler) readCalibreBook(
 		SizeBytes:        info.Size(),
 		MTime:            info.ModTime().UTC(),
 		ContentSHA256:    hex.EncodeToString(digest.Sum(nil)),
+		PartialMD5:       fingerprint,
 		OriginalFilename: path.Base(relative),
 		MediaType:        "application/epub+zip",
 		Title:            book.Title,

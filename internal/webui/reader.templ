@@ -418,11 +418,16 @@ templ readerPage(v ReaderView, csrf string) {
 			// Where the prompt goes when the clipboard is not available:
 			// a plain-HTTP origin has no navigator.clipboard at all, and
 			// a browser may refuse the write anywhere. The text arrives
-			// selected, so copying it is one keystroke.
+			// selected, so copying it is one keystroke — and the Copy
+			// button here is a fresh press in this document, which is
+			// often exactly what the refused write was missing.
 			<dialog id="reader-prompt-fallback" class="reader-goto" aria-labelledby="reader-prompt-fallback-title">
 				<h2 id="reader-prompt-fallback-title">Copy this prompt</h2>
-				<textarea id="reader-prompt-fallback-text" rows="10" readonly></textarea>
-				<form method="dialog"><button class="btn primary">Close</button></form>
+				<textarea id="reader-prompt-fallback-text" rows="6" readonly></textarea>
+				<div class="reader-prompt-fallback-actions">
+					<button type="button" id="reader-prompt-fallback-copy" class="btn primary">Copy</button>
+					<form method="dialog"><button>Close</button></form>
+				</div>
 			</dialog>
 			// Asked for rather than offered (ADR-0040). Nothing has been
 			// applied by the time this opens: the server's answer has been

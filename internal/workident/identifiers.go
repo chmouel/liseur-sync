@@ -63,6 +63,11 @@ func ForCatalogBook(
 	}
 	if book.Status == store.BookActive {
 		add("sha256", book.ContentSHA256)
+		// The same bytes under the name every KOReader-speaking client
+		// and peer server calls them by. It sits below the SHA-256 on
+		// purpose: it samples twelve kilobytes, so it is evidence and
+		// not proof.
+		add("partial-md5", book.PartialMD5)
 	}
 	for _, id := range ids {
 		add("dc", id.Value)
