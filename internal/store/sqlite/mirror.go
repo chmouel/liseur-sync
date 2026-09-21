@@ -15,11 +15,13 @@ import (
 //
 // The fingerprint comes from the alias graph rather than from the
 // catalog book, because the alias is the value both a KOReader device
-// and a folder pass write, and because its primary key already
-// guarantees one work per fingerprint per reader. A fingerprint that
-// named two works could not be stored in the first place, so the
-// ambiguity this bridge has to refuse is caught before the mirror ever
-// sees it.
+// and a folder pass write. Its primary key guarantees one *alias row*
+// per fingerprint per reader, but not that the catalog has only one
+// book with that fingerprint: a 12-kilobyte KOReader sample can name
+// two different active books, and only one of them holds the alias.
+// The subquery below excludes any fingerprint the catalog itself
+// cannot tell apart, which is the refusal ADR-0047 requires rather
+// than a guess at which book the reader meant.
 func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.Time, limit int) ([]store.MirrorCandidate, error) {
 	if limit < 1 {
 		return nil, nil
@@ -34,6 +36,8 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		    AND o.seq = (SELECT MAX(seq) FROM ops m
 		                  WHERE m.user_id = a.user_id AND m.work_id = a.work_id)
 		    AND o.received_at >= ?
+		    AND (SELECT COUNT(*) FROM books b
+		          WHERE b.partial_md5 = a.value AND b.status = 'active') <= 1
 		  ORDER BY o.seq DESC
 		  LIMIT ?`,
 		userID, "partial-md5", formatTime(since), limit)

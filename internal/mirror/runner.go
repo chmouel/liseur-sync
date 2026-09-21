@@ -135,6 +135,21 @@ func (r *Runner) Run(ctx context.Context) error {
 				continue
 			}
 			syncer = s
+		} else if err := r.checkEnabled(ctx); err != nil {
+			// The syncer was built while the account was active; an
+			// administrator may have disabled it since. Nothing short
+			// of asking again on every pass would notice that, so this
+			// is checked here rather than trusted from build time.
+			// Dropping the cached syncer means the next successful
+			// check goes back through build, and re-authorizes rather
+			// than resuming a client that sat idle mid-outage.
+			syncer = nil
+			if ctx.Err() != nil {
+				log.Info("mirror stopping")
+				return nil
+			}
+			wait = r.failed(log, poll, err)
+			continue
 		}
 
 		now := time.Now().UTC()
@@ -176,12 +191,9 @@ func (r *Runner) Run(ctx context.Context) error {
 // is wrong" in the log at startup instead of leaving it to be inferred
 // from a string of failed passes.
 func (r *Runner) build(ctx context.Context, client *Client) (*Syncer, error) {
-	u, err := r.Store.UserByName(ctx, r.Cfg.Account)
+	u, err := r.account(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("mirror account %q: %w", r.Cfg.Account, err)
-	}
-	if u.DisabledAt != nil {
-		return nil, fmt.Errorf("mirror account %q is disabled", r.Cfg.Account)
+		return nil, err
 	}
 	if err := client.Authorize(ctx); err != nil {
 		return nil, fmt.Errorf("peer credential: %w", err)
@@ -196,6 +208,31 @@ func (r *Runner) build(ctx context.Context, client *Client) (*Syncer, error) {
 		MaxPerPass:   r.MaxPerPass,
 		Log:          r.Log,
 	}, nil
+}
+
+// account resolves the configured account and refuses one that is
+// disabled. build calls it once to construct a syncer; checkEnabled
+// calls it again on every later pass, because an administrator can
+// disable an account after a syncer for it already exists.
+func (r *Runner) account(ctx context.Context) (store.User, error) {
+	u, err := r.Store.UserByName(ctx, r.Cfg.Account)
+	if err != nil {
+		return store.User{}, fmt.Errorf("mirror account %q: %w", r.Cfg.Account, err)
+	}
+	if u.DisabledAt != nil {
+		return store.User{}, fmt.Errorf("mirror account %q is disabled", r.Cfg.Account)
+	}
+	return u, nil
+}
+
+// checkEnabled revalidates the account a cached syncer already holds.
+// It does not touch the peer credential: the peer checks the same two
+// headers on every request regardless, so there is nothing new to
+// authorize here, only the local fact that can change out from under a
+// running mirror.
+func (r *Runner) checkEnabled(ctx context.Context) error {
+	_, err := r.account(ctx)
+	return err
 }
 
 // failed records a failure and says how long to wait. The interval
