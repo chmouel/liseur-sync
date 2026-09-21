@@ -521,6 +521,79 @@ It is safe to re-run and reports what it did. A title-and-author-only
 match still needs confirmation from the reader, because a wrong answer
 would merge reading histories.
 
+## Mirroring reading to another server
+
+If you also run a server that speaks KOReader's sync protocol —
+BookOrbit, a second liseur-sync, stock kosync — liseur-sync can keep
+reading positions in step with it. The reasoning is in
+[ADR-0047](adr/0047-mirroring-reading-to-a-koreader-peer.md); this is
+how to turn it on.
+
+It is off unless configured, and when it is on it covers exactly one
+account.
+
+```toml
+[mirror]
+enabled = true
+name = "orbit"
+base_url = "https://orbit.example.com/api/v1/koreader"
+account = "you"             # the local account whose reading is mirrored
+remote_user = "you"         # the peer's KOReader sync username
+device_id = "liseur-sync"   # how this server names itself on the peer
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+```
+
+The peer's key goes in the environment, not the file:
+
+```
+LISEUR_MIRROR_REMOTE_KEY=<md5 of the peer's KOReader sync password>
+```
+
+It is the same value KOReader sends as `x-auth-key`, which is the MD5
+of the password, not the password. Every other field has a
+`LISEUR_MIRROR_*` equivalent: `LISEUR_MIRROR_ENABLED`,
+`LISEUR_MIRROR_NAME`, `LISEUR_MIRROR_BASE_URL`, `LISEUR_MIRROR_ACCOUNT`,
+`LISEUR_MIRROR_REMOTE_USER`, `LISEUR_MIRROR_DEVICE_ID`.
+
+A half-configured mirror is refused at startup rather than started and
+left to fail quietly. Everything after that is retried instead: a peer
+that is down, a key that has been rotated, an account name that does not
+exist yet. The interval doubles from `poll_interval` up to half an hour
+and resets on the first success, and none of it can stop the server.
+Watch the log for `mirror pass failed`.
+
+### What to expect from it
+
+- **Books are matched by their bytes**, using the fingerprint KOReader
+  computes from twelve kilobytes of a file. Both servers have to be
+  looking at the same file. A book only one of them holds is not
+  mirrored, and nothing is guessed from titles.
+- **Positions cross as percentages.** The exact spot survives inside one
+  system; across the bridge you land on the percentage. There is no way
+  around this — the two readers do not describe a position in the same
+  language, and inventing a translation would put you in the wrong
+  place while looking precise.
+- **Newest wins**, on the timestamp. Reading the same book in both
+  places between two polls means the later of the two is kept.
+- **Positions taken from the peer appear as a device** named
+  `<name>:<their device>`, so a reader can see where a position came
+  from. This is why `name` is picked once and left alone: changing it
+  makes the mirror forget what it has already exchanged and start filing
+  under a new device.
+- **Only recently read books are polled.** `active_days` bounds it, so
+  the cost does not grow with the size of the library. A book you have
+  not opened in a month stops being asked about until you open it again.
+- **A reset on the peer is ignored, not applied.** BookOrbit answers
+  with a synthetic start-of-book position while a reading reset is
+  outstanding. Applying it would send you to page one and keep doing it,
+  so the mirror leaves those replies alone. The cost of the choice is
+  that a reset you actually meant has to be made on this side too.
+
+Reading positions are all it moves today. Finished status, highlights
+and statistics are not mirrored.
+
 ## Configuration
 
 The content block is intentionally small:
@@ -612,6 +685,25 @@ that did nothing from one that did.
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
+
+### Book fingerprints and the mirror, migrations 13 and 14
+
+Migration 13 adds `books.partial_md5`, the fingerprint KOReader computes
+from parts of a file. Migration 14 adds `mirror_cursors`, the
+bookkeeping for the optional mirror described above.
+
+Neither changes what an existing deployment can see, and neither needs
+anything done to it. Existing rows start with no fingerprint and are
+filled in as folder passes see the files again, including files that
+have not changed — so a library fills itself in over the first few
+passes after the upgrade rather than all at once. A book with no
+fingerprint yet is simply a book that KOReader-speaking peers cannot
+name; nothing else about it is affected.
+
+The fingerprint is useful on its own, whether or not a mirror is
+configured. Before it, a KOReader device syncing a book already in the
+catalog created a second, pending work, because the identifier it sent
+matched nothing the server held. Now it resolves onto the catalog book.
 
 ### Reading statistics, migration 7
 

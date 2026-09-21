@@ -24,6 +24,20 @@ const anyReader = ""
 
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
+	t.Run("MirrorCandidates", func(t *testing.T) { testMirrorCandidates(t, open) })
+	t.Run("MirrorCandidatesAreBoundedAndOrdered", func(t *testing.T) {
+		testMirrorCandidatesAreBoundedAndOrdered(t, open)
+	})
+	t.Run("MirrorCandidatesAreScopedToTheAccount", func(t *testing.T) {
+		testMirrorCandidatesAreScopedToTheAccount(t, open)
+	})
+	t.Run("MirrorCursors", func(t *testing.T) { testMirrorCursors(t, open) })
+	t.Run("MirrorCursorsAreScopedToPeerAndAccount", func(t *testing.T) {
+		testMirrorCursorsAreScopedToPeerAndAccount(t, open)
+	})
+	t.Run("MirrorCursorsFollowTheWorkOut", func(t *testing.T) {
+		testMirrorCursorsFollowTheWorkOut(t, open)
+	})
 	t.Run("Notifications", func(t *testing.T) { testNotifications(t, open) })
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("AdminRole", func(t *testing.T) { testAdminRole(t, open) })

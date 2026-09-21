@@ -28,6 +28,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/live"
+	"github.com/chmouel/liseur-sync/internal/mirror"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -225,6 +226,10 @@ func cmdServe(args []string) error {
 	// safety timer; a pass is idempotent and holds no state, so there is
 	// no queue to drain and nothing to recover on restart (ADR-0017).
 	watcher := content.NewWatcher(st, reconciler, slog.Default())
+	// The mirror exchanges reading positions with a peer that speaks
+	// KOReader's protocol (ADR-0047). It is off unless configured, and
+	// when it is on it is scoped to the single account it names.
+	mirrorRunner := &mirror.Runner{Store: st, Cfg: cfg.Mirror, Log: slog.Default()}
 	// The UI delegates downloads, covers and uploads back to the API
 	// server, so the two surfaces share one implementation of the rules
 	// about what a stored file may claim to be, and one about what may
@@ -266,6 +271,14 @@ func cmdServe(args []string) error {
 			errCh <- fmt.Errorf("folder watcher: %w", err)
 		}
 	}()
+	// The mirror is an accessory to this server, not a part of it: it
+	// reports nothing terminal, so it has no place on errCh. A peer
+	// that is down is the peer's problem (ADR-0047).
+	mirrorDone := make(chan struct{})
+	go func() {
+		defer close(mirrorDone)
+		_ = mirrorRunner.Run(bgCtx)
+	}()
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
@@ -296,6 +309,7 @@ func cmdServe(args []string) error {
 	}
 	<-serverDone
 	<-watcherDone
+	<-mirrorDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)
 }
