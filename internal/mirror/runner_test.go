@@ -242,6 +242,56 @@ func TestShutdownDoesNotWaitOutABackoff(t *testing.T) {
 	}
 }
 
+// TestADisabledAccountStopsTheMirrorWithoutARestart. A cached syncer
+// must not keep exporting and importing a reader's positions once an
+// administrator disables the account it belongs to; the fix has to
+// notice on the very next pass, not only at startup.
+func TestADisabledAccountStopsTheMirrorWithoutARestart(t *testing.T) {
+	f := newSyncFixture(t)
+	f.read("op-1", 0.21, time.Now().Add(-time.Hour))
+
+	r := f.runner()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	waitFor(t, "the startup pass", func() bool { return len(f.peer.pushed(t)) == 1 })
+
+	if err := f.st.SetUserDisabled(ctx, f.user.ID, true, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "the disabled account to be noticed", func() bool {
+		return r.Status().Consecutive > 0
+	})
+	if got := r.Status().LastError; !strings.Contains(got, "disabled") {
+		t.Fatalf("last error: %q", got)
+	}
+
+	// Reading on while disabled must not cross the bridge.
+	f.read("op-2", 0.9, time.Now())
+	time.Sleep(50 * time.Millisecond)
+	if got := len(f.peer.pushed(t)); got != 1 {
+		t.Fatalf("a disabled account still pushed: %d positions", got)
+	}
+
+	if err := f.st.SetUserDisabled(ctx, f.user.ID, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the mirror to resume", func() bool { return len(f.peer.pushed(t)) == 2 })
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+}
+
 // TestTheCredentialIsCheckedOnce. The peer checks the same two headers
 // on every request, so authorizing repeatedly would be noise on
 // somebody else's server.

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/buildinfo"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -21,6 +22,7 @@ const (
 	settingsAdminUsers       = "users"
 	settingsAdminUser        = "user"
 	settingsAdminFolders     = "folders"
+	settingsAdminMirror      = "mirror"
 	settingsAdminMaintenance = "maintenance"
 )
 
@@ -92,6 +94,13 @@ type settingsAdminView struct {
 	HasUser bool
 
 	Maintenance maintenanceView
+	Mirror      mirrorView
+}
+
+type mirrorView struct {
+	Config config.MirrorConfig
+	HasKey bool
+	Users  []store.User
 }
 
 type settingsView struct {
@@ -216,7 +225,7 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 	case settingsAdmin:
 		view = r.URL.Query().Get("view")
 		switch view {
-		case settingsAdminUsers, settingsAdminFolders, settingsAdminMaintenance:
+		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror, settingsAdminMaintenance:
 		case settingsAdminUser:
 			userID = r.URL.Query().Get("user")
 			if userID == "" {
@@ -422,6 +431,13 @@ func (s *Server) settingsAdmin(
 			Kinds:  countRows(counts.FoldersByKind, folderKindOrder),
 			Books:  countRows(counts.BooksByStatus, bookStatusOrder),
 		}
+	case settingsAdminMirror:
+		users, err := s.St.ListUsersPage(r.Context(), "", 1000)
+		if err != nil {
+			return err
+		}
+		m := s.mirrorConfig()
+		v.Mirror = mirrorView{Config: m, HasKey: m.RemoteKey != "", Users: users}
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {

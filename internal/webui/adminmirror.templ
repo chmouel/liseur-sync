@@ -1,0 +1,58 @@
+package webui
+
+templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
+	<h2>Mirror reading positions</h2>
+	<p class="muted">
+		Keep one local account's reading position in step with another server
+		that speaks KOReader sync. The peer password is converted to the
+		KOReader key and saved in the configuration file; it is never shown
+		again.
+	</p>
+	@adminFlash(flash)
+	<section class="card">
+		<form method="post" action={ prefix + "admin/mirror" } autocomplete="off">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label class="check">
+				if v.Config.Enabled {
+					<input type="checkbox" name="enabled" checked/>
+				} else {
+					<input type="checkbox" name="enabled"/>
+				}
+				Enable mirroring
+			</label>
+			<label>Peer URL
+				<input name="base_url" type="url" required value={ v.Config.BaseURL } placeholder="https://reader.example/sync"/>
+			</label>
+			<label>Local account
+				<select name="account" required>
+					for _, user := range v.Users {
+						if user.Name == v.Config.Account {
+							<option value={ user.Name } selected>{ user.Name }</option>
+						} else {
+							<option value={ user.Name }>{ user.Name }</option>
+						}
+					}
+				</select>
+			</label>
+			<label>Peer KOReader username
+				<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
+			</label>
+			<label>Peer KOReader password
+				<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
+			</label>
+			<p class="muted">Leave the password blank to keep the saved credential.</p>
+			<label>Peer name
+				<input name="name" required value={ v.Config.Name } placeholder="orbit"/>
+			</label>
+			<label>Device name on peer
+				<input name="device_id" required value={ v.Config.DeviceID } placeholder="liseur-sync"/>
+			</label>
+			<button type="submit" class="primary">Save and test connection</button>
+		</form>
+	</section>
+	<section class="card">
+		<h3>After saving</h3>
+		<p>The configuration file is updated, but the running process reads it only at startup. Restart liseur-sync to start or stop the mirror.</p>
+		<p>Positions cross as percentages. Exact reader locations are not shared between different reader systems.</p>
+	</section>
+}

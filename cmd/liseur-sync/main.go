@@ -235,7 +235,7 @@ func cmdServe(args []string) error {
 	// about what a stored file may claim to be, and one about what may
 	// be written into a watched folder.
 	apiSrv.WebUI = &webui.Server{
-		St: st, Auth: auth.NewService(st), Cfg: cfg,
+		St: st, Auth: auth.NewService(st), Cfg: cfg, ConfigPath: *cfgPath,
 		LoginLimiter: loginLimiter,
 		Downloads:    apiSrv,
 		Covers:       apiSrv,

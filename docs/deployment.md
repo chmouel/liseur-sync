@@ -529,6 +529,13 @@ reading positions in step with it. The reasoning is in
 [ADR-0047](adr/0047-mirroring-reading-to-a-koreader-peer.md); this is
 how to turn it on.
 
+Administrators can configure it from `/ui/settings` → `Administration` →
+`Mirror`: enter the peer URL, choose the local account, enter the peer's
+normal KOReader username and password, and press **Save and test connection**.
+The page derives the MD5 key and checks the peer before writing the `[mirror]`
+section to the config file. Restart the server after saving. The shell
+configuration below remains available for unattended deployments.
+
 It is off unless configured, and when it is on it covers exactly one
 account.
 
