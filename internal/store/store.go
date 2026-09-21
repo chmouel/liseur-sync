@@ -1998,6 +1998,49 @@ type Store interface {
 	UpsertKopluginSessionByAlias(ctx context.Context, userID, partialMD5 string, ses Session) (status string, err error)
 	CreatePendingWork(ctx context.Context, userID string, partialMD5 string) (workID string, created bool, err error)
 	WorkIDByAlias(ctx context.Context, userID, kind, value string) (string, error)
+
+	// Mirroring reading to a peer that speaks KOReader (ADR-0047).
+	//
+	// MirrorCandidates is the bounded set of works a mirror could
+	// exchange for one account: those carrying a KOReader fingerprint
+	// and touched since the given moment, newest first, each with the
+	// newest op for the work. A work with no fingerprint has no join
+	// key and is not a candidate; a work outside the window is the
+	// price of not asking the peer about an entire library every few
+	// minutes.
+	MirrorCandidates(ctx context.Context, userID string, since time.Time, limit int) ([]MirrorCandidate, error)
+	// MirrorCursors is everything remembered about one peer, keyed by
+	// work id. Losing it costs one redundant exchange per book.
+	MirrorCursors(ctx context.Context, userID, peer string) (map[string]MirrorCursor, error)
+	PutMirrorCursor(ctx context.Context, userID, peer string, c MirrorCursor) error
+}
+
+// MirrorCandidate is one work a mirror may exchange with a peer: the
+// join key both servers compute from the same bytes, and where this
+// server currently thinks the reader is.
+type MirrorCandidate struct {
+	WorkID   string
+	Document string // the KOReader fingerprint, lowercase hex
+	Latest   Op
+}
+
+// MirrorCursor is what a mirror remembers about one work and one peer.
+// It is bookkeeping about a conversation rather than reading, so it is
+// never consulted for anything a reader can see and is safe to lose.
+type MirrorCursor struct {
+	WorkID   string
+	Document string
+	// PushedSeq is the local op sequence last sent to the peer. The op
+	// log is append-only and seq is never renumbered, so this is a
+	// watermark rather than a guess.
+	PushedSeq int64
+	PushedAt  *time.Time
+	// RemoteTS is the peer's timestamp on the last position taken from
+	// it, in unix seconds, which is the resolution kosync carries.
+	RemoteTS    int64
+	PulledAt    *time.Time
+	LastError   string
+	LastErrorAt *time.Time
 }
 
 // KopluginDevice is a capability-URL credential for the KOReader

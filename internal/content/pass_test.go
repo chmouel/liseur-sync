@@ -20,6 +20,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 // fakeCatalog records what a pass concluded without a database in the
@@ -284,8 +285,118 @@ func TestPassReadsWhatIsOnDiskAndIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestAPassFingerprintsWhatItReads proves a pass records KOReader's
+// document fingerprint, and that the value is the one KOReader itself
+// would compute from the same bytes. It is the name every
+// KOReader-speaking client and peer server calls a document by, so a
+// book without it is a book none of them can recognise.
+func TestAPassFingerprintsWhatItReads(t *testing.T) {
+	folder := plainFolder(t)
+	writeBook(t, folder.RootPath, "one.epub", "One")
+	catalog := newFakeCatalog()
+	r := testReconciler(catalog)
+	if _, err := r.Reconcile(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	_, observed, _ := catalog.snapshot()
+	if len(observed) != 1 {
+		t.Fatalf("observed %d books", len(observed))
+	}
+	if observed[0].PartialMD5 != fingerprintOnDisk(t, folder.RootPath, "one.epub") {
+		t.Fatalf("fingerprint does not match the file: %q", observed[0].PartialMD5)
+	}
+}
+
+// TestAPassFingerprintsABookItWillNotReopen covers the books
+// catalogued before the fingerprint existed. A pass recognises an
+// unchanged file by its stat and never opens it, so the fingerprint has
+// to be taken on that path or the book stays anonymous forever. Once
+// recorded it is not taken again.
+func TestAPassFingerprintsABookItWillNotReopen(t *testing.T) {
+	folder := plainFolder(t)
+	writeBook(t, folder.RootPath, "one.epub", "One")
+	catalog := newFakeCatalog()
+	r := testReconciler(catalog)
+
+	// A catalog entry as a pass that predates the fingerprint left it.
+	catalog.mu.Lock()
+	catalog.known[folder.ID] = []store.KnownBook{{
+		ID: "old", RelativePath: "one.epub", Status: store.BookActive,
+		ContentSHA256: digestOfFile(t, folder.RootPath, "one.epub"),
+		SizeBytes:     sizeOnDisk(t, folder.RootPath, "one.epub"),
+		MTime:         mtimeOnDisk(t, folder.RootPath, "one.epub"),
+	}}
+	catalog.mu.Unlock()
+
+	if _, err := r.Reconcile(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	_, observed, _ := catalog.snapshot()
+	if len(observed) != 1 || !observed[0].Unchanged {
+		t.Fatalf("expected one unchanged observation, got %+v", observed)
+	}
+	if observed[0].PartialMD5 != fingerprintOnDisk(t, folder.RootPath, "one.epub") {
+		t.Fatalf("an unopened book was not fingerprinted: %q", observed[0].PartialMD5)
+	}
+
+	// Now that it is recorded, the next pass leaves it alone.
+	if _, err := r.Reconcile(context.Background(), folder); err != nil {
+		t.Fatal(err)
+	}
+	_, observed, _ = catalog.snapshot()
+	if observed[0].PartialMD5 != "" {
+		t.Fatalf("a recorded fingerprint was computed again: %q", observed[0].PartialMD5)
+	}
+}
+
+func fingerprintOnDisk(t *testing.T, root, name string) string {
+	t.Helper()
+	f, err := os.Open(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := workident.PartialMD5(f, info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func digestOfFile(t *testing.T, root, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digestOf(data)
+}
+
+func sizeOnDisk(t *testing.T, root, name string) int64 {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
+}
+
+func mtimeOnDisk(t *testing.T, root, name string) time.Time {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(root, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.ModTime().UTC()
+}
+
 // TestChangedBytesAtAPathAreANewBook is rule 4: content change is not
-// identity transfer.func TestChangedBytesAtAPathAreANewBook(t *testing.T) {
+// identity transfer.
+func TestChangedBytesAtAPathAreANewBook(t *testing.T) {
 	folder := plainFolder(t)
 	writeBook(t, folder.RootPath, "one.epub", "One")
 	catalog := newFakeCatalog()

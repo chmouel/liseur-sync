@@ -1083,6 +1083,32 @@ ALTER TABLE books ADD COLUMN partial_md5 TEXT NOT NULL DEFAULT '';
 CREATE INDEX books_partial_md5 ON books(partial_md5) WHERE partial_md5 <> '';
 `
 
+// mirrorCursors remembers, per reader and per work, what has already
+// crossed to a peer that speaks KOReader (ADR-0047). It is bookkeeping
+// about a conversation, not reading: dropping the whole table costs one
+// redundant exchange per book and nothing else, which is why it carries
+// no history and is safe to cascade away with its reader.
+//
+// It is additive and nothing reads it but the mirror, so no existing
+// deployment sees anything differently after it is applied.
+const mirrorCursors = `
+CREATE TABLE IF NOT EXISTS mirror_cursors (
+    user_id       TEXT NOT NULL,
+    work_id       TEXT NOT NULL,
+    peer          TEXT NOT NULL,
+    document      TEXT NOT NULL DEFAULT '',
+    pushed_seq    INTEGER NOT NULL DEFAULT 0,
+    pushed_at     TEXT,
+    remote_ts     INTEGER NOT NULL DEFAULT 0,
+    pulled_at     TEXT,
+    last_error    TEXT NOT NULL DEFAULT '',
+    last_error_at TEXT,
+    PRIMARY KEY (user_id, peer, work_id),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX mirror_cursors_document ON mirror_cursors(user_id, peer, document);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1092,6 +1118,7 @@ var migrations = []string{
 	statsRevisionUpsertSafe, rollupOldestPageIndex, readerPromptTemplate,
 	userSettingsTable,
 	bookPartialMD5,
+	mirrorCursors,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1111,6 +1138,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"readerPromptTemplate":     readerPromptTemplate,
 		"userSettingsTable":        userSettingsTable,
 		"bookPartialMD5":           bookPartialMD5,
+		"mirrorCursors":            mirrorCursors,
 	}
 	want, ok := named[name]
 	if !ok {
