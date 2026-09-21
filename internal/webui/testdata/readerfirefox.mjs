@@ -205,6 +205,101 @@ const check = (name, ok, extra = '') => {
 check('page loads', typeof (await evalIn('document.title')) === 'string',
   await evalIn('document.title'));
 
+// The fallback dialog, judged by the engine the complaint came from:
+// on Firefox for Android the box arrived with its title under the fixed
+// bar. A phone cannot be driven from here, but the shape of the problem
+// can: a short viewport, the dialog open, and the two things that were
+// wrong — a box taller than the space it has, and a bar still painted
+// across the top of it.
+if (process.env.SMOKE_PROMPT === '1') {
+  at('prompt fallback');
+  await send('browsingContext.setViewport', {
+    context, viewport: { width: 412, height: 380 },
+  });
+  await new Promise((r) => setTimeout(r, 600));
+  await evalIn(`(() => {
+    window.__copied = null;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async () => { throw new Error('denied'); } },
+    });
+    document.execCommand = () => false;
+    return true;
+  })()`);
+  const passage = await evalIn(`(() => {
+    const doc = document.querySelector('readium-view').renderer.getContents()[0].doc;
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    let node = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.textContent.trim().length > 30) { node = walker.currentNode; break; }
+    }
+    if (!node) return '';
+    const range = doc.createRange();
+    const start = node.textContent.indexOf(node.textContent.trim()[0]);
+    range.setStart(node, start);
+    range.setEnd(node, start + 30);
+    const selection = doc.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  })()`);
+  check('the fixture has a passage to select', passage.length > 0, passage);
+  await waitFor("!document.getElementById('reader-prompt-copy').hidden",
+    'the prompt button to appear with a selection');
+  await evalIn("document.getElementById('reader-prompt-copy').click()");
+  await waitFor("document.getElementById('reader-prompt-fallback')?.open",
+    'the fallback dialog to open');
+  // The bar fades rather than vanishing, so a reading taken the instant
+  // the dialog opens is a reading of the transition.
+  await new Promise((r) => setTimeout(r, 400));
+  const fit = JSON.parse(await evalIn(`JSON.stringify((() => {
+    const dialog = document.getElementById('reader-prompt-fallback');
+    const title = document.getElementById('reader-prompt-fallback-title');
+    const box = dialog.getBoundingClientRect();
+    const head = title.getBoundingClientRect();
+    const over = document.elementFromPoint(
+      Math.round(head.left + head.width / 2), Math.round(head.top + head.height / 2));
+    const bar = document.querySelector('.reader-bar');
+    return {
+      top: box.top, bottom: box.bottom, left: box.left, right: box.right,
+      height: window.innerHeight, width: window.innerWidth,
+      text: document.getElementById('reader-prompt-fallback-text').value,
+      overTitle: over ? (dialog.contains(over) ? 'dialog' : over.className || over.tagName) : 'nothing',
+      barOpacity: bar ? getComputedStyle(bar).opacity : '',
+      barEvents: bar ? getComputedStyle(bar).pointerEvents : '',
+    };
+  })())`));
+  check('a refused clipboard hands the prompt over instead',
+    fit.text.includes(passage.trim()), fit.text);
+  check('the fallback dialog fits the viewport it is read in',
+    fit.top >= 0 && fit.bottom <= fit.height + 1 &&
+      fit.left >= 0 && fit.right <= fit.width + 1,
+    JSON.stringify(fit));
+  check('nothing is painted over the dialog title',
+    fit.overTitle === 'dialog', JSON.stringify(fit));
+  check('the bar steps aside while the dialog is open',
+    fit.barOpacity === '0' && fit.barEvents === 'none', JSON.stringify(fit));
+
+  // The button in the dialog is a fresh press in this document, which
+  // is often what the refused write was missing.
+  await evalIn(`(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (text) => { window.__copied = text; } },
+    });
+    return true;
+  })()`);
+  await evalIn("document.getElementById('reader-prompt-fallback-copy').click()");
+  await waitFor("!document.getElementById('reader-prompt-fallback').open",
+    'the dialog to close once the prompt is copied');
+  const copied = await evalIn('window.__copied ?? ""');
+  check('the dialog copies the prompt when asked again',
+    copied.includes(passage.trim()), copied);
+
+  ws.close();
+  await finish(fail.length ? 1 : 0);
+}
+
 if (detached) {
   const at = JSON.parse(await evalIn('JSON.stringify({href: location.href, cookie: document.cookie})'));
   check('the reader was handed off to the other origin', at.href.includes(readerHost.split(':')[0]), at.href);

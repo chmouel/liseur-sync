@@ -21,6 +21,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/metadata"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/workident"
 )
 
 // Catalog is the store surface one pass needs. It is an interface rather
@@ -111,7 +112,8 @@ func (r *Reconciler) reconcilePlain(
 			// re-reading it would produce the metadata already stored.
 			// The observation is still recorded, because being seen is
 			// what keeps a book out of the missing list.
-			observed = append(observed, seenAsBefore(prior, file))
+			observed = append(observed,
+				seenAsBefore(prior, file, r.fingerprintIfMissing(folder.RootPath, prior, file)))
 			continue
 		}
 		shelved, inSeries := series[file.RelativePath]
@@ -151,14 +153,62 @@ func unchanged(prior store.KnownBook, file ScannedFile) bool {
 // seenAsBefore records an unchanged file without re-reading it. Only the
 // identity and the stat are carried: the store leaves the metadata and
 // relations of an unchanged book alone.
-func seenAsBefore(prior store.KnownBook, file ScannedFile) store.ObservedBook {
+func seenAsBefore(
+	prior store.KnownBook, file ScannedFile, fingerprint string,
+) store.ObservedBook {
 	return store.ObservedBook{
 		RelativePath:  file.RelativePath,
 		SizeBytes:     file.SizeBytes,
 		MTime:         file.ModifiedAt,
 		ContentSHA256: prior.ContentSHA256,
+		PartialMD5:    fingerprint,
 		Unchanged:     true,
 	}
+}
+
+// fingerprintIfMissing computes the KOReader fingerprint of a file the
+// pass is otherwise not going to open, and only when the catalog has
+// none for it. That is the backfill for books catalogued before the
+// column existed: a pass recognises them by their stat and would never
+// reopen them, so the fingerprint has to be taken here or never.
+//
+// It reads twelve kilobytes, not the file, so doing it on every pass
+// for the handful of books still missing one costs nothing worth
+// measuring. Once written it is never recomputed.
+//
+// A read failure is logged and yields nothing. It deliberately does not
+// make the pass incomplete: the file was seen, which is the only thing
+// a pass concludes anything from, and a book without a fingerprint is
+// simply a book KOReader-speaking peers cannot name yet.
+func (r *Reconciler) fingerprintIfMissing(
+	rootPath string, prior store.KnownBook, file ScannedFile,
+) string {
+	if prior.PartialMD5 != "" {
+		return ""
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		r.log.Warn("cannot fingerprint book",
+			"path", file.RelativePath, "error", err)
+		return ""
+	}
+	defer root.Close()
+
+	opened, err := root.OpenFile(file.RelativePath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		r.log.Warn("cannot fingerprint book",
+			"path", file.RelativePath, "error", err)
+		return ""
+	}
+	defer opened.Close()
+
+	fingerprint, err := workident.PartialMD5(opened, file.SizeBytes)
+	if err != nil {
+		r.log.Warn("cannot fingerprint book",
+			"path", file.RelativePath, "error", err)
+		return ""
+	}
+	return fingerprint
 }
 
 // readBook opens one publication and turns it into an observation:
@@ -192,11 +242,18 @@ func (r *Reconciler) readBook(
 	if _, err := io.Copy(digest, opened); err != nil {
 		return store.ObservedBook{}, err
 	}
+	// Read positionally, so it does not disturb the offset the copy
+	// above left behind and the EPUB read below starts from.
+	fingerprint, err := workident.PartialMD5(opened, info.Size())
+	if err != nil {
+		return store.ObservedBook{}, err
+	}
 	obs := store.ObservedBook{
 		RelativePath:     file.RelativePath,
 		SizeBytes:        info.Size(),
 		MTime:            info.ModTime().UTC(),
 		ContentSHA256:    hex.EncodeToString(digest.Sum(nil)),
+		PartialMD5:       fingerprint,
 		OriginalFilename: path.Base(file.RelativePath),
 		MediaType:        "application/epub+zip",
 	}

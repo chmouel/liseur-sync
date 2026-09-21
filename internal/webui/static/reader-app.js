@@ -104,6 +104,7 @@ const fullscreenBtn = document.getElementById("reader-fullscreen");
 const promptButton = document.getElementById("reader-prompt-copy");
 const promptFallback = document.getElementById("reader-prompt-fallback");
 const promptFallbackText = document.getElementById("reader-prompt-fallback-text");
+const promptFallbackCopy = document.getElementById("reader-prompt-fallback-copy");
 
 let chapterLoadingTimer = null;
 let chapterLoadingGeneration = 0;
@@ -201,22 +202,34 @@ const offlinePartition = cfg.detached ? null : storagePartition();
 const offlineBase = cfg.offline ? deploymentPrefix() : "";
 let readingCoordinator = null;
 let sendTimer = null;
-let statusTimer = null;
+let sayTimer = null;
 
-function say(message, isError, duration) {
-  clearTimeout(statusTimer);
+function say(message, isError) {
+  clearTimeout(sayTimer);
+  sayTimer = null;
   status.textContent = message;
   status.classList.toggle("problem", !!isError);
-  status.classList.toggle("toast", !!duration);
+  status.classList.remove("flash");
   status.hidden = !message;
-  if (duration) {
-    statusTimer = setTimeout(() => say(""), duration);
-  }
 }
 
-status.addEventListener("click", () => {
-  if (status.classList.contains("toast")) say("");
-});
+// flash is a message with nothing behind it: something worked, and there
+// is nothing for the reader to do about it. The status sits over the
+// middle of the page, which is exactly where the text is — and where a
+// tap toggles the bars — so a line nobody has to act on takes itself
+// away again and lets a tap through while it is up. Anything said
+// afterwards cancels the timer rather than being wiped by it, and an
+// error stays until whatever caused it is settled.
+const FLASH_MS = 1600;
+
+function flash(message) {
+  say(message);
+  status.classList.add("flash");
+  sayTimer = setTimeout(() => {
+    sayTimer = null;
+    if (status.textContent === message) say("");
+  }, FLASH_MS);
+}
 
 // ------------------------------------------- refused reading changes
 
@@ -1625,6 +1638,7 @@ const PROMPT_MAX_TEXT = 4096;
 
 let promptTemplate = cfg.promptTemplate || "";
 let promptSelection = null;
+let promptButtonPreservingSelection = false;
 
 function promptCacheKey(account) {
   return account ? PROMPT_CACHE_PREFIX + account : "";
@@ -1785,21 +1799,82 @@ function promptValues() {
   };
 }
 
+// writeClipboard puts the prompt on the clipboard by whatever means
+// this browser allows, and says whether anything worked.
+//
+// The passage was selected inside the chapter's own frame, so at the
+// moment of the press the reading page may hold neither the selection
+// nor — in Firefox — the focus that a clipboard write is judged
+// against. One refusal is therefore not an answer: the write is tried,
+// tried again with this document focused, and finally made the old way,
+// through a textarea of our own and execCommand. Only a browser that
+// refuses all three has really refused, and that is what the fallback
+// dialog is for.
+async function writeClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        window.focus();
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Nothing to say here: the old path is tried next, and the
+        // dialog after that.
+      }
+    }
+  }
+  return copyTheOldWay(text);
+}
+
+function copyTheOldWay(text) {
+  if (typeof document.execCommand !== "function") return false;
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.cssText =
+    "position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0";
+  document.body.appendChild(box);
+  const wasFocused = document.activeElement;
+  let copied = false;
+  try {
+    box.focus({ preventScroll: true });
+    box.setSelectionRange(0, text.length);
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  box.remove();
+  try {
+    wasFocused?.focus?.({ preventScroll: true });
+  } catch {
+    // A page that cannot take its focus back has still copied.
+  }
+  return copied;
+}
+
 async function copyPrompt() {
   if (!promptTemplate) return;
   const prompt = fillPrompt(promptTemplate, promptValues());
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
-    await navigator.clipboard.writeText(prompt);
-    say("Prompt copied.", false, 2000);
-  } catch (error) {
-    // Over plain HTTP there is no clipboard to write to, and a browser
-    // may refuse the write anywhere. The prompt is still worth having,
-    // so it is handed over to be copied by hand.
-    showPromptFallback(prompt);
+  if (await writeClipboard(prompt)) {
+    flash("Prompt copied.");
+    return;
   }
+  // The prompt is still worth having, so it is handed over to be
+  // copied by hand.
+  showPromptFallback(prompt);
 }
 
+// The dialog hands the text over, and the bar steps aside for it (see
+// the stylesheet): a box a reader has to read is no use with the top of
+// it under the chrome. Focus goes to the Copy button rather than to the
+// text, because a press there is a fresh gesture in this document —
+// which is usually what the refused write was missing — and because a
+// focused text box invites a phone to raise its keyboard over the
+// dialog. The text is selected all the same, so a copy by hand is one
+// gesture either way.
 function showPromptFallback(prompt) {
   if (!promptFallback || !promptFallbackText) {
     say("This browser would not copy the prompt.", true);
@@ -1807,9 +1882,36 @@ function showPromptFallback(prompt) {
   }
   promptFallbackText.value = prompt;
   promptFallback.showModal();
-  promptFallbackText.focus();
-  promptFallbackText.select();
+  try {
+    promptFallbackText.setSelectionRange(0, prompt.length);
+  } catch {
+    // Selecting is a convenience; the text is there to copy regardless.
+  }
+  if (promptFallbackCopy) promptFallbackCopy.focus();
+  else {
+    promptFallbackText.focus();
+    promptFallbackText.select();
+  }
 }
+
+promptFallbackCopy?.addEventListener("click", () => {
+  const text = promptFallbackText?.value || "";
+  if (!text) return;
+  writeClipboard(text).then(copied => {
+    if (copied) {
+      promptFallback?.close();
+      flash("Prompt copied.");
+      return;
+    }
+    // Still refused. The reader's own copy gesture is the way out, so
+    // the text is put under it, selected and focused.
+    promptFallbackText.focus();
+    promptFallbackText.select();
+  }).catch(() => {
+    promptFallbackText.focus();
+    promptFallbackText.select();
+  });
+});
 
 function wirePromptSelection(doc) {
   const update = () => {
@@ -1817,7 +1919,7 @@ function wirePromptSelection(doc) {
     // A pointer already on the button is a reader reaching for it: the
     // selection they are about to quote must outlive the press that
     // collapses it.
-    if (!next && promptButton?.matches(":hover")) return;
+    if (!next && promptButtonPreservingSelection) return;
     promptSelection = next;
     updatePromptButton();
   };
@@ -1826,9 +1928,16 @@ function wirePromptSelection(doc) {
   doc.addEventListener("touchend", () => setTimeout(update, 0), { passive: true });
 }
 
+promptButton?.addEventListener("pointerdown", () => {
+  promptButtonPreservingSelection = true;
+});
+
 promptButton?.addEventListener("click", () => {
   copyPrompt().catch(error =>
-    say(error.message || "The prompt could not be copied.", true));
+    say(error.message || "The prompt could not be copied.", true))
+    .finally(() => {
+      promptButtonPreservingSelection = false;
+    });
 });
 
 // buildAnnotationList fills the sidebar with the entries that do not

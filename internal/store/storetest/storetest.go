@@ -180,6 +180,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ReconcileUnchangedKeepsMetadata", func(t *testing.T) {
 		testReconcileUnchangedKeepsMetadata(t, open)
 	})
+	t.Run("ReconcileStoresTheKOReaderFingerprint", func(t *testing.T) {
+		testReconcileStoresTheKOReaderFingerprint(t, open)
+	})
+	t.Run("ReconcileFillsAMissingFingerprintOnce", func(t *testing.T) {
+		testReconcileFillsAMissingFingerprintOnce(t, open)
+	})
 	t.Run("ReconcileRepeatPassCountsNoUpdates", func(t *testing.T) {
 		testReconcileRepeatPassCountsNoUpdates(t, open)
 	})

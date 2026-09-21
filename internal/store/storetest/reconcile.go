@@ -358,6 +358,88 @@ func testReconcileUnchangedKeepsMetadata(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testReconcileStoresTheKOReaderFingerprint proves the catalog keeps
+// the digest KOReader-speaking clients and peer servers name a document
+// by. Without it a position pushed for a book this server holds matches
+// nothing here, and the reader's history attaches to a pending work
+// instead of the book they are reading.
+func testReconcileStoresTheKOReaderFingerprint(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "fingerprint", store.FolderPlain)
+	now := time.Date(2026, time.February, 2, 0, 0, 0, 0, time.UTC)
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "book.epub", SizeBytes: 100, MTime: now,
+		ContentSHA256: "sha-book", PartialMD5: "0123456789abcdef0123456789abcdef",
+		Title: "Fingerprinted",
+	}}, true, now)
+
+	bookID := knownByPath(t, s, folder.ID)["book.epub"].ID
+	got, err := s.CatalogBookByID(ctx, "", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PartialMD5 != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("fingerprint not stored: %q", got.PartialMD5)
+	}
+	if known := knownByPath(t, s, folder.ID)["book.epub"]; known.PartialMD5 != got.PartialMD5 {
+		t.Fatalf("fingerprint not reported back to the pass: %q", known.PartialMD5)
+	}
+}
+
+// testReconcileFillsAMissingFingerprintOnce covers books catalogued
+// before the fingerprint existed. A pass recognises those files by
+// their stat and never reopens them, so the only chance to record one
+// is on an unchanged observation — and that observation must still not
+// be able to change anything else, including a fingerprint already
+// there.
+func testReconcileFillsAMissingFingerprintOnce(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	folder := MkFolder(t, s, "fingerprint-backfill", store.FolderPlain)
+	now := time.Date(2026, time.February, 3, 0, 0, 0, 0, time.UTC)
+
+	// As a pre-fingerprint pass would have left it.
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "old.epub", SizeBytes: 100, MTime: now,
+		ContentSHA256: "sha-old", Title: "Cataloged Earlier",
+	}}, true, now)
+	bookID := knownByPath(t, s, folder.ID)["old.epub"].ID
+
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "old.epub", SizeBytes: 100, MTime: now, Unchanged: true,
+		PartialMD5: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}, true, now.Add(time.Hour))
+
+	got, err := s.CatalogBookByID(ctx, "", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PartialMD5 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("fingerprint not filled in: %q", got.PartialMD5)
+	}
+	if got.Title != "Cataloged Earlier" {
+		t.Fatalf("an unchanged observation changed the metadata: %+v", got)
+	}
+
+	// A later pass must not be able to move a fingerprint that is
+	// already recorded: an unchanged file is the same bytes, so a
+	// different digest for it is a bug somewhere and not a correction.
+	doReconcile(t, s, folder.ID, []store.ObservedBook{{
+		RelativePath: "old.epub", SizeBytes: 100, MTime: now, Unchanged: true,
+		PartialMD5: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}, true, now.Add(2*time.Hour))
+
+	got, err = s.CatalogBookByID(ctx, "", bookID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PartialMD5 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("an unchanged observation overwrote a fingerprint: %q", got.PartialMD5)
+	}
+}
+
 // testReconcileRepeatPassCountsNoUpdates covers the honesty of
 // Updated. A Calibre pass re-reads every row of metadata.db every time
 // (ADR-0022), so it re-submits full observations for books nothing

@@ -412,7 +412,12 @@ type CatalogBook struct {
 	MTime time.Time
 	// ContentSHA256 is the publication's digest: what a client matches
 	// its own copy against, and what the cover cache is keyed by.
-	ContentSHA256    string
+	ContentSHA256 string
+	// PartialMD5 is KOReader's fingerprint of the same bytes: the name
+	// every KOReader-speaking client and peer server calls this
+	// document by. It is empty for a book catalogued before the pass
+	// computed it and for one whose file the last pass could not read.
+	PartialMD5       string
 	OriginalFilename string
 	MediaType        string
 	// CalibreID identifies this book in its folder's metadata.db, and is
@@ -842,6 +847,7 @@ type ObservedBook struct {
 	SizeBytes         int64
 	MTime             time.Time
 	ContentSHA256     string
+	PartialMD5        string
 	OriginalFilename  string
 	MediaType         string
 	CoverRelativePath *string
@@ -1007,8 +1013,13 @@ type KnownBook struct {
 	SizeBytes     int64
 	MTime         time.Time
 	ContentSHA256 string
-	CalibreID     *int64
-	CoverSHA256   string
+	// PartialMD5 is empty for a book catalogued before the pass
+	// computed it. A backfill fills those in; a pass on its own will
+	// not, because it recognises an unchanged file by its stat and
+	// never opens it again.
+	PartialMD5  string
+	CalibreID   *int64
+	CoverSHA256 string
 }
 
 // Work is the abstract book positions and statistics attach to.
