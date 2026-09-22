@@ -229,7 +229,10 @@ func (f *fakeOrbit) handleAppInfo(w http.ResponseWriter, _ *http.Request) {
 
 func (f *fakeOrbit) handleQuery(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Q string `json:"q"`
+		Q          string `json:"q"`
+		Pagination struct {
+			Page int `json:"page"`
+		} `json:"pagination"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
@@ -238,6 +241,14 @@ func (f *fakeOrbit) handleQuery(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.searches = append(f.searches, body.Q)
+	if body.Pagination.Page != 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			f.envelope: []bookCard{},
+			"page":     body.Pagination.Page,
+			"total":    1,
+		})
+		return
+	}
 	// The real search covers title, author, series and narrator. Title
 	// is enough to prove the protocol narrows before it decides.
 	cards := []bookCard{}
