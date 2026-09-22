@@ -199,6 +199,11 @@ type MirrorConfig struct {
 	LocalPathPrefix string `toml:"local_path_prefix"`
 	// PollInterval is how often the peer is asked. It has no push.
 	PollInterval Duration `toml:"poll_interval"`
+	// ResolveRetryInterval is how long a BookOrbit book lookup that
+	// found nothing is remembered before it is tried again. BookOrbit
+	// exposes no by-fingerprint lookup, so unresolved books are not
+	// searched on every poll.
+	ResolveRetryInterval Duration `toml:"resolve_retry_interval"`
 	// ActiveDays bounds what is polled: only works read within this
 	// many days are asked about, so the cost does not grow with the
 	// size of the library.
@@ -282,6 +287,7 @@ func Default() Config {
 	c.Mirror.Protocol = ProtocolKosync
 	c.Mirror.DeviceID = "liseur-sync"
 	c.Mirror.PollInterval = Duration(5 * time.Minute)
+	c.Mirror.ResolveRetryInterval = Duration(24 * time.Hour)
 	c.Mirror.ActiveDays = 30
 	c.Mirror.Timeout = Duration(20 * time.Second)
 	return c
@@ -297,7 +303,8 @@ func Default() Config {
 // LISEUR_MIRROR_ACCOUNT, LISEUR_MIRROR_PROTOCOL,
 // LISEUR_MIRROR_REMOTE_USER, LISEUR_MIRROR_REMOTE_KEY,
 // LISEUR_MIRROR_REMOTE_PASSWORD, LISEUR_MIRROR_DEVICE_ID,
-// LISEUR_MIRROR_PEER_PATH_PREFIX, LISEUR_MIRROR_LOCAL_PATH_PREFIX.
+// LISEUR_MIRROR_PEER_PATH_PREFIX, LISEUR_MIRROR_LOCAL_PATH_PREFIX,
+// LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL.
 //
 // The mirror's credential is an environment variable on purpose: it
 // belongs beside the database URL in a deployment's .env rather than in
@@ -326,6 +333,13 @@ func (c *Config) applyEnv() {
 			*dst = out
 		}
 	}
+	setDuration := func(dst *Duration, key string) {
+		if v, ok := os.LookupEnv(key); ok {
+			if d, err := time.ParseDuration(v); err == nil {
+				*dst = Duration(d)
+			}
+		}
+	}
 	setStr(&c.ListenAddr, "LISEUR_LISTEN_ADDR")
 	setStr(&c.Database.Driver, "LISEUR_DATABASE_DRIVER")
 	setStr(&c.Database.URL, "LISEUR_DATABASE_URL")
@@ -347,6 +361,7 @@ func (c *Config) applyEnv() {
 	setStr(&c.Mirror.DeviceID, "LISEUR_MIRROR_DEVICE_ID")
 	setStr(&c.Mirror.PeerPathPrefix, "LISEUR_MIRROR_PEER_PATH_PREFIX")
 	setStr(&c.Mirror.LocalPathPrefix, "LISEUR_MIRROR_LOCAL_PATH_PREFIX")
+	setDuration(&c.Mirror.ResolveRetryInterval, "LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL")
 }
 
 // Validate checks the config is coherent.
@@ -525,6 +540,9 @@ func (c *Config) validateMirror() error {
 	m.BaseURL = strings.TrimSuffix(u.String(), "/")
 	if m.PollInterval.Duration() < time.Minute {
 		return fmt.Errorf("mirror.poll_interval must be at least 1m")
+	}
+	if m.ResolveRetryInterval.Duration() < time.Minute {
+		return fmt.Errorf("mirror.resolve_retry_interval must be at least 1m")
 	}
 	if m.ActiveDays < 1 {
 		return fmt.Errorf("mirror.active_days must be >= 1")

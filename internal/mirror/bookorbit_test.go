@@ -700,6 +700,29 @@ func TestABookThePeerDoesNotHoldIsNotSearchedForAgain(t *testing.T) {
 	}
 }
 
+func TestABookThePeerDoesNotHoldUsesConfiguredRetry(t *testing.T) {
+	orbit := newFakeOrbit(t)
+	peer := orbit.protocol(t)
+	peer.cfg.ResolveRetryInterval = config.Duration(10 * time.Minute)
+	ctx := context.Background()
+	if err := peer.Authorize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c := orbitBook()
+	checked := time.Now().Add(-11 * time.Minute)
+	cur := &store.MirrorCursor{
+		WorkID:          c.WorkID,
+		Document:        c.Document,
+		RemoteCheckedAt: &checked,
+	}
+	if _, err := peer.Pull(ctx, c, cur); !errors.Is(err, ErrNotOnPeer) {
+		t.Fatalf("a book the peer does not hold gave %v", err)
+	}
+	if len(orbit.asked()) != 1 {
+		t.Fatalf("searched %d times after the configured retry window", len(orbit.asked()))
+	}
+}
+
 // TestAFailedSearchIsNotAnAnswerAboutTheBook. A peer that was down when
 // the book was looked for has said nothing about whether it holds it,
 // and remembering the outage as "not there" would hide the book for a
