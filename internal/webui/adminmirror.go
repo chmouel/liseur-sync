@@ -41,6 +41,21 @@ func mirrorCredentialFromEnv(protocol string) bool {
 	return ok
 }
 
+func applyMirrorCredentialFromEnv(m *config.MirrorConfig) bool {
+	if m.Protocol == config.ProtocolBookOrbit {
+		v, ok := os.LookupEnv("LISEUR_MIRROR_REMOTE_PASSWORD")
+		if ok {
+			m.RemoteKey, m.RemotePassword = "", v
+		}
+		return ok
+	}
+	v, ok := os.LookupEnv("LISEUR_MIRROR_REMOTE_KEY")
+	if ok {
+		m.RemoteKey, m.RemotePassword = v, ""
+	}
+	return ok
+}
+
 // mirrorConfig is what the mirror form shows: the file as this process
 // last wrote it, or as it read it at startup.
 func (s *Server) mirrorConfig() config.MirrorConfig {
@@ -128,14 +143,12 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 	// trailing slash from the peer URL — so what it leaves behind is
 	// what gets written, not what the form sent.
 	checkMirror := m
-	if password == "" && mirrorCredentialFromEnv(checkMirror.Protocol) &&
-		s.Cfg.Mirror.Protocol == checkMirror.Protocol {
+	if password == "" && mirrorCredentialFromEnv(checkMirror.Protocol) {
 		// The running config is the effective one after environment
 		// overrides. Use that credential for validation and the
 		// connection test, while the value saved below stays the one
 		// from the file unless the form supplied a replacement.
-		checkMirror.RemoteKey = s.Cfg.Mirror.RemoteKey
-		checkMirror.RemotePassword = s.Cfg.Mirror.RemotePassword
+		applyMirrorCredentialFromEnv(&checkMirror)
 	}
 	check := s.Cfg
 	check.Mirror = checkMirror
