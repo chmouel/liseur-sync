@@ -124,6 +124,7 @@ func TestSaveMirrorWritesAFileAnOperatorCanRead(t *testing.T) {
 		t.Fatalf("a fresh config file does not start at its first setting:\n%q", text)
 	}
 	if !strings.Contains(text, "poll_interval = \"5m\"") ||
+		!strings.Contains(text, "resolve_retry_interval = \"24h\"") ||
 		!strings.Contains(text, "timeout = \"20s\"") {
 		t.Fatalf("durations were not written the way people write them:\n%s", text)
 	}
@@ -145,19 +146,20 @@ func TestSaveMirrorKeepsABookOrbitPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := MirrorConfig{
-		Enabled:         true,
-		Protocol:        ProtocolBookOrbit,
-		Name:            "orbit",
-		BaseURL:         "https://orbit.example.com/api/v1",
-		Account:         "you",
-		RemoteUser:      "you",
-		RemotePassword:  "hunter2",
-		DeviceID:        "liseur-sync",
-		PeerPathPrefix:  "/books",
-		LocalPathPrefix: "/srv/library",
-		PollInterval:    Duration(5 * time.Minute),
-		ActiveDays:      30,
-		Timeout:         Duration(20 * time.Second),
+		Enabled:              true,
+		Protocol:             ProtocolBookOrbit,
+		Name:                 "orbit",
+		BaseURL:              "https://orbit.example.com/api/v1",
+		Account:              "you",
+		RemoteUser:           "you",
+		RemotePassword:       "hunter2",
+		DeviceID:             "liseur-sync",
+		PeerPathPrefix:       "/books",
+		LocalPathPrefix:      "/srv/library",
+		PollInterval:         Duration(5 * time.Minute),
+		ResolveRetryInterval: Duration(10 * time.Minute),
+		ActiveDays:           30,
+		Timeout:              Duration(20 * time.Second),
 	}
 	if err := SaveMirror(path, m); err != nil {
 		t.Fatal(err)
@@ -172,6 +174,9 @@ func TestSaveMirrorKeepsABookOrbitPeer(t *testing.T) {
 	}
 	if got.PeerPathPrefix != "/books" || got.LocalPathPrefix != "/srv/library" {
 		t.Fatalf("the path mapping did not survive a save: %+v", got)
+	}
+	if got.ResolveRetryInterval.Duration() != 10*time.Minute {
+		t.Fatalf("the resolve retry interval did not survive a save: %+v", got)
 	}
 	if cfg.ListenAddr != "127.0.0.1:8585" {
 		t.Fatalf("saving the mirror disturbed the rest of the file: %q", cfg.ListenAddr)

@@ -571,6 +571,7 @@ account = "you"             # the local account whose reading is mirrored
 remote_user = "you"         # the peer's KOReader sync username
 device_id = "liseur-sync"   # how this server names itself on the peer
 poll_interval = "5m"
+resolve_retry_interval = "24h"
 active_days = 30
 timeout = "20s"
 ```
@@ -597,6 +598,7 @@ account = "you"
 remote_user = "you"         # the peer account name
 device_id = "liseur-sync"   # the session label shown on the peer
 poll_interval = "5m"
+resolve_retry_interval = "24h"
 active_days = 30
 timeout = "20s"
 
@@ -630,7 +632,8 @@ Every other field has a `LISEUR_MIRROR_*` equivalent:
 `LISEUR_MIRROR_ENABLED`, `LISEUR_MIRROR_PROTOCOL`, `LISEUR_MIRROR_NAME`,
 `LISEUR_MIRROR_BASE_URL`, `LISEUR_MIRROR_ACCOUNT`,
 `LISEUR_MIRROR_REMOTE_USER`, `LISEUR_MIRROR_DEVICE_ID`,
-`LISEUR_MIRROR_PEER_PATH_PREFIX`, `LISEUR_MIRROR_LOCAL_PATH_PREFIX`.
+`LISEUR_MIRROR_PEER_PATH_PREFIX`, `LISEUR_MIRROR_LOCAL_PATH_PREFIX`,
+`LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL`.
 
 A half-configured mirror is refused at startup rather than started and
 left to fail quietly. Everything after that is retried instead: a peer
@@ -647,7 +650,9 @@ Watch the log for `mirror pass failed`.
   protocol it is the file's size and name, because BookOrbit does not
   publish the fingerprint it holds: a book is searched for by title to
   get a shortlist and then decided on those, with the directory
-  settings above as extra confirmation when they are set. A title so
+  settings above as extra confirmation when they are set. A BookOrbit
+  miss is retried after `resolve_retry_interval`, because a peer library
+  may scan a matching file after this server already checked. A title so
   common that the peer answers with a full page of matches is left
   alone too. Either way a book only one server holds is not mirrored,
   and a book that could be two different books is refused rather than

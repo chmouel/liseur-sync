@@ -218,11 +218,18 @@ func value(s *string) string {
 	return strings.TrimSpace(*s)
 }
 
-// resolveRetry is how long a book the peer does not appear to hold is
+// defaultResolveRetry is how long a book the peer does not appear to hold is
 // left alone before being looked for again. Resolution costs two
 // requests and the answer almost never changes; asking every poll
 // would spend most of the mirror's budget on books it cannot mirror.
-const resolveRetry = 24 * time.Hour
+const defaultResolveRetry = 24 * time.Hour
+
+func (b *bookOrbitPeer) resolveRetry() time.Duration {
+	if d := b.cfg.ResolveRetryInterval.Duration(); d > 0 {
+		return d
+	}
+	return defaultResolveRetry
+}
 
 // resolve finds what the peer calls this book, and remembers it.
 //
@@ -244,7 +251,7 @@ func (b *bookOrbitPeer) resolve(
 	if cur.RemoteFileID != "" {
 		return cur.RemoteFileID, nil
 	}
-	if cur.RemoteCheckedAt != nil && time.Since(*cur.RemoteCheckedAt) < resolveRetry {
+	if cur.RemoteCheckedAt != nil && time.Since(*cur.RemoteCheckedAt) < b.resolveRetry() {
 		return "", ErrNotOnPeer
 	}
 	// A work can carry a fingerprint no catalog book holds, because a

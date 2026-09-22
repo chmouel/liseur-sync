@@ -65,6 +65,7 @@ func SaveMirror(path string, m MirrorConfig) error {
 		fmt.Sprintf("peer_path_prefix = %q\n", m.PeerPathPrefix),
 		fmt.Sprintf("local_path_prefix = %q\n", m.LocalPathPrefix),
 		fmt.Sprintf("poll_interval = %q\n", writtenDuration(m.PollInterval)),
+		fmt.Sprintf("resolve_retry_interval = %q\n", writtenDuration(m.ResolveRetryInterval)),
 		fmt.Sprintf("active_days = %d\n", m.ActiveDays),
 		fmt.Sprintf("timeout = %q\n", writtenDuration(m.Timeout)),
 	)
