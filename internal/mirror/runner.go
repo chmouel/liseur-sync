@@ -97,9 +97,24 @@ func (r *Runner) Run(ctx context.Context) error {
 	if poll <= 0 {
 		poll = 5 * time.Minute
 	}
-	client := NewClient(r.Cfg)
 	log := r.log().With("peer", r.Cfg.Name)
-	log.Info("mirror starting", "base_url", r.Cfg.BaseURL,
+	proto, err := NewProtocol(r.Cfg, log)
+	if err != nil {
+		// Configuration is validated before anything starts, so this
+		// is a protocol name that got past Validate rather than an
+		// operator mistake. It still must not take the server down.
+		log.Error("mirror not started", "error", err)
+		r.set(func(s *Status) { s.LastError = err.Error() })
+		return nil
+	}
+	defer func() {
+		// The context that ended the mirror is already cancelled, and
+		// saying goodbye to the peer still has to travel.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		proto.Close(ctx)
+	}()
+	log.Info("mirror starting", "base_url", r.Cfg.BaseURL, "protocol", proto.Name(),
 		"account", r.Cfg.Account, "poll_interval", poll.String())
 
 	// A syncer needs a user id, and the configuration names an
@@ -125,7 +140,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 
 		if syncer == nil {
-			s, err := r.build(ctx, client)
+			s, err := r.build(ctx, proto)
 			if err != nil {
 				if ctx.Err() != nil {
 					log.Info("mirror stopping")
@@ -190,24 +205,40 @@ func (r *Runner) Run(ctx context.Context) error {
 // authorization call is a legibility measure — it puts "the password
 // is wrong" in the log at startup instead of leaving it to be inferred
 // from a string of failed passes.
-func (r *Runner) build(ctx context.Context, client *Client) (*Syncer, error) {
+func (r *Runner) build(ctx context.Context, proto Protocol) (*Syncer, error) {
 	u, err := r.account(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := client.Authorize(ctx); err != nil {
+	if err := proto.Authorize(ctx); err != nil {
 		return nil, fmt.Errorf("peer credential: %w", err)
 	}
 	r.log().Info("mirror authorized", "peer", r.Cfg.Name, "account", r.Cfg.Account)
 	return &Syncer{
 		Store:        r.Store,
-		Client:       client,
+		Proto:        proto,
 		Peer:         r.Cfg.Name,
 		UserID:       u.ID,
 		ActiveWindow: time.Duration(r.Cfg.ActiveDays) * 24 * time.Hour,
 		MaxPerPass:   r.MaxPerPass,
 		Log:          r.Log,
 	}, nil
+}
+
+// NewProtocol builds the way of speaking the configuration names. The
+// configuration has already been validated, so an unknown name here is
+// a programming error rather than an operator's, and it is reported
+// rather than defaulted: a mirror that silently spoke a protocol
+// nobody asked for would be worse than one that did not start.
+func NewProtocol(cfg config.MirrorConfig, log *slog.Logger) (Protocol, error) {
+	switch cfg.Protocol {
+	case "", config.ProtocolKosync:
+		return KosyncProtocol(NewClient(cfg), cfg), nil
+	case config.ProtocolBookOrbit:
+		return BookOrbitProtocol(cfg, log), nil
+	default:
+		return nil, fmt.Errorf("mirror: unknown protocol %q", cfg.Protocol)
+	}
 }
 
 // account resolves the configured account and refuses one that is

@@ -2022,6 +2022,21 @@ type MirrorCandidate struct {
 	WorkID   string
 	Document string // the KOReader fingerprint, lowercase hex
 	Latest   Op
+	// What the catalog knows about the one active book carrying this
+	// fingerprint, when there is one. A peer that is not joined on the
+	// fingerprint has to find the book by some other means, and these
+	// are the only facts about it that two servers indexing the same
+	// disk can be expected to agree on. All of them are empty when no
+	// catalog book holds the fingerprint, which is an ordinary state:
+	// a work can carry one because a KOReader device said so.
+	//
+	// RootPath is here for the same reason and stays here: it is a
+	// filesystem oracle, it is used to confirm a peer's own path
+	// against ours, and it reaches no response.
+	Title        string
+	RelativePath string
+	SizeBytes    int64
+	RootPath     string
 }
 
 // MirrorCursor is what a mirror remembers about one work and one peer.
@@ -2035,12 +2050,30 @@ type MirrorCursor struct {
 	// watermark rather than a guess.
 	PushedSeq int64
 	PushedAt  *time.Time
+	// PeerIdentity is which peer the three fields above describe. A
+	// mirror is keyed by the name an operator chose, and that name
+	// outlives a change of URL or account, so what the peer calls a
+	// book is only meaningful alongside a note of which peer said so.
+	// A protocol that caches nothing leaves it empty.
+	PeerIdentity string
+	// PushedMark is the content of the last position sent, for a peer
+	// whose replies carry no device id. Comparing it to what comes
+	// back is how such a peer's echo is recognised (ADR-0048); a
+	// protocol that names devices leaves it empty.
+	PushedMark string
 	// RemoteTS is the peer's timestamp on the last position taken from
 	// it, in unix seconds, which is the resolution kosync carries.
 	RemoteTS    int64
 	PulledAt    *time.Time
 	LastError   string
 	LastErrorAt *time.Time
+	// RemoteFileID is what the peer calls this book, for a protocol
+	// that is not joined on the document fingerprint and has to look
+	// it up. RemoteCheckedAt dates that lookup, including one that
+	// found nothing, so a book the peer does not hold is searched for
+	// occasionally rather than on every pass.
+	RemoteFileID    string
+	RemoteCheckedAt *time.Time
 }
 
 // KopluginDevice is a capability-URL credential for the KOReader

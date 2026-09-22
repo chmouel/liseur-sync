@@ -1109,6 +1109,32 @@ CREATE TABLE IF NOT EXISTS mirror_cursors (
 CREATE INDEX mirror_cursors_document ON mirror_cursors(user_id, peer, document);
 `
 
+// mirrorPeerFiles widens that bookkeeping for a peer spoken to over its
+// own API rather than over KOReader's (ADR-0048).
+//
+// Two things a kosync peer never needed. remote_file_id is what the
+// peer calls this book, because a protocol that is not joined on the
+// document fingerprint has to look the book up and would otherwise do
+// it again on every pass; remote_checked_at dates that lookup, so a
+// book the peer does not hold is not searched for every few minutes.
+// pushed_mark is the content of the last position sent, for a peer
+// whose reply carries no device to recognise this server's own writing
+// by. peer_identity is which peer all three are about: the mirror is
+// keyed by the name an operator gave it, and that name survives a
+// change of URL or account, so a remembered file id has to say which
+// installation it came from or it will one day be sent to a stranger's
+// book of the same number.
+//
+// Additive, and read by nothing but the mirror: an existing deployment
+// sees nothing differently after it is applied, and a kosync mirror
+// leaves all three empty.
+const mirrorPeerFiles = `
+ALTER TABLE mirror_cursors ADD COLUMN remote_file_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mirror_cursors ADD COLUMN remote_checked_at TEXT;
+ALTER TABLE mirror_cursors ADD COLUMN pushed_mark TEXT NOT NULL DEFAULT '';
+ALTER TABLE mirror_cursors ADD COLUMN peer_identity TEXT NOT NULL DEFAULT '';
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1119,6 +1145,7 @@ var migrations = []string{
 	userSettingsTable,
 	bookPartialMD5,
 	mirrorCursors,
+	mirrorPeerFiles,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1139,6 +1166,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"userSettingsTable":        userSettingsTable,
 		"bookPartialMD5":           bookPartialMD5,
 		"mirrorCursors":            mirrorCursors,
+		"mirrorPeerFiles":          mirrorPeerFiles,
 	}
 	want, ok := named[name]
 	if !ok {
