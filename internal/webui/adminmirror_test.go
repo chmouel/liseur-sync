@@ -388,6 +388,49 @@ timeout = "20s"
 	}
 }
 
+func TestSavingAProtocolSwitchUsesTheTargetEnvironmentCredential(t *testing.T) {
+	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "env-kosync-key")
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		s.Cfg.Mirror = config.Default().Mirror
+		s.Cfg.Mirror.Enabled = true
+		s.Cfg.Mirror.Protocol = config.ProtocolBookOrbit
+		s.Cfg.Mirror.BaseURL = "https://orbit.example/api/v1"
+		s.Cfg.Mirror.Account = "alice"
+		s.Cfg.Mirror.RemoteUser = "reader"
+		s.Cfg.Mirror.RemotePassword = "bookorbit-password"
+		s.Cfg.Mirror.DeviceID = "liseur-sync"
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"name": {"orbit"}, "device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "connection tested") {
+		t.Fatalf("the target protocol environment credential was not used:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "env-kosync-key") || strings.Contains(string(saved), "bookorbit-password") {
+		t.Fatalf("an environment credential was written to disk:\n%s", saved)
+	}
+}
+
 // TestAForgedMirrorSaveIsRefused. Every UI mutation carries the
 // per-session token; this one writes a file on the server's disk.
 func TestAForgedMirrorSaveIsRefused(t *testing.T) {
