@@ -155,6 +155,239 @@ func TestAPeerThatRejectsTheCredentialIsNotSaved(t *testing.T) {
 	}
 }
 
+// TestSavingWithAnEnvironmentCredentialDoesNotCopyItToTheFile. A
+// deployment may keep the peer credential beside the database URL in
+// the environment. The admin form can use it to test a save, but a
+// blank password field must not serialize that secret into TOML.
+func TestSavingWithAnEnvironmentCredentialDoesNotCopyItToTheFile(t *testing.T) {
+	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "env-secret-key")
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		s.Cfg.Mirror = config.Default().Mirror
+		s.Cfg.Mirror.Enabled = true
+		s.Cfg.Mirror.Protocol = config.ProtocolKosync
+		s.Cfg.Mirror.BaseURL = peer.URL
+		s.Cfg.Mirror.Account = "alice"
+		s.Cfg.Mirror.RemoteUser = "reader"
+		s.Cfg.Mirror.RemoteKey = "env-secret-key"
+		s.Cfg.Mirror.DeviceID = "liseur-sync"
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"name": {"orbit"}, "device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "connection tested") {
+		t.Fatalf("the environment credential was not used to test the peer:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "env-secret-key") {
+		t.Fatalf("the environment credential was written to disk:\n%s", saved)
+	}
+	if !strings.Contains(string(saved), `remote_key = ""`) {
+		t.Fatalf("the saved mirror should leave the file credential empty:\n%s", saved)
+	}
+}
+
+func TestSavingWithAnEnvironmentCredentialDoesNotTestTheStaleFileCredential(t *testing.T) {
+	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "env-secret-key")
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	if err := os.WriteFile(path, []byte(`[mirror]
+enabled = true
+protocol = "kosync"
+name = "orbit"
+base_url = "`+peer.URL+`"
+account = "alice"
+remote_user = "reader"
+remote_key = "stale-file-key"
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		s.Cfg.Mirror = config.Default().Mirror
+		s.Cfg.Mirror.Enabled = true
+		s.Cfg.Mirror.Protocol = config.ProtocolKosync
+		s.Cfg.Mirror.BaseURL = peer.URL
+		s.Cfg.Mirror.Account = "alice"
+		s.Cfg.Mirror.RemoteUser = "reader"
+		s.Cfg.Mirror.RemoteKey = "env-secret-key"
+		s.Cfg.Mirror.DeviceID = "liseur-sync"
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"name": {"orbit"}, "device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "connection tested") {
+		t.Fatalf("the effective environment credential was not used:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `remote_key = "stale-file-key"`) {
+		t.Fatalf("the file credential should have stayed on disk:\n%s", saved)
+	}
+	if strings.Contains(string(saved), "env-secret-key") {
+		t.Fatalf("the environment credential was written to disk:\n%s", saved)
+	}
+}
+
+func TestSavingWithAFileCredentialTestsTheCurrentFileCredential(t *testing.T) {
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	if err := os.WriteFile(path, []byte(`[mirror]
+enabled = true
+protocol = "kosync"
+name = "orbit"
+base_url = "`+peer.URL+`"
+account = "alice"
+remote_user = "reader"
+remote_key = "fresh-file-key"
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		// Stands in for a long-running process whose startup config is
+		// older than the current file. No LISEUR_MIRROR_REMOTE_KEY is
+		// set, so the file credential is the effective one for this
+		// save.
+		s.Cfg.Mirror = config.Default().Mirror
+		s.Cfg.Mirror.Enabled = true
+		s.Cfg.Mirror.Protocol = config.ProtocolKosync
+		s.Cfg.Mirror.BaseURL = peer.URL
+		s.Cfg.Mirror.Account = "alice"
+		s.Cfg.Mirror.RemoteUser = "reader"
+		s.Cfg.Mirror.RemoteKey = "stale-startup-key"
+		s.Cfg.Mirror.DeviceID = "liseur-sync"
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"name": {"orbit"}, "device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "connection tested") {
+		t.Fatalf("the current file credential was not used:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `remote_key = "fresh-file-key"`) {
+		t.Fatalf("the current file credential did not stay on disk:\n%s", saved)
+	}
+	if strings.Contains(string(saved), "stale-startup-key") {
+		t.Fatalf("the stale startup credential was written to disk:\n%s", saved)
+	}
+}
+
+func TestSavingWithAnEmptyEnvironmentCredentialIsRejected(t *testing.T) {
+	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "")
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	if err := os.WriteFile(path, []byte(`[mirror]
+enabled = false
+protocol = "kosync"
+name = "orbit"
+base_url = "`+peer.URL+`"
+account = "alice"
+remote_user = "reader"
+remote_key = "file-key"
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		s.Cfg.Mirror = config.Default().Mirror
+		s.Cfg.Mirror.Enabled = false
+		s.Cfg.Mirror.Protocol = config.ProtocolKosync
+		s.Cfg.Mirror.BaseURL = peer.URL
+		s.Cfg.Mirror.Account = "alice"
+		s.Cfg.Mirror.RemoteUser = "reader"
+		s.Cfg.Mirror.RemoteKey = ""
+		s.Cfg.Mirror.DeviceID = "liseur-sync"
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"name": {"orbit"}, "device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "mirror.remote_key is required") {
+		t.Fatalf("an empty environment credential was not rejected:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "enabled = true") {
+		t.Fatalf("an invalid enabled mirror was written:\n%s", saved)
+	}
+}
+
 // TestAForgedMirrorSaveIsRefused. Every UI mutation carries the
 // per-session token; this one writes a file on the server's disk.
 func TestAForgedMirrorSaveIsRefused(t *testing.T) {

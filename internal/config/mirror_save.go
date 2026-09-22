@@ -99,6 +99,36 @@ func SaveMirror(path string, m MirrorConfig) error {
 	return nil
 }
 
+// MirrorFromFile reads only the config file's mirror table, without
+// applying environment overrides. The admin UI needs that distinction
+// so a credential supplied by LISEUR_MIRROR_REMOTE_KEY or
+// LISEUR_MIRROR_REMOTE_PASSWORD can be used for a connection test
+// without being copied back into the TOML file on the next save.
+func MirrorFromFile(path string) (MirrorConfig, bool, error) {
+	c := Default()
+	if strings.TrimSpace(path) == "" {
+		return c.Mirror, false, nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c.Mirror, false, nil
+		}
+		return c.Mirror, false, fmt.Errorf("read config: %w", err)
+	}
+	hasMirror := false
+	for _, line := range strings.Split(string(body), "\n") {
+		if name, ok := tableHeaderName(strings.TrimSpace(line)); ok && name == "mirror" {
+			hasMirror = true
+			break
+		}
+	}
+	if _, err := toml.Decode(string(body), &c); err != nil {
+		return c.Mirror, hasMirror, err
+	}
+	return c.Mirror, hasMirror, nil
+}
+
 // tableHeaderName reports the table name a TOML header line names, if
 // it is one. It strips a trailing inline comment first, so `[mirror] #
 // peer settings` is recognized exactly like `[mirror]` — both by the

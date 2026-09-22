@@ -15,26 +15,50 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT a.value, COALESCE(b.title, ''), COALESCE(b.relative_path, ''),
-		        COALESCE(b.size_bytes, 0), COALESCE(f.root_path, ''), `+prefixed(opCols, "o")+`
-		   FROM aliases a
-		   JOIN ops o
-		     ON o.user_id = a.user_id AND o.work_id = a.work_id
-		   LEFT JOIN books b ON b.partial_md5 = a.value AND b.status = 'active'
+		`WITH latest AS (
+		     SELECT o.*
+		       FROM ops o
+		      WHERE o.user_id = ?
+		        AND o.seq = (SELECT MAX(seq) FROM ops m
+		                       WHERE m.user_id = o.user_id AND m.work_id = o.work_id)
+		        AND o.received_at >= ?
+		   ),
+		   candidates AS (
+		     SELECT l.*,
+		            (SELECT a.value
+		               FROM aliases a
+		               LEFT JOIN books b
+		                 ON b.partial_md5 = a.value
+		                AND b.status = 'active'
+		                AND EXISTS (SELECT 1 FROM user_folders uf
+		                             WHERE uf.folder_id = b.folder_id
+		                               AND uf.user_id = a.user_id)
+		              WHERE a.user_id = l.user_id
+		                AND a.work_id = l.work_id
+		                AND a.kind = ?
+		                AND (SELECT COUNT(*) FROM books b2
+		                      WHERE b2.partial_md5 = a.value
+		                        AND b2.status = 'active') <= 1
+		              ORDER BY CASE WHEN b.id IS NOT NULL THEN 0 ELSE 1 END,
+		                       CASE WHEN length(a.value) = 32 THEN 0 ELSE 1 END,
+		                       a.value DESC
+		              LIMIT 1) AS document
+		       FROM latest l
+		   )
+		 SELECT c.document, COALESCE(b.title, ''), COALESCE(b.relative_path, ''),
+		        COALESCE(b.size_bytes, 0), COALESCE(f.root_path, ''), `+prefixed(opCols, "c")+`
+		   FROM candidates c
+		   LEFT JOIN books b ON b.partial_md5 = c.document AND b.status = 'active'
 		                    AND EXISTS (SELECT 1 FROM user_folders uf
 		                                 WHERE uf.folder_id = b.folder_id
-		                                   AND uf.user_id = a.user_id)
+		                                   AND uf.user_id = c.user_id)
 		   LEFT JOIN folders f ON f.id = b.folder_id
-		  WHERE a.user_id = ?
-		    AND a.kind = ?
-		    AND o.seq = (SELECT MAX(seq) FROM ops m
-		                  WHERE m.user_id = a.user_id AND m.work_id = a.work_id)
-		    AND o.received_at >= ?
+		  WHERE c.document IS NOT NULL
 		    AND (SELECT COUNT(*) FROM books b2
-		          WHERE b2.partial_md5 = a.value AND b2.status = 'active') <= 1
-		  ORDER BY o.seq DESC
+		          WHERE b2.partial_md5 = c.document AND b2.status = 'active') <= 1
+		  ORDER BY c.seq DESC
 		  LIMIT ?`),
-		userID, "partial-md5", since.UTC(), limit)
+		userID, since.UTC(), "partial-md5", limit)
 	if err != nil {
 		return nil, err
 	}

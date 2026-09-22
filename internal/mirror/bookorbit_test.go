@@ -791,6 +791,33 @@ func TestTheSharedDirectoryConfirmsTheBook(t *testing.T) {
 	}
 }
 
+// TestTheSharedDirectoryCanBeTheFilesystemRoot. "/" is a real root,
+// not an empty prefix. If trimming turns it into "", the translated
+// path becomes relative and the match is refused even though both
+// sides named the same file.
+func TestTheSharedDirectoryCanBeTheFilesystemRoot(t *testing.T) {
+	orbit := newFakeOrbit(t)
+	file := orbitFile()
+	file.AbsolutePath = "/Arkady Martine/A Memory Called Empire.epub"
+	orbit.hold("7", "A Memory Called Empire", file)
+	peer := orbit.protocol(t)
+	peer.cfg.PeerPathPrefix = "/"
+	peer.cfg.LocalPathPrefix = "/"
+	ctx := context.Background()
+	if err := peer.Authorize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	book := orbitBook()
+	book.RootPath = "/"
+	cur := &store.MirrorCursor{WorkID: "w1", Document: fixtureDocument}
+	if _, err := peer.Pull(ctx, book, cur); !errors.Is(err, ErrNoPosition) {
+		t.Fatalf("a book under the shared root was not accepted: %v", err)
+	}
+	if cur.RemoteFileID != "41" {
+		t.Fatalf("cursor: %+v", cur)
+	}
+}
+
 // TestABookElsewhereOnTheSharedDiskIsRefused. Same name, same size, a
 // different directory: with the mapping configured that is a different
 // book, and without it there is nothing to go on and it is accepted.

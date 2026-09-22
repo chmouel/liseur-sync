@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -29,6 +30,15 @@ func mirrorHasCredential(m config.MirrorConfig) bool {
 		return m.RemotePassword != ""
 	}
 	return m.RemoteKey != ""
+}
+
+func mirrorCredentialFromEnv(protocol string) bool {
+	if protocol == config.ProtocolBookOrbit {
+		_, ok := os.LookupEnv("LISEUR_MIRROR_REMOTE_PASSWORD")
+		return ok
+	}
+	_, ok := os.LookupEnv("LISEUR_MIRROR_REMOTE_KEY")
+	return ok
 }
 
 // mirrorConfig is what the mirror form shows: the file as this process
@@ -84,6 +94,11 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 	m.DeviceID = strings.TrimSpace(r.FormValue("device_id"))
 	m.PeerPathPrefix = strings.TrimSpace(r.FormValue("peer_path_prefix"))
 	m.LocalPathPrefix = strings.TrimSpace(r.FormValue("local_path_prefix"))
+	diskMirror, _, err := config.MirrorFromFile(s.ConfigPath)
+	if err != nil {
+		s.renderMirror(w, r, a, u, Flash{Error: err.Error()})
+		return
+	}
 	// A protocol change invalidates whatever credential was saved for
 	// the other one: an MD5 of a KOReader password is not a BookOrbit
 	// login, and neither is usable as the other. Clearing it turns a
@@ -92,28 +107,61 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 	if m.Protocol != previous {
 		m.RemoteKey, m.RemotePassword = "", ""
 	}
-	if password := r.FormValue("remote_password"); password != "" {
+	password := r.FormValue("remote_password")
+	if password != "" {
 		if m.Protocol == config.ProtocolBookOrbit {
 			m.RemotePassword = password
 		} else {
 			sum := md5.Sum([]byte(password))
 			m.RemoteKey = hex.EncodeToString(sum[:])
 		}
+	} else if diskMirror.Protocol == m.Protocol {
+		// Keep only a credential that was already in the file. A
+		// credential supplied through the environment may still be used
+		// to test the connection below, but saving unrelated settings
+		// must not copy it into the TOML file.
+		m.RemoteKey, m.RemotePassword = diskMirror.RemoteKey, diskMirror.RemotePassword
+	} else {
+		m.RemoteKey, m.RemotePassword = "", ""
 	}
 	// Validate normalizes as well as checks — it trims and strips a
 	// trailing slash from the peer URL — so what it leaves behind is
 	// what gets written, not what the form sent.
+	checkMirror := m
+	if password == "" && mirrorCredentialFromEnv(checkMirror.Protocol) &&
+		s.Cfg.Mirror.Protocol == checkMirror.Protocol {
+		// The running config is the effective one after environment
+		// overrides. Use that credential for validation and the
+		// connection test, while the value saved below stays the one
+		// from the file unless the form supplied a replacement.
+		checkMirror.RemoteKey = s.Cfg.Mirror.RemoteKey
+		checkMirror.RemotePassword = s.Cfg.Mirror.RemotePassword
+	}
 	check := s.Cfg
-	check.Mirror = m
+	check.Mirror = checkMirror
 	if err := check.Validate(); err != nil {
 		s.renderMirror(w, r, a, u, Flash{Error: err.Error()})
 		return
 	}
-	m = check.Mirror
-	if m.Enabled {
+	checkMirror = check.Mirror
+	// Keep the normalized non-secret fields from validation, but keep
+	// the credential decision from above: it may intentionally be blank
+	// on disk while present in the process environment.
+	m.Protocol = checkMirror.Protocol
+	m.Name = checkMirror.Name
+	m.BaseURL = checkMirror.BaseURL
+	m.Account = checkMirror.Account
+	m.RemoteUser = checkMirror.RemoteUser
+	m.DeviceID = checkMirror.DeviceID
+	m.PeerPathPrefix = checkMirror.PeerPathPrefix
+	m.LocalPathPrefix = checkMirror.LocalPathPrefix
+	m.PollInterval = checkMirror.PollInterval
+	m.ActiveDays = checkMirror.ActiveDays
+	m.Timeout = checkMirror.Timeout
+	if checkMirror.Enabled {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		proto, err := mirror.NewProtocol(m, nil)
+		proto, err := mirror.NewProtocol(checkMirror, nil)
 		if err != nil {
 			s.renderMirror(w, r, a, u, Flash{Error: err.Error()})
 			return

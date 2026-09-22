@@ -375,13 +375,23 @@ func (b *bookOrbitPeer) pathAgrees(remote string, c store.MirrorCandidate) bool 
 	if b.cfg.PeerPathPrefix == "" || b.cfg.LocalPathPrefix == "" || remote == "" {
 		return true
 	}
-	peerRoot := strings.TrimSuffix(b.cfg.PeerPathPrefix, "/")
-	localRoot := strings.TrimSuffix(b.cfg.LocalPathPrefix, "/")
+	peerRoot := pathRoot(b.cfg.PeerPathPrefix)
+	localRoot := pathRoot(b.cfg.LocalPathPrefix)
 	rest, ok := strings.CutPrefix(remote, peerRoot+"/")
+	if !ok && peerRoot == "/" {
+		rest, ok = strings.CutPrefix(remote, "/")
+	}
 	if !ok {
 		return false
 	}
 	return path.Join(localRoot, rest) == path.Join(c.RootPath, c.RelativePath)
+}
+
+func pathRoot(root string) string {
+	if root == "/" {
+		return "/"
+	}
+	return strings.TrimSuffix(root, "/")
 }
 
 // searchPageSize bounds one catalog reply. It is large enough that a
