@@ -55,10 +55,10 @@ templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 				</select>
 			</label>
 			if v.BookOrbit() {
-				<label>Peer account name
+				<label>Peer username
 					<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
 				</label>
-				<label>Peer account password
+				<label>Peer password
 					<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
 				</label>
 				<p class="muted">
@@ -69,13 +69,13 @@ templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 					positions and nothing else.
 				</p>
 			} else {
-				<label>Peer KOReader username
+				<label>Peer username
 					<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
 				</label>
-				<label>Peer KOReader password
+				<label>Peer password
 					<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
 				</label>
-				<p class="muted">The password is converted to the KOReader key and never stored or shown.</p>
+				<p class="muted">On KOReader sync, the password is converted to the KOReader key and never stored or shown.</p>
 			}
 			<p class="muted">Leave the password blank to keep the saved credential.</p>
 			<label>Peer name
