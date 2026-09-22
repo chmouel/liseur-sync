@@ -523,18 +523,40 @@ would merge reading histories.
 
 ## Mirroring reading to another server
 
-If you also run a server that speaks KOReader's sync protocol —
-BookOrbit, a second liseur-sync, stock kosync — liseur-sync can keep
-reading positions in step with it. The reasoning is in
-[ADR-0047](adr/0047-mirroring-reading-to-a-koreader-peer.md); this is
-how to turn it on.
+If you also run a server that keeps reading positions — BookOrbit, a
+second liseur-sync, stock kosync — liseur-sync can keep one account's
+positions in step with it. The reasoning is in
+[ADR-0047](adr/0047-mirroring-reading-to-a-koreader-peer.md) and
+[ADR-0048](adr/0048-a-second-protocol-for-the-mirror.md); this is how to
+turn it on.
 
-Administrators can configure it from `/ui/settings` → `Administration` →
-`Mirror`: enter the peer URL, choose the local account, enter the peer's
-normal KOReader username and password, and press **Save and test connection**.
-The page derives the MD5 key and checks the peer before writing the `[mirror]`
-section to the config file. Restart the server after saving. The shell
-configuration below remains available for unattended deployments.
+There are two ways to talk to the peer, chosen with `protocol`:
+
+- **`kosync`**, the default. KOReader's sync protocol, which works
+  against anything that speaks it. The credential is the peer's
+  KOReader key, which unlocks reading positions and nothing else. A
+  position crosses as a percentage.
+- **`bookorbit`**. BookOrbit's own API. A position crosses carrying the
+  exact spot in the book, so reopening on either server lands on the
+  same sentence. The credential is the peer's account password, because
+  BookOrbit's API accepts nothing narrower.
+
+**Prefer `kosync` unless you want the exact spot.** BookOrbit offers no
+limited credential for its own API, so choosing it means a password
+that opens the whole peer account sits in this server's configuration.
+The KOReader key cannot do anything but read and write positions. That
+trade is the only reason the less precise protocol is the default one.
+
+Administrators can configure either from `/ui/settings` →
+`Administration` → `Mirror`: choose the protocol, enter the peer URL,
+choose the local account, enter the peer credential, and press **Save
+and test connection**. The page signs in to the peer before writing the
+`[mirror]` section to the config file. Restart the server after saving.
+The shell configuration below remains available for unattended
+deployments.
+
+Changing the protocol on that page clears the saved credential, because
+the two are not interchangeable.
 
 It is off unless configured, and when it is on it covers exactly one
 account.
@@ -542,6 +564,7 @@ account.
 ```toml
 [mirror]
 enabled = true
+protocol = "kosync"         # or "bookorbit"
 name = "orbit"
 base_url = "https://orbit.example.com/api/v1/koreader"
 account = "you"             # the local account whose reading is mirrored
@@ -559,10 +582,55 @@ LISEUR_MIRROR_REMOTE_KEY=<md5 of the peer's KOReader sync password>
 ```
 
 It is the same value KOReader sends as `x-auth-key`, which is the MD5
-of the password, not the password. Every other field has a
-`LISEUR_MIRROR_*` equivalent: `LISEUR_MIRROR_ENABLED`,
-`LISEUR_MIRROR_NAME`, `LISEUR_MIRROR_BASE_URL`, `LISEUR_MIRROR_ACCOUNT`,
-`LISEUR_MIRROR_REMOTE_USER`, `LISEUR_MIRROR_DEVICE_ID`.
+of the password, not the password.
+
+For `protocol = "bookorbit"` the URL is the API root rather than the
+KOReader path, and the credential is a password rather than a key:
+
+```toml
+[mirror]
+enabled = true
+protocol = "bookorbit"
+name = "orbit"
+base_url = "https://orbit.example.com/api/v1"
+account = "you"
+remote_user = "you"         # the peer account name
+device_id = "liseur-sync"   # the session label shown on the peer
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+
+# Optional. Only if both servers read the same directory on disk.
+peer_path_prefix = "/books"        # where the peer sees the library
+local_path_prefix = "/srv/library" # where this server sees it
+```
+
+```
+LISEUR_MIRROR_REMOTE_PASSWORD=<the peer account password>
+```
+
+`base_url` is an address and nothing else: a username or password in
+it, a query string or a `#fragment` is refused at startup. The URL is
+printed in the log when the mirror starts, and a credential smuggled
+into it would be printed with it.
+
+The password is kept as typed because BookOrbit's API signs in with it.
+It is written to the config file when the admin page saves it, so treat
+that file as holding a peer account password and not just settings. The
+tokens the peer hands back are held in memory only and never written
+anywhere; the session is closed when the server stops.
+
+The two path settings are optional and only make sense when both
+servers are reading the same files. BookOrbit reports where a file sits
+on its own machine, which is a different path from this one when it
+runs in a container, so naming both roots lets a book be confirmed by
+its location as well as by its size and name. Set both or neither.
+
+Every other field has a `LISEUR_MIRROR_*` equivalent:
+`LISEUR_MIRROR_ENABLED`, `LISEUR_MIRROR_PROTOCOL`, `LISEUR_MIRROR_NAME`,
+`LISEUR_MIRROR_BASE_URL`, `LISEUR_MIRROR_ACCOUNT`,
+`LISEUR_MIRROR_REMOTE_USER`, `LISEUR_MIRROR_DEVICE_ID`,
+`LISEUR_MIRROR_PEER_PATH_PREFIX`, `LISEUR_MIRROR_LOCAL_PATH_PREFIX`.
 
 A half-configured mirror is refused at startup rather than started and
 left to fail quietly. Everything after that is retried instead: a peer
@@ -573,30 +641,59 @@ Watch the log for `mirror pass failed`.
 
 ### What to expect from it
 
-- **Books are matched by their bytes**, using the fingerprint KOReader
-  computes from twelve kilobytes of a file. Both servers have to be
-  looking at the same file. A book only one of them holds is not
-  mirrored, and nothing is guessed from titles.
-- **Positions cross as percentages.** The exact spot survives inside one
-  system; across the bridge you land on the percentage. There is no way
-  around this — the two readers do not describe a position in the same
-  language, and inventing a translation would put you in the wrong
-  place while looking precise.
+- **Books are matched by their bytes.** On the KOReader protocol that
+  is the fingerprint KOReader computes from twelve kilobytes of a file,
+  and both servers have to be looking at the same file. On the BookOrbit
+  protocol it is the file's size and name, because BookOrbit does not
+  publish the fingerprint it holds: a book is searched for by title to
+  get a shortlist and then decided on those, with the directory
+  settings above as extra confirmation when they are set. A title so
+  common that the peer answers with a full page of matches is left
+  alone too. Either way a book only one server holds is not mirrored,
+  and a book that could be two different books is refused rather than
+  guessed. Watch for `mirror could not identify a book on the peer` in
+  the log.
+- **How much of the position crosses depends on the protocol.** On
+  `kosync` it is a percentage: the exact spot survives inside one system
+  and you land on the progression across the bridge. On `bookorbit` the
+  exact location crosses, so reopening lands on the same sentence. A
+  KOReader position from a real device also survives in its own form on
+  that path rather than being flattened.
+- **The phone app still lands on the percentage.** The precise location
+  that crosses on the BookOrbit protocol is followed by this server's
+  own reader. Liseur on Android needs a chapter named alongside it,
+  which the peer does not send, so it opens at the right distance
+  through the book instead.
 - **Newest wins**, on the timestamp. Reading the same book in both
   places between two polls means the later of the two is kept.
+- **Moving the mirror to another peer starts it over.** Everything the
+  mirror remembers per book — how far the two sides had got, which
+  book on the peer is which book here — is about one particular
+  library, so it is stamped with the protocol, the address and the
+  account it was learned from. Change any of those, even keeping
+  `name`, and the next pass treats every book as new: positions cross
+  again in both directions and, on the BookOrbit protocol, every book
+  is looked up on the peer again. That pass is slower and nothing
+  worse. Carrying the old memory over would be the harm, from a
+  position silently never sent because an old note said it already had
+  been, to the peer's small number for a book meaning a different book
+  on a different server. Rotating the peer password is not a move and
+  costs nothing.
 - **Positions taken from the peer appear as a device** named
   `<name>:<their device>`, so a reader can see where a position came
   from. This is why `name` is picked once and left alone: changing it
-  makes the mirror forget what it has already exchanged and start filing
-  under a new device.
+  makes the mirror start filing under a new device, alongside the
+  positions already filed under the old one.
 - **Only recently read books are polled.** `active_days` bounds it, so
   the cost does not grow with the size of the library. A book you have
   not opened in a month stops being asked about until you open it again.
-- **A reset on the peer is ignored, not applied.** BookOrbit answers
-  with a synthetic start-of-book position while a reading reset is
-  outstanding. Applying it would send you to page one and keep doing it,
-  so the mirror leaves those replies alone. The cost of the choice is
-  that a reset you actually meant has to be made on this side too.
+- **A reset on the peer is ignored, not applied.** On the KOReader
+  protocol BookOrbit answers with a synthetic start-of-book position
+  while a reading reset is outstanding. Applying it would send you to
+  page one and keep doing it, so the mirror leaves those replies alone,
+  and on either protocol a peer position at exactly zero never replaces
+  one you have. The cost of the choice is that a reset you actually
+  meant has to be made on this side too.
 
 Reading positions are all it moves today. Finished status, highlights
 and statistics are not mirrored.
@@ -692,6 +789,15 @@ that did nothing from one that did.
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
+
+### The mirror's book-matching cache, migration 15
+
+Migration 15 adds three columns to `mirror_cursors`, remembering what
+the peer calls a book, when it was last looked for, and what was last
+sent. It changes nothing an existing deployment can see and needs
+nothing done to it. A mirror that was already running keeps running:
+the new columns start empty, and on the KOReader protocol they stay
+that way.
 
 ### Book fingerprints and the mirror, migrations 13 and 14
 

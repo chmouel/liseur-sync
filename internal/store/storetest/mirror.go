@@ -208,6 +208,84 @@ func testMirrorCandidatesRefuseAmbiguousFingerprints(t *testing.T, open OpenFunc
 	}
 }
 
+// testMirrorCandidatesRespectFolderGrants. A fingerprint is a reader's
+// own alias and says only that they hold these bytes. It is not a
+// claim on a shelf nobody gave them, so the catalog facts a candidate
+// carries — the title, the filename, the size, the folder's root —
+// come only from a book in a folder they were granted.
+//
+// This matters beyond the usual isolation rule because those facts
+// leave the building: the BookOrbit protocol searches the peer by
+// title (ADR-0048), so an ungranted title would be spoken aloud to
+// another server, and a position could be filed against a book the
+// reader cannot see.
+func testMirrorCandidatesRespectFolderGrants(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "mirror-grants")
+	w := MkWork(t, s, u, "w1", "sha-w1")
+	mirrorOp(t, s, u, w.ID, "sha-w1", "op-1", "phone", 0.3)
+
+	// A folder this reader is not in, holding a book whose bytes
+	// happen to carry their fingerprint.
+	now := time.Now().UTC()
+	private := store.Folder{
+		ID: "f-private", Name: "private", RootPath: "/srv/private",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.CreateFolder(ctx, private); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReconcileFolder(ctx, private.ID, []store.ObservedBook{{
+		RelativePath: "secret/Confidential Report.epub", SizeBytes: 4242,
+		MTime: now, ContentSHA256: "sha-secret", PartialMD5: "md5-w1",
+		Title: "Confidential Report",
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("the reader's own work stopped being a candidate: %+v", got)
+	}
+	// The work still mirrors — the reader's reading is theirs — but it
+	// carries nothing from a folder they were never given.
+	c := got[0]
+	if c.Title != "" || c.RelativePath != "" || c.SizeBytes != 0 || c.RootPath != "" {
+		t.Fatalf("a book from an ungranted folder leaked into the mirror: %+v", c)
+	}
+
+	// Granted, it is an ordinary catalog book again.
+	if err := s.AssignUserFolder(ctx, u.ID, private.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Title != "Confidential Report" {
+		t.Fatalf("a granted book did not reach the mirror: %+v", got)
+	}
+	if got[0].RootPath != "/srv/private" || got[0].SizeBytes != 4242 {
+		t.Fatalf("candidate: %+v", got[0])
+	}
+
+	// And revoked again, it goes back to being invisible.
+	if err := s.UnassignUserFolder(ctx, u.ID, private.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Title != "" {
+		t.Fatalf("a revoked grant left the book behind: %+v", got)
+	}
+}
+
 // testMirrorCursors covers the bookkeeping: what has already crossed,
 // per work and per peer.
 func testMirrorCursors(t *testing.T, open OpenFunc) {
@@ -251,6 +329,9 @@ func testMirrorCursors(t *testing.T, open OpenFunc) {
 	if got.PulledAt != nil || got.RemoteTS != 0 || got.LastError != "" || got.LastErrorAt != nil {
 		t.Fatalf("a cursor invented a pull that never happened: %+v", got)
 	}
+	if got.RemoteFileID != "" || got.RemoteCheckedAt != nil || got.PushedMark != "" {
+		t.Fatalf("a cursor invented a book on the peer: %+v", got)
+	}
 
 	// The second exchange replaces the first. There is no history here:
 	// this is a watermark, not a log.
@@ -260,6 +341,12 @@ func testMirrorCursors(t *testing.T, open OpenFunc) {
 	second.PulledAt = Ptr(time.Now().UTC().Truncate(time.Second))
 	second.LastError = "peer answered 502"
 	second.LastErrorAt = Ptr(time.Now().UTC().Truncate(time.Second))
+	// What the peer calls this book, when it was last looked for, and
+	// what was last sent: the bookkeeping a protocol whose replies
+	// carry no device needs to recognise its own writing.
+	second.RemoteFileID = "41"
+	second.RemoteCheckedAt = Ptr(time.Now().UTC().Truncate(time.Second))
+	second.PushedMark = "cfi:epubcfi(/6/14!/4/2/8:37)"
 	if err := s.PutMirrorCursor(ctx, u.ID, "orbit", second); err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +366,12 @@ func testMirrorCursors(t *testing.T, open OpenFunc) {
 	}
 	if got.PulledAt == nil || !got.PulledAt.Equal(*second.PulledAt) {
 		t.Fatalf("pulled_at: %v", got.PulledAt)
+	}
+	if got.RemoteFileID != "41" || got.PushedMark != second.PushedMark {
+		t.Fatalf("what the peer calls the book was not kept: %+v", got)
+	}
+	if got.RemoteCheckedAt == nil || !got.RemoteCheckedAt.Equal(*second.RemoteCheckedAt) {
+		t.Fatalf("remote_checked_at: %v", got.RemoteCheckedAt)
 	}
 }
 

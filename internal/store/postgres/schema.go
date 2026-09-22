@@ -710,6 +710,15 @@ CREATE TABLE IF NOT EXISTS mirror_cursors (
 CREATE INDEX mirror_cursors_document ON mirror_cursors(user_id, peer, document);
 `
 
+// mirrorPeerFiles widens that bookkeeping for a peer spoken to over its
+// own API (ADR-0048), for the reason the SQLite copy gives.
+const mirrorPeerFiles = `
+ALTER TABLE mirror_cursors ADD COLUMN remote_file_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mirror_cursors ADD COLUMN remote_checked_at TIMESTAMPTZ;
+ALTER TABLE mirror_cursors ADD COLUMN pushed_mark TEXT NOT NULL DEFAULT '';
+ALTER TABLE mirror_cursors ADD COLUMN peer_identity TEXT NOT NULL DEFAULT '';
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -718,6 +727,7 @@ var migrations = []string{
 	userSettingsTable,
 	bookPartialMD5,
 	mirrorCursors,
+	mirrorPeerFiles,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -737,6 +747,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"userSettingsTable":        userSettingsTable,
 		"bookPartialMD5":           bookPartialMD5,
 		"mirrorCursors":            mirrorCursors,
+		"mirrorPeerFiles":          mirrorPeerFiles,
 	}
 	want, ok := named[name]
 	if !ok {
