@@ -419,7 +419,7 @@ func (b *bookOrbitPeer) search(ctx context.Context, title string) ([]bookCard, e
 	query := map[string]any{
 		"q":          title,
 		"sort":       []map[string]string{{"field": "addedAt", "dir": "desc"}},
-		"pagination": map[string]int{"page": 1, "size": searchPageSize},
+		"pagination": map[string]int{"page": 0, "size": searchPageSize},
 	}
 	var raw json.RawMessage
 	if err := b.api.post(ctx, "/books/query", query, &raw); err != nil {
