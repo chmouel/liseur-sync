@@ -171,6 +171,7 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 	m.PeerPathPrefix = checkMirror.PeerPathPrefix
 	m.LocalPathPrefix = checkMirror.LocalPathPrefix
 	m.PollInterval = checkMirror.PollInterval
+	m.ResolveRetryInterval = checkMirror.ResolveRetryInterval
 	m.ActiveDays = checkMirror.ActiveDays
 	m.Timeout = checkMirror.Timeout
 	if checkMirror.Enabled {

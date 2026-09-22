@@ -39,6 +39,9 @@ func TestMirrorIsOffAndHarmlessByDefault(t *testing.T) {
 	if got := cfg.Mirror.PollInterval.Duration(); got != 5*time.Minute {
 		t.Fatalf("default poll interval: %s", got)
 	}
+	if got := cfg.Mirror.ResolveRetryInterval.Duration(); got != 24*time.Hour {
+		t.Fatalf("default resolve retry interval: %s", got)
+	}
 	if cfg.Mirror.ActiveDays != 30 {
 		t.Fatalf("default active days: %d", cfg.Mirror.ActiveDays)
 	}
@@ -163,6 +166,12 @@ func TestPollingIsBounded(t *testing.T) {
 	}
 
 	cfg = workingMirror(t)
+	cfg.Mirror.ResolveRetryInterval = Duration(10 * time.Second)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a ten-second resolve retry interval was accepted")
+	}
+
+	cfg = workingMirror(t)
 	cfg.Mirror.ActiveDays = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("an empty active window was accepted")
@@ -186,6 +195,7 @@ account = "reader"
 remote_user = "reader"
 remote_key = "0123456789abcdef0123456789abcdef"
 poll_interval = "90m"
+resolve_retry_interval = "10m"
 timeout = "3s"
 active_days = 7
 `
@@ -195,6 +205,9 @@ active_days = 7
 	}
 	if got := cfg.Mirror.PollInterval.Duration(); got != 90*time.Minute {
 		t.Fatalf("poll_interval: %s", got)
+	}
+	if got := cfg.Mirror.ResolveRetryInterval.Duration(); got != 10*time.Minute {
+		t.Fatalf("resolve_retry_interval: %s", got)
 	}
 	if got := cfg.Mirror.Timeout.Duration(); got != 3*time.Second {
 		t.Fatalf("timeout: %s", got)
@@ -225,6 +238,7 @@ func TestTheCredentialComesFromTheEnvironment(t *testing.T) {
 	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "fedcba9876543210fedcba9876543210")
 	t.Setenv("LISEUR_MIRROR_DEVICE_ID", "books-chmouel-com")
 	t.Setenv("LISEUR_MIRROR_NAME", "orbit")
+	t.Setenv("LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL", "10m")
 
 	cfg := Default()
 	cfg.applyEnv()
@@ -239,7 +253,10 @@ func TestTheCredentialComesFromTheEnvironment(t *testing.T) {
 		DeviceID:   "books-chmouel-com",
 	}
 	got := cfg.Mirror
-	got.PollInterval, got.ActiveDays, got.Timeout = 0, 0, 0
+	if got.ResolveRetryInterval.Duration() != 10*time.Minute {
+		t.Fatalf("resolve retry interval from environment: %s", got.ResolveRetryInterval.Duration())
+	}
+	got.PollInterval, got.ResolveRetryInterval, got.ActiveDays, got.Timeout = 0, 0, 0, 0
 	if got != want {
 		t.Fatalf("mirror from environment:\n got %+v\nwant %+v", got, want)
 	}
@@ -271,6 +288,7 @@ func TestTheShippedExampleDocumentsTheMirror(t *testing.T) {
 		t.Fatal("the example config does not document the mirror")
 	}
 	text = strings.Replace(text, `poll_interval = "5m"`, `poll_interval = "11m"`, 1)
+	text = strings.Replace(text, `resolve_retry_interval = "24h"`, `resolve_retry_interval = "10m"`, 1)
 	text = strings.Replace(text, "active_days = 30", "active_days = 3", 1)
 
 	cfg, err := Load(writeConfig(t, text))
@@ -279,6 +297,9 @@ func TestTheShippedExampleDocumentsTheMirror(t *testing.T) {
 	}
 	if got := cfg.Mirror.PollInterval.Duration(); got != 11*time.Minute {
 		t.Fatalf("poll_interval did not reach the mirror: %s", got)
+	}
+	if got := cfg.Mirror.ResolveRetryInterval.Duration(); got != 10*time.Minute {
+		t.Fatalf("resolve_retry_interval did not reach the mirror: %s", got)
 	}
 	if cfg.Mirror.ActiveDays != 3 {
 		t.Fatalf("active_days did not reach the mirror: %d", cfg.Mirror.ActiveDays)

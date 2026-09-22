@@ -122,5 +122,6 @@ name = "peer"
 # remote_key = ""           # prefer LISEUR_MIRROR_REMOTE_KEY
 device_id = "liseur-sync"   # how this server names itself on the peer
 poll_interval = "5m"        # the peer has no push, so it is asked
+resolve_retry_interval = "24h" # how often BookOrbit misses are retried
 active_days = 30            # only recently read books are asked about
 timeout = "20s"
