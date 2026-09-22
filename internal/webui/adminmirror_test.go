@@ -155,6 +155,53 @@ func TestAPeerThatRejectsTheCredentialIsNotSaved(t *testing.T) {
 	}
 }
 
+func TestSavingWithNewCredentialRepairsMalformedMirrorTable(t *testing.T) {
+	peer := mirrorTestServer(t, http.StatusOK)
+	path := filepath.Join(t.TempDir(), "liseur-sync.toml")
+	if err := os.WriteFile(path, []byte(`listen_addr = "127.0.0.1:8585"
+insecure_http = true
+
+[mirror]
+enabled = true
+protocol = "kosync"
+remote_key = "unterminated
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ts, st := testServerCfg(t, nil, func(s *Server) {
+		generousReauth(s)
+		s.ConfigPath = path
+		s.Cfg.InsecureHTTP = true
+		s.Cfg.Mirror = config.Default().Mirror
+	})
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	csrf := extractCSRF(t, body)
+
+	code, body := postForm(t, ts, cookie, "/ui/admin/mirror", url.Values{
+		"csrf": {csrf}, "enabled": {"on"}, "protocol": {config.ProtocolKosync},
+		"base_url": {peer.URL}, "account": {"alice"}, "remote_user": {"reader"},
+		"remote_password": {"fixed-password"}, "name": {"orbit"},
+		"device_id": {"liseur-sync"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("saving the mirror answered %d", code)
+	}
+	if !strings.Contains(body, "connection tested") {
+		t.Fatalf("the repaired mirror was not tested:\n%s", body)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Mirror.Account != "alice" || saved.Mirror.RemoteKey == "" {
+		t.Fatalf("the mirror table was not repaired: %+v", saved.Mirror)
+	}
+}
+
 // TestSavingWithAnEnvironmentCredentialDoesNotCopyItToTheFile. A
 // deployment may keep the peer credential beside the database URL in
 // the environment. The admin form can use it to test a save, but a

@@ -109,11 +109,6 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 	m.DeviceID = strings.TrimSpace(r.FormValue("device_id"))
 	m.PeerPathPrefix = strings.TrimSpace(r.FormValue("peer_path_prefix"))
 	m.LocalPathPrefix = strings.TrimSpace(r.FormValue("local_path_prefix"))
-	diskMirror, _, err := config.MirrorFromFile(s.ConfigPath)
-	if err != nil {
-		s.renderMirror(w, r, a, u, Flash{Error: err.Error()})
-		return
-	}
 	// A protocol change invalidates whatever credential was saved for
 	// the other one: an MD5 of a KOReader password is not a BookOrbit
 	// login, and neither is usable as the other. Clearing it turns a
@@ -130,14 +125,21 @@ func (s *Server) handleSaveMirror(w http.ResponseWriter, r *http.Request, a stor
 			sum := md5.Sum([]byte(password))
 			m.RemoteKey = hex.EncodeToString(sum[:])
 		}
-	} else if diskMirror.Protocol == m.Protocol {
-		// Keep only a credential that was already in the file. A
-		// credential supplied through the environment may still be used
-		// to test the connection below, but saving unrelated settings
-		// must not copy it into the TOML file.
-		m.RemoteKey, m.RemotePassword = diskMirror.RemoteKey, diskMirror.RemotePassword
 	} else {
-		m.RemoteKey, m.RemotePassword = "", ""
+		diskMirror, _, err := config.MirrorFromFile(s.ConfigPath)
+		if err != nil {
+			s.renderMirror(w, r, a, u, Flash{Error: err.Error()})
+			return
+		}
+		if diskMirror.Protocol == m.Protocol {
+			// Keep only a credential that was already in the file. A
+			// credential supplied through the environment may still be used
+			// to test the connection below, but saving unrelated settings
+			// must not copy it into the TOML file.
+			m.RemoteKey, m.RemotePassword = diskMirror.RemoteKey, diskMirror.RemotePassword
+		} else {
+			m.RemoteKey, m.RemotePassword = "", ""
+		}
 	}
 	// Validate normalizes as well as checks — it trims and strips a
 	// trailing slash from the peer URL — so what it leaves behind is
