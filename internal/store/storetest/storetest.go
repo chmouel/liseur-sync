@@ -31,6 +31,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("MirrorCandidatesAreBoundedAndOrdered", func(t *testing.T) {
 		testMirrorCandidatesAreBoundedAndOrdered(t, open)
 	})
+	t.Run("MirrorCandidatesPickOneAliasPerWork", func(t *testing.T) {
+		testMirrorCandidatesPickOneAliasPerWork(t, open)
+	})
+	t.Run("MirrorCandidatesPreferSafeCatalogAlias", func(t *testing.T) {
+		testMirrorCandidatesPreferSafeCatalogAlias(t, open)
+	})
 	t.Run("MirrorCandidatesAreScopedToTheAccount", func(t *testing.T) {
 		testMirrorCandidatesAreScopedToTheAccount(t, open)
 	})

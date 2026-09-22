@@ -134,6 +134,76 @@ func testMirrorCandidatesAreBoundedAndOrdered(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testMirrorCandidatesPickOneAliasPerWork covers a work that owns more
+// than one KOReader fingerprint. That can happen when bytes changed at
+// a path and the work learns the new fingerprint before the old one is
+// forgotten. The mirror cursor is keyed by work, so the candidate list
+// must still offer one row for that work, not one row per alias.
+func testMirrorCandidatesPickOneAliasPerWork(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "mirror-multi-alias")
+	w := MkWork(t, s, u, "w1", "sha-w1")
+	if err := s.AddAliases(ctx, u.ID, w.ID,
+		[]store.Identifier{{Kind: "partial-md5", Value: "ffffffffffffffffffffffffffffffff"}}); err != nil {
+		t.Fatal(err)
+	}
+	mirrorOp(t, s, u, w.ID, "sha-w1", "op-1", "phone", 0.55)
+
+	got, err := s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("one work with two aliases produced %d candidates: %+v", len(got), got)
+	}
+	if got[0].WorkID != w.ID || got[0].Document != "ffffffffffffffffffffffffffffffff" {
+		t.Fatalf("candidate: %+v", got[0])
+	}
+}
+
+func testMirrorCandidatesPreferSafeCatalogAlias(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "mirror-safe-alias")
+	w := MkWork(t, s, u, "w1", "sha-w1")
+	const (
+		ambiguous = "ffffffffffffffffffffffffffffffff"
+		safe      = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	)
+	if err := s.AddAliases(ctx, u.ID, w.ID, []store.Identifier{
+		{Kind: "partial-md5", Value: ambiguous},
+		{Kind: "partial-md5", Value: safe},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mirrorOp(t, s, u, w.ID, "sha-w1", "op-1", "phone", 0.55)
+
+	folder := MkFolder(t, s, "safe-alias", store.FolderPlain)
+	now := time.Now().UTC()
+	if _, err := s.ReconcileFolder(ctx, folder.ID, []store.ObservedBook{
+		{RelativePath: "safe.epub", SizeBytes: 100, MTime: now,
+			ContentSHA256: "sha-safe", PartialMD5: safe, Title: "Safe"},
+		{RelativePath: "ambiguous-one.epub", SizeBytes: 101, MTime: now,
+			ContentSHA256: "sha-ambiguous-one", PartialMD5: ambiguous, Title: "Ambiguous One"},
+		{RelativePath: "ambiguous-two.epub", SizeBytes: 102, MTime: now,
+			ContentSHA256: "sha-ambiguous-two", PartialMD5: ambiguous, Title: "Ambiguous Two"},
+	}, true, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("candidates: %+v", got)
+	}
+	if got[0].Document != safe || got[0].Title != "Safe" {
+		t.Fatalf("candidate chose the unsafe alias: %+v", got[0])
+	}
+}
+
 // testMirrorCandidatesAreScopedToTheAccount. Reading state is per
 // reader, and a mirror belongs to exactly one account; a candidate list
 // that crossed accounts would push one reader's position to another's
