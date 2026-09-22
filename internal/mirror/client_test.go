@@ -152,9 +152,8 @@ func (p *fakePeer) failWith(status int, body string) {
 	p.status, p.body = status, body
 }
 
-func (p *fakePeer) client(t *testing.T) *Client {
-	t.Helper()
-	return NewClient(config.MirrorConfig{
+func (p *fakePeer) config() config.MirrorConfig {
+	return config.MirrorConfig{
 		Enabled:    true,
 		BaseURL:    p.URL,
 		Account:    "local",
@@ -162,7 +161,12 @@ func (p *fakePeer) client(t *testing.T) *Client {
 		RemoteKey:  p.key,
 		DeviceID:   "liseur-sync",
 		Timeout:    config.Duration(5 * time.Second),
-	})
+	}
+}
+
+func (p *fakePeer) client(t *testing.T) *Client {
+	t.Helper()
+	return NewClient(p.config())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

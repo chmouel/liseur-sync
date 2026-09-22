@@ -3,10 +3,11 @@ package webui
 templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 	<h2>Mirror reading positions</h2>
 	<p class="muted">
-		Keep one local account's reading position in step with another server
-		that speaks KOReader sync. The peer password is converted to the
-		KOReader key and saved in the configuration file; it is never shown
-		again.
+		Keep one local account's reading position in step with another
+		server. Choose how to talk to it: KOReader sync works with any
+		server that speaks it, and BookOrbit's own API carries the exact
+		spot in the page rather than only how far through the book you
+		are.
 	</p>
 	@adminFlash(flash)
 	<section class="card">
@@ -20,8 +21,27 @@ templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 				}
 				Enable mirroring
 			</label>
+			<label>Protocol
+				<select name="protocol" required>
+					if v.BookOrbit() {
+						<option value="kosync">KOReader sync</option>
+						<option value="bookorbit" selected>BookOrbit API</option>
+					} else {
+						<option value="kosync" selected>KOReader sync</option>
+						<option value="bookorbit">BookOrbit API</option>
+					}
+				</select>
+			</label>
+			<p class="muted">
+				Changing the protocol clears the saved credential, because the
+				two are not interchangeable.
+			</p>
 			<label>Peer URL
-				<input name="base_url" type="url" required value={ v.Config.BaseURL } placeholder="https://reader.example/sync"/>
+				if v.BookOrbit() {
+					<input name="base_url" type="url" required value={ v.Config.BaseURL } placeholder="https://orbit.example/api/v1"/>
+				} else {
+					<input name="base_url" type="url" required value={ v.Config.BaseURL } placeholder="https://reader.example/sync"/>
+				}
 			</label>
 			<label>Local account
 				<select name="account" required>
@@ -34,12 +54,29 @@ templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 					}
 				</select>
 			</label>
-			<label>Peer KOReader username
-				<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
-			</label>
-			<label>Peer KOReader password
-				<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
-			</label>
+			if v.BookOrbit() {
+				<label>Peer account name
+					<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
+				</label>
+				<label>Peer account password
+					<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
+				</label>
+				<p class="muted">
+					BookOrbit's API signs in with the account password and offers
+					no limited alternative, so this password is kept in the
+					configuration file and opens the whole peer account. The
+					KOReader option uses a separate key that unlocks reading
+					positions and nothing else.
+				</p>
+			} else {
+				<label>Peer KOReader username
+					<input name="remote_user" required value={ v.Config.RemoteUser } autocomplete="username"/>
+				</label>
+				<label>Peer KOReader password
+					<input name="remote_password" type="password" autocomplete="new-password" placeholder={ mirrorPasswordPlaceholder(v.HasKey) }/>
+				</label>
+				<p class="muted">The password is converted to the KOReader key and never stored or shown.</p>
+			}
 			<p class="muted">Leave the password blank to keep the saved credential.</p>
 			<label>Peer name
 				<input name="name" required value={ v.Config.Name } placeholder="orbit"/>
@@ -47,12 +84,44 @@ templ adminMirrorBody(prefix string, csrf string, v mirrorView, flash Flash) {
 			<label>Device name on peer
 				<input name="device_id" required value={ v.Config.DeviceID } placeholder="liseur-sync"/>
 			</label>
+			if v.BookOrbit() {
+				<h3>Matching books between the two servers</h3>
+				<p class="muted">
+					Optional. BookOrbit reports where a file sits on its own
+					machine, which is a different path from this one even when
+					both are reading the same disk. Filling in both directories
+					lets a book be confirmed by its location as well as by its
+					size and filename. Leave both blank if the two servers do not
+					share storage.
+				</p>
+				<label>Library directory on the peer
+					<input name="peer_path_prefix" value={ v.Config.PeerPathPrefix } placeholder="/books"/>
+				</label>
+				<label>The same directory here
+					<input name="local_path_prefix" value={ v.Config.LocalPathPrefix } placeholder="/srv/library"/>
+				</label>
+			}
 			<button type="submit" class="primary">Save and test connection</button>
 		</form>
 	</section>
 	<section class="card">
 		<h3>After saving</h3>
 		<p>The configuration file is updated, but the running process reads it only at startup. Restart liseur-sync to start or stop the mirror.</p>
-		<p>Positions cross as percentages. Exact reader locations are not shared between different reader systems.</p>
+		if v.BookOrbit() {
+			<p>
+				Positions cross carrying the exact location in the book, so
+				reopening on either server lands on the same sentence. A book is
+				matched by its title, its size on disk and its filename; a book
+				the peer stores under a different title is left alone rather than
+				guessed at.
+			</p>
+			<p>
+				In the phone app an incoming position still opens at the right
+				distance through the book rather than the exact sentence. Only
+				the reader on this server follows the precise location so far.
+			</p>
+		} else {
+			<p>Positions cross as percentages. Exact reader locations are not shared between different reader systems.</p>
+		}
 	</section>
 }

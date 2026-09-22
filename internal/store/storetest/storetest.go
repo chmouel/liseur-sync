@@ -25,6 +25,9 @@ const anyReader = ""
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("MirrorCandidates", func(t *testing.T) { testMirrorCandidates(t, open) })
+	t.Run("MirrorCandidatesRespectFolderGrants", func(t *testing.T) {
+		testMirrorCandidatesRespectFolderGrants(t, open)
+	})
 	t.Run("MirrorCandidatesAreBoundedAndOrdered", func(t *testing.T) {
 		testMirrorCandidatesAreBoundedAndOrdered(t, open)
 	})

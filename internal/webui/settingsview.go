@@ -103,6 +103,13 @@ type mirrorView struct {
 	Users  []store.User
 }
 
+// BookOrbit reports whether the peer is spoken to over its own API
+// rather than over KOReader sync. The two need different credentials
+// and carry different fidelity, so the form says different things.
+func (v mirrorView) BookOrbit() bool {
+	return v.Config.Protocol == config.ProtocolBookOrbit
+}
+
 type settingsView struct {
 	Section string
 	Saved   bool
@@ -437,7 +444,7 @@ func (s *Server) settingsAdmin(
 			return err
 		}
 		m := s.mirrorConfig()
-		v.Mirror = mirrorView{Config: m, HasKey: m.RemoteKey != "", Users: users}
+		v.Mirror = mirrorView{Config: m, HasKey: mirrorHasCredential(m), Users: users}
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {

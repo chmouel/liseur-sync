@@ -62,7 +62,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 	return &syncFixture{
 		t: t, st: st, peer: peer, user: u, work: w, document: fixtureDocument,
 		syncer: &Syncer{
-			Store: st, Client: peer.client(t), Peer: "orbit", UserID: u.ID,
+			Store: st, Proto: KosyncProtocol(peer.client(t), peer.config()), Peer: "orbit", UserID: u.ID,
 			ActiveWindow: 30 * 24 * time.Hour, MaxPerPass: 100,
 		},
 	}

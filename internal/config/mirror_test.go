@@ -230,6 +230,7 @@ func TestTheCredentialComesFromTheEnvironment(t *testing.T) {
 	cfg.applyEnv()
 	want := MirrorConfig{
 		Enabled:    true,
+		Protocol:   ProtocolKosync,
 		Name:       "orbit",
 		BaseURL:    "https://peer.example.com/api/v1/koreader",
 		Account:    "reader",
@@ -287,5 +288,119 @@ func TestTheShippedExampleDocumentsTheMirror(t *testing.T) {
 	}
 	if cfg.Mirror.RemoteKey != "" {
 		t.Fatal("the shipped example carries a credential")
+	}
+}
+
+// TestTheProtocolDecidesWhichCredentialIsRequired. The two ways of
+// talking to a peer need different secrets, and neither works as the
+// other: an MD5 of a KOReader password is not an account password, and
+// a mirror started with the wrong one fails on its first request
+// rather than at startup.
+func TestTheProtocolDecidesWhichCredentialIsRequired(t *testing.T) {
+	base := `
+[mirror]
+enabled = true
+name = "orbit"
+base_url = "https://orbit.example.com/api/v1"
+account = "you"
+remote_user = "you"
+device_id = "liseur-sync"
+`
+	for _, tc := range []struct {
+		name  string
+		extra string
+		ok    bool
+	}{
+		{"kosync needs a key", `protocol = "kosync"`, false},
+		{"kosync with a key", "protocol = \"kosync\"\nremote_key = \"abc\"", true},
+		{"a key is not a bookorbit password",
+			"protocol = \"bookorbit\"\nremote_key = \"abc\"", false},
+		{"bookorbit with a password",
+			"protocol = \"bookorbit\"\nremote_password = \"hunter2\"", true},
+		{"a protocol nobody speaks",
+			"protocol = \"smoke signals\"\nremote_key = \"abc\"", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, base+tc.extra+"\n"))
+			if tc.ok && err != nil {
+				t.Fatalf("refused a complete mirror: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("accepted a mirror that cannot work")
+			}
+		})
+	}
+}
+
+// TestTheProtocolIsSpelledHowever. An operator writing "BookOrbit" in
+// a config file means the protocol of that name.
+func TestTheProtocolIsSpelledHowever(t *testing.T) {
+	cfg, err := Load(writeConfig(t, `
+[mirror]
+enabled = true
+protocol = " BookOrbit "
+name = "orbit"
+base_url = "https://orbit.example.com/api/v1"
+account = "you"
+remote_user = "you"
+remote_password = "hunter2"
+device_id = "liseur-sync"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mirror.Protocol != ProtocolBookOrbit {
+		t.Fatalf("protocol: %q", cfg.Mirror.Protocol)
+	}
+}
+
+// TestHalfAPathMappingIsRefused. Naming one end and not the other
+// would rewrite the peer's path into nothing and quietly stop
+// confirming anything, which is worse than not mapping at all.
+func TestHalfAPathMappingIsRefused(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+[mirror]
+enabled = true
+protocol = "bookorbit"
+name = "orbit"
+base_url = "https://orbit.example.com/api/v1"
+account = "you"
+remote_user = "you"
+remote_password = "hunter2"
+device_id = "liseur-sync"
+peer_path_prefix = "/books"
+`))
+	if err == nil {
+		t.Fatal("accepted half a path mapping")
+	}
+}
+
+// TestThePeerAddressIsAnAddressAndNothingElse. The mirror's base URL is
+// logged whole at every startup and every route is built from it, so it
+// is a scheme, a host and a path. A password hidden in the userinfo
+// would be printed to the log; a query string or a fragment would be
+// silently dropped from every route built on top of it, which is worse
+// than refusing it, because the operator would never know.
+func TestThePeerAddressIsAnAddressAndNothingElse(t *testing.T) {
+	for _, tc := range []struct{ name, url, says string }{
+		{"userinfo", "https://sam:hunter2@orbit.example.com/api/v1", "password"},
+		{"username only", "https://sam@orbit.example.com/api/v1", "username"},
+		{"query", "https://orbit.example.com/api/v1?token=abc", "query"},
+		{"fragment", "https://orbit.example.com/api/v1#top", "fragment"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := workingMirror(t)
+			cfg.Mirror.BaseURL = tc.url
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("a base_url of %q was accepted", tc.url)
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Fatalf("the error does not say what is wrong: %v", err)
+			}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Fatalf("the error quoted the password back: %v", err)
+			}
+		})
 	}
 }

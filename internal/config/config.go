@@ -149,6 +149,13 @@ type Config struct {
 // appears in a response.
 type MirrorConfig struct {
 	Enabled bool `toml:"enabled"`
+	// Protocol is how the peer is spoken to. "kosync" is KOReader's
+	// sync protocol, which any peer worth pointing this at implements
+	// and which does not move; it is the default for both reasons.
+	// "bookorbit" is BookOrbit's own REST API, which carries a CFI
+	// rather than a percentage and costs a full account password to
+	// reach (ADR-0048).
+	Protocol string `toml:"protocol"`
 	// Name labels this peer. It is not cosmetic: it keys the mirror's
 	// bookkeeping and prefixes the device id every position taken from
 	// the peer is filed under, so a reader sees where a position came
@@ -156,22 +163,40 @@ type MirrorConfig struct {
 	// exchanged and start filing under a new device, so it is picked
 	// once and left alone.
 	Name string `toml:"name"`
-	// BaseURL is the peer's kosync root, the same URL a KOReader device
-	// would be pointed at. Must be HTTPS unless insecure_http is set,
-	// because the credential travels on every request.
+	// BaseURL is the peer's root. For kosync it is the same URL a
+	// KOReader device would be pointed at; for BookOrbit's native
+	// protocol it is the API root, ending in /api/v1. Must be HTTPS
+	// unless insecure_http is set, because the credential travels on
+	// every request.
 	BaseURL string `toml:"base_url"`
 	// Account is the liseur-sync username whose reading is mirrored.
 	// The mirror reads and writes nothing outside it.
 	Account string `toml:"account"`
-	// RemoteUser and RemoteKey are the peer's kosync credential: the
-	// username and the MD5-derived key KOReader sends as x-auth-user
-	// and x-auth-key.
+	// RemoteUser is the account name on the peer. Both protocols need
+	// it; only the credential beside it differs.
 	RemoteUser string `toml:"remote_user"`
-	RemoteKey  string `toml:"remote_key"`
+	// RemoteKey is kosync's credential: the MD5-derived key KOReader
+	// sends as x-auth-key. It unlocks progress-by-fingerprint on the
+	// peer and nothing else.
+	RemoteKey string `toml:"remote_key"`
+	// RemotePassword is the native protocol's credential, and it is
+	// the peer account's real password, because BookOrbit offers a
+	// native client nothing narrower. It opens that whole account, so
+	// it is the reason kosync remains the default (ADR-0048).
+	RemotePassword string `toml:"remote_password"`
 	// DeviceID is the device name this server writes under on the peer.
 	// It is also how it recognises its own echo coming back, so it must
-	// be stable across restarts.
+	// be stable across restarts. The native protocol has no device
+	// field on a position, so there it is only the label the peer
+	// shows for this server's session.
 	DeviceID string `toml:"device_id"`
+	// PeerPathPrefix and LocalPathPrefix reconcile two views of one
+	// disk. A peer in a container reports the path it sees, which is
+	// not the path this server sees; naming both roots turns the
+	// peer's path into a check rather than a curiosity. Optional: with
+	// them unset the match is made on the file's size and name alone.
+	PeerPathPrefix  string `toml:"peer_path_prefix"`
+	LocalPathPrefix string `toml:"local_path_prefix"`
 	// PollInterval is how often the peer is asked. It has no push.
 	PollInterval Duration `toml:"poll_interval"`
 	// ActiveDays bounds what is polled: only works read within this
@@ -181,6 +206,15 @@ type MirrorConfig struct {
 	// Timeout bounds one request to the peer.
 	Timeout Duration `toml:"timeout"`
 }
+
+// The protocols a mirror can speak. They are spelled here rather than
+// in internal/mirror because configuration is validated before a
+// mirror exists, and a peer that cannot be spoken to is refused at
+// startup rather than discovered on the first pass.
+const (
+	ProtocolKosync    = "kosync"
+	ProtocolBookOrbit = "bookorbit"
+)
 
 // Duration is a time.Duration that reads from TOML as a string like
 // "5m". The standard decoder has no duration type and the alternative
@@ -245,6 +279,7 @@ func Default() Config {
 	c.PairingCodeTTLMin = 15
 	c.WebSessionTTLDays = 180
 	c.Mirror.Name = "peer"
+	c.Mirror.Protocol = ProtocolKosync
 	c.Mirror.DeviceID = "liseur-sync"
 	c.Mirror.PollInterval = Duration(5 * time.Minute)
 	c.Mirror.ActiveDays = 30
@@ -259,9 +294,10 @@ func Default() Config {
 // (comma-separated), LISEUR_READER_ORIGIN,
 // LISEUR_FOLDER_ROOTS (comma-separated),
 // LISEUR_MIRROR_ENABLED, LISEUR_MIRROR_NAME, LISEUR_MIRROR_BASE_URL,
-// LISEUR_MIRROR_ACCOUNT,
+// LISEUR_MIRROR_ACCOUNT, LISEUR_MIRROR_PROTOCOL,
 // LISEUR_MIRROR_REMOTE_USER, LISEUR_MIRROR_REMOTE_KEY,
-// LISEUR_MIRROR_DEVICE_ID.
+// LISEUR_MIRROR_REMOTE_PASSWORD, LISEUR_MIRROR_DEVICE_ID,
+// LISEUR_MIRROR_PEER_PATH_PREFIX, LISEUR_MIRROR_LOCAL_PATH_PREFIX.
 //
 // The mirror's credential is an environment variable on purpose: it
 // belongs beside the database URL in a deployment's .env rather than in
@@ -304,9 +340,13 @@ func (c *Config) applyEnv() {
 	setStr(&c.Mirror.Name, "LISEUR_MIRROR_NAME")
 	setStr(&c.Mirror.BaseURL, "LISEUR_MIRROR_BASE_URL")
 	setStr(&c.Mirror.Account, "LISEUR_MIRROR_ACCOUNT")
+	setStr(&c.Mirror.Protocol, "LISEUR_MIRROR_PROTOCOL")
 	setStr(&c.Mirror.RemoteUser, "LISEUR_MIRROR_REMOTE_USER")
 	setStr(&c.Mirror.RemoteKey, "LISEUR_MIRROR_REMOTE_KEY")
+	setStr(&c.Mirror.RemotePassword, "LISEUR_MIRROR_REMOTE_PASSWORD")
 	setStr(&c.Mirror.DeviceID, "LISEUR_MIRROR_DEVICE_ID")
+	setStr(&c.Mirror.PeerPathPrefix, "LISEUR_MIRROR_PEER_PATH_PREFIX")
+	setStr(&c.Mirror.LocalPathPrefix, "LISEUR_MIRROR_LOCAL_PATH_PREFIX")
 }
 
 // Validate checks the config is coherent.
@@ -408,27 +448,48 @@ func (c *Config) Validate() error {
 func (c *Config) validateMirror() error {
 	m := &c.Mirror
 	m.Name = strings.TrimSpace(m.Name)
+	m.Protocol = strings.ToLower(strings.TrimSpace(m.Protocol))
 	m.BaseURL = strings.TrimSpace(m.BaseURL)
 	m.Account = strings.TrimSpace(m.Account)
 	m.RemoteUser = strings.TrimSpace(m.RemoteUser)
 	m.DeviceID = strings.TrimSpace(m.DeviceID)
+	m.PeerPathPrefix = strings.TrimSpace(m.PeerPathPrefix)
+	m.LocalPathPrefix = strings.TrimSpace(m.LocalPathPrefix)
+	if m.Protocol == "" {
+		// A file written before there was a choice means the only
+		// protocol there was.
+		m.Protocol = ProtocolKosync
+	}
 	if !m.Enabled {
 		return nil
 	}
-	for _, required := range []struct {
-		name  string
-		value string
-	}{
+	type setting struct{ name, value string }
+	required := []setting{
 		{"mirror.name", m.Name},
 		{"mirror.base_url", m.BaseURL},
 		{"mirror.account", m.Account},
 		{"mirror.remote_user", m.RemoteUser},
-		{"mirror.remote_key", m.RemoteKey},
 		{"mirror.device_id", m.DeviceID},
-	} {
-		if required.value == "" {
-			return fmt.Errorf("%s is required when the mirror is enabled", required.name)
+	}
+	switch m.Protocol {
+	case ProtocolKosync:
+		required = append(required, setting{"mirror.remote_key", m.RemoteKey})
+	case ProtocolBookOrbit:
+		required = append(required, setting{"mirror.remote_password", m.RemotePassword})
+	default:
+		return fmt.Errorf("mirror.protocol must be %q or %q, got %q",
+			ProtocolKosync, ProtocolBookOrbit, m.Protocol)
+	}
+	for _, r := range required {
+		if r.value == "" {
+			return fmt.Errorf("%s is required when the mirror is enabled", r.name)
 		}
+	}
+	// Naming one end of the path mapping and not the other would
+	// rewrite a peer's path into nothing and silently stop confirming
+	// anything, which is worse than not mapping at all.
+	if (m.PeerPathPrefix == "") != (m.LocalPathPrefix == "") {
+		return fmt.Errorf("mirror.peer_path_prefix and mirror.local_path_prefix must be set together")
 	}
 	// The name is joined to a remote device id with a colon to make the
 	// device a reader sees, so a name carrying one would make that id
@@ -450,6 +511,16 @@ func (c *Config) validateMirror() error {
 		}
 	default:
 		return fmt.Errorf("mirror.base_url must be http or https, got %q", u.Scheme)
+	}
+	// An API root is a scheme, a host and a path. A password in the
+	// userinfo would be logged with the URL at every startup, and a
+	// query or a fragment would be carried onto every route built from
+	// it, so none of the three is accepted rather than quietly dropped.
+	if u.User != nil {
+		return fmt.Errorf("mirror.base_url must not contain a username or password")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("mirror.base_url must not contain a query string or fragment")
 	}
 	m.BaseURL = strings.TrimSuffix(u.String(), "/")
 	if m.PollInterval.Duration() < time.Minute {
