@@ -144,7 +144,7 @@ templ themeToggle(prefix string, csrf string, u userCtx) {
 		<input type="hidden" name="csrf" value={ csrf }/>
 		<input type="hidden" name="theme" value={ nextTheme(u.Prefs.Theme) }/>
 		<input type="hidden" name="back" value={ u.Back }/>
-		<button class="link" type="submit" title={ "Theme: " + u.Prefs.Theme }>
+		<button class="link" type="submit" title={ "Switch theme to " + nextTheme(u.Prefs.Theme) }>
 			{ themeGlyph(u.Prefs.Theme) }
 			<span class="visually-hidden">
 				{ "Switch theme to " + nextTheme(u.Prefs.Theme) }

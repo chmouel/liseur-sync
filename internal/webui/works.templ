@@ -177,7 +177,9 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 			<p class="muted">No individual sittings are kept for this one any more. The totals above still count them.</p>
 		} else {
 			<table>
-				<tr><th>When</th><th>Device</th><th>Duration</th><th>Progress</th></tr>
+				<thead>
+					<tr><th scope="col">When</th><th scope="col">Device</th><th scope="col">Duration</th><th scope="col">Progress</th></tr>
+				</thead>
 				for _, s := range sessions {
 					<tr>
 						<td>{ s.When }</td>
@@ -196,7 +198,9 @@ templ workBody(prefix, csrf string, d WorkDetail, ops []OpRow, sessions []Sessio
 			<p class="muted">No positions recorded yet.</p>
 		} else {
 			<table>
-				<tr><th>When</th><th>Device</th><th>Via</th><th>Progress</th></tr>
+				<thead>
+					<tr><th scope="col">When</th><th scope="col">Device</th><th scope="col">Via</th><th scope="col">Progress</th></tr>
+				</thead>
 				for _, o := range ops {
 					<tr>
 						<td>{ o.When }</td>

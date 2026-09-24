@@ -1,4 +1,6 @@
 import {
+  activeAccount,
+  clearActiveAccount,
   clearOfflineAccount,
   accountVersion,
   listOfflineOutbox,
@@ -14,8 +16,17 @@ if (account) {
     const response = await fetch(deploymentPrefix() + "ui/offline/account", {
       cache: "no-store", credentials: "same-origin",
     });
-    if (response.ok && !response.redirected && (await response.json()).account === account) {
+    if (!response.ok || response.redirected) return;
+    const server = await response.json();
+    if (server.account === account) {
       await setActiveAccount(partition, account, version);
+    } else if (await activeAccount(partition) === account) {
+      // The session belongs to somebody else now. The marker must stop
+      // saying this browser speaks for the account that saved books
+      // here, or the shelf would offer that account's offline library
+      // to the wrong reader. The data itself stays: it is theirs again
+      // the moment they sign back in.
+      await clearActiveAccount(partition);
     }
   })
     .catch(error => console.warn("offline account marker could not be updated", error));

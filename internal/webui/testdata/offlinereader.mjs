@@ -13,7 +13,7 @@ const timer = setTimeout(() => {
   console.error('offline reader timed out', diagnostics);
   chrome.kill();
   process.exit(1);
-}, 75000);
+}, 120000);
 try {
   const endpoint = await new Promise((resolve, reject) => {
     let output = '';
@@ -30,6 +30,7 @@ try {
   let id = 0;
   const pending = new Map();
   const responses = [];
+  const paused = [];
   ws.addEventListener('message', event => {
     const message = JSON.parse(event.data);
     if (message.id) {
@@ -39,6 +40,7 @@ try {
       else promise?.resolve(message.result);
     }
     if (message.method === 'Network.responseReceived') responses.push(message.params.response);
+    if (message.method === 'Fetch.requestPaused') paused.push(message.params);
     if (message.method === 'Runtime.exceptionThrown') diagnostics.push(message.params.exceptionDetails);
     if (message.method === 'Log.entryAdded') diagnostics.push(message.params.entry);
   });
@@ -80,6 +82,65 @@ try {
   assert(responses.some(response => /\/publication\/[^/]+\/positions\.json$/.test(response.url) && response.status === 200),
     'download must fetch real publication positions');
   console.log('PASS authenticated Save offline downloads the real publication graph');
+
+  const button = 'document.querySelector("[data-offline-book]")';
+  const offlineState = (text, ready, status) => `(() => {
+    const b = ${button};
+    const s = document.querySelector('[data-offline-status="' + b.dataset.offlineBook + '"]');
+    return b.textContent === ${JSON.stringify(text)} && b.dataset.offlineReady === ${JSON.stringify(ready)}
+      && s?.textContent === ${JSON.stringify(status)};
+  })()`;
+  // The first click's handler runs up to its first await and takes the
+  // slot, so the second click cancels before the saved copy is removed.
+  await online.evaluate(`${button}.click(); ${button}.click();`);
+  await wait(online, offlineState('Remove offline copy', '1', 'Download cancelled'),
+    'a cancel before removal keeps the saved copy');
+  console.log('PASS cancelling before removal keeps the saved copy');
+
+  // offline-change is dispatched synchronously once storage has changed and
+  // before the button is updated, so a click from it lands a cancel in the
+  // window where the operation can no longer stop.
+  const lateCancel = `addEventListener('offline-change', () => ${button}.click(), { once: true }); ${button}.click();`;
+  await online.evaluate(lateCancel);
+  await wait(online, offlineState('Save offline', '', 'Removed from this device'),
+    'a cancel after removal started reports the removal');
+  console.log('PASS a late cancel reports the removal that happened');
+
+  // Cancel and restart while the first request is held: the cancelled
+  // operation must not write over the one that replaced it.
+  await online.call('Fetch.enable', { patterns: [{ urlPattern: '*/resolve', requestStage: 'Request' }] });
+  await online.evaluate(`${button}.click()`);
+  for (let attempt = 0; attempt < 100 && paused.length < 1; attempt++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(paused.length, 1, 'the first resolve request must be held');
+  await online.evaluate(`(() => {
+    const b = ${button};
+    const s = document.querySelector('[data-offline-status="' + b.dataset.offlineBook + '"]');
+    b.click(); b.click();
+    window.afterRetry = [];
+    new MutationObserver(() => afterRetry.push(s.textContent + ' | ' + b.textContent))
+      .observe(s, { childList: true, characterData: true, subtree: true });
+    new MutationObserver(() => afterRetry.push(s.textContent + ' | ' + b.textContent))
+      .observe(b, { childList: true, characterData: true, subtree: true });
+  })()`);
+  for (let attempt = 0; attempt < 100 && paused.length < 2; attempt++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(paused.length, 2, 'the restarted download must reach its own resolve request');
+  assert.equal(await online.evaluate(`${button}.textContent`), 'Cancel download',
+    'the restarted download keeps its cancel label');
+  await online.call('Fetch.continueRequest', { requestId: paused[0].requestId }).catch(() => {});
+  await online.call('Fetch.continueRequest', { requestId: paused[1].requestId });
+  await online.call('Fetch.disable');
+  await wait(online, offlineState('Remove offline copy', '1', 'Saved offline'), 'restarted download completes');
+  const afterRetry = await online.evaluate('afterRetry');
+  assert(!afterRetry.some(entry => entry.startsWith('Download cancelled') || entry.endsWith('| Save offline')),
+    `the cancelled operation wrote over the restarted one: ${JSON.stringify(afterRetry)}`);
+  console.log('PASS cancel and immediate restart keeps the new download in charge');
+
+  await online.evaluate(`${button}.click()`);
+  await wait(online, offlineState('Save offline', '', 'Removed from this device'), 'remove before late-cancel download');
+  await online.evaluate(lateCancel);
+  await wait(online, offlineState('Remove offline copy', '1', 'Saved offline'),
+    'a cancel after the commit started reports the saved copy');
+  console.log('PASS a late cancel reports the copy that was saved');
 
   await online.call('Page.navigate', { url: `${base}ui/offline/` });
   await wait(online, '!!navigator.serviceWorker.controller', 'service worker control');

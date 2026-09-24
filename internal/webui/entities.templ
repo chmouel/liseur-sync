@@ -52,9 +52,7 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 	}
 	<section class="card">
 		if len(v.Entities) == 0 {
-			<p class="muted">
-				Nothing here yet. These appear as the folder is read.
-			</p>
+			@emptyState("Nothing here yet", "These appear as the folder is read.", "", "")
 		} else if v.View == viewGrid {
 			<div class="grid">
 				for _, e := range v.Entities {
@@ -63,10 +61,12 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 			</div>
 		} else {
 			<table>
-				<tr>
-					<th>Name</th>
-					<th>Books</th>
-				</tr>
+				<thead>
+					<tr>
+						<th scope="col">Name</th>
+						<th scope="col">Books</th>
+					</tr>
+				</thead>
 				for _, e := range v.Entities {
 					<tr>
 						<td>
@@ -80,7 +80,7 @@ templ entitiesBody(prefix, csrf string, v EntitiesView) {
 			</table>
 		}
 		if v.NextURL != "" {
-			<p><a href={ prefix + v.NextURL }>Next page</a></p>
+			<p><a rel="next" href={ prefix + v.NextURL }>Next page</a></p>
 		}
 	</section>
 	<p><a href={ prefix + "library" }>Back to the library</a></p>
@@ -98,7 +98,7 @@ templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
 	</div>
 	<section class="card">
 		if len(v.Books) == 0 {
-			<p class="muted">Nothing here — no book in this folder claims it any more.</p>
+			@emptyState("Nothing here", "No book in this folder claims it any more.", "", "")
 		} else if v.View == viewGrid {
 			<div class="grid">
 				for _, b := range v.Books {
@@ -107,7 +107,9 @@ templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
 			</div>
 		} else {
 			<table>
-				<tr><th>Title</th><th>Added</th></tr>
+				<thead>
+					<tr><th scope="col">Title</th><th scope="col">Added</th></tr>
+				</thead>
 				for _, b := range v.Books {
 					<tr>
 						<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
@@ -117,7 +119,7 @@ templ entityBooksBody(prefix, csrf string, v EntityBooksView) {
 			</table>
 		}
 		if v.NextURL != "" {
-			<p><a href={ prefix + v.NextURL }>Next page</a></p>
+			<p><a rel="next" href={ prefix + v.NextURL }>Next page</a></p>
 		}
 	</section>
 	<p>

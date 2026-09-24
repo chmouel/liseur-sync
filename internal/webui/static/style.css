@@ -142,6 +142,9 @@ body {
 	font-size: 15px;
 	line-height: 1.55;
 	-webkit-text-size-adjust: 100%;
+	/* Mobile browsers flash a platform-coloured box on every tap; this
+	   UI's own pressed states are the answer it would be repeating. */
+	-webkit-tap-highlight-color: transparent;
 }
 
 a { color: var(--primary); }
@@ -603,6 +606,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 }
 .auth-wrap { width: min(100%, 61rem); }
 .auth-shell {
+	/* The auth panel keeps one brand palette in every theme, so its
+	   colours are tokens of its own rather than literals repeated where
+	   a theme change would never find them. */
+	--auth-primary: #c4a7e7;
+	--auth-primary-dim: #d7c2f2;
+	--auth-on-primary: #1d1526;
+	--auth-focus: #9d7fd0;
 	display: grid; grid-template-columns: .9fr 1.1fr;
 	border: 1px solid var(--line); border-radius: 1.5rem;
 	overflow: hidden; background: var(--surface);
@@ -624,7 +634,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 .auth-brand span { margin-left: .4rem; color: #b9aecd; font: 500 .7rem ui-sans-serif, system-ui, sans-serif; letter-spacing: .18em; }
 .auth-icon { display: block; width: 7rem; height: 7rem; margin-bottom: 1.8rem; }
 .auth-headline { margin: 0 0 1.3rem; font: 400 clamp(2.4rem, 4vw, 3.15rem)/1.1 Georgia, serif; letter-spacing: -.035em; }
-.auth-headline em { color: #c4a7e7; font-weight: 400; }
+.auth-headline em { color: var(--auth-primary); font-weight: 400; }
 .auth-story-copy { max-width: 25ch; margin: 0 0 2.5rem; color: #c2b8d4; font-size: .95rem; line-height: 1.7; }
 .auth-story-foot { margin: auto 0 0; padding-top: 1rem; font-size: .72rem; letter-spacing: .035em; color: #c2b8d4; }
 .auth-panel { padding: 3.75rem 3rem; align-self: center; min-width: 0; }
@@ -640,15 +650,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 	transition: border-color .15s, box-shadow .15s;
 }
 .auth-form input:hover { border-color: var(--muted); }
-.auth-form input:focus-visible { border-color: #9d7fd0; outline: 2px solid #9d7fd080; outline-offset: 2px; }
+.auth-form input:focus-visible { border-color: var(--auth-focus); outline: 2px solid color-mix(in srgb, var(--auth-focus) 50%, transparent); outline-offset: 2px; }
 .auth-hint { font-size: .73rem; font-weight: 400; color: var(--ink-dim); }
 .auth-form .auth-submit {
 	justify-content: space-between; width: 100%; min-height: 3.1rem; margin-top: .4rem;
-	padding: .8rem 1rem; border: 1px solid #c4a7e7; border-radius: .6rem;
-	background: #c4a7e7; color: #1d1526; font-size: .87rem; font-weight: 650;
+	padding: .8rem 1rem; border: 1px solid var(--auth-primary); border-radius: .6rem;
+	background: var(--auth-primary); color: var(--auth-on-primary); font-size: .87rem; font-weight: 650;
 	transition: background .15s;
 }
-.auth-form .auth-submit:hover { background: #d7c2f2; }
+.auth-form .auth-submit:hover { background: var(--auth-primary-dim); }
 .auth-submit span { font-size: 1.25rem; line-height: 1; }
 .auth-note { margin: 1.4rem 0 0; padding-top: 1.2rem; border-top: 1px solid var(--line-soft); color: var(--ink-dim); font-size: .75rem; line-height: 1.7; }
 
@@ -826,8 +836,8 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	padding: .35rem .85rem; border-radius: 999px;
 	font-size: .78rem; text-decoration: none; color: var(--muted);
 }
-.charttabs a:hover { color: var(--fg); background: var(--surface-3); }
-.charttabs [aria-current] { color: var(--fg); background: var(--surface); box-shadow: var(--shadow-sm); }
+.charttabs a:hover { color: var(--ink); background: var(--surface-3); }
+.charttabs [aria-current] { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); }
 
 .count-badge {
 	display: grid; place-items: center; min-width: 1.7rem; height: 1.7rem;
@@ -940,6 +950,10 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	opacity: 0; transition: opacity .15s ease;
 }
 .bookcard:hover .actions, .bookcard .actions:focus-within { opacity: 1; }
+/* A phone has no hover to reveal them with; there they are simply on. */
+@media (hover: none) {
+	.bookcard .actions { opacity: 1; }
+}
 .bookcard .actions .btn { padding: .25rem .6rem; font-size: .8rem; }
 
 .bookcard .badge {
@@ -1493,7 +1507,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-stage{flex:1;display:flex;min-height:0;position:relative;
   box-sizing:border-box;padding-top:3rem}
 .reader-body[data-reader-autohide="true"] .reader-stage{padding-top:0}
-#reader-view{flex:1;min-width:0;height:100%;background:#fff;overflow:hidden;position:relative}
+#reader-view{flex:1;min-width:0;height:100%;background:var(--surface);overflow:hidden;position:relative}
 readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:block}
 .reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;
   border:0;background:transparent;cursor:pointer;font-size:2rem;
@@ -1585,6 +1599,23 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 	animation: spin 600ms linear infinite;
 }
 .htmx-request .scanspinner { display: inline-block; }
+
+/* A plain form on its way to the server: the submitter is disabled by
+   ui.js, this is what the wait looks like everywhere else on it. */
+form.working { cursor: progress; }
+form.working :is(input, select, textarea, button) { pointer-events: none; }
+
+/* The one message a failed fragment request can show: fixed, brief,
+   and above whatever asked. It is an element ui.js adds on the first
+   failure rather than markup every page carries. */
+.flash-error {
+	position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
+	max-width: min(30rem, calc(100vw - 2rem));
+	margin: 0; padding: .7rem 1rem; border-radius: var(--radius-sm);
+	background: var(--surface); color: var(--danger);
+	border: 1px solid var(--danger); box-shadow: var(--shadow);
+	font-size: .9rem; z-index: 60;
+}
 
 /* ------------------------------------------------------------- library */
 
@@ -1836,3 +1867,18 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 }
 .refreshbtn[hidden] { display: none; }
 .refreshbtn .ui-icon { width: 1rem; height: 1rem; }
+
+/* Paper has no rail, no chrome, no buttons and no dark theme: a printed
+   page is the content, in black on white, at the full width. */
+@media print {
+	.app { display: block; }
+	.topbar, .rail, .skip, .librarycontrols, .librarytools,
+	.toolbar.filters, .cta, .cardopen, .bookcard .actions, .refreshbtn,
+	.flash-error, #pull-indicator { display: none !important; }
+	:root, [data-theme] {
+		--bg: #fff; --surface: #fff; --surface-2: #fff; --surface-3: #eee;
+		--ink: #000; --ink-dim: #222; --muted: #444;
+		--line: #ccc; --line-soft: #ddd;
+		--shadow: none; --shadow-sm: none;
+	}
+}

@@ -25,6 +25,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 						<span class="scanlabel">Scan all</span>
 						<span class="scanspinner" aria-hidden="true"></span>
 					</button>
+					<span class="scansay visually-hidden" role="status"></span>
 				</form>
 			}
 			<button
@@ -88,7 +89,9 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				server writes a new book file under a folder.
 			</p>
 			<table>
-				<tr><th>Name</th><th>Kind</th><th>Root</th><th>Uploads</th><th>Added</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Name</th><th scope="col">Kind</th><th scope="col">Root</th><th scope="col">Uploads</th><th scope="col">Added</th><th scope="col"></th></tr>
+				</thead>
 				for _, f := range folders {
 					<tr>
 						<td>
@@ -110,7 +113,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 								<span class="muted">{ "Refused" }</span>
 							}
 						</td>
-						<td>{ f.Folder.CreatedAt.Format("2006-01-02") }</td>
+						<td><time datetime={ f.Folder.CreatedAt.Format("2006-01-02T15:04:05Z07:00") }>{ f.Folder.CreatedAt.Format("2006-01-02") }</time></td>
 						<td>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/uploads" }>
 								<input type="hidden" name="csrf" value={ csrf }/>
@@ -133,6 +136,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 									<span>Scan now</span>
 									<span class="scanspinner" aria-hidden="true"></span>
 								</button>
+								<span class="scansay visually-hidden" role="status"></span>
 							</form>
 							<form method="post" action={ prefix + "admin/folders/" + f.Folder.ID + "/delete" }
 								hx-confirm="Stop watching this folder? Its books stay on disk but leave the catalog."
@@ -145,7 +149,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				}
 			</table>
 			if next != "" {
-				<p><a href={ next }>Next page →</a></p>
+				<p><a rel="next" href={ next }>Next page →</a></p>
 			}
 		</section>
 	}

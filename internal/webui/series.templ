@@ -34,7 +34,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 	if v.NextUp != nil {
 		<section class="hero">
 			<div class="art">
-				<a href={ prefix + "books/" + v.NextUp.BookID }>
+				<a href={ prefix + "books/" + v.NextUp.BookID } aria-label={ orPlaceholder(v.NextUp.Title) }>
 					<img
 						src={ prefix + "books/" + v.NextUp.BookID + "/cover?size=full" }
 						alt=""
@@ -56,7 +56,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 					<span class="by">{ "Book " + v.NextUp.Position }</span>
 				}
 				if v.NextUp.Progression != nil {
-					<div class="bar"><span class={ pctClass(*v.NextUp.Progression) }></span></div>
+					@progressBar("bar", *v.NextUp.Progression)
 					<span class="muted">{ pct(*v.NextUp.Progression) }</span>
 				}
 				<p class="rowlinks">
@@ -95,7 +95,7 @@ templ seriesShelfBody(prefix, csrf string, v SeriesShelfView) {
 		}
 		if v.NextURL != "" {
 			<div class="more">
-				<a href={ prefix + v.NextURL }>Next page</a>
+				<a rel="next" href={ prefix + v.NextURL }>Next page</a>
 			</div>
 		}
 	</section>
@@ -168,6 +168,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 			<form
 				method="post"
 				action={ prefix + "entities/series/" + v.SeriesID + "/merge" }
+				hx-confirm={ "Merge this shelf into \"" + v.MergeTargetName + "\"? The books move with their numbers kept, and this shelf's name keeps leading there. Nobody's reading position changes." }
 			>
 				<input type="hidden" name="csrf" value={ csrf }/>
 				<input type="hidden" name="into" value={ v.MergeTargetID }/>
@@ -179,6 +180,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 		<form
 			method="post"
 			action={ prefix + "entities/series/" + v.SeriesID + "/merge" }
+			hx-confirm="Merge this shelf? The books move to the other shelf with their numbers kept, and this shelf's name keeps leading there. Nobody's reading position changes."
 		>
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<label>
@@ -194,6 +196,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 					hx-trigger="input changed delay:300ms"
 					hx-target="#series-names"
 					hx-swap="innerHTML"
+					hx-sync="this:replace"
 				/>
 			</label>
 			<datalist id="series-names"></datalist>
@@ -210,6 +213,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 			<form
 				method="post"
 				action={ prefix + "entities/series/" + v.SeriesID + "/split" }
+				hx-confirm="Split this folder's books onto a shelf of their own? Only this folder's claim changes; the shared shelf keeps every other folder."
 			>
 				<input type="hidden" name="csrf" value={ csrf }/>
 				<label>
@@ -242,6 +246,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 						<form
 							method="post"
 							action={ prefix + "entities/series/" + v.SeriesID + "/unbind" }
+							hx-confirm="Undo this redirect? A scan that still sees the name puts the old shelf back."
 						>
 							<input type="hidden" name="csrf" value={ csrf }/>
 							<input type="hidden" name="binding" value={ b.ID }/>
@@ -261,7 +266,7 @@ templ seriesReshapeCard(prefix, csrf string, v SeriesShelfView) {
 
 templ seriesVolumeRow(prefix, csrf string, vol SeriesVolume) {
 	<li class="seriesvol">
-		<a class="art" href={ prefix + "books/" + vol.BookID }>
+		<a class="art" href={ prefix + "books/" + vol.BookID } aria-label={ orPlaceholder(vol.Title) }>
 			<img
 				src={ prefix + "books/" + vol.BookID + "/cover?size=thumbnail" }
 				alt=""
@@ -285,7 +290,7 @@ templ seriesVolumeRow(prefix, csrf string, vol SeriesVolume) {
 				<span class="by">{ vol.Author }</span>
 			}
 			if vol.Progression != nil {
-				<div class="bar"><span class={ pctClass(*vol.Progression) }></span></div>
+				@progressBar("bar", *vol.Progression)
 				<span class="muted">
 					if vol.Finished() {
 						{ "Finished" }
@@ -405,6 +410,7 @@ templ seriesAssignRowFields(prefix string, row SeriesAssignRow) {
 			hx-trigger="input changed delay:300ms"
 			hx-target="#series-names"
 			hx-swap="innerHTML"
+			hx-sync="this:replace"
 		/>
 		<input
 			type="text"

@@ -15,7 +15,7 @@ package webui
 templ bookCard(prefix string, b BookRow) {
 	<article class="bookcard">
 		<div class="art">
-			<a href={ prefix + "books/" + b.ID } title={ orPlaceholder(b.Title) }>
+			<a href={ prefix + "books/" + b.ID } title={ orPlaceholder(b.Title) } aria-label={ orPlaceholder(b.Title) }>
 				<img
 					src={ prefix + "books/" + b.ID + "/cover?size=thumbnail" }
 					alt=""
@@ -53,7 +53,7 @@ templ workCard(prefix string, w WorkRow) {
 	<article class="bookcard">
 		if w.BookID != "" {
 			<div class="art">
-				<a href={ w.readURL(prefix) } title={ workCardHint(w) }>
+				<a href={ w.readURL(prefix) } title={ workCardHint(w) } aria-label={ orPlaceholder(w.Title) }>
 					<img
 						src={ prefix + "books/" + w.BookID + "/cover?size=thumbnail" }
 						alt=""
@@ -69,7 +69,7 @@ templ workCard(prefix string, w WorkRow) {
 					</div>
 				}
 				if w.Progression != nil {
-					<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
+					@progressBar("prog", *w.Progression)
 				}
 			</div>
 		} else {
@@ -99,7 +99,7 @@ templ workCard(prefix string, w WorkRow) {
 			}
 		</span>
 		if w.BookID == "" && w.Progression != nil {
-			<div class="prog"><span class={ pctClass(*w.Progression) }></span></div>
+			@progressBar("prog", *w.Progression)
 		}
 	</article>
 }
@@ -130,6 +130,14 @@ templ entityCard(prefix string, v EntitiesView, e EntityRow) {
 			<span class="count">{ plural(e.BookCount, "book") }</span>
 		</a>
 	</article>
+}
+
+// progressBar is the one way a reading fraction becomes the little bar:
+// the fill's width is a class, because the CSP forbids a style
+// attribute, and the numbers sit on the element for anything that
+// cannot see the fill.
+templ progressBar(track string, f float64) {
+	<div class={ track } role="progressbar" aria-label={ pct(f) + " read" } aria-valuemin="0" aria-valuemax="100" aria-valuenow={ pctNum(f) }><span class={ pctClass(f) }></span></div>
 }
 
 // emptyState presents a friendly placeholder with optional call to action.

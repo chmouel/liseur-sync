@@ -37,6 +37,11 @@ function claimable(target) {
       const overflow = getComputedStyle(node).overflowX;
       if (overflow === "auto" || overflow === "scroll") return false;
     }
+    // A region that scrolls vertically and is away from its own top
+    // wants this drag for itself: it can still scroll up. At its top
+    // the drag overshoots it either way, so the pull may have it.
+    if (node.scrollHeight > node.clientHeight + 1 && node.scrollTop > 0)
+      return false;
   }
   return true;
 }
