@@ -191,7 +191,18 @@ type SessionRow struct {
 	EndProg   float64
 }
 
+// pct formats a progression fraction as a whole percentage, e.g. "42%".
 func pct(f float64) string { return pctNum(f) + "%" }
+
+// pctProgression formats progress as a percentage. When a book has
+// been started but progress is under 1%, it reports "< 1%" rather than
+// "0%" so the started state is obvious.
+func pctProgression(f float64) string {
+	if f > 0 && f < 0.01 {
+		return "< 1%"
+	}
+	return pct(f)
+}
 
 // pctNum is the same figure without the sign, for the places that want a
 // number rather than something to read: aria-valuenow is measured
@@ -237,7 +248,11 @@ func pctClass(f float64) string {
 	case f >= 1:
 		return "p100"
 	}
-	return "p" + strconv.Itoa(int(math.Round(f*20))*5)
+	step := int(math.Round(f*20)) * 5
+	if step == 0 && f > 0 {
+		return "p5"
+	}
+	return "p" + strconv.Itoa(step)
 }
 
 // cellClass buckets minutes for the heatmap.

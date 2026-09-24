@@ -632,3 +632,32 @@ func TestAnEmptyLibraryPointsAdminsAtTheAdminPanel(t *testing.T) {
 		t.Fatalf("an administrator was not offered the admin Settings folders view: %s", html)
 	}
 }
+
+// TestLibraryFolderChooserHidesWhenOnlyOneFolder verifies that the
+// library/folder dropdown chooser is not shown when the user has only
+// one folder, and appears once multiple folders are assigned.
+func TestLibraryFolderChooserHidesWhenOnlyOneFolder(t *testing.T) {
+	f, _ := libraryFixture(t)
+
+	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	if strings.Contains(page, `id="folder-pick"`) {
+		t.Errorf("folder chooser should be hidden when user has only one folder:\n%s", page)
+	}
+
+	now := time.Now().UTC()
+	second := store.Folder{
+		ID: "folder-two", Name: "Second Library", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: now,
+	}
+	if err := f.st.CreateFolder(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), "u1", second.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, pageTwo := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	if !strings.Contains(pageTwo, `id="folder-pick"`) {
+		t.Errorf("folder chooser should be visible when user has multiple folders:\n%s", pageTwo)
+	}
+}
