@@ -12,6 +12,7 @@ package webui
 // turning an answer into a sentence on the page the form came from.
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -49,11 +50,11 @@ func (s *Server) handleLibraryUpload(
 	// carried in the query string instead, where the check can read it
 	// without the body being touched.
 	if !checkCSRFValue(r.URL.Query().Get("csrf"), a) {
-		s.uploadDone(w, back, "", "that form had expired; try again")
+		s.uploadDone(w, r, back, "", "that form had expired; try again")
 		return
 	}
 	if s.Uploads == nil {
-		s.uploadDone(w, back, "", "this server cannot receive uploads")
+		s.uploadDone(w, r, back, "", "this server cannot receive uploads")
 		return
 	}
 	folder, err := s.St.FolderByID(r.Context(), u.ID, folderID)
@@ -62,25 +63,35 @@ func (s *Server) handleLibraryUpload(
 		return
 	}
 	if !folder.AcceptsUploads {
-		s.uploadDone(w, back, "", "that folder does not accept uploads")
+		s.uploadDone(w, r, back, "", "that folder does not accept uploads")
 		return
 	}
 	_, duplicate, err := s.Uploads.ReceiveUploadTo(w, r, folder, u.ID)
 	if err != nil {
-		s.uploadDone(w, back, "", err.Error())
+		s.uploadDone(w, r, back, "", err.Error())
 		return
 	}
 	if duplicate {
-		s.uploadDone(w, back, "that book is already on this server", "")
+		s.uploadDone(w, r, back, "that book is already on this server", "")
 		return
 	}
-	s.uploadDone(w, back, "added to "+folder.Name, "")
+	s.uploadDone(w, r, back, "added to "+folder.Name, "")
 }
 
 // uploadDone sends the browser back to the page the form was on, with
 // what happened in the query string. A redirect rather than a rendered
 // page, so that reloading afterwards does not send the file again.
-func (s *Server) uploadDone(w http.ResponseWriter, back, notice, problem string) {
+func (s *Server) uploadDone(w http.ResponseWriter, r *http.Request, back, notice, problem string) {
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if problem != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": problem})
+		} else {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "notice": notice})
+		}
+		return
+	}
 	sep := "?"
 	if strings.Contains(back, "?") {
 		sep = "&"
