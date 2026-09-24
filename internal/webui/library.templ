@@ -20,26 +20,25 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	// page off the folder list is what made a revoked or never-assigned
 	// account look like an empty server — issue #13.
 	<header class="libraryhead">
-		<div>
-			<p class="eyebrow">Your shelves</p>
-			<h1>Library</h1>
-			<p class="page-intro">Browse your books and continue reading.</p>
-		</div>
-		if v.HasGrant() || (admin && v.ServerHasFolders) {
-			<div class="librarycontrols">
-				@scanButton(prefix, csrf, v.Back)
-				if v.HasGrant() {
+		<div class="libraryhead-main">
+			<p class="eyebrow">Your collection</p>
+			<div class="libraryhead-row">
+				<h1>Library</h1>
+				if v.HasGrant() && len(v.Folders) > 1 {
 					<form class="folderpick" method="get" action={ prefix + "library" }>
 						<label class="visually-hidden" for="folder-pick">Folder</label>
-						<select id="folder-pick" name="folder">
-							for _, f := range v.Folders {
-								if f.Selected {
-									<option value={ f.ID } selected>{ f.Name }</option>
-								} else {
-									<option value={ f.ID }>{ f.Name }</option>
+						<div class="folderselect-wrap">
+							<span class="folder-glyph" aria-hidden="true">@uiIcon("Folders")</span>
+							<select id="folder-pick" name="folder">
+								for _, f := range v.Folders {
+									if f.Selected {
+										<option value={ f.ID } selected>{ f.Name }</option>
+									} else {
+										<option value={ f.ID }>{ f.Name }</option>
+									}
 								}
-							}
-						</select>
+							</select>
+						</div>
 						if v.Filter != filterAll {
 							<input type="hidden" name="filter" value={ v.Filter }/>
 						}
@@ -53,7 +52,15 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 					</form>
 				}
 			</div>
-		}
+			<p class="page-intro">Browse your books and continue reading.</p>
+		</div>
+		<div class="librarycontrols">
+			if v.HasGrant() || (admin && v.ServerHasFolders) {
+				@scanButton(prefix, csrf, v.Back)
+			}
+			@refreshButton()
+			@viewToggle(prefix, csrf, v.Back, v.View)
+		</div>
 	</header>
 	if !v.HasGrant() {
 		<section class="card">
@@ -90,29 +97,35 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			}
 		</section>
 	}
-	<div class="librarytools">
-			if v.Selected != "" {
-				@searchForm(prefix, SearchView{FolderID: v.Selected}, false)
-			}
-			// Browsing by series, author or tag reaches the whole
-			// library (ADR-0019), so these do not wait for a folder to
-			// be picked the way search does.
-			<nav class="chips" aria-label="Browse the library">
-				<a class="chip" href={ prefix + "entities/series" }>Series</a>
-				<a class="chip" href={ prefix + "entities/contributors" }>Contributors</a>
-				<a class="chip" href={ prefix + "entities/tags" }>Tags</a>
-			</nav>
-			<span class="spacer"></span>
-			@refreshButton()
-			@viewToggle(prefix, csrf, v.Back, v.View)
-		</div>
+	if v.Hero != nil {
+		@heroCard(prefix, *v.Hero)
+	}
+	<div class="librarydeck">
 		if v.CanUpload {
 			@uploadForm(prefix, csrf, v.Selected)
 		}
-		if v.Hero != nil {
-			@heroCard(prefix, *v.Hero)
-		}
 		<div class="toolbar filters">
+			<nav class="chips shelf-chips" aria-label="Filter">
+				for _, c := range v.Chips {
+					if c.Active {
+						<a class="chip on" href={ prefix + c.URL } aria-current="true">{ c.Label }</a>
+					} else {
+						<a class="chip" href={ prefix + c.URL }>{ c.Label }</a>
+					}
+				}
+			</nav>
+			<span class="deck-divider" aria-hidden="true"></span>
+			<nav class="chips entity-chips" aria-label="Browse the library">
+				<a class="chip entity-link" href={ prefix + "entities/series" }>Series</a>
+				<a class="chip entity-link" href={ prefix + "entities/contributors" }>Contributors</a>
+				<a class="chip entity-link" href={ prefix + "entities/tags" }>Tags</a>
+			</nav>
+		</div>
+		<div class="librarytools">
+			if v.Selected != "" {
+				@searchForm(prefix, SearchView{FolderID: v.Selected}, false)
+			}
+			<span class="spacer"></span>
 			if v.View == viewGrid {
 				<form class="groupseries" method="post" action={ prefix + "preferences" }>
 					<input type="hidden" name="csrf" value={ csrf }/>
@@ -131,25 +144,18 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 					<noscript><button type="submit">Apply</button></noscript>
 				</form>
 			}
-			<nav class="chips" aria-label="Filter">
-				for _, c := range v.Chips {
-					if c.Active {
-						<a class="chip on" href={ prefix + c.URL } aria-current="true">{ c.Label }</a>
-					} else {
-						<a class="chip" href={ prefix + c.URL }>{ c.Label }</a>
-					}
-				}
-			</nav>
-			<span class="spacer"></span>
-			<a class="chip sortchip" href={ prefix + v.SortURL }>
-				{ sortLabel(v.Sort) }
-				<span aria-hidden="true">⇅</span>
-			</a>
-			<a class="chip sortchip" href={ prefix + v.DirURL } title="Reverse the sort order">
-				{ dirLabel(v.Dir) }
-				<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
-			</a>
+			<div class="deck-sort">
+				<a class="chip sortchip" href={ prefix + v.SortURL } title="Change sort order">
+					{ sortLabel(v.Sort) }
+					<span aria-hidden="true">⇅</span>
+				</a>
+				<a class="chip sortchip" href={ prefix + v.DirURL } title="Reverse the sort direction">
+					{ dirLabel(v.Dir) }
+					<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
+				</a>
+			</div>
 		</div>
+	</div>
 		<section class="libraryshelf" aria-label="Books">
 			if v.View == viewList {
 				if len(v.Rows) == 0 {
@@ -214,26 +220,32 @@ templ heroCard(prefix string, row LibraryRow) {
 			/>
 		</a>
 		<div class="herotext">
-			<span class="eyebrow">Continue reading</span>
+			<div class="herostatus">
+				<span class="eyebrow">Currently reading</span>
+				if row.Progression != nil {
+					<span class="heropct">{ pctProgression(*row.Progression) }</span>
+				}
+			</div>
 			<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
 			if row.Author != "" {
-				<span class="by">{ row.Author }</span>
+				<span class="by"><span class="by-prefix">by</span> { row.Author }</span>
 			}
-			if row.Progression != nil {
-				@progressBar("bar", *row.Progression)
-				<span class="muted">
-					{ pct(*row.Progression) }
-					if row.LastActive != "" {
-						{ " · read " + row.LastActive }
+			if row.Progression != nil || row.LastActive != "" {
+				<div class="herotrack">
+					if row.Progression != nil {
+						@progressBar("bar", *row.Progression)
 					}
-				</span>
+					if row.LastActive != "" {
+						<span class="muted">{ "Last read " + row.LastActive }</span>
+					}
+				</div>
 			}
 			<p class="rowlinks">
-				<a class="btn primary" href={ row.href(prefix) }>Resume</a>
+				<a class="btn primary resume-btn" href={ row.href(prefix) }>Resume reading <span aria-hidden="true">→</span></a>
 				if row.WorkID != "" {
-					<a class="btn" href={ prefix + "works/" + row.WorkID }>Stats</a>
+					<a class="btn" href={ prefix + "works/" + row.WorkID }>Reading log</a>
 				}
-				<a class="btn" href={ prefix + "books/" + row.BookID }>Details</a>
+				<a class="btn" href={ prefix + "books/" + row.BookID }>Volume details</a>
 			</p>
 		</div>
 	</section>
@@ -394,7 +406,7 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 						<span class="count">{ row.Author }</span>
 					}
 					if row.Progression != nil {
-						<span class="big">{ pct(*row.Progression) }</span>
+						<span class="big">{ pctProgression(*row.Progression) }</span>
 					}
 					<span class="tag">synced elsewhere</span>
 				</a>
@@ -402,17 +414,16 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 			</div>
 		}
 		<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
-		<span class="by">
-			if row.Pending {
-				pending
-			} else if row.LastActive != "" {
-				{ "read " + row.LastActive }
-			} else if row.Author != "" {
-				{ row.Author }
-			} else {
-				{ row.Added }
-			}
-		</span>
+		if row.Author != "" {
+			<span class="by">{ row.Author }</span>
+		} else if row.Added != "" {
+			<span class="by muted">{ row.Added }</span>
+		}
+		if row.Pending {
+			<span class="card-activity muted">pending</span>
+		} else if row.LastActive != "" {
+			<span class="card-activity muted">{ "read " + row.LastActive }</span>
+		}
 		<nav class="sublinks">
 			if row.BookID != "" {
 				<a href={ prefix + "books/" + row.BookID }>Details</a>
@@ -512,7 +523,7 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				<td>
 					if row.Progression != nil {
 						@progressBar("bar", *row.Progression)
-						{ pct(*row.Progression) }
+						{ pctProgression(*row.Progression) }
 					} else {
 						<span class="muted">—</span>
 					}
@@ -545,17 +556,23 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 // upload to find the token that says whether to accept the upload.
 templ uploadForm(prefix, csrf, folder string) {
 	<form
-		class="toolbar upload"
+		class="toolbar upload bookdrop"
 		method="post"
 		enctype="multipart/form-data"
 		action={ prefix + "library/upload?folder=" + folder + "&csrf=" + csrf }
 	>
-		<label class="visually-hidden" for="upload-file">EPUB to add</label>
-		<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
-		<button type="submit">Send a book</button>
-		// ui.js fills this while the book is on its way; with scripting
-		// off it simply stays empty and the form submits as forms do.
-		<span class="muted uploadstatus" role="status"></span>
+		<div class="bookdrop-header">
+			<span class="bookdrop-glyph" aria-hidden="true">@uiIcon("Library")</span>
+			<span class="bookdrop-title">Add book to shelf</span>
+		</div>
+		<div class="bookdrop-inputs">
+			<label class="visually-hidden" for="upload-file">EPUB to add</label>
+			<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
+			<button type="submit" class="btn primary bookdrop-submit">Send a book</button>
+			// ui.js fills this while the book is on its way; with scripting
+			// off it simply stays empty and the form submits as forms do.
+			<span class="muted uploadstatus" role="status"></span>
+		</div>
 	</form>
 }
 
