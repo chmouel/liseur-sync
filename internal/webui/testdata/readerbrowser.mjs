@@ -684,28 +684,19 @@ const unthemed = JSON.parse(await evalIn(probe));
 check('reset restores the default Light palette',
   unthemed.colour.replace(/\s/g, '') === 'rgb(27,27,31)', unthemed.colour);
 
-// In scroll mode the text runs under the bottom edge, so the footer
-// goes: a line drawn there would print itself over the book. It is back
-// the moment the pages are.
-{
-  const setFlow = (value) => evalIn(`(() => {
-    const radio = document.querySelector(
-      '#reader-settings-form input[name="flow"][value="${value}"]',
-    );
-    radio.checked = true;
-    radio.dispatchEvent(new Event('input', { bubbles: true }));
-  })()`);
-  await setFlow('scrolled');
-  await new Promise((r) => setTimeout(r, 700));
-  const scrolled = JSON.parse(await evalIn(probe));
-  check('the footer leaves in scroll mode', !scrolled.footerShown,
-    String(scrolled.footerShown));
-  await setFlow('paginated');
-  await new Promise((r) => setTimeout(r, 900));
-  const paged = JSON.parse(await evalIn(probe));
-  check('the footer returns with the pages', paged.footerShown && pageOf(paged.page),
-    `${paged.footerShown} ${paged.page}`);
-}
+// Scroll mode is gone. The engine is pinned to pages, and the settings
+// panel no longer leaves a dormant layout choice behind.
+const paginated = JSON.parse(await evalIn(`JSON.stringify({
+  controls: document.querySelectorAll('#reader-settings-form [name="flow"]').length,
+  scroll: document.querySelector('readium-view').preferences.scroll,
+  footerShown: getComputedStyle(document.getElementById('reader-footer')).display !== 'none',
+})`));
+check('the reader offers only its paginated layout',
+  paginated.controls === 0 && paginated.scroll === false,
+  JSON.stringify(paginated));
+check('the reading footer stays in the paginated layout',
+  paginated.footerShown && pageOf(JSON.parse(await evalIn(probe)).page),
+  String(paginated.footerShown));
 
 // A click on any blank margin is a page turn: aimed at the right edge
 // of the stage — which the engine's own margin occupies, retargeted to

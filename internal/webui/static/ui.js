@@ -46,7 +46,7 @@
     });
   }
 
-  // "/" puts the cursor in the search box, Escape closes the mobile nav.
+  // "/" puts the cursor in the search box.
   document.addEventListener('keydown', function (e) {
     const active = document.activeElement;
     const tag = active && active.tagName;
@@ -57,11 +57,6 @@
         e.preventDefault();
         input.focus();
       }
-      return;
-    }
-    if (e.key === 'Escape') {
-      const toggle = document.getElementById('nav-toggle');
-      if (toggle && toggle.checked) toggle.checked = false;
     }
   });
 

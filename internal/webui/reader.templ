@@ -166,11 +166,6 @@ templ readerPage(v ReaderView, csrf string) {
 								<label class="chip"><input type="checkbox" name="justify"/> Justify</label>
 								<label class="chip"><input type="checkbox" name="hyphenate"/> Hyphenate</label>
 							</div>
-							<fieldset>
-								<legend>Layout</legend>
-								<label class="chip"><input type="radio" name="flow" value="paginated"/> Pages</label>
-								<label class="chip"><input type="radio" name="flow" value="scrolled"/> Scroll</label>
-							</fieldset>
 							<label class="row">
 								Columns
 								<select name="columns">
@@ -390,8 +385,8 @@ templ readerPage(v ReaderView, csrf string) {
 				</table>
 				<p class="reader-help-note">
 					Click or tap the left and right edges of the page to turn it, and
-					the middle to show or hide the bars. They step aside on their own
-					while you read; &ldquo;Auto-hide bars&rdquo; under Aa turns that off.
+					the middle to show or hide the bars. With &ldquo;Auto-hide bars&rdquo;
+					enabled under Aa, they step aside on their own while you read.
 				</p>
 				<form method="dialog"><button>Close</button></form>
 			</dialog>
