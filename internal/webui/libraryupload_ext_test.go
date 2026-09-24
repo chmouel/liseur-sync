@@ -10,6 +10,7 @@ package webui_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -121,6 +122,49 @@ func TestSendingABookAnswers404WithoutAFolderGrant(t *testing.T) {
 	entries, err := os.ReadDir(f.root)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("inaccessible upload changed the folder: %+v, %v", entries, err)
+	}
+}
+
+func TestSendingABookWithJSONAcceptHeaderReturnsJSON(t *testing.T) {
+	f := newBooksFixture(t)
+	allowUploads(t, f)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", "test.epub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(browserEPUB(t, "Ancillary Sword", "Ann Leckie")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost,
+		f.ts.URL+"/ui/library/upload?folder="+f.folder+"&csrf="+csrfOnLibrary(t, f), &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	req.AddCookie(f.cookie)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var out struct {
+		OK     bool   `json:"ok"`
+		Notice string `json:"notice"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || !strings.Contains(out.Notice, "added to") {
+		t.Fatalf("unexpected json response: %+v", out)
 	}
 }
 

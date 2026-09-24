@@ -55,6 +55,18 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			<p class="page-intro">Browse your books and continue reading.</p>
 		</div>
 		<div class="librarycontrols">
+			if v.CanUpload {
+				<button
+					type="button"
+					class="btn upload-btn"
+					data-dialog-open="upload-dialog"
+					aria-controls="upload-dialog"
+					title="Upload books"
+				>
+					<span class="upload-icon" aria-hidden="true">@uiIcon("Upload")</span>
+					<span>Upload</span>
+				</button>
+			}
 			if v.HasGrant() || (admin && v.ServerHasFolders) {
 				@scanButton(prefix, csrf, v.Back)
 			}
@@ -101,9 +113,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 		@heroCard(prefix, *v.Hero)
 	}
 	<div class="librarydeck">
-		if v.CanUpload {
-			@uploadForm(prefix, csrf, v.Selected)
-		}
 		<div class="toolbar filters">
 			<nav class="chips shelf-chips" aria-label="Filter">
 				for _, c := range v.Chips {
@@ -174,6 +183,9 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 				}
 			}
 		</section>
+		if v.CanUpload {
+			@uploadDialog(prefix, csrf, v.Selected)
+		}
 }
 
 // libraryEmpty says why the shelf is empty, which depends entirely on
@@ -547,33 +559,60 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 	}
 }
 
-// uploadForm sends a book to the selected folder (ADR-0023). It appears
+// uploadDialog sends books to the selected folder (ADR-0023). It appears
 // only where an administrator asked for that folder to be writable.
 //
 // The CSRF token goes in the action's query string rather than in a
 // hidden field, because the handler has to check it before the body is
 // read and the body is a whole book: a field would mean buffering the
 // upload to find the token that says whether to accept the upload.
-templ uploadForm(prefix, csrf, folder string) {
-	<form
-		class="toolbar upload bookdrop"
-		method="post"
-		enctype="multipart/form-data"
-		action={ prefix + "library/upload?folder=" + folder + "&csrf=" + csrf }
-	>
-		<div class="bookdrop-header">
-			<span class="bookdrop-glyph" aria-hidden="true">@uiIcon("Library")</span>
-			<span class="bookdrop-title">Add book to shelf</span>
+templ uploadDialog(prefix, csrf, folder string) {
+	<dialog id="upload-dialog" class="upload-dialog folder-dialog" aria-labelledby="upload-dialog-title">
+		<div class="dialog-head">
+			<div>
+				<p class="eyebrow">Add to your library</p>
+				<h2 id="upload-dialog-title">Upload books</h2>
+			</div>
+			<form method="dialog">
+				<button type="submit" class="dialog-close" aria-label="Close">✕</button>
+			</form>
 		</div>
-		<div class="bookdrop-inputs">
-			<label class="visually-hidden" for="upload-file">EPUB to add</label>
-			<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
-			<button type="submit" class="btn primary bookdrop-submit">Send a book</button>
-			// ui.js fills this while the book is on its way; with scripting
-			// off it simply stays empty and the form submits as forms do.
-			<span class="muted uploadstatus" role="status"></span>
-		</div>
-	</form>
+		<form
+			id="upload-dialog-form"
+			class="upload-dialog-form upload"
+			method="post"
+			enctype="multipart/form-data"
+			action={ prefix + "library/upload?folder=" + folder + "&csrf=" + csrf }
+		>
+			<label for="upload-dialog-file" class="upload-dropzone" id="upload-dropzone">
+				<span class="upload-dropzone-glyph" aria-hidden="true">@uiIcon("Upload")</span>
+				<p class="upload-dropzone-prompt">
+					<strong>Drop EPUB files here</strong> or <span class="upload-browse-link">browse files</span>
+				</p>
+				<p class="upload-dropzone-hint muted">Select one or multiple .epub books</p>
+				<input
+					id="upload-dialog-file"
+					class="visually-hidden"
+					type="file"
+					name="file"
+					accept=".epub,application/epub+zip"
+					multiple
+					required
+				/>
+			</label>
+			<div class="upload-queue" id="upload-queue" hidden>
+				<div class="upload-queue-head">
+					<span class="upload-queue-count muted" id="upload-queue-count"></span>
+					<button type="button" class="btn linkish upload-queue-clear" id="upload-queue-clear">Clear all</button>
+				</div>
+				<ul class="upload-queue-list" id="upload-queue-list"></ul>
+			</div>
+			<div class="upload-dialog-actions">
+				<button type="submit" id="upload-dialog-submit" class="btn primary">Send a book</button>
+				<span class="uploadstatus muted" role="status"></span>
+			</div>
+		</form>
+	</dialog>
 }
 
 // refreshButton is the pull gesture said with a pointer: deliver what
