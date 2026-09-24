@@ -7,10 +7,6 @@ import "github.com/chmouel/liseur-sync/internal/buildinfo"
 // so every URL below stays correct when the app is served under a
 // stripped subpath.
 //
-// The drawer on a narrow screen is a checkbox and a label rather than a
-// script, because navigation is not somewhere to start depending on
-// JavaScript when no other part of this UI does.
-
 templ layout(title string, prefix string, u userCtx, csrf string, body templ.Component) {
 	<!doctype html>
 	<html lang="en" data-theme={ u.Prefs.Theme }>
@@ -43,13 +39,8 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 		<body data-pwa-base={ pwaBase(prefix, u.Offline) } data-offline-account={ offlineAccount(u) }>
 			<a class="skip" href="#content">Skip to content</a>
 			if u.User != nil {
-				<input type="checkbox" id="nav-toggle" class="nav-toggle"/>
 				<div class="app">
 					<header class="topbar">
-						<label class="nav-open" for="nav-toggle" title="Menu">
-							<span aria-hidden="true">☰</span>
-							<span class="visually-hidden">Menu</span>
-						</label>
 						<a class="brand" href={ prefix + "." }>
 							<img class="brand-icon" src={ prefix + "static/icon.svg" } width="32" height="32" alt=""/>
 							<span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span>
@@ -64,7 +55,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							</form>
 						</div>
 					</header>
-					<label class="nav-scrim" for="nav-toggle" aria-hidden="true"></label>
 					<aside class="rail">
 						<p class="rail-caption">Your reading space</p>
 						<nav aria-label="Sections">

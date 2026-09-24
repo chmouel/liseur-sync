@@ -2663,7 +2663,7 @@ function placeView() {
 
 // ------------------------------------------------------ appearance
 
-// Reader appearance, Komga-style: theme, font, size, spacing, layout.
+// Reader appearance, Komga-style: theme, font, size, spacing, and margins.
 // All of it is a browser preference — stored in localStorage, applied
 // through the engine's user stylesheet and layout attributes, never
 // sent to the server. Typography defaults to "what the publisher said":
@@ -2678,10 +2678,8 @@ function placeView() {
 // own default, and Publisher stays one radio away for the books whose
 // design is the point.
 const SETTINGS_KEY = "liseur.reader.settings";
-// On a phone the browser chrome already consumes part of the viewport, and
-// leaving our own bar visible takes another useful slice from the page. This
-// is only the default: a saved choice still wins, and the setting remains
-// available for readers who want the bar pinned.
+// Compact screens use narrower margins by default, but they still open with
+// the reader bar visible. A saved reader preference wins when there is one.
 const COMPACT_READER = /Android/i.test(navigator.userAgent) ||
   window.matchMedia("(max-width: 700px)").matches;
 const SETTINGS_DEFAULTS = Object.freeze({
@@ -2691,10 +2689,9 @@ const SETTINGS_DEFAULTS = Object.freeze({
   spacing: "0",
   justify: false,
   hyphenate: false,
-  flow: COMPACT_READER ? "scrolled" : "paginated",
   columns: "auto",
   margin: COMPACT_READER ? "narrow" : "normal",
-  autohide: COMPACT_READER,
+  autohide: false,
   footer: "chapter",
 });
 // What the footer's middle slot shows; a click on the footer walks
@@ -2749,6 +2746,9 @@ let settings = loadSettings();
 function loadSettings() {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    // Scroll mode was removed. Ignore the value saved by an older reader
+    // instead of carrying a setting no control can now change.
+    if (stored && typeof stored === "object") delete stored.flow;
     return { ...SETTINGS_DEFAULTS, ...(stored || {}) };
   } catch (err) {
     return { ...SETTINGS_DEFAULTS };
@@ -2845,8 +2845,6 @@ function chapterCSS(s) {
 function applySettings() {
   document.body.dataset.readerTheme = settings.theme;
   document.body.dataset.readerAutohide = String(!!settings.autohide);
-  document.body.dataset.readerFlow =
-    settings.flow === "scrolled" ? "scrolled" : "paginated";
   document.body.dataset.readerFooter = FOOTER_MODES.includes(settings.footer)
     ? settings.footer
     : SETTINGS_DEFAULTS.footer;
@@ -2917,7 +2915,6 @@ function readSettingsForm() {
     spacing: String(data.get("spacing") || SETTINGS_DEFAULTS.spacing),
     justify: data.has("justify"),
     hyphenate: data.has("hyphenate"),
-    flow: String(data.get("flow") || SETTINGS_DEFAULTS.flow),
     columns: String(data.get("columns") || SETTINGS_DEFAULTS.columns),
     margin: String(data.get("margin") || SETTINGS_DEFAULTS.margin),
     autohide: data.has("autohide"),

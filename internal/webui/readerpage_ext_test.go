@@ -179,12 +179,12 @@ func TestReaderPageLinksTheCoverAsItsIcon(t *testing.T) {
 }
 
 // TestReaderPageOffersTheChromeControls: the bar and the page-turn
-// arrows step aside while somebody reads, so the two ways of getting
-// them back — the "z" key and the setting that turns the behaviour off
-// — have to be on the page that says what the reader can do. So does
-// the sentence about the tap zones: once the arrows have faded, tapping
-// the sides of the page is how a phone turns it, and nothing else on
-// screen says so.
+// arrows can step aside while somebody reads, so the two ways of getting
+// them back — the "z" key and the setting that enables auto-hide — have
+// to be on the page that says what the reader can do. So does the
+// sentence about the tap zones: once the arrows have faded, tapping the
+// sides of the page is how a phone turns it, and nothing else on screen
+// says so.
 func TestReaderPageOffersTheChromeControls(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
@@ -359,8 +359,11 @@ func TestReaderPageCarriesTheReadingFooter(t *testing.T) {
 // Android browsers can make 100vh taller than the visible viewport while
 // their URL bar is open. The reader must follow the dynamic viewport or its
 // bottom lines disappear below the browser chrome, especially at larger type.
-func TestReaderUsesTheDynamicMobileViewport(t *testing.T) {
+// Compact readers still paginate, start with the bar visible, and discard a
+// scroll preference saved by an older build.
+func TestReaderUsesTheDynamicMobileViewportAndPaginates(t *testing.T) {
 	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 	resp, css := f.get(t, "/ui/static/style.css", f.cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("reader stylesheet: %d", resp.StatusCode)
@@ -377,11 +380,31 @@ func TestReaderUsesTheDynamicMobileViewport(t *testing.T) {
 		}
 	}
 
+	if strings.Contains(css, "data-reader-flow") {
+		t.Error("reader stylesheet still contains a scrolled-layout branch")
+	}
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	if strings.Contains(page, `name="flow"`) || strings.Contains(page, `value="scrolled"`) {
+		t.Error("reader settings still offer scroll mode")
+	}
+
 	resp, js := f.get(t, "/ui/static/reader-app.js", f.cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("reader script: %d", resp.StatusCode)
 	}
-	if !strings.Contains(js, `flow: COMPACT_READER ? "scrolled" : "paginated",`) {
-		t.Error("compact readers do not default to scrolling")
+	if !strings.Contains(js, "autohide: false") {
+		t.Error("compact readers still default to hiding the bar")
+	}
+	if !strings.Contains(js, "delete stored.flow") {
+		t.Error("an older saved scroll preference is not discarded")
+	}
+
+	resp, engine := f.get(t, "/ui/static/reader-engine.js", f.cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reader engine: %d", resp.StatusCode)
+	}
+	if !strings.Contains(engine, "scroll: false") || strings.Contains(engine, "settings.flow") {
+		t.Error("reader engine can still select scroll mode")
 	}
 }

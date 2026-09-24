@@ -409,9 +409,9 @@ export class ReaderEngine extends HTMLElement {
       normal: { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 },
       wide: { optimalLineLength: 65, minimalLineLength: 40, maximalLineLength: 80 },
     }[settings.margin] || { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 };
-    this.renderer.style.inset = `0 0 ${settings.flow === "scrolled" ? 0 : margin}px`;
+    this.renderer.style.inset = `0 0 ${margin}px`;
     this.preferences = {
-      scroll: settings.flow === "scrolled",
+      scroll: false,
       columnCount: settings.columns === "auto" ? null : Number(settings.columns),
       pageGutter: margin,
       ...lineLength,

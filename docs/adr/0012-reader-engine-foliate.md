@@ -9,7 +9,9 @@
 - **Amended by:** [ADR-0031](0031-web-reader-footer.md), which moved the
   figures out of the top bar;
   [ADR-0032](0032-reader-pages-are-readium-positions.md), which patches
-  the vendored engine in three places
+  the vendored engine in three places;
+  [ADR-0049](0049-the-web-reader-paginates.md), which removes scroll
+  mode and keeps the bar visible by default
 
 ## Context
 

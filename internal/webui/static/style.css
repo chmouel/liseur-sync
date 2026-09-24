@@ -229,7 +229,6 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 	align-self: start;
 	height: calc(100vh - var(--topbar)); height: calc(100dvh - var(--topbar));
 	display: flex; flex-direction: column;
-	overflow-y: auto;
 }
 .rail-caption { margin: 0 .8rem 1rem; font-size: .61rem; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); }
 .rail nav { display: flex; flex-direction: column; gap: .4rem; }
@@ -252,29 +251,17 @@ main { grid-area: main; padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) 3rem; min-w
 .page-intro { color: var(--muted); margin: .65rem 0 0; font-size: .9rem; }
 .foot { padding: 2.5rem 0 0; }
 
-/* The drawer. A checkbox rather than a script, so navigation on a phone
-   does not depend on JavaScript any more than the rest of this UI does. */
-.nav-toggle { display: none; }
-.nav-open, .nav-scrim { display: none; }
-
 @media (max-width: 60em) {
-	.app { grid-template-areas: "top" "main"; grid-template-columns: 1fr; }
-	.nav-open {
-		display: inline-flex; align-items: center; justify-content: center;
-		width: 2.2rem; height: 2.2rem; border-radius: var(--radius-sm);
-		border: 1px solid var(--line); background: var(--surface-2);
-		color: var(--ink); cursor: pointer;
-	}
+	.app { grid-template-areas: "top" "rail" "main"; grid-template-columns: 1fr; }
 	.rail {
-		position: fixed; inset: 0 auto 0 0; width: min(17rem, 82vw);
-		height: 100vh; height: 100dvh; z-index: 50; transform: translateX(-102%);
-		transition: transform .18s ease; box-shadow: var(--shadow);
+		position: sticky; top: var(--topbar); width: auto; height: auto; z-index: 20;
+		padding: .5rem clamp(.75rem, 3vw, 1.5rem);
+		border-right: 0; border-bottom: 1px solid var(--line);
+		box-shadow: none;
 	}
-	.nav-toggle:checked ~ .app .rail { transform: none; }
-	.nav-toggle:checked ~ .app .nav-scrim {
-		display: block; position: fixed; inset: 0; z-index: 40;
-		background: rgb(0 0 0 / .5);
-	}
+	.rail-caption, .rail-note { display: none; }
+	.rail nav { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: .25rem; }
+	.rail a { flex: 1 1 auto; justify-content: center; min-height: 2.7rem; padding: .5rem .4rem; }
 	.topbar-context { display: none; }
 	main { padding: 1.75rem 1.25rem 3rem; }
 }
@@ -288,7 +275,7 @@ main { grid-area: main; padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) 3rem; min-w
 	.account { gap: .65rem; }
 	.account .who { display: none; }
 	.account button { font-size: .72rem; }
-	.nav-open { width: 2rem; height: 2rem; flex: none; }
+	.rail a { gap: .4rem; padding-inline: .3rem; font-size: .78rem; }
 }
 
 /* ------------------------------------------------------------ components */
@@ -1144,10 +1131,11 @@ button.linkish:hover, button.linkish:focus-visible {
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left.
 
-   The progress line and status float over the stage. Only an always
-   visible bar reserves an inset. Auto-hide bars float over the book,
-   keeping the viewport height steady as they appear and disappear so
-   the engine does not repaginate while somebody is reading. */
+   The progress line and status float over the stage. By default the
+   visible bar reserves an inset. When auto-hide is enabled the bars
+   float over the book, keeping the viewport height steady as they
+   appear and disappear so the engine does not repaginate while somebody
+   is reading. */
 .reader-body{margin:0;height:100vh;height:100dvh;box-sizing:border-box;padding-top:3px;
   display:flex;flex-direction:column;overflow:hidden}
 .reader-body[data-reader-margin="none"]{--reader-margin:8px}
@@ -1228,8 +1216,6 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-footer-mid{flex:1;min-width:0;text-align:center;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .reader-footer-mid:empty{visibility:hidden}
-.reader-body[data-reader-flow="scrolled"] .reader-footer{display:none}
-.reader-body[data-reader-flow="scrolled"] .reader-turn{bottom:0}
 /* The footer sits over the stage, so its ink follows the stage's
    theme rather than the app's. */
 .reader-body[data-reader-theme="original"] .reader-footer{--reader-footer-fg:#1b1b1f}

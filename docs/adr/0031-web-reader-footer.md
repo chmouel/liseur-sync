@@ -6,7 +6,9 @@
   chapter name and the percentage in the top bar
 - **Amended by:** [ADR-0032](0032-reader-pages-are-readium-positions.md),
   which replaces the engine's locations with Readium's positions so that
-  the page here is the page the app shows
+  the page here is the page the app shows;
+  [ADR-0049](0049-the-web-reader-paginates.md), which removes scroll mode
+  and the footer's scroll-only exception
 
 ## Context
 
@@ -20,9 +22,7 @@ text, Kindle-style: the percentage on the left, the page on the
 right, a middle slot that says the chapter's name or the time left,
 cycled by a tap. Its pages are Readium's synthetic positions, a fixed
 slice of the book's bytes, so the number is the same on every device
-and at every font size. That footer stays while the bars are hidden
-and goes away in scroll mode, where the text runs under the bottom
-edge.
+and at every font size. That footer stays while the bars are hidden.
 
 Foliate hands the web reader the same ingredients on every relocate:
 `location.current/total` (its "locations", ~1500 characters each),
@@ -70,11 +70,9 @@ themes. A slot with nothing honest to say — a book whose navigation
 covers no entry, an engine with no time estimate — stays empty rather
 than inventing something.
 
-**It stays while the bars are hidden, and leaves in scroll mode.**
-The footer is not part of the chrome that auto-hides; the figures are
-what a reader looks for mid-page. In the scrolled layout the engine
-clears its margins and the text runs to the bottom, so the footer is
-hidden there. It comes back the moment the pages do.
+**It stays while the bars are hidden.** The footer is not part of the
+chrome that auto-hides; the figures are what a reader looks for
+mid-page.
 
 **A click on the footer turns no page.** The footer is not a stage
 surface: the stage's tap model checks its target, and the footer is
@@ -89,8 +87,8 @@ title, and three controls of one shape.
   move into the footer; `#reader-page` is new. The browser check
   (`TestReaderOpensInARealBrowser`) asserts the page reads `n of m`
   with `n ≤ m`, counts forward with the page turns, survives the
-  chrome hiding, leaves in scroll mode, and that a click on the
-  footer cycles the slot without moving the position.
+  chrome hiding, and that a click on the footer cycles the slot without
+  moving the position.
 - The footer's font size follows the margin: at the narrow setting
   (16px) it is small. That is the trade the app makes too, and the
   margin values are unchanged so nobody's pagination moved.
