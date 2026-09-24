@@ -940,6 +940,23 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 	display: inline-flex; align-items: center; color: var(--primary);
 }
 .librarycontrols .upload-btn .ui-icon { width: 1rem; height: 1rem; }
+.librarycontrols .refreshbtn {
+	display: inline-flex; align-items: center; gap: .35rem;
+	padding: .35rem .75rem; font-size: .84rem; font-weight: 600;
+	background: var(--surface-2); color: var(--ink);
+	border: 1px solid var(--line); border-radius: var(--radius-sm);
+	cursor: pointer; transition: all .15s ease;
+}
+.librarycontrols .refreshbtn:hover {
+	background: var(--surface-3); border-color: var(--line-strong);
+	color: var(--primary);
+}
+.librarycontrols .refreshbtn:disabled {
+	opacity: .6; cursor: not-allowed;
+}
+.librarycontrols .refreshbtn .ui-icon {
+	width: 1rem; height: 1rem; color: var(--primary);
+}
 .folderpick { margin: 0; }
 .folderselect-wrap {
 	display: inline-flex; align-items: center; gap: .4rem;

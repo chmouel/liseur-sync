@@ -67,9 +67,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 					<span>Upload</span>
 				</button>
 			}
-			if v.HasGrant() || (admin && v.ServerHasFolders) {
-				@scanButton(prefix, csrf, v.Back)
-			}
 			@refreshButton()
 			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>
