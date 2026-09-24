@@ -113,7 +113,7 @@ const CHAPTER_LOADING_MIN_MS = 250;
 function startChapterLoading(message = "Loading chapter…", delay = 0) {
   const generation = ++chapterLoadingGeneration;
   clearTimeout(chapterLoadingTimer);
-  if (!chapterLoader && !progressRail) return { show() {}, stop() {} };
+  if (!chapterLoader && !progressRail) return { show() {}, relabel() {}, stop() {} };
   let shownAt = 0;
   const show = (nextMessage = message) => {
     if (generation !== chapterLoadingGeneration) return;
@@ -127,6 +127,11 @@ function startChapterLoading(message = "Loading chapter…", delay = 0) {
   } else {
     show();
   }
+  // Changes what an already visible loader says, and never brings one up.
+  const relabel = nextMessage => {
+    if (generation !== chapterLoadingGeneration || !shownAt) return;
+    if (chapterLoaderText) chapterLoaderText.textContent = nextMessage;
+  };
   const stop = () => {
     if (generation !== chapterLoadingGeneration) return;
     clearTimeout(chapterLoadingTimer);
@@ -141,7 +146,7 @@ function startChapterLoading(message = "Loading chapter…", delay = 0) {
     if (remaining > 0) chapterLoadingTimer = setTimeout(hide, remaining);
     else hide();
   };
-  return { show, stop };
+  return { show, relabel, stop };
 }
 
 function isChapterEdge(direction) {
@@ -3703,13 +3708,16 @@ tocList.addEventListener("click", (e) => {
 function turn(direction) {
   if (!noteNavigation()) return undefined;
   const chapterMessage = direction > 0 ? "Loading next chapter…" : "Loading previous chapter…";
-  const atEdge = isChapterEdge(direction);
-  const loading = startChapterLoading(atEdge ? chapterMessage : "Loading page…", atEdge ? 0 : 80);
+  // A chapter turn waits as long as a page turn before it says anything.
+  // The frame pool keeps the neighbouring chapters built, so most chapter
+  // turns are as quick as a page turn, and a loader shown for one of them
+  // would only look like a delay.
+  const loading = startChapterLoading(isChapterEdge(direction) ? chapterMessage : "Loading page…", 80);
   const beforeSection = view.lastLocation?.section?.current;
   const promise = direction > 0 ? view.goRight() : view.goLeft();
   const finished = () => {
     if (view.lastLocation?.section?.current !== beforeSection) {
-      loading.show(chapterMessage);
+      loading.relabel(chapterMessage);
     }
     loading.stop();
   };

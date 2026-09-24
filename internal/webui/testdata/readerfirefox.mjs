@@ -384,6 +384,16 @@ await setReaderTheme('light', 'rgb(27,27,31)', 'the Light palette');
 check('publication script did not run', diag.ran === false, String(diag.ran));
 
 at('turning pages');
+// tools/reader/framepool.js keeps the next chapter as a hidden, loaded
+// frame from the moment this one opens. Gecko is where the reader has
+// been most fragile about frames it did not create itself, so the pooled
+// frame is checked here too before any turn relies on it.
+const nextChapter = await evalIn("document.querySelector('readium-view').book.sections[1].id");
+await waitFor(`!!document.querySelector('readium-view').navigator?.framePool?.pool?.has(${JSON.stringify(nextChapter)})`,
+  'the next chapter to have a loaded frame');
+check('the next chapter has a loaded frame before the reader turns into it', true, nextChapter);
+check('only the current chapter is on screen',
+  (await evalIn(`document.querySelector('readium-view').renderer.getContents().length`)) === 1);
 const seen = [];
 for (let i = 0; i < 10; i++) {
   // Observe the button's navigation promise so the next click cannot overlap

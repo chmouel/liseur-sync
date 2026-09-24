@@ -475,51 +475,117 @@ const bytes = preloaded && await evalIn(
   `document.querySelector('readium-view').resources.documents.get(${JSON.stringify(nextChapter)}).then(b => b.length)`);
 check('the next chapter is built before the reader turns into it', bytes > 0, `${nextChapter}, ${bytes} bytes`);
 
-// A warmed chapter can finish its turn in the same frame as the click. The
-// loading bar still has to reach a paint; otherwise its show and hide DOM
-// changes collapse into one and the reader never sees it at all.
-await evalIn(`(() => {
+// A built document is only half of a chapter turn. Readium still has to
+// inject its scripts, load the iframe and lay the chapter out in columns,
+// and its own pool does not start that until the reader is a couple of
+// positions from the end. tools/reader/framepool.js keeps the neighbouring
+// chapters in the pool as hidden, loaded frames from the moment a chapter
+// opens, which is what makes the turn cost what a page turn does.
+const pooled = `!!document.querySelector('readium-view').navigator?.framePool?.pool?.has(${JSON.stringify(nextChapter)})`;
+let framed = false;
+for (let i = 0; i < 100 && !framed; i++) {
+  framed = await evalIn(pooled);
+  if (!framed) await new Promise(resolve => setTimeout(resolve, 50));
+}
+check('the next chapter has a loaded frame before the reader turns into it', framed, nextChapter);
+const hiddenFrames = await evalIn(`[...document.querySelector('readium-view').renderer.querySelectorAll('iframe')]
+  .filter(frame => frame.style.visibility === 'hidden').length`);
+check('the pooled chapter stays out of sight', hiddenFrames >= 1 &&
+  (await evalIn(`document.querySelector('readium-view').renderer.getContents().length`)) === 1, `${hiddenFrames} hidden`);
+
+// A chapter turn waits as long as a page turn before the loader says
+// anything: most of them are now just as quick, and a loader flashed for
+// a turn that took no time reads as a delay. A slow one still shows it,
+// and it has to reach a paint rather than being put up and taken down in
+// the same frame.
+const stubTurn = ms => evalIn(`(() => {
   const view = document.querySelector('readium-view');
   window.__readerRealGoRight = view.goRight;
   window.__readerRealLocation = view.lastLocation;
-  view.goRight = () => {
+  view.goRight = () => new Promise(resolve => setTimeout(() => {
     view.lastLocation = {
       ...view.lastLocation,
       section: { ...view.lastLocation.section, current: view.lastLocation.section.current + 1 },
     };
-    return Promise.resolve();
-  };
+    resolve();
+  }, ${ms}));
   document.getElementById('reader-next').click();
   return true;
 })()`);
-await new Promise(resolve => setTimeout(resolve, 50));
-const loadingChapter = JSON.parse(await evalIn(`JSON.stringify({
+const loaderState = async () => JSON.parse(await evalIn(`JSON.stringify({
   loader: !document.getElementById('reader-chapter-loader').hidden,
   rail: document.querySelector('.reader-progress').classList.contains('loading'),
+  text: document.getElementById('reader-chapter-loader-text').textContent,
 })`));
-check('a fast chapter turn still paints its loading state',
-  loadingChapter.loader && loadingChapter.rail, JSON.stringify(loadingChapter));
-await new Promise(resolve => setTimeout(resolve, 300));
-const finishedLoading = await evalIn(`(() => {
+const restoreTurn = () => evalIn(`(() => {
   const view = document.querySelector('readium-view');
   view.goRight = window.__readerRealGoRight;
   view.lastLocation = window.__readerRealLocation;
   delete window.__readerRealGoRight;
   delete window.__readerRealLocation;
-  return document.getElementById('reader-chapter-loader').hidden &&
-    !document.querySelector('.reader-progress').classList.contains('loading');
+  return true;
 })()`);
-check('the chapter loading state clears after the turn', finishedLoading, String(finishedLoading));
+await stubTurn(0);
+await new Promise(resolve => setTimeout(resolve, 150));
+const fastChapter = await loaderState();
+check('a fast chapter turn shows no loading state',
+  !fastChapter.loader && !fastChapter.rail, JSON.stringify(fastChapter));
+await restoreTurn();
+await stubTurn(400);
+await new Promise(resolve => setTimeout(resolve, 250));
+const slowChapter = await loaderState();
+check('a slow turn paints its loading state', slowChapter.loader && slowChapter.rail, JSON.stringify(slowChapter));
+await new Promise(resolve => setTimeout(resolve, 250));
+const relabelled = await loaderState();
+check('a slow turn that lands in a new chapter says so',
+  relabelled.text === 'Loading next chapter…', JSON.stringify(relabelled));
+await new Promise(resolve => setTimeout(resolve, 300));
+const finishedLoading = await loaderState();
+await restoreTurn();
+check('the chapter loading state clears after the turn',
+  !finishedLoading.loader && !finishedLoading.rail, JSON.stringify(finishedLoading));
+
+// Turns cross into the next chapter below over a slow link. The chapter
+// they land in must already be on hand: a request for it during the turn
+// is the wait issue #60 was about. The time a turn takes is logged, not
+// asserted, since it measures the machine running the test as much as
+// the reader.
+const turnRequests = [];
+ws.addEventListener('message', (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.method === 'Network.requestWillBeSent' && msg.sessionId === sessionId && msg.params.request.url.includes('/publication/')) {
+    turnRequests.push(msg.params.request.url);
+  }
+});
+await S('Network.emulateNetworkConditions', { offline: false, latency: 300, downloadThroughput: -1, uploadThroughput: -1 });
 
 const seen = [];
 for (let i = 0; i < 10; i++) {
   const before = await evalIn("JSON.stringify(document.querySelector('readium-view').lastLocation.locator)");
-  await evalIn(`document.getElementById('reader-next').click()`);
+  const beforeSection = await evalIn("document.querySelector('readium-view').lastLocation.section.current");
+  const target = await evalIn(`document.querySelector('readium-view').book.sections[${beforeSection} + 1]?.id || ''`);
+  turnRequests.length = 0;
+  await evalIn(`(() => {
+    const view = document.querySelector('readium-view');
+    const started = performance.now();
+    window.__turnMs = null;
+    view.addEventListener('relocate', () => { window.__turnMs = Math.round(performance.now() - started); }, { once: true });
+    document.getElementById('reader-next').click();
+    return true;
+  })()`);
   await waitFor(`JSON.stringify(document.querySelector('readium-view').lastLocation.locator) !== ${JSON.stringify(before)}`,
     'page turn ' + (i + 1));
   const now = JSON.parse(await evalIn(probe));
-  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi, loc: now.page });
+  const section = await evalIn("document.querySelector('readium-view').lastLocation.section.current");
+  const ms = await evalIn('window.__turnMs');
+  if (section !== beforeSection) {
+    const fetched = turnRequests.filter(url => target && decodeURIComponent(url).endsWith('/' + decodeURIComponent(target)));
+    console.log(`chapter turn into ${target}: ${ms} ms`);
+    check('a turn into the next chapter fetches nothing for it', fetched.length === 0, fetched.join(' '));
+  }
+  seen.push({ page: i + 2, chapter: now.chapter, progress: now.progress, fraction: now.fraction, cfi: now.cfi, loc: now.page, ms });
 }
+await S('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 console.log('page turns:', JSON.stringify(seen, null, 1));
 
 // Ten turns, ten different places. A book that lays itself out too wide

@@ -2,6 +2,7 @@ import { build } from "esbuild";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { update } from "./framepool.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const output = path.resolve(root, "../../internal/webui/static/vendor/readium");
@@ -38,13 +39,31 @@ await build({
       // a chapter is unlikely to be revisited soon. It refuses to touch an
       // href still in the pool (visible or preloaded), matching what the
       // managers' own pruning already treats as untouchable.
+      //
+      // The same module also gets its update() replaced by the one in
+      // framepool.js, which keeps the neighbouring chapters built as hidden
+      // frames and shows the current one without waiting for them (see
+      // that file). destroy() raises the `closed` flag those background
+      // builds check, so none of them attaches a frame to a torn-down pool.
       build.onLoad({ filter: /@readium\/navigator\/dist\/epub\/frame\/FramePoolManager\.js$/ }, async ({ path: filename }) => {
-        const source = await readFile(filename, "utf8");
+        let source = await readFile(filename, "utf8");
+        const once = (needle, what) => {
+          if (source.split(needle).length !== 2) throw Error(`Readium FramePoolManager ${what} patch needs review`);
+        };
+        once('import y from"./FrameBlobBuilder.js";import{FrameManager as P}from"./FrameManager.js";const b=5,m=3;', "update");
+        const start = "async update(e,r,s,n=!1){", end = "setCSSProperties(e){";
+        once(start, "update");
+        once(end, "update");
+        const replacement = update.toString().replace(/^async function update\(/, "async update(");
+        if (replacement === update.toString()) throw Error("framepool.js update() has an unexpected shape");
+        source = source.slice(0, source.indexOf(start)) + replacement + source.slice(source.indexOf(end));
+        once("async destroy(){", "destroy");
+        source = source.replace("async destroy(){", "async destroy(){this.closed=!0;");
         const needle = "}}export{B as FramePoolManager};";
-        if (source.split(needle).length !== 2) throw Error("Readium FramePoolManager evict patch needs review");
+        once(needle, "evict");
         return {
           contents: source.replace(needle,
-            "}evict(e){if(this.pool.has(e))return;const r=this.blobs.get(e);" +
+            "}evict(e){if(this.pool.has(e)||this.building?.has(e))return;const r=this.blobs.get(e);" +
             "r&&(this.injector?.releaseBlobUrl?.(r),URL.revokeObjectURL(r),this.blobs.delete(e),this.pendingUpdates?.delete(e))}" +
             "}export{B as FramePoolManager};"),
           loader: "js",

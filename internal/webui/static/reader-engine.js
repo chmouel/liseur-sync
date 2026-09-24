@@ -248,13 +248,13 @@ export class ReaderEngine extends HTMLElement {
   // Fetches and builds the chapters on either side of this one while the
   // reader is still reading this one.
   //
-  // Readium's frame pool measures its preload window in positions, not in
-  // chapters, and a position is about a kilobyte of text: it does not
-  // reach for the next chapter until the reader is already standing on
-  // the last screen or two of this one, and the turn then waits for the
-  // fetch. Over a real network that wait is the whole complaint in issue
-  // #60. A chapter takes minutes to read and a few hundred milliseconds
-  // to fetch, so there is no reason to spend them at the same moment.
+  // Readium's frame pool, as patched in tools/reader/framepool.js, keeps
+  // the neighbouring chapters as hidden, loaded frames, so a turn into one
+  // costs what an ordinary page turn does. Those frames are built from
+  // this publication's documents, so warming the documents here first
+  // takes the fetch off both paths: a chapter takes minutes to read and a
+  // few hundred milliseconds to fetch, and over a real network that wait
+  // is the whole complaint in issue #60.
   //
   // Only the immediate neighbours, both of which are well inside the
   // retain window above, so nothing warmed here is released before it is
