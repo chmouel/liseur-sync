@@ -36,7 +36,7 @@
 	--shadow: 0 8px 30px rgb(34 29 46 / .07);
 	--shadow-sm: 0 2px 8px rgb(34 29 46 / .04);
 	--cover-ratio: 2 / 3;
-	--card-min: 10.5rem;
+	--card-min: clamp(8.5rem, 42vw, 10.5rem);
 	--book-spine-width: 14px;
 	--book-spine: linear-gradient(to right, rgb(0 0 0 / .2) 0%, rgb(0 0 0 / .06) 35%, rgb(255 255 255 / .2) 65%, transparent 100%);
 	--book-edge: linear-gradient(to left, rgb(0 0 0 / .12) 0%, transparent 100%);
@@ -211,7 +211,11 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 .topbar {
 	grid-area: top;
 	display: flex; align-items: center; gap: 1rem;
-	min-height: var(--topbar); padding: .75rem 2rem .75rem 1.5rem;
+	min-height: calc(var(--topbar) + env(safe-area-inset-top, 0px));
+	padding-top: max(.75rem, env(safe-area-inset-top, 0px));
+	padding-bottom: .75rem;
+	padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
+	padding-right: max(2rem, env(safe-area-inset-right, 0px));
 	background: var(--surface);
 	border-bottom: 1px solid var(--line);
 	position: sticky; top: 0; z-index: 30;
@@ -270,7 +274,13 @@ h3 { font-size: .95rem; margin: 0 0 .4rem; }
 .rail-note { margin-top: auto; padding: 3rem .85rem .5rem; color: var(--ink); }
 .rail-note p { margin: .8rem 0; font: 1.6rem/1.25 Georgia, serif; letter-spacing: -.03em; }
 .rail-note em { font-weight: 400; color: var(--primary); }
-main { grid-area: main; padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) 3rem; min-width: 0; }
+main {
+	grid-area: main;
+	padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) calc(3rem + env(safe-area-inset-bottom, 0px));
+	padding-left: max(clamp(1.5rem, 3.5vw, 3.5rem), env(safe-area-inset-left, 0px));
+	padding-right: max(clamp(1.5rem, 3.5vw, 3.5rem), env(safe-area-inset-right, 0px));
+	min-width: 0;
+}
 .page { max-width: 78rem; margin: 0 auto; }
 .page-intro { color: var(--muted); margin: .65rem 0 0; font-size: .9rem; }
 .foot { padding: 2.5rem 0 0; }
@@ -287,11 +297,21 @@ main { grid-area: main; padding: 2.5rem clamp(1.5rem, 3.5vw, 3.5rem) 3rem; min-w
 	.rail nav { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: .25rem; }
 	.rail a { flex: 1 1 auto; justify-content: center; min-height: 2.7rem; padding: .5rem .4rem; }
 	.topbar-context { display: none; }
-	main { padding: 1.75rem 1.25rem 3rem; }
+	main {
+		padding: 1.75rem 1.25rem calc(3rem + env(safe-area-inset-bottom, 0px));
+		padding-left: max(1.25rem, env(safe-area-inset-left, 0px));
+		padding-right: max(1.25rem, env(safe-area-inset-right, 0px));
+	}
 }
 @media (max-width: 36em) {
 	:root { --topbar: 4rem; --gap: 1.1rem; }
-	.topbar { padding: .6rem 1rem; gap: .7rem; }
+	.topbar {
+		padding-top: max(.6rem, env(safe-area-inset-top, 0px));
+		padding-bottom: .6rem;
+		padding-left: max(1rem, env(safe-area-inset-left, 0px));
+		padding-right: max(1rem, env(safe-area-inset-right, 0px));
+		gap: .7rem;
+	}
 	.brand .brand-icon { width: 2rem; height: 2rem; }
 	.brand .brandmark { font-size: 1.45rem; }
 	.brand .suffix { font-size: .63rem; }
@@ -1180,6 +1200,12 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 /* A phone has no hover to reveal them with; there they are simply on. */
 @media (hover: none) {
 	.bookcard .actions { opacity: 1; }
+	.bookcard .sublinks a, .bookcard .sublinks button.linkish {
+		padding: .25rem .15rem;
+		min-height: 2rem;
+		display: inline-flex;
+		align-items: center;
+	}
 }
 .bookcard .actions .btn { padding: .25rem .6rem; font-size: .8rem; }
 
@@ -1321,7 +1347,29 @@ button.linkish:hover, button.linkish:focus-visible {
 	.librarycontrols { width: 100%; justify-content: space-between; }
 	.folderpick, .folderselect-wrap, .folderselect-wrap select { width: 100%; }
 	.librarydeck { padding: .85rem; }
-	.librarydeck .toolbar.filters { gap: .5rem; }
+	.librarydeck .toolbar.filters {
+		gap: .5rem;
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+		scrollbar-width: none;
+		padding-bottom: .6rem;
+		margin: 0 -.85rem;
+		padding-left: .85rem;
+		padding-right: .85rem;
+	}
+	.librarydeck .toolbar.filters::-webkit-scrollbar { display: none; }
+	.shelf-chips, .entity-chips {
+		flex-wrap: nowrap;
+		flex-shrink: 0;
+	}
+	.shelf-chips .chip, .entity-chips .entity-link {
+		white-space: nowrap;
+		min-height: 2.2rem;
+		display: inline-flex;
+		align-items: center;
+	}
+	.deck-divider { flex-shrink: 0; }
 	.librarydeck .librarytools { flex-direction: column; align-items: stretch; }
 	.librarydeck .librarytools form:first-child, .librarydeck .librarytools input[type="search"] { width: 100%; }
 	.deck-sort { justify-content: flex-end; }
@@ -1355,7 +1403,7 @@ button.linkish:hover, button.linkish:focus-visible {
 
 @media (max-width: 46em) {
 	.hero .art { flex-basis: 100%; max-width: 12rem; }
-	:root { --card-min: 7.5rem; }
+	:root { --card-min: clamp(8.5rem, 42vw, 10.5rem); }
 }
 
 .empty-state {
@@ -1396,7 +1444,8 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body[data-reader-margin="wide"]{--reader-margin:72px}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
   display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
-  align-items:center;gap:.6rem;padding:.35rem .75rem;
+  align-items:center;gap:.6rem;
+  padding:calc(.35rem + env(safe-area-inset-top, 0px)) max(.75rem, env(safe-area-inset-right, 0px)) .35rem max(.75rem, env(safe-area-inset-left, 0px));
   border-bottom:1px solid var(--line);
   background:color-mix(in srgb,var(--surface) 88%,transparent);
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
@@ -1437,7 +1486,7 @@ button.linkish:hover, button.linkish:focus-visible {
   justify-content:flex-end;align-items:center}
 .reader-prompt-fallback-actions form{margin:0}
 @media (max-width:32em){
-  .reader-bar{gap:.4rem;padding:.4rem .55rem}
+  .reader-bar{gap:.4rem;padding:calc(.4rem + env(safe-area-inset-top, 0px)) max(.55rem, env(safe-area-inset-right, 0px)) .4rem max(.55rem, env(safe-area-inset-left, 0px))}
   .reader-back-label{display:none}
   .reader-back{padding:.25rem}
 }
@@ -1449,8 +1498,8 @@ button.linkish:hover, button.linkish:focus-visible {
    here changes the middle slot and turns nothing.
    It is the one thing left on screen once the bars have gone. */
 .reader-footer{position:absolute;left:0;right:0;bottom:0;z-index:5;
-  height:var(--reader-margin,48px);box-sizing:border-box;
-  padding:0 var(--reader-margin,48px);
+  height:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));box-sizing:border-box;
+  padding:0 max(var(--reader-margin,48px), env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(var(--reader-margin,48px), env(safe-area-inset-left, 0px));
   display:flex;align-items:center;justify-content:space-between;gap:.9rem;
   font-size:min(.78rem,calc(var(--reader-margin,48px) * .7));
   letter-spacing:.01em;line-height:1;
@@ -1951,15 +2000,17 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 }
 
 @media (max-width: 38em) {
-	.resume { flex-direction: column; align-items: flex-start; gap: 1.25rem; padding: 1.25rem; }
-	.resume .art { flex-basis: 7rem; max-width: 8rem; }
-	.resume .title { font-size: 1.3rem; }
-	.resume .bar { max-width: 100%; }
-}
-
-@media (max-width: 32em) {
-	.resume .art { flex-basis: 5.5rem; }
+	.resume {
+		flex-direction: row; align-items: flex-start; gap: 1rem;
+		padding: 1rem;
+	}
+	.resume .art { flex: 0 0 5.5rem; max-width: 5.5rem; }
+	.resume .herotext { min-width: 0; gap: .3rem; }
 	.resume .title { font-size: 1.15rem; }
+	.resume .by { font-size: .85rem; }
+	.resume .bar { max-width: 100%; }
+	.resume .rowlinks { gap: .4rem; margin-top: .4rem; }
+	.resume .rowlinks .btn.resume-btn { padding: .45rem .85rem; font-size: .84rem; }
 	.resume .rowlinks .btn:not(.primary) { display: none; }
 }
 

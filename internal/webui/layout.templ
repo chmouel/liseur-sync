@@ -12,7 +12,12 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 	<html lang="en" data-theme={ u.Prefs.Theme }>
 		<head>
 			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+			<meta name="apple-mobile-web-app-title" content="Liseur"/>
+			<meta name="format-detection" content="telephone=no"/>
 			// htmx would otherwise inject a <style> element into this head
 			// at load, which the page's CSP refuses. The rules it wanted to
 			// add live in style.css instead, spelled the same way.
