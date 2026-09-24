@@ -130,6 +130,26 @@ async function storageChecks() {
     } }), "identity resource length mismatches must still reject the download");
   }
 
+  // A cancel that lands after the resources are in must still leave the
+  // copy the reader already had, not commit the one they cancelled. The
+  // fake transport ignores the signal, so reconciliation finishes and
+  // only the check before the commit can stop it.
+  const keptCopy = await s.getReadySnapshot({ ...context, bookID });
+  const cancel = new AbortController();
+  const reconcileSignals = [];
+  await rejected(() => s.downloadPublication({ ...context, bookID, workID, signal: cancel.signal,
+    request: (path, options) => {
+      if (path.includes("/positions?") || path.includes("/annotations")) {
+        reconcileSignals.push(options?.signal);
+        cancel.abort();
+      }
+      return publicationRequest(path, options);
+    } }), "a download cancelled during reconciliation must reject");
+  check(reconcileSignals.length === 2 && reconcileSignals.every(signal => signal === cancel.signal),
+    "reconciliation requests must carry the download's cancel signal");
+  check((await s.getReadySnapshot({ ...context, bookID }))?.key === keptCopy.key,
+    "a download cancelled before its commit must keep the existing offline copy");
+
   const queue = async (id, body, queueID, deleted = false, rev = 0) => {
     const annotation = { id, work_id: workID, kind: "note", body, rev, pending: true, deleted };
     await s.queueOfflineAnnotation({ ...context, bookID, annotation, queueID,

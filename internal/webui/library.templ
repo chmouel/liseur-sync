@@ -92,7 +92,7 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	}
 	<div class="librarytools">
 			if v.Selected != "" {
-				@searchForm(prefix, SearchView{FolderID: v.Selected})
+				@searchForm(prefix, SearchView{FolderID: v.Selected}, false)
 			}
 			// Browsing by series, author or tag reaches the whole
 			// library (ADR-0019), so these do not wait for a folder to
@@ -220,7 +220,7 @@ templ heroCard(prefix string, row LibraryRow) {
 				<span class="by">{ row.Author }</span>
 			}
 			if row.Progression != nil {
-				<div class="bar"><span class={ pctClass(*row.Progression) }></span></div>
+				@progressBar("bar", *row.Progression)
 				<span class="muted">
 					{ pct(*row.Progression) }
 					if row.LastActive != "" {
@@ -266,7 +266,10 @@ templ libraryFragment(prefix, csrf string, v LibraryView) {
 			hx-trigger="revealed"
 			hx-swap="outerHTML"
 		>
-			<a href={ v.NextURL }>Next page</a>
+			<a rel="next" href={ v.NextURL }>Next page</a>
+			// The sentinel swaps itself out on success; while the fetch is
+			// in the air this is the only sign anything is happening.
+			<span class="htmx-indicator">Loading…</span>
 		</div>
 	}
 }
@@ -380,7 +383,7 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 				</a>
 				@cardOpen(prefix, row)
 				if row.Progression != nil {
-					<div class="prog"><span class={ pctClass(*row.Progression) }></span></div>
+					@progressBar("prog", *row.Progression)
 				}
 			</div>
 		} else {
@@ -478,7 +481,9 @@ templ cardOpen(prefix string, row LibraryRow) {
 // thousand titles beats looking at five thousand pictures.
 templ libraryTable(prefix, csrf string, v LibraryView) {
 	<table>
-		<tr><th></th><th>Title</th><th>Progress</th><th>Last read</th><th>Added</th><th></th></tr>
+		<thead>
+			<tr><th scope="col"></th><th scope="col">Title</th><th scope="col">Progress</th><th scope="col">Last read</th><th scope="col">Added</th><th scope="col"></th></tr>
+		</thead>
 		for _, row := range v.Rows {
 			<tr>
 				<td>
@@ -506,7 +511,7 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				</td>
 				<td>
 					if row.Progression != nil {
-						<div class="bar"><span class={ pctClass(*row.Progression) }></span></div>
+						@progressBar("bar", *row.Progression)
 						{ pct(*row.Progression) }
 					} else {
 						<span class="muted">—</span>
@@ -527,7 +532,7 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 		}
 	</table>
 	if v.NextURL != "" {
-		<p><a href={ v.NextURL }>Next page</a></p>
+		<p><a rel="next" href={ v.NextURL }>Next page</a></p>
 	}
 }
 
@@ -548,6 +553,9 @@ templ uploadForm(prefix, csrf, folder string) {
 		<label class="visually-hidden" for="upload-file">EPUB to add</label>
 		<input id="upload-file" type="file" name="file" accept=".epub,application/epub+zip" required/>
 		<button type="submit">Send a book</button>
+		// ui.js fills this while the book is on its way; with scripting
+		// off it simply stays empty and the form submits as forms do.
+		<span class="muted uploadstatus" role="status"></span>
 	</form>
 }
 
@@ -567,6 +575,7 @@ templ refreshButton() {
 		class="refreshbtn"
 		data-refresh
 		title="Sync and refresh this shelf"
+		aria-label="Sync and refresh this shelf"
 		hidden
 	>
 		<svg class="ui-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -598,5 +607,8 @@ templ scanButton(prefix, csrf, back string) {
 			<span class="scanlabel">Scan</span>
 			<span class="scanspinner" aria-hidden="true"></span>
 		</button>
+		// ui.js announces the wait here; the spinner is aria-hidden, so
+		// without this a screen reader hears nothing for up to a minute.
+		<span class="scansay visually-hidden" role="status"></span>
 	</form>
 }

@@ -39,7 +39,7 @@ templ searchPage(prefix string, u userCtx, csrf string, v SearchView) {
 templ searchBody(prefix, csrf string, v SearchView) {
 	<h1>Search { v.FolderName }</h1>
 	<section class="card">
-		@searchForm(prefix, v)
+		@searchForm(prefix, v, true)
 	</section>
 	if len(v.Applied) > 0 {
 		<div class="chips">
@@ -71,7 +71,9 @@ templ searchBody(prefix, csrf string, v SearchView) {
 				}
 			} else {
 				<table>
-					<tr><th>Title</th><th>Added</th></tr>
+					<thead>
+						<tr><th scope="col">Title</th><th scope="col">Added</th></tr>
+					</thead>
 					for _, b := range v.Books {
 						<tr>
 							<td><a href={ prefix + "books/" + b.ID }>{ orPlaceholder(b.Title) }</a></td>
@@ -108,7 +110,7 @@ templ searchBody(prefix, csrf string, v SearchView) {
 // searchForm is its own template because the library page shows it too:
 // somebody looking at a folder is the person most likely to be looking
 // for something in it.
-templ searchForm(prefix string, v SearchView) {
+templ searchForm(prefix string, v SearchView, autofocus bool) {
 	<form method="get" action={ prefix + "folders/" + v.FolderID + "/search" }>
 		<label class="visually-hidden" for="search-q">Find a book in this folder</label>
 		<input
@@ -116,7 +118,11 @@ templ searchForm(prefix string, v SearchView) {
 			type="search"
 			name="q"
 			value={ v.Query }
-			placeholder="title, author, series, tag"/>
+			placeholder="title, author, series, tag"
+			enterkeyhint="search"
+			autocomplete="off"
+			autofocus?={ autofocus }
+		/>
 		for _, id := range v.Filters {
 			<input type="hidden" name="entity" value={ id }/>
 		}

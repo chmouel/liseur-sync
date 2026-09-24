@@ -131,7 +131,7 @@ templ bookBody(prefix, csrf string, b BookView) {
 					<span class="tag done">Finished</span>
 				} else if b.Progression != nil && *b.Progression > 0 {
 					<span class="tag">Reading { pct(*b.Progression) }</span>
-					<div class="bar" aria-label={ pct(*b.Progression) + " read" }><span class={ pctClass(*b.Progression) }></span></div>
+					@progressBar("bar", *b.Progression)
 				} else {
 					<span class="tag">Unread</span>
 				}
@@ -274,7 +274,9 @@ templ bookBody(prefix, csrf string, b BookView) {
 			}
 		} else {
 			<table>
-				<tr><th>Name</th><th>Type</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col"></th></tr>
+				</thead>
 				<tr>
 					<td>{ orPlaceholder(b.Filename) }</td>
 					<td>{ b.MediaType }</td>

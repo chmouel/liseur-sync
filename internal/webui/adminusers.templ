@@ -31,7 +31,9 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 	<section class="card">
 		<h2>Accounts</h2>
 		<table>
-			<tr><th>Name</th><th>Role</th><th>Created</th></tr>
+			<thead>
+				<tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Created</th></tr>
+			</thead>
 			for _, usr := range users {
 				<tr>
 					<td><a href={ settingsAdminUserHref(prefix, usr.ID) }>{ usr.Name }</a></td>
@@ -78,7 +80,9 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 		</form>
 		if len(invites) > 0 {
 			<table>
-				<tr><th>Created</th><th>Expires</th><th>State</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Created</th><th scope="col">Expires</th><th scope="col">State</th><th scope="col"></th></tr>
+				</thead>
 				for _, inv := range invites {
 					<tr>
 						<td>{ inv.ExpiresAt.AddDate(0, 0, -7).Format("2006-01-02 15:04") }</td>
@@ -155,7 +159,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			<p class="muted">None.</p>
 		} else {
 			<table>
-				<tr><th>Name</th><th>Scopes</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Name</th><th scope="col">Scopes</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+				</thead>
 				for _, t := range v.Tokens {
 					<tr>
 						<td>{ t.Name }</td>
@@ -188,7 +194,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			<p class="muted">None.</p>
 		} else {
 			<table>
-				<tr><th>Slot</th><th>Label</th><th>Revoked</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+				</thead>
 				for _, d := range v.Kosync {
 					<tr>
 						<td><code>{ d.DeviceSlot }</code></td>
@@ -218,7 +226,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			<p class="muted">None.</p>
 		} else {
 			<table>
-				<tr><th>Label</th><th>Device</th><th>Created</th><th>Revoked</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Label</th><th scope="col">Device</th><th scope="col">Created</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+				</thead>
 				for _, d := range v.Koplugin {
 					<tr>
 						<td>{ orDash(d.Label) }</td>

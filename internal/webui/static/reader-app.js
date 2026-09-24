@@ -2958,7 +2958,9 @@ const MINIMIZE_PATH = "M4 14h3a2 2 0 012 2v3m6 0v-3a2 2 0 012-2h3M20 10h-3a2 2 0
 
 function toggleFullscreen() {
   if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {});
+    document.documentElement.requestFullscreen().catch(() => {
+      flash("This browser would not switch to full screen.");
+    });
   } else {
     document.exitFullscreen();
   }
@@ -3700,7 +3702,7 @@ tocList.addEventListener("click", (e) => {
   if (view) {
     const loading = startChapterLoading(title ? `Loading ${title}…` : "Loading chapter…");
     view.goTo(a.dataset.href)
-      .catch(() => {})
+      .catch(() => { say(`"${title || "That chapter"}" could not be opened. Try again.`, true); })
       .finally(loading.stop);
   }
 });
@@ -4002,7 +4004,9 @@ window.addEventListener("beforeunload", () => {
       const href = e.detail?.href;
       if (!href) return;
       const loading = startChapterLoading("Loading chapter…");
-      view.goTo(href).catch(() => {}).finally(loading.stop);
+      view.goTo(href)
+        .catch(() => { say("That link could not be opened.", true); })
+        .finally(loading.stop);
     });
     const local = cfg.offline
       ? await getReadySnapshot({ partition: storagePartition(), bookID: cfg.bookID })

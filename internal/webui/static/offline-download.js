@@ -36,16 +36,42 @@ if (buttons.length) {
     }
   };
 
-  const updateReadyState = async (button, account) => {
+  // Every caller passes a guard, re-checked after the read: a state read
+  // that settles after the user clicked again must not overwrite the
+  // newer operation's label.
+  const updateReadyState = async (button, account, guard) => {
     const snapshot = await getReadySnapshot({
       partition: storagePartition(),
       account,
       bookID: button.dataset.offlineBook,
       digest: button.dataset.offlineDigest,
     });
+    if (!guard()) return false;
     button.textContent = snapshot ? "Remove offline copy" : "Save offline";
     button.dataset.offlineReady = snapshot ? "1" : "";
     say(button, snapshot ? "Saved offline" : "");
+    return true;
+  };
+  // No operation newer than the caller is using this button.
+  const buttonFree = button => () => !active || active.button !== button;
+  // After a cancel or failure the button says what is actually stored,
+  // never what the interrupted operation was expected to leave behind.
+  const restore = async (button, account, message = null, error = false) => {
+    const free = buttonFree(button);
+    try {
+      const reader = account || await activeAccount(storagePartition());
+      if (reader) {
+        if (!await updateReadyState(button, reader, free)) return;
+      } else if (free()) {
+        button.textContent = "Save offline";
+        button.dataset.offlineReady = "";
+      }
+    } catch (stateError) {
+      console.warn("offline download state could not be restored", stateError);
+      if (!free()) return;
+      button.textContent = "Save offline";
+    }
+    if (message !== null && free()) say(button, message, error);
   };
 
   for (const button of buttons) {
@@ -55,24 +81,40 @@ if (buttons.length) {
       continue;
     }
     activeAccount(storagePartition())
-      .then(account => account && updateReadyState(button, account))
-      .catch(error => console.warn("offline download state could not be loaded", error));
+      .then(account => account && updateReadyState(button, account, buttonFree(button)))
+      .catch(error => {
+        console.warn("offline download state could not be loaded", error);
+        // The local store is unreadable, so a download could not be
+        // kept either. Say so rather than offering a button that lies.
+        button.disabled = true;
+        say(button, "Offline reading is unavailable in this browser.", true);
+      });
     button.addEventListener("click", async () => {
       if (active) {
-        active.abort();
+        // One download at a time. This click cancels the one in flight,
+        // which may be another book's button; that operation puts its
+        // own button back once it has stopped.
+        const running = active;
+        active = null;
+        running.controller.abort();
+        say(running.button, "Cancelling…");
         return;
       }
       button.disabled = false;
       const controller = new AbortController();
-      active = controller;
+      const { signal } = controller;
+      active = { controller, button };
+      const owns = () => active !== null && active.controller === controller;
       let operationAccount = "";
       button.textContent = "Cancel download";
       say(button, "Preparing offline copy…");
       try {
         const identity = await auth.acquire();
+        signal.throwIfAborted();
         operationAccount = identity.account;
         const partition = storagePartition();
         const context = await accountContext(partition, identity.account);
+        signal.throwIfAborted();
         const authorize = async current => {
           await assertOfflineContext(context);
           if (current.account !== identity.account || current.device !== identity.device)
@@ -84,17 +126,24 @@ if (buttons.length) {
           bookID: button.dataset.offlineBook,
           digest: button.dataset.offlineDigest,
         });
+        signal.throwIfAborted();
         if (existing) {
+          // Removal cannot be interrupted once it starts, so this is the
+          // last point at which a cancel keeps the copy.
           await removeBookSnapshots({
             partition,
             account: identity.account,
             epoch: context.epoch,
             bookID: button.dataset.offlineBook,
           });
-          button.dataset.offlineReady = "";
-          button.textContent = "Save offline";
-          say(button, "Removed from this device");
           notifyOfflineChange();
+          if (owns()) {
+            button.dataset.offlineReady = "";
+            button.textContent = "Save offline";
+            say(button, "Removed from this device");
+          } else {
+            await restore(button, identity.account, "Removed from this device");
+          }
         } else {
           const resolve = await auth.request(
             "v1/books/" + encodeURIComponent(button.dataset.offlineBook) + "/resolve",
@@ -103,11 +152,13 @@ if (buttons.length) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: "{}",
+              signal,
             },
           );
           if (!resolve.ok || !auth.responseCurrent(resolve))
             throw new Error("The book could not be prepared for offline sync.");
           const resolved = await resolve.json();
+          signal.throwIfAborted();
           if (!resolved.work_id)
             throw new Error("The book has no reading work to sync.");
           await downloadPublication({
@@ -121,31 +172,33 @@ if (buttons.length) {
             deviceID: identity.device || "",
             supportsActiveMs: identity.supportsActiveMs === true,
             expectedDigest: button.dataset.offlineDigest,
-            signal: controller.signal,
-            onProgress: ({ completed, total }) => say(button, `Downloading ${completed}/${total}…`),
+            signal,
+            onProgress: ({ completed, total }) => {
+              if (owns()) say(button, `Downloading ${completed}/${total}…`);
+            },
           });
-          await updateReadyState(button, identity.account);
           notifyOfflineChange();
+          if (owns()) await updateReadyState(button, identity.account, owns);
+          else await restore(button, identity.account);
         }
       } catch (error) {
-        if (error.name === "AbortError") say(button, "Download cancelled");
-        else {
+        // This operation is over; give the slot back before restoring so
+        // the restore's own guard sees the button as free.
+        const owned = owns();
+        if (owned) active = null;
+        if (error.name === "AbortError") {
+          await restore(button, operationAccount, "Download cancelled");
+        } else if (owned || buttonFree(button)()) {
           const message = error.code === "quota"
             ? error.message : error.message || "Offline download failed";
-          let restored = false;
-          if (operationAccount) {
-            try {
-              await updateReadyState(button, operationAccount);
-              restored = true;
-            } catch (stateError) {
-              console.warn("offline download state could not be restored", stateError);
-            }
-          }
-          if (!restored) button.textContent = "Save offline";
-          say(button, message, true);
+          await restore(button, operationAccount, message, true);
+        } else {
+          console.warn("superseded offline download failed", error);
         }
       } finally {
-        active = null;
+        // A download started after this one was cancelled owns the
+        // slot now; only the operation that took it gives it back.
+        if (owns()) active = null;
       }
     });
   }

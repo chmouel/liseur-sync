@@ -37,7 +37,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 	<section class="card">
 		<h2>API tokens</h2>
 		<table>
-			<tr><th>Name</th><th>Type</th><th>Scopes</th><th>Device id</th><th>State</th><th></th></tr>
+			<thead>
+				<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Scopes</th><th scope="col">Device id</th><th scope="col">State</th><th scope="col"></th></tr>
+			</thead>
 			for _, t := range toks {
 				{{ devType := detectDeviceType(t.Name, t.DeviceID) }}
 				<tr>
@@ -110,11 +112,13 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 			<p class="muted">You have not read in a browser on this account.</p>
 		} else {
 			<table>
-				<tr><th>Device id</th><th>Last read</th><th>State</th></tr>
+				<thead>
+					<tr><th scope="col">Device id</th><th scope="col">Last read</th><th scope="col">State</th></tr>
+				</thead>
 				for _, b := range browsers {
 					<tr>
 						<td><code>{ b.DeviceID }</code></td>
-						<td>{ b.LastUsed.Format("2006-01-02 15:04") }</td>
+						<td><time datetime={ b.LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ b.LastUsed.Format("2006-01-02 15:04") }</time></td>
 						<td>
 							if b.Active {
 								active
@@ -147,7 +151,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 		</form>
 		if len(kosyncDevs) > 0 {
 			<table>
-				<tr><th>Slot</th><th>Label</th><th>Type</th><th>State</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col">State</th><th scope="col"></th></tr>
+				</thead>
 				for _, d := range kosyncDevs {
 					{{ devType := detectDeviceType(d.Label, d.DeviceSlot) }}
 					<tr>
@@ -195,7 +201,9 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 		</form>
 		if len(kopluginDevs) > 0 {
 			<table>
-				<tr><th>Name</th><th>Type</th><th>Device id</th><th>State</th><th></th></tr>
+				<thead>
+					<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Device id</th><th scope="col">State</th><th scope="col"></th></tr>
+				</thead>
 				for _, d := range kopluginDevs {
 					{{ devType := detectDeviceType(d.Label, d.DeviceID) }}
 					<tr>

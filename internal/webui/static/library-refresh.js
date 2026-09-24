@@ -123,10 +123,20 @@ async function redraw() {
     return;
   }
   if (!response.ok) throw new Error("The shelf could not be refreshed.");
-  const fresh = new DOMParser()
-    .parseFromString(await response.text(), "text/html")
-    .querySelector("#content .page");
-  if (!fresh) throw new Error("The shelf could not be refreshed.");
+  const parsed = new DOMParser()
+    .parseFromString(await response.text(), "text/html");
+  const fresh = parsed.querySelector("#content .page");
+  if (!fresh) {
+    // A sign-in form answering without a redirect — a proxy that
+    // rewrites rather than forwards, say — means the session ended
+    // underneath the shelf. A full navigation goes through the same
+    // door any page load would and lands on the login screen.
+    if (parsed.querySelector(".auth-form")) {
+      window.location.reload();
+      return;
+    }
+    throw new Error("The shelf could not be refreshed.");
+  }
   target.replaceWith(document.adoptNode(fresh));
   // The new markup carries the reveal sentinel and the rest of the
   // page's own attributes; without this they are inert markup.

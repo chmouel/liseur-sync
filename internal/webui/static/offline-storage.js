@@ -1544,7 +1544,11 @@ export async function downloadPublication({
       }
       if (manifestChanged) await updateStagingManifest(context, key, manifest);
     }
-    await reconcileOfflineBook(context, snapshot, request, current);
+    await reconcileOfflineBook(context, snapshot,
+      (path, options) => request(path, { ...options, signal }), current);
+    // Past this point the new copy replaces any ready one, so a cancel
+    // must win here or not at all.
+    signal?.throwIfAborted();
     const committed = await commitSnapshot(context, key);
     return committed;
   } catch (error) {
