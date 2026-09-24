@@ -52,7 +52,11 @@ templ readerPage(v ReaderView, csrf string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			<meta name="mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-capable" content="yes"/>
+			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+			<meta name="apple-mobile-web-app-title" content="Liseur"/>
 			<title>{ readerTitle(v.Title) }</title>
 			if v.IconURL != "" {
 				<link rel="icon" href={ v.IconURL }/>
