@@ -85,13 +85,15 @@ func (s *Server) handleAdminCreateFolder(
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	root := strings.TrimSpace(r.FormValue("root"))
+	acceptsUploads := r.FormValue("accepts_uploads") == "on"
 	folder, err := admin.NewFolder(r.Context(), s.St, name, root,
-		s.Cfg.Content.FolderRoots, u.ID, r.FormValue("accepts_uploads") == "on")
+		s.Cfg.Content.FolderRoots, u.ID, acceptsUploads)
 	logAdminAction(r, u, "add-folder", name, err)
 	if err != nil {
 		s.renderAdminFolders(w, r, a, u, Flash{
 			Error:          err.Error(),
 			OpenFolderForm: true,
+			FolderUploads:   &acceptsUploads,
 		})
 		return
 	}

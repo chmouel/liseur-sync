@@ -409,6 +409,9 @@ func TestFirstRunSetupKeepsTheAccountWhenTheFolderIsRefused(t *testing.T) {
 		!strings.Contains(body, "Add your book folder") {
 		t.Fatalf("second attempt is not offered: %d\n%s", code, body)
 	}
+	if strings.Contains(body, `name="accepts_uploads" checked`) {
+		t.Fatal("the setup folder's unchecked upload choice was lost after refusal")
+	}
 }
 
 // The setup page is open to anybody who can reach the port while the

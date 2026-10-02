@@ -14,6 +14,7 @@ type Flash struct {
 	// OpenFolderForm keeps a rejected folder form open after the settings
 	// redirect, rather than making the administrator start over.
 	OpenFolderForm bool
+	FolderUploads   *bool
 }
 
 templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {

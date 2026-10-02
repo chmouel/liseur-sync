@@ -65,6 +65,9 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if !strings.Contains(body, "a folder name is required") {
 		t.Fatalf("a blank name was accepted: %s", body)
 	}
+	if strings.Contains(body, `name="accepts_uploads" checked`) {
+		t.Fatal("the failed form enabled uploads after they were left unchecked")
+	}
 	if !strings.Contains(body, `data-auto-open="true"`) {
 		t.Fatalf("folder validation did not reopen the add dialog: %s", body)
 	}
@@ -238,6 +241,34 @@ func TestAdminSecondFolderStaysOnFoldersPage(t *testing.T) {
 		if folder.AcceptsUploads {
 			t.Fatalf("uploads enabled without a checked checkbox: %s", folder.Name)
 		}
+	}
+}
+
+func TestAdminFoldersStaleCursorKeepsUploadsOff(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	folder := store.Folder{
+		ID: "existing", Name: "Existing", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now().UTC(),
+	}
+	if err := st.CreateFolder(t.Context(), folder); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	path := settingsAdminHref("/ui/settings", settingsAdminFolders) +
+		"&after=" + url.QueryEscape(store.FolderCursor(folder))
+	code, body := page(t, ts, cookie, path)
+	if code != http.StatusOK {
+		t.Fatalf("stale folder page: got %d", code)
+	}
+	if strings.Contains(body, `name="accepts_uploads" checked`) {
+		t.Fatal("an empty page enabled uploads despite an existing folder")
+	}
+	if strings.Contains(body, "Add your book folder") {
+		t.Fatal("an empty page showed first-folder onboarding with an existing folder")
 	}
 }
 
