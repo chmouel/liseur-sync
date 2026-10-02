@@ -818,7 +818,7 @@ func TestWorkCardShowsBookCoverWhenMapped(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("works page: %d", code)
 	}
-	if !strings.Contains(body, "books/"+bookID+"/cover?size=thumbnail") {
+	if !strings.Contains(body, "books/"+bookID+"/cover?size=full") {
 		t.Fatalf("reading page does not render cover for mapped work:\n%s", body)
 	}
 }
