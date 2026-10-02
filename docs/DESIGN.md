@@ -580,6 +580,18 @@ Designed as the direct negation of the KoInsight findings.
   acting administrator's password before minting durable access.
 - Per-token and per-IP rate limits protect auth endpoints; credential checks
   use constant-time compares.
+- Anonymous API login, invite registration, web login and first-run setup
+  share two password-request slots per process. Admission happens after
+  body parsing and before invite redemption; a full budget returns `429`
+  with `Retry-After: 1`, without queuing work. At the current Argon2 cost,
+  these requests can run at most 128 MiB of password derivations at once.
+  Per-key rate limiters sweep expired entries on requests once per window
+  and retain at most 10,000 keys each. At capacity, the least recently used
+  key is evicted so new clients can still sign in. Eviction can reset that
+  client's per-key budget; the shared password capacity remains enforced.
+  IPv6 addresses within a /64 share one budget to prevent address rotation
+  within a subnet from churning the table. Busy web requests render the
+  login or setup form; API requests receive JSON.
 - Reading state is scoped by `user_id` at the query layer. Catalog rows are
   shared, while their visibility is filtered through explicit per-user folder
   grants. Positions, sessions, works, devices and `user_book_works` remain

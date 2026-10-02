@@ -38,6 +38,11 @@ integrate.
    `scopes` and include the deprecated scalar `scope` only for
    singleton sets.
 
+Login and registration can return `429` when the per-IP limit or the
+shared password-processing capacity is reached. Respect `Retry-After`
+(seconds) and retry with backoff and jitter. A registration refused with
+`429` has not consumed its invite.
+
 Use `PATCH /v1/tokens/{id}` with the same `scope`/`scopes` shape to
 change capabilities without changing the token secret, device id, or
 retry identity.

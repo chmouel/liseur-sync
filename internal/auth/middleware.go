@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"container/list"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -103,15 +105,22 @@ func RequireSecureTransport(cfg config.Config, next http.Handler) http.Handler {
 // RateLimiter is a per-key fixed-window limiter. In-memory and
 // per-process by design (v1 is single-replica).
 type RateLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	window  time.Duration
-	buckets map[string]*bucket
+	mu        sync.Mutex
+	limit     int
+	window    time.Duration
+	buckets   map[string]*bucket
+	nextSweep time.Time
+	recent    list.List
 }
+
+// Evict the least recently used key at capacity. A full table must not
+// prevent previously unseen clients from attempting authentication.
+const maxRateLimitBuckets = 10_000
 
 type bucket struct {
 	count   int
 	resetAt time.Time
+	entry   *list.Element
 }
 
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
@@ -120,12 +129,35 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 
 // Allow reports whether key may proceed, consuming one unit.
 func (rl *RateLimiter) Allow(key string) bool {
+	return rl.allowAt(key, time.Now())
+}
+
+func (rl *RateLimiter) allowAt(key string, now time.Time) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	now := time.Now()
+	if !now.Before(rl.nextSweep) {
+		for k, b := range rl.buckets {
+			if !now.Before(b.resetAt) {
+				delete(rl.buckets, k)
+				rl.recent.Remove(b.entry)
+			}
+		}
+		rl.nextSweep = now.Add(rl.window)
+	}
 	b, ok := rl.buckets[key]
-	if !ok || now.After(b.resetAt) {
-		rl.buckets[key] = &bucket{count: 1, resetAt: now.Add(rl.window)}
+	if !ok {
+		if len(rl.buckets) >= maxRateLimitBuckets {
+			oldest := rl.recent.Back()
+			delete(rl.buckets, oldest.Value.(string))
+			rl.recent.Remove(oldest)
+		}
+		b = &bucket{entry: rl.recent.PushFront(key)}
+		rl.buckets[key] = b
+	} else {
+		rl.recent.MoveToFront(b.entry)
+	}
+	if !ok || !now.Before(b.resetAt) {
+		b.count, b.resetAt = 1, now.Add(rl.window)
 		return true
 	}
 	if b.count >= rl.limit {
@@ -135,12 +167,47 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return true
 }
 
+// All anonymous password routes share this process-wide budget. Two
+// concurrent Argon2 operations use 128 MiB at the production parameters.
+var passwordRequests = make(chan struct{}, 2)
+
+// PasswordBusyRetryAfter is the retry delay in seconds for a full password budget.
+const PasswordBusyRetryAfter = "1"
+
+// BeginPasswordRequest reserves capacity after the handler has parsed its
+// body, so a slow sender cannot hold a password slot. Nil means busy;
+// callers render the appropriate API or HTML response. Defer a non-nil
+// release, and reserve before consuming an invite or creating an account.
+func BeginPasswordRequest() (release func()) {
+	select {
+	case passwordRequests <- struct{}{}:
+		return func() { <-passwordRequests }
+	default:
+		return nil
+	}
+}
+
+// ClientRateKey groups IPv6 clients by /64 so rotating interface addresses
+// does not provide fresh budgets or churn the table. Logs still use ClientIP.
+func ClientRateKey(r *http.Request, cfg config.Config) string {
+	key := ClientIP(r, cfg)
+	ip, err := netip.ParseAddr(key)
+	if err != nil {
+		return key
+	}
+	ip = ip.Unmap()
+	if ip.Is6() {
+		return netip.PrefixFrom(ip, 64).Masked().String()
+	}
+	return ip.String()
+}
+
 // RateLimitIP throttles requests per client IP, as ClientIP resolves
 // it — behind a trusted proxy that is the forwarded client, not the
 // proxy.
 func RateLimitIP(rl *RateLimiter, cfg config.Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow(ClientIP(r, cfg)) {
+		if !rl.Allow(ClientRateKey(r, cfg)) {
 			w.Header().Set("Retry-After", "60")
 			http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
 			return

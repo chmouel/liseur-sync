@@ -474,7 +474,7 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, stor
 func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.LoginLimiter != nil {
-			if !s.LoginLimiter.Allow(auth.ClientIP(r, s.Cfg)) {
+			if !s.LoginLimiter.Allow(auth.ClientRateKey(r, s.Cfg)) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
 				loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "too many attempts, try again later").
@@ -486,17 +486,37 @@ func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// errPasswordBusy is what a browser form shows when the shared password
+// capacity is full. The form is rendered again, never the API's JSON.
+const errPasswordBusy = "the server is busy, try again in a moment"
+
+// passwordBusy writes the status line for a form refused because the
+// shared password capacity is full; the caller renders the page.
+func passwordBusy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", auth.PasswordBusyRetryAfter)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusTooManyRequests)
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	prefix := relPrefix(r.URL.Path)
-	u, err := s.St.UserByName(r.Context(), r.FormValue("username"))
+	username, password := r.FormValue("username"), r.FormValue("password")
+	release := auth.BeginPasswordRequest()
+	if release == nil {
+		passwordBusy(w)
+		loginPage(prefix, uiCtx(r, nil), errPasswordBusy).Render(r.Context(), w)
+		return
+	}
+	defer release()
+	u, err := s.St.UserByName(r.Context(), username)
 	if err != nil {
 		// Same work as a real check, so an unknown username cannot be
 		// told apart from a wrong password by response time.
-		auth.CheckDummyPassword(r.FormValue("password"))
+		auth.CheckDummyPassword(password)
 		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
 		return
 	}
-	ok, err := auth.CheckPassword(r.FormValue("password"), u.Argon2Hash)
+	ok, err := auth.CheckPassword(password, u.Argon2Hash)
 	if err != nil || !ok {
 		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
 		return

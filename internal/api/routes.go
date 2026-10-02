@@ -22,6 +22,13 @@ func (s *Server) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
+	release := auth.BeginPasswordRequest()
+	if release == nil {
+		w.Header().Set("Retry-After", auth.PasswordBusyRetryAfter)
+		writeError(w, http.StatusTooManyRequests, "password service busy; try again shortly")
+		return
+	}
+	defer release()
 	secret, err := s.Auth.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")

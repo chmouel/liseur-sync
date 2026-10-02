@@ -99,7 +99,7 @@ func (s *Server) reauth(r *http.Request, actor *store.User) error {
 		userAllowed = s.AdminReauthUserLimiter.Allow(actor.ID)
 	}
 	if s.AdminReauthIPLimiter != nil {
-		ipAllowed = s.AdminReauthIPLimiter.Allow(auth.ClientIP(r, s.Cfg))
+		ipAllowed = s.AdminReauthIPLimiter.Allow(auth.ClientRateKey(r, s.Cfg))
 	}
 	if !userAllowed || !ipAllowed {
 		return errRateLimited

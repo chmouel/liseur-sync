@@ -27,6 +27,13 @@ func (s *Server) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invite, username, and password (>= 8 chars) required")
 		return
 	}
+	release := auth.BeginPasswordRequest()
+	if release == nil {
+		w.Header().Set("Retry-After", auth.PasswordBusyRetryAfter)
+		writeError(w, http.StatusTooManyRequests, "password service busy; try again shortly")
+		return
+	}
+	defer release()
 	ctx := r.Context()
 	inv, err := s.St.RedeemInvite(ctx, auth.HashSecret(req.Invite), time.Now())
 	if err != nil {
