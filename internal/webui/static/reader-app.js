@@ -2690,7 +2690,7 @@ const COMPACT_READER = /Android/i.test(navigator.userAgent) ||
 const SETTINGS_DEFAULTS = Object.freeze({
   theme: "light",
   font: "publisher",
-  size: 100,
+  size: 120,
   spacing: "0",
   justify: false,
   hyphenate: false,
