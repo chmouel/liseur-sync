@@ -1353,7 +1353,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-body[data-reader-margin="normal"]{--reader-margin:48px}
 .reader-body[data-reader-margin="wide"]{--reader-margin:72px}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
-  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
+  display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,1fr) minmax(max-content,1fr);
   align-items:center;gap:.6rem;
   padding:calc(.35rem + env(safe-area-inset-top, 0px)) max(.75rem, env(safe-area-inset-right, 0px)) .35rem max(.75rem, env(safe-area-inset-left, 0px));
   border-bottom:1px solid var(--line);
@@ -1370,7 +1370,7 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   text-align:center;font-size:.95rem;letter-spacing:.005em}
 .reader-title strong{font-weight:600}
-.reader-actions{display:flex;align-items:center;justify-self:end;gap:.35rem;min-width:0}
+.reader-actions{position:relative;display:flex;align-items:center;justify-self:end;gap:.35rem;min-width:0}
 /* One shape for every control on the bar: TOC, Aa, full screen. */
 .reader-icon-btn{display:inline-flex;align-items:center;justify-content:center;
   box-sizing:border-box;width:2rem;height:2rem;padding:0;
@@ -1389,7 +1389,7 @@ button.linkish:hover, button.linkish:focus-visible {
    than its viewport grows off both edges at once, and the edge that
    matters is the one carrying the title. */
 #reader-prompt-fallback textarea{
-  box-sizing:border-box;width:100%;max-height:40dvh;font:inherit;font-size:.9rem;
+  box-sizing:border-box;width:100%;max-height:40vh;max-height:40dvh;font:inherit;font-size:.9rem;
   margin:.6rem 0;padding:.5rem;border:1px solid var(--line);border-radius:8px;
   background:var(--surface-2);color:inherit}
 .reader-prompt-fallback-actions{margin-top:.2rem;display:flex;gap:.5rem;
@@ -1550,7 +1550,7 @@ button.linkish:hover, button.linkish:focus-visible {
   100%{transform:translateX(320%)}
 }
 .reader-chapter-loader{
-  position:fixed;z-index:60;top:3.8rem;left:50%;
+  position:fixed;z-index:60;top:calc(var(--reader-bar-height,3rem) + .8rem);left:50%;
   transform:translate(-50%,-4px) scale(.96);
   display:inline-flex;align-items:center;gap:.65rem;
   padding:.45rem 1.05rem;font-size:.82rem;font-weight:500;
@@ -1561,7 +1561,7 @@ button.linkish:hover, button.linkish:focus-visible {
   box-shadow:0 4px 20px rgba(0,0,0,.16),0 1px 3px rgba(0,0,0,.08);
   pointer-events:none;opacity:0;
   transition:top .2s cubic-bezier(.16,1,.3,1),opacity .2s cubic-bezier(.16,1,.3,1),transform .2s cubic-bezier(.16,1,.3,1)}
-.reader-body[data-reader-chrome="hidden"] .reader-chapter-loader{top:1.1rem}
+.reader-body[data-reader-chrome="hidden"] .reader-chapter-loader{top:calc(1.1rem + env(safe-area-inset-top, 0px))}
 .reader-chapter-loader:not([hidden]){
   opacity:1;transform:translate(-50%,0) scale(1)}
 .reader-chapter-loader[hidden]{display:none}
@@ -1628,7 +1628,7 @@ button.linkish:hover, button.linkish:focus-visible {
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
   box-sizing:border-box;
   min-width:min(18rem,calc(100vw - 2rem));max-width:calc(100vw - 2rem);
-  max-height:calc(100dvh - 2rem);overflow:auto;font-size:.9rem}
+  max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;font-size:.9rem}
 #reader-prompt-fallback{width:min(60ch,calc(100vw - 2rem))}
 .reader-goto::backdrop{background:rgba(0,0,0,.55)}
 .reader-goto h2{margin:0 0 .7rem;font-size:1rem}
@@ -1645,7 +1645,8 @@ button.linkish:hover, button.linkish:focus-visible {
    them, and a comparison that scrolls is not one. */
 .reader-sync-dialog{background:var(--surface);color:inherit;border:1px solid var(--line);
   border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);padding:1.1rem 1.3rem;
-  width:min(32rem,calc(100vw - 2rem));font-size:.9rem}
+  box-sizing:border-box;width:min(32rem,calc(100vw - 2rem));
+  max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;font-size:.9rem}
 .reader-sync-dialog::backdrop{background:rgba(0,0,0,.55)}
 .reader-sync-dialog h2{margin:0 0 .7rem;font-size:1rem}
 .reader-sync-summary{margin:0 0 .9rem}
@@ -1671,6 +1672,10 @@ button.linkish:hover, button.linkish:focus-visible {
 .reader-catchup-detail[hidden],.reader-catchup-excerpt[hidden]{display:none}
 .reader-toc{position:fixed;top:0;bottom:0;left:0;z-index:60;
   width:min(22rem,85vw);overflow-y:auto;padding:1rem 1.1rem;
+  box-sizing:border-box;overscroll-behavior:contain;
+  padding-top:max(1rem,env(safe-area-inset-top, 0px));
+  padding-bottom:max(1rem,env(safe-area-inset-bottom, 0px));
+  padding-left:max(1.1rem,env(safe-area-inset-left, 0px));
   background:var(--surface);border-right:1px solid var(--line);
   box-shadow:0 0 32px rgba(0,0,0,.45);font-size:.9rem}
 .reader-toc h2{margin:0 0 .6rem;font-size:1rem}
@@ -1702,11 +1707,11 @@ button.linkish:hover, button.linkish:focus-visible {
 .ann-color-purple{border-left:4px solid #ba68c8}
 .ann-color-orange{border-left:4px solid #ffb74d}
 .reader-stage{flex:1;display:flex;min-height:0;position:relative;
-  box-sizing:border-box;padding-top:3rem}
-.reader-body[data-reader-autohide="true"] .reader-stage{padding-top:0}
+  box-sizing:border-box;padding-top:var(--reader-bar-height,calc(3rem + env(safe-area-inset-top, 0px)))}
+.reader-body[data-reader-autohide="true"] .reader-stage{padding-top:env(safe-area-inset-top, 0px)}
 #reader-view{flex:1;min-width:0;height:100%;background:var(--surface);overflow:hidden;position:relative}
 readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:block}
-.reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;
+.reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));z-index:6;width:2.75rem;
   border:0;background:transparent;cursor:pointer;font-size:2rem;
   padding:0;opacity:.35;color:inherit;transition:opacity .18s ease}
 #reader-prev{left:0}
@@ -1716,12 +1721,18 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 /* Reader appearance settings (ADR-0012): a details popover, no script
    needed to open it and none to style it. The stage colour tracks the
    chosen theme so page gaps match the book instead of flashing white. */
-.reader-settings{position:relative}
-.reader-settings>summary{list-style:none;user-select:none}
+/* Anchor the popover to the actions' right edge; anchoring it to Aa
+   pushes its left edge off screen in Split View. */
+.reader-settings{position:static}
+.reader-settings>summary{list-style:none;user-select:none;-webkit-user-select:none}
 .reader-settings>summary::-webkit-details-marker{display:none}
 .reader-settings[open]>summary{background:var(--surface-3)}
 .reader-settings>form{position:absolute;right:0;top:calc(100% + .55rem);z-index:40;
-  width:19rem;max-height:min(75vh,34rem);overflow:auto;
+  box-sizing:border-box;width:21rem;
+  max-width:calc(100vw - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  max-height:min(75vh,34rem);
+  max-height:min(34rem,calc(100dvh - var(--reader-bar-height,3rem) - 1.5rem - env(safe-area-inset-bottom, 0px)));
+  overflow:auto;overscroll-behavior:contain;
   background:var(--surface);border:1px solid var(--line);border-radius:10px;
   box-shadow:0 12px 32px rgba(0,0,0,.45);padding:.9rem;
   display:grid;gap:.7rem;font-size:.85rem;white-space:normal}
@@ -1751,6 +1762,20 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 #reader-settings-reset{border:1px solid var(--line);border-radius:6px;
   background:transparent;color:inherit;cursor:pointer;padding:.35rem .6rem}
 #reader-settings-reset:hover{background:var(--surface-3)}
+/* Match capabilities, including iPads with a trackpad attached. Keep
+   native selection and pinch zoom available in the publication. */
+@media (any-pointer:coarse){
+  .reader-icon-btn,.reader-size-step{width:44px;height:44px;flex-shrink:0}
+  .reader-back{box-sizing:border-box;min-width:44px;min-height:44px;justify-content:center}
+  .reader-settings .chip,.reader-toc a,.reader-toc button,
+  .reader-goto button,.reader-sync-dialog button,#reader-settings-reset{
+    box-sizing:border-box;min-height:44px}
+  .reader-toc a{padding-top:.65rem;padding-bottom:.65rem}
+  .reader-settings input[type="range"]{min-height:44px}
+  /* Small form text makes Safari zoom the whole page on focus. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,textarea,.reader-settings select,#reader-prompt-fallback textarea{font-size:16px}
+}
 .reader-body[data-reader-theme="light"] #reader-view{background:#ffffff}
 .reader-body[data-reader-theme="sepia"] #reader-view{background:#f6ecd9}
 .reader-body[data-reader-theme="dark"] #reader-view{background:#202124}

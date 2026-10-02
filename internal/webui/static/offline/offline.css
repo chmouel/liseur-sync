@@ -5,6 +5,9 @@
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem max(1.25rem, calc((100% - 68rem) / 2));
+  padding-top: max(1rem, env(safe-area-inset-top, 0px));
+  padding-left: max(1.25rem, calc((100% - 68rem) / 2), env(safe-area-inset-left, 0px));
+  padding-right: max(1.25rem, calc((100% - 68rem) / 2), env(safe-area-inset-right, 0px));
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
@@ -13,6 +16,9 @@
   max-width: 68rem;
   margin: 0 auto;
   padding: 3rem 1.25rem;
+  padding-left: max(1.25rem, env(safe-area-inset-left, 0px));
+  padding-right: max(1.25rem, env(safe-area-inset-right, 0px));
+  padding-bottom: calc(3rem + env(safe-area-inset-bottom, 0px));
 }
 
 .offline-shell .muted { font-size: .9rem; }
