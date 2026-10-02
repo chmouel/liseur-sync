@@ -109,16 +109,18 @@ templ searchBody(prefix, csrf string, v SearchView) {
 
 // searchForm is its own template because the library page shows it too:
 // somebody looking at a folder is the person most likely to be looking
-// for something in it.
+// for something in it. It has no submit button: a form with one text
+// field submits on Enter, and the search key on a phone keyboard does
+// the same.
 templ searchForm(prefix string, v SearchView, autofocus bool) {
-	<form method="get" action={ prefix + "folders/" + v.FolderID + "/search" }>
+	<form class="searchform" method="get" action={ prefix + "folders/" + v.FolderID + "/search" }>
 		<label class="visually-hidden" for="search-q">Find a book in this folder</label>
 		<input
 			id="search-q"
 			type="search"
 			name="q"
 			value={ v.Query }
-			placeholder="title, author, series, tag"
+			placeholder="Search titles, authors, series, tags"
 			enterkeyhint="search"
 			autocomplete="off"
 			autofocus?={ autofocus }
@@ -126,6 +128,5 @@ templ searchForm(prefix string, v SearchView, autofocus bool) {
 		for _, id := range v.Filters {
 			<input type="hidden" name="entity" value={ id }/>
 		}
-		<button type="submit">Search</button>
 	</form>
 }

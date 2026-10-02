@@ -151,7 +151,7 @@ func libraryFixture(t *testing.T) (*booksFixture, map[string]string) {
 // you were reading, not a view of the list — so an assertion about what
 // a chip shows has to look below it.
 func grid(page string) string {
-	i := strings.Index(page, `class="toolbar filters"`)
+	i := strings.Index(page, `class="shelfbar"`)
 	if i < 0 {
 		return page
 	}
@@ -282,7 +282,7 @@ func TestLibraryHeroResumesTheLastBook(t *testing.T) {
 	f, ids := libraryFixture(t)
 
 	_, page := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
-	hero := page[strings.Index(page, `class="card resume"`):]
+	hero := page[strings.Index(page, `class="resume"`):]
 	hero = hero[:strings.Index(hero, "</section>")]
 	if !strings.Contains(hero, `books/`+ids["midway"]+`/read`) {
 		t.Errorf("the hero does not resume the half-read book:\n%s", hero)
@@ -295,29 +295,110 @@ func TestLibraryHeroResumesTheLastBook(t *testing.T) {
 	// a section, so an empty one would be furniture.
 	bare := newBooksFixture(t)
 	_, page = bare.get(t, "/ui/library", bare.cookie)
-	if strings.Contains(page, `class="card resume"`) {
+	if strings.Contains(page, `class="resume"`) {
 		t.Errorf("a shelf with nothing in progress still drew a hero:\n%s", page)
 	}
 }
 
-// TestLibraryCardOpensTheBookRatherThanAMenu records the decision the ⋮
-// menu lost: the action affordance on a cover is a link to the page that
-// holds the actions, because a popup anchored inside an overflow-hidden
-// cover is clipped by the picture it hangs off, and hover and long-press
-// are both unavailable to a web page on a phone.
-func TestLibraryCardOpensTheBookRatherThanAMenu(t *testing.T) {
+// TestTheAllTabLeadsToAll follows the links the page draws rather than
+// asking for filter=all by hand. An address with no filter is the
+// landing view, so an All tab that dropped the parameter looked right
+// and showed the wrong shelf; the sort-direction link has to keep it too.
+func TestTheAllTabLeadsToAll(t *testing.T) {
+	f, _ := libraryFixture(t)
+
+	link := func(page string, pattern string) string {
+		m := regexp.MustCompile(pattern).FindStringSubmatch(page)
+		if m == nil {
+			t.Fatalf("no link matches %s:\n%s", pattern, page)
+		}
+		return html.UnescapeString(m[1])
+	}
+	_, landing := f.get(t, "/ui/library?folder="+f.folder, f.cookie)
+	all := link(landing, `<a href="([^"]*)">All</a>`)
+	_, page := f.get(t, "/ui/"+all, f.cookie)
+	if !strings.Contains(grid(page), "works/w-elsewhere") {
+		t.Errorf("the All tab (%s) does not show a work with no file here", all)
+	}
+	reversed := link(page, `<a class="iconbtn sortdir" href="([^"]*)"`)
+	if !strings.Contains(reversed, "filter=all") {
+		t.Errorf("reversing the sort drops the All tab: %s", reversed)
+	}
+	_, page = f.get(t, "/ui/"+reversed, f.cookie)
+	if !strings.Contains(grid(page), "works/w-elsewhere") {
+		t.Errorf("the reversed All shelf (%s) lost the work with no file here", reversed)
+	}
+}
+
+// libraryCardFor is the one card on the shelf that mentions needle, so
+// an assertion about a card's menu cannot be satisfied by its neighbour
+// or by the continue-reading row.
+func libraryCardFor(t *testing.T, page, needle string) string {
+	t.Helper()
+	for _, card := range strings.Split(grid(page), `<article class="bookcard`)[1:] {
+		if end := strings.Index(card, "</article>"); end >= 0 {
+			card = card[:end]
+		}
+		if strings.Contains(card, needle) {
+			return card
+		}
+	}
+	t.Fatalf("no card on the shelf mentions %s:\n%s", needle, page)
+	return ""
+}
+
+// TestLibraryCardMenuHoldsTheRowsActions pins where a card's actions
+// live: in a ⋯ menu beside the title, outside the overflow-hidden cover
+// that clipped the first menu, so a card's caption stays a title and an
+// author rather than a row of links.
+func TestLibraryCardMenuHoldsTheRowsActions(t *testing.T) {
 	f, ids := libraryFixture(t)
 
 	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
-	if !strings.Contains(page, `class="cardopen" href="books/`+ids["fresh"]+`"`) {
-		t.Errorf("a card has no way to its book's page:\n%s", page)
+	csrf := csrfFrom(t, page)
+	if strings.Contains(page, "cardmenu") || strings.Contains(page, "sublinks") {
+		t.Error("a card still carries the old menu or its row of links")
 	}
-	if strings.Contains(page, "cardmenu") || strings.Contains(page, "<details class=\"cardmenu\"") {
-		t.Error("the clipped popup menu came back")
+	menu := func(needle string) string {
+		card := libraryCardFor(t, page, needle)
+		j := strings.Index(card, `<details class="bookmenu">`)
+		k := strings.Index(card, "</details>")
+		if j < 0 || k < j {
+			t.Fatalf("the card for %s has no menu:\n%s", needle, card)
+		}
+		return card[j:k]
 	}
-	// A work with no book here opens its own page instead.
-	if !strings.Contains(page, `class="cardopen" href="works/w-elsewhere"`) {
-		t.Errorf("a work with no file here has no way to its statistics:\n%s", page)
+	for needle, wants := range map[string][]string{
+		`href="books/` + ids["fresh"] + `/read"`: {
+			`href="books/` + ids["fresh"] + `"`,
+			`action="books/` + ids["fresh"] + `/reading-status"`,
+			`value="read">Mark read`,
+			`href="books/` + ids["fresh"] + `/download"`,
+			"Download EPUB",
+			`value="` + csrf + `"`,
+		},
+		`href="books/` + ids["done"] + `/read"`: {
+			`value="unread">Mark unread`,
+			`href="works/w-done"`,
+			`href="works/w-done#sessions"`,
+		},
+		`href="works/w-elsewhere"`: {
+			`href="works/w-elsewhere"`,
+			`href="works/w-elsewhere#sessions"`,
+			`action="works/w-elsewhere/delete"`,
+			`hx-confirm=`,
+			`value="` + csrf + `"`,
+		},
+	} {
+		got := menu(needle)
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Errorf("the menu of the card with %s lacks %q:\n%s", needle, want, got)
+			}
+		}
+		if strings.Contains(got, ">Get<") {
+			t.Errorf("the card with %s still labels its download Get", needle)
+		}
 	}
 }
 
@@ -336,7 +417,7 @@ func TestLibraryFragmentIsCardsOnly(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	frag := string(body)
-	for _, shell := range []string{"<html", `class="rail"`, `class="topbar"`, `class="card resume"`} {
+	for _, shell := range []string{"<html", `class="rail"`, `class="topbar"`, `class="resume"`} {
 		if strings.Contains(frag, shell) {
 			t.Errorf("the htmx fragment contains %q, so it would append the page to itself", shell)
 		}

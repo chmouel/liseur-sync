@@ -10,11 +10,7 @@ templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
 
 templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
 	<header class="settings-heading">
-		<p class="eyebrow">Account & preferences</p>
 		<h1>Settings</h1>
-		<p class="muted">
-			Your account, your readers, and the way your library works.
-		</p>
 	</header>
 	<nav class="settings-tabs" aria-label="Settings sections">
 		@settingsTab(settingsHref(prefix, settingsProfile), "Profile & security", v.Section == settingsProfile)

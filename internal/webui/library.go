@@ -169,7 +169,6 @@ type LibraryView struct {
 	Chips   []FilterChip
 	Filter  string
 	Sort    string
-	SortURL string
 	Dir     string
 	DirURL  string
 	NextURL string
@@ -260,9 +259,6 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	}
 	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, "")
 	v.Chips = libraryChips(v.Selected, v.Filter, v.Sort, v.Dir)
-	// Switching field resets direction to the default: a field's
-	// natural order is not the other field's reversal.
-	v.SortURL = libraryURL(v.Selected, v.Filter, otherSort(v.Sort), "", "")
 	v.DirURL = libraryURL(v.Selected, v.Filter, v.Sort, otherDir(v.Dir), "")
 
 	loc := userLoc(u)
@@ -668,20 +664,6 @@ func normalizeSort(raw string) string {
 	return sortRecent
 }
 
-func otherSort(current string) string {
-	if current == sortLastRead {
-		return sortRecent
-	}
-	return sortLastRead
-}
-
-func sortLabel(current string) string {
-	if current == sortLastRead {
-		return "Last read"
-	}
-	return "Recently added"
-}
-
 func normalizeDir(raw string) string {
 	if strings.ToLower(strings.TrimSpace(raw)) == sortDirAsc {
 		return sortDirAsc
@@ -718,7 +700,9 @@ func libraryURL(folder, filter, sortBy, dir, cursor string) string {
 	if folder != "" {
 		q.Set("folder", folder)
 	}
-	if filter != "" && filter != filterAll {
+	// Always spelled out: no filter means "here", so leaving "all" out
+	// would turn the All tab into a second link to the landing view.
+	if filter != "" {
 		q.Set("filter", filter)
 	}
 	if sortBy != "" && sortBy != sortRecent {

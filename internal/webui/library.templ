@@ -20,59 +20,56 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	// page off the folder list is what made a revoked or never-assigned
 	// account look like an empty server — issue #13.
 	<header class="libraryhead">
-		<div class="libraryhead-main">
-			<p class="eyebrow">Your collection</p>
-			<div class="libraryhead-row">
-				<h1>Library</h1>
-				if v.HasGrant() && len(v.Folders) > 1 {
-					<form class="folderpick" method="get" action={ prefix + "library" }>
-						<label class="visually-hidden" for="folder-pick">Folder</label>
-						<div class="folderselect-wrap">
-							<span class="folder-glyph" aria-hidden="true">@uiIcon("Folders")</span>
-							<select id="folder-pick" name="folder">
-								for _, f := range v.Folders {
-									if f.Selected {
-										<option value={ f.ID } selected>{ f.Name }</option>
-									} else {
-										<option value={ f.ID }>{ f.Name }</option>
-									}
+		<div class="libraryhead-row">
+			<h1>Library</h1>
+			if v.HasGrant() && len(v.Folders) > 1 {
+				<form class="folderpick" method="get" action={ prefix + "library" }>
+					<label class="visually-hidden" for="folder-pick">Folder</label>
+					<div class="folderselect-wrap">
+						<span class="folder-glyph" aria-hidden="true">@uiIcon("Folders")</span>
+						<select id="folder-pick" name="folder">
+							for _, f := range v.Folders {
+								if f.Selected {
+									<option value={ f.ID } selected>{ f.Name }</option>
+								} else {
+									<option value={ f.ID }>{ f.Name }</option>
 								}
-							</select>
-						</div>
-						if v.Filter != filterAll {
-							<input type="hidden" name="filter" value={ v.Filter }/>
-						}
-						if v.Sort != sortRecent {
-							<input type="hidden" name="sort" value={ v.Sort }/>
-						}
-						if v.Dir != sortDirDesc {
-							<input type="hidden" name="dir" value={ v.Dir }/>
-						}
-						<noscript><button type="submit">Show</button></noscript>
-					</form>
-				}
-			</div>
-			<p class="page-intro">Browse your books and continue reading.</p>
+							}
+						</select>
+					</div>
+					<input type="hidden" name="filter" value={ v.Filter }/>
+					if v.Sort != sortRecent {
+						<input type="hidden" name="sort" value={ v.Sort }/>
+					}
+					if v.Dir != sortDirDesc {
+						<input type="hidden" name="dir" value={ v.Dir }/>
+					}
+					<noscript><button type="submit">Show</button></noscript>
+				</form>
+			}
 		</div>
 		<div class="librarycontrols">
+			if v.Selected != "" {
+				@searchForm(prefix, SearchView{FolderID: v.Selected}, false)
+			}
+			@sortPicker(prefix, v)
+			@viewToggle(prefix, csrf, v.Back, v.View)
 			if v.CanUpload {
 				<button
 					type="button"
 					class="btn upload-btn"
 					data-dialog-open="upload-dialog"
 					aria-controls="upload-dialog"
-					title="Upload books"
 				>
 					<span class="upload-icon" aria-hidden="true">@uiIcon("Upload")</span>
 					<span>Upload</span>
 				</button>
 			}
 			@refreshButton()
-			@viewToggle(prefix, csrf, v.Back, v.View)
 		</div>
 	</header>
 	if !v.HasGrant() {
-		<section class="card">
+		<section class="librarynote">
 			if !v.ServerHasFolders {
 				if admin {
 					<p class="muted">
@@ -109,80 +106,95 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	if v.Hero != nil {
 		@heroCard(prefix, *v.Hero)
 	}
-	<div class="librarydeck">
-		<div class="toolbar filters">
-			<nav class="chips shelf-chips" aria-label="Filter">
+	// The tabs over the shelf say what to show; search and ordering sit in
+	// the header. The status filters are links, so a filtered shelf is
+	// still a URL somebody can send.
+	<div class="shelfbar">
+		<div class="shelftabs">
+			<nav class="tabs" aria-label="Filter">
 				for _, c := range v.Chips {
 					if c.Active {
-						<a class="chip on" href={ prefix + c.URL } aria-current="true">{ c.Label }</a>
+						<a class="on" href={ prefix + c.URL } aria-current="true">{ c.Label }</a>
 					} else {
-						<a class="chip" href={ prefix + c.URL }>{ c.Label }</a>
+						<a href={ prefix + c.URL }>{ c.Label }</a>
 					}
 				}
 			</nav>
-			<span class="deck-divider" aria-hidden="true"></span>
-			<nav class="chips entity-chips" aria-label="Browse the library">
-				<a class="chip entity-link" href={ prefix + "entities/series" }>Series</a>
-				<a class="chip entity-link" href={ prefix + "entities/contributors" }>Contributors</a>
-				<a class="chip entity-link" href={ prefix + "entities/tags" }>Tags</a>
-			</nav>
-		</div>
-		<div class="librarytools">
-			if v.Selected != "" {
-				@searchForm(prefix, SearchView{FolderID: v.Selected}, false)
-			}
-			<span class="spacer"></span>
-			if v.View == viewGrid {
-				<form class="groupseries" method="post" action={ prefix + "preferences" }>
-					<input type="hidden" name="csrf" value={ csrf }/>
-					<input type="hidden" name="back" value={ v.Back }/>
-					<input type="hidden" name="set" value="series"/>
-					<label class="check" for="group-series-toggle">
-						<input
-							id="group-series-toggle"
-							type="checkbox"
-							name="group_series"
-							value="1"
-							checked?={ v.GroupSeries }
-						/>
-						Group by series
-					</label>
-					<noscript><button type="submit">Apply</button></noscript>
-				</form>
-			}
-			<div class="deck-sort">
-				<a class="chip sortchip" href={ prefix + v.SortURL } title="Change sort order">
-					{ sortLabel(v.Sort) }
-					<span aria-hidden="true">⇅</span>
-				</a>
-				<a class="chip sortchip" href={ prefix + v.DirURL } title="Reverse the sort direction">
-					{ dirLabel(v.Dir) }
-					<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
-				</a>
+			<div class="shelfextras">
+				<nav class="browselinks" aria-label="Browse the library">
+					<span class="muted">Browse</span>
+					<a href={ prefix + "entities/series" }>Series</a>
+					<a href={ prefix + "entities/contributors" }>Contributors</a>
+					<a href={ prefix + "entities/tags" }>Tags</a>
+				</nav>
+				if v.View == viewGrid {
+					<form class="groupseries" method="post" action={ prefix + "preferences" }>
+						<input type="hidden" name="csrf" value={ csrf }/>
+						<input type="hidden" name="back" value={ v.Back }/>
+						<input type="hidden" name="set" value="series"/>
+						<label class="check" for="group-series-toggle">
+							<input
+								id="group-series-toggle"
+								type="checkbox"
+								name="group_series"
+								value="1"
+								checked?={ v.GroupSeries }
+							/>
+							Group by series
+						</label>
+						<noscript><button type="submit">Apply</button></noscript>
+					</form>
+				}
 			</div>
 		</div>
 	</div>
-		<section class="libraryshelf" aria-label="Books">
-			if v.View == viewList {
-				if len(v.Rows) == 0 {
-					@libraryEmpty(v)
-				} else {
-					@libraryTable(prefix, csrf, v)
-				}
+	<section class="libraryshelf" aria-label="Books">
+		if v.View == viewList {
+			if len(v.Rows) == 0 {
+				@libraryEmpty(v)
 			} else {
-				if (v.groupedGrid() && len(v.Entries) == 0 && v.NextURL == "") ||
-					(!v.groupedGrid() && len(v.Rows) == 0) {
-					@libraryEmpty(v)
-				} else {
-					<div class="grid">
-						@libraryFragment(prefix, csrf, v)
-					</div>
-				}
+				@libraryTable(prefix, csrf, v)
 			}
-		</section>
-		if v.CanUpload {
-			@uploadDialog(prefix, csrf, v.Selected)
+		} else {
+			if (v.groupedGrid() && len(v.Entries) == 0 && v.NextURL == "") ||
+				(!v.groupedGrid() && len(v.Rows) == 0) {
+				@libraryEmpty(v)
+			} else {
+				<div class="grid">
+					@libraryFragment(prefix, csrf, v)
+				</div>
+			}
 		}
+	</section>
+	if v.CanUpload {
+		@uploadDialog(prefix, csrf, v.Selected)
+	}
+}
+
+// sortPicker orders the shelf. Choosing a field resets the direction to
+// that field's default, as the old toggle did; the arrow beside it
+// reverses whatever is chosen.
+templ sortPicker(prefix string, v LibraryView) {
+	<form class="sortpick" method="get" action={ prefix + "library" }>
+		if v.Selected != "" {
+			<input type="hidden" name="folder" value={ v.Selected }/>
+		}
+		<input type="hidden" name="filter" value={ v.Filter }/>
+		<label class="visually-hidden" for="sort-pick">Sort by</label>
+		<select id="sort-pick" name="sort">
+			<option value={ sortRecent } selected?={ v.Sort == sortRecent }>Recently added</option>
+			<option value={ sortLastRead } selected?={ v.Sort == sortLastRead }>Last read</option>
+		</select>
+		<noscript><button type="submit">Sort</button></noscript>
+	</form>
+	<a
+		class="iconbtn sortdir"
+		href={ prefix + v.DirURL }
+		title={ dirLabel(v.Dir) + " (click to reverse)" }
+		aria-label={ "Sort direction: " + dirLabel(v.Dir) + ". Reverse it." }
+	>
+		<span aria-hidden="true">{ dirArrow(v.Dir) }</span>
+	</a>
 }
 
 // libraryEmpty says why the shelf is empty, which depends entirely on
@@ -217,10 +229,10 @@ templ libraryEmpty(v LibraryView) {
 // page, and hunting for it among four hundred covers is the thing this
 // removes.
 templ heroCard(prefix string, row LibraryRow) {
-	<section class="card resume">
-		<a class="art" href={ row.href(prefix) } title={ row.hint() }>
+	<section class="resume" aria-labelledby="resume-title">
+		<a class="art" href={ row.href(prefix) } title={ row.hint() } tabindex="-1" aria-hidden="true">
 			<img
-				src={ prefix + "books/" + row.BookID + "/cover?size=thumbnail" }
+				src={ prefix + "books/" + row.BookID + "/cover?size=full" }
 				alt=""
 				loading="lazy"
 				decoding="async"
@@ -229,32 +241,28 @@ templ heroCard(prefix string, row LibraryRow) {
 			/>
 		</a>
 		<div class="herotext">
-			<div class="herostatus">
-				<span class="eyebrow">Currently reading</span>
-				if row.Progression != nil {
-					<span class="heropct">{ pctProgression(*row.Progression) }</span>
-				}
-			</div>
-			<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+			<p class="herolabel">Continue reading</p>
+			<h2 id="resume-title"><a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a></h2>
 			if row.Author != "" {
-				<span class="by"><span class="by-prefix">by</span> { row.Author }</span>
+				<p class="by">{ row.Author }</p>
 			}
 			if row.Progression != nil || row.LastActive != "" {
 				<div class="herotrack">
 					if row.Progression != nil {
 						@progressBar("bar", *row.Progression)
+						<span class="pct">{ pctProgression(*row.Progression) }</span>
 					}
 					if row.LastActive != "" {
 						<span class="muted">{ "Last read " + row.LastActive }</span>
 					}
 				</div>
 			}
-			<p class="rowlinks">
-				<a class="btn primary resume-btn" href={ row.href(prefix) }>Resume reading <span aria-hidden="true">→</span></a>
+			<p class="heroactions">
+				<a class="btn primary" href={ row.href(prefix) }>Resume reading</a>
 				if row.WorkID != "" {
-					<a class="btn" href={ prefix + "works/" + row.WorkID }>Reading log</a>
+					<a class="quiet" href={ prefix + "works/" + row.WorkID }>Reading log</a>
 				}
-				<a class="btn" href={ prefix + "books/" + row.BookID }>Volume details</a>
+				<a class="quiet" href={ prefix + "books/" + row.BookID }>Book details</a>
 			</p>
 		</div>
 	</section>
@@ -296,8 +304,8 @@ templ libraryFragment(prefix, csrf string, v LibraryView) {
 }
 
 // librarySeriesCard mirrors Liseur's compact shelf pile: the next-up
-// cover in front, two real volumes peeking out behind it, a count badge,
-// and one progress segment per volume.
+// cover in front, two real volumes peeking out behind it, and one
+// progress segment per volume. The count is in the summary line below.
 templ librarySeriesCard(prefix string, series LibrarySeries) {
 	<article class="bookcard seriescard">
 		<a
@@ -338,7 +346,6 @@ templ librarySeriesCard(prefix string, series LibrarySeries) {
 					@seriesStackCover(prefix, series.CoverBookID)
 				</span>
 			}
-			<span class="seriescount" aria-hidden="true">{ i2s(len(series.Volumes)) }</span>
 		</a>
 		<div class="seriesrail" aria-hidden="true">
 			for _, volume := range series.Volumes {
@@ -354,22 +361,16 @@ templ librarySeriesCard(prefix string, series LibrarySeries) {
 		<a class="title" href={ prefix + "entities/series/" + series.ID }>
 			{ orPlaceholder(series.Name) }
 		</a>
-		<span class="by">
-			if series.Author != "" {
-				{ series.Author }
-			} else {
-				{ series.Summary() }
-			}
-		</span>
-		<nav class="sublinks">
-			<a href={ prefix + "entities/series/" + series.ID }>{ series.Summary() }</a>
-		</nav>
+		if series.Author != "" {
+			<span class="by">{ series.Author }</span>
+		}
+		<span class="card-activity muted">{ series.Summary() }</span>
 	</article>
 }
 
 templ seriesStackCover(prefix, bookID string) {
 	<img
-		src={ prefix + "books/" + bookID + "/cover?size=thumbnail" }
+		src={ prefix + "books/" + bookID + "/cover?size=full" }
 		alt=""
 		loading="lazy"
 		decoding="async"
@@ -379,22 +380,21 @@ templ seriesStackCover(prefix, bookID string) {
 }
 
 // libraryCard is one row on the wall. The cover carries on reading when
-// there is something to carry on with, and everything else lives behind
-// the ⋮ menu.
+// there is something to carry on with; everything else a row can do
+// lives behind the ⋯ menu beside its title.
 //
-// The menu is a <details>, not a script: it opens with JavaScript off,
-// closes on Escape without anybody writing that, and is reachable from a
-// keyboard for free. It is always rendered rather than revealed on
-// hover, because hover does not exist on a phone and long-press is not
-// something a web page can claim — that was the whole reason this page
-// needed designing rather than merging.
+// The menu is a <details>, so it opens with scripting off and from a
+// keyboard. It hangs off the caption rather than the cover: the art is
+// an overflow-hidden box, and a panel inside it would be clipped by the
+// picture it belongs to. ui.js closes it on Escape, on a click outside,
+// and when another one opens.
 templ libraryCard(prefix, csrf string, row LibraryRow) {
 	<article class="bookcard">
 		if row.BookID != "" {
 			<div class="art">
 				<a href={ row.href(prefix) } title={ row.hint() }>
 					<img
-						src={ prefix + "books/" + row.BookID + "/cover?size=thumbnail" }
+						src={ prefix + "books/" + row.BookID + "/cover?size=full" }
 						alt=""
 						loading="lazy"
 						decoding="async"
@@ -402,7 +402,6 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 						height="500"
 					/>
 				</a>
-				@cardOpen(prefix, row)
 				if row.Progression != nil {
 					@progressBar("prog", *row.Progression)
 				}
@@ -417,12 +416,14 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 					if row.Progression != nil {
 						<span class="big">{ pctProgression(*row.Progression) }</span>
 					}
-					<span class="tag">synced elsewhere</span>
+					<span class="note">Synced elsewhere</span>
 				</a>
-				@cardOpen(prefix, row)
 			</div>
 		}
-		<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+		<div class="caption">
+			<a class="title" href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+			@bookMenu(prefix, csrf, row)
+		</div>
 		if row.Author != "" {
 			<span class="by">{ row.Author }</span>
 		} else if row.Added != "" {
@@ -431,25 +432,40 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 		if row.Pending {
 			<span class="card-activity muted">pending</span>
 		} else if row.LastActive != "" {
-			<span class="card-activity muted">{ "read " + row.LastActive }</span>
+			<span class="card-activity muted">{ "Read " + row.LastActive }</span>
 		}
-		<nav class="sublinks">
+	</article>
+}
+
+// bookMenu is everything a card can do besides reading. "Download"
+// serves the stored file as it sits in the folder, so it names the
+// format when it knows one.
+templ bookMenu(prefix, csrf string, row LibraryRow) {
+	<details class="bookmenu">
+		<summary title="More actions" aria-label={ "More actions for " + orPlaceholder(row.Title) }>
+			<span aria-hidden="true">⋯</span>
+		</summary>
+		<div class="menu">
 			if row.BookID != "" {
-				<a href={ prefix + "books/" + row.BookID }>Details</a>
+				<a href={ prefix + "books/" + row.BookID }>Book details</a>
 				@markBookForm(prefix, csrf, row.BookID, row.Finished())
 			}
 			if row.WorkID != "" {
-				<a href={ prefix + "works/" + row.WorkID }>Stats</a>
+				<a href={ prefix + "works/" + row.WorkID }>Reading log</a>
 				<a href={ prefix + "works/" + row.WorkID + "#sessions" }>Sessions</a>
 			}
 			if row.CanGet && row.BookID != "" {
-				<a href={ prefix + "books/" + row.BookID + "/download" }>Get</a>
+				if row.CanRead {
+					<a href={ prefix + "books/" + row.BookID + "/download" }>Download EPUB</a>
+				} else {
+					<a href={ prefix + "books/" + row.BookID + "/download" }>Download file</a>
+				}
 			}
 			if row.Bookless {
 				@deleteWorkForm(prefix, csrf, row.WorkID, "closest article")
 			}
-		</nav>
-	</article>
+		</div>
+	</details>
 }
 
 // deleteWorkForm removes one work of the reader's own from a list,
@@ -472,29 +488,8 @@ templ deleteWorkForm(prefix, csrf, workID, target string) {
 		hx-confirm="Delete this book's reading history? A device still syncing this book will bring it back as a new entry."
 	>
 		<input type="hidden" name="csrf" value={ csrf }/>
-		<button class="linkish danger" type="submit">Delete</button>
+		<button class="linkish danger" type="submit">Delete reading history</button>
 	</form>
-}
-
-// cardOpen is how a card reaches everything it can do without hover and
-// without long-press.
-//
-// It was a ⋮ menu first — a <details> disclosure, so it would open with
-// scripting off. It looked wrong the moment it met a real cover: the
-// art is an overflow-hidden box, so the panel was clipped by the
-// picture it hung off, and unclipping it meant taking the menu out of
-// the element it belongs to and reinventing a popup by hand.
-//
-// So it is a link. Pressing it opens the page that already holds every
-// action this row has — Read, Download, Delete, statistics — instead of
-// making a small copy of that page float over a cover. One tap, no
-// popup, nothing to close, and the same behaviour on a phone as on a
-// desktop.
-templ cardOpen(prefix string, row LibraryRow) {
-	<a class="cardopen" href={ row.detailURL(prefix) } title={ "Open " + orPlaceholder(row.Title) }>
-		<span aria-hidden="true">›</span>
-		<span class="visually-hidden">{ "Open " + orPlaceholder(row.Title) }</span>
-	</a>
 }
 
 // libraryTable is the same rows for the times when scanning five
@@ -523,7 +518,7 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				<td>
 					<a href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
 					if row.Pending {
-						<span class="tag">pending</span>
+						<span class="muted">pending</span>
 					}
 					if row.Author != "" {
 						<span class="by">{ row.Author }</span>
@@ -540,7 +535,7 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				<td>{ orDash(row.LastActive) }</td>
 				<td>{ orDash(row.Added) }</td>
 				<td>
-					<a href={ row.detailURL(prefix) }>Open</a>
+					<a href={ row.detailURL(prefix) }>Details</a>
 					if row.BookID != "" {
 						@markBookForm(prefix, csrf, row.BookID, row.Finished())
 					}
@@ -567,7 +562,6 @@ templ uploadDialog(prefix, csrf, folder string) {
 	<dialog id="upload-dialog" class="upload-dialog folder-dialog" aria-labelledby="upload-dialog-title">
 		<div class="dialog-head">
 			<div>
-				<p class="eyebrow">Add to your library</p>
 				<h2 id="upload-dialog-title">Upload books</h2>
 			</div>
 			<form method="dialog">
