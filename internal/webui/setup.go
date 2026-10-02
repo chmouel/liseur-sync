@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -119,6 +120,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		setupPage(prefix, uiCtx(r, nil), form, errPasswordBusy).Render(r.Context(), w)
 		return
 	}
+	// Released as soon as the account exists: the password work is done,
+	// and the folder scan that follows can take minutes.
+	release = sync.OnceFunc(release)
 	defer release()
 	fail := func(msg string) {
 		setupPage(prefix, uiCtx(r, nil), form, msg).Render(r.Context(), w)
@@ -137,6 +141,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := admin.CreateFirstAdmin(r.Context(), s.St, form.Username, pw)
+	release()
 	switch {
 	case errors.Is(err, admin.ErrSetupClosed):
 		// Somebody else finished setup between the check above and this
