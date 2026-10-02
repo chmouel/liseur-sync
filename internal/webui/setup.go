@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
+	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -112,6 +113,13 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		FolderName: strings.TrimSpace(r.FormValue("folder_name")),
 		FolderRoot: strings.TrimSpace(r.FormValue("folder_root")),
 	}
+	release := auth.BeginPasswordRequest()
+	if release == nil {
+		passwordBusy(w)
+		setupPage(prefix, uiCtx(r, nil), form, errPasswordBusy).Render(r.Context(), w)
+		return
+	}
+	defer release()
 	fail := func(msg string) {
 		setupPage(prefix, uiCtx(r, nil), form, msg).Render(r.Context(), w)
 	}

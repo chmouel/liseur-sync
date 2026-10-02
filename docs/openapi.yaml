@@ -159,7 +159,7 @@ paths:
                   expires_in: { type: integer, description: seconds }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
-        "429": { $ref: "#/components/responses/Error", description: "Rate limited" }
+        "429": { $ref: "#/components/responses/Error", description: "Per-IP limit or shared password capacity reached; retry after Retry-After seconds" }
 
   /v1/register:
     post:
@@ -193,6 +193,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error", description: "Invalid or expired invite" }
         "409": { $ref: "#/components/responses/Error", description: "Username taken" }
+        "429": { $ref: "#/components/responses/Error", description: "Per-IP limit or shared password capacity reached; invite has not been consumed; retry after Retry-After seconds" }
 
   /v1/token:
     get:
