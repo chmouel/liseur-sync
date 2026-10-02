@@ -652,14 +652,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); flex
 .auth-intro { margin: -.5rem 0 1.5rem; color: var(--ink-dim); font-size: .9rem; }
 .auth-form { display: grid; gap: 1.1rem; }
 .auth-form label { display: grid; gap: .45rem; margin: 0; color: var(--ink); font-size: .8rem; font-weight: 500; }
-.auth-form input {
+.auth-form input:not([type="checkbox"]) {
 	width: 100%; min-width: 0; min-height: 3rem; padding: .75rem .9rem;
 	background: var(--bg); border: 1px solid var(--line); border-radius: .6rem;
 	color: var(--ink); font: inherit; font-size: 1rem;
 	transition: border-color .15s, box-shadow .15s;
 }
-.auth-form input:hover { border-color: var(--muted); }
-.auth-form input:focus-visible { border-color: var(--auth-focus); outline: 2px solid color-mix(in srgb, var(--auth-focus) 50%, transparent); outline-offset: 2px; }
+.auth-form input:not([type="checkbox"]):hover { border-color: var(--muted); }
+.auth-form input:not([type="checkbox"]):focus-visible { border-color: var(--auth-focus); outline: 2px solid color-mix(in srgb, var(--auth-focus) 50%, transparent); outline-offset: 2px; }
 .auth-hint { font-size: .73rem; font-weight: 400; color: var(--ink-dim); }
 .auth-form .auth-submit {
 	justify-content: space-between; width: 100%; min-height: 3.1rem; margin-top: .4rem;
