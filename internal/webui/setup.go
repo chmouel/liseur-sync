@@ -208,7 +208,10 @@ func (s *Server) finishSetup(
 		// folders page with the dialog open and the reason showing —
 		// which is where a second attempt belongs anyway.
 		redirectRel(w, settingsAdminHref(prefix, settingsAdminFolders)+"&"+
-			flashQuery(Flash{Error: err.Error(), OpenFolderForm: true}),
+			flashQuery(Flash{
+				Error: err.Error(), OpenFolderForm: true,
+				FolderUploads: &form.FolderUploads,
+			}),
 			http.StatusSeeOther)
 		return
 	}

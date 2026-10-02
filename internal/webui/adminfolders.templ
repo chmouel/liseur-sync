@@ -4,13 +4,13 @@ package webui
 // is the only page whose subject is the disk rather than a book
 // (ADR-0017).
 
-templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, openFolderForm bool, flash Flash) {
+templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, hasFolders bool, next string, roots []string, openFolderForm bool, flash Flash) {
 	<header class="folder-heading">
 		<div>
 			<h1>Folders</h1>
 		</div>
 		<div class="folder-actions">
-			if len(folders) > 0 {
+			if hasFolders {
 				<form
 					class="scanform"
 					method="post"
@@ -42,7 +42,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 		forgets this server's record of it.
 	</p>
 	@adminFlash(flash)
-	if len(folders) == 0 {
+	if !hasFolders {
 		<section class="card onboarding-card">
 			<div class="onboarding-icon" aria-hidden="true">+</div>
 			<div class="onboarding-copy">
@@ -151,7 +151,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 			}
 		</section>
 	}
-	@adminFolderDialog(prefix, csrf, roots, openFolderForm, len(folders) == 0)
+	@adminFolderDialog(prefix, csrf, roots, openFolderForm, flash.folderUploadsOr(!hasFolders))
 	<section class="card folder-form-fallback">
 		<div class="cardhead">
 			<div>
@@ -169,7 +169,7 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 				aria-haspopup="dialog"
 			>Add folder</button>
 		</div>
-		@adminFolderForm(prefix, csrf, roots, len(folders) == 0)
+		@adminFolderForm(prefix, csrf, roots, flash.folderUploadsOr(!hasFolders))
 	</section>
 }
 
