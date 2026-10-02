@@ -106,6 +106,17 @@ const promptFallback = document.getElementById("reader-prompt-fallback");
 const promptFallbackText = document.getElementById("reader-prompt-fallback-text");
 const promptFallbackCopy = document.getElementById("reader-prompt-fallback-copy");
 
+// The bar grows with touch controls, safe areas and browser text sizing.
+// Reserve its measured height so rotating an iPad cannot cover the book.
+const readerBar = document.querySelector(".reader-bar");
+if (readerBar) {
+  const sizeBar = () => document.body.style.setProperty(
+    "--reader-bar-height", `${readerBar.getBoundingClientRect().height}px`,
+  );
+  sizeBar();
+  new ResizeObserver(sizeBar).observe(readerBar);
+}
+
 let chapterLoadingTimer = null;
 let chapterLoadingGeneration = 0;
 const CHAPTER_LOADING_MIN_MS = 250;
@@ -2956,28 +2967,42 @@ if (settingsForm) {
 const MAXIMIZE_PATH = "M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3m10 0h3a2 2 0 002-2v-3";
 const MINIMIZE_PATH = "M4 14h3a2 2 0 012 2v3m6 0v-3a2 2 0 012-2h3M20 10h-3a2 2 0 01-2-2V5m-6 0v3a2 2 0 01-2 2H4";
 
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(() => {
-      flash("This browser would not switch to full screen.");
-    });
-  } else {
-    document.exitFullscreen();
+const fullscreenRoot = document.documentElement;
+const enterFullscreen = fullscreenRoot.requestFullscreen || fullscreenRoot.webkitRequestFullscreen;
+const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+const fullscreenAvailable = !!(enterFullscreen && exitFullscreen) &&
+  (document.fullscreenEnabled ?? document.webkitFullscreenEnabled ?? true);
+
+async function toggleFullscreen() {
+  if (!fullscreenAvailable) {
+    flash("Full screen is unavailable. Add Liseur to your Home Screen for a full-screen reader.");
+    return;
+  }
+  try {
+    // Older iPad Safari exposes prefixed methods returning void, not a Promise.
+    if (fullscreenElement()) await exitFullscreen.call(document);
+    else await enterFullscreen.call(fullscreenRoot);
+  } catch (err) {
+    flash("This browser would not switch to full screen.");
   }
 }
 
 if (fullscreenBtn) {
+  fullscreenBtn.hidden = !fullscreenAvailable;
   fullscreenBtn.addEventListener("click", toggleFullscreen);
-  document.addEventListener("fullscreenchange", () => {
+  const updateFullscreen = () => {
     const p = fullscreenBtn.querySelector("path");
-    if (document.fullscreenElement) {
+    if (fullscreenElement()) {
       p.setAttribute("d", MINIMIZE_PATH);
       fullscreenBtn.title = "Exit full screen (f)";
     } else {
       p.setAttribute("d", MAXIMIZE_PATH);
       fullscreenBtn.title = "Full screen (f)";
     }
-  });
+  };
+  document.addEventListener("fullscreenchange", updateFullscreen);
+  document.addEventListener("webkitfullscreenchange", updateFullscreen);
 }
 
 // ---------------------------------------------- chrome and tap zones
@@ -2995,6 +3020,7 @@ if (fullscreenBtn) {
 const CHROME_IDLE_MS = 2200;
 const CHROME_TOUCH_MS = 4000;
 const TAP_SLOP_PX = 10;
+const TAP_MAX_MS = 500;
 
 let chromePinned = false;
 let chromeTimer = null;
@@ -3204,7 +3230,13 @@ function overText(doc, x, y) {
 // finger, a cancelled pointer or a stolen capture ends it: what happens
 // next is a pinch, a scroll or the browser's business, never a tap.
 function newGesture() {
-  return { id: null, x: 0, y: 0, spoiled: true, hadSelection: false };
+  return { id: null, x: 0, y: 0, startedAt: 0, spoiled: true, hadSelection: false };
+}
+
+function trackGesture(gesture, e) {
+  if (gesture.id !== e.pointerId) return;
+  if (Math.abs(e.clientX - gesture.x) > TAP_SLOP_PX ||
+      Math.abs(e.clientY - gesture.y) > TAP_SLOP_PX) gesture.spoiled = true;
 }
 
 function wireChapterPointer(doc) {
@@ -3236,6 +3268,7 @@ function wireChapterPointer(doc) {
   doc.addEventListener(
     "pointermove",
     (e) => {
+      trackGesture(gesture, e);
       pointerMoved(...toViewport(doc, e.clientX, e.clientY), e.pointerType);
     },
     { passive: true },
@@ -3257,6 +3290,7 @@ function wireChapterPointer(doc) {
         id: e.pointerId,
         x: e.clientX,
         y: e.clientY,
+        startedAt: performance.now(),
         spoiled: false,
         hadSelection: selected(),
       };
@@ -3268,6 +3302,7 @@ function wireChapterPointer(doc) {
   };
   doc.addEventListener("pointercancel", spoil, { passive: true });
   doc.addEventListener("lostpointercapture", spoil, { passive: true });
+  doc.addEventListener("contextmenu", () => { gesture.spoiled = true; }, { passive: true });
   // A finger is answered here rather than on the click that should
   // follow it: the engine snaps the page on every touchend, and a
   // scroll between touchend and the synthesized click cancels that
@@ -3288,6 +3323,7 @@ function wireChapterPointer(doc) {
       gesture.id = null;
       if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
       touchAt = Date.now();
+      if (performance.now() - gesture.startedAt > TAP_MAX_MS) gesture.spoiled = true;
       if (tocPanel && !tocPanel.hidden) {
         toggleTOC(false); // the drawer cannot hear a tap inside the book
         gesture.spoiled = true;
@@ -3783,6 +3819,7 @@ stageArea.addEventListener(
       id: e.pointerId,
       x: e.clientX,
       y: e.clientY,
+      startedAt: performance.now(),
       spoiled: false,
       hadSelection: bookHasSelection(),
     };
@@ -3795,6 +3832,8 @@ const spoilStage = (e) => {
 };
 stageArea.addEventListener("pointercancel", spoilStage, { passive: true });
 stageArea.addEventListener("lostpointercapture", spoilStage, { passive: true });
+stageArea.addEventListener("pointermove", (e) => trackGesture(stageGesture, e), { passive: true });
+stageArea.addEventListener("contextmenu", () => { stageGesture.spoiled = true; }, { passive: true });
 stageArea.addEventListener("pointerup", (e) => {
   noteActivity();
   if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
@@ -3816,6 +3855,7 @@ stageArea.addEventListener("pointerup", (e) => {
     return;
   }
   if (!clean) return;
+  if (performance.now() - stageGesture.startedAt > TAP_MAX_MS) return;
   if (stageGesture.hadSelection || bookHasSelection()) return;
   if (!stageSurface(e.target)) return;
   tapAt(e.clientX, e.clientY);

@@ -409,7 +409,7 @@ export class ReaderEngine extends HTMLElement {
       normal: { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 },
       wide: { optimalLineLength: 65, minimalLineLength: 40, maximalLineLength: 80 },
     }[settings.margin] || { optimalLineLength: 90, minimalLineLength: 60, maximalLineLength: 110 };
-    this.renderer.style.inset = `0 0 ${margin}px`;
+    this.renderer.style.inset = `0 env(safe-area-inset-right, 0px) calc(${margin}px + env(safe-area-inset-bottom, 0px)) env(safe-area-inset-left, 0px)`;
     this.preferences = {
       scroll: false,
       columnCount: settings.columns === "auto" ? null : Number(settings.columns),
