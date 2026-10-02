@@ -70,7 +70,7 @@ func ValidateFolderName(name string) error {
 // whoever -assign did.
 func NewFolder(
 	ctx context.Context, st store.Store, name, root string, allowed []string,
-	grantUserID string,
+	grantUserID string, acceptsUploads bool,
 ) (store.Folder, error) {
 	if err := ValidateFolderName(name); err != nil {
 		return store.Folder{}, err
@@ -84,12 +84,13 @@ func NewFolder(
 	}
 	now := time.Now().UTC()
 	folder := store.Folder{
-		ID:        uuid.New().String(),
-		Name:      strings.TrimSpace(name),
-		RootPath:  absolute,
-		Kind:      DetectFolderKind(absolute),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             uuid.New().String(),
+		Name:           strings.TrimSpace(name),
+		RootPath:       absolute,
+		Kind:           DetectFolderKind(absolute),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		AcceptsUploads: acceptsUploads,
 	}
 	if err := st.CreateFolderGranting(ctx, folder, grantUserID); err != nil {
 		return store.Folder{}, err
@@ -190,7 +191,7 @@ func addFolder(ctx context.Context, st store.Store, args []string) error {
 	// bound by the config allowlist the browser form is: that allowlist
 	// exists to stop an administrator's session from naming any path on
 	// the machine, not to stop the operator from doing so at a shell.
-	folder, err := NewFolder(ctx, st, fs.Arg(0), fs.Arg(1), nil, grantUserID)
+	folder, err := NewFolder(ctx, st, fs.Arg(0), fs.Arg(1), nil, grantUserID, false)
 	if err != nil {
 		return err
 	}

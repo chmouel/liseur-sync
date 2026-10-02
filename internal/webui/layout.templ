@@ -304,7 +304,7 @@ templ setupBody(prefix string, form setupForm, errMsg string) {
 					starts reading it straight away. A Calibre library is
 					recognised by its <code>metadata.db</code> and read through
 					Calibre's own catalog; anything else is read as a tree of
-					books. Nothing on disk is changed either way.
+					books. Scanning does not change existing files.
 				</p>
 				<p class="auth-hint">
 					It has to be a directory this server is configured to read.
@@ -313,6 +313,8 @@ templ setupBody(prefix string, form setupForm, errMsg string) {
 				</p>
 				<label>Folder name <input name="folder_name" value={ form.FolderName } maxlength="120" autocomplete="off" placeholder="My books"/></label>
 				<label>Root path <input name="folder_root" value={ form.FolderRoot } autocomplete="off" placeholder="/srv/books"/></label>
+				<label class="check"><input type="checkbox" name="folder_uploads" checked?={ form.FolderUploads }/> Allow uploads and book deletion</label>
+				<p class="auth-hint">Uploads create files in this directory. Book deletion removes files. Uncheck this for a read-only library.</p>
 			</fieldset>
 			<button type="submit" class="auth-submit">Create administrator <span aria-hidden="true">→</span></button>
 		</form>

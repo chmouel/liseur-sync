@@ -193,12 +193,15 @@ func TestFolderKindIsDetectedNotAsked(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	folder, err := NewFolder(t.Context(), st, "Calibre", root, nil, "")
+	folder, err := NewFolder(t.Context(), st, "Calibre", root, nil, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if folder.Kind != store.FolderCalibre {
 		t.Fatalf("kind = %q, want calibre", folder.Kind)
+	}
+	if folder.AcceptsUploads {
+		t.Fatal("a folder created without upload permission accepts uploads")
 	}
 }
 
@@ -219,7 +222,7 @@ func TestFolderRootMustExistAndBeADirectory(t *testing.T) {
 		{"blank", "  ", "must not be blank"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewFolder(t.Context(), st, "Books", tc.root, nil, "")
+			_, err := NewFolder(t.Context(), st, "Books", tc.root, nil, "", false)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want one mentioning %q", err, tc.want)
 			}
@@ -241,17 +244,17 @@ func TestFolderRootAllowlistBindsTheBrowserNotTheShell(t *testing.T) {
 	outside := t.TempDir()
 
 	if _, err := NewFolder(
-		t.Context(), st, "Inside", inside, []string{allowed}, "",
+		t.Context(), st, "Inside", inside, []string{allowed}, "", false,
 	); err != nil {
 		t.Fatalf("a subdirectory of an allowed root was refused: %v", err)
 	}
-	_, err := NewFolder(t.Context(), st, "Outside", outside, []string{allowed}, "")
+	_, err := NewFolder(t.Context(), st, "Outside", outside, []string{allowed}, "", false)
 	if err == nil || !strings.Contains(err.Error(), "not below any of the roots") {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
 	// An empty allowlist is the default and means "anywhere the server
 	// can read", which is what the subcommand has always permitted.
-	if _, err := NewFolder(t.Context(), st, "Anywhere", outside, nil, ""); err != nil {
+	if _, err := NewFolder(t.Context(), st, "Anywhere", outside, nil, "", false); err != nil {
 		t.Fatalf("empty allowlist refused a readable root: %v", err)
 	}
 }
@@ -261,11 +264,11 @@ func TestFolderRootAllowlistBindsTheBrowserNotTheShell(t *testing.T) {
 func TestFolderNameIsBoundedAndNotBlank(t *testing.T) {
 	st := newAdminStore(t)
 	root := t.TempDir()
-	if _, err := NewFolder(t.Context(), st, "   ", root, nil, ""); err != ErrFolderNameEmpty {
+	if _, err := NewFolder(t.Context(), st, "   ", root, nil, "", false); err != ErrFolderNameEmpty {
 		t.Fatalf("err = %v, want %v", err, ErrFolderNameEmpty)
 	}
 	long := strings.Repeat("x", MaxFolderNameLength+1)
-	if _, err := NewFolder(t.Context(), st, long, root, nil, ""); err != ErrFolderNameTooLong {
+	if _, err := NewFolder(t.Context(), st, long, root, nil, "", false); err != ErrFolderNameTooLong {
 		t.Fatalf("err = %v, want %v", err, ErrFolderNameTooLong)
 	}
 }
@@ -280,7 +283,7 @@ func TestFolderRootIsStoredAbsolute(t *testing.T) {
 	if err := os.Mkdir("books", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	folder, err := NewFolder(t.Context(), st, "Books", "books", nil, "")
+	folder, err := NewFolder(t.Context(), st, "Books", "books", nil, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +405,7 @@ func TestAddFolderRefusesAnUnknownGranteeBeforeTouchingTheDisk(t *testing.T) {
 func TestNewFolderGrantIsAtomic(t *testing.T) {
 	st := newAdminStore(t)
 	if _, err := NewFolder(
-		t.Context(), st, "Books", t.TempDir(), nil, "no-such-user",
+		t.Context(), st, "Books", t.TempDir(), nil, "no-such-user", true,
 	); err == nil {
 		t.Fatal("a folder was created for an account that does not exist")
 	}

@@ -274,6 +274,7 @@ func TestFirstRunSetupWatchesTheFolderItNames(t *testing.T) {
 		"username": {"founder"}, "password": {"hunter2hunter"},
 		"repeat":      {"hunter2hunter"},
 		"folder_name": {"My books"}, "folder_root": {books},
+		"folder_uploads": {"on"},
 	})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("setup with a folder: got %d", resp.StatusCode)
@@ -317,10 +318,46 @@ func TestFirstRunSetupWatchesTheFolderItNames(t *testing.T) {
 	if folders[0].Kind != store.FolderPlain {
 		t.Fatalf("a directory with no metadata.db was read as %q", folders[0].Kind)
 	}
+	if !folders[0].AcceptsUploads {
+		t.Fatal("the setup folder did not retain the checked upload choice")
+	}
 	// Signed in, and the folder is on the folders page.
 	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
 	if code != http.StatusOK || !strings.Contains(body, "My books") {
 		t.Fatalf("folders page after setup: %d\n%s", code, body)
+	}
+}
+
+func TestSetupFolderUploadsCanBeDisabled(t *testing.T) {
+	ts, st := emptyServer(t)
+	_, body := get(t, ts, nil, "/ui/setup")
+	if !strings.Contains(body, `name="folder_uploads" checked`) {
+		t.Fatal("setup uploads are not checked by default")
+	}
+	code, body := postForm(t, ts, nil, "/ui/setup", url.Values{
+		"username": {"founder"}, "password": {"short"}, "repeat": {"short"},
+		"folder_name": {"Books"}, "folder_root": {t.TempDir()},
+	})
+	if code != http.StatusOK || strings.Contains(body, `name="folder_uploads" checked`) {
+		t.Fatal("setup validation did not preserve the unchecked upload choice")
+	}
+	resp := setupPost(t, ts, url.Values{
+		"username": {"founder"}, "password": {"hunter2hunter"}, "repeat": {"hunter2hunter"},
+		"folder_name": {"Books"}, "folder_root": {t.TempDir()},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("setup: got %d", resp.StatusCode)
+	}
+	u, err := st.UserByName(t.Context(), "founder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := st.ListFolders(t.Context(), u.ID, "", 10)
+	if err != nil || len(folders) != 1 {
+		t.Fatalf("folders = %v, %v", folders, err)
+	}
+	if folders[0].AcceptsUploads {
+		t.Fatal("setup enabled uploads despite an unchecked checkbox")
 	}
 }
 

@@ -31,9 +31,10 @@ import (
 // The folder half is optional: an instance with an account and no folder
 // is a working instance, and the folders page is still there.
 type setupForm struct {
-	Username   string
-	FolderName string
-	FolderRoot string
+	Username      string
+	FolderName    string
+	FolderRoot    string
+	FolderUploads bool
 }
 
 // wantsFolder reports whether the operator filled in the folder half at
@@ -90,7 +91,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, prefix+"login", http.StatusSeeOther)
 		return
 	}
-	setupPage(prefix, uiCtx(r, nil), setupForm{}, "").Render(r.Context(), w)
+	setupPage(prefix, uiCtx(r, nil), setupForm{FolderUploads: true}, "").Render(r.Context(), w)
 }
 
 // handleSetup creates the first account, makes it an administrator,
@@ -110,9 +111,10 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	prefix := relPrefix(r.URL.Path)
 	form := setupForm{
-		Username:   r.FormValue("username"),
-		FolderName: strings.TrimSpace(r.FormValue("folder_name")),
-		FolderRoot: strings.TrimSpace(r.FormValue("folder_root")),
+		Username:      r.FormValue("username"),
+		FolderName:    strings.TrimSpace(r.FormValue("folder_name")),
+		FolderRoot:    strings.TrimSpace(r.FormValue("folder_root")),
+		FolderUploads: r.FormValue("folder_uploads") == "on",
 	}
 	release := auth.BeginPasswordRequest()
 	if release == nil {
@@ -197,7 +199,7 @@ func (s *Server) finishSetup(
 		return
 	}
 	folder, err := admin.NewFolder(r.Context(), s.St, form.FolderName,
-		form.FolderRoot, s.Cfg.Content.FolderRoots, u.ID)
+		form.FolderRoot, s.Cfg.Content.FolderRoots, u.ID, form.FolderUploads)
 	logAdminAction(r, &u, "add-folder", form.FolderName, err)
 	if err != nil {
 		// The account is made and they are signed in, so setup has
