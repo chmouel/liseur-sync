@@ -114,3 +114,28 @@ func TestRateLimitIPKeysOnForwardedClient(t *testing.T) {
 		t.Fatal("a different client behind the same proxy was locked out")
 	}
 }
+
+func TestIPv6AddressRotationSharesRateBudget(t *testing.T) {
+	cfg := proxiedCfg("172.29.0.0/16")
+	rl := NewRateLimiter(1, time.Minute)
+	h := RateLimitIP(rl, cfg, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		address string
+		want    int
+	}{
+		{"2001:db8:1:2::1", http.StatusNoContent},
+		{"2001:db8:1:2::abcd", http.StatusTooManyRequests},
+		{"2001:db8:1:3::1", http.StatusNoContent},
+		{"192.0.2.1", http.StatusNoContent},
+		{"::ffff:192.0.2.1", http.StatusTooManyRequests},
+		{"192.0.2.2", http.StatusNoContent},
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, xffRequest("172.29.0.1:4242", tc.address))
+		if w.Code != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.address, w.Code, tc.want)
+		}
+	}
+}
