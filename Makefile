@@ -138,7 +138,12 @@ run: generate $(CONFIG) ## Run the server once
 dev: generate $(CONFIG) ## Run the server and restart it on every change (needs reflex)
 	@command -v reflex >/dev/null || { \
 		echo "reflex is not installed: go install github.com/cespare/reflex@latest"; exit 1; }
-	@host_ip=$$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([^ ]*\).*/\1/p'); \
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		iface=$$(route get 1.1.1.1 2>/dev/null | awk '/interface:/{print $$2}'); \
+		host_ip=$$(ipconfig getifaddr "$$iface" 2>/dev/null); \
+	else \
+		host_ip=$$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([^ ]*\).*/\1/p'); \
+	fi; \
 	test -n "$$host_ip" || { echo "could not determine the host IP address"; exit 1; }; \
 	printf 'dev server: http://%s:8585\n\n' "$$host_ip"
 	@CONFIG=$(CONFIG) reflex --decoration=fancy --config=.reflex.conf
