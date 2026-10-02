@@ -59,7 +59,6 @@ templ insightsBody(
 		<div>
 			<p class="eyebrow">{ sum.Span.Label() }</p>
 			<h1>Insights</h1>
-			<p class="page-intro">Reading activity and recent sessions.</p>
 		</div>
 		@spanPicker(sum.Span)
 	</header>
@@ -84,7 +83,7 @@ templ insightsBody(
 	</section>
 	<section class="card">
 		<div class="cardhead">
-			<div><p class="eyebrow">The reading habit</p><h2>{ chartHeading(sum.Span, sum.Chart) }</h2></div>
+			<h2>{ chartHeading(sum.Span, sum.Chart) }</h2>
 			if sum.Calendar {
 				@chartTabs(sum)
 			}
@@ -100,7 +99,7 @@ templ insightsBody(
 	if len(books) > 0 {
 		<section class="card" id="by-book">
 			<div class="cardhead">
-				<div><p class="eyebrow">Where the time went</p><h2>By book</h2></div>
+				<h2>By book</h2>
 				<span class="count-badge">{ i2s(len(books)) }</span>
 			</div>
 			<ul class="bookstats">

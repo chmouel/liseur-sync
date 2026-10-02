@@ -50,7 +50,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							<img class="brand-icon" src={ prefix + "static/icon.svg" } width="32" height="32" alt=""/>
 							<span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span>
 						</a>
-						<span class="topbar-context">{ title }</span>
 						<div class="account">
 							@themeToggle(prefix, csrf, u)
 							<span class="who"><span class="account-avatar" aria-hidden="true">@uiIcon("Account")</span>{ u.User.Name }</span>
@@ -61,7 +60,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 						</div>
 					</header>
 					<aside class="rail">
-						<p class="rail-caption">Your reading space</p>
 						<nav aria-label="Sections">
 							@railLink(prefix+"library", "Library", u.Section == "library")
 							@railLink(prefix+"insights", "Insights", u.Section == "insights")
@@ -70,9 +68,6 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 							}
 							@railLink(prefix+"settings", "Settings", u.Section == "settings")
 						</nav>
-						<div class="rail-note">
-							<p>A library<br/><em>of your own.</em></p>
-						</div>
 					</aside>
 					<main id="content">
 						// The pull indicator lives outside the region a refresh
@@ -189,7 +184,6 @@ templ loginPage(prefix string, u userCtx, errMsg string) {
 
 templ loginBody(prefix string, errMsg string) {
 	@authFrame(prefix) {
-		<p class="auth-eyebrow">Liseur Sync</p>
 		<h1>Sign in</h1>
 		if errMsg != "" {
 			<p class="error" role="alert">{ errMsg }</p>
@@ -204,18 +198,13 @@ templ loginBody(prefix string, errMsg string) {
 
 templ authFrame(prefix string) {
 	<div class="auth-wrap">
-		<div class="auth-shell">
-			<aside class="auth-story" aria-label="Liseur Sync">
-				<p class="auth-brand">Liseur <span>sync</span></p>
-				<img class="auth-icon" src={ prefix + "static/icon.svg" } width="112" height="112" alt=""/>
-				<p class="auth-headline">Your library.<br/><em>Read and sync from anywhere.</em></p>
-				<p class="auth-story-copy">Liseur Sync keeps your library and your reading position on your own server.</p>
-				<p class="auth-story-foot">Self-hosted reading sync.</p>
-			</aside>
-			<section class="auth-panel">
-				{ children... }
-			</section>
-		</div>
+		<section class="auth-shell">
+			<p class="auth-brand">
+				<img class="auth-icon" src={ prefix + "static/icon.svg" } width="40" height="40" alt=""/>
+				<span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span>
+			</p>
+			{ children... }
+		</section>
 		<div class="auth-footer">
 			@creditLine()
 		</div>
@@ -295,7 +284,6 @@ templ setupPage(prefix string, u userCtx, form setupForm, errMsg string) {
 
 templ setupBody(prefix string, form setupForm, errMsg string) {
 	@authFrame(prefix) {
-		<p class="auth-eyebrow">First run</p>
 		<h1>Create the first account</h1>
 		<p class="auth-intro">No accounts exist on this server yet.</p>
 		if errMsg != "" {

@@ -140,7 +140,7 @@ const page = await evalIn(`(() => {
     cards: document.querySelectorAll('.bookcard').length,
     // A fragment answer would bring the card list without the page
     // around it, which is exactly the failure this test exists for.
-    intro: !!document.querySelector('.page-intro'),
+    heading: !!document.querySelector('.libraryhead h1'),
     button: !!document.querySelector('[data-refresh]:not([hidden])'),
   };
 })()`);
@@ -149,7 +149,7 @@ check(page.present, 'the refresh removed the shelf');
 check(page.swapped, 'the refresh did not redraw anything');
 check(page.lists, 'the redrawn shelf does not list the book');
 check(page.cards > 0, 'the redrawn shelf has no cards');
-check(page.intro, 'the redrawn shelf is a bare fragment, not the page');
+check(page.heading, 'the redrawn shelf is a bare fragment, not the page');
 check(page.button, 'the refresh button did not survive its own refresh');
 const landed = await evalIn(`location.href`);
 check(landed === settled,

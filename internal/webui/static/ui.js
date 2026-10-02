@@ -57,7 +57,7 @@
     const tag = active && active.tagName;
     if (e.key === '/' && tag !== 'INPUT' && tag !== 'TEXTAREA' &&
       !(active && active.isContentEditable)) {
-      const input = document.querySelector('header form input[name="q"]');
+      const input = document.querySelector('form input[type="search"][name="q"]');
       if (input) {
         e.preventDefault();
         input.focus();
@@ -69,7 +69,7 @@
   // Without this the forms still work — their <noscript> buttons submit
   // them — so this is the same behaviour the onchange attribute used to
   // give, minus the attribute the CSP now refuses.
-  const goOnChange = ['folder-pick', 'span-pick'];
+  const goOnChange = ['folder-pick', 'span-pick', 'sort-pick'];
   document.addEventListener('change', function (e) {
     const select = e.target;
     if (!select || !select.form) return;
@@ -80,6 +80,38 @@
     if (select.id === 'group-series-toggle') {
       select.form.requestSubmit();
     }
+  });
+
+  // A book's ⋯ menu is a <details>: it opens without any of this. These
+  // make it behave like a menu once open: one at a time, and closed by
+  // Escape or a click anywhere else.
+  function closeMenus(except) {
+    document.querySelectorAll('details.bookmenu[open]').forEach(function (d) {
+      if (d !== except) d.open = false;
+    });
+  }
+  document.addEventListener('toggle', function (e) {
+    const d = e.target;
+    if (d && d.matches && d.matches('details.bookmenu') && d.open) closeMenus(d);
+  }, true);
+  document.addEventListener('click', function (e) {
+    const inside = e.target.closest && e.target.closest('details.bookmenu');
+    closeMenus(inside);
+  });
+  // Tabbing out closes it. A null relatedTarget is a click that focused
+  // nothing (Safari does not focus links), which the click handler owns.
+  document.addEventListener('focusout', function (e) {
+    const menu = e.target.closest && e.target.closest('details.bookmenu[open]');
+    const next = e.relatedTarget;
+    if (menu && next && !menu.contains(next)) menu.open = false;
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    const open = document.querySelector('details.bookmenu[open]');
+    if (!open) return;
+    const hadFocus = open.contains(document.activeElement);
+    open.open = false;
+    if (hadFocus) open.querySelector('summary').focus();
   });
 
   // The heatmap opens at its far end: the reader came to see how this

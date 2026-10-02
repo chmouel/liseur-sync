@@ -15,8 +15,6 @@
   padding: 3rem 1.25rem;
 }
 
-.offline-shell .eyebrow { margin: 0 0 .65rem; }
-.offline-shell .lead { max-width: 45rem; color: var(--ink-dim); }
 .offline-shell .muted { font-size: .9rem; }
 
 .offline-books {

@@ -7,7 +7,6 @@ package webui
 templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, next string, roots []string, openFolderForm bool, flash Flash) {
 	<header class="folder-heading">
 		<div>
-			<p class="eyebrow">Library sources</p>
 			<h1>Folders</h1>
 		</div>
 		<div class="folder-actions">
@@ -47,7 +46,6 @@ templ adminFoldersBody(prefix string, csrf string, folders []adminFolderView, ne
 		<section class="card onboarding-card">
 			<div class="onboarding-icon" aria-hidden="true">+</div>
 			<div class="onboarding-copy">
-				<p class="eyebrow">First step</p>
 				<h2>Add your book folder</h2>
 				<p>
 					Point liseur-sync at the directory where your books already
@@ -190,7 +188,6 @@ templ adminFolderDialog(prefix string, csrf string, roots []string, openFolderFo
 templ adminFolderDialogBody(prefix string, csrf string, roots []string) {
 	<div class="dialog-head">
 		<div>
-			<p class="eyebrow">Add to your library</p>
 			<h2 id="folder-dialog-title">Watch a folder</h2>
 		</div>
 		<form method="dialog">

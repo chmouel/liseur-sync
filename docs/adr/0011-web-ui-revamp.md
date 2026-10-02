@@ -56,13 +56,13 @@ replaces both with their union — keyed by book where there is a book,
 by work where there is not — and the two old paths are deleted rather
 than redirected, this project never having shipped.
 
-Over the grid are filter chips (`All`, `Reading`, `Unread`, `Finished`,
+Over the grid are status tabs (`All`, `Reading`, `Unread`, `Finished`,
 `On this server`) and a sort, both kept in the URL so a filtered shelf
 is a link somebody can send. `On this server` is the one the page lands
 on, added later: the union above is what the library *is*, but a work
 with no file is a card you cannot open, and a shelf should open on the
-books. `All` is one chip away and is still the whole union. Above them
-is a continue-reading banner:
+books. `All` is one tab away and is still the whole union. Above them
+is a continue-reading row:
 the most recently started unfinished book whose file is here, absent
 entirely when there is nothing to go back to. It repeats a card from
 the grid on purpose — coming back to a half-read book is the commonest
@@ -78,18 +78,20 @@ you are in the middle of. Sorting alphabetically is missing for the
 same reason and is honest about it: it needs a second cursor ordering
 in the store, not a re-sort of whichever page arrived.
 
-**A cover's actions are a link, not a menu.** Hover does not exist on a
-phone and a web page cannot claim long-press, so the old reveal-on-hover
-overlay left touch users with no way to a book's actions at all. The
-first attempt was a ⋮ disclosure menu on each cover — no script needed,
-Escape closes it for free — and it was wrong on contact: a cover is an
-overflow-hidden box, so the panel was clipped by the picture it hung
-off, and unclipping it meant lifting the menu out of the element it
-belongs to and hand-rolling a popup. So the corner button is a link to
-the book's page, which already lists every action, and the two or three
-worth reaching without a page load (stats, sessions, download) are
-small text sublinks under the cover. No popup, nothing to close, and
-the same behaviour under a finger as under a pointer.
+**A card's actions are a menu beside its title, not on its cover.**
+Hover does not exist on a phone and a web page cannot claim long-press,
+so the old reveal-on-hover overlay left touch users with no way to a
+book's actions at all. The first ⋮ disclosure menu sat on each cover
+and was wrong on contact: a cover is an overflow-hidden box, so the
+panel was clipped by the picture it hung off. It was replaced by a
+corner link to the book's page plus a row of text sublinks under every
+cover, which worked but put six small links under every book on the
+wall. The menu now hangs off the caption line, outside the cover, so
+nothing clips it: a `<details>` that opens without script, with a few
+lines of `ui.js` to close it on Escape, on a click elsewhere, and when
+another opens. The cover still carries on reading and the title still
+names the book; details, mark read, reading log, sessions, download
+and (for a work with no book) delete are in the menu.
 
 **Light by default.** The September 2026 visual refresh uses white
 surfaces, green accents and serif headings. A new browser, or a cookie

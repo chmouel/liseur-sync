@@ -524,8 +524,10 @@ func TestBooksGridAndListViews(t *testing.T) {
 	if !strings.Contains(html, `class="grid"`) || !strings.Contains(html, `class="bookcard"`) {
 		t.Fatal("default browse view is not a grid of cards")
 	}
-	if !strings.Contains(html, "/cover?size=thumbnail") {
-		t.Error("grid does not ask for the cached thumbnail")
+	// A shelf cover is drawn wider than a thumbnail, which is a third
+	// of the full size, so the grid asks for the full render.
+	if !strings.Contains(html, "/cover?size=full") {
+		t.Error("grid does not ask for the full cover")
 	}
 	if !strings.Contains(html, bookID) {
 		t.Error("the book is missing from the grid")
