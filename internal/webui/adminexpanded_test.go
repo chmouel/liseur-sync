@@ -53,6 +53,9 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	if strings.Contains(body, `data-auto-open="true"`) {
 		t.Fatalf("a normal folders visit unexpectedly opened onboarding:\n%s", body)
 	}
+	if !strings.Contains(body, `name="accepts_uploads" checked`) {
+		t.Fatal("the first-folder form did not default to accepting uploads")
+	}
 
 	// A blank name is refused, and refused by the same rule the CLI
 	// uses rather than by a second copy of it.
@@ -83,6 +86,7 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	// Folders page that just went from empty to one entry.
 	req, _ := http.NewRequest("POST", ts.URL+"/ui/admin/folders", strings.NewReader(url.Values{
 		"csrf": {csrf}, "name": {"Shelf"}, "root": {root},
+		"accepts_uploads": {"on"},
 	}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -112,6 +116,13 @@ func TestAdminWatchesAndForgetsAFolder(t *testing.T) {
 	}
 	if folders[0].Kind != store.FolderPlain {
 		t.Errorf("kind = %q, want plain for a directory of files", folders[0].Kind)
+	}
+	if !folders[0].AcceptsUploads {
+		t.Fatal("the first folder did not retain its upload choice")
+	}
+	granted, err := st.ListFolders(ctx, "u1", "", 10)
+	if err != nil || len(granted) != 1 || !granted[0].AcceptsUploads {
+		t.Fatalf("the creator's upload-enabled folder = %v, %v", granted, err)
 	}
 
 	// The root path is on this page, and this page only: it is a
@@ -205,6 +216,9 @@ func TestAdminSecondFolderStaysOnFoldersPage(t *testing.T) {
 
 	cookie := loginCookie(t, ts)
 	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if strings.Contains(body, `name="accepts_uploads" checked`) {
+		t.Fatal("a later folder defaulted to accepting uploads")
+	}
 	csrf := extractCSRF(t, body)
 
 	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
@@ -215,6 +229,37 @@ func TestAdminSecondFolderStaysOnFoldersPage(t *testing.T) {
 	}
 	if strings.Contains(body, `data-auto-open="true"`) {
 		t.Fatalf("a successful folder add left the dialog marked for auto-open: %s", body)
+	}
+	folders, err := st.ListFolders(ctx, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range folders {
+		if folder.AcceptsUploads {
+			t.Fatalf("uploads enabled without a checked checkbox: %s", folder.Name)
+		}
+	}
+}
+
+func TestAdminFirstFolderUploadsCanBeDisabled(t *testing.T) {
+	ts, st := testServerCfg(t, nil, generousReauth)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	_, body = postForm(t, ts, cookie, "/ui/admin/folders", url.Values{
+		"csrf": {extractCSRF(t, body)}, "name": {"Read only"}, "root": {t.TempDir()},
+	})
+	if !strings.Contains(body, "Watching Read only") {
+		t.Fatalf("folder creation failed: %s", body)
+	}
+	folders, err := st.ListFolders(t.Context(), "u1", "", 10)
+	if err != nil || len(folders) != 1 {
+		t.Fatalf("folders = %v, %v", folders, err)
+	}
+	if folders[0].AcceptsUploads {
+		t.Fatal("the first-folder form ignored the unchecked upload choice")
 	}
 }
 
