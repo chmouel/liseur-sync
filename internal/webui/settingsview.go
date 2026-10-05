@@ -29,6 +29,7 @@ const (
 const (
 	folderOnboardingQuery = "onboarding"
 	folderOnboardingValue = "folder"
+	folderUploadsQuery    = "folder_uploads"
 )
 
 // The reader prompt (see static/reader-prompt.js) is the account's own
@@ -81,6 +82,7 @@ type settingsAdminView struct {
 	Build  buildinfo.Info
 	Config configFacts
 
+	HasFolders     bool
 	Folders        []adminFolderView
 	FoldersNext    string
 	Roots          []string
@@ -213,16 +215,41 @@ func flashQuery(flash Flash) string {
 	if flash.OpenFolderForm {
 		query = append(query, folderOnboardingQuery+"="+folderOnboardingValue)
 	}
+	if flash.FolderUploads != nil {
+		value := "0"
+		if *flash.FolderUploads {
+			value = "1"
+		}
+		query = append(query, folderUploadsQuery+"="+value)
+	}
 	return strings.Join(query, "&")
 }
 
 // flashFromQuery reads back what settingsRedirect sent.
 func flashFromQuery(r *http.Request) Flash {
-	return Flash{
+	flash := Flash{
 		Notice:         r.URL.Query().Get("notice"),
 		Error:          r.URL.Query().Get("problem"),
 		OpenFolderForm: folderOnboardingRequested(r),
 	}
+	if values, ok := r.URL.Query()[folderUploadsQuery]; ok && len(values) == 1 {
+		switch values[0] {
+		case "0":
+			uploads := false
+			flash.FolderUploads = &uploads
+		case "1":
+			uploads := true
+			flash.FolderUploads = &uploads
+		}
+	}
+	return flash
+}
+
+func (f Flash) folderUploadsOr(defaultValue bool) bool {
+	if f.FolderUploads != nil {
+		return *f.FolderUploads
+	}
+	return defaultValue
 }
 
 func settingsSelection(r *http.Request) (section, view, userID string) {
@@ -347,6 +374,10 @@ func (s *Server) settingsAdmin(
 	case settingsAdminFolders:
 		after := r.URL.Query().Get("after")
 		folders, err := s.St.ListFolders(r.Context(), "", after, adminFoldersPerPage+1)
+		if err != nil {
+			return err
+		}
+		v.HasFolders, err = s.St.HasAnyFolder(r.Context())
 		if err != nil {
 			return err
 		}

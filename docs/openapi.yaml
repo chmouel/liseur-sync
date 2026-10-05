@@ -159,7 +159,7 @@ paths:
                   expires_in: { type: integer, description: seconds }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
-        "429": { $ref: "#/components/responses/Error", description: "Rate limited" }
+        "429": { $ref: "#/components/responses/RateLimited" }
 
   /v1/register:
     post:
@@ -193,6 +193,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error", description: "Invalid or expired invite" }
         "409": { $ref: "#/components/responses/Error", description: "Username taken" }
+        "429": { $ref: "#/components/responses/RateLimited", description: "Per-IP limit or shared password capacity reached. The invite has not been consumed." }
 
   /v1/token:
     get:
@@ -2589,6 +2590,15 @@ components:
         machine-readable `code` and the identifiers that explain it
         (see `BatchItemError` for the batch routes). Clients must key
         any recovery off `code`, never off the message text.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Per-IP limit or shared password capacity reached
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying
+          schema: { type: integer, example: 1 }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

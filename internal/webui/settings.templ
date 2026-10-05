@@ -2,7 +2,7 @@ package webui
 
 templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
 	if v.Section == settingsAdmin && v.Admin.View == settingsAdminFolders {
-		@layout("Folders", prefix, u, csrf, adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash))
+		@layout("Folders", prefix, u, csrf, adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash))
 	} else {
 		@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, v))
 	}
@@ -10,11 +10,7 @@ templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
 
 templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
 	<header class="settings-heading">
-		<p class="eyebrow">Account & preferences</p>
 		<h1>Settings</h1>
-		<p class="muted">
-			Your account, your readers, and the way your library works.
-		</p>
 	</header>
 	<nav class="settings-tabs" aria-label="Settings sections">
 		@settingsTab(settingsHref(prefix, settingsProfile), "Profile & security", v.Section == settingsProfile)
@@ -139,7 +135,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMaintenance), "Maintenance", v.Admin.View == settingsAdminMaintenance)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
-		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
+		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
 	} else if v.Admin.View == settingsAdminUsers {
 		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Flash)
 	} else if v.Admin.View == settingsAdminUser && v.Admin.HasUser {

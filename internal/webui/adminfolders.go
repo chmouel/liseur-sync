@@ -20,8 +20,8 @@ import (
 // is a privilege beyond administering the application, which is why the
 // form is bounded by content.folder_roots when an operator has set it.
 //
-// The server never writes below a root. Removing a folder forgets this
-// server's record of it and touches nothing on disk.
+// Uploads and book deletion require the administrator's explicit choice.
+// Removing a folder forgets its record and touches nothing on disk.
 
 // adminFoldersPerPage is how many folders one page shows.
 const adminFoldersPerPage = 50
@@ -85,13 +85,15 @@ func (s *Server) handleAdminCreateFolder(
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
 	root := strings.TrimSpace(r.FormValue("root"))
+	acceptsUploads := r.FormValue("accepts_uploads") == "on"
 	folder, err := admin.NewFolder(r.Context(), s.St, name, root,
-		s.Cfg.Content.FolderRoots, u.ID)
+		s.Cfg.Content.FolderRoots, u.ID, acceptsUploads)
 	logAdminAction(r, u, "add-folder", name, err)
 	if err != nil {
 		s.renderAdminFolders(w, r, a, u, Flash{
 			Error:          err.Error(),
 			OpenFolderForm: true,
+			FolderUploads:   &acceptsUploads,
 		})
 		return
 	}
@@ -299,7 +301,7 @@ func (s *Server) handleAdminDeleteFolder(
 //
 // This is the only switch that lets this server write under a root
 // (ADR-0023), so it lives beside the root path rather than anywhere a
-// reader can reach, and it is off until somebody turns it on.
+// reader can reach. The onboarding form offers it checked by default.
 func (s *Server) handleAdminSetFolderUploads(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {

@@ -226,6 +226,14 @@ The same is true any other time a folder is added while the server had
 none: the admin panel is otherwise unchanged, so a folder added after
 one already exists still lands back on Folders with its usual notice.
 
+The optional setup folder and the first folder added from the web UI
+offer uploads and book deletion enabled by default. Uncheck the option
+before submitting to keep a read-only library. Enabling it lets uploads
+create files in that directory and book deletion remove them; a Calibre
+library also needs write access to its catalog. Later folders start with
+the option unchecked. Existing folders and folders added from the shell
+keep their upload settings unchanged.
+
 You can also add the books from a shell:
 
 ```

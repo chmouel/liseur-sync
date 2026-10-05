@@ -16,8 +16,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/chmouel/liseur-sync/internal/admin"
+	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -29,9 +31,10 @@ import (
 // The folder half is optional: an instance with an account and no folder
 // is a working instance, and the folders page is still there.
 type setupForm struct {
-	Username   string
-	FolderName string
-	FolderRoot string
+	Username      string
+	FolderName    string
+	FolderRoot    string
+	FolderUploads bool
 }
 
 // wantsFolder reports whether the operator filled in the folder half at
@@ -88,7 +91,7 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, prefix+"login", http.StatusSeeOther)
 		return
 	}
-	setupPage(prefix, uiCtx(r, nil), setupForm{}, "").Render(r.Context(), w)
+	setupPage(prefix, uiCtx(r, nil), setupForm{FolderUploads: true}, "").Render(r.Context(), w)
 }
 
 // handleSetup creates the first account, makes it an administrator,
@@ -108,10 +111,21 @@ func (s *Server) handleSetupPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	prefix := relPrefix(r.URL.Path)
 	form := setupForm{
-		Username:   r.FormValue("username"),
-		FolderName: strings.TrimSpace(r.FormValue("folder_name")),
-		FolderRoot: strings.TrimSpace(r.FormValue("folder_root")),
+		Username:      r.FormValue("username"),
+		FolderName:    strings.TrimSpace(r.FormValue("folder_name")),
+		FolderRoot:    strings.TrimSpace(r.FormValue("folder_root")),
+		FolderUploads: r.FormValue("folder_uploads") == "on",
 	}
+	release := auth.BeginPasswordRequest()
+	if release == nil {
+		passwordBusy(w)
+		setupPage(prefix, uiCtx(r, nil), form, errPasswordBusy).Render(r.Context(), w)
+		return
+	}
+	// Released as soon as the account exists: the password work is done,
+	// and the folder scan that follows can take minutes.
+	release = sync.OnceFunc(release)
+	defer release()
 	fail := func(msg string) {
 		setupPage(prefix, uiCtx(r, nil), form, msg).Render(r.Context(), w)
 	}
@@ -129,6 +143,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := admin.CreateFirstAdmin(r.Context(), s.St, form.Username, pw)
+	release()
 	switch {
 	case errors.Is(err, admin.ErrSetupClosed):
 		// Somebody else finished setup between the check above and this
@@ -184,7 +199,7 @@ func (s *Server) finishSetup(
 		return
 	}
 	folder, err := admin.NewFolder(r.Context(), s.St, form.FolderName,
-		form.FolderRoot, s.Cfg.Content.FolderRoots, u.ID)
+		form.FolderRoot, s.Cfg.Content.FolderRoots, u.ID, form.FolderUploads)
 	logAdminAction(r, &u, "add-folder", form.FolderName, err)
 	if err != nil {
 		// The account is made and they are signed in, so setup has
@@ -193,7 +208,10 @@ func (s *Server) finishSetup(
 		// folders page with the dialog open and the reason showing —
 		// which is where a second attempt belongs anyway.
 		redirectRel(w, settingsAdminHref(prefix, settingsAdminFolders)+"&"+
-			flashQuery(Flash{Error: err.Error(), OpenFolderForm: true}),
+			flashQuery(Flash{
+				Error: err.Error(), OpenFolderForm: true,
+				FolderUploads: &form.FolderUploads,
+			}),
 			http.StatusSeeOther)
 		return
 	}
