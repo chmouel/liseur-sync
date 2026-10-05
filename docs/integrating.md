@@ -1467,8 +1467,8 @@ round-trips verbatim to kosync pulls.
   [Pushing](#pushing)).
 - Batch limits: 500 ops, 1000 sessions, 500 books per batch resolve, 1
   MiB body, 16 KiB per `locator`.
-- Settings limits: 256 keys per account, 128 bytes per key, 4 KiB per
-  value; the account cap is a `409`.
+- Settings limits: 256 keys per device, 128 bytes per key, 4 KiB per
+  value; the device cap is a `409`.
 - Auth endpoints are rate-limited per
   IP (429 + `Retry-After`).
 - Credential traffic requires HTTPS; on
