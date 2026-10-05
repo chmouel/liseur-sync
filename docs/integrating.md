@@ -437,6 +437,9 @@ maximum-progression operation for each work/edition/origin-alias ownership
 group through compaction; equal fractions keep the earliest sequence.
 The candidates are sorted by work, decreasing progression, then sequence.
 The history limit applies only to `ops`, and both arrays share a snapshot.
+Response operations include `origin_alias` when recorded, so clients can
+retain distinct edition-less ownership groups rather than combining their
+maxima. This provenance is response-only; native writers do not assign it.
 
 Keep those candidates separately from current position and the agreed
 baseline. Offer a jump to the greatest known progression without making it

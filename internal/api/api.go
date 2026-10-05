@@ -276,6 +276,7 @@ type opJSON struct {
 	Locator     json.RawMessage `json:"locator,omitempty"`
 	ForeignPos  *string         `json:"foreign_pos,omitempty"`
 	Origin      string          `json:"origin,omitempty"`
+	OriginAlias *string         `json:"origin_alias,omitempty"`
 	Seq         int64           `json:"seq,omitempty"`
 	DeviceID    string          `json:"device_id,omitempty"`
 	ReceivedAt  string          `json:"received_at,omitempty"`
@@ -290,6 +291,7 @@ func opToJSON(o store.Op) opJSON {
 		Progression: o.Progression,
 		ForeignPos:  o.ForeignPos,
 		Origin:      string(o.Origin),
+		OriginAlias: o.OriginAlias,
 		Seq:         o.Seq,
 		DeviceID:    o.DeviceID,
 		ReceivedAt:  o.ReceivedAt.UTC().Format("2006-01-02T15:04:05.999999999Z"),
