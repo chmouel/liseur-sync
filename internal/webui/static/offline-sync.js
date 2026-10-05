@@ -305,6 +305,7 @@ export function readingSync({
   context, request, bookID = "", onChange = () => {}, onStatus = () => {},
   onStuck = () => {},
 }) {
+  let leaving = false;
   const mine = record => record.deviceID === context.deviceID;
   const run = async () => {
     // No hidden-tab check here: a sitting ends when the tab is hidden,
@@ -312,7 +313,8 @@ export function readingSync({
     // is what keeps a background tab from retrying on a timer.
     if (coordinator.stopped() || globalThis.navigator?.onLine === false) return false;
     await assertOfflineContext(context);
-    await drainOfflineOutbox(context, request);
+    await drainOfflineOutbox(context, (path, options) =>
+      request(path, { ...options, keepalive: leaving || options?.keepalive }));
     if (coordinator.stopped()) return false;
     await onChange();
     const pending = await listOfflineOutbox({ ...context, state: null });
@@ -328,5 +330,9 @@ export function readingSync({
     lock: outboxLock(context), run, onStatus, partition: context.partition,
     waiting: "Reading changes are waiting to sync.",
   });
-  return coordinator;
+  return {
+    ...coordinator,
+    leave() { leaving = true; return coordinator.trigger(); },
+    resume() { leaving = false; },
+  };
 }
