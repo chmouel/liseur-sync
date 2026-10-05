@@ -9,7 +9,20 @@
 // button is somebody asking, so it gets asked back — which is why even
 // agreement is reported rather than passed over in silence.
 
-import { EPSILON, sameSpot, reconcileReadingState } from "./reader-reconcile.js";
+import { EPSILON, anchorOf, sameSpot, reconcileReadingState } from "./reader-reconcile.js";
+import { furthestPosition } from "./reader-sync.js";
+
+export function furthestChoice({ candidates, workID, local, remote, resolvable = () => true }) {
+  const op = furthestPosition(candidates, workID);
+  const sameDestination = other => {
+    if (!other || !op) return false;
+    if (op.edition_sha && other.edition_sha && op.edition_sha !== other.edition_sha) return false;
+    if (anchorOf(op) && anchorOf(other)) return sameSpot(op, other);
+    return op.progression === other.progression &&
+      JSON.stringify(op.locator || {}) === JSON.stringify(other.locator || {});
+  };
+  return op && resolvable(op) && !sameDestination(local) && !sameDestination(remote) ? op : null;
+}
 
 /**
  * Reads the two sides and says what to do about them.

@@ -452,10 +452,17 @@ templ readerPage(v ReaderView, csrf string) {
 						<p id="reader-sync-there" class="reader-sync-place"></p>
 						<p id="reader-sync-excerpt" class="reader-catchup-excerpt" hidden></p>
 					</section>
+					<section class="reader-sync-side" id="reader-sync-furthest-side" hidden>
+						<h3>Furthest seen</h3>
+						<p id="reader-sync-furthest" class="reader-sync-place"></p>
+						<p id="reader-sync-furthest-excerpt" class="reader-catchup-excerpt" hidden></p>
+					</section>
 				</div>
 				<div class="reader-sync-actions">
 					<button type="button" id="reader-sync-take">Go to the other position</button>
 					<button type="button" id="reader-sync-keep">Keep this page</button>
+					<button type="button" id="reader-sync-furthest-take" hidden>Go to furthest seen</button>
+					<button type="button" id="reader-sync-back" hidden>Return to previous place</button>
 					<button type="button" id="reader-sync-cancel">Cancel</button>
 				</div>
 			</dialog>

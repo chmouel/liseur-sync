@@ -68,6 +68,7 @@ async function storageChecks() {
   const initialNote = { id: "server-note", rev: 1, kind: "note", body: "server", work_id: workID };
   let remoteAnnotations = [initialNote];
   let remotePosition = { op_id: "server-position", work_id: workID, progression: 0.4 };
+  let retainedPositions;
   const reply = (body, url, status = 200) => {
     const response = new Response(JSON.stringify(body), {
       status, headers: { "Content-Type": "application/json" },
@@ -89,7 +90,7 @@ async function storageChecks() {
       readingOrder: [{ href: root + "resources/chapter.xhtml", type: "application/xhtml+xml" }],
     }, url);
     if (path.endsWith("positions.json")) return reply({ positions: [] }, url);
-    if (path.includes("/positions?")) return reply({ ops: [remotePosition] }, url);
+    if (path.includes("/positions?")) return reply({ ops: [remotePosition], furthest: retainedPositions }, url);
     if (path.endsWith("/annotations")) return reply({ annotations: remoteAnnotations }, url);
     const response = new Response(`<html xmlns="http://www.w3.org/1999/xhtml"><head>
       <script src="/must-not-download/script.js"></script>
@@ -227,6 +228,9 @@ async function storageChecks() {
   await queue("local", "local pending", "local");
   remoteAnnotations = [{ ...initialNote, id: "fresh", body: "remote update" }];
   remotePosition = { ...remotePosition, progression: 0.8 };
+  retainedPositions = [{ op_id: "retained-outside-window", work_id: workID, progression: 0.95,
+    edition_sha: "retained", device_id: "remote", seq: 1,
+    locator: { href: "original.xhtml", locations: { totalProgression: 0.95 } } }];
   await s.saveReadingPosition({ ...context, bookID, op: { op_id: "local-position", progression: 0.6 } });
   await s.reconcileOfflineBook(context, book, publicationRequest);
   local = await s.listOfflineAnnotations({ ...context, bookID });
@@ -234,6 +238,9 @@ async function storageChecks() {
     !local.some(row => row.id === "server-note"), "pull merges pending writes and removes absent server notes");
   check((await s.getReadySnapshot({ ...context, bookID })).localPosition.progression === 0.6,
     "pull never overwrites queued local position");
+  check((await s.getReadySnapshot({ ...context, bookID })).furthest.some(op =>
+    op.op_id === "retained-outside-window" && op.locator.href === "original.xhtml"),
+  "snapshot refresh retains full server maxima absent from the recent ops window");
   await new Promise(resolve => setTimeout(resolve, 5));
   const latestPosition = { op_id: "a-newer-position", progression: 0.2,
     locator: { href: "chapter.xhtml", locations: { progression: 0.2 } } };
@@ -341,6 +348,48 @@ async function storageChecks() {
   reading = await s.readingState({ ...context, bookID: online });
   check(!reading.local && reading.baseline.op_id === "elsewhere",
     "a discarded page stops being this device's local position");
+  check(reading.furthest[0].op_id === "elsewhere",
+    "accepting, withdrawing and discarding never erase the observed maximum");
+  const peak = { ...page("observed-peak", 0.8), edition_sha: "edition", device_id: "foreign",
+    locator: { href: "original.xhtml", locations: { totalProgression: 0.8 } } };
+  await Promise.all([
+    s.observeReadingPositions({ ...context, bookID: online, workID, ops: [peak] }),
+    s.observeReadingPositions({ ...context, bookID: online, workID,
+      ops: [{ ...peak, op_id: "newer-lower", progression: 0.31 }] }),
+  ]);
+  reading = await s.readingState({ ...context, bookID: online });
+  check(reading.furthest.find(op => op.edition_sha === "edition").op_id === peak.op_id,
+    "concurrent observation transactions preserve the full peak before lower overwrite");
+  const detached = { ...context, partition: partition + "|https://api.example/" };
+  detached.epoch = await s.setActiveAccount(detached.partition, account);
+  await s.observeReadingPositions({ ...detached, bookID: online, workID, ops: [peak] });
+  check((await s.readingState({ ...detached, bookID: online })).furthest[0].locator.href === "original.xhtml",
+    "detached origin history persists without a publication snapshot");
+  await s.clearActiveAccount(detached.partition);
+  await rejected(() => s.observeReadingPositions({ ...detached, bookID: online, workID, ops: [peak] }),
+    "an expired detached account cannot write history");
+  const staleBook = "stale-maxima";
+  await s.saveReadingPosition({ ...context, bookID: staleBook, workID,
+    requireSnapshot: false, op: page("newer-tab", 0.31) });
+  const db = await s.openOfflineDB();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction("reading", "readwrite");
+    const store = tx.objectStore("reading");
+    const request = store.index("book").getAll([partition, account, staleBook]);
+    request.onsuccess = () => {
+      const record = request.result[0];
+      record.updatedAt = Date.now() + 60000;
+      store.put(record);
+    };
+    tx.oncomplete = resolve;
+    tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+  await s.saveReadingPosition({ ...context, bookID: staleBook, workID,
+    requireSnapshot: false, op: page("late-tab-peak", 0.85) });
+  const late = await s.readingState({ ...context, bookID: staleBook });
+  check(late.local.op_id === "newer-tab" && late.furthest[0].op_id === "late-tab-peak",
+    "rejecting a stale tab's current write still transactionally retains its peak");
 
   // Two windows of one account share one queue and one lock. Whichever
   // holds the lock does the sending; the other finds nothing left to do

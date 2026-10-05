@@ -1,5 +1,39 @@
 import { reconcileReadingState } from "./reader-reconcile.js";
 
+const validFraction = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+
+// Keep original operations, not a locator assembled from different observations.
+export function mergeFurthest(previous, observations, workID) {
+  const groups = new Map();
+  for (const op of [...(previous || []), ...(observations || [])]) {
+    if (!op?.op_id || op.work_id !== workID || !validFraction(op.progression)) continue;
+    const key = JSON.stringify([op.work_id, op.edition_sha || "", op.origin_alias || ""]);
+    const old = groups.get(key);
+    if (!old || op.progression > old.progression ||
+        (op.progression === old.progression && earlierCandidate(op, old))) {
+      groups.set(key, structuredClone(op));
+    }
+  }
+  return [...groups.values()];
+}
+
+function earlierCandidate(a, b) {
+  if (a.seq != null && b.seq == null) return true;
+  if (a.seq == null && b.seq != null) return false;
+  if (a.seq != null && b.seq != null) {
+    try {
+      if (BigInt(a.seq) !== BigInt(b.seq)) return BigInt(a.seq) < BigInt(b.seq);
+    } catch { /* Non-server observations are ordered by their original identity. */ }
+  }
+  return String(a.op_id) < String(b.op_id);
+}
+
+export function furthestPosition(ops, workID) {
+  return mergeFurthest([], ops, workID).reduce((best, op) =>
+    !best || op.progression > best.progression ||
+      (op.progression === best.progression && earlierCandidate(op, best)) ? op : best, null);
+}
+
 // Match Android's bounded fallback past malformed position records. A real
 // zero is readable; missing, null and out-of-range fractions are not.
 export function latestReadablePosition(ops, workID) {
