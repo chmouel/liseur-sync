@@ -296,16 +296,34 @@ already accepted.
 
 ### 5.3 History, not just heads
 
-`GET /v1/works/{id}/positions?limit=50` returns recent ops. This enables
+`GET /v1/works/{id}/positions?limit=50` returns recent `ops` and a separate
+`furthest` array, read from one snapshot. Recent history enables
 undo, session inference for legacy devices (§6.3), and trust: users can
 see what each device claimed and when.
 
+`furthest` retains the full operation with the greatest progression for
+each work/edition/origin-alias ownership group, independently of the history
+limit. Equal fractions keep the earliest sequence. These groups preserve
+the evidence needed when a work is split by edition or legacy alias. The
+work-wide maximum is the greatest fraction among them. It is a destination
+the reader may choose, separate from the latest position and the agreed
+merge baseline. Returning to an earlier chapter, marking unread, or
+dismissing a sync offer does not reset it. Navigation jumps count too.
+Clients preserve locally recorded peaks before coalescing position uploads,
+and retain every incoming peak before choosing a latest operation for merge.
+They never apply a historical maximum as a fresh remote move.
+
 Retention: ops older than a configurable window (default 180 days) are
 compacted to daily last-op-per-device snapshots. The newest op per
-(work, device) is kept whatever its age, and a kosync op not yet
+(work, device) and each ownership group's furthest op are kept whatever
+their age, and a kosync op not yet
 materialised into an inferred session (§6.3) is kept until it is. The
 horizon is the newest seq compaction removed; a cursor below it gets
-`410 resync_required` and rebuilds from `GET /v1/heads`.
+`410 resync_required` and rebuilds from `GET /v1/heads`. That response
+includes `furthest` in the same read transaction as the heads and
+`snapshot_seq`. Existing deployments can recover only positions still
+retained at upgrade, not history already compacted away
+([ADR-0051](adr/0051-furthest-position-survives-rereading.md)).
 
 ### 5.4 Conflicts are resolved by clients
 

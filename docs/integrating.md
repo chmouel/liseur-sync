@@ -431,6 +431,35 @@ fell behind the compaction horizon. Fetch `GET /v1/heads`, rebuild your
 local state from those heads, set your cursor to its `snapshot_seq`, and
 resume normal delta sync.
 
+Both `/v1/heads` and `/v1/works/{id}/positions?limit=50` return a separate
+`furthest` array of full original operations. The server retains the
+maximum-progression operation for each work/edition/origin-alias ownership
+group through compaction; equal fractions keep the earliest sequence.
+The candidates are sorted by work, decreasing progression, then sequence.
+The history limit applies only to `ops`, and both arrays share a snapshot.
+
+Keep those candidates separately from current position and the agreed
+baseline. Offer a jump to the greatest known progression without making it
+win a normal merge. Before reducing a changes page to its latest operation
+per work, retain maxima from **all** valid operations, including local
+echoes. Updating the cursor and persisting these observations must be one
+transaction. Seed maxima from the per-work response when resolving a book
+whose operations are already behind the cursor.
+
+Record local peaks before upload coalescing so reading to 70%, returning to
+31% offline, then reconnecting preserves both facts. Deliver an unsent local
+peak before the current position, with stable operation IDs and payloads;
+never upload another device's historical candidate as newly authored reading.
+Acknowledging the current position does not acknowledge an unsent peak.
+
+A zero fraction is valid. Retain small advances without merge tolerances.
+Use the source operation's own locator and edition; different editions may
+need an approximate destination. Dismissal, rereading and marking unread
+leave the historical maximum alone. A missing `furthest` field means an
+older server; an empty array means no retained positions. Clients may still
+offer locally known maxima against an older server, but cannot promise a
+complete server history. Data compacted before this feature is unrecoverable.
+
 A work can also disappear from under a cursor: a reader deleting a work
 (ADR-0024) removes its ops without a tombstone in this feed. A client
 that holds ops for a work the server no longer knows learns so on its

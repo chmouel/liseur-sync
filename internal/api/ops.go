@@ -192,19 +192,20 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 	case limit > 200:
 		limit = 200
 	}
-	ops, err := s.St.Positions(r.Context(), tok.UserID, workID, limit)
+	snapshot, err := s.St.PositionSnapshot(r.Context(), tok.UserID, workID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "positions failed")
 		return
 	}
 	out := struct {
-		Ops []opJSON `json:"ops"`
-	}{}
-	for _, o := range ops {
+		Ops      []opJSON `json:"ops"`
+		Furthest []opJSON `json:"furthest"`
+	}{Ops: []opJSON{}, Furthest: []opJSON{}}
+	for _, o := range snapshot.Ops {
 		out.Ops = append(out.Ops, opToJSON(o))
 	}
-	if out.Ops == nil {
-		out.Ops = []opJSON{}
+	for _, o := range snapshot.Furthest {
+		out.Furthest = append(out.Furthest, opToJSON(o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -220,13 +221,14 @@ func (s *Server) HandleHeads(w http.ResponseWriter, r *http.Request) {
 	}
 	out := struct {
 		Ops         []opJSON `json:"ops"`
+		Furthest    []opJSON `json:"furthest"`
 		SnapshotSeq int64    `json:"snapshot_seq"`
-	}{SnapshotSeq: h.SnapshotSeq}
+	}{Ops: []opJSON{}, Furthest: []opJSON{}, SnapshotSeq: h.SnapshotSeq}
 	for _, o := range h.Ops {
 		out.Ops = append(out.Ops, opToJSON(o))
 	}
-	if out.Ops == nil {
-		out.Ops = []opJSON{}
+	for _, o := range h.Furthest {
+		out.Furthest = append(out.Furthest, opToJSON(o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

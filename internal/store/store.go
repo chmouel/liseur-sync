@@ -1314,9 +1314,18 @@ type ChangesPage struct {
 	ResyncNeeded bool // since < compaction horizon
 }
 
-// Heads is the recovery snapshot: newest op per (work, device).
+// PositionSnapshot keeps recent history and retained furthest candidates
+// in one read snapshot. Furthest is independent of the history limit.
+type PositionSnapshot struct {
+	Ops      []Op
+	Furthest []Op
+}
+
+// Heads is the recovery snapshot: newest op per (work, device), plus
+// furthest candidates per (work, edition, origin alias).
 type Heads struct {
 	Ops         []Op // newest op per (work_id, device_id)
+	Furthest    []Op
 	SnapshotSeq int64
 }
 
@@ -1908,6 +1917,7 @@ type Store interface {
 	AppendOps(ctx context.Context, userID, deviceID string, ops []Op) ([]OpResult, error)
 	Changes(ctx context.Context, userID string, since int64, limit int) (ChangesPage, error)
 	Positions(ctx context.Context, userID, workID string, limit int) ([]Op, error)
+	PositionSnapshot(ctx context.Context, userID, workID string, limit int) (PositionSnapshot, error)
 	PendingInferenceOps(ctx context.Context, userID string) ([]Op, error)
 	HeadsFor(ctx context.Context, userID string) (Heads, error)
 	CompactionHorizon(ctx context.Context, userID string) (int64, error)

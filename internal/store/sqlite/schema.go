@@ -1152,6 +1152,10 @@ CREATE TABLE IF NOT EXISTS device_settings (
 CREATE INDEX IF NOT EXISTS tokens_user_device ON tokens(user_id, device_id);
 `
 
+const furthestPositions = `
+CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, progression DESC, seq);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1164,6 +1168,7 @@ var migrations = []string{
 	mirrorCursors,
 	mirrorPeerFiles,
 	deviceSettings,
+	furthestPositions,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1186,6 +1191,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"mirrorCursors":            mirrorCursors,
 		"mirrorPeerFiles":          mirrorPeerFiles,
 		"deviceSettings":           deviceSettings,
+		"furthestPositions":        furthestPositions,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -12,6 +12,37 @@ import (
 const opCols = `user_id, seq, op_id, work_id, edition_sha, device_id, client_ts,
                 progression, locator_json, foreign_pos, origin, origin_alias, received_at`
 
+const furthestRank = `ROW_NUMBER() OVER (
+	PARTITION BY work_id, edition_sha, origin_alias
+	ORDER BY progression DESC, seq ASC)`
+
+func furthestOpsTx(ctx context.Context, tx *sql.Tx, userID, workID string) ([]store.Op, error) {
+	where := `user_id = ?`
+	args := []any{userID}
+	if workID != "" {
+		where += ` AND work_id = ?`
+		args = append(args, workID)
+	}
+	rows, err := tx.QueryContext(ctx, q(
+		`SELECT `+opCols+` FROM (
+			SELECT `+opCols+`, `+furthestRank+` AS furthest_rank FROM ops
+			WHERE `+where+` AND progression >= 0 AND progression <= 1
+		) ranked WHERE furthest_rank = 1 ORDER BY work_id, progression DESC, seq`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Op
+	for rows.Next() {
+		o, err := scanOp(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) AppendOps(ctx context.Context, userID, deviceID string, ops []store.Op) ([]store.OpResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -230,6 +261,37 @@ func (s *Store) Positions(ctx context.Context, userID, workID string, limit int)
 	return out, rows.Err()
 }
 
+func (s *Store) PositionSnapshot(ctx context.Context, userID, workID string, limit int) (store.PositionSnapshot, error) {
+	var snapshot store.PositionSnapshot
+	tx, err := s.db.BeginTx(ctx, snapshotTx)
+	if err != nil {
+		return snapshot, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, q(
+		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND work_id = ? ORDER BY seq DESC LIMIT ?`),
+		userID, workID, limit)
+	if err != nil {
+		return snapshot, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		o, err := scanOp(rows)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Ops = append(snapshot.Ops, o)
+	}
+	if err := rows.Err(); err != nil {
+		return snapshot, err
+	}
+	if err := rows.Close(); err != nil {
+		return snapshot, err
+	}
+	snapshot.Furthest, err = furthestOpsTx(ctx, tx, userID, workID)
+	return snapshot, err
+}
+
 func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error) {
 	tx, err := s.db.BeginTx(ctx, snapshotTx)
 	if err != nil {
@@ -255,7 +317,14 @@ func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error
 		}
 		h.Ops = append(h.Ops, o)
 	}
-	return h, rows.Err()
+	if err := rows.Err(); err != nil {
+		return h, err
+	}
+	if err := rows.Close(); err != nil {
+		return h, err
+	}
+	h.Furthest, err = furthestOpsTx(ctx, tx, userID, "")
+	return h, err
 }
 
 func (s *Store) CompactionHorizon(ctx context.Context, userID string) (int64, error) {
@@ -298,6 +367,9 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 		return 0, err
 	}
 	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return 0, err
+	}
 	cut := olderThan.UTC()
 
 	rows, err := tx.QueryContext(ctx, q(
@@ -312,7 +384,12 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 		     SELECT MAX(seq) FROM ops o3
 		     WHERE o3.user_id = ops.user_id
 		     GROUP BY o3.work_id, o3.device_id)
-		 RETURNING seq`), userID, cut, cut)
+		 AND seq NOT IN (
+		     SELECT seq FROM (
+		         SELECT seq, `+furthestRank+` AS furthest_rank FROM ops
+		         WHERE user_id = ? AND progression >= 0 AND progression <= 1
+		     ) ranked WHERE furthest_rank = 1)
+		 RETURNING seq`), userID, cut, cut, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -334,10 +411,11 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 	if horizon == 0 {
 		return 0, tx.Commit()
 	}
-	if _, err := tx.ExecContext(ctx, q(
+	if err := tx.QueryRowContext(ctx, q(
 		`INSERT INTO compaction_state (user_id, horizon) VALUES (?, ?)
-		 ON CONFLICT(user_id) DO UPDATE SET horizon = excluded.horizon`),
-		userID, horizon); err != nil {
+		 ON CONFLICT(user_id) DO UPDATE SET horizon = GREATEST(compaction_state.horizon, excluded.horizon)
+		 RETURNING horizon`),
+		userID, horizon).Scan(&horizon); err != nil {
 		return 0, err
 	}
 	return horizon, tx.Commit()

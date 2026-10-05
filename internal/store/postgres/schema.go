@@ -734,6 +734,10 @@ CREATE TABLE IF NOT EXISTS device_settings (
 CREATE INDEX IF NOT EXISTS tokens_user_device ON tokens(user_id, device_id);
 `
 
+const furthestPositions = `
+CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, progression DESC, seq);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -744,6 +748,7 @@ var migrations = []string{
 	mirrorCursors,
 	mirrorPeerFiles,
 	deviceSettings,
+	furthestPositions,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -765,6 +770,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"mirrorCursors":            mirrorCursors,
 		"mirrorPeerFiles":          mirrorPeerFiles,
 		"deviceSettings":           deviceSettings,
+		"furthestPositions":        furthestPositions,
 	}
 	want, ok := named[name]
 	if !ok {
