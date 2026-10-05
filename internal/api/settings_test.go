@@ -108,6 +108,77 @@ func TestSettingsSyncRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSettingsStayOnTheirDevice pins ADR-0050: settings belong to the
+// device that wrote them. A second device of the same account starts
+// empty and never sees the first one's, while a new token for the same
+// device — what a client gets when it signs in again keeping its
+// device_id — finds them where it left them.
+func TestSettingsStayOnTheirDevice(t *testing.T) {
+	f := newFolderFixture(t)
+
+	putBody := `{"settings":{
+		"reader.font":{"value":"literata","updated_at":"2026-06-01T12:00:00Z"}
+	}}`
+	code, body := putJSONReq(t, f.ts.URL+"/v1/me/settings", f.token, putBody)
+	if code != http.StatusOK {
+		t.Fatalf("put: %d %v", code, body)
+	}
+	if body["scope"] != "device" {
+		t.Fatalf("PUT response does not say its scope: %v", body)
+	}
+
+	tablet := f.mintToken(t, f.user.ID, store.ScopeSync)
+	code, body = getJSON(t, f.ts.URL+"/v1/me/settings", tablet)
+	if code != http.StatusOK {
+		t.Fatalf("tablet get: %d %v", code, body)
+	}
+	if body["scope"] != "device" {
+		t.Fatalf("GET response does not say its scope: %v", body)
+	}
+	if got := body["settings"].(map[string]any); len(got) != 0 {
+		t.Fatalf("another device of the account sees the phone's settings: %v", got)
+	}
+
+	// A newer write on the tablet stays on the tablet.
+	code, body = putJSONReq(t, f.ts.URL+"/v1/me/settings", tablet, `{"settings":{
+		"reader.font":{"value":"inter","updated_at":"2026-06-02T12:00:00Z"}
+	}}`)
+	if code != http.StatusOK {
+		t.Fatalf("tablet put: %d %v", code, body)
+	}
+	code, body = getJSON(t, f.ts.URL+"/v1/me/settings", f.token)
+	if code != http.StatusOK {
+		t.Fatalf("phone get: %d %v", code, body)
+	}
+	font := body["settings"].(map[string]any)["reader.font"].(map[string]any)
+	if font["value"] != "literata" {
+		t.Fatalf("tablet's write reached the phone: %v", font)
+	}
+
+	// Same device, new token.
+	phone, err := f.srv.Auth.AuthenticateToken(t.Context(), f.token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := f.srv.Auth.Login(t.Context(), f.user.Name, "hunter2hunter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _, err := f.srv.Auth.CreateToken(t.Context(), login, "phone again",
+		store.ScopeSet{store.ScopeSync}, nil, phone.DeviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body = getJSON(t, f.ts.URL+"/v1/me/settings", again)
+	if code != http.StatusOK {
+		t.Fatalf("same device get: %d %v", code, body)
+	}
+	font = body["settings"].(map[string]any)["reader.font"].(map[string]any)
+	if font["value"] != "literata" {
+		t.Fatalf("same device lost its settings: %v", font)
+	}
+}
+
 func putJSONReq(t *testing.T, url, token, body string) (int, map[string]any) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader([]byte(body)))

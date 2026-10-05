@@ -9,7 +9,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-// TestPutUserSettingsWaitsForAccountLock pins the serialization the
+// TestPutDeviceSettingsWaitsForAccountLock pins the serialization the
 // quota check depends on.
 //
 // Counting the stored settings inside a transaction does not stop two
@@ -21,7 +21,7 @@ import (
 // ahead. It also gives every writer for one account a single order to
 // work in, so two overlapping multi-key upserts cannot take the same
 // rows in opposite orders and deadlock.
-func TestPutUserSettingsWaitsForAccountLock(t *testing.T) {
+func TestPutDeviceSettingsWaitsForAccountLock(t *testing.T) {
 	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
 	if dsn == "" {
 		t.Skip("LISEUR_PG_TEST_DSN not set")
@@ -56,7 +56,7 @@ func TestPutUserSettingsWaitsForAccountLock(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- s.PutUserSettings(ctx, "u1", []store.UserSetting{
+		done <- s.PutDeviceSettings(ctx, "u1", "d1", []store.DeviceSetting{
 			{Key: "reader.font", Value: "literata", UpdatedAt: now},
 		}, 256)
 	}()
@@ -79,7 +79,7 @@ func TestPutUserSettingsWaitsForAccountLock(t *testing.T) {
 		t.Fatal("write never completed after the lock was released")
 	}
 
-	got, err := s.GetUserSettings(ctx, "u1")
+	got, err := s.GetDeviceSettings(ctx, "u1", "d1")
 	if err != nil {
 		t.Fatal(err)
 	}

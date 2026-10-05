@@ -12,32 +12,35 @@ import (
 // that are not about the cap.
 const settingsCap = 256
 
-func testUserSettings(t *testing.T, open OpenFunc) {
+// settingsDevice is the device the single-device cases write as.
+const settingsDevice = "settings-phone"
+
+func testDeviceSettings(t *testing.T, open OpenFunc) {
 	s := open(t)
 	ctx := t.Context()
 	alice := MkUser(t, s, "settings-alice")
 
-	// Empty on a fresh account.
-	got, err := s.GetUserSettings(ctx, alice.ID)
+	// Empty on a fresh device.
+	got, err := s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("fresh account has settings: %v", got)
+		t.Fatalf("fresh device has settings: %v", got)
 	}
 
 	t1 := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
 
 	// Put two keys.
-	if err := s.PutUserSettings(ctx, alice.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, alice.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "reader.font", Value: "literata", UpdatedAt: t1},
 		{Key: "reader.theme", Value: "sepia", UpdatedAt: t1},
 	}, settingsCap); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err = s.GetUserSettings(ctx, alice.ID)
+	got, err = s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,16 +55,16 @@ func testUserSettings(t *testing.T, open OpenFunc) {
 	}
 
 	// Last-writer-wins: a newer timestamp overwrites.
-	if err := s.PutUserSettings(ctx, alice.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, alice.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "reader.font", Value: "vollkorn", UpdatedAt: t2},
 	}, settingsCap); err != nil {
 		t.Fatal(err)
 	}
-	got, err = s.GetUserSettings(ctx, alice.ID)
+	got, err = s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
-	byKey := map[string]store.UserSetting{}
+	byKey := map[string]store.DeviceSetting{}
 	for _, us := range got {
 		byKey[us.Key] = us
 	}
@@ -73,16 +76,16 @@ func testUserSettings(t *testing.T, open OpenFunc) {
 	}
 
 	// Stale write is silently dropped.
-	if err := s.PutUserSettings(ctx, alice.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, alice.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "reader.font", Value: "inter", UpdatedAt: t1},
 	}, settingsCap); err != nil {
 		t.Fatal(err)
 	}
-	got, err = s.GetUserSettings(ctx, alice.ID)
+	got, err = s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
-	byKey = map[string]store.UserSetting{}
+	byKey = map[string]store.DeviceSetting{}
 	for _, us := range got {
 		byKey[us.Key] = us
 	}
@@ -91,18 +94,53 @@ func testUserSettings(t *testing.T, open OpenFunc) {
 	}
 
 	// Empty put is a no-op.
-	if err := s.PutUserSettings(ctx, alice.ID, nil, settingsCap); err != nil {
+	if err := s.PutDeviceSettings(ctx, alice.ID, settingsDevice, nil, settingsCap); err != nil {
 		t.Fatal(err)
 	}
 
 	// Cross-user isolation.
 	bob := MkUser(t, s, "settings-bob")
-	bobs, err := s.GetUserSettings(ctx, bob.ID)
+	bobs, err := s.GetDeviceSettings(ctx, bob.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bobs) != 0 {
 		t.Fatalf("bob sees alice's settings: %v", bobs)
+	}
+
+	// Device isolation: another device of the same account sees none
+	// of alice's phone settings, and its own writes stay its own, even
+	// under the same key.
+	tablet := "settings-tablet"
+	tabs, err := s.GetDeviceSettings(ctx, alice.ID, tablet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tabs) != 0 {
+		t.Fatalf("tablet sees the phone's settings: %v", tabs)
+	}
+	if err := s.PutDeviceSettings(ctx, alice.ID, tablet, []store.DeviceSetting{
+		{Key: "reader.font", Value: "inter", UpdatedAt: t2.Add(time.Hour)},
+	}, settingsCap); err != nil {
+		t.Fatal(err)
+	}
+	tabs, err = s.GetDeviceSettings(ctx, alice.ID, tablet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tabs) != 1 || tabs[0].Key != "reader.font" || tabs[0].Value != "inter" {
+		t.Fatalf("tablet settings: %v", tabs)
+	}
+	got, err = s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey = map[string]store.DeviceSetting{}
+	for _, us := range got {
+		byKey[us.Key] = us
+	}
+	if byKey["reader.font"].Value != "vollkorn" {
+		t.Fatalf("tablet's newer write reached the phone: %+v", byKey["reader.font"])
 	}
 
 	// Sub-second precision survives the round trip. The upsert keeps
@@ -113,16 +151,16 @@ func testUserSettings(t *testing.T, open OpenFunc) {
 	// truncates below a microsecond, and this asserts what both backends
 	// promise.
 	frac := time.Date(2026, 6, 3, 12, 0, 0, 500000000, time.UTC)
-	if err := s.PutUserSettings(ctx, alice.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, alice.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "reader.fraction", Value: "x", UpdatedAt: frac},
 	}, settingsCap); err != nil {
 		t.Fatal(err)
 	}
-	got, err = s.GetUserSettings(ctx, alice.ID)
+	got, err = s.GetDeviceSettings(ctx, alice.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}
-	byKey = map[string]store.UserSetting{}
+	byKey = map[string]store.DeviceSetting{}
 	for _, us := range got {
 		byKey[us.Key] = us
 	}
@@ -131,34 +169,41 @@ func testUserSettings(t *testing.T, open OpenFunc) {
 			stored.Format(time.RFC3339Nano), frac.Format(time.RFC3339Nano))
 	}
 
-	// The per-account cap counts new keys only: replacing a key already
+	// The per-device cap counts new keys only: replacing a key already
 	// stored is not growth, and must still be allowed at the cap.
 	carol := MkUser(t, s, "settings-carol")
-	if err := s.PutUserSettings(ctx, carol.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, carol.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "a", Value: "1", UpdatedAt: t1},
 		{Key: "b", Value: "1", UpdatedAt: t1},
 	}, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutUserSettings(ctx, carol.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, carol.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "b", Value: "2", UpdatedAt: t2},
 	}, 2); err != nil {
 		t.Fatalf("replacing a key at the cap was refused: %v", err)
 	}
-	if err := s.PutUserSettings(ctx, carol.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, carol.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "c", Value: "1", UpdatedAt: t2},
 	}, 2); !errors.Is(err, store.ErrQuotaExceeded) {
 		t.Fatalf("want ErrQuotaExceeded past the cap, got %v", err)
 	}
 	// A refused put stores nothing, including the pairs it could have
 	// taken: the whole batch shares one transaction.
-	if err := s.PutUserSettings(ctx, carol.ID, []store.UserSetting{
+	if err := s.PutDeviceSettings(ctx, carol.ID, settingsDevice, []store.DeviceSetting{
 		{Key: "b", Value: "3", UpdatedAt: t2.Add(time.Hour)},
 		{Key: "d", Value: "1", UpdatedAt: t2},
 	}, 2); !errors.Is(err, store.ErrQuotaExceeded) {
 		t.Fatalf("want ErrQuotaExceeded, got %v", err)
 	}
-	got, err = s.GetUserSettings(ctx, carol.ID)
+	// The cap is per device: another device of a full account still
+	// has room of its own.
+	if err := s.PutDeviceSettings(ctx, carol.ID, "settings-tablet", []store.DeviceSetting{
+		{Key: "c", Value: "1", UpdatedAt: t2},
+	}, 2); err != nil {
+		t.Fatalf("a second device was refused by the first one's cap: %v", err)
+	}
+	got, err = s.GetDeviceSettings(ctx, carol.ID, settingsDevice)
 	if err != nil {
 		t.Fatal(err)
 	}

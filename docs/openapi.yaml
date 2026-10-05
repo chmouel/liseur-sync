@@ -451,12 +451,18 @@ paths:
   /v1/me/settings:
     get:
       tags: [sync]
-      summary: Read the account's synced settings
+      summary: Read this device's stored settings
       security: [{ deviceToken: [] }]  # requires sync scope
       description: |
-        Returns every key/value pair the account has stored. The server
-        treats keys and values as opaque strings; which keys exist and
-        what values mean is the client's business.
+        Returns every key/value pair stored for the calling device, the
+        one the token belongs to. Another device of the same account
+        never sees them (ADR-0050). The server treats keys and values as
+        opaque strings; which keys exist and what values mean is the
+        client's business.
+
+        `scope` is always `device`. A server that answers without it is
+        older and its map is account-wide; a client keeping settings per
+        device should adopt nothing from it.
       responses:
         "200":
           description: The settings map (empty object when none are stored)
@@ -464,18 +470,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [settings]
+                required: [settings, scope]
                 properties:
                   settings:
                     type: object
                     additionalProperties:
                       $ref: "#/components/schemas/SettingEntry"
+                  scope:
+                    type: string
+                    enum: [device]
+                    description: Whose settings these are; always the calling device's.
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "500": { $ref: "#/components/responses/Error" }
     put:
       tags: [sync]
-      summary: Upsert synced settings (last-writer-wins)
+      summary: Upsert this device's settings (newer wins)
       security: [{ deviceToken: [] }]  # requires sync scope
       description: |
         Each key in the request is upserted only when the supplied
@@ -483,24 +493,27 @@ paths:
         that key; a stale write is silently dropped. Keys not mentioned
         are untouched — this is a partial update, not a replace.
 
-        The response is the merged result: every key the account holds
+        Rows belong to the calling device; nothing written here is
+        visible to another device of the account.
+
+        The response is the merged result: every key the device holds
         after the upsert, not just the ones sent. A dropped write is not
         an error, so a client must compare the response against what it
         sent rather than read `200` as "my value was stored".
 
-        `updated_at` is supplied by the client, because last-writer-wins
-        has to order an edit made offline by when it was made and not by
-        when it arrived. It may not sit more than 24 hours ahead of the
-        server's clock: without that bound a single write stamped far in
+        `updated_at` is supplied by the client, so a retry arriving late
+        cannot undo a newer write from the same device. It may not sit
+        more than 24 hours ahead of the server's clock: without that bound a single write stamped far in
         the future would pin the key forever, and there is no delete.
 
         Refused with `400`: an empty `settings` map, an absent or
         unparseable `updated_at`, one more than 24 hours ahead
         (`code: time_in_future`), an empty key, a key or value over
         `ops.settings_max_key_bytes` / `ops.settings_max_value_bytes`,
-        and a NUL byte in either. Refused with `409` when the account
-        already holds `ops.settings_max_per_account` keys and the
-        request would add another; nothing is stored in that case.
+        and a NUL byte in either. Refused with `409` when the device
+        already holds `ops.settings_max_per_account` keys (a per-device
+        cap, despite its name) and the request would add another;
+        nothing is stored in that case.
       requestBody:
         required: true
         content:
@@ -520,12 +533,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [settings]
+                required: [settings, scope]
                 properties:
                   settings:
                     type: object
                     additionalProperties:
                       $ref: "#/components/schemas/SettingEntry"
+                  scope:
+                    type: string
+                    enum: [device]
+                    description: Whose settings these are; always the calling device's.
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
