@@ -1746,12 +1746,12 @@ async function liveGuard(evalIn, check, S) {
     };
     return true;
   })()`);
-  const remote = (id, fraction) => evalIn(`(async () => {
+  const remote = (id, fraction, fragment = 'epubcfi(/6/9998!/4/2)') => evalIn(`(async () => {
     const out = await window.__liveCall('v1/ops', 'POST', { ops: [{
       op_id: ${JSON.stringify('live-test-' + id)}, work_id: window.__liveWork,
       client_ts: new Date().toISOString(), progression: ${fraction},
       locator: {
-        locations: { totalProgression: ${fraction}, fragments: ['epubcfi(/6/9998!/4/2)'] },
+        locations: { totalProgression: ${fraction}, fragments: [${JSON.stringify(fragment)}] },
         // Another device's text, in the shape an anchor is written in:
         // the first visible word, and the words either side of it cut
         // mid-word the way a fixed-length capture cuts them. And
@@ -2026,7 +2026,28 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   check('failed queue preparation does not adopt the remote baseline',
     JSON.stringify(JSON.parse(await stored()).baseline) === JSON.stringify(beforeFailedTake));
   await evalIn("window.__restoreReadingPut()");
+  await evalIn(`(() => {
+    const original = IDBObjectStore.prototype.put;
+    window.__restoreReadingPut = () => { IDBObjectStore.prototype.put = original; };
+    IDBObjectStore.prototype.put = function(...args) {
+      if (this.name === 'reading' && args[0]?.baseline?.op_id === 'live-test-asked')
+        throw new DOMException('Injected baseline adoption failure', 'QuotaExceededError');
+      return original.apply(this, args);
+    };
+  })()`);
   await evalIn("document.getElementById('reader-sync-take').click()");
+  check('a failed baseline write after landing keeps the retryable choice open',
+    await wait(`${syncDialog}.open && document.getElementById('reader-sync-summary').textContent.includes('sync choice could not be saved')`),
+    await evalIn("document.getElementById('reader-sync-summary').textContent"));
+  check('baseline failure after landing is not reported as durable adoption',
+    JSON.stringify(JSON.parse(await stored()).baseline) === JSON.stringify(beforeFailedTake));
+  check('the failed baseline write happened after navigation',
+    await position() > 0.8 && await position() !== settled);
+  await evalIn("window.__restoreReadingPut()");
+  await evalIn("document.getElementById('reader-sync-take').click()");
+  check('retry durably records the previously failed adoption before closing',
+    await wait(`!${syncDialog}.open`) &&
+    JSON.parse(await stored()).baseline.op_id === 'live-test-asked');
   // The fixture has thirteen positions in ten chapters, so a fraction
   // of 0.9 lands on the page that starts below it rather than on 0.9
   // itself: what is checked is the trip, not an exact landing.
@@ -2039,6 +2060,43 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   check('an answered position is not left open in the panel',
     await evalIn("document.getElementById('reader-catchup').hidden"),
     await evalIn("document.getElementById('reader-catchup').textContent"));
+
+  await evalIn("window.__liveBlockOps = true; document.getElementById('reader-progress-text').click()");
+  await evalIn("document.getElementById('reader-goto-input').value = '95'; document.getElementById('reader-goto-form').requestSubmit()");
+  check('a local peak is queued before accepting a lower remote place',
+    await wait("document.querySelector('readium-view').lastLocation.fraction > 0.9") &&
+    await wait(`(${drained}).then(n => n > 0)`));
+  await evalIn("document.getElementById('reader-progress-text').click()");
+  await evalIn("document.getElementById('reader-goto-input').value = '31'; document.getElementById('reader-goto-form').requestSubmit()");
+  await wait("document.querySelector('readium-view').lastLocation.fraction < 0.4");
+  await remote('retained-adoption', 0.65, 'epubcfi(/6/9999!/4/2)');
+  await evalIn("document.getElementById('reader-sync').click()");
+  await wait(`${syncDialog}.open && !document.getElementById('reader-sync-take').hidden`);
+  await evalIn(`(() => {
+    const original = IDBObjectStore.prototype.put;
+    window.__restoreReadingPut = () => { IDBObjectStore.prototype.put = original; };
+    IDBObjectStore.prototype.put = function(...args) {
+      if (this.name === 'reading' && args[0]?.baseline?.op_id === 'live-test-retained-adoption')
+        throw new DOMException('Injected retained-peak baseline failure', 'QuotaExceededError');
+      return original.apply(this, args);
+    };
+  })()`);
+  await evalIn("document.getElementById('reader-sync-take').click()");
+  check('retained-peak adoption does not close on a failed baseline write',
+    await wait(`${syncDialog}.open && document.getElementById('reader-sync-summary').textContent.includes('sync choice could not be saved')`));
+  reading = JSON.parse(await stored());
+  check('the chosen destination stays durably owed after baseline failure',
+    reading.local?.progression > 0.4 && reading.local.progression < 0.8 &&
+    reading.baseline?.op_id !== 'live-test-retained-adoption', JSON.stringify(reading));
+  await evalIn("window.__restoreReadingPut(); document.getElementById('reader-sync-take').click()");
+  check('retained-peak adoption can be retried successfully', await wait(`!${syncDialog}.open`));
+  reading = JSON.parse(await stored());
+  check('successful retry preserves the undelivered destination rather than clearing local state',
+    reading.baseline?.op_id === 'live-test-retained-adoption' && !!reading.local,
+    JSON.stringify(reading));
+  await evalIn("window.__liveBlockOps = false; window.dispatchEvent(new Event('online'))");
+  check('the retained peak and chosen current position eventually drain in order',
+    await wait(`(${drained}).then(n => n === 0)`));
 
   await remote('historical-peak', 0.97);
   await evalIn("document.getElementById('reader-sync').click()");

@@ -1020,23 +1020,28 @@ async function goThere(op, stamp, activity, still) {
   } finally {
     loading.stop();
     restoring = false;
-    // A restored page starts accounting only when the reader next interacts.
-    if (landed && current(stamp)) {
-      retryOp = null;
-      readingDirty = false;
-      interactionPending = false;
-      catchup.adopt(op);
-      await rememberAnswer(op, true);
-      if (retainedPeak) {
-        // The retained local peak must be delivered before the chosen current
-        // place, or its later delivery would leave the server at the peak.
-        readingDirty = true;
-        await push();
-      }
-    }
   }
   if (!landed && valid()) throw Error("That reading position could not be opened.");
-  return landed;
+  if (!landed || !valid()) return false;
+  if (retainedPeak) {
+    // Queue the chosen current place after the retained peak before settling
+    // anything. A failed write leaves both the question and the local retry owed.
+    readingDirty = true;
+    await push();
+    if (readingDirty) throw Error("The destination opened, but could not be saved. Try taking it again.");
+  }
+  if (!current(stamp)) return false;
+  if (!await rememberAnswer(op, !retainedPeak))
+    throw Error("The destination opened, but this sync choice could not be saved. Try taking it again.");
+  if (!current(stamp) || activity !== activityGeneration) return false;
+  retryOp = null;
+  readingDirty = false;
+  interactionPending = false;
+  // An undelivered destination remains local movement; only acknowledgement
+  // may clear it. Otherwise the restored position is the agreed current place.
+  if (retainedPeak) catchup.refuse(op);
+  else catchup.adopt(op);
+  return true;
 }
 
 catchupDismiss?.addEventListener("click", dismissCatchup);
