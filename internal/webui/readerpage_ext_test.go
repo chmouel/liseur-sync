@@ -220,10 +220,10 @@ func TestReaderTitleIsCenteredInTheViewport(t *testing.T) {
 	_, css := f.get(t, "/ui/static/style.css", f.cookie)
 	for _, want := range []string{
 		".reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;\n" +
-			"  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);",
+			"  display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,1fr) minmax(max-content,1fr);",
 		".reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\n" +
 			"  text-align:center;",
-		".reader-actions{display:flex;align-items:center;justify-self:end;",
+		".reader-actions{position:relative;display:flex;align-items:center;justify-self:end;",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("the reader title is not safely centered: missing %q", want)
@@ -372,8 +372,8 @@ func TestReaderUsesTheDynamicMobileViewportAndPaginates(t *testing.T) {
 		t.Error("reader shell does not use the dynamic mobile viewport height")
 	}
 	for _, want := range []string{
-		".reader-stage{flex:1;display:flex;min-height:0;position:relative;\n  box-sizing:border-box;padding-top:3rem}",
-		".reader-turn{position:absolute;top:0;bottom:var(--reader-margin,48px);z-index:6;width:2.75rem;",
+		".reader-stage{flex:1;display:flex;min-height:0;position:relative;\n  box-sizing:border-box;padding-top:var(--reader-bar-height,calc(3rem + env(safe-area-inset-top, 0px)))}",
+		".reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));z-index:6;width:2.75rem;",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("reader page controls are not overlaid: missing %q", want)

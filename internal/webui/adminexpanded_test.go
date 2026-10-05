@@ -258,7 +258,7 @@ func TestAdminFoldersStaleCursorKeepsUploadsOff(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	path := settingsAdminHref("/ui/settings", settingsAdminFolders) +
+	path := settingsAdminHref("/ui/", settingsAdminFolders) +
 		"&after=" + url.QueryEscape(store.FolderCursor(folder))
 	code, body := page(t, ts, cookie, path)
 	if code != http.StatusOK {

@@ -93,7 +93,7 @@ func (s *Server) handleAdminCreateFolder(
 		s.renderAdminFolders(w, r, a, u, Flash{
 			Error:          err.Error(),
 			OpenFolderForm: true,
-			FolderUploads:   &acceptsUploads,
+			FolderUploads:  &acceptsUploads,
 		})
 		return
 	}
