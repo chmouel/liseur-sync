@@ -728,6 +728,37 @@ func TestReaderOpensInARealBrowser(t *testing.T) {
 // anywhere else: the handoff is a redirect, the credential arrives in a
 // URL fragment, and the API calls that follow are cross-origin. Only a
 // browser enforces any of that.
+func TestDetachedReaderFurthestInARealBrowser(t *testing.T) {
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "furthest-novel", browserTestEPUB(t))
+	ts, readerHost := splitOriginServer(t, f)
+	cookie := f.loginTo(t, ts, "alice")
+	cmd := exec.Command(node, filepath.Join("testdata", "readerbrowser.mjs"))
+	cmd.Env = append(os.Environ(),
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_URL="+ts.URL+"/ui/books/"+bookID+"/read",
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_HOST="+strings.TrimPrefix(ts.URL, "http://"),
+		"SMOKE_MAP="+readerHost,
+		"SMOKE_DETACHED=1",
+		"SMOKE_FURTHEST=1",
+	)
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("detached furthest recovery failed: %v", err)
+	}
+}
+
 func TestDetachedReaderOpensInARealBrowser(t *testing.T) {
 	chrome := findChrome()
 	if chrome == "" {

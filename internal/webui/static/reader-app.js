@@ -7,11 +7,11 @@ import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
 import { offlineSync, readingSync, outboxLock } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
-import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged } from "./reader-sync.js";
+import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged, mergeFurthest } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
 import { agreedEdition, startCandidates as restoreCandidates } from "./reader-restore.js";
 import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } from "./reader-place.js";
-import { decideBookSync } from "./reader-sync-choice.js";
+import { decideBookSync, furthestChoice } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import { fillPrompt } from "./reader-prompt.js";
@@ -38,6 +38,7 @@ import {
   saveReadingPosition,
   readingState,
   agreeReadingBaseline,
+  observeReadingPositions,
   saveOfflineSessionCheckpoint,
   deploymentPrefix,
   storagePartition,
@@ -208,13 +209,16 @@ let releaseOfflineReader = null;
 // its own fresh sitting rather than adopting this one's.
 let sessionOwner = false;
 let offlineInvalidated = false;
-// An online reader on the deployment's own origin queues its reading
-// state in the same IndexedDB the offline app uses, and drains it
-// through the same lock. The separate reader origin (ADR-0007 phase 3)
-// has no such storage of its own to share, so it keeps posting
-// directly: that boundary is deliberate, not an oversight.
-const durableSync = !cfg.offline && !cfg.detached;
-const offlinePartition = cfg.detached ? null : storagePartition();
+// Detached storage stays on the reader origin, partitioned further by API
+// deployment. This does not register a worker or enable offline publications.
+const durableSync = !cfg.offline;
+const offlinePartition = cfg.detached
+  ? storagePartition() + "|" + new URL(cfg.apiBase, location.href).href
+  : storagePartition();
+let furthest = [];
+let furthestVerified = false;
+let historyStorageError = false;
+let positionStorageFlight = Promise.resolve();
 const offlineBase = cfg.offline ? deploymentPrefix() : "";
 let readingCoordinator = null;
 let sendTimer = null;
@@ -428,6 +432,9 @@ const auth = readerAuth({
       // switch needs the page lifecycle to advance, or a write settled
       // under the fresh token would be requeued as if it never landed.
       lifecycle++;
+      furthest = [];
+      furthestVerified = false;
+      syncDialog?.close();
       auth.stop(); // A page opened for one account never writes under another.
       return;
     }
@@ -485,6 +492,7 @@ function prepareOfflineSync() {
     context: offlineContext, base: offlineBase,
     onChange: async () => {
       const fresh = await getReadySnapshot({ ...offlineContext, bookID: cfg.bookID });
+      await loadFurthest(fresh?.furthest);
       if (fresh?.localPosition && !readingDirty) {
         catchup.observe(fresh.localPosition);
         showCatchup();
@@ -524,6 +532,8 @@ async function prepareReadingSync(identity) {
     // No local queue is a weaker reader, not a broken one: it posts
     // straight through the way it always did.
     console.warn("Reading changes cannot be queued locally:", error);
+    historyStorageError = true;
+    say("Reading history cannot be saved on this device: " + error.message, true);
     offlineContext = null;
     return;
   }
@@ -536,12 +546,12 @@ async function prepareReadingSync(identity) {
       await resolveAnnotationConflicts();
       await retryUnrestoredAnnotations();
     },
-    onStatus: message => { if (!syncExpired) say(message, !!message); },
+    onStatus: message => { if (!syncExpired && (message || !historyStorageError)) say(message, !!message); },
     onStuck: records => {
       showStuck(records);
       // The drain no longer speaks through the status line, so this is
       // what clears a transient failure the coordinator put there.
-      if (!records.length && !syncExpired) say("");
+      if (!records.length && !syncExpired && !historyStorageError) say("");
     },
   });
 }
@@ -553,6 +563,7 @@ async function refreshLocalReadingState() {
   if (!offlineContext || !durableSync) return;
   const state = await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null);
   if (!state) return;
+  furthest = mergeFurthest(furthest, state.furthest, workID);
   const queued = await listOfflineOutbox({
     ...offlineContext, kind: "position", state: null,
   }).catch(() => []);
@@ -599,13 +610,13 @@ async function checkOfflineAccount() {
     say("Offline access ended. Close this reader and sign in again.", true);
   }
 }
-if (cfg.offline) {
+if (globalThis.BroadcastChannel) {
   const channel = new BroadcastChannel("liseur-offline");
   channel.onmessage = () => checkOfflineAccount();
-  window.addEventListener("offline-change", checkOfflineAccount);
-  window.addEventListener("pageshow", checkOfflineAccount);
-  document.addEventListener("visibilitychange", checkOfflineAccount);
 }
+window.addEventListener("offline-change", checkOfflineAccount);
+window.addEventListener("pageshow", checkOfflineAccount);
+document.addEventListener("visibilitychange", checkOfflineAccount);
 
 // ------------------------------------------------------------ sync
 
@@ -650,9 +661,43 @@ async function lastPosition() {
   );
   if (!resp.ok) return { ok: false };
   stamp.identity = auth.responseIdentity(resp);
-  const ops = (await resp.json()).ops || [];
+  const data = await resp.json();
+  const ops = data.ops || [];
   if (work !== workID || !current(stamp)) return { ok: false };
+  await rememberFurthest([...ops, ...(data.furthest || [])]);
+  if (!current(stamp)) return { ok: false };
+  furthestVerified = Array.isArray(data.furthest);
   return { ok: true, op: latestReadablePosition(ops, work) };
+}
+
+async function loadFurthest(extra = []) {
+  if (!offlineContext || !workID) return;
+  const stamp = snapshot();
+  const state = await readingState({ ...offlineContext, bookID: cfg.bookID });
+  if (!current(stamp)) return;
+  await rememberFurthest([...(state?.furthest || []), state?.local, state?.baseline, ...(extra || [])]);
+}
+
+async function rememberFurthest(ops) {
+  const stamp = snapshot();
+  const observed = mergeFurthest(furthest, ops, workID);
+  if (!offlineContext) {
+    furthest = observed;
+    historyStorageError = true;
+    say("Furthest positions are only kept until this tab closes; device storage is unavailable.", true);
+    return;
+  }
+  let stored;
+  try {
+    stored = await observeReadingPositions({
+      ...offlineContext, bookID: cfg.bookID, workID, ops: observed,
+    });
+  } catch (error) {
+    historyStorageError = true;
+    say(error.message || "Reading history could not be saved.", true);
+    throw error;
+  }
+  if (current(stamp)) furthest = stored;
 }
 
 // ------------------------------------------------------------- live
@@ -770,28 +815,37 @@ function startLive() {
 // Answering settles the disagreement for good: the position the reader
 // did not take becomes the agreed baseline too, because it has been
 // seen and answered. Without that, every reload asks again.
-function rememberAnswer(op, settled) {
-  if (!op || !offlineContext) return;
-  agreeReadingBaseline({
-    ...offlineContext, bookID: cfg.bookID, workID, baseline: op, settled,
-  }).catch(() => {});
+async function rememberAnswer(op, settled) {
+  if (!op || !offlineContext) return true;
+  try {
+    await agreeReadingBaseline({
+      ...offlineContext, bookID: cfg.bookID, workID, baseline: op, settled,
+    });
+    return true;
+  } catch (error) {
+    say(error.message || "This sync choice could not be saved.", true);
+    return false;
+  }
 }
 
-// Taking the other device's position withdraws this device's own
-// undelivered ones. The queue drains oldest first, so a page turn still
-// waiting there would land after the reader's answer and reinstate the
-// position they just refused. Nothing is lost: an op the server never
-// acknowledged is a claim about where the reader was, and they have
-// just said otherwise. It runs under the queue's own lock so a send
-// already in flight finishes before the queue is edited underneath it.
+// Withdraw superseded current positions, but keep undelivered peaks. If a
+// peak remains, the chosen current place is queued after navigation so the
+// peak's eventual delivery cannot leave it masquerading as the latest.
 async function withdrawQueuedPositions() {
-  if (!offlineContext) return;
+  if (!offlineContext) return false;
+  let retainedPeak = false;
   const withdraw = async () => {
+    await loadFurthest();
+    const peaks = new Set(furthest.map(op => op.op_id));
     const queued = await listOfflineOutbox({
       ...offlineContext, kind: "position", state: null,
     });
     for (const record of queued) {
       if (record.bookID !== cfg.bookID || record.deviceID !== offlineContext.deviceID) continue;
+      if (peaks.has(record.id)) {
+        retainedPeak = true;
+        continue;
+      }
       await removeOfflineOutbox({
         ...offlineContext, kind: "position", id: record.id, settle: false,
       });
@@ -800,7 +854,11 @@ async function withdrawQueuedPositions() {
   try {
     if (navigator.locks) await navigator.locks.request(outboxLock(offlineContext), withdraw);
     else await withdraw();
-  } catch { /* the queue is best-effort; a stale op is not worth an error */ }
+  } catch (error) {
+    say(error.message || "Queued positions could not be updated.", true);
+    throw error;
+  }
+  return retainedPeak;
 }
 
 // A question whose answer is the page in the reader's hand is not a
@@ -906,8 +964,9 @@ async function keepHere(op, still) {
     }
   }
   if (still && !still()) return "withdrawn";
+  if (!await rememberAnswer(op, false)) return "unsent";
+  if (still && !still()) return "withdrawn";
   catchup.refuse(op);
-  rememberAnswer(op, false);
   return "kept";
 }
 
@@ -934,12 +993,13 @@ async function goThere(op, stamp, activity) {
   // would reinstate the position the reader just refused.
   clearTimeout(sendTimer);
   sendTimer = null;
-  await withdrawQueuedPositions();
+  const retainedPeak = await withdrawQueuedPositions();
   if (!current(stamp) || !view) return;
   // Close the old sitting at its actual page, not at the remote destination.
   endSession();
   restoring = true;
   const loading = startChapterLoading("Syncing to reading position…");
+  let landed = false;
   try {
     for (const target of startCandidates(op)) {
       if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
@@ -949,6 +1009,7 @@ async function goThere(op, stamp, activity) {
         // goTo catches anchor failures internally; use the renderer so a stale
         // CFI actually descends to the existing fraction/href fallback.
         await view.renderer.goTo(resolved);
+        landed = true;
         break;
       } catch { /* try the coarser locator */ }
     }
@@ -956,7 +1017,15 @@ async function goThere(op, stamp, activity) {
     loading.stop();
     restoring = false;
     // A restored page starts accounting only when the reader next interacts.
-    rememberAnswer(op, true);
+    if (landed && current(stamp)) {
+      await rememberAnswer(op, true);
+      if (retainedPeak) {
+        // The retained local peak must be delivered before the chosen current
+        // place, or its later delivery would leave the server at the peak.
+        readingDirty = true;
+        await push();
+      }
+    }
   }
 }
 
@@ -994,6 +1063,13 @@ const syncExcerpt = document.getElementById("reader-sync-excerpt");
 const syncTake = document.getElementById("reader-sync-take");
 const syncKeep = document.getElementById("reader-sync-keep");
 const syncCancel = document.getElementById("reader-sync-cancel");
+const syncFurthestSide = document.getElementById("reader-sync-furthest-side");
+const syncFurthestText = document.getElementById("reader-sync-furthest");
+const syncFurthestExcerpt = document.getElementById("reader-sync-furthest-excerpt");
+const syncFurthestTake = document.getElementById("reader-sync-furthest-take");
+const syncBack = document.getElementById("reader-sync-back");
+let furthestOffered = null;
+let furthestBack = null;
 // The position the open dialog is asking about. Cleared when it closes,
 // so an answer can never be given about a question no longer on screen.
 let syncOffered = null;
@@ -1009,7 +1085,7 @@ let syncCovered = false;
 // that would invent a side.
 function positionHere() {
   if (!view || !here || !finite(here.fraction)) return null;
-  return { progression: here.fraction, locator: locatorFor(here) || {} };
+  return { progression: here.fraction, locator: locatorFor(here) || {}, edition_sha: editionSHA() };
 }
 
 // Two of the summaries below promise this page is on its way up. The
@@ -1062,6 +1138,7 @@ async function askBookSync() {
   try {
     syncCovered = !!catchupPanel && !catchupPanel.hidden;
     hideCatchup();
+    await loadFurthest(offlineSnapshot?.furthest);
     // The offline reader has no server to ask: its positions are
     // queued on this device and go up when it is next online. Saying
     // so is the whole of the answer, and nudging the queue is the
@@ -1090,6 +1167,8 @@ async function askBookSync() {
     }
     catchup.observe(result.op);
     presentBookSync(result.op, null);
+  } catch (error) {
+    say(error.message || "Reading history could not be loaded.", true);
   } finally {
     syncAsking = false;
     syncButton?.removeAttribute("aria-busy");
@@ -1139,9 +1218,26 @@ function presentBookSync(remote, note) {
 
   syncTake.hidden = !takeable;
   syncKeep.hidden = !keepable;
+  const peak = furthestChoice({
+    candidates: furthest, workID, local: positionHere(), remote: takeable ? remote : null,
+    resolvable: op => startCandidates(op).length > 0,
+  });
+  furthestOffered = peak ? {
+    op: structuredClone(peak), stamp: snapshot(), activity: activityGeneration,
+    edition: editionSHA(), local: JSON.stringify(positionHere()),
+  } : null;
+  const peakPlace = placeOf(peak, seen);
+  syncFurthestSide.hidden = !peak;
+  syncFurthestTake.hidden = !peak;
+  syncFurthestText.textContent = peak
+    ? `${placeSentence(peakPlace) || percent(peak.progression)}. ${furthestVerified && !note
+      ? "Includes retained server history." : "Furthest known on this device; server history has not been verified."}`
+    : "";
+  showExcerpt(syncFurthestExcerpt, peakPlace);
+  syncBack.hidden = !furthestBack || !current(furthestBack.stamp);
   // With nothing to choose between, the only button left is the way
   // out, and calling it "Cancel" would suggest something was pending.
-  syncCancel.textContent = syncTake.hidden && syncKeep.hidden ? "Close" : "Cancel";
+  syncCancel.textContent = syncTake.hidden && syncKeep.hidden && !peak ? "Close" : "Cancel";
   if (!syncDialog.open) syncDialog.showModal();
 }
 
@@ -1152,9 +1248,79 @@ syncCancel?.addEventListener("click", () => syncDialog.close());
 // question that was already waiting. An answer below clears the flag
 // first, because answering the dialog answers the panel with it.
 syncDialog?.addEventListener("close", () => {
+  // The browser queues this event. A fast reopen may already have installed
+  // a new candidate; the previous dialog's close must not erase it.
+  if (syncDialog.open) return;
   syncOffered = null;
+  furthestOffered = null;
   if (syncCovered) showCatchup();
   syncCovered = false;
+});
+
+async function navigateHistorical(choice, still) {
+  const valid = () => current(choice.stamp) && !document.hidden &&
+    activityGeneration === choice.activity && editionSHA() === choice.edition && still();
+  if (!valid()) throw Error("The reading position changed. Open sync again before choosing.");
+  if (offlineContext) await assertOfflineContext(offlineContext);
+  if (!valid() || JSON.stringify(positionHere()) !== choice.local)
+    throw Error("The page moved. Open sync again before choosing.");
+  if (!await settleBeforeAnswer()) throw Error("This page could not be saved. The furthest position was not taken.");
+  if (!valid()) throw Error("The reading position changed. Open sync again before choosing.");
+  const back = { op: positionHere(), stamp: snapshot() };
+  endSession();
+  restoring = true;
+  let landed = false;
+  try {
+    for (const target of startCandidates(choice.op)) {
+      if (!valid()) break;
+      try {
+        const resolved = await view.resolveNavigation(target);
+        if (offlineContext) await assertOfflineContext(offlineContext);
+        if (!valid()) break;
+        await view.renderer.goTo(resolved);
+        landed = true;
+        break;
+      } catch { /* Follow the same exact-to-approximate restoration ladder as opening. */ }
+    }
+  } finally {
+    restoring = false;
+  }
+  if (!landed) throw Error("That position could not be opened.");
+  furthestBack = back;
+  // Historical navigation is a new local choice, never an agreed server head.
+  readingDirty = true;
+  await push();
+  if (readingDirty) throw Error("The destination opened, but could not be saved on this device.");
+  syncCovered = false;
+  syncDialog.close();
+  hideCatchup();
+  flash("Position opened. Use Sync to return to your previous place.");
+}
+
+syncFurthestTake?.addEventListener("click", async () => {
+  const choice = furthestOffered;
+  if (!choice) return;
+  syncFurthestTake.disabled = true;
+  try {
+    await navigateHistorical(choice, () => furthestOffered === choice);
+  } catch (error) {
+    syncSummary.textContent = error.message;
+  } finally {
+    syncFurthestTake.disabled = false;
+  }
+});
+
+syncBack?.addEventListener("click", async () => {
+  const back = furthestBack;
+  if (!back || !current(back.stamp)) return;
+  const choice = {
+    ...back, activity: activityGeneration, edition: editionSHA(), local: JSON.stringify(positionHere()),
+  };
+  try {
+    await navigateHistorical(choice, () => furthestBack === back && syncDialog.open);
+  } catch (error) {
+    syncSummary.textContent = error.message;
+  }
 });
 
 syncTake?.addEventListener("click", async () => {
@@ -2283,26 +2449,25 @@ async function pushPosition() {
   catchup.wrote(op);
   if (cfg.offline || (durableSync && offlineContext)) {
     try {
-      await saveReadingPosition({
-        ...offlineContext,
+      const context = offlineContext;
+      const save = () => saveReadingPosition({
+        ...context,
         bookID: cfg.bookID,
-        workID,
+        workID: op.work_id,
         op,
         requireSnapshot: cfg.offline,
       });
+      const saving = positionStorageFlight.then(save);
+      positionStorageFlight = saving.catch(() => {});
+      await saving;
+      if (!current(stamp)) return;
+      furthest = mergeFurthest(furthest, [{ ...op, device_id: context.deviceID }], workID);
       catchup.local(op);
       if (cfg.offline) notifyOfflineChange();
       else if (leaving) {
-        // The queue is the guarantee, but an unload is the last moment
-        // this page can speak and another device is probably waiting.
-        // The queued copy carries the same bytes under the same op id,
-        // so a later delivery is a duplicate rather than a second page.
-        api("v1/ops", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          keepalive: true,
-          body: JSON.stringify({ ops: [op] }),
-        }).catch(() => {});
+        // Never bypass older queued peaks: a retry could otherwise make one
+        // of them the latest position after this lower page was accepted.
+        readingCoordinator?.trigger();
       } else scheduleSend();
       if (retryOp?.op === op) {
         retryOp = null;
@@ -2313,6 +2478,8 @@ async function pushPosition() {
       // An expired local account cannot be queued into. The reader
       // keeps reading; the credential layer is what says so.
       if (!cfg.offline && err?.code === "auth") {
+        say("This account changed. Reopen the reader before saving more positions.", true);
+        historyStorageError = true;
         offlineContext = null;
         readingCoordinator?.stop();
         readingCoordinator = null;
@@ -2321,6 +2488,7 @@ async function pushPosition() {
         sessionOwner = false;
         return;
       }
+      historyStorageError = true;
       say(err.message || "This reading position could not be saved on this device.", true);
     }
     return;
@@ -2366,6 +2534,7 @@ async function pushPosition() {
 }
 
 async function settlePosition() {
+  await positionStorageFlight;
   if (readingDirty && !restoring && !positionInFlight) await push();
   if (positionInFlight) await positionInFlight;
 }
@@ -2392,6 +2561,11 @@ function opID() {
 function schedulePush() {
   if (!readingDirty || restoring) return;
   cancelScheduledPush();
+  if (offlineContext) {
+    // Capture the full operation now, before another relocate can replace it.
+    void pushPosition();
+    return;
+  }
   // Local durability need not wait for the network debounce.
   pending = setTimeout(push, cfg.offline || offlineContext ? 0 : 1500);
 }
@@ -4130,6 +4304,7 @@ window.addEventListener("beforeunload", () => {
       const stamped = op && { ...op, device_id: op.device_id || offlineSnapshot.deviceID };
       catchup.baseline(stamped);
       catchup.local(stamped, false);
+      await loadFurthest(offlineSnapshot.furthest);
     }
     if (!cfg.offline) try {
       workID = await resolveWork();
@@ -4155,6 +4330,7 @@ window.addEventListener("beforeunload", () => {
       const stored = offlineContext
         ? await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null)
         : null;
+      furthest = mergeFurthest(furthest, stored?.furthest, workID);
       const queued = offlineContext
         ? await listOfflineOutbox({
           ...offlineContext, kind: "position", state: null,
@@ -4181,7 +4357,7 @@ window.addEventListener("beforeunload", () => {
       }
       catchup.observe(remote);
     } catch (err) {
-      /* read on without sync */
+      say(err.message || "Reading history could not be loaded.", true);
     }
 
     // The candidates are tried in order because a pointer that
@@ -4208,7 +4384,7 @@ window.addEventListener("beforeunload", () => {
     if (cfg.offline) prepareOfflineSync();
     if (!cfg.offline && ready && !document.hidden) startLive();
     if (document.hidden) catchup.hide();
-    if (!syncExpired) say("");
+    if (!syncExpired && !historyStorageError) say("");
     // Opening the book is a moment where a disagreement can be raised
     // without taking the page out from under anybody.
     if (!document.hidden) {

@@ -240,6 +240,59 @@ const check = (name, ok, extra = '') => {
 const title = await evalIn('document.title');
 check('page loads', typeof title === 'string' && title.length > 0, title);
 
+if (process.env.SMOKE_FURTHEST === "1") {
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const wait = async expression => {
+    for (let n = 0; n < 100; n++) {
+      if (await evalIn(expression)) return true;
+      await pause(100);
+    }
+    return false;
+  };
+  const storage = `(async () => {
+    const cfg = document.getElementById('reader-config').dataset;
+    const s = await import(document.querySelector('script[type=module][src$="reader-app.js"]')
+      .src.replace('reader-app.js', 'offline-storage.js'));
+    const partition = s.storagePartition() + '|' + new URL(cfg.apiBase, location.href).href;
+    const account = await s.activeAccount(partition);
+    const db = await s.openOfflineDB();
+    const rows = await new Promise((resolve, reject) => {
+      const request = db.transaction('reading').objectStore('reading').index('book')
+        .getAll([partition, account, cfg.book]);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return rows[0];
+  })()`;
+  const goto = async percent => {
+    await evalIn("document.getElementById('reader-progress-text').click()");
+    await evalIn(`document.getElementById('reader-goto-input').value = '${percent}'; document.getElementById('reader-goto-form').requestSubmit()`);
+  };
+  await goto(70);
+  check('detached reader records a local peak', await wait(`(${storage}).then(r => r?.furthest?.some(op => op.progression > 0.6))`));
+  const peak = await evalIn(`(${storage}).then(r => r.furthest.reduce((a,b) => a.progression > b.progression ? a : b))`);
+  await goto(31);
+  check('detached reader keeps a lower current position', await wait(`(${storage}).then(r => r?.local?.progression < 0.4 || r?.baseline?.progression < 0.4)`));
+  await pause(2200);
+  await S('Page.navigate', { url: process.env.SMOKE_URL });
+  check('detached handoff reopens at the lower latest, not the peak', await wait(
+    "!!document.querySelector('readium-view')?.lastLocation && document.querySelector('readium-view').lastLocation.fraction < 0.4"));
+  check('detached peak survives reopening with its original locator', await evalIn(
+    `(${storage}).then(r => r.furthest.some(op => op.op_id === ${JSON.stringify(peak.op_id)} && JSON.stringify(op.locator) === ${JSON.stringify(JSON.stringify(peak.locator))}))`));
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('detached manual sync exposes the saved peak', await wait(
+    "document.getElementById('reader-sync-dialog').open && !document.getElementById('reader-sync-furthest-take').hidden"));
+  await evalIn("document.getElementById('reader-sync-furthest-take').click()");
+  check('detached furthest restores the saved passage', await wait(
+    `!document.getElementById('reader-sync-dialog').open && Math.abs(document.querySelector('readium-view').lastLocation.fraction - ${peak.progression}) < 0.001 && document.querySelector('readium-view').lastLocation.locator.href === ${JSON.stringify(peak.locator.href)}`));
+  check('detached history does not install the offline PWA', await evalIn(
+    "(async () => !navigator.serviceWorker || !(await navigator.serviceWorker.getRegistrations()).length)()"));
+  check('detached origin still has no cookies', await evalIn("document.cookie === ''"));
+  ws.close();
+  await finish(fail.length ? 1 : 0);
+}
+
 // The NaN guard is a self-contained probe: it does not want the render,
 // page-turn and annotation battery below, so it runs and exits here.
 if (nan) {
@@ -1912,8 +1965,8 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
     await evalIn(syncText));
   check('with nothing to compare, no second side is shown',
     await evalIn("document.getElementById('reader-sync-there-side').hidden"));
-  check('the only button left is the way out',
-    (await evalIn("document.getElementById('reader-sync-cancel').textContent")) === 'Close');
+  check('historical recovery remains available beside an in-step latest position',
+    await evalIn("!document.getElementById('reader-sync-furthest-take').hidden"));
   const settled = await position();
   await evalIn("document.getElementById('reader-sync-cancel').click()");
   check('the dialog closes', await wait(`!${syncDialog}.open`));
@@ -1969,6 +2022,43 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
     await evalIn("document.getElementById('reader-catchup').hidden"),
     await evalIn("document.getElementById('reader-catchup').textContent"));
 
+  await remote('historical-peak', 0.97);
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('manual read observes the historical peak', await wait(`${syncDialog}.open`));
+  await evalIn("document.getElementById('reader-sync-cancel').click()");
+  await evalIn("document.getElementById('reader-progress-text').click()");
+  await evalIn("document.getElementById('reader-goto-input').value = '31'; document.getElementById('reader-goto-form').requestSubmit()");
+  check('an explicit earlier place remains current', await wait("document.querySelector('readium-view').lastLocation.fraction < 0.4"));
+  check('the earlier place reaches the server', await wait(`(${drained}).then(n => n === 0)`));
+  let earlier = await position();
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('an earlier own echo does not hide historical recovery',
+    await wait(`${syncDialog}.open && !document.getElementById('reader-sync-furthest-take').hidden`));
+  check('the complete peak survives in durable state',
+    JSON.parse(await stored()).furthest.some(op => op.op_id === 'live-test-historical-peak' &&
+      op.progression === 0.97 && op.locator));
+  await evalIn("document.getElementById('reader-next').click()");
+  await wait(`document.querySelector('readium-view').lastLocation.fraction !== ${earlier}`);
+  earlier = await position();
+  await evalIn("document.getElementById('reader-sync-furthest-take').click()");
+  check('a page turn invalidates the candidate-bound historical action',
+    await wait(`${syncDialog}.open && document.getElementById('reader-sync-summary').textContent.includes('changed')`));
+  check('stale acceptance does not navigate', await position() === earlier);
+  await evalIn("document.getElementById('reader-sync-cancel').click(); document.getElementById('reader-sync').click()");
+  await wait(`${syncDialog}.open && !document.getElementById('reader-sync-furthest-take').hidden`);
+  await evalIn("document.getElementById('reader-sync-furthest-take').click()");
+  check('explicit furthest action navigates through the restoration ladder',
+    await wait("!document.getElementById('reader-sync-dialog').open && document.querySelector('readium-view').lastLocation.fraction > 0.9"),
+    await evalIn("document.getElementById('reader-sync-summary').textContent"));
+  await evalIn("document.getElementById('reader-sync').click()");
+  check('historical navigation keeps a way back',
+    await wait(`${syncDialog}.open && !document.getElementById('reader-sync-back').hidden`));
+  await evalIn("document.getElementById('reader-sync-back').click()");
+  check('way back restores the earlier place',
+    await wait(`!${syncDialog}.open && Math.abs(document.querySelector('readium-view').lastLocation.fraction - ${earlier}) < 0.01`));
+  await evalIn("document.getElementById('reader-progress-text').click()");
+  await evalIn("document.getElementById('reader-goto-input').value = '90'; document.getElementById('reader-goto-form').requestSubmit()");
+  await wait("document.querySelector('readium-view').lastLocation.fraction > 0.8");
   await samePageGuard(evalIn, check, { pause, wait, visibility, position, stored, drained, remote });
 }
 

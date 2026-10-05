@@ -1,5 +1,5 @@
 import { decodeText, publicationHref } from "./reader-publication.js";
-import { latestReadablePosition } from "./reader-sync.js";
+import { latestReadablePosition, mergeFurthest } from "./reader-sync.js";
 
 export const OFFLINE_DB_NAME = "liseur-sync-offline";
 export const OFFLINE_DB_VERSION = 4;
@@ -275,6 +275,7 @@ export async function saveReadingPosition({
 } = {}) {
   if (!partition || !account || !bookID || !op?.op_id)
     throw new OfflineStorageError("A reading position needs an account, book and operation.");
+  workID = workID || op.work_id || "";
   return withDB(async db => {
     try {
       await guardedWork(db, [SNAPSHOTS, OUTBOX, READING], { partition, account, epoch }, (tx, _, fail) => {
@@ -318,6 +319,8 @@ export async function saveReadingPosition({
               outbox.delete(row.key);
             }
             if (current) {
+              current.furthest = mergeFurthest(current.furthest,
+                [current.localPosition, { ...op, device_id: device }], workID);
               current.localPosition = op;
               snapshots.put(current);
             }
@@ -343,14 +346,38 @@ function putReadingLocal(store, identity, workID, op, updatedAt) {
   const request = store.get(key);
   request.onsuccess = () => {
     const record = request.result || { key, ...identity, baseline: null, local: null };
+    record.furthest = mergeFurthest(record.furthest,
+      [record.local, record.baseline, { ...op, device_id: identity.deviceID }], workID || record.workID);
     // A late write from a slower tab must not resurrect an older page as
     // this device's local state.
-    if ((record.updatedAt || 0) > updatedAt) return;
+    if ((record.updatedAt || 0) > updatedAt) {
+      store.put(record);
+      return;
+    }
     record.workID = workID || record.workID || "";
     record.local = op;
     record.updatedAt = updatedAt;
     store.put(record);
   };
+}
+
+export async function observeReadingPositions({
+  partition = storagePartition(), account, epoch, deviceID, bookID, workID, ops = [],
+} = {}) {
+  return withDB(db => guardedWork(db, READING, { partition, account, epoch }, (tx, set) => {
+    const store = tx.objectStore(READING);
+    const identity = { partition, account, deviceID, bookID };
+    const key = keyForReading(identity);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result || { key, ...identity, baseline: null, local: null };
+      record.furthest = mergeFurthest(record.furthest,
+        [record.local, record.baseline, ...ops], workID);
+      record.workID = workID;
+      store.put(record);
+      set(record.furthest);
+    };
+  }));
 }
 
 /**
@@ -393,6 +420,8 @@ export async function agreeReadingBaseline({
     const request = store.get(key);
     request.onsuccess = () => {
       const record = request.result || { key, ...identity, baseline: null, local: null };
+      record.furthest = mergeFurthest(record.furthest,
+        [record.local, record.baseline, baseline], workID || record.workID);
       record.workID = workID || record.workID || "";
       record.baseline = baseline || null;
       if (settled) record.local = null;
@@ -692,6 +721,8 @@ export async function removeOfflineOutbox({
             if (!settle && !authored) return;
             const value = state || { key: readingKey, ...identity, baseline: null, local: null };
             value.workID = value.workID || record.payload.work_id || "";
+            value.furthest = mergeFurthest(value.furthest,
+              [value.local, value.baseline, { ...record.payload, device_id: record.deviceID }], value.workID);
             if (settle) value.baseline = record.payload;
             if (authored) value.local = null;
             value.updatedAt = Date.now();
@@ -931,6 +962,10 @@ export async function reconcileOfflineBook(context, book, request, current = () 
   if (!current(positions) || !current(annotations)) throw new OfflineStorageError("The reading credential changed.", "auth");
   if (!Array.isArray(positionData.ops) || !Array.isArray(annotationData.annotations))
     throw new OfflineStorageError("The reading state response is incomplete.");
+  await observeReadingPositions({
+    ...context, deviceID: book.deviceID, bookID: book.bookID, workID: book.workID,
+    ops: [...positionData.ops, ...(positionData.furthest || [])],
+  });
   await withDB(db => guardedWork(db, [SNAPSHOTS, ANNOTATIONS, OUTBOX], context, tx => {
     const outbox = tx.objectStore(OUTBOX).getAll();
     outbox.onsuccess = () => {
@@ -943,6 +978,8 @@ export async function reconcileOfflineBook(context, book, request, current = () 
         const position = pending.filter(value => value.kind === "position")
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
         for (const copy of copies.result) {
+          copy.furthest = mergeFurthest(copy.furthest,
+            [copy.localPosition, ...positionData.ops, ...(positionData.furthest || [])], book.workID);
           copy.localPosition = position ? position.payload : latestReadablePosition(positionData.ops, book.workID) || copy.localPosition || null;
           snapshots.put(copy);
         }
