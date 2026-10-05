@@ -664,7 +664,14 @@ async function lastPosition() {
   const data = await resp.json();
   const ops = data.ops || [];
   if (work !== workID || !current(stamp)) return { ok: false };
-  await rememberFurthest([...ops, ...(data.furthest || [])]);
+  try {
+    await rememberFurthest([...ops, ...(data.furthest || [])]);
+  } catch {
+    // Persistence already reported its failure. A readable latest position
+    // still restores the book; only durability, not the server read, failed.
+    if (current(stamp)) furthest = mergeFurthest(furthest,
+      [...ops, ...(data.furthest || [])], work);
+  }
   if (!current(stamp)) return { ok: false };
   furthestVerified = Array.isArray(data.furthest);
   return { ok: true, op: latestReadablePosition(ops, work) };
@@ -980,21 +987,18 @@ async function settleBeforeAnswer() {
   return !readingDirty;
 }
 
-// Going to the other device's position: the same journey whether the
-// panel offered it or the reader asked. The answer itself has already
-// been recorded by the caller; this is only the trip.
-async function goThere(op, stamp, activity) {
-  if (!op || !view) return;
-  retryOp = null;
-  readingDirty = false;
-  interactionPending = false;
+// Settle the choice only after queue preparation and navigation succeed.
+async function goThere(op, stamp, activity, still) {
+  const valid = () => current(stamp) && !!view && !document.hidden &&
+    activity === activityGeneration && still();
+  if (!op || !valid()) return false;
   // Withdraw before anything else can drain the queue: ending the
   // sitting triggers a send, and a page delivered after the answer
   // would reinstate the position the reader just refused.
   clearTimeout(sendTimer);
   sendTimer = null;
   const retainedPeak = await withdrawQueuedPositions();
-  if (!current(stamp) || !view) return;
+  if (!valid()) return false;
   // Close the old sitting at its actual page, not at the remote destination.
   endSession();
   restoring = true;
@@ -1002,10 +1006,10 @@ async function goThere(op, stamp, activity) {
   let landed = false;
   try {
     for (const target of startCandidates(op)) {
-      if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
+      if (!valid()) break;
       try {
         const resolved = await view.resolveNavigation(target);
-        if (!current(stamp) || document.hidden || activity !== activityGeneration) break;
+        if (!valid()) break;
         // goTo catches anchor failures internally; use the renderer so a stale
         // CFI actually descends to the existing fraction/href fallback.
         await view.renderer.goTo(resolved);
@@ -1018,6 +1022,10 @@ async function goThere(op, stamp, activity) {
     restoring = false;
     // A restored page starts accounting only when the reader next interacts.
     if (landed && current(stamp)) {
+      retryOp = null;
+      readingDirty = false;
+      interactionPending = false;
+      catchup.adopt(op);
       await rememberAnswer(op, true);
       if (retainedPeak) {
         // The retained local peak must be delivered before the chosen current
@@ -1027,6 +1035,8 @@ async function goThere(op, stamp, activity) {
       }
     }
   }
+  if (!landed && valid()) throw Error("That reading position could not be opened.");
+  return landed;
 }
 
 catchupDismiss?.addEventListener("click", dismissCatchup);
@@ -1039,11 +1049,14 @@ catchupPanel?.addEventListener("keydown", (event) => {
 catchupAccept?.addEventListener("click", async () => {
   const shown = catchup.shown();
   const activity = activityGeneration;
-  hideCatchup();
   if (!shown || !view) return;
   if (!await settleBeforeAnswer()) return;
   const stamp = snapshot();
-  await goThere(current(stamp) ? catchup.accept(shown) : null, stamp, activity);
+  try {
+    if (await goThere(shown.op, stamp, activity, () => catchup.canAccept(shown))) hideCatchup();
+  } catch (error) {
+    say(error.message || "The other position could not be taken.", true);
+  }
 });
 
 // ------------------------------------------- syncing on request
@@ -1345,14 +1358,16 @@ syncTake?.addEventListener("click", async () => {
   // has answered it: the page went up, which is never wrong, and
   // nothing else here happens.
   if (syncOffered !== op) return;
-  syncCovered = false;
-  syncDialog.close();
-  // The panel may be up behind the dialog, asking about this very
-  // position. Answering here answers it.
-  hideCatchup();
   const stamp = snapshot();
   if (!current(stamp)) return;
-  await goThere(catchup.adopt(op), stamp, activity);
+  try {
+    if (!await goThere(op, stamp, activity, () => syncOffered === op && syncDialog.open)) return;
+    syncCovered = false;
+    syncDialog.close();
+    hideCatchup();
+  } catch (error) {
+    syncSummary.textContent = error.message || "The other position could not be taken.";
+  }
 });
 
 syncKeep?.addEventListener("click", async () => {
@@ -2460,6 +2475,7 @@ async function pushPosition() {
       const saving = positionStorageFlight.then(save);
       positionStorageFlight = saving.catch(() => {});
       await saving;
+      if (leaving && context === offlineContext) readingCoordinator?.leave();
       if (!current(stamp)) return;
       furthest = mergeFurthest(furthest, [{ ...op, device_id: context.deviceID }], workID);
       catchup.local(op);
@@ -2467,7 +2483,7 @@ async function pushPosition() {
       else if (leaving) {
         // Never bypass older queued peaks: a retry could otherwise make one
         // of them the latest position after this lower page was accepted.
-        readingCoordinator?.trigger();
+        readingCoordinator?.leave();
       } else scheduleSend();
       if (retryOp?.op === op) {
         retryOp = null;
@@ -2787,10 +2803,14 @@ document.addEventListener("visibilitychange", () => {
     scheduleFractionRetry();
   }
 });
-window.addEventListener("pageshow", () => { leaving = false; });
+window.addEventListener("pageshow", () => {
+  leaving = false;
+  readingCoordinator?.resume();
+});
 window.addEventListener("pagehide", () => {
   lifecycle++;
   leaving = true;
+  readingCoordinator?.leave();
   live.stop();
   refreshes.stop();
   catchup.hide();
@@ -4168,6 +4188,7 @@ document.addEventListener("keydown", handleKeys);
 window.addEventListener("beforeunload", () => {
   clearTimeout(pending);
   leaving = true;
+  readingCoordinator?.leave();
   push();
   endSession();
   view?.destroy().catch(() => {});

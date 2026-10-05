@@ -2008,6 +2008,24 @@ async function durableGuard(evalIn, check, { pause, wait, remote, visibility, po
   await evalIn("document.getElementById('reader-sync').click()");
   check('a cancelled question can be asked again',
     await wait(`${syncDialog}.open && !document.getElementById('reader-sync-take').hidden`));
+  const beforeFailedTake = JSON.parse(await stored()).baseline;
+  const beforeFailedSummary = await evalIn("document.getElementById('reader-sync-summary').textContent");
+  await evalIn(`(() => {
+    const original = IDBObjectStore.prototype.put;
+    window.__restoreReadingPut = () => { IDBObjectStore.prototype.put = original; };
+    IDBObjectStore.prototype.put = function(...args) {
+      if (this.name === 'reading') throw new DOMException('Injected reading storage failure', 'QuotaExceededError');
+      return original.apply(this, args);
+    };
+  })()`);
+  await evalIn("document.getElementById('reader-sync-take').click()");
+  check('failed queue preparation keeps the question open with a visible error',
+    await wait(`${syncDialog}.open && document.getElementById('reader-sync-summary').textContent !== ${JSON.stringify(beforeFailedSummary)}`),
+    await evalIn("document.getElementById('reader-sync-summary').textContent"));
+  check('failed queue preparation does not move the page', await position() === settled);
+  check('failed queue preparation does not adopt the remote baseline',
+    JSON.stringify(JSON.parse(await stored()).baseline) === JSON.stringify(beforeFailedTake));
+  await evalIn("window.__restoreReadingPut()");
   await evalIn("document.getElementById('reader-sync-take').click()");
   // The fixture has thirteen positions in ten chapters, so a fraction
   // of 0.9 lands on the page that starts below it rather than on 0.9
@@ -2443,6 +2461,26 @@ async function samePageGuard(evalIn, check, { pause, wait, visibility, position,
     await panelHidden(), await panelText());
   check('and it opened on that page', await settledPage() === opened,
     opened + ' -> ' + await pageNow());
+
+  const injection = await S('Page.addScriptToEvaluateOnNewDocument', { source: `
+    const original = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function(...args) {
+      if (this.name === 'reading') throw new DOMException('Injected opening storage failure', 'QuotaExceededError');
+      return original.apply(this, args);
+    };
+  ` });
+  await S('Page.reload');
+  await waitFor(`(() => {
+    const view = document.querySelector('readium-view');
+    return Number.isFinite(view?.lastLocation?.fraction) &&
+      view?.renderer?.getContents?.().some(({ doc }) => doc?.body) &&
+      document.getElementById('reader-status')?.classList.contains('problem');
+  })()`, 'latest position to restore despite failed furthest persistence', 20000);
+  check('storage failure on opening still restores the fetched latest page',
+    await settledPage() === opened, opened + ' -> ' + await pageNow());
+  check('storage failure on opening remains visible',
+    await evalIn("document.getElementById('reader-status').classList.contains('problem')"));
+  await S('Page.removeScriptToEvaluateOnNewDocument', { identifier: injection.identifier });
 }
 
 // svgGuard proves finding #1 of the streaming-reader review: a spine
