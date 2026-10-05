@@ -401,5 +401,12 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) error {
 		                       OR (revoked_at IS NOT NULL AND revoked_at < ?)`, graceS, graceS); err != nil {
 		return err
 	}
+	// A device with no token left can never sign in as itself again, so
+	// nothing could ever read its settings back.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM device_settings WHERE NOT EXISTS (
+		SELECT 1 FROM tokens t
+		 WHERE t.user_id = device_settings.user_id AND t.device_id = device_settings.device_id)`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }

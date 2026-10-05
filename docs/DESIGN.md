@@ -347,7 +347,8 @@ device is the authenticated token's, so another device of the same
 account never sees them
 ([ADR-0050](adr/0050-settings-stay-on-the-device.md)). The server copy
 lets a device restore its own settings; it is not a channel between
-devices. Keys and values are opaque strings the server stores and never
+devices. Housekeeping deletes the settings of a device whose last token
+it purges, since no token request can name that device again. Keys and values are opaque strings the server stores and never
 interprets. Both responses carry `"scope": "device"` so a client can
 tell this from an older server whose map was account-wide.
 

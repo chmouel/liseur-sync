@@ -45,7 +45,13 @@ caps each device.
 Revoking a token does not delete the device's settings, for the same
 reason it does not delete the device's ops and sessions. A device
 signing in again may keep its `device_id`, and its settings are still
-there when it does.
+there when it does. That only works while the server still lists a
+token for the device, because a token request naming a `device_id`
+the server no longer knows is refused. So once housekeeping purges a
+device's last token, it deletes that device's settings as well: nothing
+could ever read them again. This also keeps the row count tied to
+devices that exist, since the per-device cap alone would let a client
+that keeps minting new devices pile up rows without bound.
 
 **The migration drops the account-wide rows.** They name no device, so
 there is no owner to hand them to. Each device uploads its own settings

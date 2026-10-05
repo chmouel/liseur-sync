@@ -1165,11 +1165,30 @@ func testHousekeeping(t *testing.T, open OpenFunc) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.CreateToken(ctx, store.Token{
+		ID: "live-token", UserID: u.ID, DeviceID: "d2", Name: "new",
+		Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "live-token-hash", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, dev := range []string{"d1", "d2"} {
+		if err := s.PutDeviceSettings(ctx, u.ID, dev, []store.DeviceSetting{
+			{Key: "reader.theme", Value: "sepia", UpdatedAt: now},
+		}, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := s.Housekeep(ctx, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.TokenByHash(ctx, u.ID, "expired-token-hash"); err != store.ErrNotFound {
 		t.Fatalf("expired token retained: %v", err)
+	}
+	if got, err := s.GetDeviceSettings(ctx, u.ID, "d1"); err != nil || len(got) != 0 {
+		t.Fatalf("settings of a device with no token retained: %+v %v", got, err)
+	}
+	if got, err := s.GetDeviceSettings(ctx, u.ID, "d2"); err != nil || len(got) != 1 {
+		t.Fatalf("settings of a live device lost: %+v %v", got, err)
 	}
 	if _, err := s.AuthSessionByHash(ctx, "expired-auth-hash"); err != store.ErrNotFound {
 		t.Fatalf("expired auth session retained: %v", err)
