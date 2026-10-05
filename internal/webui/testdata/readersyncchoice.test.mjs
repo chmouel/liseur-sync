@@ -5,7 +5,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideBookSync } from "../static/reader-sync-choice.js";
+import { decideBookSync, furthestChoice } from "../static/reader-sync-choice.js";
+
+test("manual historical choice survives in-step, own echo, and declined latest", () => {
+  const peak = { op_id: "peak", work_id: "work", progression: 0.7, locator: {} };
+  const lower = { op_id: "echo", work_id: "work", progression: 0.31, locator: {} };
+  assert.equal(decideBookSync({ local: lower, remote: lower }).verdict, "in-step");
+  assert.deepEqual(furthestChoice({ candidates: [peak], workID: "work", local: lower }), peak);
+  assert.equal(furthestChoice({ candidates: [peak], workID: "work", local: peak }), null);
+  assert.equal(furthestChoice({ candidates: [peak], workID: "work", remote: peak }), null);
+  assert.equal(furthestChoice({ candidates: [peak], workID: "work", resolvable: () => false }), null);
+  assert.deepEqual(furthestChoice({ candidates: [peak], workID: "work",
+    local: { ...lower, progression: 0.6999 } }), peak);
+});
 
 const at = (fraction, cfi) => ({
   progression: fraction,

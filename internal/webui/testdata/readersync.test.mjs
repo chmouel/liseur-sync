@@ -1,6 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { catchupState, candidateID, topicRefresh, latestReadablePosition, positionAcknowledged } from "../static/reader-sync.js";
+import { catchupState, candidateID, topicRefresh, latestReadablePosition, positionAcknowledged, mergeFurthest, furthestPosition } from "../static/reader-sync.js";
+
+test("furthest keeps the original full op after lower latest and own echoes", () => {
+  const peak = { op_id: "peak", work_id: "work", device_id: "ours", seq: 8,
+    progression: 0.7, edition_sha: "edition", client_ts: "original",
+    locator: { href: "chapter.xhtml", locations: { fragments: ["epubcfi(/6/4!/2)"] } } };
+  const lower = { ...peak, op_id: "lower", seq: 9, progression: 0.31, locator: {} };
+  const maxima = mergeFurthest([], [peak, lower], "work");
+  assert.deepEqual(furthestPosition(maxima, "work"), peak);
+  assert.equal(latestReadablePosition([lower, peak], "work").op_id, "lower");
+  peak.locator.href = "mutated";
+  assert.equal(maxima[0].locator.href, "chapter.xhtml");
+});
+
+test("maxima retain zero, small advances, editions and alias ownership with stable ties", () => {
+  const op = { op_id: "a", work_id: "work", progression: 0, seq: 1 };
+  const observations = [op, ...[null, undefined, "0.9", NaN, Infinity, -1, 2]
+    .map((progression, n) => ({ ...op, op_id: String(n), progression }))];
+  assert.deepEqual(mergeFurthest([], observations, "work"), [op]);
+  const tiny = { ...op, op_id: "b", progression: 0.0001, seq: 2 };
+  assert.deepEqual(furthestPosition([op, tiny], "work"), tiny);
+  const edition = { ...tiny, op_id: "c", edition_sha: "other" };
+  const alias = { ...tiny, op_id: "d", origin_alias: "legacy" };
+  assert.equal(mergeFurthest([], [tiny, edition, alias], "work").length, 3);
+  assert.deepEqual(furthestPosition([{ ...tiny, seq: 3, op_id: "later" }, tiny], "work"), tiny);
+});
 
 test("position reads skip corrupt heads without inventing a zero", () => {
   const good = { op_id: "good", work_id: "work", progression: 0.7 };

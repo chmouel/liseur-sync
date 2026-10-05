@@ -231,7 +231,7 @@ try {
   assert.equal(inspect.hostile, false);
   assert(inspect.nonce, 'offline reader has a script nonce');
   await offline.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
-  const saved = await wait(offline, `(async () => {
+  let saved = await wait(offline, `(async () => {
     const s = await import('../assets/offline-storage.js');
     const book = await s.getReadySnapshot({ bookID: ${JSON.stringify(book)} });
     const rows = await s.listOfflineOutbox({ partition: book.partition, account: book.account, kind: 'position' });
@@ -246,6 +246,29 @@ try {
   assert.notEqual(await offline.evaluate('document.querySelector("script[nonce]")?.nonce'), inspect.nonce,
     'each cached reader navigation receives a fresh nonce');
   console.log('PASS cold /sync/ offline navigation, real positions, inert EPUB script and fresh nonce on reload');
+  const peak = saved;
+  await offline.evaluate("document.getElementById('reader-progress-text').click()");
+  await offline.evaluate("document.getElementById('reader-goto-input').value = '31'; document.getElementById('reader-goto-form').requestSubmit()");
+  await wait(offline, "document.querySelector('readium-view').lastLocation.fraction < 0.4", 'offline earlier place');
+  await offline.evaluate("document.getElementById('reader-sync').click()");
+  await wait(offline, "document.getElementById('reader-sync-dialog').open && !document.getElementById('reader-sync-furthest-take').hidden",
+    'offline manual furthest without contacting a server');
+  assert.match(await offline.evaluate("document.getElementById('reader-sync-furthest').textContent"), /known on this device/);
+  await offline.evaluate("document.getElementById('reader-sync-furthest-take').click()");
+  await wait(offline, "!document.getElementById('reader-sync-dialog').open && document.querySelector('readium-view').lastLocation.fraction > 0.9",
+    'offline historical navigation');
+  await offline.evaluate("document.getElementById('reader-sync').click()");
+  await wait(offline, "document.getElementById('reader-sync-dialog').open && !document.getElementById('reader-sync-back').hidden",
+    'offline way back');
+  await offline.evaluate("document.getElementById('reader-sync-back').click()");
+  await wait(offline, "!document.getElementById('reader-sync-dialog').open && document.querySelector('readium-view').lastLocation.fraction < 0.4",
+    'offline way back restores the lower current position');
+  saved = await offline.evaluate(`(async () => {
+    const s = await import('../assets/offline-storage.js');
+    return (await s.getReadySnapshot({ bookID: ${JSON.stringify(book)} })).localPosition;
+  })()`);
+  assert(saved.progression < peak.progression, 'historical navigation does not force the current position to stay at the maximum');
+  console.log('PASS offline historical recovery and way back work without a server');
   await offline.call('Network.emulateNetworkConditions', {
     offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
   });
