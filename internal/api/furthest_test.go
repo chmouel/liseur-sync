@@ -74,3 +74,34 @@ func TestFurthestPositionIsSeparateFromLatest(t *testing.T) {
 		}
 	}
 }
+
+func TestFurthestResponsesPreserveOriginAliases(t *testing.T) {
+	f := newFolderFixture(t)
+	w := storetest.MkWork(t, f.st, f.user, "alias-work", "abc123")
+	for i, alias := range []string{"partial-md5:first", "partial-md5:second"} {
+		_, err := f.st.AppendOps(t.Context(), f.user.ID, "koreader", []store.Op{{
+			OpID: fmt.Sprintf("alias-%d", i), WorkID: w.ID,
+			ClientTS: time.Now(), Progression: 0.7 - float64(i)/10,
+			Origin: store.OriginKosync, OriginAlias: &alias,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/v1/heads", "/v1/works/" + w.ID + "/positions?limit=1"} {
+		code, out := get(t, f.ts.URL+path, f.token)
+		if code != http.StatusOK {
+			t.Fatalf("%s: %d %v", path, code, out)
+		}
+		candidates := out["furthest"].([]any)
+		if len(candidates) != 2 {
+			t.Fatalf("lost an ownership group: %v", out)
+		}
+		for i, alias := range []string{"partial-md5:first", "partial-md5:second"} {
+			op := candidates[i].(map[string]any)
+			if op["origin_alias"] != alias || op["op_id"] != fmt.Sprintf("alias-%d", i) {
+				t.Fatalf("lost source identity: %v", op)
+			}
+		}
+	}
+}
