@@ -254,6 +254,10 @@ export function catchupState() {
     dismiss() { refuse(offer ? offer.op : null); },
     refuse,
     adopt,
+    canAccept(shown) {
+      return !!shown && !hidden && offer === shown && shown.generation === generation &&
+        shown.id === identify(shown.op) && candidate?.id === shown.id;
+    },
     accept(shown) {
       if (!shown || hidden || offer !== shown || shown.generation !== generation ||
           shown.id !== identify(shown.op) || candidate?.id !== shown.id) {

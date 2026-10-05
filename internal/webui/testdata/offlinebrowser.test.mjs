@@ -438,6 +438,26 @@ async function storageChecks() {
     "the renewed credential replays the same bytes from the surviving window", seen.join(","));
   tabB.stop();
 
+  await queuePage("unload-peak", 0.9);
+  await queuePage("unload-current", 0.3);
+  const unloadCalls = [];
+  const departing = readingSync({
+    context,
+    request: async (path, options) => {
+      if (path === "v1/ops") {
+        const op = JSON.parse(options.body).ops[0];
+        unloadCalls.push({ id: op.op_id, keepalive: options.keepalive });
+      }
+      return readerRequest(path, options);
+    },
+  });
+  await departing.leave();
+  departing.stop();
+  check(JSON.stringify(unloadCalls) === JSON.stringify([
+    { id: "unload-peak", keepalive: true },
+    { id: "unload-current", keepalive: true },
+  ]), "unloading drains peak before current under the shared queue lock with keepalive");
+
   // A verdict the server will repeat forever ends the change instead of
   // parking it. `id_reused` is the one worth being sure about: it does
   // not say the sitting was lost, it says the server already has it, so
