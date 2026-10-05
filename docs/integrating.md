@@ -457,14 +457,18 @@ in [Liseur's ADR-0023](https://github.com/chmouel/liseur/blob/main/docs/adr/0023
 ## Settings
 
 `GET /v1/me/settings` and `PUT /v1/me/settings` hold a small map of
-account-wide preferences, so a reader setting up a second device finds
-their typeface, theme and margins already there. Keys and values are
-opaque strings; the server stores them and never interprets them. Both
-need the `sync` scope.
+preferences for **the calling device**: typeface, theme, margins. The
+device is the one your token belongs to, and no other device of the
+account can read what you store
+([ADR-0050](adr/0050-settings-stay-on-the-device.md)). Settings do not
+travel between devices; the server copy is there so a device can get
+its own back, for example after signing in again with the same
+`device_id`. Keys and values are opaque strings; the server stores them
+and never interprets them. Both need the `sync` scope.
 
 ```http
 PUT /v1/me/settings
-Authorization: Bearer <token>
+Authorization: ******
 
 {"settings": {
   "reader.font": {"value": "literata", "updated_at": "2026-02-08T09:14:02.481Z"},
@@ -472,56 +476,45 @@ Authorization: Bearer <token>
 }}
 ```
 
-`updated_at` is **when the reader changed the setting**, not when you
-are sending it. This is the whole contract: the upsert keeps whichever
-side is newer, so a change made on a plane on Monday still beats an
-untouched device that syncs on Tuesday. Stamping the moment of the
-request instead turns that into last-*arriver*-wins and loses the edit.
-A timestamp more than 24 hours ahead of the server's clock is refused
-with `time_in_future`, since a key pinned by a bad clock could never be
-moved again and there is no delete route.
+Both responses carry `"scope": "device"` beside `settings`. A server
+without it is older and its map is the whole account's, shared by every
+device; a client that keeps settings per device should adopt nothing
+from it.
+
+The upsert keeps whichever side has the newer `updated_at`. Since only
+your device writes these rows, that just stops a late retry from
+undoing a newer write; stamp each change with the time you send it, or
+the time it was made if you have it. A timestamp more than 24 hours
+ahead of the server's clock is refused with `time_in_future`, since a
+key pinned by a bad clock could never be moved again and there is no
+delete route.
 
 **A `PUT` answers `200` whether your value won or lost, and the body is
-the merged state — that is the only way to tell.** Record *both* halves
-of each returned entry as your new baseline, and where the returned
-value differs from what you sent, the server's is the one to apply
-locally. Recording the value you sent against the timestamp that came
-back invents a pair neither side holds, after which neither looks newer
-than the other and the key stays diverged for good. A key you sent that
-is absent from the response was not stored; record nothing and offer it
-again.
-
-Both responses carry every stored key, with `updated_at` in RFC3339 to
-microsecond precision. Echo it back unchanged: truncating the fraction
-produces a timestamp strictly older than the stored one, which the
-`>` comparison then refuses forever. A timestamp sent with more
-precision than that is rounded down before it is stored, because one
-backend keeps microseconds and the other keeps nanoseconds, and a
-promise only one of them can keep is not a promise.
-
-Treat a value you do not recognise as a value you leave alone. An older
-build that coerces a newer build's font name into its own default will
-push that default back over the reader's choice, and the two devices
-will then fight. Store what you understand, ignore the rest, and record
-nothing for it.
+the merged state; that is the only way to tell.** A key you sent that
+is absent from the response was not stored. Both responses carry every
+key stored for the device, with `updated_at` in RFC3339 to microsecond
+precision. Echo it back unchanged: truncating the fraction produces a
+timestamp strictly older than the stored one, which the `>` comparison
+then refuses forever. A timestamp sent with more precision than that is
+rounded down before it is stored, because one backend keeps
+microseconds and the other keeps nanoseconds.
 
 An omitted `value` means the empty string, but an explicit `null` is
 refused with `400`: clearing a preference should be something a client
 asked for, not something its serialiser did.
 
 There is no delete and no null. A client that needs "explicitly unset"
-as distinct from "never chosen" — Liseur's typography has six such
-settings, where unset means *use the publisher's* — should send a
+as distinct from "never chosen" (Liseur's typography has six such
+settings, where unset means *use the publisher's*) should send a
 sentinel value of its own choosing.
 
-Limits are 256 keys per account, 128 bytes per key and 4 KiB per value;
-exceeding the account cap is a `409`. A key must not be empty, and
+Limits are 256 keys per device, 128 bytes per key and 4 KiB per value;
+exceeding the device cap is a `409`. A key must not be empty, and
 neither a key nor a value may contain a NUL byte, which Postgres cannot
 store.
 
-Liseur's side of this, including why a setting is held back while a book
-is open, is in
-[ADR-0034](https://github.com/chmouel/liseur/blob/main/docs/adr/0034-settings-travel-by-when-they-were-changed.md).
+Liseur's side of this is in
+[ADR-0041](https://github.com/chmouel/liseur/blob/main/docs/adr/0041-settings-stay-on-the-device.md).
 
 ## Live notifications
 

@@ -115,12 +115,14 @@ type Config struct {
 		AnnotationRetentionDays   int `toml:"annotation_retention_days"`    // default 180
 
 		// Settings bounds. A settings key is opaque to the server, so
-		// nothing here reads a value; these only stop one account's
+		// nothing here reads a value; these only stop one device's
 		// key/value store from growing without limit. The wire format
 		// has no delete — a client represents "unset" as a value — so
-		// nothing ever reclaims a key, and the per-account cap is the
-		// only thing standing between a buggy client and unbounded
-		// rows. Enforced inside the write transaction, as
+		// nothing ever reclaims a key, and the cap is the only thing
+		// standing between a buggy client and unbounded rows.
+		// SettingsMaxPerAccount keeps its name because the loader
+		// refuses unknown keys, but it caps each device (ADR-0050).
+		// Enforced inside the write transaction, as
 		// AnnotationMaxPerWork is.
 		SettingsMaxPerAccount int `toml:"settings_max_per_account"` // default 256
 		SettingsMaxKeyBytes   int `toml:"settings_max_key_bytes"`   // default 128

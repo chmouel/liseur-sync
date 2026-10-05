@@ -15,24 +15,36 @@ import (
 )
 
 // settingsFuture is how far ahead of the server's clock a client's
-// updated_at may sit before the write is refused. The timestamp has to
-// stay client-assigned, because last-writer-wins must order an edit made
-// offline by when it was made rather than by when it happened to arrive.
-// That trust needs a bound: the upsert keeps whichever side is newer, so
-// a single write stamped years ahead would pin the key forever and no
-// later write — from any device — could ever move it again, with no
-// delete route to recover. A day is the same allowance POST /v1/ops
-// gives client_ts.
+// updated_at may sit before the write is refused. The timestamp stays
+// client-assigned so a retried request that arrives late cannot undo a
+// newer write from the same device. That trust needs a bound: the upsert
+// keeps whichever side is newer, so a single write stamped years ahead
+// would pin the key forever and no later write could ever move it
+// again, with no delete route to recover. A day is the same allowance
+// POST /v1/ops gives client_ts.
 const settingsFuture = 24 * time.Hour
 
+// settingsScope tells a client whose settings it is looking at. A server
+// that predates ADR-0050 answers without it, and its map is the whole
+// account's, so a client that keeps settings per device must not adopt
+// anything from a response that lacks it.
+const settingsScope = "device"
+
+func writeSettings(w http.ResponseWriter, settings map[string]any) {
+	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "scope": settingsScope})
+}
+
+// HandleGetSettings answers with the calling device's own settings. The
+// device is the token's, so two devices of one account never see each
+// other's (ADR-0050).
 func (s *Server) HandleGetSettings(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
-	out, err := s.settingsSnapshot(r.Context(), tok.UserID)
+	out, err := s.settingsSnapshot(r.Context(), tok.UserID, tok.DeviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "settings read failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": out})
+	writeSettings(w, out)
 }
 
 func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +96,7 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(keys)
 
 	now := time.Now()
-	settings := make([]store.UserSetting, 0, len(body.Settings))
+	settings := make([]store.DeviceSetting, 0, len(body.Settings))
 	for _, key := range keys {
 		v := body.Settings[key]
 		value, err := settingValue(v.Value)
@@ -108,7 +120,7 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		settings = append(settings, store.UserSetting{
+		settings = append(settings, store.DeviceSetting{
 			Key:   key,
 			Value: value,
 			// Truncated here rather than left to the backend. Postgres
@@ -120,9 +132,9 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if err := s.St.PutUserSettings(r.Context(), tok.UserID, settings, s.Cfg.Ops.SettingsMaxPerAccount); err != nil {
+	if err := s.St.PutDeviceSettings(r.Context(), tok.UserID, tok.DeviceID, settings, s.Cfg.Ops.SettingsMaxPerAccount); err != nil {
 		if errors.Is(err, store.ErrQuotaExceeded) {
-			writeError(w, http.StatusConflict, "too many settings for this account")
+			writeError(w, http.StatusConflict, "too many settings for this device")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "settings write failed")
@@ -134,18 +146,18 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 	// code alone. Returning the merged state is what lets it find out,
 	// which makes this read part of the write's contract rather than a
 	// convenience.
-	out, err := s.settingsSnapshot(r.Context(), tok.UserID)
+	out, err := s.settingsSnapshot(r.Context(), tok.UserID, tok.DeviceID)
 	if err != nil {
 		// The write committed; only reading it back failed. Say so,
 		// rather than reporting a write failure that did not happen.
 		writeError(w, http.StatusInternalServerError, "settings stored but could not be read back")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": out})
+	writeSettings(w, out)
 }
 
-func (s *Server) settingsSnapshot(ctx context.Context, userID string) (map[string]any, error) {
-	settings, err := s.St.GetUserSettings(ctx, userID)
+func (s *Server) settingsSnapshot(ctx context.Context, userID, deviceID string) (map[string]any, error) {
+	settings, err := s.St.GetDeviceSettings(ctx, userID, deviceID)
 	if err != nil {
 		return nil, err
 	}

@@ -1135,6 +1135,22 @@ ALTER TABLE mirror_cursors ADD COLUMN pushed_mark TEXT NOT NULL DEFAULT '';
 ALTER TABLE mirror_cursors ADD COLUMN peer_identity TEXT NOT NULL DEFAULT '';
 `
 
+// deviceSettings keys synced settings by the device that wrote them
+// (ADR-0050). Settings no longer travel between devices, so the
+// account-wide rows have no owner to hand them to and are dropped: every
+// device uploads its own settings again on its next sync.
+const deviceSettings = `
+DROP TABLE IF EXISTS user_settings;
+CREATE TABLE IF NOT EXISTS device_settings (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, device_id, key)
+);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1146,6 +1162,7 @@ var migrations = []string{
 	bookPartialMD5,
 	mirrorCursors,
 	mirrorPeerFiles,
+	deviceSettings,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1167,6 +1184,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"bookPartialMD5":           bookPartialMD5,
 		"mirrorCursors":            mirrorCursors,
 		"mirrorPeerFiles":          mirrorPeerFiles,
+		"deviceSettings":           deviceSettings,
 	}
 	want, ok := named[name]
 	if !ok {
