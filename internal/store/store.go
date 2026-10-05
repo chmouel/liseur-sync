@@ -1972,7 +1972,8 @@ type Store interface {
 
 	// Housekeep deletes expired auth debris: expired pairing codes,
 	// expired or revoked auth sessions, and tokens expired/revoked more
-	// than TokenPurgeGrace ago. Global (all users) by design, like
+	// than TokenPurgeGrace ago, and the settings of any device left
+	// with no token at all. Global (all users) by design, like
 	// UserIDs: it runs from the background maintenance loop.
 	Housekeep(ctx context.Context, now time.Time) error
 
