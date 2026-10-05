@@ -790,6 +790,10 @@ paths:
         a fresh client): returns the newest op for every work+device
         pair plus an atomic `snapshot_seq`. Rebuild your baseline from
         the heads, then resume `/v1/changes?since=<snapshot_seq>`.
+        The separate `furthest` array contains retained maximum-progression
+        operations per work/edition/origin-alias ownership group, from the
+        same snapshot. Store those as historical destinations, never as new
+        movement for latest-position reconciliation.
       security: [{ deviceToken: [] }]  # requires sync scope
       responses:
         "200":
@@ -798,9 +802,18 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [ops, furthest, snapshot_seq]
                 properties:
                   ops:
                     type: array
+                    items: { $ref: "#/components/schemas/Op" }
+                  furthest:
+                    type: array
+                    description: |
+                      Full original maximum-progression operations, retained
+                      through compaction. Equal fractions keep the earliest
+                      sequence. Sorted by work_id, descending progression,
+                      then sequence. Empty when there are no positions.
                     items: { $ref: "#/components/schemas/Op" }
                   snapshot_seq: { type: integer }
 
@@ -808,6 +821,15 @@ paths:
     get:
       tags: [sync]
       summary: Recent position history for a work (newest first)
+      description: |
+        Recent `ops` and retained `furthest` candidates come from one snapshot.
+        `limit` bounds only `ops`. `furthest` holds the greatest progression
+        per edition/origin-alias ownership group, with the earliest sequence
+        breaking ties, sorted by descending progression then sequence.
+        These are full original operations, not synthetic page numbers.
+        Clients offer them independently of current position and use
+        edition-aware locator restoration. Earlier history already compacted
+        before furthest retention was introduced cannot be recovered.
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -819,8 +841,12 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [ops, furthest]
                 properties:
                   ops:
+                    type: array
+                    items: { $ref: "#/components/schemas/Op" }
+                  furthest:
                     type: array
                     items: { $ref: "#/components/schemas/Op" }
         "404": { $ref: "#/components/responses/Error" }
