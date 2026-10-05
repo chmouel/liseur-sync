@@ -1149,6 +1149,7 @@ CREATE TABLE IF NOT EXISTS device_settings (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (user_id, device_id, key)
 );
+CREATE INDEX IF NOT EXISTS tokens_user_device ON tokens(user_id, device_id);
 `
 
 // migrations is append-only: entry n is applied to a database that has

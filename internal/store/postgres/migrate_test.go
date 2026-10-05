@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // TestMigrateUpgradesAnOlderDatabase. The case a fresh-database test
@@ -166,6 +168,69 @@ func TestBackfillLeavesAConfiguredServerAlone(t *testing.T) {
 				t.Fatalf("after the backfill there are %d grants, want %d", grants, tc.want)
 			}
 		})
+	}
+}
+
+// TestDeviceSettingsDropsAccountWideRows. See the SQLite copy: the
+// account-wide rows name no device, so the upgrade drops them and the
+// table that replaces them takes writes straight away.
+func TestDeviceSettingsDropsAccountWideRows(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	ctx := context.Background()
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	reset(t, s)
+	through, ok := migrationsThrough("deviceSettings")
+	if !ok {
+		t.Fatal("deviceSettings is no longer a known migration")
+	}
+	now := time.Now().UTC()
+	for i, m := range through {
+		if _, err := s.db.ExecContext(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO schema_migrations(version, applied_at) VALUES ($1, $2)`, i+1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO users
+		(id, name, argon2_hash, created_at) VALUES ('u1', 'u1', 'x', $1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO user_settings
+		(user_id, key, value, updated_at) VALUES ('u1', 'reader.font', 'literata', $1)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var old bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT to_regclass('user_settings') IS NOT NULL`).Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	if old {
+		t.Fatal("user_settings survived the upgrade")
+	}
+	got, err := s.GetDeviceSettings(ctx, "u1", "any-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("account-wide settings leaked to a device: %v", got)
+	}
+	if err := s.PutDeviceSettings(ctx, "u1", "phone", []store.DeviceSetting{
+		{Key: "reader.font", Value: "inter", UpdatedAt: time.Now().UTC()},
+	}, 256); err != nil {
+		t.Fatalf("writing after the upgrade: %v", err)
 	}
 }
 

@@ -731,6 +731,7 @@ CREATE TABLE IF NOT EXISTS device_settings (
     updated_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (user_id, device_id, key)
 );
+CREATE INDEX IF NOT EXISTS tokens_user_device ON tokens(user_id, device_id);
 `
 
 // migrations is append-only, for the reason the SQLite copy gives.
