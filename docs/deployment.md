@@ -1,5 +1,20 @@
 # Deploying liseur-sync
 
+## Upgrading furthest-position retention
+
+ADR-0051 adds an index over position ownership and progression (migration 17
+on SQLite, 16 on PostgreSQL). It does not rewrite or delete reading state.
+The server now retains each work/edition/origin-alias group's original
+furthest operation alongside the device heads and daily snapshots.
+Those extra records survive the configured operation-retention window so
+clients can recover a farther place after rereading an earlier chapter.
+Deleting a work still deletes its entire reading graph.
+
+Existing libraries recover the greatest positions still stored when the
+new server starts. Positions compacted by an older version cannot be
+recreated. Deploy server support before expecting updated clients to
+recover a server-wide furthest position after reinstalling.
+
 ## Install script
 
 `scripts/install.sh` automates the two most common setups: Docker
