@@ -238,12 +238,13 @@ type UserSettings struct {
 	ReaderPromptTemplate string
 }
 
-// UserSetting is one key/value pair the client syncs. The server never
-// interprets Value; both sides agree only on Key. UpdatedAt is supplied
-// by the client, because last-writer-wins has to order an edit made
-// offline by when it was made and not by when it arrived — the API
-// bounds how far into the future it may sit.
-type UserSetting struct {
+// DeviceSetting is one key/value pair a device keeps on the server. It
+// belongs to the device that wrote it and is never shown to another one
+// (ADR-0050). The server never interprets Value; both sides agree only
+// on Key. UpdatedAt is supplied by the client so a retry that arrives
+// late cannot undo a newer write from the same device — the API bounds
+// how far into the future it may sit.
+type DeviceSetting struct {
 	Key       string
 	Value     string
 	UpdatedAt time.Time
@@ -1862,15 +1863,18 @@ type Store interface {
 
 	// User settings.
 	UpdateUserSettings(ctx context.Context, userID string, settings UserSettings) error
-	GetUserSettings(ctx context.Context, userID string) ([]UserSetting, error)
-	// PutUserSettings upserts each pair, keeping whichever side carries
+
+	// Device settings: each device's own key set, never readable by
+	// another device of the same account (ADR-0050).
+	GetDeviceSettings(ctx context.Context, userID, deviceID string) ([]DeviceSetting, error)
+	// PutDeviceSettings upserts each pair, keeping whichever side carries
 	// the newer UpdatedAt. A pair whose timestamp is not newer than the
 	// stored one is dropped, so a caller must read the result back
-	// rather than assume its write landed. maxPerAccount bounds the
-	// account's whole key set and is checked inside the transaction,
+	// rather than assume its write landed. maxPerDevice bounds the
+	// device's whole key set and is checked inside the transaction,
 	// which is the only place the count cannot race; exceeding it
 	// returns ErrQuotaExceeded and writes nothing.
-	PutUserSettings(ctx context.Context, userID string, settings []UserSetting, maxPerAccount int) error
+	PutDeviceSettings(ctx context.Context, userID, deviceID string, settings []DeviceSetting, maxPerDevice int) error
 	// SetUserPassword writes the argon2id hash and revokes the
 	// account's auth sessions — web and login both — in one
 	// transaction, so there is no moment where the password has changed

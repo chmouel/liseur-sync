@@ -719,6 +719,20 @@ ALTER TABLE mirror_cursors ADD COLUMN pushed_mark TEXT NOT NULL DEFAULT '';
 ALTER TABLE mirror_cursors ADD COLUMN peer_identity TEXT NOT NULL DEFAULT '';
 `
 
+// deviceSettings keys synced settings by device, for the reason the
+// SQLite copy gives.
+const deviceSettings = `
+DROP TABLE IF EXISTS user_settings;
+CREATE TABLE IF NOT EXISTS device_settings (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, device_id, key)
+);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -728,6 +742,7 @@ var migrations = []string{
 	bookPartialMD5,
 	mirrorCursors,
 	mirrorPeerFiles,
+	deviceSettings,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -748,6 +763,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"bookPartialMD5":           bookPartialMD5,
 		"mirrorCursors":            mirrorCursors,
 		"mirrorPeerFiles":          mirrorPeerFiles,
+		"deviceSettings":           deviceSettings,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -803,6 +803,21 @@ Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
 
+### Settings stay on the device, the deviceSettings migration
+
+The `deviceSettings` migration (16 on SQLite, 15 on PostgreSQL) **drops
+every stored reader setting**. Settings used to be one map per account
+shared by all its devices; they now belong to the device that wrote
+them ([ADR-0050](adr/0050-settings-stay-on-the-device.md)), and the old
+rows name no device to give them to. `user_settings` is replaced by
+`device_settings`.
+
+Nothing on a device is lost: each device keeps its own settings locally
+and uploads them again on its next sync. What goes is the shared copy,
+so a device set up after the upgrade starts from its own defaults
+rather than another device's choices. `ops.settings_max_per_account`
+keeps its name and now caps each device.
+
 ### The mirror's book-matching cache, migration 15
 
 Migration 15 adds three columns to `mirror_cursors`, remembering what

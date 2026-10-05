@@ -231,6 +231,66 @@ func TestBackfillIsANoOpOnAFreshDatabase(t *testing.T) {
 	}
 }
 
+// TestDeviceSettingsDropsAccountWideRows. Settings used to be one map per
+// account; from the deviceSettings migration on they belong to the
+// device that wrote them (ADR-0050). The old rows name no device, so
+// there is nobody to hand them to: the upgrade drops them, and the
+// first device to sync uploads its own again.
+func TestDeviceSettingsDropsAccountWideRows(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	through, ok := migrationsThrough("deviceSettings")
+	if !ok {
+		t.Fatal("deviceSettings is no longer a known migration")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i, m := range through {
+		if _, err := s.db.ExecContext(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`, i+1, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO users
+		(id, name, argon2_hash, created_at) VALUES ('u1', 'u1', 'x', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO user_settings
+		(user_id, key, value, updated_at) VALUES ('u1', 'reader.font', 'literata', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var old int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'user_settings'`).Scan(&old); err != nil {
+		t.Fatal(err)
+	}
+	if old != 0 {
+		t.Fatal("user_settings survived the upgrade")
+	}
+	got, err := s.GetDeviceSettings(ctx, "u1", "any-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("account-wide settings leaked to a device: %v", got)
+	}
+	if err := s.PutDeviceSettings(ctx, "u1", "phone", []store.DeviceSetting{
+		{Key: "reader.font", Value: "inter", UpdatedAt: time.Now().UTC()},
+	}, 256); err != nil {
+		t.Fatalf("writing after the upgrade: %v", err)
+	}
+}
+
 // TestBaselineIsFrozen. Migration 1 is the baseline, and it has shipped:
 // a database that applied it will never apply it again, so a column
 // added to it reaches new installations and no existing one. That is not
