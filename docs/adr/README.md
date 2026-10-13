@@ -76,6 +76,7 @@ loose ends that must come before any of it, are in
 | [0049](0049-the-web-reader-paginates.md) | The web reader paginates and shows its bar | Now | Accepted; implemented | One paginated reader layout, with continuous scroll removed even from older saved browser preferences; the bar starts visible on every viewport and auto-hide remains opt-in; amends [0012](0012-reader-engine-foliate.md) and [0031](0031-web-reader-footer.md) |
 | [0050](0050-settings-stay-on-the-device.md) | Settings stay on the device | Now | Accepted; implemented | `GET`/`PUT /v1/me/settings` are keyed by the token's device, so another device of the account never sees them; the server copy is a per-device restore point, not a channel; responses carry `scope: device` so a client can refuse an older account-wide server; the migration drops the account-wide rows and `ops.settings_max_per_account` now caps each device; amends [DESIGN §5.6](../DESIGN.md) |
 | [0051](0051-furthest-position-survives-rereading.md) | The furthest position survives rereading | Now | Accepted | Durable maxima in the native snapshots and clients, independent of current-position conflict resolution |
+| [0052](0052-a-translation-cache-the-account-keeps.md) | A translation cache the account keeps | Client | Accepted; implemented | Per-user, per-work sentence translations keyed by a one-way hash, last-write-wins with identical pushes as no-ops, a per-work delta pull, and byte-budget eviction; the sentence itself never reaches the server; amends [DESIGN §5](../DESIGN.md#57-the-translation-cache) |
 
 ## Convention
 

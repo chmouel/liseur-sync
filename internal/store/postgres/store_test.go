@@ -44,7 +44,7 @@ func reset(t *testing.T, s *Store) {
 		"book_identifiers", "user_book_works", "user_folders",
 		"books", "folders",
 		"mirror_cursors",
-		"session_supersessions", "session_tombstones", "session_rollups_v2", "session_rollups", "sessions", "ops", "annotations", "aliases", "editions",
+		"session_supersessions", "session_tombstones", "session_rollups_v2", "session_rollups", "sessions", "ops", "annotations", "work_translations", "work_translation_stamps", "aliases", "editions",
 		"works", "seq_counters", "compaction_state", "stats_revisions", "kosync_devices",
 		"koplugin_devices", "pairing_codes", "invites", "auth_sessions",
 		"token_scopes", "tokens", "device_settings", "user_settings", "users", "schema_migrations",

@@ -1463,6 +1463,69 @@ type AnnotationChangesPage struct {
 	HasMore     bool
 }
 
+// ---------------------------------------------------------------------
+// Work translations (ADR-0052)
+// ---------------------------------------------------------------------
+
+// WorkTranslation is one cached sentence translation, keyed by the
+// client's opaque content hash. The server never sees the sentence
+// itself: the key is SHA-256 over the client's translation identity and
+// the sentence, and the server treats it exactly as it treats an
+// `op_id` — an idempotency key it does not interpret.
+type WorkTranslation struct {
+	Key         string // 64 hex chars, client-generated
+	Translation string
+	DeviceID    string // server-side, from the token
+	UpdatedAt   time.Time
+}
+
+// WorkTranslationWrite is one item of a batched push. The client sends
+// only the key and the translation; both stamps on the stored row are
+// the server's.
+type WorkTranslationWrite struct {
+	Key         string
+	Translation string
+}
+
+// WorkTranslationPage is one page of a work's translation feed, ordered
+// by (updated_at, key) — the same order the cursor cuts at, so equal
+// timestamps cannot skip or repeat a row across pages.
+type WorkTranslationPage struct {
+	Translations []WorkTranslation
+	NextCursor   string // the cursor of the last row returned; empty when none
+	HasMore      bool
+}
+
+// WorkTranslationTimeFormat is the cursor's timestamp spelling: fixed
+// width, so byte order and chronological order agree and the cursor can
+// be compared as a plain string by both backends.
+const WorkTranslationTimeFormat = "2006-01-02T15:04:05.000000000Z07:00"
+
+// WorkTranslationCursor is the opaque pagination cursor of a work's
+// translation feed: the row's (updated_at, key) sort key. The timestamp
+// is first and contains no space, so cutting at the first space is
+// unambiguous — the same bargain FolderCursor makes.
+func WorkTranslationCursor(t WorkTranslation) string {
+	return t.UpdatedAt.UTC().Format(WorkTranslationTimeFormat) + " " + t.Key
+}
+
+// SplitWorkTranslationCursor undoes WorkTranslationCursor. An
+// unparseable cursor is refused by the caller rather than read as "start
+// over": unlike a folder list, a translation feed cursor names rows a
+// client has already merged, and silently re-reading from the beginning
+// is the one failure the protocol works to avoid.
+func SplitWorkTranslationCursor(c string) (at time.Time, key string, ok bool) {
+	stamp, key, found := strings.Cut(c, " ")
+	if !found {
+		return time.Time{}, "", false
+	}
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil || key == "" {
+		return time.Time{}, "", false
+	}
+	return at, key, true
+}
+
 // Store is the storage contract. Implementations: SQLite and Postgres.
 // All methods take a userID; cross-user access is impossible by
 // construction.
@@ -1951,6 +2014,26 @@ type Store interface {
 	// offline longer than the window that pushes it again creates a
 	// new record, rev starting over at 1.
 	SweepAnnotationTombstones(ctx context.Context, userID string, olderThan time.Time) (int64, error)
+
+	// Work translations (ADR-0052): the per-user, per-work sentence
+	// translation cache. Keys are opaque client content hashes; the
+	// sentence itself never reaches the server.
+	//
+	// PushWorkTranslations applies one batch atomically: a row is
+	// inserted if absent and updated — translation, device_id and
+	// updated_at, all server-stamped — only when the text differs, so
+	// an identical push is a byte-level no-op and pullers never
+	// re-download what they already hold. Last write wins; there is no
+	// conflict. A work the user does not have is an UnknownWork item
+	// error decided inside the transaction, like an op's. Over the
+	// per-user byte budget, the oldest-updated rows are evicted first,
+	// in the same transaction.
+	PushWorkTranslations(ctx context.Context, userID, workID, deviceID string, items []WorkTranslationWrite, budgetBytes int64) error
+	// PullWorkTranslations returns one page of a work's rows ordered by
+	// (updated_at, key), strictly after the cursor, with the cursor of
+	// the last row returned and whether more remain. A work the user
+	// does not have is ErrNotFound.
+	PullWorkTranslations(ctx context.Context, userID, workID, after string, limit int) (WorkTranslationPage, error)
 
 	// Sessions.
 	AppendSessions(ctx context.Context, userID string, ss []Session) error

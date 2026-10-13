@@ -738,6 +738,32 @@ const furthestPositions = `
 CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, progression DESC, seq);
 `
 
+// workTranslations is the SQLite copy's migration 17 (ADR-0052): the
+// per-user, per-work sentence translation cache, keyed by the client's
+// opaque content hash.
+const workTranslations = `
+CREATE TABLE work_translations (
+    user_id     TEXT NOT NULL,
+    work_id     TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    translation TEXT NOT NULL,
+    device_id   TEXT NOT NULL DEFAULT '',
+    updated_at  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, work_id, key),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX work_translations_eviction ON work_translations(user_id, updated_at);
+`
+
+// workTranslationStamps is the SQLite copy's migration 18 (ADR-0052):
+// the per-user high-water mark a translation stamp is allocated above.
+const workTranslationStamps = `
+CREATE TABLE work_translation_stamps (
+    user_id TEXT NOT NULL PRIMARY KEY,
+    high    TIMESTAMPTZ NOT NULL
+);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -749,6 +775,8 @@ var migrations = []string{
 	mirrorPeerFiles,
 	deviceSettings,
 	furthestPositions,
+	workTranslations,
+	workTranslationStamps,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -771,6 +799,8 @@ func migrationsThrough(name string) ([]string, bool) {
 		"mirrorPeerFiles":          mirrorPeerFiles,
 		"deviceSettings":           deviceSettings,
 		"furthestPositions":        furthestPositions,
+		"workTranslations":         workTranslations,
+		"workTranslationStamps":    workTranslationStamps,
 	}
 	want, ok := named[name]
 	if !ok {
