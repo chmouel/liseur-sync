@@ -144,9 +144,11 @@ func evictWorkTranslationsTx(ctx context.Context, tx *sql.Tx, userID string, bud
 	for {
 		var total sql.NullInt64
 		// The budget is bytes and so is the measure: LENGTH counts
-		// characters, OCTET_LENGTH what is actually stored.
+		// characters, OCTET_LENGTH what is actually stored. The hash
+		// rides along in the measure so a row of tiny text still spends
+		// its share and the row count stays bounded too.
 		if err := tx.QueryRowContext(ctx, q(
-			`SELECT SUM(OCTET_LENGTH(translation)) FROM work_translations WHERE user_id = ?`),
+			`SELECT SUM(OCTET_LENGTH(key) + OCTET_LENGTH(translation)) FROM work_translations WHERE user_id = ?`),
 			userID).Scan(&total); err != nil {
 			return err
 		}
@@ -155,7 +157,7 @@ func evictWorkTranslationsTx(ctx context.Context, tx *sql.Tx, userID string, bud
 			return nil
 		}
 		rows, err := tx.QueryContext(ctx, q(
-			`SELECT ctid::text, OCTET_LENGTH(translation) FROM work_translations
+			`SELECT ctid::text, OCTET_LENGTH(key) + OCTET_LENGTH(translation) FROM work_translations
 			 WHERE user_id = ? ORDER BY updated_at, key LIMIT 100`),
 			userID)
 		if err != nil {

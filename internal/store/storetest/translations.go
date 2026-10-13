@@ -239,8 +239,10 @@ func testWorkTranslationsBudget(t *testing.T, open OpenFunc) {
 		}
 	}
 
-	// First two rows under a budget that fits both.
-	push(12, store.WorkTranslationWrite{Key: trKey("e1"), Translation: "123456"},
+	// First two rows under a budget that fits both: 64 hash bytes
+	// plus six text bytes each, seventy a row, one hundred and forty
+	// the pair.
+	push(140, store.WorkTranslationWrite{Key: trKey("e1"), Translation: "123456"},
 		store.WorkTranslationWrite{Key: trKey("e2"), Translation: "123456"})
 	if all := trAll(t, s, u.ID, w.ID, 10); len(all) != 2 {
 		t.Fatalf("before eviction: %+v", all)
@@ -248,7 +250,7 @@ func testWorkTranslationsBudget(t *testing.T, open OpenFunc) {
 
 	// A third row over the budget evicts the oldest-updated row — the
 	// first one — and keeps the newer two.
-	push(12, store.WorkTranslationWrite{Key: trKey("e3"), Translation: "123456"})
+	push(140, store.WorkTranslationWrite{Key: trKey("e3"), Translation: "123456"})
 	all := trAll(t, s, u.ID, w.ID, 10)
 	if len(all) != 2 {
 		t.Fatalf("after eviction: %+v", all)
@@ -270,21 +272,28 @@ func testWorkTranslationsBudgetCountsBytes(t *testing.T, open OpenFunc) {
 	u := MkUser(t, s, "tr-bytes")
 	w := MkWork(t, s, u, "trw6", "trsha6")
 
-	// Three two-byte characters: six bytes, three characters.
+	// Three two-byte characters: the row measures sixty-four hash
+	// bytes plus six value bytes, seventy in all, sixty-seven counted
+	// in characters. A budget of sixty-eight fits the characters but
+	// not the bytes, so the row does not survive its own push; one of
+	// seventy holds it.
 	value := "ééé"
-	push := func(items ...store.WorkTranslationWrite) {
+	push := func(budget int64, items ...store.WorkTranslationWrite) {
 		t.Helper()
-		if err := s.PushWorkTranslations(ctx, u.ID, w.ID, "phone", items, 6); err != nil {
+		if err := s.PushWorkTranslations(ctx, u.ID, w.ID, "phone", items, budget); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	push(store.WorkTranslationWrite{Key: trKey("b1"), Translation: value})
-	push(store.WorkTranslationWrite{Key: trKey("b2"), Translation: value})
+	push(68, store.WorkTranslationWrite{Key: trKey("b1"), Translation: value})
+	if all := trAll(t, s, u.ID, w.ID, 10); len(all) != 0 {
+		t.Fatalf("a character-counted budget kept the row: %+v", all)
+	}
 
+	push(70, store.WorkTranslationWrite{Key: trKey("b2"), Translation: value})
 	all := trAll(t, s, u.ID, w.ID, 10)
 	if len(all) != 1 || all[0].Key != trKey("b2") {
-		t.Fatalf("a character-counted budget kept both rows: %+v", all)
+		t.Fatalf("a byte-counted budget lost the row: %+v", all)
 	}
 }
 

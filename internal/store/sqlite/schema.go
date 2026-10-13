@@ -1184,7 +1184,7 @@ CREATE INDEX work_translations_eviction ON work_translations(user_id, updated_at
 // pull's cursor for good.
 const workTranslationStamps = `
 CREATE TABLE work_translation_stamps (
-    user_id TEXT NOT NULL PRIMARY KEY,
+    user_id TEXT NOT NULL PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     high    TEXT NOT NULL
 );
 `

@@ -408,7 +408,8 @@ where an identical push writes nothing at all, and the pull is a
 per-work delta feed ordered by `(updated_at, key)` behind an opaque
 cursor. `unknown_work` is the refusal ops already use, with the same
 recovery. The cache is bounded in bytes per user — measured in what is
-stored, not in characters — and evicts its oldest rows first; it is a
+stored, each entry spending its hash and its text, not in characters —
+and evicts its oldest rows first; it is a
 cache, not reading history, and the per-book "left translated" mode
 stays on the device as ADR-0050 keeps every other preference. Server
 stamps only ever move forward while the database remembers the last, so
