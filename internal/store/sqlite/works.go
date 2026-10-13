@@ -586,6 +586,14 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	if err := moveAnnotationsTx(ctx, tx, userID, fromWorkID, intoWorkID, nil); err != nil {
 		return err
 	}
+	// So does every cached sentence translation (ADR-0052). A key
+	// collision means both works cached the same sentence — the key is
+	// a content hash, so either text answers it — and the survivor's
+	// stays; the moved rows are stamped beyond anything the user holds
+	// so a pull cursor on the survivor discovers them.
+	if err := moveWorkTranslationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE user_book_works SET work_id = ? WHERE user_id = ? AND work_id = ?`,
 		intoWorkID, userID, fromWorkID); err != nil {

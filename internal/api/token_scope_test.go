@@ -164,10 +164,12 @@ var registeredRouteGates = map[string]routeGate{
 	"POST /v1/sessions":            gateSync,
 
 	// ADR-0028: annotations are reading state and travel with positions.
-	"POST /v1/annotations":           gateSync,
-	"GET /v1/annotations/changes":    gateSync,
-	"DELETE /v1/annotations/{id}":    gateSync,
-	"GET /v1/works/{id}/annotations": gateSync,
+	"POST /v1/annotations":             gateSync,
+	"GET /v1/annotations/changes":      gateSync,
+	"DELETE /v1/annotations/{id}":      gateSync,
+	"GET /v1/works/{id}/annotations":   gateSync,
+	"POST /v1/works/{id}/translations": gateSync,
+	"GET /v1/works/{id}/translations":  gateSync,
 
 	"GET /v1/me/settings": gateSync,
 	"PUT /v1/me/settings": gateSync,

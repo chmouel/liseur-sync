@@ -696,6 +696,66 @@ feed no longer mentions and the live set does not contain is gone.
 Positions and annotations never mix: `/v1/changes` stays ops-only, and
 annotation writes do not move the op high-water.
 
+## Sentence translations
+
+A page-translation cache travels too (ADR-0052), scoped to the account
+and the work. The key is your own cache key — a one-way SHA-256 over
+your translation identity and the sentence — and **the sentence itself
+never reaches the server**: only the hash and the translated text do.
+The hash is for matching, not for secrecy — a translation says what its
+sentence means, and an operator who holds the book can test whether a
+given sentence was translated — and the server treats it as an
+opaque idempotency key, like an `op_id`.
+
+```json
+POST /v1/works/{id}/translations
+{
+  "translations": [
+    {"key": "e3b0c442…", "translation": "the sea was calm"}
+  ]
+}
+-> {"status": "applied"}
+```
+
+The rules:
+
+- The push is a batched atomic last-write-wins upsert. A row is
+  inserted if absent and updated only when the text differs; an
+  identical push writes nothing, so `updated_at` does not move and
+  pullers never re-download unchanged rows. There is no conflict and
+  no rev — last write wins, and either answer is one valid translation
+  of one sentence.
+- `device_id` and `updated_at` are the server's stamps, taken from
+  your token and its clock. Send only `key` and `translation`.
+- A key must be exactly 64 hex characters; a value over
+  `ops.translation_max_value_bytes` (8 KiB by default) or holding a
+  NUL is refused. The first bad item refuses the whole batch with
+  `code` (`bad_key`, `bad_value`, `too_large`, `missing_field`),
+  `item_index` and the `key` — atomic, like an ops batch. The batch
+  shares `ops.max_batch` (500).
+- A work the user does not have is `400 unknown_work` with the
+  `work_id`, the same refusal ops use: re-resolve the book and retry
+  under the fresh work id.
+
+Pull with a cursor; the first pull is the whole work:
+
+```
+GET /v1/works/{id}/translations?limit=500
+-> {"translations": [{"key": "…", "translation": "…",
+      "device_id": "…", "updated_at": "…"}],
+    "next_cursor": "2026-10-12T10:00:00.123456789Z e3b0c442…",
+    "has_more": false}
+```
+
+Rows are ordered by `(updated_at, key)`, and the cursor carries both,
+because a batch lands under one timestamp and a cursor cutting at the
+ timestamp alone would skip or repeat rows sharing it. A cursor that
+ does not parse is `400`; drop yours and pull from the beginning —
+ re-reading costs requests, skipping rows loses them. The whole cache
+ is bounded in bytes per user (`ops.translation_budget_bytes`, 32 MiB
+ by default) and evicts its oldest-updated rows first, so a row you
+ pulled may be gone later: translate the sentence again.
+
 ## Reading sessions
 
 Report what you measured at the time of reading:

@@ -1049,6 +1049,94 @@ paths:
                     items: { $ref: "#/components/schemas/Annotation" }
         "404": { $ref: "#/components/responses/Error" }
 
+  /v1/works/{id}/translations:
+    post:
+      tags: [sync]
+      summary: Push a batch of cached sentence translations
+      description: |
+        The account's sentence translation cache (ADR-0052): a batched,
+        atomic, idempotent upsert. Last write wins — a row is inserted
+        if absent and updated only when the text differs — and an
+        identical push writes nothing at all, so `updated_at` does not
+        move and pullers never re-download unchanged rows. There is no
+        conflict and no rev. The key is the client's opaque content hash
+        (64 hex characters); the sentence itself never reaches the
+        server. `device_id` and `updated_at` are stamped by the server
+        from the token. Validation is atomic like an ops batch: the
+        first bad item refuses the whole request with `code`
+        (`bad_key`, `too_large`, `bad_value`, `missing_field`),
+        `item_index` and the offending `key`; `bad_value` is a
+        translation holding a NUL, which no store can keep. A work the user does not have is
+        `400 unknown_work` with the `work_id`, the same refusal and
+        recovery as ops. The batch shares `ops.max_batch`; values are
+        bounded by `ops.translation_max_value_bytes` and the whole
+        cache by `ops.translation_budget_bytes`, evicting the
+        oldest-updated rows first.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [translations]
+              properties:
+                translations:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/WorkTranslationInput" }
+      responses:
+        "200":
+          description: The batch was applied (an identical batch is a no-op, not a different answer)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [applied] }
+        "400": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [sync]
+      summary: Pull a work's cached translations (delta feed)
+      description: |
+        One page of the work's sentence translation cache, ordered by
+        `(updated_at, key)` — the same order the cursor cuts at, so rows
+        sharing a timestamp cannot be skipped or repeated across pages.
+        The first pull (no `after`) is the whole work; later pulls pass
+        the `next_cursor` the last page returned and receive only the
+        delta. A cursor that does not parse is `400`; the recovery is to
+        drop the cursor and pull from the beginning — re-reading, never
+        skipping. A work the user does not have is `404`.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: limit
+          in: query
+          description: Page size, capped by `ops.translation_max_pull` (500 by default).
+          schema: { type: integer, default: 500, maximum: 500 }
+        - name: after
+          in: query
+          description: The `next_cursor` of the last page; absent for the whole work.
+          schema: { type: string }
+      responses:
+        "200":
+          description: One page of cached translations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  translations:
+                    type: array
+                    items: { $ref: "#/components/schemas/WorkTranslation" }
+                  next_cursor: { type: string, description: The cursor of the last row returned; pass it as `after` to continue. }
+                  has_more: { type: boolean }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /v1/insights/capabilities:
     get:
       tags: [insights]
@@ -3798,3 +3886,27 @@ components:
         server:
           allOf: [{ $ref: "#/components/schemas/Annotation" }]
           description: The server's current copy, carried on a conflict.
+    WorkTranslationInput:
+      type: object
+      required: [key, translation]
+      properties:
+        key:
+          type: string
+          minLength: 64
+          maxLength: 64
+          description: |
+            The client's opaque content hash: SHA-256 over its
+            translation identity and the sentence. The server does not
+            interpret it; the sentence itself never travels.
+        translation:
+          type: string
+          description: The translated text, bounded by `ops.translation_max_value_bytes` (8 KiB by default).
+    WorkTranslation:
+      type: object
+      description: One cached sentence translation as the server holds it.
+      required: [key, translation]
+      properties:
+        key: { type: string, description: The client's opaque content hash. }
+        translation: { type: string }
+        device_id: { type: string, description: The token's device, stamped by the server. }
+        updated_at: { type: string, format: date-time, description: Server-stamped; moves only when the text changes. }

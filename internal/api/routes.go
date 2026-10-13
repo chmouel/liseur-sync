@@ -362,6 +362,13 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/annotations/changes", syncH(s.HandleAnnotationChanges))
 	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))
 	mux.Handle("GET /v1/works/{id}/annotations", syncH(s.HandleWorkAnnotations))
+	// The sentence translation cache (ADR-0052): reading state the
+	// account keeps so a second device does not pay for the first
+	// one's translations. Push is an idempotent LWW upsert, pull a
+	// per-work delta feed; the key is a one-way hash, so the sentence
+	// itself never reaches the server.
+	mux.Handle("POST /v1/works/{id}/translations", syncH(s.HandlePushWorkTranslations))
+	mux.Handle("GET /v1/works/{id}/translations", syncH(s.HandlePullWorkTranslations))
 	mux.Handle("GET /v1/me/settings", syncH(s.HandleGetSettings))
 	mux.Handle("PUT /v1/me/settings", syncH(s.HandlePutSettings))
 

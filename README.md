@@ -1,5 +1,6 @@
 
 # liseur-sync
+
   <img align="right" src="internal/webui/static/icon.svg" width="160" height="160" alt="Liseur Sync — an open book encircled by mint and gold sync arrows">
 
 Self-hosted server for book libraries and reading-position synchronization.
@@ -25,6 +26,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * a browser based EPUB reader that supports offline reading.
 * per-user reading statistics and sessions
 * per-user series claims
+* a per-account sentence translation cache.
 
 API documentation is available in [docs/openapi.yaml](docs/openapi.yaml).
 

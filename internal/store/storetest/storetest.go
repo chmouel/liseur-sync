@@ -328,6 +328,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ConcurrentAnnotationPushMonotonicSeq", func(t *testing.T) {
 		testConcurrentAnnotationPush(t, open)
 	})
+	t.Run("WorkTranslationsUpsert", func(t *testing.T) { testWorkTranslationsUpsert(t, open) })
+	t.Run("WorkTranslationsScoping", func(t *testing.T) { testWorkTranslationsScoping(t, open) })
+	t.Run("WorkTranslationsPaging", func(t *testing.T) { testWorkTranslationsPaging(t, open) })
+	t.Run("WorkTranslationsBudget", func(t *testing.T) { testWorkTranslationsBudget(t, open) })
+	t.Run("WorkTranslationsBudgetCountsBytes", func(t *testing.T) { testWorkTranslationsBudgetCountsBytes(t, open) })
+	t.Run("WorkTranslationsMerge", func(t *testing.T) { testWorkTranslationsMerge(t, open) })
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
 	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })
