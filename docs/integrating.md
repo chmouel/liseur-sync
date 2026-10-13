@@ -753,8 +753,9 @@ because a batch lands under one timestamp and a cursor cutting at the
  does not parse is `400`; drop yours and pull from the beginning —
  re-reading costs requests, skipping rows loses them. The whole cache
  is bounded in bytes per user (`ops.translation_budget_bytes`, 32 MiB
- by default) and evicts its oldest-updated rows first, so a row you
- pulled may be gone later: translate the sentence again.
+ by default, each entry counting its hash and its text) and evicts its
+ oldest-updated rows first, so a row you pulled may be gone later:
+ translate the sentence again.
 
 ## Reading sessions
 
