@@ -598,6 +598,58 @@ func TestInsightsCountsBooksReadAndFinished(t *testing.T) {
 	}
 }
 
+func TestInsightsHidesBooksReadForLessThanTwoMinutes(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	now := time.Now()
+	brief := seedWork(t, st, "brief", "Only briefly opened")
+	boundary := seedWork(t, st, "boundary", "Two short sittings")
+	archived := seedWork(t, st, "archived", "Archived reading")
+	old := seedWork(t, st, "old", "Brief in this period")
+	zero := seedWork(t, st, "zero", "No active reading")
+	seedSession(t, st, "brief-1", brief, now.Add(-119999*time.Millisecond), now)
+	seedSession(t, st, "boundary-1", boundary, now.Add(-3*time.Minute), now.Add(-2*time.Minute))
+	seedSession(t, st, "boundary-2", boundary, now.Add(-time.Minute), now)
+	seedSession(t, st, "old-1", old, now.AddDate(0, 0, -30).Add(-time.Hour), now.AddDate(0, 0, -30))
+	seedSession(t, st, "old-2", old, now.Add(-time.Minute), now)
+	active := int64(0)
+	if err := st.AppendSessions(t.Context(), "u1", []store.Session{{
+		SessionID: "zero-1", WorkID: zero.WorkID, DeviceID: "reader",
+		StartedAt: now.Add(-time.Hour), EndedAt: now, ActiveMs: &active, Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApplyRollups(t.Context(), "u1", []store.SessionRollup{{
+		UserID: "u1", WorkID: archived.WorkID, Day: now.UTC().Format(insights.DayFormat),
+		ActiveSeconds: 121, SessionCount: 1,
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendOps(t.Context(), "u1", "reader", []store.Op{
+		{OpID: "done-brief", WorkID: brief.WorkID, ClientTS: now, Progression: 1, Origin: store.OriginNative},
+		{OpID: "done-boundary", WorkID: boundary.WorkID, ClientTS: now, Progression: 1, Origin: store.OriginNative},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, body := page(t, ts, cookie, "/ui/insights?span=7d")
+	for _, hidden := range []string{brief.WorkID, old.WorkID, zero.WorkID} {
+		if strings.Contains(body, `href="works/`+hidden+`"`) {
+			t.Errorf("briefly read work %s is listed", hidden)
+		}
+	}
+	for _, want := range []string{
+		`href="works/boundary"`, `href="works/archived"`,
+		`<span class="num">2</span><span class="lbl">books read from</span>`,
+		`<span class="num">1</span><span class="lbl">books finished</span>`,
+		`<p class="headline-value">7 min</p>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
 // insightsCookies fetches a page and hands back what it asked the
 // browser to remember alongside the body.
 func insightsCookies(

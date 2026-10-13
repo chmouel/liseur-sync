@@ -45,9 +45,15 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.
 		return
 	}
 
+	works := make([]insights.Work, 0, len(stats.Works))
+	for _, work := range stats.Works {
+		if work.TotalActiveMinutes >= 2 {
+			works = append(works, work)
+		}
+	}
 	sessions := make([]store.Session, 0, len(snapshot.Sessions))
 	for _, ses := range snapshot.Sessions {
-		if win.HoldsSession(ses) {
+		if win.HoldsSession(ses) && stats.ByWork[ses.WorkID].TotalActiveMinutes >= 2 {
 			sessions = append(sessions, ses)
 		}
 	}
@@ -66,8 +72,8 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.
 		Pages:         stats.Summary.TotalPages,
 		StreakDays:    stats.Summary.StreakDays,
 		SpeedPerHour:  stats.Summary.SpeedProgPerHour,
-		BooksRead:     len(stats.Works),
-		BooksFinished: booksFinished(stats.Works),
+		BooksRead:     len(works),
+		BooksFinished: booksFinished(works),
 	}
 	dayMin := map[string]float64{}
 	for _, day := range stats.Days {
@@ -79,7 +85,7 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.
 		sum,
 		daySeries(win, dayMin, now, loc),
 		recentSessions(sessions, titles, loc, labels),
-		byBook(stats.Works)).
+		byBook(works)).
 		Render(r.Context(), w)
 }
 
