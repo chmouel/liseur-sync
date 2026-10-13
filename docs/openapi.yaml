@@ -3908,5 +3908,5 @@ components:
       properties:
         key: { type: string, description: The client's opaque content hash. }
         translation: { type: string }
-        device_id: { type: string, description: The token's device, stamped by the server. }
+        device_id: { type: string, description: "The token's device, stamped by the server." }
         updated_at: { type: string, format: date-time, description: Server-stamped; moves only when the text changes. }
