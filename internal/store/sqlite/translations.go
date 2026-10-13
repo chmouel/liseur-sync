@@ -146,9 +146,11 @@ func evictWorkTranslationsTx(ctx context.Context, tx *sql.Tx, userID string, bud
 		// The budget is bytes and so is the measure: LENGTH counts
 		// characters and stops at an embedded NUL, which a value full
 		// of them would spend none of — CAST to BLOB counts what is
-		// actually stored.
+		// actually stored. The hash rides along in the measure so a row
+		// of tiny text still spends its share and the row count stays
+		// bounded too.
 		if err := tx.QueryRowContext(ctx,
-			`SELECT SUM(LENGTH(CAST(translation AS BLOB))) FROM work_translations WHERE user_id = ?`,
+			`SELECT SUM(LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(translation AS BLOB))) FROM work_translations WHERE user_id = ?`,
 			userID).Scan(&total); err != nil {
 			return err
 		}
@@ -162,7 +164,7 @@ func evictWorkTranslationsTx(ctx context.Context, tx *sql.Tx, userID string, bud
 		// query per row. The key rides along in the ordering so rows
 		// sharing a timestamp leave in a deterministic order.
 		rows, err := tx.QueryContext(ctx,
-			`SELECT rowid, LENGTH(CAST(translation AS BLOB)) FROM work_translations
+			`SELECT rowid, LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(translation AS BLOB)) FROM work_translations
 			 WHERE user_id = ? ORDER BY updated_at, key LIMIT 100`,
 			userID)
 		if err != nil {

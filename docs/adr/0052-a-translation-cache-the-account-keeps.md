@@ -67,8 +67,10 @@ same shape, a bounded atomic batch. Per value the bound is
 `ops.translation_max_value_bytes` (8 KiB, above the 2,000 characters
 the client itself refuses to translate), one pull page is
 `ops.translation_max_pull` (500), and the whole cache is bounded in
-bytes per user by `ops.translation_budget_bytes` (32 MiB). Over
-budget, the oldest-`updated_at` rows are evicted first, inside the
+bytes per user by `ops.translation_budget_bytes` (32 MiB) — each entry
+spending its hash and its text, so a row of tiny text still spends its
+share and the row count stays bounded too. Over budget, the
+oldest-`updated_at` rows are evicted first, inside the
 push transaction — a cache, not an archive, and what leaves is what a
 pull can fetch again anyway.
 
