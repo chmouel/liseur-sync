@@ -127,6 +127,19 @@ type Config struct {
 		SettingsMaxPerAccount int `toml:"settings_max_per_account"` // default 256
 		SettingsMaxKeyBytes   int `toml:"settings_max_key_bytes"`   // default 128
 		SettingsMaxValueBytes int `toml:"settings_max_value_bytes"` // default 4 KiB
+
+		// Translation cache bounds (ADR-0052). The push shares
+		// max_batch with ops: it is the same shape, a batched atomic
+		// append, and one number for "how many items may one request
+		// carry" is easier to keep honest. The others have no ops
+		// counterpart: a translation is bounded per value (the client
+		// refuses passages over 2,000 characters itself, so 8 KiB is
+		// generous in UTF-8), one pull page is bounded, and the whole
+		// cache is bounded in bytes per user — enforced inside the push
+		// transaction, evicting the oldest-updated rows first.
+		TranslationMaxValueBytes int   `toml:"translation_max_value_bytes"` // default 8 KiB
+		TranslationMaxPull       int   `toml:"translation_max_pull"`        // default 500
+		TranslationBudgetBytes   int64 `toml:"translation_budget_bytes"`    // default 32 MiB
 	} `toml:"ops"`
 
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
@@ -283,6 +296,9 @@ func Default() Config {
 	c.Ops.SettingsMaxPerAccount = 256
 	c.Ops.SettingsMaxKeyBytes = 128
 	c.Ops.SettingsMaxValueBytes = 4 << 10
+	c.Ops.TranslationMaxValueBytes = 8 << 10
+	c.Ops.TranslationMaxPull = 500
+	c.Ops.TranslationBudgetBytes = 32 << 20
 	c.PairingCodeTTLMin = 15
 	c.WebSessionTTLDays = 180
 	c.Mirror.Name = "peer"
@@ -435,6 +451,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Ops.SettingsMaxValueBytes < 1 {
 		return fmt.Errorf("ops.settings_max_value_bytes must be >= 1")
+	}
+	if c.Ops.TranslationMaxValueBytes < 1 {
+		return fmt.Errorf("ops.translation_max_value_bytes must be >= 1")
+	}
+	if c.Ops.TranslationMaxPull < 1 {
+		return fmt.Errorf("ops.translation_max_pull must be >= 1")
+	}
+	if c.Ops.TranslationBudgetBytes < 1 {
+		return fmt.Errorf("ops.translation_budget_bytes must be >= 1")
 	}
 	if c.Ops.InferenceGapMin < 1 {
 		return fmt.Errorf("ops.inference_gap_min must be >= 1")

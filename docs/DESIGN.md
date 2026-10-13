@@ -395,6 +395,27 @@ never told its own value is stale. `docs/integrating.md` states what a
 client must do with the merged reply; Liseur's side is in
 [its ADR-0041](https://github.com/chmouel/liseur/blob/main/docs/adr/0041-settings-stay-on-the-device.md).
 
+### 5.7 The translation cache
+
+The account also keeps the sentence translations its devices' page
+translation produced, per work, in `work_translations` keyed by
+`(user_id, work_id, key)` ([ADR-0052](adr/0052-a-translation-cache-the-account-keeps.md)).
+The key is the client's own cache key — a SHA-256 over its translation
+identity and the sentence — so the sentence itself never reaches the
+server; what arrives is a one-way hash and the translated text, and
+nothing else. The push is a batched atomic last-write-wins upsert
+where an identical push writes nothing at all, and the pull is a
+per-work delta feed ordered by `(updated_at, key)` behind an opaque
+cursor. `unknown_work` is the refusal ops already use, with the same
+recovery. The cache is bounded in bytes per user — measured in what is
+stored, not in characters — and evicts its oldest rows first; it is a
+cache, not reading history, and the per-book "left translated" mode
+stays on the device as ADR-0050 keeps every other preference. Server
+stamps only ever move forward while the database remembers the last, so
+a clock stepped back cannot land a row behind a cursor a pull already
+holds; a work merge carries the cache to the survivor, stamped so
+existing cursors discover the moved rows.
+
 ## 6. Reading statistics
 
 ### 6.1 Sessions are facts, not derived state
