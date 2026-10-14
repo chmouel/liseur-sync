@@ -204,6 +204,50 @@ func evictWorkTranslationsTx(ctx context.Context, tx *sql.Tx, userID string, bud
 	}
 }
 
+// DeleteWorkTranslations drops one work's cached translations. See the
+// Store interface for the contract. Under the work-graph lock, like a
+// push, so a clear cannot interleave with a merge carrying the same
+// rows to another work.
+func (s *Store) DeleteWorkTranslations(ctx context.Context, userID, workID string) (int64, error) {
+	var n int64
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := lockWorkGraph(ctx, tx, userID); err != nil {
+			return err
+		}
+		if exists, err := workExistsTx(ctx, tx, userID, workID); err != nil {
+			return err
+		} else if !exists {
+			return store.ErrNotFound
+		}
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM work_translations WHERE user_id = ? AND work_id = ?`, userID, workID)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	return n, err
+}
+
+// DeleteAllWorkTranslations drops the user's whole translation cache.
+func (s *Store) DeleteAllWorkTranslations(ctx context.Context, userID string) (int64, error) {
+	var n int64
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := lockWorkGraph(ctx, tx, userID); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM work_translations WHERE user_id = ?`, userID)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	return n, err
+}
+
 // PullWorkTranslations returns one page of a work's rows, strictly after
 // the cursor, in (updated_at, key) order. See the Store interface for
 // the contract.

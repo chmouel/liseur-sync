@@ -369,6 +369,10 @@ func (s *Server) Routes() *http.ServeMux {
 	// itself never reaches the server.
 	mux.Handle("POST /v1/works/{id}/translations", syncH(s.HandlePushWorkTranslations))
 	mux.Handle("GET /v1/works/{id}/translations", syncH(s.HandlePullWorkTranslations))
+	// A reader's clear (ADR-0053): one work's rows or the whole
+	// account's. The devices that pulled them keep their copies.
+	mux.Handle("DELETE /v1/works/{id}/translations", syncH(s.HandleDeleteWorkTranslations))
+	mux.Handle("DELETE /v1/translations", syncH(s.HandleDeleteAllWorkTranslations))
 	mux.Handle("GET /v1/me/settings", syncH(s.HandleGetSettings))
 	mux.Handle("PUT /v1/me/settings", syncH(s.HandlePutSettings))
 

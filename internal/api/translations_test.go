@@ -220,3 +220,76 @@ func cursorEscape(t *testing.T, cursor string) string {
 	t.Helper()
 	return strings.ReplaceAll(cursor, " ", "%20")
 }
+
+// TestWorkTranslationClearRoutes walks the ADR-0053 clears: one work,
+// then the whole account, both idempotent and sync-scoped, and neither
+// reaching another account.
+func TestWorkTranslationClearRoutes(t *testing.T) {
+	ts, st := testServer(t)
+	tok, workID := annotationTestUser(t, ts.URL, st, "u1", "alice")
+	other, otherWork := annotationTestUser(t, ts.URL, st, "u2", "bob")
+
+	if code, out := del(t, ts.URL+"/v1/works/"+workID+"/translations", ""); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated clear: %d %v", code, out)
+	}
+	roTok, _, err := auth.NewService(st).MintToken(t.Context(), "u1", "alice-reader",
+		store.ScopeSet{store.ScopeReadInsights}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := del(t, ts.URL+"/v1/works/"+workID+"/translations", roTok); code != http.StatusForbidden {
+		t.Fatalf("read-insights token cleared a work: %d %v", code, out)
+	}
+	if code, out := del(t, ts.URL+"/v1/translations", roTok); code != http.StatusForbidden {
+		t.Fatalf("read-insights token cleared the account: %d %v", code, out)
+	}
+
+	if code, out := pushTr(t, ts.URL, tok, workID,
+		map[string]any{"key": trKeyHex("c1"), "translation": "one"},
+		map[string]any{"key": trKeyHex("c2"), "translation": "two"},
+	); code != http.StatusOK {
+		t.Fatalf("push: %d %v", code, out)
+	}
+	if code, out := pushTr(t, ts.URL, other, otherWork,
+		map[string]any{"key": trKeyHex("c1"), "translation": "theirs"},
+	); code != http.StatusOK {
+		t.Fatalf("other push: %d %v", code, out)
+	}
+
+	code, out := del(t, ts.URL+"/v1/works/"+workID+"/translations", tok)
+	if code != http.StatusOK || out["deleted"] != float64(2) {
+		t.Fatalf("clear work: %d %v", code, out)
+	}
+	code, out = get(t, ts.URL+"/v1/works/"+workID+"/translations", tok)
+	if code != http.StatusOK || len(out["translations"].([]any)) != 0 {
+		t.Fatalf("pull after clear: %d %v", code, out)
+	}
+	code, out = del(t, ts.URL+"/v1/works/"+workID+"/translations", tok)
+	if code != http.StatusOK || out["deleted"] != float64(0) {
+		t.Fatalf("repeated clear: %d %v", code, out)
+	}
+	// The JSON body is what tells a dropped work from a server without
+	// the route, the same contract as the pull.
+	code, out = del(t, ts.URL+"/v1/works/nope/translations", tok)
+	if code != http.StatusNotFound || out["error"] != "work not found" {
+		t.Fatalf("clear of unknown work: %d %v", code, out)
+	}
+	code, out = del(t, ts.URL+"/v1/works/"+otherWork+"/translations", tok)
+	if code != http.StatusNotFound {
+		t.Fatalf("clear of another account's work: %d %v", code, out)
+	}
+
+	if code, out := pushTr(t, ts.URL, tok, workID,
+		map[string]any{"key": trKeyHex("c3"), "translation": "three"},
+	); code != http.StatusOK {
+		t.Fatalf("push after clear: %d %v", code, out)
+	}
+	code, out = del(t, ts.URL+"/v1/translations", tok)
+	if code != http.StatusOK || out["deleted"] != float64(1) {
+		t.Fatalf("clear account: %d %v", code, out)
+	}
+	code, out = get(t, ts.URL+"/v1/works/"+otherWork+"/translations", other)
+	if code != http.StatusOK || len(out["translations"].([]any)) != 1 {
+		t.Fatalf("account clear reached another account: %d %v", code, out)
+	}
+}

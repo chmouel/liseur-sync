@@ -88,6 +88,8 @@ the account holds. That is accepted: the Clear is about this phone's
 storage, not about the account, and a `DELETE
 /v1/works/{id}/translations` route is noted as a possible follow-up
 rather than built now.
+[ADR-0053](0053-a-reader-can-clear-the-account-translations.md)
+has since built it, with an account-wide clear beside it.
 
 ## Consequences
 
