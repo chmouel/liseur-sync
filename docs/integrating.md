@@ -767,10 +767,10 @@ DELETE /v1/translations              -> {"deleted": 340}
 
 Both are idempotent, so retry after a lost answer. An unknown work is
 `404` with a `work not found` body: there is nothing left to clear. A
-bare `404` is a server older than the route. The server keeps no
-tombstone, so other devices keep whatever they already pulled. Clear
-your local copy yourself, and don't pull the work again until the
-clear is acknowledged, or the rows come back.
+bare `404` or `405` means an older server does not support the clear
+route. The server keeps no tombstone, so other devices keep whatever
+they already pulled. Clear your local copy yourself, and don't pull
+the work again until the clear is acknowledged, or the rows come back.
 
 ## Reading sessions
 
