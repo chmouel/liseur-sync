@@ -1144,9 +1144,9 @@ paths:
         Drops every cached translation of the work from the account
         (ADR-0053). Idempotent: a repeated clear answers `deleted: 0`.
         A work the user does not have is `404` with a `work not found`
-        JSON body; a bare `404` is a server without this route. Devices
-        that already pulled the rows keep them: the server keeps no
-        tombstone.
+        JSON body; a bare `404` or `405` means an older server does not
+        support this route. Devices that already pulled the rows keep
+        them: the server keeps no tombstone.
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1167,8 +1167,9 @@ paths:
       summary: Clear the account's whole translation cache
       description: |
         Drops every cached translation of every work the user has
-        (ADR-0053). Idempotent. Devices that already pulled the rows
-        keep them.
+        (ADR-0053). Idempotent. An older server without this route
+        returns a bare `404`. Devices that already pulled the rows keep
+        them.
       security: [{ deviceToken: [] }]  # requires sync scope
       responses:
         "200":

@@ -188,7 +188,8 @@ func (s *Server) HandlePullWorkTranslations(w http.ResponseWriter, r *http.Reque
 // empty cache answers the same as the first. A work the user does not
 // have is the pull's 404 with its JSON body, which a client takes as
 // "nothing left to clear" and tells apart from an older server's bare
-// 404 for a route it never had.
+// 404 when the route is missing or 405 when only GET and POST are
+// supported.
 func (s *Server) HandleDeleteWorkTranslations(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	n, err := s.St.DeleteWorkTranslations(r.Context(), tok.UserID, r.PathValue("id"))

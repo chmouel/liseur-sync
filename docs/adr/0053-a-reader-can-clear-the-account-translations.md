@@ -28,9 +28,10 @@ cache answers the same as the first clear, so a client retrying after
 a lost answer needs no special case. A work the user does not have is
 the pull's `404` with a `work not found` JSON body. A client reads it
 as "nothing left to clear" and tells it apart from an older server's
-bare `404` for a route it never had. Both run under the work-graph
-lock a push takes, so a clear cannot interleave with a merge moving the
-same rows to another work.
+bare `404` when the route is missing or `405` when the server supports
+only the existing `GET` and `POST` methods. Both run under the
+work-graph lock a push takes, so a clear cannot interleave with a merge
+moving the same rows to another work.
 
 **A clear is the account's, not every device's.** The server stops
 serving the rows; a device that already pulled them keeps its local
