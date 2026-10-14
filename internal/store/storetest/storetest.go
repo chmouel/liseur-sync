@@ -334,6 +334,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("WorkTranslationsBudget", func(t *testing.T) { testWorkTranslationsBudget(t, open) })
 	t.Run("WorkTranslationsBudgetCountsBytes", func(t *testing.T) { testWorkTranslationsBudgetCountsBytes(t, open) })
 	t.Run("WorkTranslationsMerge", func(t *testing.T) { testWorkTranslationsMerge(t, open) })
+	t.Run("WorkTranslationsDelete", func(t *testing.T) { testWorkTranslationsDelete(t, open) })
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
 	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })

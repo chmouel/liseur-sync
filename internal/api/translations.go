@@ -181,3 +181,37 @@ func (s *Server) HandlePullWorkTranslations(w http.ResponseWriter, r *http.Reque
 	out.NextCursor = page.NextCursor
 	writeJSON(w, http.StatusOK, out)
 }
+
+// HandleDeleteWorkTranslations implements
+// DELETE /v1/works/{id}/translations — drop one work's cached
+// translations from the account (ADR-0053). Idempotent: a clear of an
+// empty cache answers the same as the first. A work the user does not
+// have is the pull's 404 with its JSON body, which a client takes as
+// "nothing left to clear" and tells apart from an older server's bare
+// 404 for a route it never had.
+func (s *Server) HandleDeleteWorkTranslations(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFrom(r)
+	n, err := s.St.DeleteWorkTranslations(r.Context(), tok.UserID, r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "work not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "clear failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
+// HandleDeleteAllWorkTranslations implements DELETE /v1/translations —
+// drop the account's whole translation cache, every work at once
+// (ADR-0053). Idempotent.
+func (s *Server) HandleDeleteAllWorkTranslations(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFrom(r)
+	n, err := s.St.DeleteAllWorkTranslations(r.Context(), tok.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "clear failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
