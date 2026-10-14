@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -348,5 +349,104 @@ func testWorkTranslationsMerge(t *testing.T, open OpenFunc) {
 	page := trPull(t, s, u.ID, into.ID, before.NextCursor, 10)
 	if len(page.Translations) != 1 || page.Translations[0].Key != trKey("moving") {
 		t.Fatalf("moved row not in the delta: %+v", page)
+	}
+}
+
+// TestWorkTranslationsDelete proves a clear (ADR-0053) drops exactly
+// what it names: one work's rows, or the whole account's, never another
+// work's or another user's. A repeated clear is answered the same, an
+// unknown work is ErrNotFound, and a cursor held from before the clear
+// still sees what is pushed after it.
+func testWorkTranslationsDelete(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "tr-delete")
+	other := MkUser(t, s, "tr-delete-other")
+	w1 := MkWork(t, s, u, "trw9", "trsha9")
+	w2 := MkWork(t, s, u, "trw10", "trsha10")
+	ow := MkWork(t, s, other, "trw9", "trsha9-other")
+
+	trPush(t, s, u.ID, w1.ID, "phone",
+		store.WorkTranslationWrite{Key: trKey("d1"), Translation: "one"},
+		store.WorkTranslationWrite{Key: trKey("d2"), Translation: "two"},
+	)
+	trPush(t, s, u.ID, w2.ID, "phone", store.WorkTranslationWrite{Key: trKey("d3"), Translation: "three"})
+	trPush(t, s, other.ID, ow.ID, "phone", store.WorkTranslationWrite{Key: trKey("d1"), Translation: "theirs"})
+	before := trPull(t, s, u.ID, w1.ID, "", 10)
+
+	n, err := s.DeleteWorkTranslations(ctx, u.ID, w1.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("delete work: n=%d err=%v", n, err)
+	}
+	if all := trAll(t, s, u.ID, w1.ID, 10); len(all) != 0 {
+		t.Fatalf("cleared work still serves rows: %+v", all)
+	}
+	if all := trAll(t, s, u.ID, w2.ID, 10); len(all) != 1 {
+		t.Fatalf("clear reached another work: %+v", all)
+	}
+	if all := trAll(t, s, other.ID, ow.ID, 10); len(all) != 1 {
+		t.Fatalf("clear reached another user: %+v", all)
+	}
+	if n, err := s.DeleteWorkTranslations(ctx, u.ID, w1.ID); err != nil || n != 0 {
+		t.Fatalf("repeated clear: n=%d err=%v", n, err)
+	}
+	if _, err := s.DeleteWorkTranslations(ctx, u.ID, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown work: %v", err)
+	}
+
+	// The feed keeps moving forward: a row pushed after the clear lands
+	// behind the cursor a device held from before it.
+	trPush(t, s, u.ID, w1.ID, "tablet", store.WorkTranslationWrite{Key: trKey("d1"), Translation: "again"})
+	page := trPull(t, s, u.ID, w1.ID, before.NextCursor, 10)
+	if len(page.Translations) != 1 || page.Translations[0].Translation != "again" {
+		t.Fatalf("push after clear not in the delta: %+v", page)
+	}
+
+	n, err = s.DeleteAllWorkTranslations(ctx, u.ID)
+	if err != nil || n != 2 {
+		t.Fatalf("delete all: n=%d err=%v", n, err)
+	}
+	if all := trAll(t, s, u.ID, w1.ID, 10); len(all) != 0 {
+		t.Fatalf("account clear left rows: %+v", all)
+	}
+	if all := trAll(t, s, u.ID, w2.ID, 10); len(all) != 0 {
+		t.Fatalf("account clear left rows: %+v", all)
+	}
+	if all := trAll(t, s, other.ID, ow.ID, 10); len(all) != 1 {
+		t.Fatalf("account clear reached another user: %+v", all)
+	}
+	if n, err := s.DeleteAllWorkTranslations(ctx, u.ID); err != nil || n != 0 {
+		t.Fatalf("repeated account clear: n=%d err=%v", n, err)
+	}
+
+	// A concurrent push may land just before the clear and be removed,
+	// or just after it and remain. Both operations must complete cleanly.
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- s.PushWorkTranslations(ctx, u.ID, w1.ID, "tablet",
+			[]store.WorkTranslationWrite{{Key: trKey("d4"), Translation: "raced"}}, 32<<20)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_, err := s.DeleteAllWorkTranslations(ctx, u.ID)
+		errs <- err
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows := trAll(t, s, u.ID, w1.ID, 10); len(rows) > 1 ||
+		(len(rows) == 1 && (rows[0].Key != trKey("d4") || rows[0].Translation != "raced")) {
+		t.Fatalf("concurrent clear and push left an unexpected cache: %+v", rows)
 	}
 }

@@ -416,6 +416,9 @@ stamps only ever move forward while the database remembers the last, so
 a clock stepped back cannot land a row behind a cursor a pull already
 holds; a work merge carries the cache to the survivor, stamped so
 existing cursors discover the moved rows.
+A reader can clear one work's rows or the whole account's
+([ADR-0053](adr/0053-a-reader-can-clear-the-account-translations.md));
+devices that already pulled them keep their copies.
 
 ## 6. Reading statistics
 

@@ -1137,6 +1137,49 @@ paths:
                   has_more: { type: boolean }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [sync]
+      summary: Clear a work's cached translations
+      description: |
+        Drops every cached translation of the work from the account
+        (ADR-0053). Idempotent: a repeated clear answers `deleted: 0`.
+        A work the user does not have is `404` with a `work not found`
+        JSON body; a bare `404` is a server without this route. Devices
+        that already pulled the rows keep them: the server keeps no
+        tombstone.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The work's cache is empty
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer, format: int64, description: Rows dropped; 0 on a repeated clear. }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/translations:
+    delete:
+      tags: [sync]
+      summary: Clear the account's whole translation cache
+      description: |
+        Drops every cached translation of every work the user has
+        (ADR-0053). Idempotent. Devices that already pulled the rows
+        keep them.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      responses:
+        "200":
+          description: The account's cache is empty
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: integer, format: int64, description: Rows dropped; 0 on a repeated clear. }
+        "401": { $ref: "#/components/responses/Error" }
 
   /v1/insights/capabilities:
     get:

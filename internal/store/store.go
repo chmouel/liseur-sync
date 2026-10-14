@@ -2034,6 +2034,16 @@ type Store interface {
 	// the last row returned and whether more remain. A work the user
 	// does not have is ErrNotFound.
 	PullWorkTranslations(ctx context.Context, userID, workID, after string, limit int) (WorkTranslationPage, error)
+	// DeleteWorkTranslations drops every cached translation of one work
+	// and reports how many rows went. Deleting an empty cache is not an
+	// error, so a retried clear is answered the same way; a work the
+	// user does not have is ErrNotFound. A device that already pulled
+	// the rows keeps them: the account stops serving them, nothing
+	// more (ADR-0053).
+	DeleteWorkTranslations(ctx context.Context, userID, workID string) (int64, error)
+	// DeleteAllWorkTranslations drops the user's whole translation
+	// cache, every work at once, and reports how many rows went.
+	DeleteAllWorkTranslations(ctx context.Context, userID string) (int64, error)
 
 	// Sessions.
 	AppendSessions(ctx context.Context, userID string, ss []Session) error

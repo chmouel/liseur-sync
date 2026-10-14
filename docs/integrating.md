@@ -757,6 +757,21 @@ because a batch lands under one timestamp and a cursor cutting at the
  oldest-updated rows first, so a row you pulled may be gone later:
  translate the sentence again.
 
+A reader can clear the account's copy (ADR-0053), one work or all of
+them:
+
+```
+DELETE /v1/works/{id}/translations   -> {"deleted": 12}
+DELETE /v1/translations              -> {"deleted": 340}
+```
+
+Both are idempotent, so retry after a lost answer. An unknown work is
+`404` with a `work not found` body: there is nothing left to clear. A
+bare `404` is a server older than the route. The server keeps no
+tombstone, so other devices keep whatever they already pulled. Clear
+your local copy yourself, and don't pull the work again until the
+clear is acknowledged, or the rows come back.
+
 ## Reading sessions
 
 Report what you measured at the time of reading:
