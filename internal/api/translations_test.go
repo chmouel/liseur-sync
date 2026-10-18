@@ -221,7 +221,7 @@ func cursorEscape(t *testing.T, cursor string) string {
 	return strings.ReplaceAll(cursor, " ", "%20")
 }
 
-// TestWorkTranslationClearRoutes walks the ADR-0053 clears: one work,
+// TestWorkTranslationClearRoutes walks the ADR-0054 clears: one work,
 // then the whole account, both idempotent and sync-scoped, and neither
 // reaching another account.
 func TestWorkTranslationClearRoutes(t *testing.T) {

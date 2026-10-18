@@ -1312,21 +1312,30 @@ type ChangesPage struct {
 	HighWater    int64 // current max seq for the user
 	HasMore      bool
 	ResyncNeeded bool // since < compaction horizon
+	// FurthestFloors maps each work with a forgotten furthest floor to
+	// it (ADR-0054). Forgetting appends no op, so a client caught up on
+	// the feed learns a new floor only from here.
+	FurthestFloors map[string]int64
 }
 
 // PositionSnapshot keeps recent history and retained furthest candidates
 // in one read snapshot. Furthest is independent of the history limit.
+// FurthestFloor is the work's forgotten floor (ADR-0054): candidates at
+// or below it are excluded from Furthest. Zero when nothing was forgotten.
 type PositionSnapshot struct {
-	Ops      []Op
-	Furthest []Op
+	Ops           []Op
+	Furthest      []Op
+	FurthestFloor int64
 }
 
 // Heads is the recovery snapshot: newest op per (work, device), plus
-// furthest candidates per (work, edition, origin alias).
+// furthest candidates per (work, edition, origin alias) and the
+// forgotten floor of every work that has one (ADR-0054).
 type Heads struct {
-	Ops         []Op // newest op per (work_id, device_id)
-	Furthest    []Op
-	SnapshotSeq int64
+	Ops            []Op // newest op per (work_id, device_id)
+	Furthest       []Op
+	FurthestFloors map[string]int64 // work_id -> floor, only floors > 0
+	SnapshotSeq    int64
 }
 
 // AnnotationKind is what an annotation record is (ADR-0028). One
@@ -1985,6 +1994,12 @@ type Store interface {
 	HeadsFor(ctx context.Context, userID string) (Heads, error)
 	CompactionHorizon(ctx context.Context, userID string) (int64, error)
 	Compact(ctx context.Context, userID string, olderThan time.Time) (newHorizon int64, err error)
+	// ForgetFurthest raises the work's furthest floor to uptoSeq, clamped
+	// to the newest op the work holds, and returns the resulting floor
+	// (ADR-0054). The floor never falls and the op log is not touched.
+	// A work that is not the user's is ErrNotFound; a negative uptoSeq
+	// is ErrInvalidInput.
+	ForgetFurthest(ctx context.Context, userID, workID string, uptoSeq int64) (floor int64, err error)
 
 	// Annotations (ADR-0028): mutable per-user reading state, never
 	// part of the op log. Every accepted write — create, edit,
@@ -2039,7 +2054,7 @@ type Store interface {
 	// error, so a retried clear is answered the same way; a work the
 	// user does not have is ErrNotFound. A device that already pulled
 	// the rows keeps them: the account stops serving them, nothing
-	// more (ADR-0053).
+	// more (ADR-0054).
 	DeleteWorkTranslations(ctx context.Context, userID, workID string) (int64, error)
 	// DeleteAllWorkTranslations drops the user's whole translation
 	// cache, every work at once, and reports how many rows went.

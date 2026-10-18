@@ -105,3 +105,75 @@ func TestFurthestResponsesPreserveOriginAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestForgetFurthest(t *testing.T) {
+	f := newFolderFixture(t)
+	w := storetest.MkWork(t, f.st, f.user, "forget-work", "abc123")
+	forget := f.ts.URL + "/v1/works/" + w.ID + "/furthest/forget"
+	code, out := get(t, f.ts.URL+"/v1/works/"+w.ID+"/positions", f.token)
+	if code != http.StatusOK || out["furthest_floor"] != 0.0 {
+		t.Fatalf("floor must always be present: %d %v", code, out)
+	}
+	for _, path := range []string{"/v1/heads", "/v1/changes?since=0"} {
+		code, out = get(t, f.ts.URL+path, f.token)
+		if floors, ok := out["furthest_floors"].(map[string]any); code != http.StatusOK || !ok || len(floors) != 0 {
+			t.Fatalf("%s: floors must always be an object: %d %v", path, code, out)
+		}
+	}
+	ops := []map[string]any{}
+	for i, p := range []float64{0.98, 0.3, 0.31} {
+		ops = append(ops, map[string]any{
+			"op_id": fmt.Sprintf("op-%d", i), "work_id": w.ID,
+			"client_ts": time.Now().UTC().Format(time.RFC3339Nano), "progression": p,
+		})
+	}
+	if code, out = post(t, f.ts.URL+"/v1/ops", f.token, map[string]any{"ops": ops}); code != http.StatusOK {
+		t.Fatalf("push: %d %v", code, out)
+	}
+
+	for _, body := range []any{
+		map[string]any{},
+		map[string]any{"upto_seq": nil},
+		map[string]any{"upto_seq": -1},
+		map[string]any{"upto_seq": "3"},
+		map[string]any{"upto_seq": 1.5},
+	} {
+		if code, out = post(t, forget, f.token, body); code != http.StatusBadRequest || out["error"] == nil {
+			t.Fatalf("%v: %d %v", body, code, out)
+		}
+	}
+	// Repeating the request, or asking for less, answers the same floor.
+	for _, upto := range []int64{1000, 3, 1} {
+		code, out = post(t, forget, f.token, map[string]any{"upto_seq": upto})
+		if code != http.StatusOK || out["furthest_floor"] != 3.0 || len(out) != 1 {
+			t.Fatalf("forget upto %d: %d %v", upto, code, out)
+		}
+	}
+	code, out = get(t, f.ts.URL+"/v1/works/"+w.ID+"/positions", f.token)
+	if code != http.StatusOK || out["furthest_floor"] != 3.0 ||
+		len(out["furthest"].([]any)) != 0 || len(out["ops"].([]any)) != 3 {
+		t.Fatalf("positions after forgetting: %d %v", code, out)
+	}
+	code, out = get(t, f.ts.URL+"/v1/heads", f.token)
+	if code != http.StatusOK || len(out["furthest"].([]any)) != 0 ||
+		out["furthest_floors"].(map[string]any)[w.ID] != 3.0 {
+		t.Fatalf("heads after forgetting: %d %v", code, out)
+	}
+	code, out = get(t, f.ts.URL+"/v1/changes?since=3", f.token)
+	if code != http.StatusOK || len(out["ops"].([]any)) != 0 ||
+		out["furthest_floors"].(map[string]any)[w.ID] != 3.0 {
+		t.Fatalf("changes after forgetting: %d %v", code, out)
+	}
+
+	other := f.mintToken(t, f.other.ID, store.ScopeSync)
+	for _, url := range []string{forget, f.ts.URL + "/v1/works/no-such-work/furthest/forget"} {
+		code, out = post(t, url, other, map[string]any{"upto_seq": 1})
+		if code != http.StatusNotFound || out["error"] != "work not found" {
+			t.Fatalf("%s: %d %v", url, code, out)
+		}
+	}
+	libraryOnly := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+	if code, _ = post(t, forget, libraryOnly, map[string]any{"upto_seq": 1}); code != http.StatusForbidden {
+		t.Fatalf("library-only scope: %d", code)
+	}
+}

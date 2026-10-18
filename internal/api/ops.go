@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -164,10 +165,14 @@ func (s *Server) HandleChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := struct {
-		Ops       []opJSON `json:"ops"`
-		HighWater int64    `json:"high_water"`
-		HasMore   bool     `json:"has_more"`
-	}{HighWater: page.HighWater, HasMore: page.HasMore}
+		Ops            []opJSON         `json:"ops"`
+		HighWater      int64            `json:"high_water"`
+		HasMore        bool             `json:"has_more"`
+		FurthestFloors map[string]int64 `json:"furthest_floors"`
+	}{HighWater: page.HighWater, HasMore: page.HasMore, FurthestFloors: page.FurthestFloors}
+	if out.FurthestFloors == nil {
+		out.FurthestFloors = map[string]int64{}
+	}
 	for _, o := range page.Ops {
 		out.Ops = append(out.Ops, opToJSON(o))
 	}
@@ -198,9 +203,10 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := struct {
-		Ops      []opJSON `json:"ops"`
-		Furthest []opJSON `json:"furthest"`
-	}{Ops: []opJSON{}, Furthest: []opJSON{}}
+		Ops           []opJSON `json:"ops"`
+		Furthest      []opJSON `json:"furthest"`
+		FurthestFloor int64    `json:"furthest_floor"`
+	}{Ops: []opJSON{}, Furthest: []opJSON{}, FurthestFloor: snapshot.FurthestFloor}
 	for _, o := range snapshot.Ops {
 		out.Ops = append(out.Ops, opToJSON(o))
 	}
@@ -220,10 +226,14 @@ func (s *Server) HandleHeads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := struct {
-		Ops         []opJSON `json:"ops"`
-		Furthest    []opJSON `json:"furthest"`
-		SnapshotSeq int64    `json:"snapshot_seq"`
-	}{Ops: []opJSON{}, Furthest: []opJSON{}, SnapshotSeq: h.SnapshotSeq}
+		Ops            []opJSON         `json:"ops"`
+		Furthest       []opJSON         `json:"furthest"`
+		FurthestFloors map[string]int64 `json:"furthest_floors"`
+		SnapshotSeq    int64            `json:"snapshot_seq"`
+	}{Ops: []opJSON{}, Furthest: []opJSON{}, FurthestFloors: h.FurthestFloors, SnapshotSeq: h.SnapshotSeq}
+	if out.FurthestFloors == nil {
+		out.FurthestFloors = map[string]int64{}
+	}
 	for _, o := range h.Ops {
 		out.Ops = append(out.Ops, opToJSON(o))
 	}
@@ -231,4 +241,41 @@ func (s *Server) HandleHeads(w http.ResponseWriter, r *http.Request) {
 		out.Furthest = append(out.Furthest, opToJSON(o))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// HandleForgetFurthest implements POST /v1/works/{id}/furthest/forget
+// (ADR-0054). It raises the work's furthest floor to upto_seq, clamped
+// to the work's newest op, so every furthest candidate at or below it
+// stops counting. The op log is untouched and the floor never falls,
+// so a repeated request answers the same floor.
+func (s *Server) HandleForgetFurthest(w http.ResponseWriter, r *http.Request) {
+	tok, _ := auth.TokenFrom(r)
+	var req struct {
+		UptoSeq *int64 `json:"upto_seq"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.UptoSeq == nil {
+		writeError(w, http.StatusBadRequest, "upto_seq required")
+		return
+	}
+	if *req.UptoSeq < 0 {
+		writeError(w, http.StatusBadRequest, "upto_seq must be a non-negative integer")
+		return
+	}
+	floor, err := s.St.ForgetFurthest(r.Context(), tok.UserID, r.PathValue("id"), *req.UptoSeq)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "work not found")
+		return
+	case errors.Is(err, store.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, "upto_seq must be a non-negative integer")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "forget failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"furthest_floor": floor})
 }

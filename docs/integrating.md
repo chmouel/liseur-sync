@@ -463,6 +463,24 @@ older server; an empty array means no retained positions. Clients may still
 offer locally known maxima against an older server, but cannot promise a
 complete server history. Data compacted before this feature is unrecoverable.
 
+A reader can forget a wrong furthest position, such as an accidental jump
+to 98%, with `POST /v1/works/{id}/furthest/forget` and
+`{"upto_seq": N}`. Send the newest `seq` you know for the work. The server
+clamps it to the work's newest operation, raises the work's floor to it, and
+answers `{"furthest_floor": F}`. From then on `furthest` ranks only
+operations with `seq > F`, so every earlier peak is forgotten and later
+reading counts again. The floor never falls, so a retry or a lower value
+answers the same floor. The operation log is unchanged. The per-work
+response carries `furthest_floor` (0 when nothing was forgotten), and
+`/v1/heads` and every `/v1/changes` page carry `furthest_floors`, an object
+from work id to floor for the works that have one. Forgetting appends no
+operation, so a client caught up on the feed learns the floor from
+`/v1/changes`, and a live `positions` event is sent when a floor rises.
+A client that sent a peak and lost the answer may later be told the
+retry is a `duplicate` with a `seq` at or below the floor; that peak was
+forgotten too. Drop locally retained maxima at or below the floor
+instead of offering them again, and do not re-upload them as new peaks.
+
 A work can also disappear from under a cursor: a reader deleting a work
 (ADR-0024) removes its ops without a tombstone in this feed. A client
 that holds ops for a work the server no longer knows learns so on its
@@ -757,7 +775,7 @@ because a batch lands under one timestamp and a cursor cutting at the
  oldest-updated rows first, so a row you pulled may be gone later:
  translate the sentence again.
 
-A reader can clear the account's copy (ADR-0053), one work or all of
+A reader can clear the account's copy (ADR-0054), one work or all of
 them:
 
 ```

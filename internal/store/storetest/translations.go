@@ -352,7 +352,7 @@ func testWorkTranslationsMerge(t *testing.T, open OpenFunc) {
 	}
 }
 
-// TestWorkTranslationsDelete proves a clear (ADR-0053) drops exactly
+// TestWorkTranslationsDelete proves a clear (ADR-0054) drops exactly
 // what it names: one work's rows, or the whole account's, never another
 // work's or another user's. A repeated clear is answered the same, an
 // unknown work is ErrNotFound, and a cursor held from before the clear
