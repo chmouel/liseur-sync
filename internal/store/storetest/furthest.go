@@ -1,6 +1,7 @@
 package storetest
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -244,5 +245,187 @@ func testFurthestReplacementKeepsHorizon(t *testing.T, open OpenFunc) {
 	page, err := s.Changes(ctx, u.ID, 1, 100)
 	if err != nil || !page.ResyncNeeded {
 		t.Fatalf("cursor behind a removed op was accepted: %+v %v", page, err)
+	}
+}
+
+func opIDs(ops []store.Op) []string {
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, op.OpID)
+	}
+	return out
+}
+
+func appendAt(t *testing.T, s store.Store, userID, workID string, ops ...store.Op) {
+	t.Helper()
+	for i := range ops {
+		ops[i].WorkID = workID
+		ops[i].ClientTS = time.Now()
+		ops[i].Origin = store.OriginNative
+	}
+	if _, err := s.AppendOps(t.Context(), userID, "phone", ops); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testForgetFurthest(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "forgetful")
+	other := MkUser(t, s, "neighbour")
+	w := MkWork(t, s, u, "w1", "abc123")
+	MkWork(t, s, other, "w1", "abc123")
+	onlyMine := MkWork(t, s, u, "w2", "def456")
+	appendAt(t, s, other.ID, w.ID, store.Op{OpID: "theirs", Progression: 0.9})
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "jump", Progression: 0.98},
+		store.Op{OpID: "back", Progression: 0.3},
+		store.Op{OpID: "reading", Progression: 0.31})
+
+	snapshot, err := s.PositionSnapshot(ctx, u.ID, w.ID, 10)
+	if err != nil || !reflect.DeepEqual(opIDs(snapshot.Furthest), []string{"jump"}) || snapshot.FurthestFloor != 0 {
+		t.Fatalf("before forgetting: %+v %v", snapshot, err)
+	}
+	if heads, err := s.HeadsFor(ctx, u.ID); err != nil || len(heads.FurthestFloors) != 0 {
+		t.Fatalf("a floor nobody set: %+v %v", heads, err)
+	}
+
+	// Clamped to the newest op the work holds, never above it.
+	floor, err := s.ForgetFurthest(ctx, u.ID, w.ID, 1000)
+	if err != nil || floor != 3 {
+		t.Fatalf("forget: %d %v", floor, err)
+	}
+	snapshot, err = s.PositionSnapshot(ctx, u.ID, w.ID, 10)
+	if err != nil || len(snapshot.Furthest) != 0 || snapshot.FurthestFloor != 3 ||
+		!reflect.DeepEqual(opIDs(snapshot.Ops), []string{"reading", "back", "jump"}) {
+		t.Fatalf("forgotten peak still ranks, or the log changed: %+v %v", snapshot, err)
+	}
+	heads, err := s.HeadsFor(ctx, u.ID)
+	if err != nil || len(heads.Furthest) != 0 || len(heads.Ops) != 1 ||
+		!reflect.DeepEqual(heads.FurthestFloors, map[string]int64{w.ID: 3}) {
+		t.Fatalf("heads after forgetting: %+v %v", heads, err)
+	}
+	// Forgetting appends no op: a device already caught up on the feed
+	// learns the floor from an empty changes page.
+	page, err := s.Changes(ctx, u.ID, 3, 100)
+	if err != nil || len(page.Ops) != 0 ||
+		!reflect.DeepEqual(page.FurthestFloors, map[string]int64{w.ID: 3}) {
+		t.Fatalf("changes after forgetting: %+v %v", page, err)
+	}
+
+	// Idempotent, and the floor never falls.
+	for _, upto := range []int64{3, 1, 0} {
+		if floor, err := s.ForgetFurthest(ctx, u.ID, w.ID, upto); err != nil || floor != 3 {
+			t.Fatalf("forget upto %d: %d %v", upto, floor, err)
+		}
+	}
+
+	// Reading after the forget counts again.
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "later", Progression: 0.4},
+		store.Op{OpID: "lower", Progression: 0.35})
+	snapshot, err = s.PositionSnapshot(ctx, u.ID, w.ID, 10)
+	if err != nil || !reflect.DeepEqual(opIDs(snapshot.Furthest), []string{"later"}) {
+		t.Fatalf("later reading did not count: %+v %v", snapshot, err)
+	}
+
+	// A work with no ops answers its current floor.
+	if floor, err := s.ForgetFurthest(ctx, u.ID, onlyMine.ID, 0); err != nil || floor != 0 {
+		t.Fatalf("empty work: %d %v", floor, err)
+	}
+	if floor, err := s.ForgetFurthest(ctx, u.ID, onlyMine.ID, 10); err != nil || floor != 0 {
+		t.Fatalf("empty work clamp: %d %v", floor, err)
+	}
+	if _, err := s.ForgetFurthest(ctx, u.ID, w.ID, -1); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("negative upto_seq: %v", err)
+	}
+	for _, workID := range []string{onlyMine.ID, "no-such-work"} {
+		if _, err := s.ForgetFurthest(ctx, other.ID, workID, 1); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("forgot a work that is not theirs (%s): %v", workID, err)
+		}
+	}
+	// The same work id under another account keeps its own furthest.
+	theirs, err := s.PositionSnapshot(ctx, other.ID, w.ID, 10)
+	if err != nil || theirs.FurthestFloor != 0 || !reflect.DeepEqual(opIDs(theirs.Furthest), []string{"theirs"}) {
+		t.Fatalf("another account's furthest moved: %+v %v", theirs, err)
+	}
+	if heads, err := s.HeadsFor(ctx, other.ID); err != nil || len(heads.FurthestFloors) != 0 {
+		t.Fatalf("another account saw a floor: %+v %v", heads, err)
+	}
+}
+
+func testForgetFurthestCompacts(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "compact-forgotten")
+	w := MkWork(t, s, u, "w1", "abc123")
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "jump", Progression: 0.98},
+		store.Op{OpID: "back", Progression: 0.2},
+		store.Op{OpID: "reading", Progression: 0.3})
+	if _, err := s.ForgetFurthest(ctx, u.ID, w.ID, 3); err != nil {
+		t.Fatal(err)
+	}
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "new-peak", Progression: 0.5},
+		store.Op{OpID: "latest", Progression: 0.45})
+	if _, err := s.Compact(ctx, u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// The forgotten peak is no longer pinned; the peak above the floor
+	// and the head are.
+	snapshot, err := s.PositionSnapshot(ctx, u.ID, w.ID, 10)
+	if err != nil || !reflect.DeepEqual(opIDs(snapshot.Ops), []string{"latest", "new-peak"}) ||
+		!reflect.DeepEqual(opIDs(snapshot.Furthest), []string{"new-peak"}) {
+		t.Fatalf("compaction after forgetting: %+v %v", snapshot, err)
+	}
+}
+
+func testForgetFurthestFollowsSplitAndMerge(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := t.Context()
+	u := MkUser(t, s, "split-forgotten")
+	w := MkWork(t, s, u, "w1", "abc123")
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "edition-jump", EditionSHA: Ptr("abc123"), Progression: 0.9},
+		store.Op{OpID: "loose-jump", Progression: 0.8})
+	if _, err := s.ForgetFurthest(ctx, u.ID, w.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	appendAt(t, s, u.ID, w.ID,
+		store.Op{OpID: "edition-after", EditionSHA: Ptr("abc123"), Progression: 0.2},
+		store.Op{OpID: "loose-after", Progression: 0.1})
+	split := store.Work{ID: "split", UserID: u.ID, CreatedAt: time.Now()}
+	if err := s.SplitWork(ctx, u.ID, w.ID, "abc123", nil, split); err != nil {
+		t.Fatal(err)
+	}
+	check := func(workID string, floor int64, ids ...string) {
+		t.Helper()
+		snapshot, err := s.PositionSnapshot(ctx, u.ID, workID, 10)
+		if err != nil || snapshot.FurthestFloor != floor || !reflect.DeepEqual(opIDs(snapshot.Furthest), ids) {
+			t.Fatalf("work %s: floor %d furthest %v (%v), want %d %v",
+				workID, snapshot.FurthestFloor, opIDs(snapshot.Furthest), err, floor, ids)
+		}
+	}
+	check(split.ID, 2, "edition-after")
+	check(w.ID, 2, "loose-after")
+
+	// The survivor keeps the higher floor, whichever side held it.
+	if floor, err := s.ForgetFurthest(ctx, u.ID, split.ID, 100); err != nil || floor != 3 {
+		t.Fatalf("forget on split: %d %v", floor, err)
+	}
+	if err := s.MergeWorks(ctx, u.ID, split.ID, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(w.ID, 3, "loose-after")
+	other := MkWork(t, s, u, "w3", "def456")
+	appendAt(t, s, u.ID, other.ID, store.Op{OpID: "other-edition", EditionSHA: Ptr("def456"), Progression: 0.6})
+	if err := s.MergeWorks(ctx, u.ID, other.ID, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	check(w.ID, 3, "other-edition", "loose-after")
+	heads, err := s.HeadsFor(ctx, u.ID)
+	if err != nil || !reflect.DeepEqual(heads.FurthestFloors, map[string]int64{w.ID: 3}) {
+		t.Fatalf("heads floors after merge: %+v %v", heads, err)
 	}
 }

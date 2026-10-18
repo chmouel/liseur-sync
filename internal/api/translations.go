@@ -184,7 +184,7 @@ func (s *Server) HandlePullWorkTranslations(w http.ResponseWriter, r *http.Reque
 
 // HandleDeleteWorkTranslations implements
 // DELETE /v1/works/{id}/translations — drop one work's cached
-// translations from the account (ADR-0053). Idempotent: a clear of an
+// translations from the account (ADR-0054). Idempotent: a clear of an
 // empty cache answers the same as the first. A work the user does not
 // have is the pull's 404 with its JSON body, which a client takes as
 // "nothing left to clear" and tells apart from an older server's bare

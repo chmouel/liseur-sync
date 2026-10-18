@@ -39,7 +39,9 @@ func TestFurthestUpgradePreservesReading(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := s.PositionSnapshot(ctx, u.ID, w.ID, 1)
+	// Read through Positions: today's snapshot also reads the furthest
+	// floor a later migration adds (ADR-0054), which this schema lacks.
+	before, err := s.Positions(ctx, u.ID, w.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,8 @@ func TestFurthestUpgradePreservesReading(t *testing.T) {
 			t.Fatal(err)
 		}
 		after, err := s.PositionSnapshot(ctx, u.ID, w.ID, 1)
-		if err != nil || !reflect.DeepEqual(before, after) {
+		if err != nil || !reflect.DeepEqual(before, after.Ops) || len(after.Furthest) != 1 ||
+			after.Furthest[0].OpID != "peak" || after.FurthestFloor != 0 {
 			t.Fatalf("migration changed reading: before=%+v after=%+v err=%v", before, after, err)
 		}
 	}

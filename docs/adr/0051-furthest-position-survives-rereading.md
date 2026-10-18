@@ -36,7 +36,8 @@ historical destination using the existing edition-aware locator ladder.
 It does not become the current position merely because it is farther.
 
 Navigation jumps count. Rereading, marking unread, and declining a sync
-offer do not lower the maximum. There is no reset operation. Preserve the
+offer do not lower the maximum. The only reset is the explicit forget in
+[ADR-0054](0054-forgetting-the-furthest-position.md). Preserve the
 clients' existing current-position conflict policies, including Android's
 automatic farther-side opening with a way back.
 

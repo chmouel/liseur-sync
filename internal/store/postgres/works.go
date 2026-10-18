@@ -356,9 +356,13 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		return store.ErrConflict
 	}
 
+	// The new work inherits the source's furthest floor (ADR-0054).
 	if _, err := tx.ExecContext(ctx, q(
-		`INSERT INTO works (id, user_id, title, author, pending, created_at) VALUES (?, ?, ?, ?, FALSE, ?)`),
-		newWork.ID, userID, newWork.Title, newWork.Author, newWork.CreatedAt.UTC()); err != nil {
+		`INSERT INTO works (id, user_id, title, author, pending, created_at, furthest_floor)
+		 VALUES (?, ?, ?, ?, FALSE, ?,
+		         (SELECT furthest_floor FROM works WHERE user_id = ? AND id = ?))`),
+		newWork.ID, userID, newWork.Title, newWork.Author, newWork.CreatedAt.UTC(),
+		userID, workID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, q(
@@ -551,6 +555,14 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	if _, err := tx.ExecContext(ctx, q(
 		`UPDATE user_book_works SET work_id = ? WHERE user_id = ? AND work_id = ?`),
 		intoWorkID, userID, fromWorkID); err != nil {
+		return err
+	}
+	// The survivor keeps the higher furthest floor (ADR-0054).
+	if _, err := tx.ExecContext(ctx, q(
+		`UPDATE works SET furthest_floor = GREATEST(furthest_floor,
+		     (SELECT furthest_floor FROM works WHERE user_id = ? AND id = ?))
+		 WHERE user_id = ? AND id = ?`),
+		userID, fromWorkID, userID, intoWorkID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, q(

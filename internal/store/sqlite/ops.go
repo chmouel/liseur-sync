@@ -179,6 +179,13 @@ const furthestRank = `ROW_NUMBER() OVER (
 	PARTITION BY work_id, edition_sha, origin_alias
 	ORDER BY progression DESC, seq ASC)`
 
+// aboveFurthestFloor drops candidates a reader forgot (ADR-0054): an op
+// at or below its work's furthest_floor is still in the log but no
+// longer ranks. It reads the work through the op's own user_id, so it
+// can never consult another account's floor.
+const aboveFurthestFloor = `seq > (SELECT w.furthest_floor FROM works w
+	WHERE w.user_id = ops.user_id AND w.id = ops.work_id)`
+
 func furthestOpsTx(ctx context.Context, tx *sql.Tx, userID, workID string) ([]store.Op, error) {
 	where := `user_id = ?`
 	args := []any{userID}
@@ -190,6 +197,7 @@ func furthestOpsTx(ctx context.Context, tx *sql.Tx, userID, workID string) ([]st
 		`SELECT `+opCols+` FROM (
 			SELECT `+opCols+`, `+furthestRank+` AS furthest_rank FROM ops
 			WHERE `+where+` AND progression >= 0 AND progression <= 1
+			  AND `+aboveFurthestFloor+`
 		) ranked WHERE furthest_rank = 1 ORDER BY work_id, progression DESC, seq`, args...)
 	if err != nil {
 		return nil, err
@@ -256,7 +264,9 @@ func (s *Store) Changes(ctx context.Context, userID string, since int64, limit i
 		page.HasMore = true
 		page.Ops = page.Ops[:limit]
 	}
-	return page, nil
+	rows.Close()
+	page.FurthestFloors, err = furthestFloorsTx(ctx, tx, userID)
+	return page, err
 }
 
 // Positions returns the most recent ops for a work (newest first).
@@ -307,6 +317,15 @@ func (s *Store) PositionSnapshot(ctx context.Context, userID, workID string, lim
 		return snapshot, err
 	}
 	snapshot.Furthest, err = furthestOpsTx(ctx, tx, userID, workID)
+	if err != nil {
+		return snapshot, err
+	}
+	err = tx.QueryRowContext(ctx,
+		`SELECT furthest_floor FROM works WHERE user_id = ? AND id = ?`,
+		userID, workID).Scan(&snapshot.FurthestFloor)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
 	return snapshot, err
 }
 
@@ -347,7 +366,80 @@ func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error
 		return h, err
 	}
 	h.Furthest, err = furthestOpsTx(ctx, tx, userID, "")
+	if err != nil {
+		return h, err
+	}
+	h.FurthestFloors, err = furthestFloorsTx(ctx, tx, userID)
 	return h, err
+}
+
+// furthestFloorsTx returns the forgotten floor of every work that has
+// one (ADR-0054), inside the caller's snapshot.
+func furthestFloorsTx(ctx context.Context, tx *sql.Tx, userID string) (map[string]int64, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, furthest_floor FROM works WHERE user_id = ? AND furthest_floor > 0`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out map[string]int64
+	for rows.Next() {
+		var id string
+		var floor int64
+		if err := rows.Scan(&id, &floor); err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = make(map[string]int64)
+		}
+		out[id] = floor
+	}
+	return out, rows.Err()
+}
+
+// ForgetFurthest raises a work's furthest floor (ADR-0054), so every
+// furthest candidate at or below it stops counting and later reading
+// counts again. uptoSeq is clamped to the newest op the work holds, so a
+// floor can never hide an op not yet written; the floor never falls, so
+// repeating a request changes nothing. The op log is not touched.
+func (s *Store) ForgetFurthest(ctx context.Context, userID, workID string, uptoSeq int64) (int64, error) {
+	if uptoSeq < 0 {
+		return 0, store.ErrInvalidInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := lockWorkGraph(ctx, tx, userID); err != nil {
+		return 0, err
+	}
+	var floor, newest int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT furthest_floor,
+		        (SELECT COALESCE(MAX(seq), 0) FROM ops WHERE user_id = ? AND work_id = ?)
+		 FROM works WHERE user_id = ? AND id = ?`,
+		userID, workID, userID, workID).Scan(&floor, &newest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, store.ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	target := min(uptoSeq, newest)
+	if target <= floor {
+		return floor, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE works SET furthest_floor = ? WHERE user_id = ? AND id = ?`,
+		target, userID, workID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	s.Notify(userID, store.TopicPositions)
+	return target, nil
 }
 
 func (s *Store) CompactionHorizon(ctx context.Context, userID string) (int64, error) {
@@ -418,6 +510,7 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 		     SELECT seq FROM (
 		         SELECT seq, `+furthestRank+` AS furthest_rank FROM ops
 		         WHERE user_id = ? AND progression >= 0 AND progression <= 1
+		           AND `+aboveFurthestFloor+`
 		     ) ranked WHERE furthest_rank = 1)
 		 RETURNING seq`, userID, cut, cut, userID)
 	if err != nil {

@@ -764,6 +764,12 @@ CREATE TABLE work_translation_stamps (
 );
 `
 
+// furthestFloor is the SQLite copy's migration 19 (ADR-0054): the op
+// sequence at or below which a work's furthest candidates are forgotten.
+const furthestFloor = `
+ALTER TABLE works ADD COLUMN furthest_floor BIGINT NOT NULL DEFAULT 0;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -777,6 +783,7 @@ var migrations = []string{
 	furthestPositions,
 	workTranslations,
 	workTranslationStamps,
+	furthestFloor,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -801,6 +808,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"furthestPositions":        furthestPositions,
 		"workTranslations":         workTranslations,
 		"workTranslationStamps":    workTranslationStamps,
+		"furthestFloor":            furthestFloor,
 	}
 	want, ok := named[name]
 	if !ok {

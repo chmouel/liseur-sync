@@ -762,6 +762,14 @@ paths:
                     items: { $ref: "#/components/schemas/Op" }
                   high_water: { type: integer }
                   has_more: { type: boolean }
+                  furthest_floors:
+                    type: object
+                    description: |
+                      Forgotten furthest floor per work id, for the works
+                      that have one (ADR-0054). Forgetting appends no op,
+                      so this is how a client caught up on the feed learns
+                      of it.
+                    additionalProperties: { type: integer, format: int64 }
         "400":
           description: "`since` is not a non-negative integer"
           content:
@@ -793,7 +801,9 @@ paths:
         The separate `furthest` array contains retained maximum-progression
         operations per work/edition/origin-alias ownership group, from the
         same snapshot. Store those as historical destinations, never as new
-        movement for latest-position reconciliation.
+        movement for latest-position reconciliation. `furthest_floors`
+        names every work whose furthest position was forgotten, from the
+        same snapshot.
       security: [{ deviceToken: [] }]  # requires sync scope
       responses:
         "200":
@@ -802,7 +812,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ops, furthest, snapshot_seq]
+                required: [ops, furthest, furthest_floors, snapshot_seq]
                 properties:
                   ops:
                     type: array
@@ -814,7 +824,18 @@ paths:
                       through compaction. Equal fractions keep the earliest
                       sequence. Sorted by work_id, descending progression,
                       then sequence. Empty when there are no positions.
+                      Operations at or below their work's furthest floor
+                      are left out.
                     items: { $ref: "#/components/schemas/Op" }
+                  furthest_floors:
+                    type: object
+                    description: |
+                      Work id to furthest floor, for every work whose
+                      furthest position was forgotten (see
+                      `POST /v1/works/{id}/furthest/forget`). A work that
+                      never forgot one is absent. Always present, possibly
+                      empty.
+                    additionalProperties: { type: integer, format: int64, minimum: 1 }
                   snapshot_seq: { type: integer }
 
   /v1/works/{id}/positions:
@@ -830,6 +851,9 @@ paths:
         Clients offer them independently of current position and use
         edition-aware locator restoration. Earlier history already compacted
         before furthest retention was introduced cannot be recovered.
+        `furthest` leaves out operations at or below `furthest_floor`, the
+        sequence up to which the reader forgot this work's furthest
+        position; `ops` still contains them.
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -841,7 +865,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ops, furthest]
+                required: [ops, furthest, furthest_floor]
                 properties:
                   ops:
                     type: array
@@ -849,7 +873,58 @@ paths:
                   furthest:
                     type: array
                     items: { $ref: "#/components/schemas/Op" }
+                  furthest_floor:
+                    type: integer
+                    format: int64
+                    minimum: 0
+                    description: |
+                      Operations with `seq` at or below this value no longer
+                      count toward `furthest`. 0 when nothing was forgotten.
         "404": { $ref: "#/components/responses/Error" }
+
+  /v1/works/{id}/furthest/forget:
+    post:
+      tags: [sync]
+      summary: Forget a work's furthest position
+      description: |
+        Forgets every furthest position this work has seen up to
+        `upto_seq`, for example after an accidental jump near the end.
+        The server raises the work's `furthest_floor` to `upto_seq`,
+        clamped to the newest operation the work holds, and from then on
+        `furthest` only ranks operations with a greater `seq`. Later
+        reading counts again. The operation log is not changed: `ops`,
+        `/v1/changes` and `/v1/heads` heads keep every operation.
+
+        The floor never falls, so repeating a request, or sending a lower
+        `upto_seq`, answers the current floor unchanged. Send the newest
+        `seq` you know for the work to forget everything up to it. A
+        floor that rises notifies the `positions` topic on
+        `/v1/events`. A split work keeps its source's floor; a merge keeps
+        the higher of the two.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upto_seq]
+              properties:
+                upto_seq: { type: integer, format: int64, minimum: 0 }
+      responses:
+        "200":
+          description: The work's furthest floor after the request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [furthest_floor]
+                properties:
+                  furthest_floor: { type: integer, format: int64, minimum: 0 }
+        "400": { $ref: "#/components/responses/Error", description: "Missing, malformed, or negative upto_seq" }
+        "404": { $ref: "#/components/responses/Error", description: "No such work for this account" }
 
   /v1/sessions:
     post:
@@ -1142,7 +1217,7 @@ paths:
       summary: Clear a work's cached translations
       description: |
         Drops every cached translation of the work from the account
-        (ADR-0053). Idempotent: a repeated clear answers `deleted: 0`.
+        (ADR-0054). Idempotent: a repeated clear answers `deleted: 0`.
         A work the user does not have is `404` with a `work not found`
         JSON body; a bare `404` or `405` means an older server does not
         support this route. Devices that already pulled the rows keep

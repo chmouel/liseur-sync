@@ -1189,6 +1189,15 @@ CREATE TABLE work_translation_stamps (
 );
 `
 
+// furthestFloor is migration 19 (ADR-0054): the per-user op sequence at
+// or below which a work's furthest candidates are forgotten. The op log
+// itself is never touched; a candidate is only ranked when its seq is
+// above the floor. Zero forgets nothing, so an existing deployment reads
+// exactly what it read before.
+const furthestFloor = `
+ALTER TABLE works ADD COLUMN furthest_floor INTEGER NOT NULL DEFAULT 0;
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1204,6 +1213,7 @@ var migrations = []string{
 	furthestPositions,
 	workTranslations,
 	workTranslationStamps,
+	furthestFloor,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1229,6 +1239,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"furthestPositions":        furthestPositions,
 		"workTranslations":         workTranslations,
 		"workTranslationStamps":    workTranslationStamps,
+		"furthestFloor":            furthestFloor,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -355,6 +355,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/changes", syncH(s.HandleChanges))
 	mux.Handle("GET /v1/heads", syncH(s.HandleHeads))
 	mux.Handle("GET /v1/works/{id}/positions", syncH(s.HandlePositions))
+	mux.Handle("POST /v1/works/{id}/furthest/forget", syncH(s.HandleForgetFurthest))
 	mux.Handle("POST /v1/sessions", syncH(s.HandlePushSessions))
 	// Annotations (ADR-0028) are reading state, they travel with
 	// positions, and the reader token already carries what they need.
@@ -369,7 +370,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// itself never reaches the server.
 	mux.Handle("POST /v1/works/{id}/translations", syncH(s.HandlePushWorkTranslations))
 	mux.Handle("GET /v1/works/{id}/translations", syncH(s.HandlePullWorkTranslations))
-	// A reader's clear (ADR-0053): one work's rows or the whole
+	// A reader's clear (ADR-0054): one work's rows or the whole
 	// account's. The devices that pulled them keep their copies.
 	mux.Handle("DELETE /v1/works/{id}/translations", syncH(s.HandleDeleteWorkTranslations))
 	mux.Handle("DELETE /v1/translations", syncH(s.HandleDeleteAllWorkTranslations))

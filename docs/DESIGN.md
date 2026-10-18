@@ -309,14 +309,19 @@ work-wide maximum is the greatest fraction among them. It is a destination
 the reader may choose, separate from the latest position and the agreed
 merge baseline. Returning to an earlier chapter, marking unread, or
 dismissing a sync offer does not reset it. Navigation jumps count too.
+The one reset is explicit: `POST /v1/works/{id}/furthest/forget` raises
+the work's `furthest_floor`, and only operations with a greater `seq` are
+ranked afterwards. The log keeps every operation; reading after the
+forget counts again
+([ADR-0054](adr/0054-forgetting-the-furthest-position.md)).
 Clients preserve locally recorded peaks before coalescing position uploads,
 and retain every incoming peak before choosing a latest operation for merge.
 They never apply a historical maximum as a fresh remote move.
 
 Retention: ops older than a configurable window (default 180 days) are
 compacted to daily last-op-per-device snapshots. The newest op per
-(work, device) and each ownership group's furthest op are kept whatever
-their age, and a kosync op not yet
+(work, device) and each ownership group's furthest op above the work's
+floor are kept whatever their age, and a kosync op not yet
 materialised into an inferred session (§6.3) is kept until it is. The
 horizon is the newest seq compaction removed; a cursor below it gets
 `410 resync_required` and rebuilds from `GET /v1/heads`. That response
@@ -417,7 +422,7 @@ a clock stepped back cannot land a row behind a cursor a pull already
 holds; a work merge carries the cache to the survivor, stamped so
 existing cursors discover the moved rows.
 A reader can clear one work's rows or the whole account's
-([ADR-0053](adr/0053-a-reader-can-clear-the-account-translations.md));
+([ADR-0054](adr/0053-a-reader-can-clear-the-account-translations.md));
 devices that already pulled them keep their copies.
 
 ## 6. Reading statistics

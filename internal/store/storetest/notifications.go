@@ -72,6 +72,7 @@ func testNotifications(t *testing.T, open OpenFunc) {
 		}
 		t.Run(name, func(t *testing.T) { testOpNotifications(t, open, kosync) })
 	}
+	t.Run("ForgetFurthest", func(t *testing.T) { testForgetFurthestNotifications(t, open) })
 	t.Run("Annotations", func(t *testing.T) { testAnnotationNotifications(t, open) })
 	t.Run("NativeSessions", func(t *testing.T) { testSessionNotifications(t, open) })
 	t.Run("InferredSessions", func(t *testing.T) { testInferredNotifications(t, open, false) })
@@ -180,6 +181,38 @@ func testOpNotifications(t *testing.T, open OpenFunc, kosync bool) {
 		t.Fatal(err)
 	}
 	probe.check(t, "u-alice", store.TopicPositions)
+}
+
+// A forget that raises the floor tells the account's other devices; one
+// that changes nothing, or is refused, stays silent.
+func testForgetFurthestNotifications(t *testing.T, open OpenFunc) {
+	s, user, work, probe := notificationFixture(t, open)
+	ctx := context.Background()
+	if _, err := s.AppendOps(ctx, user.ID, "device", []store.Op{{
+		OpID: "jump", WorkID: work.ID, ClientTS: time.Now(), Progression: 0.98, Origin: store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	probe.check(t, user.ID, store.TopicPositions)
+	probe.read = func(ctx context.Context) {
+		snapshot, err := s.PositionSnapshot(ctx, user.ID, work.ID, 1)
+		if err != nil || snapshot.FurthestFloor != 1 || len(snapshot.Furthest) != 0 {
+			t.Errorf("notification preceded forget commit: %+v, %v", snapshot, err)
+		}
+	}
+	if floor, err := s.ForgetFurthest(ctx, user.ID, work.ID, 1); err != nil || floor != 1 {
+		t.Fatalf("forget: %d %v", floor, err)
+	}
+	probe.check(t, user.ID, store.TopicPositions)
+	probe.read = nil
+	if _, err := s.ForgetFurthest(ctx, user.ID, work.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	probe.check(t, user.ID, "")
+	if _, err := s.ForgetFurthest(ctx, user.ID, "no-such-work", 1); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown work: %v", err)
+	}
+	probe.check(t, user.ID, "")
 }
 
 func testAnnotationNotifications(t *testing.T, open OpenFunc) {
