@@ -111,18 +111,19 @@ func snapshotBody(sessions ...store.Session) map[string]any {
 }
 
 type snapshotReply struct {
-	AccountID          string           `json:"account_id"`
-	SnapshotID         string           `json:"snapshot_id"`
-	Timezone           string           `json:"timezone"`
-	Revision           string           `json:"stats_revision"`
-	Complete           bool             `json:"complete"`
-	IncompleteReason   string           `json:"incomplete_reason"`
-	ComparisonReason   string           `json:"comparison_incomplete_reason"`
-	CombinedStreakDays int              `json:"combined_streak_days"`
-	Summary            insights.Summary `json:"summary"`
-	Works              []insights.Work  `json:"works"`
-	Days               []insights.Day   `json:"days"`
-	Comparison         *comparisonReply `json:"comparison"`
+	AccountID          string            `json:"account_id"`
+	SnapshotID         string            `json:"snapshot_id"`
+	Timezone           string            `json:"timezone"`
+	Revision           string            `json:"stats_revision"`
+	Complete           bool              `json:"complete"`
+	IncompleteReason   string            `json:"incomplete_reason"`
+	ComparisonReason   string            `json:"comparison_incomplete_reason"`
+	CombinedStreakDays int               `json:"combined_streak_days"`
+	Summary            insights.Summary  `json:"summary"`
+	Works              []insights.Work   `json:"works"`
+	Days               []insights.Day    `json:"days"`
+	Comparison         *comparisonReply  `json:"comparison"`
+	FirstReadDays      map[string]string `json:"first_read_days"`
 	Overlap            struct {
 		Minutes    float64                `json:"total_active_minutes"`
 		Sessions   int                    `json:"sessions"`
@@ -263,6 +264,15 @@ func TestInsightsSnapshotMeasuredOverlapSurvivesReplayAndCompaction(t *testing.T
 			len(got.Overlap.Works) != 1 || got.Overlap.Works[0].TotalActiveMinutes != 30 ||
 			got.Overlap.Works[0].Sessions != 1 || got.Overlap.Works[0].TotalPages != 20 {
 			t.Errorf("per-work server/overlap totals: %+v", got)
+		}
+		if len(got.Works) == 1 && (got.Works[0].FirstReadDay == nil || *got.Works[0].FirstReadDay != "2024-01-02") {
+			t.Errorf("server work first read day: %v", got.Works[0].FirstReadDay)
+		}
+		if got.FirstReadDays[f.work.ID] != "2024-01-02" {
+			t.Errorf("first read days: %v", got.FirstReadDays)
+		}
+		if len(got.Overlap.Works) == 1 && got.Overlap.Works[0].FirstReadDay != nil {
+			t.Errorf("overlap work carries a first read day of its own: %s", *got.Overlap.Works[0].FirstReadDay)
 		}
 		if want := []insights.Day{{Date: "2024-01-02", Minutes: 50, Pages: 40, Sessions: 2}}; !reflect.DeepEqual(got.Days, want) {
 			t.Errorf("server days: got %+v, want %+v", got.Days, want)
@@ -542,6 +552,26 @@ func TestInsightsSnapshotStreakUnionsAllHistoryNotDisplayedDays(t *testing.T) {
 	got = readSnapshot(t, f.ts.URL, f.reader, body)
 	if got.CombinedStreakDays != 5 || got.Summary.Sessions != 0 || got.Summary.TotalActiveMinutes != 0 {
 		t.Errorf("display range must not truncate combined streak: %+v", got)
+	}
+}
+
+// A book begun months ago and read only on this device lately has no
+// server row in this month's window; its first day must still be sent.
+func TestInsightsSnapshotFirstReadDaysOutliveTheWindow(t *testing.T) {
+	f := newSnapshotFixture(t)
+	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{f.session("old")}); err != nil {
+		t.Fatal(err)
+	}
+	body := snapshotBody()
+	delete(body, "range")
+	body["from"], body["to"] = "2024-03-01", "2024-03-31"
+	body["calendar_from"], body["calendar_to"] = "2024-03-01", "2024-03-31"
+	got := readSnapshot(t, f.ts.URL, f.reader, body)
+	if len(got.Works) != 0 || got.Summary.Sessions != 0 {
+		t.Errorf("an out-of-window work must not gain a row: %+v", got)
+	}
+	if want := map[string]string{f.work.ID: "2024-01-02"}; !reflect.DeepEqual(got.FirstReadDays, want) {
+		t.Errorf("first read days: got %v, want %v", got.FirstReadDays, want)
 	}
 }
 

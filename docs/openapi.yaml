@@ -3639,6 +3639,15 @@ components:
           description: |
             Latest contributing session end in the window, or local
             midnight for a rollup whose raw timestamp is no longer kept.
+        first_read_day:
+          type: string
+          format: date
+          description: |
+            Account-local day the work was first read, over the whole
+            record regardless of the window: a raw session counts on the
+            day it ended, a rollup on the day it names, which is the day
+            in the timezone it was compacted under. Absent from overlap
+            rows and from servers that predate it.
     InsightsDay:
       type: object
       required: [date, minutes, pages, sessions]
@@ -3777,8 +3786,9 @@ components:
         works:
           type: array
           description: |
-            Same row shape as server works, but current_progression is 0
-            and eta_seconds is null because overlap has no positions.
+            Same row shape as server works, but current_progression is 0,
+            eta_seconds is null and first_read_day is absent because
+            overlap has no positions or history of its own.
           items: { $ref: "#/components/schemas/InsightsWork" }
         days:
           type: array
@@ -3853,6 +3863,15 @@ components:
                 All-history streak over server positive-activity days
                 unioned with local_active_days, ending today or yesterday.
                 Independent of aggregate and calendar bounds.
+            first_read_days:
+              type: object
+              additionalProperties: { type: string, format: date }
+              description: |
+                Work id to the day it was first read, for every work with
+                any reading, whatever the aggregate window: a work read
+                only before the window has no row in works but still has
+                a start. Same rule as first_read_day on a work row. Absent
+                from servers that predate it.
             comparison:
               allOf:
                 - { $ref: "#/components/schemas/InsightsComparison" }

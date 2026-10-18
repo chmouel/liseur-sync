@@ -950,15 +950,19 @@ The response contains:
 | `days` | Server daily rows: `date`, `minutes`, `pages`, `sessions`. Missing dates contribute zero. |
 | `overlap` | Actual included candidates: `total_active_minutes`, `sessions`, `works`, `days`. No top-level page total. |
 | `combined_streak_days` | Streak from all server positive-activity days unioned with `local_active_days`. |
+| `first_read_days` | Work id to `first_read_day` for every work with any reading, including works with no row in this window. |
 | `comparison` | Optional server `current_active_minutes` and `previous_active_minutes`, with the four echoed dates and normalized `through`. |
 | `overlap.comparison` | Optional `current_active_minutes` and `previous_active_minutes` overlap totals for the top-level comparison's echoed spans. |
 | `comparison_incomplete_reason` | Present only when comparison was requested but both comparison blocks were omitted. It never changes headline `complete`. |
 
 Work rows carry `work_id`, `sessions`, `total_active_minutes`,
 `total_pages`, `current_progression`, nullable `eta_seconds` and
-`last_read_at`, plus `title`/`author` when known. They are sorted by active
-time descending, then work id. Overlap uses the same row shape, but its
-position/ETA fields are placeholders, not values to merge.
+`last_read_at`, plus `title`/`author` when known, and `first_read_day`: the
+account-local day the work was first read over the whole record, whatever
+the window. A raw session counts on the day it ended and a compacted one on
+the day its rollup names, in the timezone it was compacted under. They are sorted by active time descending, then work id. Overlap
+uses the same row shape, but its position/ETA fields are placeholders, not
+values to merge, and it carries no `first_read_day`.
 
 For additive totals, use **server + captured local - actual overlap**.
 Do this only after checking `complete: true`, supported versions,

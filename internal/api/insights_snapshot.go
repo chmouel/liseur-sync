@@ -335,6 +335,19 @@ func (s *Server) HandleInsightsSnapshot(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	// The overlap snapshot holds only the matched sittings, so a first
+	// day read from it would be wherever the matches happen to begin.
+	for i := range overlap.Works {
+		overlap.Works[i].FirstReadDay = nil
+	}
+	// A work with no reading in the window has no row, yet a device that
+	// read it here this week still needs the day it was really begun.
+	firstReadDays := make(map[string]string)
+	for id, work := range result.ByWork {
+		if work.FirstReadDay != nil {
+			firstReadDays[id] = *work.FirstReadDay
+		}
+	}
 	overlapAnswer := map[string]any{
 		"total_active_minutes": overlap.Summary.TotalActiveMinutes, "sessions": overlap.Summary.Sessions,
 		"works": overlap.Works, "days": calendarDays(overlap.Days, calendarWin),
@@ -345,6 +358,7 @@ func (s *Server) HandleInsightsSnapshot(w http.ResponseWriter, r *http.Request) 
 		"today": today, "calendar_from": calendarFrom, "calendar_to": calendarTo,
 		"summary": result.Summary, "works": result.Works, "days": calendarDays(result.Days, calendarWin),
 		"combined_streak_days": insights.StreakDays(result.ActiveDays, loc, now),
+		"first_read_days":      firstReadDays,
 		"overlap":              overlapAnswer,
 	}
 	if !result.Complete {

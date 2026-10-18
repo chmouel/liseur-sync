@@ -31,6 +31,11 @@ type Work struct {
 	CurrentProgression float64    `json:"current_progression"`
 	ETASeconds         *float64   `json:"eta_seconds"`
 	LastReadAt         *time.Time `json:"last_read_at"`
+	// FirstReadDay is the account-local day the work was first read,
+	// over the whole record whatever window was asked for: a book begun
+	// last year was still begun last year when only this week is shown.
+	// A device whose own history starts later has no other way to know.
+	FirstReadDay *string `json:"first_read_day,omitempty"`
 }
 
 type Day struct {
@@ -93,6 +98,19 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		unknown              bool
 	}
 	paces := make(map[string]pace)
+	// Both halves of the record count, because an old sitting no longer
+	// exists one by one: it lives on as the day its rollup names, and a
+	// work read for a year would otherwise claim to have started
+	// whenever compaction happened to stop. A raw sitting is placed on
+	// the day it ended, which is the day its rollup will name once it is
+	// compacted; placing it by its start would move the date the day the
+	// sitting aged out.
+	firstDays := make(map[string]string)
+	recordFirstDay := func(workID, day string) {
+		if first, ok := firstDays[workID]; !ok || day < first {
+			firstDays[workID] = day
+		}
+	}
 	for _, w := range snap.Works {
 		out.ByWork[w.ID] = Work{WorkID: w.ID, Title: w.Title, Author: w.Author}
 	}
@@ -145,7 +163,9 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 			measured = active
 			delta = math.Max(0, ses.EndProg-ses.StartProg)
 		}
-		add(ses.WorkID, ses.EndedAt.In(loc).Format(DayFormat), active, pages, 1,
+		endedDay := ses.EndedAt.In(loc).Format(DayFormat)
+		recordFirstDay(ses.WorkID, endedDay)
+		add(ses.WorkID, endedDay, active, pages, 1,
 			ses.EndedAt, measured, delta, false)
 	}
 	for _, ru := range snap.Rollups {
@@ -153,6 +173,7 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		if err != nil {
 			return out, err
 		}
+		recordFirstDay(ru.WorkID, ru.Day)
 		recordActiveDay(ru.Day, ru.ActiveSeconds)
 		if ru.AttributionVersion != 2 && win.HoldsDay(ru.Day) {
 			out.Complete = false
@@ -184,6 +205,9 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 	// revision, regardless of Go's map iteration order.
 	for _, id := range workIDs {
 		work := out.ByWork[id]
+		if day, ok := firstDays[id]; ok {
+			work.FirstReadDay = &day
+		}
 		p := paces[id]
 		if position, ok := snap.Positions[id]; ok {
 			work.CurrentProgression = position.Progression
