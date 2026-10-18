@@ -3602,7 +3602,13 @@ components:
         total_pages:
           type: number
           description: Edition-derived or source-reported pages; not universal pagination.
-        sessions: { type: integer }
+        sessions:
+          type: integer
+          description: |
+            Sittings. Retained sessions of one work on one account-local
+            day count as one sitting while each starts less than five
+            minutes after the previous ones ended, on any device.
+            Compacted days count one per session.
         streak_days:
           type: integer
           description: |
@@ -3621,7 +3627,7 @@ components:
         work_id: { type: string }
         title: { type: string, description: Absent when unknown }
         author: { type: string, description: Absent when unknown }
-        sessions: { type: integer }
+        sessions: { type: integer, description: Sittings, counted as in InsightsSummary }
         total_active_minutes: { type: number }
         total_pages: { type: number }
         current_progression:
@@ -3655,7 +3661,7 @@ components:
         date: { type: string, format: date }
         minutes: { type: number }
         pages: { type: number }
-        sessions: { type: integer }
+        sessions: { type: integer, description: Sittings, counted as in InsightsSummary }
     InsightsCandidate:
       allOf:
         - { $ref: "#/components/schemas/SessionInput" }

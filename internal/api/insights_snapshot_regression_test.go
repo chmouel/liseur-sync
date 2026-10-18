@@ -241,6 +241,9 @@ func TestInsightsSnapshotMeasuredOverlapSurvivesReplayAndCompaction(t *testing.T
 	local.EditionSHA, remote.EditionSHA = &sha, &sha
 	local.IdleMs = 5 * 60 * 1000
 	remote.DeviceID = "another-device"
+	// An hour later, so the two stay separate sittings once compacted
+	// days count one per session.
+	remote.StartedAt, remote.EndedAt = remote.StartedAt.Add(time.Hour), remote.EndedAt.Add(time.Hour)
 	remoteActive := int64(20 * 60 * 1000)
 	remote.ActiveMs = &remoteActive
 	if err := f.st.AppendSessions(t.Context(), f.user.ID, []store.Session{local, remote}); err != nil {
@@ -495,7 +498,8 @@ func TestInsightsSnapshotWindowAndCalendarClipBothAggregates(t *testing.T) {
 			before, cross, zero, next := f.session("before"), f.session("cross"), f.session("zero"), f.session("next")
 			before.StartedAt, before.EndedAt = midnight.Add(-time.Hour), midnight.Add(-time.Minute)
 			cross.StartedAt, cross.EndedAt = midnight.Add(-10*time.Minute), midnight
-			zero.StartedAt, zero.EndedAt = midnight, midnight
+			// Far enough from the midnight one to be a sitting of its own.
+			zero.StartedAt, zero.EndedAt = midnight.Add(30*time.Minute), midnight.Add(30*time.Minute)
 			z := int64(0)
 			zero.ActiveMs = &z
 			next.StartedAt, next.EndedAt = midnight.AddDate(0, 0, 1).Add(-time.Minute), midnight.AddDate(0, 0, 1)

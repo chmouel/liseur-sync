@@ -367,7 +367,8 @@ func TestWorkTotalsIncludeAllSessions(t *testing.T) {
 	base := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
 	sessions := make([]store.Session, 10_001)
 	for i := range sessions {
-		at := base.Add(time.Duration(i) * time.Minute)
+		// Ten minutes apart, so that each one is a sitting of its own.
+		at := base.Add(time.Duration(i) * 10 * time.Minute)
 		sessions[i] = store.Session{
 			SessionID: fmt.Sprintf("s-%d", i), WorkID: ed.WorkID, DeviceID: "reader",
 			StartedAt: at, EndedAt: at.Add(time.Minute), Origin: store.OriginNative,
