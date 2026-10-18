@@ -244,7 +244,12 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	if seconds := stat.ETASeconds; seconds != nil && *seconds <= float64((1<<63-1)/int64(time.Second)) {
 		d.ETAHuman = readingDuration(asDuration(*seconds, time.Second))
 	}
-	if first, ok := firstReadingDay(snapshot, workID, loc); ok {
+	if stat.FirstReadDay != nil {
+		first, err := time.ParseInLocation(insights.DayFormat, *stat.FirstReadDay, loc)
+		if err != nil {
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
 		d.Started = first.Format("2 Jan 2006")
 		if stat.LastReadAt != nil {
 			last := stat.LastReadAt.In(loc)
@@ -319,48 +324,6 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request, a store.Auth
 	}
 	workPage(relPrefix(r.URL.Path), uiCtx(r, u), csrfFor(a), d, opRows, sessionRows, annRows).
 		Render(r.Context(), w)
-}
-
-// firstReadingDay is the day a work was first read.
-//
-// It comes from the snapshot the page already holds rather than from
-// [insights.Work], which does not carry it: that struct is serialised
-// straight onto the API, and one page wanting a date is not a reason to
-// change a wire contract. Both halves of the record are consulted,
-// because an old sitting no longer exists one by one — it lives on as
-// the day its rollup names, and a work read for a year would otherwise
-// claim to have started whenever compaction happened to stop.
-//
-// A raw sitting is placed on the account-local day it ended, which is
-// the day its rollup will name once it is compacted. Placing it by its
-// start would move the date a reader sees the day the sitting aged out.
-func firstReadingDay(snap store.StatsSnapshot, workID string, loc *time.Location) (time.Time, bool) {
-	var first time.Time
-	consider := func(day time.Time) {
-		if first.IsZero() || day.Before(first) {
-			first = day
-		}
-	}
-	midnight := func(t time.Time) time.Time {
-		d := t.In(loc)
-		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
-	}
-	for _, ses := range snap.Sessions {
-		if ses.WorkID == workID {
-			consider(midnight(ses.EndedAt))
-		}
-	}
-	for _, ru := range snap.Rollups {
-		if ru.WorkID != workID {
-			continue
-		}
-		day, err := time.Parse(insights.DayFormat, ru.Day)
-		if err != nil {
-			continue
-		}
-		consider(time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc))
-	}
-	return first, !first.IsZero()
 }
 
 // readingSpanDays is how long a book has been on the go, counted in

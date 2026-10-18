@@ -321,3 +321,36 @@ func TestAggregateReportedPagesAndUnknownPageCounts(t *testing.T) {
 	aggregateNear(t, "only reported pages are known", got.Summary.TotalPages, 7)
 	aggregateNear(t, "backwards progression does not subtract pace", got.Summary.SpeedProgPerHour, 8)
 }
+
+// TestAggregateFirstReadDayCoversTheWholeRecord keeps the day a book was
+// begun from depending on the window being looked at, or on how much of
+// the record has been compacted: a device whose own history starts later
+// reads this day to say when the book was really started.
+func TestAggregateFirstReadDayCoversTheWholeRecord(t *testing.T) {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	ended := time.Date(2026, 3, 30, 0, 30, 0, 0, time.UTC)
+	snap := store.StatsSnapshot{
+		Timezone: "UTC",
+		Works:    []store.Work{{ID: "book"}, {ID: "new"}, {ID: "unread"}},
+		Sessions: []store.Session{
+			{SessionID: "s1", WorkID: "book", StartedAt: ended.Add(-time.Hour), EndedAt: ended, Origin: store.OriginNative},
+			{SessionID: "s2", WorkID: "new", StartedAt: ended.Add(-time.Hour), EndedAt: ended, Origin: store.OriginNative},
+		},
+		Rollups: []store.SessionRollup{
+			{WorkID: "book", Day: "2025-11-02", ActiveSeconds: 600, SessionCount: 1, Timezone: "Europe/Paris", AttributionVersion: 2},
+		},
+	}
+
+	got, err := Build(snap, DayWindow(now, now, time.UTC), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for work, want := range map[string]string{"book": "2025-11-02", "new": "2026-03-30"} {
+		if day := got.ByWork[work].FirstReadDay; day == nil || *day != want {
+			t.Errorf("%s first read on %v, want %s", work, day, want)
+		}
+	}
+	if day := got.ByWork["unread"].FirstReadDay; day != nil {
+		t.Errorf("an unread work claims to have been begun on %s", *day)
+	}
+}
