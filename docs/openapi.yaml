@@ -3627,7 +3627,7 @@ components:
         work_id: { type: string }
         title: { type: string, description: Absent when unknown }
         author: { type: string, description: Absent when unknown }
-        sessions: { type: integer, description: Sittings, counted as in InsightsSummary }
+        sessions: { type: integer, description: "Sittings, counted as in InsightsSummary" }
         total_active_minutes: { type: number }
         total_pages: { type: number }
         current_progression:
@@ -3661,7 +3661,7 @@ components:
         date: { type: string, format: date }
         minutes: { type: number }
         pages: { type: number }
-        sessions: { type: integer, description: Sittings, counted as in InsightsSummary }
+        sessions: { type: integer, description: "Sittings, counted as in InsightsSummary" }
     InsightsCandidate:
       allOf:
         - { $ref: "#/components/schemas/SessionInput" }
