@@ -1053,6 +1053,14 @@ keep their original dates; they are not backfilled or reinterpreted.
 Archived dates remain fixed if the account timezone changes, so exact
 rebucketing of historical totals is unavailable.
 
+`sessions` counts sittings rather than recorded sessions. A reader
+records a new session each time it is paused, so sessions of one work
+on one account-local day are one sitting while each starts less than
+five minutes after the ones before it ended, whichever device recorded
+them. A sitting never crosses midnight, so every day is counted on its
+own and an overlap answer subtracts cleanly. Compacted days keep one
+per session, since their rollups no longer hold the times.
+
 Streaks use all positive-activity days, ending today or yesterday,
 independent of the selected window and without a ten-year cutoff.
 Rereads count time but never negative progression. Pace excludes inferred

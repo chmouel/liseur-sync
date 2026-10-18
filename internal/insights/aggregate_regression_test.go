@@ -51,7 +51,8 @@ func TestAggregateMeasuredTimeIsNotCappedToWallTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Complete || got.Summary.Sessions != 3 || len(got.Works) != 2 {
+	// The zero-length session overlaps the measured one: one sitting.
+	if !got.Complete || got.Summary.Sessions != 2 || len(got.Works) != 2 {
 		t.Fatalf("unexpected aggregate: %+v", got)
 	}
 	aggregateNear(t, "total minutes", got.Summary.TotalActiveMinutes, 90)
@@ -63,14 +64,14 @@ func TestAggregateMeasuredTimeIsNotCappedToWallTime(t *testing.T) {
 		t.Fatal("measured progression must yield an ETA")
 	}
 	aggregateNear(t, "ETA seconds", *work.ETASeconds, 9000)
-	if work.Sessions != 2 || work.Title != "Measured book" || work.Author != "Writer" ||
+	if work.Sessions != 1 || work.Title != "Measured book" || work.Author != "Writer" ||
 		work.LastReadAt == nil || !work.LastReadAt.Equal(now) {
 		t.Errorf("work metadata/count: %+v", work)
 	}
 	if got.Works[0].WorkID != "inferred" || got.Works[1].WorkID != "measured" {
 		t.Errorf("works not ordered by active time: %+v", got.Works)
 	}
-	if want := []Day{{Date: "2026-03-30", Minutes: 90, Pages: 20, Sessions: 3}}; !reflect.DeepEqual(got.Days, want) {
+	if want := []Day{{Date: "2026-03-30", Minutes: 90, Pages: 20, Sessions: 2}}; !reflect.DeepEqual(got.Days, want) {
 		t.Errorf("days: got %+v, want %+v", got.Days, want)
 	}
 }
@@ -98,8 +99,9 @@ func TestAggregateEndDayClippingMidnightAndZeroDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	aggregateNear(t, "end-day minutes, without proportional clipping", got.Summary.TotalActiveMinutes, 40)
-	if got.Summary.Sessions != 4 || len(got.Days) != 1 || got.Days[0].Date != "2026-03-29" ||
-		got.Days[0].Sessions != 4 || got.Days[0].Minutes != 40 {
+	// The zero-length session at midnight continues the one ending there.
+	if got.Summary.Sessions != 3 || len(got.Days) != 1 || got.Days[0].Date != "2026-03-29" ||
+		got.Days[0].Sessions != 3 || got.Days[0].Minutes != 40 {
 		t.Errorf("midnight/zero-duration counts: %+v", got)
 	}
 	if got.Summary.StreakDays != 4 || got.FirstActivityDay == nil || *got.FirstActivityDay != "2026-03-27" {
@@ -121,7 +123,7 @@ func TestAggregateZeroActivityDoesNotCreateAStreak(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Summary.Sessions != 2 || got.Summary.TotalActiveMinutes != 0 ||
+	if got.Summary.Sessions != 1 || got.Summary.TotalActiveMinutes != 0 ||
 		got.Summary.StreakDays != 0 || len(got.ActiveDays) != 0 || got.FirstActivityDay != nil {
 		t.Fatalf("zero-active sessions count, but are not active days: %+v", got)
 	}
@@ -352,5 +354,42 @@ func TestAggregateFirstReadDayCoversTheWholeRecord(t *testing.T) {
 	}
 	if day := got.ByWork["unread"].FirstReadDay; day != nil {
 		t.Errorf("an unread work claims to have been begun on %s", *day)
+	}
+}
+
+func TestAggregateCountsSittingsNotPauses(t *testing.T) {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	evening := time.Date(2026, 3, 29, 20, 0, 0, 0, time.UTC)
+	piece := func(id, work, device string, start time.Time, length time.Duration) store.Session {
+		return store.Session{SessionID: id, WorkID: work, DeviceID: device, StartedAt: start,
+			EndedAt: start.Add(length), Origin: store.OriginNative}
+	}
+	snap := store.StatsSnapshot{
+		Timezone: "UTC", Works: []store.Work{{ID: "book"}, {ID: "other"}},
+		Sessions: []store.Session{
+			// One evening, paused twice and picked up on the e-reader.
+			piece("a", "book", "phone", evening, 10*time.Minute),
+			piece("b", "book", "phone", evening.Add(11*time.Minute), 10*time.Minute),
+			piece("c", "book", "ereader", evening.Add(25*time.Minute), 10*time.Minute),
+			// Back after exactly the gap: a new sitting.
+			piece("d", "book", "phone", evening.Add(40*time.Minute), 10*time.Minute),
+			// Another book in between does not join or split this one.
+			piece("e", "other", "phone", evening.Add(51*time.Minute), time.Minute),
+			// Read on past midnight: the new day starts a sitting of its own.
+			piece("f", "book", "phone", evening.Add(3*time.Hour+55*time.Minute), 4*time.Minute),
+			piece("g", "book", "phone", evening.Add(4*time.Hour), 10*time.Minute),
+		},
+	}
+	got, err := Build(snap, Window{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ByWork["book"].Sessions != 4 || got.ByWork["other"].Sessions != 1 || got.Summary.Sessions != 5 {
+		t.Errorf("sittings: book=%d other=%d total=%d, want 4, 1, 5",
+			got.ByWork["book"].Sessions, got.ByWork["other"].Sessions, got.Summary.Sessions)
+	}
+	if len(got.Days) != 2 || got.Days[0].Date != "2026-03-29" || got.Days[0].Sessions != 4 ||
+		got.Days[1].Date != "2026-03-30" || got.Days[1].Sessions != 1 {
+		t.Errorf("sittings by day: %+v", got.Days)
 	}
 }

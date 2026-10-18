@@ -79,6 +79,50 @@ func Pages(ses store.Session, editions map[string]store.Edition) (float64, error
 	return delta * float64(*edition.PageCount), nil
 }
 
+// SittingGap is the pause that ends a sitting. A reader records a new
+// session whenever it is paused, so locking the screen or glancing at
+// another app would otherwise turn one evening into dozens of sittings.
+const SittingGap = 5 * time.Minute
+
+// SittingStarts reports which sessions begin a sitting: those of a work
+// that start at least SittingGap after every earlier one of that work on
+// the same account-local day has ended, whichever device recorded them.
+// A sitting never spans two days, so a day's count needs no other day and
+// a window or an overlap made of whole days counts the same sittings
+// either way. Compacted rollups keep one per session.
+func SittingStarts(sessions []store.Session, loc *time.Location) []bool {
+	type key struct{ workID, day string }
+	groups := make(map[key][]int)
+	for i, ses := range sessions {
+		k := key{ses.WorkID, ses.EndedAt.In(loc).Format(DayFormat)}
+		groups[k] = append(groups[k], i)
+	}
+	starts := make([]bool, len(sessions))
+	for _, idx := range groups {
+		sort.Slice(idx, func(a, b int) bool {
+			x, y := sessions[idx[a]], sessions[idx[b]]
+			if !x.StartedAt.Equal(y.StartedAt) {
+				return x.StartedAt.Before(y.StartedAt)
+			}
+			if !x.EndedAt.Equal(y.EndedAt) {
+				return x.EndedAt.Before(y.EndedAt)
+			}
+			return x.SessionID < y.SessionID
+		})
+		var end time.Time
+		for n, i := range idx {
+			ses := sessions[i]
+			if n == 0 || ses.StartedAt.Sub(end) >= SittingGap {
+				starts[i] = true
+				end = ses.EndedAt
+			} else if ses.EndedAt.After(end) {
+				end = ses.EndedAt
+			}
+		}
+	}
+	return starts
+}
+
 // Build aggregates one coherent store snapshot without performing further reads.
 // Legacy buckets remain visible, but cannot certify exact cross-device overlap.
 func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) {
@@ -152,7 +196,8 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		d.Pages += pages
 		d.Sessions += count
 	}
-	for _, ses := range snap.Sessions {
+	sittingStarts := SittingStarts(snap.Sessions, loc)
+	for i, ses := range snap.Sessions {
 		pages, err := Pages(ses, snap.Editions)
 		if err != nil {
 			return out, err
@@ -165,7 +210,11 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		}
 		endedDay := ses.EndedAt.In(loc).Format(DayFormat)
 		recordFirstDay(ses.WorkID, endedDay)
-		add(ses.WorkID, endedDay, active, pages, 1,
+		sitting := 0
+		if sittingStarts[i] {
+			sitting = 1
+		}
+		add(ses.WorkID, endedDay, active, pages, sitting,
 			ses.EndedAt, measured, delta, false)
 	}
 	for _, ru := range snap.Rollups {
