@@ -86,12 +86,7 @@ func (s *Service) mapping(ctx context.Context, book store.CatalogBook, item Item
 		return Mapping{}, false, err
 	}
 	m, err := Align(chapters, resources, item.Chapters, item.Duration)
-	allowed := len(occurrences(chapterNumbers(chapters))) == 0
-	audioNumbered := false
-	for _, c := range item.Chapters {
-		audioNumbered = audioNumbered || chapterNumber(c.Title) > 0
-	}
-	allowed = errors.Is(err, ErrNoAlignment) && (allowed || !audioNumbered) && finite(item.Duration) && item.Duration > 0
+	allowed := errors.Is(err, ErrNoAlignment) && finite(item.Duration) && item.Duration > 0
 	if linear {
 		if !allowed {
 			return Mapping{}, false, store.ErrInvalidInput
@@ -99,14 +94,6 @@ func (s *Service) mapping(ctx context.Context, book store.CatalogBook, item Item
 		return LinearMapping(resources, item.Duration), allowed, nil
 	}
 	return m, allowed, err
-}
-
-func chapterNumbers(chapters []BookChapter) []int {
-	nums := make([]int, len(chapters))
-	for i, c := range chapters {
-		nums[i] = chapterNumber(c.Title)
-	}
-	return nums
 }
 
 func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {

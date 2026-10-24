@@ -326,7 +326,7 @@ templ audiobookItemCard(prefix string, csrf string, v audiobookPageView, row aud
 					} else if row.LinearAllowed {
 						<div class="abs-decision abs-decision-linear">
 							<div class="abs-decision-text">
-								<p>No matching numbered chapters were found. If this recording narrates the whole ebook, positions can follow its overall percentage.</p>
+								<p>Chapters could not be aligned automatically. If this recording narrates the whole ebook, positions can follow its overall percentage.</p>
 								<p class="muted">Preview: 10%, 25%, 50%, 75% and 90% of the audio land at the same percentages of the ebook.</p>
 							</div>
 							<form method="post" action={ prefix + "audiobookshelf" }>
