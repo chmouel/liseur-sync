@@ -1,100 +1,353 @@
 package webui
 
-import "github.com/chmouel/liseur-sync/internal/store"
+import (
+	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
+	"github.com/chmouel/liseur-sync/internal/store"
+)
 
 templ audiobookPage(prefix string, u userCtx, csrf string, v audiobookPageView) {
- @layout("Audiobookshelf", prefix, u, csrf, audiobookBody(prefix, csrf, v))
+	@layout("Audiobookshelf", prefix, u, csrf, audiobookBody(prefix, csrf, v))
 }
 
 templ audiobookBody(prefix string, csrf string, v audiobookPageView) {
- <h1>Audiobookshelf</h1>
- <p class="muted">Pick up the same book where you left off, reading or listening.</p>
- if len(v.Items) == 0 {
-  <p>No audiobooks are available to the configured Audiobookshelf account.</p>
- }
- for _, row := range v.Items {
-  <section class="card">
-   <h2>{ row.Item.Title }</h2>
-   <p>{ audiobookState(row.Link) }</p>
-   if row.Link != nil {
-    if row.BookTitle != "" {
-     <p>Ebook: <a href={ prefix + "books/" + row.Link.BookID }>{ row.BookTitle }</a></p>
-    }
-    if len(row.Mapping.Segments) > 0 {
-     <p>{ audioCoverage(row.Mapping) }
-      if row.Mapping.FullNarrative {
- <span> · Whole narrative</span>
- } else {
- <span> · Partial recording; listening cannot finish the ebook</span>
- }
-     </p>
-     <details>
-      <summary>Chapter alignment</summary>
-      <ol>
-       for _, segment := range row.Mapping.Segments {
-        <li>{ segment.Label }{ " · " + audioClock(segment.AudioStart) + "–" + audioClock(segment.AudioEnd) }
-         if segment.Approx {
- <span class="muted"> · Approximate ebook position</span>
- }
-        </li>
-       }
-      </ol>
-     </details>
-    }
-    if row.Link.State == store.AudiobookLinkNeedsMapping {
-     if len(row.Mapping.Segments) > 0 {
-      <form method="post" action={ prefix + "audiobookshelf" }>
-       <input type="hidden" name="csrf" value={ csrf }/>
-       <input type="hidden" name="item_id" value={ row.Item.ID }/>
-       <input type="hidden" name="generation" value={ row.Link.Generation }/>
-       <button type="submit" name="action" value="confirm">Accept this alignment</button>
-      </form>
-     } else if row.LinearAllowed {
-      <p>No matching numbered chapters were found. If this recording narrates the whole ebook, positions can follow its overall percentage.</p>
-      <p class="muted">Preview: 10%, 25%, 50%, 75% and 90% of the audio land at the same percentages of the ebook.</p>
-      <form method="post" action={ prefix + "audiobookshelf" }>
-       <input type="hidden" name="csrf" value={ csrf }/>
-       <input type="hidden" name="item_id" value={ row.Item.ID }/>
-       <input type="hidden" name="generation" value={ row.Link.Generation }/>
-       <button type="submit" name="action" value="linear">This recording narrates the whole book</button>
-      </form>
-     } else {
-      <p>These chapters cannot be aligned safely. Choose another ebook. Editing individual chapter pairs is not available.</p>
-     }
-    }
-    <form method="post" action={ prefix + "audiobookshelf" }>
-     <input type="hidden" name="csrf" value={ csrf }/>
-     <input type="hidden" name="item_id" value={ row.Item.ID }/>
-     <input type="hidden" name="generation" value={ row.Link.Generation }/>
-     <button class="link" type="submit" name="action" value="unlink">Unlink ebook</button>
-    </form>
-   } else {
-    <form method="get" action={ prefix + "audiobookshelf" }>
-     <input type="hidden" name="item_id" value={ row.Item.ID }/>
-     <label>Find an ebook <input type="search" name="q" maxlength="256" required/></label>
-     <button type="submit">Search</button>
-    </form>
-    if v.ItemID == row.Item.ID && v.Query != "" {
-     if len(v.Choices) == 0 {
- <p>No accessible ebook matches that search.</p>
- }
-     if v.Truncated {
- <p>Narrow the title to see all matches.</p>
- }
-     if len(v.Choices) > 0 {
-      <form method="post" action={ prefix + "audiobookshelf" }>
-       <input type="hidden" name="csrf" value={ csrf }/>
-       <input type="hidden" name="item_id" value={ row.Item.ID }/>
-       <label>Ebook <select name="book_id">
-        for _, book := range v.Choices {
- <option value={ book.ID }>{ book.Title }</option>
- }
-       </select></label>
-       <button type="submit" name="action" value="link">Link ebook</button>
-      </form>
-     }
-    }
-   }
-  </section>
- }
+	<header class="abs-head">
+		<div class="abs-head-copy">
+			<h1>Audiobookshelf</h1>
+			<p class="muted">Pick up the same book where you left off, reading or listening.</p>
+		</div>
+	</header>
+	if len(v.Items) == 0 {
+		<section class="card empty-state abs-empty">
+			<div class="abs-empty-glyph" aria-hidden="true">@uiIcon("Audiobookshelf")</div>
+			<h2>No audiobooks found</h2>
+			<p>No audiobooks are available to the configured Audiobookshelf account.</p>
+		</section>
+	} else {
+		<div class="shelfbar abs-shelfbar">
+			<div class="shelftabs">
+				<nav class="tabs" aria-label="Filter audiobooks">
+					for _, tab := range v.Tabs {
+						if tab.Active {
+							<a class="on" href={ prefix + tab.URL } aria-current="page">
+								<span>{ tab.Label }</span>
+								<span class="abs-tab-count">{ i2s(tab.Count) }</span>
+							</a>
+						} else {
+							<a href={ prefix + tab.URL }>
+								<span>{ tab.Label }</span>
+								<span class="abs-tab-count">{ i2s(tab.Count) }</span>
+							</a>
+						}
+					}
+				</nav>
+			</div>
+		</div>
+		if len(v.Groups) == 0 {
+			<section class="card empty-state abs-empty">
+				<p>No audiobooks match this filter.</p>
+				<a class="btn" href={ prefix + "audiobookshelf" }>Show all audiobooks</a>
+			</section>
+		}
+		for _, g := range v.Groups {
+			<section class="abs-group" aria-labelledby={ "abs-group-" + g.Key }>
+				<header class="abs-group-head">
+					<div class="abs-group-title">
+						<h2 id={ "abs-group-" + g.Key }>{ g.Title }</h2>
+						<span class="abs-group-count">{ i2s(len(g.Items)) }</span>
+					</div>
+					<p class="muted">{ g.Hint }</p>
+				</header>
+				<div class="abs-list">
+					for _, row := range g.Items {
+						@audiobookItemCard(prefix, csrf, v, row)
+					}
+				</div>
+			</section>
+		}
+	}
 }
+
+templ audiobookItemCard(prefix string, csrf string, v audiobookPageView, row audiobookshelf.ItemView) {
+	<section class={ audiobookCardClass(row.Link) } id={ "item-" + row.Item.ID }>
+		<div class="abs-card-top">
+			<span class={ audiobookStateClass(row.Link) }>{ audiobookState(row.Link) }</span>
+			if row.Link != nil && len(row.Mapping.Segments) > 0 {
+				<div class="abs-coverage-pills">
+					if row.Mapping.FullNarrative {
+						<span class="abs-pill abs-pill-full">Whole narrative</span>
+					} else {
+						<span class="abs-pill abs-pill-partial">Partial recording; listening cannot finish the ebook</span>
+					}
+				</div>
+			}
+		</div>
+		<div class="abs-bridge">
+			<div class="abs-edition abs-edition-audio">
+				<div class="abs-audio-disc" aria-hidden="true">
+					<svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5">
+						<circle cx="24" cy="24" r="20" stroke-opacity="0.35"/>
+						<circle cx="24" cy="24" r="14" stroke-opacity="0.55"/>
+						<circle cx="24" cy="24" r="4.5" fill="currentColor" stroke="none"/>
+						<path d="M15 24a9 9 0 0 1 18 0" stroke-linecap="round"/>
+					</svg>
+				</div>
+				<div class="abs-edition-body">
+					<div class="abs-edition-top">
+						<span class="abs-edition-kind">Audiobook</span>
+						if audioDuration(row.Item.Duration) != "" || len(row.Item.Chapters) > 0 {
+							<span class="abs-meta">
+								if audioDuration(row.Item.Duration) != "" {
+									<span>{ audioDuration(row.Item.Duration) }</span>
+								}
+								if len(row.Item.Chapters) > 0 {
+									<span>{ plural(len(row.Item.Chapters), "chapter") }</span>
+								}
+							</span>
+						}
+					</div>
+					<h3 class="abs-title">{ row.Item.Title }</h3>
+					if row.Item.Subtitle != "" {
+						<p class="abs-subtitle">{ row.Item.Subtitle }</p>
+					}
+					if len(row.Item.Authors) > 0 {
+						<p class="abs-byline">{ audioAuthors(row.Item.Authors) }</p>
+					}
+					if row.RemoteProgress != nil {
+						<div class="abs-progress-row">
+							@progressBar("prog abs-prog abs-prog-audio", audioProgressFraction(row.RemoteProgress))
+							<span class="abs-progress-label">{ audioListeningSummary(row.RemoteProgress) }</span>
+						</div>
+					}
+				</div>
+			</div>
+			if row.Link != nil {
+				<div class="abs-connector" aria-hidden="true">
+					<span class="abs-connector-badge">
+						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M7 10l-3-3 3-3"/>
+							<path d="M4 7h13a3 3 0 0 1 3 3v1"/>
+							<path d="M17 14l3 3-3 3"/>
+							<path d="M20 17H7a3 3 0 0 1-3-3v-1"/>
+						</svg>
+					</span>
+				</div>
+				<div class="abs-edition abs-edition-book">
+					if row.Link.BookID != "" && row.BookPresent {
+						<a class="abs-book-cover" href={ prefix + "books/" + row.Link.BookID } aria-label={ orPlaceholder(row.BookTitle) }>
+							<img
+								src={ prefix + "books/" + row.Link.BookID + "/cover?size=thumbnail" }
+								alt=""
+								loading="lazy"
+								decoding="async"
+								width="120"
+								height="180"
+							/>
+						</a>
+					} else {
+						<div class="abs-book-cover abs-book-cover-placeholder" aria-hidden="true">
+							<svg viewBox="0 0 36 48" width="30" height="40" fill="none" stroke="currentColor" stroke-width="1.5">
+								<rect x="6" y="5" width="24" height="38" rx="2.5" stroke-opacity="0.45"/>
+								<path d="M11 5v38" stroke-opacity="0.35"/>
+								<path d="M15 15h10M15 20h7" stroke-linecap="round" stroke-opacity="0.55"/>
+							</svg>
+						</div>
+					}
+					<div class="abs-edition-body">
+						<div class="abs-edition-top">
+							<span class="abs-edition-kind">Ebook in library</span>
+							if row.Link.BookID != "" && row.BookCanRead {
+								<a class="abs-read-pill" href={ prefix + "books/" + row.Link.BookID + "/read" }>Open in reader</a>
+							}
+						</div>
+						if row.BookTitle != "" {
+							<h3 class="abs-title">
+								if row.BookPresent && row.Link.BookID != "" {
+									<a href={ prefix + "books/" + row.Link.BookID }>{ row.BookTitle }</a>
+								} else {
+									{ row.BookTitle }
+								}
+							</h3>
+						} else if row.Link.BookID != "" {
+							<h3 class="abs-title">
+								if row.BookPresent {
+									<a href={ prefix + "books/" + row.Link.BookID }>Linked ebook</a>
+								} else {
+									Linked ebook
+								}
+							</h3>
+						} else {
+							<h3 class="abs-title abs-title-muted">Linked ebook</h3>
+						}
+						if row.BookSubtitle != "" {
+							<p class="abs-subtitle">{ row.BookSubtitle }</p>
+						}
+						if len(row.BookAuthors) > 0 {
+							<p class="abs-byline">{ audioAuthors(row.BookAuthors) }</p>
+						}
+						if row.LocalProgression != nil {
+							<div class="abs-progress-row">
+								@progressBar("prog abs-prog abs-prog-book", *row.LocalProgression)
+								<span class="abs-progress-label">{ pctProgression(*row.LocalProgression) + " read" }</span>
+							</div>
+						}
+					</div>
+				</div>
+			} else {
+				<div class="abs-connector abs-connector-unmatched" aria-hidden="true">
+					<span class="abs-connector-badge">
+						<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
+							<path d="M10 4v12M4 10h12"/>
+						</svg>
+					</span>
+				</div>
+				<div class="abs-matcher abs-matcher-slot">
+					<form class="abs-search-form" method="get" action={ prefix + "audiobookshelf" }>
+						<input type="hidden" name="item_id" value={ row.Item.ID }/>
+						if v.Filter != "" && v.Filter != "all" {
+							<input type="hidden" name="state" value={ v.Filter }/>
+						}
+						<label class="abs-search-label">
+							<span>Find an ebook in your library</span>
+							<input type="search" name="q" maxlength="256" required value={ audiobookQueryFor(v, row.Item.ID) } placeholder="Search by title or author…"/>
+						</label>
+						<button type="submit">Search</button>
+					</form>
+					if v.ItemID == row.Item.ID && v.Query != "" {
+						<div class="abs-choices">
+							if len(v.Choices) == 0 {
+								<p class="muted">No accessible ebook matches that search.</p>
+							}
+							if v.Truncated {
+								<p class="muted">Narrow the title to see all matches.</p>
+							}
+							if len(v.Choices) > 0 {
+								<div class="abs-choice-grid">
+									for _, book := range v.Choices {
+										<div class="abs-choice-card">
+											<a class="abs-choice-cover" href={ prefix + "books/" + book.ID } aria-label={ orPlaceholder(book.Title) }>
+												<img
+													src={ prefix + "books/" + book.ID + "/cover?size=thumbnail" }
+													alt=""
+													loading="lazy"
+													decoding="async"
+													width="80"
+													height="120"
+												/>
+											</a>
+											<div class="abs-choice-info">
+												<a class="abs-choice-title" href={ prefix + "books/" + book.ID }>{ book.Title }</a>
+												if book.Subtitle != "" {
+													<span class="abs-choice-sub">{ book.Subtitle }</span>
+												}
+												if book.Author != "" {
+													<span class="abs-choice-author">{ book.Author }</span>
+												}
+											</div>
+											<form method="post" action={ prefix + "audiobookshelf" }>
+												<input type="hidden" name="csrf" value={ csrf }/>
+												<input type="hidden" name="item_id" value={ row.Item.ID }/>
+												<input type="hidden" name="book_id" value={ book.ID }/>
+												<button class="primary abs-btn-sm" type="submit" name="action" value="link">Link ebook</button>
+											</form>
+										</div>
+									}
+								</div>
+							}
+						</div>
+					}
+				</div>
+			}
+		</div>
+		if row.Link != nil {
+			if len(row.Mapping.Segments) > 0 {
+				<div class="abs-ruler">
+					<div class="abs-ruler-head">
+						<span class="abs-ruler-title">Narrative span in the ebook</span>
+						<span class="abs-ruler-range">{ audioCoverage(row.Mapping) }</span>
+					</div>
+					<div class="abs-ruler-track" aria-hidden="true">
+						<span class={ "abs-ruler-fill " + audioCoverageGridClass(row.Mapping) }></span>
+					</div>
+					<div class="abs-ruler-scale" aria-hidden="true">
+						<span>0%</span>
+						<span>25%</span>
+						<span>50%</span>
+						<span>75%</span>
+						<span>100%</span>
+					</div>
+				</div>
+				<details class="abs-cuesheet">
+					<summary>
+						<span>Chapter alignment</span>
+						<span class="abs-cuesheet-meta">{ plural(len(row.Mapping.Segments), "paired chapter") }</span>
+					</summary>
+					<div class="abs-cuesheet-body">
+						<table class="abs-cuetable">
+							<thead>
+								<tr>
+									<th scope="col">Chapter</th>
+									<th scope="col">Audio time</th>
+									<th scope="col">Ebook span</th>
+									<th scope="col">Placement</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, segment := range row.Mapping.Segments {
+									<tr>
+										<td class="abs-cue-label">{ segment.Label }</td>
+										<td class="abs-cue-time">{ audioClock(segment.AudioStart) + "–" + audioClock(segment.AudioEnd) }</td>
+										<td class="abs-cue-span">{ audioSegmentBookSpan(segment) }</td>
+										<td class="abs-cue-note">
+											if segment.Approx {
+												<span class="abs-approx-tag">Approximate ebook position</span>
+											} else {
+												<span class="muted">Exact chapter start</span>
+											}
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</details>
+			}
+			<div class="abs-card-foot">
+				if row.Link.State == store.AudiobookLinkNeedsMapping {
+					if len(row.Mapping.Segments) > 0 {
+						<div class="abs-decision">
+							<p class="abs-decision-copy">Confirm that these chapters line up before positions sync between the audiobook and ebook.</p>
+							<form method="post" action={ prefix + "audiobookshelf" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<input type="hidden" name="item_id" value={ row.Item.ID }/>
+								<input type="hidden" name="generation" value={ row.Link.Generation }/>
+								<button class="primary" type="submit" name="action" value="confirm">Accept this alignment</button>
+							</form>
+						</div>
+					} else if row.LinearAllowed {
+						<div class="abs-decision abs-decision-linear">
+							<div class="abs-decision-text">
+								<p>No matching numbered chapters were found. If this recording narrates the whole ebook, positions can follow its overall percentage.</p>
+								<p class="muted">Preview: 10%, 25%, 50%, 75% and 90% of the audio land at the same percentages of the ebook.</p>
+							</div>
+							<form method="post" action={ prefix + "audiobookshelf" }>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<input type="hidden" name="item_id" value={ row.Item.ID }/>
+								<input type="hidden" name="generation" value={ row.Link.Generation }/>
+								<button class="primary" type="submit" name="action" value="linear">This recording narrates the whole book</button>
+							</form>
+						</div>
+					} else {
+						<p class="abs-unalignable">These chapters cannot be aligned safely. Choose another ebook. Editing individual chapter pairs is not available.</p>
+					}
+				}
+				<form class="abs-unlink-form" method="post" action={ prefix + "audiobookshelf" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input type="hidden" name="item_id" value={ row.Item.ID }/>
+					<input type="hidden" name="generation" value={ row.Link.Generation }/>
+					<button class="link abs-unlink-btn" type="submit" name="action" value="unlink">Unlink ebook</button>
+				</form>
+			</div>
+		}
+	</section>
+}
+
