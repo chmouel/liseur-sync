@@ -87,6 +87,9 @@ func Align(book []BookChapter, resources []Resource, audio []Chapter, duration f
 		bs := bookByNum[n]
 		switch {
 		case len(bs) == 0:
+			if m, ok := alignWithSplits(book, bookNums, resources, audio, audioNums, duration); ok {
+				return m, nil
+			}
 			return Mapping{}, fmt.Errorf("%w: audio chapter %d is not in the book", ErrNoAlignment, n)
 		case len(as) != len(bs):
 			return Mapping{}, fmt.Errorf("%w: chapter %d appears %d times in the audio and %d in the book",
@@ -381,4 +384,222 @@ func validateAudio(audio []Chapter, duration float64) error {
 		}
 	}
 	return nil
+}
+
+// alignWithSplits aligns a sequential numbered book (1..N) with a sequential
+// numbered audiobook (1..M, M > N) when one or more long book chapters were
+// split across two consecutive audio tracks and/or trailing back-matter or
+// credit tracks were given sequential numbers at the end of the audiobook.
+func alignWithSplits(book []BookChapter, bookNums []int, resources []Resource, audio []Chapter, audioNums []int, duration float64) (Mapping, bool) {
+	var aIdx, bIdx []int
+	for i, n := range audioNums {
+		if n > 0 {
+			aIdx = append(aIdx, i)
+		}
+	}
+	for i, n := range bookNums {
+		if n > 0 {
+			bIdx = append(bIdx, i)
+		}
+	}
+	nBook, nAudio := len(bIdx), len(aIdx)
+	if nBook < 10 || nAudio <= nBook || nAudio-nBook > 4 {
+		return Mapping{}, false
+	}
+	for i, idx := range aIdx {
+		if audioNums[idx] != i+1 || (i > 0 && idx != aIdx[i-1]+1) {
+			return Mapping{}, false
+		}
+	}
+	totalBook := 0.0
+	for j, idx := range bIdx {
+		b := book[idx]
+		if bookNums[idx] != j+1 || !finite(b.Start) || !finite(b.End) || b.Start < 0 || b.End > 1 || !(b.Start < b.End) {
+			return Mapping{}, false
+		}
+		if j > 0 && !(book[bIdx[j-1]].Start < b.Start) {
+			return Mapping{}, false
+		}
+		totalBook += b.End - b.Start
+	}
+	if totalBook <= 0 {
+		return Mapping{}, false
+	}
+	wb := make([]float64, nBook)
+	for j, idx := range bIdx {
+		wb[j] = (book[idx].End - book[idx].Start) / totalBook
+	}
+	backMatterShare := math.Max(0, 1.0-book[bIdx[nBook-1]].End)
+	hasTrailingUnnumberedBook := bIdx[nBook-1] < len(book)-1
+
+	type step struct {
+		aCount int // 1 or 2 audio tracks paired with book chapter j
+	}
+	bestScore := math.Inf(1)
+	var bestSteps []step
+
+	maxExtra := nAudio - nBook
+	for trailing := 0; trailing <= maxExtra; trailing++ {
+		mUsed := nAudio - trailing
+		splits := mUsed - nBook
+		if trailing > 0 {
+			tailDur := audio[aIdx[nAudio-1]].End - audio[aIdx[mUsed]].Start
+			tailShare := tailDur / duration
+			maxTailShare := backMatterShare + 0.03
+			if !hasTrailingUnnumberedBook && backMatterShare < 0.005 {
+				maxTailShare = 0.025
+			}
+			if tailShare > maxTailShare {
+				continue
+			}
+		}
+		totalAudio := 0.0
+		for i := 0; i < mUsed; i++ {
+			c := audio[aIdx[i]]
+			totalAudio += c.End - c.Start
+		}
+		if totalAudio <= 0 {
+			continue
+		}
+		wa := make([]float64, mUsed)
+		for i := 0; i < mUsed; i++ {
+			c := audio[aIdx[i]]
+			wa[i] = (c.End - c.Start) / totalAudio
+		}
+
+		const inf = 1e9
+		dp := make([][]float64, nBook+1)
+		from := make([][]int, nBook+1)
+		for j := range dp {
+			dp[j] = make([]float64, splits+1)
+			from[j] = make([]int, splits+1)
+			for s := range dp[j] {
+				dp[j][s] = inf
+			}
+		}
+		dp[0][0] = 0
+
+		for j := 0; j < nBook; j++ {
+			for s := 0; s <= splits; s++ {
+				if dp[j][s] >= inf {
+					continue
+				}
+				i := j + s
+				if i >= mUsed {
+					continue
+				}
+				// 1-to-1 step: audio[aIdx[i]] <-> book[bIdx[j]]
+				err1 := math.Abs(wa[i] - wb[j])
+				if v := dp[j][s] + err1; v < dp[j+1][s] {
+					dp[j+1][s] = v
+					from[j+1][s] = 1
+				}
+				// 2-to-1 split step: audio[aIdx[i..i+1]] <-> book[bIdx[j]]
+				if s+1 <= splits && i+1 < mUsed {
+					wSum := wa[i] + wa[i+1]
+					err2 := math.Abs(wSum - wb[j])
+					if wa[i] < 0.85*wb[j] && wa[i+1] < 0.85*wb[j] &&
+						err2 < math.Abs(wa[i]-wb[j])*0.65 && err2 < math.Abs(wa[i+1]-wb[j])*0.65 {
+						if v := dp[j][s] + err2; v < dp[j+1][s+1] {
+							dp[j+1][s+1] = v
+							from[j+1][s+1] = 2
+						}
+					}
+				}
+			}
+		}
+
+		score := dp[nBook][splits]
+		if score >= inf || score > 0.25 {
+			continue
+		}
+		if trailing > 0 {
+			tailDur := audio[aIdx[nAudio-1]].End - audio[aIdx[mUsed]].Start
+			score += math.Abs((tailDur/duration)-backMatterShare) * 0.5
+		}
+		if score < bestScore {
+			bestScore = score
+			steps := make([]step, nBook)
+			s := splits
+			for j := nBook; j > 0; j-- {
+				cnt := from[j][s]
+				steps[j-1] = step{aCount: cnt}
+				if cnt == 2 {
+					s--
+				}
+			}
+			bestSteps = steps
+		}
+	}
+
+	if bestSteps == nil {
+		return Mapping{}, false
+	}
+
+	m := Mapping{
+		Duration:      duration,
+		Resources:     resources,
+		CoversFirst:   true,
+		CoversLast:    true,
+		FullNarrative: true,
+	}
+	ai := 0
+	for j, st := range bestSteps {
+		b := book[bIdx[j]]
+		nextBookStart := b.End
+		if j+1 < nBook {
+			nextBookStart = book[bIdx[j+1]].Start
+		}
+		if st.aCount == 1 {
+			a := audio[aIdx[ai]]
+			aEnd := a.End
+			if j+1 < nBook {
+				aEnd = audio[aIdx[ai+1]].Start
+			}
+			m.Segments = append(m.Segments, Segment{
+				Label:      a.Title,
+				AudioStart: a.Start,
+				AudioEnd:   aEnd,
+				BookStart:  b.Start,
+				BookEnd:    nextBookStart,
+				Href:       b.Href,
+				Fragment:   b.Fragment,
+				Approx:     b.Approx,
+			})
+			ai++
+		} else {
+			a1 := audio[aIdx[ai]]
+			a2 := audio[aIdx[ai+1]]
+			aEnd := a2.End
+			if j+1 < nBook {
+				aEnd = audio[aIdx[ai+2]].Start
+			}
+			d1 := a1.End - a1.Start
+			d2 := aEnd - a2.Start
+			bMid := b.Start + (d1/(d1+d2))*(nextBookStart-b.Start)
+			m.Segments = append(m.Segments,
+				Segment{
+					Label:      a1.Title,
+					AudioStart: a1.Start,
+					AudioEnd:   a2.Start,
+					BookStart:  b.Start,
+					BookEnd:    bMid,
+					Href:       b.Href,
+					Fragment:   b.Fragment,
+					Approx:     true,
+				},
+				Segment{
+					Label:      a2.Title,
+					AudioStart: a2.Start,
+					AudioEnd:   aEnd,
+					BookStart:  bMid,
+					BookEnd:    nextBookStart,
+					Href:       b.Href,
+					Approx:     true,
+				},
+			)
+			ai += 2
+		}
+	}
+	return m, true
 }

@@ -305,4 +305,37 @@ func TestPublicationPositionsUseStoredLengths(t *testing.T) {
 
 }
 
+func TestEPUB3FallsBackToNCXWhenNavDocumentMissing(t *testing.T) {
+	pkg := `<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Hybrid</dc:title><dc:identifier id="uid">urn:uuid:test</dc:identifier><dc:language>fr</dc:language></metadata>
+<manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+<item id="one" href="one.xhtml" media-type="application/xhtml+xml"/>
+<item id="two" href="two.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine toc="ncx"><itemref idref="one"/><itemref idref="two"/></spine></package>`
+	ncx := `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+<head><meta name="dtb:uid" content="urn:uuid:test"/></head>
+<docTitle><text>Hybrid</text></docTitle>
+<navMap>
+<navPoint id="n1" playOrder="1"><navLabel><text>CHAPTER 37</text></navLabel><content src="one.xhtml"/></navPoint>
+<navPoint id="n2" playOrder="2"><navLabel><text>CHAPTER 38</text></navLabel><content src="two.xhtml"/></navPoint>
+</navMap></ncx>`
+	entries := []zipEntry{
+		validEntries()[0],
+		validEntries()[1],
+		{name: "OPS/book.opf", body: pkg, method: zip.Deflate},
+		{name: "OPS/toc.ncx", body: ncx, method: zip.Deflate},
+		{name: "OPS/one.xhtml", body: `<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>First</body></html>`, method: zip.Deflate},
+		{name: "OPS/two.xhtml", body: `<html xmlns="http://www.w3.org/1999/xhtml"><head/><body>Second</body></html>`, method: zip.Deflate},
+	}
+	data := makeEPUB(t, entries...)
+	p, err := OpenPublication(t.Context(), bytes.NewReader(data), int64(len(data)), DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if len(p.Manifest.TableOfContents) != 2 || p.Manifest.TableOfContents[0].Title != "CHAPTER 37" || p.Manifest.TableOfContents[0].Href.String() != "OPS/one.xhtml" {
+		t.Fatalf("toc = %+v", p.Manifest.TableOfContents)
+	}
+}
+
 var _ io.ReaderAt = guardedArchive{}

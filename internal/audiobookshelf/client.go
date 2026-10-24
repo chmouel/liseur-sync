@@ -141,16 +141,26 @@ type Chapter struct {
 	Title string  `json:"title"`
 }
 
+// AudioFile is one underlying audio file of an audiobook item.
+type AudioFile struct {
+	Ino      string
+	Duration float64
+	MimeType string
+	Size     int64
+	Ext      string
+}
+
 // Item is one library item with what mapping and matching need.
 type Item struct {
-	ID        string
-	MediaType string
-	Title     string
-	Subtitle  string
-	Authors   []string
-	Duration  float64
-	Chapters  []Chapter
-	UpdatedAt int64
+	ID         string
+	MediaType  string
+	Title      string
+	Subtitle   string
+	Authors    []string
+	Duration   float64
+	Chapters   []Chapter
+	AudioFiles []AudioFile
+	UpdatedAt  int64
 }
 
 type itemWire struct {
@@ -158,8 +168,17 @@ type itemWire struct {
 	MediaType string `json:"mediaType"`
 	UpdatedAt int64  `json:"updatedAt"`
 	Media     struct {
-		Duration float64   `json:"duration"`
-		Chapters []Chapter `json:"chapters"`
+		Duration   float64   `json:"duration"`
+		Chapters   []Chapter `json:"chapters"`
+		AudioFiles []struct {
+			Ino      string  `json:"ino"`
+			Duration float64 `json:"duration"`
+			MimeType string  `json:"mimeType"`
+			Metadata struct {
+				Size int64  `json:"size"`
+				Ext  string `json:"ext"`
+			} `json:"metadata"`
+		} `json:"audioFiles"`
 		Metadata struct {
 			Title      string `json:"title"`
 			Subtitle   string `json:"subtitle"`
@@ -176,6 +195,17 @@ func (w itemWire) item() Item {
 		ID: w.ID, MediaType: w.MediaType, UpdatedAt: w.UpdatedAt,
 		Title: w.Media.Metadata.Title, Subtitle: w.Media.Metadata.Subtitle,
 		Duration: w.Media.Duration, Chapters: w.Media.Chapters,
+	}
+	for _, af := range w.Media.AudioFiles {
+		if af.Ino != "" {
+			it.AudioFiles = append(it.AudioFiles, AudioFile{
+				Ino:      af.Ino,
+				Duration: af.Duration,
+				MimeType: af.MimeType,
+				Size:     af.Metadata.Size,
+				Ext:      af.Metadata.Ext,
+			})
+		}
 	}
 	for _, a := range w.Media.Metadata.Authors {
 		if a.Name != "" {
@@ -352,6 +382,43 @@ func (c *Client) ItemSessions(ctx context.Context, itemID string, page, perPage 
 	err := c.getJSON(ctx, "/api/me/item/listening-sessions/"+url.PathEscape(itemID)+
 		"?itemsPerPage="+strconv.Itoa(perPage)+"&page="+strconv.Itoa(page), &p)
 	return p, err
+}
+
+// FileRange reads an inclusive byte range [start, end] of an item's audio file.
+func (c *Client) FileRange(ctx context.Context, itemID, ino string, start, end int64) ([]byte, error) {
+	if start < 0 || end < start || end-start+1 > maxResponseBytes {
+		return nil, fmt.Errorf("audiobookshelf: invalid byte range %d..%d", start, end)
+	}
+	path := "/api/items/" + url.PathEscape(itemID) + "/file/" + url.PathEscape(ino)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	req.Header.Set("User-Agent", "liseur-sync")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("audiobookshelf: GET %s: %w", path, unwrapURLError(err))
+	}
+	defer resp.Body.Close()
+	want := end - start + 1
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, want+1))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+		return nil, ErrUnauthorized
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, ErrNotFound
+	case resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK:
+		return nil, fmt.Errorf("audiobookshelf: GET %s: server answered %s", path, cleanText(resp.Status))
+	}
+	if readErr != nil {
+		return nil, fmt.Errorf("audiobookshelf: GET %s: %w", path, readErr)
+	}
+	if resp.StatusCode == http.StatusOK && int64(len(raw)) > want {
+		raw = raw[:want]
+	}
+	return raw, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, into any) error {

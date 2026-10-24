@@ -89,7 +89,7 @@ func (s *Service) Pass(ctx context.Context) (Report, error) {
 func progressMark(p Progress) string { return fmt.Sprintf("%.0f:%t", p.CurrentTime, p.IsFinished) }
 func peerPrefix(peer string) string  { return "abs-" + peer[:8] + ":" }
 
-func (s *Service) exchange(ctx context.Context, userID string, l *store.AudiobookLink, m Mapping, local store.Op, remote Progress, have bool) (string, error) {
+func (s *Service) exchange(ctx context.Context, userID string, l *store.AudiobookLink, item Item, m Mapping, local store.Op, remote Progress, have bool) (string, error) {
 	if s.Cfg.ActiveDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -s.Cfg.ActiveDays)
 		if local.ClientTS.Before(cutoff) && (!have || remote.LastUpdate < cutoff.UnixMilli()) {
@@ -132,6 +132,9 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		}
 		if err := s.ready(ctx, userID, *l, local.Seq); err != nil {
 			return "", err
+		}
+		if !remote.IsFinished && remoteTime > seg.AudioStart {
+			p = s.refinePositionWithSTT(ctx, userID, *l, item, m, remoteTime, p, seg)
 		}
 		loc, err := m.LocatorAt(p, seg, remoteTime == seg.AudioStart)
 		if err != nil {
@@ -303,7 +306,7 @@ func (s *Service) processItem(ctx context.Context, userID, peer string, listed I
 	}
 	outcome := "skipped"
 	if !skipPosition {
-		outcome, err = s.exchange(ctx, u.ID, &l, m, local, p, have)
+		outcome, err = s.exchange(ctx, u.ID, &l, item, m, local, p, have)
 	}
 	if err != nil {
 		rep.fail(err)
