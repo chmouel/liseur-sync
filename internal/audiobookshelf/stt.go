@@ -34,7 +34,7 @@ func TranscribeAudio(ctx context.Context, baseURL, apiKey, model string, audioBy
 		endpoint = base + "/v1/audio/transcriptions"
 	}
 	if model == "" {
-		model = "whisper-1"
+		model = "whisper-large-v3-turbo"
 	}
 	if filename == "" {
 		filename = "snippet.m4a"
@@ -268,6 +268,9 @@ func foldRune(r rune) rune {
 // is configured. Any failure falls back cleanly to linearP.
 func (s *Service) refinePositionWithSTT(ctx context.Context, userID string, l store.AudiobookLink, item Item, m Mapping, remoteTime, linearP float64, seg Segment) float64 {
 	if s.Cfg.STTURL == "" || s.Client == nil || len(item.AudioFiles) == 0 || remoteTime <= 0 {
+		return linearP
+	}
+	if strings.Contains(s.Cfg.STTURL, "api.groq.com") && s.Cfg.STTAPIKey == "" {
 		return linearP
 	}
 	book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID)

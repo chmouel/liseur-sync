@@ -187,7 +187,7 @@ type AudiobookshelfConfig struct {
 	// STTAPIKey is an optional Bearer token for STTURL.
 	// Prefer LISEUR_ABS_STT_API_KEY.
 	STTAPIKey string `toml:"stt_api_key"`
-	// STTModel is the transcription model name (default "whisper-1").
+	// STTModel is the transcription model name (default "whisper-large-v3-turbo").
 	STTModel string `toml:"stt_model"`
 }
 
@@ -347,7 +347,8 @@ func Default() Config {
 	c.Audiobookshelf.Timeout = Duration(20 * time.Second)
 	c.Audiobookshelf.SessionOverlap = Duration(10 * time.Minute)
 	c.Audiobookshelf.ActiveDays = 30
-	c.Audiobookshelf.STTModel = "whisper-1"
+	c.Audiobookshelf.STTURL = "https://api.groq.com/openai/v1"
+	c.Audiobookshelf.STTModel = "whisper-large-v3-turbo"
 	return c
 }
 
@@ -650,8 +651,11 @@ func (c *Config) validateAudiobookshelf() error {
 	a.STTURL = strings.TrimSpace(a.STTURL)
 	a.STTAPIKey = strings.TrimSpace(a.STTAPIKey)
 	a.STTModel = strings.TrimSpace(a.STTModel)
+	if a.STTURL == "" {
+		a.STTURL = "https://api.groq.com/openai/v1"
+	}
 	if a.STTModel == "" {
-		a.STTModel = "whisper-1"
+		a.STTModel = "whisper-large-v3-turbo"
 	}
 	if !a.Enabled {
 		return nil
