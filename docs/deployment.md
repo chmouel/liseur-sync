@@ -726,6 +726,65 @@ Watch the log for `mirror pass failed`.
 Reading positions are all it moves today. Finished status, highlights
 and statistics are not mirrored.
 
+## Following an audiobook on Audiobookshelf
+
+Audiobookshelf can follow the same book you read here. It runs alongside
+`[mirror]`, disabled by default, for one local account and one remote
+account. Put the API key in the server's environment:
+
+```sh
+LISEUR_ABS_ENABLED=true
+LISEUR_ABS_BASE_URL=https://audiobooks.example.com
+LISEUR_ABS_ACCOUNT=you
+LISEUR_ABS_API_KEY=your-audiobookshelf-api-key
+```
+
+Restart the server, then open `/ui/audiobookshelf` as that local account.
+The server matches titles and authors within that account's folder
+grants. Use the page to search for an ebook, link or unlink it, and
+review a changed alignment. Unlinking prevents that pair from matching
+automatically again. Administrators see job status in the overview;
+only the configured reader sees the audiobook list.
+
+Positions follow matching chapter numbers, including a recording that
+covers only part of an ebook. The chapter preview shows coverage and
+approximate ebook anchors. The web reader follows named chapter fragments;
+Android currently restores the approximate position within the resource.
+A partial recording cannot mark the ebook
+finished, even if it narrates the final chapter. Finishing an ebook can
+finish a recording that covers its final chapter. A whole-book linear
+claim is available when numbered chapters provide no alignment; confirm
+it only for a recording that narrates the whole ebook. Individual chapter
+pair editing is not available.
+
+The newer timestamp wins, with local winning a tie. A remote zero does
+not replace local progress. Audiobookshelf has no conditional progress
+write: a change made remotely between a poll and its PATCH can be
+overwritten. A stale offline player can also win by its timestamp.
+
+Listening counts toward time, days, streaks, sessions and progression,
+while measured reading pace and reading ETA exclude listening. Session
+pages derive from the ebook's page count when known. Imported sessions
+retain their original mapping and attribution after relinking or
+remapping; deleting their work also prevents later remote updates from
+recreating that history. Listening revisions stay raw indefinitely,
+like KOReader statistics-plugin revisions, so account for them in backups.
+
+Optional settings, in `[audiobookshelf]` or their environment overrides:
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| `poll_interval` | `LISEUR_ABS_POLL_INTERVAL` | `2m` (minimum `1m`) |
+| `timeout` | `LISEUR_ABS_TIMEOUT` | `20s` |
+| `session_overlap` | `LISEUR_ABS_SESSION_OVERLAP` | `10m` (minimum `1m`) |
+| `active_days` | `LISEUR_ABS_ACTIVE_DAYS` | `30` |
+
+`active_days` bounds position exchanges by recent activity on either
+side; linked listening history is still imported. HTTPS is required
+unless `insecure_http` is enabled. The key stays in configuration and is
+never saved by the web UI. Changing the server URL or remote account
+starts a separate set of links; already imported history stays.
+
 ## Configuration
 
 The content block is intentionally small:

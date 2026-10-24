@@ -235,7 +235,7 @@ func archivedContribution(ctx context.Context, tx *sql.Tx, userID string, ses st
 			return store.ArchivedSession{}, err
 		}
 		proof.Pages = pages
-		if ses.Origin != store.OriginInferred {
+		if store.MeasuresReadingPace(ses.Origin) {
 			proof.MeasuredActiveSeconds = proof.ActiveSeconds
 			proof.MeasuredProgDelta = proof.ProgDelta
 		}

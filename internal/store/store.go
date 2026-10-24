@@ -197,7 +197,20 @@ const (
 	OriginKosync   Origin = "kosync"
 	OriginKoplugin Origin = "koplugin"
 	OriginInferred Origin = "inferred"
+	// OriginAudiobookshelf is listening imported from an Audiobookshelf
+	// server (ADR-0055): positions mapped onto the ebook through chapter
+	// anchors, and listening sessions.
+	OriginAudiobookshelf Origin = "audiobookshelf"
 )
+
+// MeasuresReadingPace reports whether a session of this origin is
+// evidence of how fast the reader reads. Inferred sessions are guessed
+// from position gaps, and listening runs at whatever speed the player
+// was set to, so both count toward time and progress but never toward
+// measured pace. Every place that splits measured from total asks this.
+func MeasuresReadingPace(o Origin) bool {
+	return o != OriginInferred && o != OriginAudiobookshelf
+}
 
 // User is an account.
 type User struct {
@@ -2136,6 +2149,111 @@ type Store interface {
 	// work id. Losing it costs one redundant exchange per book.
 	MirrorCursors(ctx context.Context, userID, peer string) (map[string]MirrorCursor, error)
 	PutMirrorCursor(ctx context.Context, userID, peer string, c MirrorCursor) error
+
+	// Audiobookshelf links (ADR-0055): which audiobook on one
+	// Audiobookshelf server is which of the reader's works. A link is
+	// unique on both sides per peer, whatever its state.
+	//
+	// AudiobookLinks lists one peer's links for the account.
+	AudiobookLinks(ctx context.Context, userID, peer string) ([]AudiobookLink, error)
+	// CreateAudiobookLink inserts a link and clears any rejection of
+	// that exact pair. ErrConflict when either the work or the item is
+	// already linked for this peer; ErrNotFound when the work is gone.
+	CreateAudiobookLink(ctx context.Context, userID string, l AudiobookLink) error
+	// UpdateAudiobookLink requires the observed generation and replaces it
+	// on success. It never writes sync cursors. A stale generation conflicts.
+	UpdateAudiobookLink(ctx context.Context, userID string, l AudiobookLink) error
+	UpdateAudiobookCursor(ctx context.Context, userID string, l AudiobookLink) error
+	// DeleteAudiobookLink removes one link. With reject set it also
+	// records the pair as one automatic matching must never propose
+	// again, in the same transaction.
+	DeleteAudiobookLink(ctx context.Context, userID, peer, itemID, generation string, reject bool) error
+	// AudiobookRejections lists the pairs automatic matching skips.
+	AudiobookRejections(ctx context.Context, userID, peer string) ([]AudiobookRejection, error)
+	// AppendAudiobookSession records one revision of one listening
+	// session, ordered by the server's own updatedAt rather than by
+	// arrival: an older revision never becomes the current one. The
+	// first revision of a source key is attributed as given; every later
+	// one inherits work, edition and device from the current row, so a
+	// session never moves between works by being updated. Returns
+	// "inserted", "superseded", "duplicate" (that revision is already
+	// recorded), "stale" (older than the current one) or "conflict"
+	// (same id or remote timestamp, different content; the current one stays).
+	// "deleted" means an import record remains after its work was deleted.
+	AppendAudiobookSession(ctx context.Context, userID string, ses Session, remoteUpdatedAt time.Time, mapping []byte) (string, error)
+	AudiobookSessionImport(ctx context.Context, userID, sourceKey string) (AudiobookSessionImport, error)
+	AudiobookSessionImported(ctx context.Context, userID, sourceKey, sessionID string) (bool, error)
+	// CurrentSourceSession reads the current revision of one source key.
+	// ErrNotFound when nothing was ever recorded under it.
+	CurrentSourceSession(ctx context.Context, userID, sourceKey string) (Session, error)
+}
+
+// AudiobookLinkState is where a link stands. Only an active link
+// exchanges positions or imports sessions.
+type AudiobookLinkState string
+
+const (
+	AudiobookLinkActive AudiobookLinkState = "active"
+	// AudiobookLinkNeedsMapping is a link whose chapters could not be
+	// aligned with full confidence, or whose alignment changed since it
+	// was last confirmed. Nothing crosses until a reader confirms it.
+	AudiobookLinkNeedsMapping AudiobookLinkState = "needs_mapping"
+	// AudiobookLinkSuspended is a link whose book is no longer visible
+	// to the account or no longer servable. It still reserves both
+	// sides and comes back by itself when the book does.
+	AudiobookLinkSuspended AudiobookLinkState = "suspended"
+)
+
+// AudiobookLink joins one Audiobookshelf library item to one work, for
+// one peer. Its mapping and confirmation belong to that link.
+type AudiobookLink struct {
+	PeerIdentity string
+	Generation   string
+	ItemID       string
+	WorkID       string
+	// BookID is the catalog book the mapping was computed from. It is
+	// not a foreign key: a replaced or deleted book suspends the link
+	// rather than taking it away.
+	BookID     string
+	EditionSHA string
+	// Source is "auto" or "manual". Automatic matching never touches a
+	// manual link.
+	Source string
+	State  AudiobookLinkState
+	// ConfirmedLinear is the reader's word that the audiobook covers the
+	// whole book, so a whole-book linear mapping may stand in for
+	// chapters that could not be aligned.
+	ConfirmedLinear bool
+	// Mapping is the alignment, opaque to the store. MappingKey names
+	// the book bytes and the chapter list it was computed from, so a
+	// change on either side is noticed.
+	Mapping    []byte
+	MappingKey string
+	// PushedSeq is the newest local op already exchanged; PushedMark is
+	// what was last written to the peer, to recognise it coming back.
+	PushedSeq  int64
+	PushedMark string
+	// RemoteUpdatedMs is the peer's lastUpdate on the last remote
+	// position this side has accounted for.
+	RemoteUpdatedMs int64
+	// SessionsWatermarkMs is the newest listening-session updatedAt
+	// whose whole history below has been imported.
+	SessionsWatermarkMs int64
+	LastError           string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type AudiobookSessionImport struct {
+	MappingKey      string
+	Mapping         []byte
+	FirstImportedAt time.Time
+}
+
+// AudiobookRejection is a pair automatic matching must not propose.
+type AudiobookRejection struct {
+	WorkID string
+	ItemID string
 }
 
 // MirrorCandidate is one work a mirror may exchange with a peer: the

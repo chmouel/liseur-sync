@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -33,8 +34,10 @@ func staticContent() fs.FS {
 
 // Server is the web UI handler set.
 type Server struct {
-	St   store.Store
-	Auth *auth.Service
+	Audiobookshelf  Audiobookshelf
+	AudiobookRunner *audiobookshelf.Runner
+	St              store.Store
+	Auth            *auth.Service
 	// Cfg is the instance config. The session cookie's Secure
 	// attribute derives from it rather than from r.TLS: in the
 	// documented deployment TLS terminates at a reverse proxy and the
@@ -237,6 +240,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectRel(w, "ui/", http.StatusMovedPermanently)
 	}))
+	mux.Handle("GET /ui/audiobookshelf", sec(s.requireAuth(s.handleAudiobookshelf)))
+	mux.Handle("POST /ui/audiobookshelf", sec(s.requireAuth(s.handleAudiobookMutation)))
 	mux.Handle("GET /ui/static/", http.StripPrefix("/ui/static/",
 		// The files are embedded, so they carry no modification time
 		// and the response has no validator a browser could ask about
@@ -423,6 +428,7 @@ func (s *Server) requireAuth(next func(http.ResponseWriter, *http.Request, store
 			return
 		}
 		s.renewSession(w, r, a)
+		r = r.WithContext(context.WithValue(r.Context(), audiobookNavKey{}, s.audiobookAccess(u)))
 		next(w, withAdmin(r, s.adminFlag(r, u)), a, u)
 	}
 }
