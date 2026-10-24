@@ -334,7 +334,7 @@ func Default() Config {
 	c.Mirror.ResolveRetryInterval = Duration(24 * time.Hour)
 	c.Mirror.ActiveDays = 30
 	c.Mirror.Timeout = Duration(20 * time.Second)
-	c.Audiobookshelf.PollInterval = Duration(2 * time.Minute)
+	c.Audiobookshelf.PollInterval = Duration(30 * time.Second)
 	c.Audiobookshelf.Timeout = Duration(20 * time.Second)
 	c.Audiobookshelf.SessionOverlap = Duration(10 * time.Minute)
 	c.Audiobookshelf.ActiveDays = 30
@@ -611,8 +611,8 @@ func (c *Config) validateMirror() error {
 		return fmt.Errorf("mirror.base_url must not contain a query string or fragment")
 	}
 	m.BaseURL = strings.TrimSuffix(u.String(), "/")
-	if m.PollInterval.Duration() < time.Minute {
-		return fmt.Errorf("mirror.poll_interval must be at least 1m")
+	if m.PollInterval.Duration() < 30*time.Second {
+		return fmt.Errorf("mirror.poll_interval must be at least 30s")
 	}
 	if m.ResolveRetryInterval.Duration() < time.Minute {
 		return fmt.Errorf("mirror.resolve_retry_interval must be at least 1m")
@@ -666,8 +666,8 @@ func (c *Config) validateAudiobookshelf() error {
 		return fmt.Errorf("audiobookshelf.base_url must not contain a query string or fragment")
 	}
 	a.BaseURL = strings.TrimSuffix(u.String(), "/")
-	if a.PollInterval.Duration() < time.Minute {
-		return fmt.Errorf("audiobookshelf.poll_interval must be at least 1m")
+	if a.PollInterval.Duration() < 30*time.Second {
+		return fmt.Errorf("audiobookshelf.poll_interval must be at least 30s")
 	}
 	if a.ActiveDays < 1 {
 		return fmt.Errorf("audiobookshelf.active_days must be positive")
