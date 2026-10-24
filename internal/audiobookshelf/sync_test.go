@@ -534,3 +534,25 @@ func TestConfirmKeepsAConfirmedLinearMapping(t *testing.T) {
 		t.Fatalf("confirm: %+v", got)
 	}
 }
+
+func TestMismatchedNumberedChaptersAllowWholeBookLinearFallback(t *testing.T) {
+	// Simulate an audiobook where a chapter was split into two sequentially
+	// numbered tracks so audio has more numbered chapters than the ebook.
+	f := newABSFixture(t,
+		[]string{"Chapter 1", "Chapter 2"},
+		[]string{"Chapter 1", "Chapter 2", "Chapter 3"})
+	l := f.link(t)
+	if l.State != store.AudiobookLinkNeedsMapping {
+		t.Fatalf("link: %+v", l)
+	}
+	views, err := f.service.View(t.Context(), f.user.ID)
+	if err != nil || len(views) != 1 || !views[0].LinearAllowed {
+		t.Fatalf("View LinearAllowed: %+v %v", views, err)
+	}
+	if err := f.service.Mutate(t.Context(), f.user.ID, "item", l.Generation, "linear"); err != nil {
+		t.Fatalf("linear fallback: %v", err)
+	}
+	if got := f.linked(t); !got.ConfirmedLinear || got.State != store.AudiobookLinkActive {
+		t.Fatalf("active linear: %+v", got)
+	}
+}
