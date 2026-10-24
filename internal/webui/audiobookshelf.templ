@@ -1,0 +1,100 @@
+package webui
+
+import "github.com/chmouel/liseur-sync/internal/store"
+
+templ audiobookPage(prefix string, u userCtx, csrf string, v audiobookPageView) {
+ @layout("Audiobookshelf", prefix, u, csrf, audiobookBody(prefix, csrf, v))
+}
+
+templ audiobookBody(prefix string, csrf string, v audiobookPageView) {
+ <h1>Audiobookshelf</h1>
+ <p class="muted">Pick up the same book where you left off, reading or listening.</p>
+ if len(v.Items) == 0 {
+  <p>No audiobooks are available to the configured Audiobookshelf account.</p>
+ }
+ for _, row := range v.Items {
+  <section class="card">
+   <h2>{ row.Item.Title }</h2>
+   <p>{ audiobookState(row.Link) }</p>
+   if row.Link != nil {
+    if row.BookTitle != "" {
+     <p>Ebook: <a href={ prefix + "books/" + row.Link.BookID }>{ row.BookTitle }</a></p>
+    }
+    if len(row.Mapping.Segments) > 0 {
+     <p>{ audioCoverage(row.Mapping) }
+      if row.Mapping.FullNarrative {
+ <span> · Whole narrative</span>
+ } else {
+ <span> · Partial recording; listening cannot finish the ebook</span>
+ }
+     </p>
+     <details>
+      <summary>Chapter alignment</summary>
+      <ol>
+       for _, segment := range row.Mapping.Segments {
+        <li>{ segment.Label }{ " · " + audioClock(segment.AudioStart) + "–" + audioClock(segment.AudioEnd) }
+         if segment.Approx {
+ <span class="muted"> · Approximate ebook position</span>
+ }
+        </li>
+       }
+      </ol>
+     </details>
+    }
+    if row.Link.State == store.AudiobookLinkNeedsMapping {
+     if len(row.Mapping.Segments) > 0 {
+      <form method="post" action={ prefix + "audiobookshelf" }>
+       <input type="hidden" name="csrf" value={ csrf }/>
+       <input type="hidden" name="item_id" value={ row.Item.ID }/>
+       <input type="hidden" name="generation" value={ row.Link.Generation }/>
+       <button type="submit" name="action" value="confirm">Accept this alignment</button>
+      </form>
+     } else if row.LinearAllowed {
+      <p>No matching numbered chapters were found. If this recording narrates the whole ebook, positions can follow its overall percentage.</p>
+      <p class="muted">Preview: 10%, 25%, 50%, 75% and 90% of the audio land at the same percentages of the ebook.</p>
+      <form method="post" action={ prefix + "audiobookshelf" }>
+       <input type="hidden" name="csrf" value={ csrf }/>
+       <input type="hidden" name="item_id" value={ row.Item.ID }/>
+       <input type="hidden" name="generation" value={ row.Link.Generation }/>
+       <button type="submit" name="action" value="linear">This recording narrates the whole book</button>
+      </form>
+     } else {
+      <p>These chapters cannot be aligned safely. Choose another ebook. Editing individual chapter pairs is not available.</p>
+     }
+    }
+    <form method="post" action={ prefix + "audiobookshelf" }>
+     <input type="hidden" name="csrf" value={ csrf }/>
+     <input type="hidden" name="item_id" value={ row.Item.ID }/>
+     <input type="hidden" name="generation" value={ row.Link.Generation }/>
+     <button class="link" type="submit" name="action" value="unlink">Unlink ebook</button>
+    </form>
+   } else {
+    <form method="get" action={ prefix + "audiobookshelf" }>
+     <input type="hidden" name="item_id" value={ row.Item.ID }/>
+     <label>Find an ebook <input type="search" name="q" maxlength="256" required/></label>
+     <button type="submit">Search</button>
+    </form>
+    if v.ItemID == row.Item.ID && v.Query != "" {
+     if len(v.Choices) == 0 {
+ <p>No accessible ebook matches that search.</p>
+ }
+     if v.Truncated {
+ <p>Narrow the title to see all matches.</p>
+ }
+     if len(v.Choices) > 0 {
+      <form method="post" action={ prefix + "audiobookshelf" }>
+       <input type="hidden" name="csrf" value={ csrf }/>
+       <input type="hidden" name="item_id" value={ row.Item.ID }/>
+       <label>Ebook <select name="book_id">
+        for _, book := range v.Choices {
+ <option value={ book.ID }>{ book.Title }</option>
+ }
+       </select></label>
+       <button type="submit" name="action" value="link">Link ebook</button>
+      </form>
+     }
+    }
+   }
+  </section>
+ }
+}

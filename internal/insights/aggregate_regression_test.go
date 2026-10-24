@@ -16,6 +16,40 @@ func aggregateNear(t *testing.T, label string, got, want float64) {
 	}
 }
 
+func TestAggregateListeningCountsWithoutChangingReadingPace(t *testing.T) {
+	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
+	readMs, listenMs, onlyMs := int64(3600000), int64(1800000), int64(900000)
+	snap := store.StatsSnapshot{
+		Timezone: "UTC", Works: []store.Work{{ID: "mixed"}, {ID: "listening"}},
+		Positions: map[string]store.Op{"mixed": {Progression: 0.8}, "listening": {Progression: 0.2}},
+		Sessions: []store.Session{
+			{SessionID: "read", WorkID: "mixed", StartedAt: now.Add(-25 * time.Hour), EndedAt: now.Add(-24 * time.Hour),
+				StartProg: 0, EndProg: 0.1, ActiveMs: &readMs, Origin: store.OriginNative},
+			{SessionID: "listen", WorkID: "mixed", StartedAt: now.Add(-time.Hour), EndedAt: now,
+				StartProg: 0.1, EndProg: 0.6, ActiveMs: &listenMs, Origin: store.OriginAudiobookshelf},
+			{SessionID: "only", WorkID: "listening", StartedAt: now.Add(-time.Hour), EndedAt: now,
+				StartProg: 0, EndProg: 0.2, ActiveMs: &onlyMs, Origin: store.OriginAudiobookshelf},
+		},
+	}
+	got, err := Build(snap, Window{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregateNear(t, "total minutes", got.Summary.TotalActiveMinutes, 105)
+	aggregateNear(t, "reading pace", got.Summary.SpeedProgPerHour, 0.1)
+	if got.Summary.Sessions != 3 || got.Summary.StreakDays != 2 || len(got.ActiveDays) != 2 || len(got.Days) != 2 {
+		t.Fatalf("listening activity missing: %+v", got)
+	}
+	mixed, listening := got.ByWork["mixed"], got.ByWork["listening"]
+	if mixed.ETASeconds == nil || listening.ETASeconds != nil {
+		t.Fatalf("reading ETA: mixed=%+v listening=%+v", mixed, listening)
+	}
+	aggregateNear(t, "mixed ETA", *mixed.ETASeconds, 7200)
+	aggregateNear(t, "listening progression", listening.CurrentProgression, 0.2)
+	aggregateNear(t, "listening minutes", listening.TotalActiveMinutes, 15)
+	aggregateNear(t, "pages without an edition", got.Summary.TotalPages, 0)
+}
+
 func TestAggregateMeasuredTimeIsNotCappedToWallTime(t *testing.T) {
 	now := time.Date(2026, 3, 30, 12, 0, 0, 0, time.UTC)
 	active, zero, pages := int64(30*60*1000), int64(0), int64(200)

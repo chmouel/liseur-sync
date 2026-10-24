@@ -597,6 +597,16 @@ reason.
 - Anything the legacy protocol cannot express is dropped at the edge,
   documented, never approximated silently.
 
+### 7.4 Audiobookshelf
+
+Not an adapter: an egress integration, like the mirror, that follows an
+audiobook on one Audiobookshelf server. Audiobooks are synced, never
+served. A link joins an Audiobookshelf item to a work; positions cross
+through numbered chapters, only inside what the recording covers, and
+listening sessions are imported with origin `audiobookshelf`. They count
+in statistics but not in reading pace
+([ADR-0055](adr/0055-following-an-audiobook-on-audiobookshelf.md)).
+
 ## 8. Security and auth
 
 Designed as the direct negation of the KoInsight findings.

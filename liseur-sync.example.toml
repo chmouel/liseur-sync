@@ -128,3 +128,16 @@ poll_interval = "5m"        # the peer has no push, so it is asked
 resolve_retry_interval = "24h" # how often BookOrbit misses are retried
 active_days = 30            # only recently read books are asked about
 timeout = "20s"
+
+# Follow audiobooks on an Audiobookshelf server (ADR-0055): listening
+# and reading positions cross through matching chapters, and listening
+# time counts in statistics. Off by default.
+[audiobookshelf]
+enabled = false
+# base_url = "https://audiobooks.example.com"
+# account = "you"           # the local account whose reading is followed
+# api_key = ""              # prefer LISEUR_ABS_API_KEY
+poll_interval = "2m"
+timeout = "20s"
+session_overlap = "10m"
+active_days = 30

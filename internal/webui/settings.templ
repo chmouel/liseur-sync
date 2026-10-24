@@ -146,7 +146,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@adminMaintenanceBody(prefix, v.Admin.Maintenance, v.Flash)
 	} else {
 		@adminFlash(v.Flash)
-		@adminOverviewBody(prefix, v.Admin.Counts, v.Admin.Build, v.Admin.Config)
+		@adminOverviewBody(prefix, v.Admin.Counts, v.Admin.Build, v.Admin.Config, v.Admin.Audiobookshelf)
 	}
 }
 

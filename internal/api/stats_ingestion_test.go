@@ -17,6 +17,29 @@ type countingStatsStore struct {
 	statisticsSnapshotCalls int
 }
 
+func TestSessionRollupsExcludeListeningFromReadingPace(t *testing.T) {
+	start := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	active := int64(600000)
+	sessions := []store.Session{
+		{WorkID: "w", StartedAt: start, EndedAt: start.Add(time.Hour), StartProg: 0, EndProg: 0.25,
+			ActiveMs: &active, Origin: store.OriginNative},
+		{WorkID: "w", StartedAt: start, EndedAt: start.Add(time.Hour), StartProg: 0.25, EndProg: 0.75,
+			ActiveMs: &active, Origin: store.OriginAudiobookshelf},
+	}
+	rollups, err := buildSessionRollups(sessions, "u", "UTC", time.UTC, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rollups) != 1 {
+		t.Fatalf("rollups: %+v", rollups)
+	}
+	ru := rollups[0]
+	if ru.ActiveSeconds != 1200 || ru.ProgDelta != 0.75 || ru.SessionCount != 2 ||
+		ru.MeasuredActiveSeconds != 600 || ru.MeasuredProgDelta != 0.25 {
+		t.Fatalf("listening changed measured reading pace: %+v", ru)
+	}
+}
+
 func (c *countingStatsStore) StatisticsSnapshot(ctx context.Context, userID string, candidateIDs []string) (store.StatsSnapshot, error) {
 	c.statisticsSnapshotCalls++
 	return c.Store.StatisticsSnapshot(ctx, userID, candidateIDs)

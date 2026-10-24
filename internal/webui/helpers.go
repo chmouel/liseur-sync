@@ -54,16 +54,19 @@ func fragmentHTML(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 }
 
+type audiobookNavKey struct{}
+
 // userCtx carries the signed-in user and everything the shell needs to
 // draw itself: which palette to render, which browse view to use, which
 // rail entry is the current one, and where a preference form should
 // send the reader back to.
 type userCtx struct {
-	User    *store.User
-	Prefs   prefs
-	Section string
-	Back    string
-	Offline bool
+	Audiobookshelf bool
+	User           *store.User
+	Prefs          prefs
+	Section        string
+	Back           string
+	Offline        bool
 	// IsAdmin decides whether the rail offers the Admin entry at all.
 	// Hiding it is presentation only: requireAdmin is what enforces it.
 	IsAdmin bool
@@ -72,13 +75,15 @@ type userCtx struct {
 // uiCtx assembles that from a request, so a page does not have to think
 // about it and cannot forget to.
 func uiCtx(r *http.Request, u *store.User) userCtx {
+	abs, _ := r.Context().Value(audiobookNavKey{}).(bool)
 	return userCtx{
-		User:    u,
-		Prefs:   readPrefs(r),
-		Section: sectionOf(r.URL.Path),
-		Back:    backTo(r.URL),
-		Offline: offlineEnabled(r),
-		IsAdmin: isAdmin(r),
+		Audiobookshelf: abs,
+		User:           u,
+		Prefs:          readPrefs(r),
+		Section:        sectionOf(r.URL.Path),
+		Back:           backTo(r.URL),
+		Offline:        offlineEnabled(r),
+		IsAdmin:        isAdmin(r),
 	}
 }
 

@@ -48,7 +48,7 @@ func (s *Store) UpsertKopluginSession(ctx context.Context, userID string, ses st
 	if err != nil {
 		return "", err
 	}
-	if err := s.commitSessions(tx, userID, status != "duplicate"); err != nil {
+	if err := s.commitSessions(tx, userID, status == "inserted" || status == "superseded"); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -72,7 +72,7 @@ func (s *Store) UpsertKopluginSessionByAlias(ctx context.Context, userID, partia
 	if err != nil {
 		return "", err
 	}
-	if err := s.commitSessions(tx, userID, status != "duplicate"); err != nil {
+	if err := s.commitSessions(tx, userID, status == "inserted" || status == "superseded"); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -83,43 +83,7 @@ func upsertKopluginSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses
 		one := 1.0
 		ses.ReportedPages = &one
 	}
-	now := time.Now().UTC()
-
-	var cnt int
-	if err := tx.QueryRowContext(ctx, q(
-		`SELECT COUNT(1) FROM sessions WHERE user_id = ? AND session_id = ?`),
-		userID, ses.SessionID).Scan(&cnt); err != nil {
-		return "", err
-	}
-	if cnt > 0 {
-		return "duplicate", nil
-	}
-
-	var curSessionID string
-	var curRev int64
-	err := tx.QueryRowContext(ctx, q(
-		`SELECT session_id, revision FROM session_supersessions
-		 WHERE user_id = ? AND source_key = ?
-		 ORDER BY revision DESC LIMIT 1`), userID, *ses.SourceKey).Scan(&curSessionID, &curRev)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	nextRev := int64(1)
-	status := "inserted"
-	if err == nil {
-		nextRev = curRev + 1
-		status = "superseded"
-	}
-
-	if err := insertSessionTx(ctx, tx, userID, ses, now); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, q(
-		`INSERT INTO session_supersessions (user_id, source_key, revision, session_id, received_at)
-		 VALUES (?, ?, ?, ?, ?)`), userID, *ses.SourceKey, nextRev, ses.SessionID, now); err != nil {
-		return "", err
-	}
-	return status, nil
+	return appendSourceSessionTx(ctx, tx, userID, ses, nil)
 }
 
 func insertSessionTx(ctx context.Context, tx *sql.Tx, userID string, ses store.Session, now time.Time) error {

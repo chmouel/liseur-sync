@@ -1197,3 +1197,11 @@ func TestLibraryRefreshInARealBrowser(t *testing.T) {
 		t.Fatalf("the library refresh did not work in a browser: %v", err)
 	}
 }
+
+func TestReaderReopensOnAnAudiobookChapterAnchor(t *testing.T) {
+	reopenCheck(t, "00000000-0000-4000-8000-00000000ab55", 0.1,
+		map[string]any{
+			"href": "OEBPS/chapter1.xhtml", "type": "application/xhtml+xml",
+			"locations": map[string]any{"fragments": []string{"ishmael40"}, "progression": 0, "totalProgression": 0.1},
+		}, "RELOAD_SECTION=1", "RELOAD_INSIDE=1")
+}

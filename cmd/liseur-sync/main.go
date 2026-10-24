@@ -24,6 +24,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/adapter/kosync"
 	"github.com/chmouel/liseur-sync/internal/admin"
 	"github.com/chmouel/liseur-sync/internal/api"
+	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
@@ -230,18 +231,22 @@ func cmdServe(args []string) error {
 	// KOReader's protocol (ADR-0047). It is off unless configured, and
 	// when it is on it is scoped to the single account it names.
 	mirrorRunner := &mirror.Runner{Store: st, Cfg: cfg.Mirror, Log: slog.Default()}
+	absService := audiobookshelf.NewService(st, cfg.Audiobookshelf)
+	absRunner := &audiobookshelf.Runner{Service: absService, Log: slog.Default()}
 	// The UI delegates downloads, covers and uploads back to the API
 	// server, so the two surfaces share one implementation of the rules
 	// about what a stored file may claim to be, and one about what may
 	// be written into a watched folder.
 	apiSrv.WebUI = &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg, ConfigPath: *cfgPath,
-		LoginLimiter: loginLimiter,
-		Downloads:    apiSrv,
-		Covers:       apiSrv,
-		Uploads:      apiSrv,
-		Deletes:      apiSrv,
-		Watching:     watcher,
+		LoginLimiter:    loginLimiter,
+		Downloads:       apiSrv,
+		Covers:          apiSrv,
+		Uploads:         apiSrv,
+		Deletes:         apiSrv,
+		Watching:        watcher,
+		Audiobookshelf:  absService,
+		AudiobookRunner: absRunner,
 	}
 	mux := apiSrv.Handler()
 
@@ -279,6 +284,11 @@ func cmdServe(args []string) error {
 		defer close(mirrorDone)
 		_ = mirrorRunner.Run(bgCtx)
 	}()
+	absDone := make(chan struct{})
+	go func() {
+		defer close(absDone)
+		_ = absRunner.Run(bgCtx)
+	}()
 	serverDone := make(chan struct{})
 	go func() {
 		defer close(serverDone)
@@ -310,6 +320,7 @@ func cmdServe(args []string) error {
 	<-serverDone
 	<-watcherDone
 	<-mirrorDone
+	<-absDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)
 }

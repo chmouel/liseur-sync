@@ -25,6 +25,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * EPUB upload and deletion for writable folders
 * a browser based EPUB reader that supports offline reading.
 * per-user reading statistics and sessions
+* optional [Audiobookshelf chapter and listening sync](docs/deployment.md#following-an-audiobook-on-audiobookshelf)
 * per-user series claims
 * a per-account sentence translation cache.
 

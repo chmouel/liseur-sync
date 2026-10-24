@@ -2,12 +2,13 @@ package webui
 
 import (
 	"github.com/chmouel/liseur-sync/internal/buildinfo"
+"github.com/chmouel/liseur-sync/internal/audiobookshelf"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // adminOverview is the page an operator lands on: what this build is,
 // how much of everything there is, and how the server was configured.
-templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo.Info, cfg configFacts) {
+templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo.Info, cfg configFacts, abs audiobookshelf.Status) {
 	<h2>Administration overview</h2>
 	<section class="card">
 		<h2>This build</h2>
@@ -57,6 +58,33 @@ templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo
 			books usually means a disk is not where it was.
 		</p>
 	</section>
+ <section class="card">
+  <h2>Audiobookshelf</h2>
+  <dl class="facts">
+   <dt>Status</dt><dd>
+ if abs.Enabled {
+ Enabled
+ } else {
+ Disabled
+ }
+ </dd>
+   <dt>Server version</dt><dd>
+ if abs.Version != "" {
+ { abs.Version }
+ } else {
+ Unknown
+ }
+ </dd>
+   <dt>Last successful pass</dt><dd>
+ if abs.LastSuccess != nil {
+ { abs.LastSuccess.Format("2006-01-02 15:04 UTC") }
+ } else {
+ Never
+ }
+ </dd>
+   <dt>Errors</dt><dd>{ i2s(abs.Errors) }</dd>
+  </dl>
+ </section>
 	<section class="card">
 		<h2>Configuration</h2>
 		<p class="muted">

@@ -380,6 +380,9 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 		newWork.ID, userID, editionSHA, workID); err != nil {
 		return err
 	}
+	if err := splitAudiobookLinksTx(ctx, tx, userID, workID, editionSHA, newWork.ID); err != nil {
+		return err
+	}
 	// An annotation with this edition_sha follows its edition; one
 	// without stays with the surviving work (ADR-0028).
 	if err := moveAnnotationsTx(ctx, tx, userID, workID, newWork.ID, &editionSHA); err != nil {
@@ -550,6 +553,11 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	// stays; the moved rows are stamped beyond anything the user holds
 	// so a pull cursor on the survivor discovers them.
 	if err := moveWorkTranslationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
+		return err
+	}
+	// Audiobookshelf links and rejections follow too (ADR-0055); the
+	// survivor's link wins when both works are linked to one peer.
+	if err := moveAudiobookLinksTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, q(
