@@ -21,11 +21,17 @@ type Service struct {
 }
 
 type ItemView struct {
-	BookTitle     string
-	Item          Item
-	Link          *store.AudiobookLink
-	Mapping       Mapping
-	LinearAllowed bool
+	BookTitle        string
+	BookSubtitle     string
+	BookAuthors      []string
+	BookCanRead      bool
+	BookPresent      bool
+	Item             Item
+	Link             *store.AudiobookLink
+	Mapping          Mapping
+	LinearAllowed    bool
+	RemoteProgress   *Progress
+	LocalProgression *float64
 }
 
 func NewService(st store.Store, cfg config.AudiobookshelfConfig) *Service {
@@ -124,15 +130,35 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
+	progressByItem := make(map[string]Progress, len(me.MediaProgress))
+	for _, p := range me.MediaProgress {
+		if p.Validate(now) == nil {
+			progressByItem[p.LibraryItemID] = p
+		}
+	}
 	out := make([]ItemView, 0, len(items))
 	seen := make(map[string]bool)
+	var bookIDs []string
 	for _, item := range items {
 		seen[item.ID] = true
 		row := ItemView{Item: item}
+		if p, ok := progressByItem[item.ID]; ok {
+			pCopy := p
+			row.RemoteProgress = &pCopy
+		}
 		if l, ok := links[item.ID]; ok {
 			row.Link = &l
+			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.Seq > 0 {
+				prog := local.Progression
+				row.LocalProgression = &prog
+			}
 			if book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID); err == nil {
 				row.BookTitle = book.Title
+				row.BookSubtitle = book.Subtitle
+				row.BookPresent = book.Status == store.BookActive
+				row.BookCanRead = book.Status == store.BookActive && book.MediaType == "application/epub+zip"
+				bookIDs = append(bookIDs, book.ID)
 			}
 			if len(l.Mapping) > 0 {
 				_ = json.Unmarshal(l.Mapping, &row.Mapping)
@@ -142,6 +168,12 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 				if e == nil {
 					expanded, e := s.Client.Item(ctx, item.ID)
 					if e == nil {
+						if len(row.Item.Chapters) == 0 {
+							row.Item.Chapters = expanded.Chapters
+						}
+						if row.Item.Duration == 0 {
+							row.Item.Duration = expanded.Duration
+						}
 						var m Mapping
 						m, row.LinearAllowed, e = s.mapping(ctx, book, expanded, l.ConfirmedLinear)
 						if e == nil || errors.Is(e, ErrNoAlignment) {
@@ -156,7 +188,33 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 	for id, l := range links {
 		if !seen[id] {
 			l.State = store.AudiobookLinkSuspended
-			out = append(out, ItemView{Item: Item{ID: id, Title: "Unavailable audiobook"}, Link: &l})
+			row := ItemView{Item: Item{ID: id, Title: "Unavailable audiobook"}, Link: &l}
+			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.Seq > 0 {
+				prog := local.Progression
+				row.LocalProgression = &prog
+			}
+			if book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID); err == nil {
+				row.BookTitle = book.Title
+				row.BookSubtitle = book.Subtitle
+				row.BookPresent = book.Status == store.BookActive
+				row.BookCanRead = book.Status == store.BookActive && book.MediaType == "application/epub+zip"
+				bookIDs = append(bookIDs, book.ID)
+			}
+			out = append(out, row)
+		}
+	}
+	if len(bookIDs) > 0 {
+		if rel, err := s.Store.CatalogBookRelationsForBooks(ctx, userID, bookIDs); err == nil {
+			for i := range out {
+				if out[i].Link == nil {
+					continue
+				}
+				for _, c := range rel.Contributors[out[i].Link.BookID] {
+					if c.Name != "" {
+						out[i].BookAuthors = append(out[i].BookAuthors, c.Name)
+					}
+				}
+			}
 		}
 	}
 	return out, nil

@@ -1338,6 +1338,490 @@ button.linkish:hover, button.linkish:focus-visible {
 .dev-ereader { color: var(--primary); background: var(--surface-1); opacity: .85; }
 .dev-desktop { color: var(--ink); background: var(--surface-1); opacity: .75; }
 
+/* ----------------------------------------------------- audiobookshelf */
+
+.abs-head {
+	display: flex; align-items: flex-end; justify-content: space-between;
+	gap: 1rem; margin: 0 0 1.25rem; flex-wrap: wrap;
+}
+.abs-head h1 { margin: 0 0 .25rem; }
+.abs-head p { margin: 0; max-width: 46rem; }
+
+.abs-shelfbar { margin: 0 0 1.75rem; }
+.abs-shelfbar .tabs a {
+	display: inline-flex; align-items: center; gap: .45rem;
+}
+.abs-tab-count {
+	display: inline-flex; align-items: center; justify-content: center;
+	min-width: 1.35rem; height: 1.35rem; padding: 0 .38rem;
+	border-radius: 999px; background: var(--surface-2);
+	color: var(--ink-dim); font-size: .74rem; font-weight: 600;
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-shelfbar .tabs a.on .abs-tab-count {
+	background: color-mix(in srgb, var(--primary) 16%, var(--surface-2));
+	color: var(--primary);
+}
+
+.abs-empty { max-width: 34rem; margin: 2rem auto; }
+.abs-empty-glyph {
+	display: grid; place-items: center;
+	width: 3rem; height: 3rem; border-radius: 50%;
+	background: var(--surface-2); color: var(--primary);
+}
+.abs-empty h2 { margin: 0; font: 400 1.3rem/1.25 Georgia, "Times New Roman", serif; }
+
+.abs-group { margin: 0 0 2.25rem; }
+.abs-group-head { margin: 0 0 .9rem; }
+.abs-group-title {
+	display: flex; align-items: center; gap: .55rem; margin: 0 0 .2rem;
+}
+.abs-group-title h2 {
+	margin: 0; font: 400 1.25rem/1.2 Georgia, "Times New Roman", serif;
+	letter-spacing: -.01em;
+}
+.abs-group-count {
+	display: inline-flex; align-items: center; justify-content: center;
+	min-width: 1.4rem; height: 1.4rem; padding: 0 .4rem;
+	border-radius: 999px; background: var(--surface-2);
+	border: 1px solid var(--line-soft);
+	color: var(--muted); font-size: .75rem; font-weight: 600;
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-group-head > p { margin: 0; font-size: .86rem; max-width: 52rem; }
+
+.abs-list { display: grid; gap: 1.15rem; }
+
+.abs-card {
+	margin: 0; padding: 1.35rem 1.5rem;
+	display: flex; flex-direction: column; gap: 1.15rem;
+	position: relative; overflow: hidden;
+	transition: border-color .15s ease;
+}
+.abs-card-pending {
+	border-left: 3px solid var(--warn);
+	background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 4%, var(--surface)), var(--surface) 7rem);
+}
+.abs-card-active {
+	border-left: 3px solid var(--ok);
+}
+.abs-card-paused {
+	border-left: 3px solid var(--danger);
+}
+
+.abs-card-top {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: .65rem 1rem; flex-wrap: wrap;
+}
+.abs-badge {
+	display: inline-flex; align-items: center; gap: .4rem;
+	padding: .22rem .65rem; border-radius: 999px;
+	font-size: .78rem; font-weight: 600;
+	border: 1px solid var(--line);
+	background: var(--surface-2); color: var(--ink-dim);
+}
+.abs-badge::before {
+	content: ""; width: .45rem; height: .45rem; border-radius: 50%;
+	background: currentColor; flex: none;
+}
+.abs-badge-active {
+	background: color-mix(in srgb, var(--ok) 13%, var(--surface));
+	border-color: color-mix(in srgb, var(--ok) 38%, var(--line));
+	color: var(--ok);
+}
+.abs-badge-pending {
+	background: color-mix(in srgb, var(--warn) 14%, var(--surface));
+	border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
+	color: var(--warn);
+}
+.abs-badge-paused {
+	background: color-mix(in srgb, var(--danger) 13%, var(--surface));
+	border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+	color: var(--danger);
+}
+.abs-badge-unmatched {
+	background: var(--surface-2);
+	border-color: var(--line);
+	color: var(--muted);
+}
+
+.abs-coverage-pills {
+	display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+}
+.abs-pill {
+	display: inline-flex; align-items: center;
+	padding: .2rem .6rem; border-radius: var(--radius-sm);
+	font-size: .78rem; background: var(--surface-2);
+	border: 1px solid var(--line-soft); color: var(--ink-dim);
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-pill-full {
+	background: color-mix(in srgb, var(--ok) 10%, var(--surface-2));
+	border-color: color-mix(in srgb, var(--ok) 30%, var(--line-soft));
+	color: var(--ink);
+}
+.abs-pill-partial {
+	background: color-mix(in srgb, var(--warn) 11%, var(--surface-2));
+	border-color: color-mix(in srgb, var(--warn) 32%, var(--line-soft));
+	color: var(--ink);
+}
+
+.abs-bridge {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+	gap: 1rem; align-items: stretch;
+}
+.abs-edition {
+	display: flex; align-items: stretch; gap: 1rem;
+	padding: 1rem 1.15rem; border-radius: var(--radius);
+	background: var(--surface-2);
+	border: 1px solid var(--line-soft);
+	min-width: 0;
+}
+.abs-audio-disc {
+	flex: 0 0 3.6rem; width: 3.6rem; height: 3.6rem;
+	border-radius: .65rem;
+	display: grid; place-items: center;
+	background: linear-gradient(145deg, color-mix(in srgb, var(--primary) 18%, var(--surface)), var(--surface-3));
+	border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--line));
+	color: var(--primary);
+}
+.abs-book-cover {
+	flex: 0 0 3.6rem; width: 3.6rem;
+	aspect-ratio: 2 / 3;
+	border-radius: var(--radius-sm); overflow: hidden;
+	border: 1px solid var(--line);
+	background: var(--surface-3);
+	box-shadow: var(--book-shadow);
+	display: block; align-self: flex-start;
+}
+.abs-book-cover img {
+	width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.abs-book-cover-placeholder {
+	display: grid; place-items: center;
+	background: linear-gradient(145deg, var(--surface), var(--surface-3));
+	color: var(--ink-dim);
+}
+.abs-edition-body {
+	flex: 1; min-width: 0;
+	display: flex; flex-direction: column; gap: .22rem;
+}
+.abs-edition-top {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: .5rem; flex-wrap: wrap;
+}
+.abs-edition-kind {
+	font-size: .74rem; font-weight: 500; color: var(--muted);
+}
+.abs-read-pill {
+	display: inline-flex; align-items: center;
+	padding: .14rem .55rem; border-radius: 999px;
+	font-size: .74rem; font-weight: 500;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	color: var(--ink); text-decoration: none;
+}
+.abs-read-pill:hover {
+	border-color: var(--primary); color: var(--primary);
+}
+.abs-title {
+	margin: .05rem 0 0;
+	font: 400 1.16rem/1.25 Georgia, "Times New Roman", serif;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+.abs-title a {
+	color: var(--ink); text-decoration: none;
+}
+.abs-title a:hover {
+	color: var(--primary); text-decoration: underline;
+	text-decoration-thickness: 1px; text-underline-offset: .16em;
+}
+.abs-title-muted { color: var(--muted); }
+.abs-subtitle {
+	margin: 0; font-size: .82rem; color: var(--ink-dim);
+}
+.abs-byline {
+	margin: 0; font-size: .83rem; color: var(--muted);
+}
+.abs-meta {
+	margin: 0; font-size: .75rem; color: var(--muted);
+	display: inline-flex; flex-wrap: wrap; gap: .25rem .6rem;
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-progress-row {
+	display: flex; align-items: center; gap: .65rem;
+	margin-top: auto; padding-top: .55rem; flex-wrap: wrap;
+}
+.abs-prog {
+	position: static; width: 8.5rem; height: .38rem;
+	border-radius: 999px; overflow: hidden;
+	background: var(--surface-3);
+	border: 1px solid var(--line-soft);
+}
+.abs-prog span {
+	display: block; height: 100%; border-radius: 999px;
+	background: var(--primary);
+}
+.abs-prog-book span { background: var(--ok); }
+.abs-progress-label {
+	font-size: .78rem; color: var(--ink-dim);
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-connector {
+	display: flex; align-items: center; justify-content: center;
+	color: var(--muted);
+}
+.abs-connector-badge {
+	width: 2rem; height: 2rem; border-radius: 999px;
+	display: grid; place-items: center;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	color: var(--ink-dim);
+}
+.abs-connector-unmatched .abs-connector-badge {
+	border-style: dashed; color: var(--muted);
+}
+
+/* Narrative coverage ruler: 20 equal steps across the 0%..100% ebook axis,
+   styled strictly with classes so CSP style-src 'self' remains intact. */
+.abs-ruler {
+	padding: .9rem 1.1rem;
+	border-radius: var(--radius);
+	background: var(--surface-2);
+	border: 1px solid var(--line-soft);
+	display: flex; flex-direction: column; gap: .45rem;
+}
+.abs-ruler-head {
+	display: flex; align-items: baseline; justify-content: space-between;
+	gap: .75rem; flex-wrap: wrap; font-size: .8rem;
+}
+.abs-ruler-title { color: var(--ink-dim); font-weight: 500; }
+.abs-ruler-range {
+	color: var(--ink); font-weight: 600;
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-ruler-track {
+	display: grid;
+	grid-template-columns: repeat(20, minmax(0, 1fr));
+	height: .65rem;
+	border-radius: 999px;
+	background:
+		repeating-linear-gradient(
+			to right,
+			transparent 0,
+			transparent calc(25% - 1px),
+			var(--line) calc(25% - 1px),
+			var(--line) 25%
+		),
+		var(--surface-3);
+	border: 1px solid var(--line);
+	overflow: hidden;
+}
+.abs-ruler-fill {
+	display: block; height: 100%;
+	border-radius: 999px;
+	background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--ok) 75%, var(--primary)));
+}
+.abs-card-pending .abs-ruler-fill {
+	background: linear-gradient(90deg, var(--warn), var(--primary));
+}
+.abs-cstart-1 { grid-column-start: 1 } .abs-cstart-2 { grid-column-start: 2 }
+.abs-cstart-3 { grid-column-start: 3 } .abs-cstart-4 { grid-column-start: 4 }
+.abs-cstart-5 { grid-column-start: 5 } .abs-cstart-6 { grid-column-start: 6 }
+.abs-cstart-7 { grid-column-start: 7 } .abs-cstart-8 { grid-column-start: 8 }
+.abs-cstart-9 { grid-column-start: 9 } .abs-cstart-10 { grid-column-start: 10 }
+.abs-cstart-11 { grid-column-start: 11 } .abs-cstart-12 { grid-column-start: 12 }
+.abs-cstart-13 { grid-column-start: 13 } .abs-cstart-14 { grid-column-start: 14 }
+.abs-cstart-15 { grid-column-start: 15 } .abs-cstart-16 { grid-column-start: 16 }
+.abs-cstart-17 { grid-column-start: 17 } .abs-cstart-18 { grid-column-start: 18 }
+.abs-cstart-19 { grid-column-start: 19 } .abs-cstart-20 { grid-column-start: 20 }
+.abs-cend-2 { grid-column-end: 2 } .abs-cend-3 { grid-column-end: 3 }
+.abs-cend-4 { grid-column-end: 4 } .abs-cend-5 { grid-column-end: 5 }
+.abs-cend-6 { grid-column-end: 6 } .abs-cend-7 { grid-column-end: 7 }
+.abs-cend-8 { grid-column-end: 8 } .abs-cend-9 { grid-column-end: 9 }
+.abs-cend-10 { grid-column-end: 10 } .abs-cend-11 { grid-column-end: 11 }
+.abs-cend-12 { grid-column-end: 12 } .abs-cend-13 { grid-column-end: 13 }
+.abs-cend-14 { grid-column-end: 14 } .abs-cend-15 { grid-column-end: 15 }
+.abs-cend-16 { grid-column-end: 16 } .abs-cend-17 { grid-column-end: 17 }
+.abs-cend-18 { grid-column-end: 18 } .abs-cend-19 { grid-column-end: 19 }
+.abs-cend-20 { grid-column-end: 20 } .abs-cend-21 { grid-column-end: 21 }
+
+.abs-ruler-scale {
+	display: flex; justify-content: space-between;
+	font-size: .72rem; color: var(--muted);
+	font-variant-numeric: lining-nums tabular-nums;
+}
+
+.abs-cuesheet {
+	border: 1px solid var(--line-soft);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+}
+.abs-cuesheet > summary {
+	cursor: pointer; list-style: none;
+	display: flex; align-items: center; justify-content: space-between;
+	gap: .75rem; padding: .65rem .95rem;
+	font-size: .85rem; font-weight: 600; color: var(--ink);
+}
+.abs-cuesheet > summary::-webkit-details-marker { display: none; }
+.abs-cuesheet > summary > span:first-child {
+	display: inline-flex; align-items: center; gap: .45rem;
+}
+.abs-cuesheet > summary > span:first-child::before {
+	content: "+"; color: var(--muted); font-weight: 400; width: .75rem;
+}
+.abs-cuesheet[open] > summary > span:first-child::before { content: "−"; }
+.abs-cuesheet-meta {
+	font-size: .76rem; font-weight: 400; color: var(--muted);
+	font-variant-numeric: lining-nums tabular-nums;
+}
+.abs-cuesheet-body {
+	border-top: 1px solid var(--line-soft);
+	max-height: 20rem; overflow-y: auto;
+}
+.abs-cuetable {
+	margin: 0; width: 100%; font-size: .83rem;
+}
+.abs-cuetable th, .abs-cuetable td {
+	padding: .55rem .95rem;
+}
+.abs-Cue-label, .abs-cue-label { font-weight: 500; color: var(--ink); }
+.abs-cue-time, .abs-cue-span {
+	white-space: nowrap;
+	font-variant-numeric: lining-nums tabular-nums;
+	color: var(--ink-dim);
+}
+.abs-approx-tag {
+	display: inline-block; padding: .12rem .45rem;
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--warn) 12%, var(--surface-2));
+	color: var(--ink-dim); font-size: .75rem;
+}
+
+.abs-card-foot {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: 1rem; flex-wrap: wrap;
+	padding-top: .85rem; border-top: 1px solid var(--line-soft);
+}
+.abs-card-foot form { margin: 0; }
+.abs-decision {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: .85rem 1.25rem; flex-wrap: wrap;
+	flex: 1 1 24rem;
+	padding: .85rem 1rem;
+	border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--warn) 9%, var(--surface-2));
+	border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--line));
+}
+.abs-decision-copy {
+	margin: 0; font-size: .86rem; color: var(--ink);
+	max-width: 40rem;
+}
+.abs-decision-text {
+	display: flex; flex-direction: column; gap: .25rem;
+	max-width: 40rem;
+}
+.abs-decision-text p { margin: 0; font-size: .86rem; }
+.abs-unalignable {
+	margin: 0; flex: 1 1 20rem;
+	padding: .75rem 1rem; border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--danger) 10%, var(--surface-2));
+	border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+	font-size: .86rem; color: var(--ink);
+}
+.abs-unlink-form { margin-left: auto; }
+.abs-unlink-btn {
+	font-size: .82rem; color: var(--muted);
+}
+.abs-unlink-btn:hover { color: var(--danger); }
+
+.abs-matcher {
+	display: flex; flex-direction: column; justify-content: center;
+	gap: .85rem; min-width: 0;
+}
+.abs-matcher-slot {
+	padding: 1rem 1.15rem;
+	border-radius: var(--radius);
+	border: 1px dashed var(--line);
+	background: color-mix(in srgb, var(--surface-2) 55%, var(--surface));
+}
+.card form.abs-search-form {
+	display: flex; align-items: flex-end; gap: .6rem; flex-wrap: wrap;
+	margin: 0; width: 100%;
+}
+.card form.abs-search-form > label.abs-search-label {
+	flex: 1 1 13rem; margin: 0; display: flex; flex-direction: column; gap: .35rem;
+	font-size: .78rem; font-weight: 500; color: var(--ink-dim);
+}
+.abs-choices {
+	display: flex; flex-direction: column; gap: .65rem;
+}
+.abs-choices > p { margin: 0; font-size: .84rem; }
+.abs-choice-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+	gap: .65rem;
+}
+.abs-choice-card {
+	display: flex; align-items: center; gap: .75rem;
+	padding: .6rem .75rem;
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	border: 1px solid var(--line-soft);
+}
+.abs-choice-cover {
+	flex: 0 0 2.5rem; width: 2.5rem; aspect-ratio: 2 / 3;
+	border-radius: 2px; overflow: hidden;
+	border: 1px solid var(--line); background: var(--surface-3);
+	display: block;
+}
+.abs-choice-cover img {
+	width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.abs-choice-info {
+	flex: 1; min-width: 0;
+	display: flex; flex-direction: column; gap: .12rem;
+}
+.abs-choice-title {
+	font: 400 .96rem/1.25 Georgia, "Times New Roman", serif;
+	color: var(--ink); text-decoration: none;
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.abs-choice-title:hover { color: var(--primary); text-decoration: underline; }
+.abs-choice-sub, .abs-choice-author {
+	font-size: .76rem; color: var(--muted);
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.abs-choice-card form { margin: 0; flex: none; }
+.abs-btn-sm {
+	padding: .35rem .7rem; font-size: .78rem;
+}
+
+@media (max-width: 52em) {
+	.abs-bridge {
+		grid-template-columns: 1fr;
+		gap: .55rem;
+	}
+	.abs-connector {
+		padding: .05rem 0;
+	}
+	.abs-connector-badge svg {
+		transform: rotate(90deg);
+	}
+}
+@media (max-width: 38em) {
+	.abs-shelfbar { gap: .15rem; }
+	.abs-tab { padding: .48rem .52rem; font-size: .8rem; gap: .3rem; }
+	.abs-tab-count { min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; font-size: .7rem; }
+	.abs-card { padding: 1.05rem 1.1rem; }
+	.abs-edition, .abs-matcher-slot { padding: .85rem .9rem; }
+	.abs-cuetable th:nth-child(3),
+	.abs-cuetable td:nth-child(3) { display: none; }
+	.abs-choice-grid { grid-template-columns: 1fr; }
+}
+
 /* The reader (ADR-0007): a book wants the window, so this page drops
    the usual chrome and gives the sandboxed frame everything left.
 
