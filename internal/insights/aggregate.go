@@ -204,7 +204,7 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		}
 		active := ActiveSeconds(ses)
 		var measured, delta float64
-		if ses.Origin != store.OriginInferred {
+		if store.MeasuresReadingPace(ses.Origin) {
 			measured = active
 			delta = math.Max(0, ses.EndProg-ses.StartProg)
 		}

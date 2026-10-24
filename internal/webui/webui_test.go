@@ -663,7 +663,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/settings",
 		"/ui/settings?section=devices", "/ui/settings?section=admin",
 		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
-		"/ui/search",
+		"/ui/search", "/ui/audiobookshelf",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
 			t.Errorf("GET %s over plain HTTP: want 403, got %d", p, code)
@@ -672,7 +672,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 	for _, p := range []string{
 		"/ui/login", "/ui/setup", "/ui/logout", "/ui/tokens", "/ui/pairing", "/ui/koplugin",
 		"/ui/tokens/example/scopes", "/ui/browsers/revoke",
-		"/ui/settings", "/ui/settings/password",
+		"/ui/settings", "/ui/settings/password", "/ui/audiobookshelf",
 		"/ui/admin/invites", "/ui/admin/users", "/ui/admin/users/u1/password",
 		"/ui/admin/users/u1/admin", "/ui/admin/users/u1/disabled",
 		"/ui/admin/users/u1/credentials/revoke",

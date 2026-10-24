@@ -440,6 +440,9 @@ The history limit applies only to `ops`, and both arrays share a snapshot.
 Response operations include `origin_alias` when recorded, so clients can
 retain distinct edition-less ownership groups rather than combining their
 maxima. This provenance is response-only; native writers do not assign it.
+Operations imported from Audiobookshelf have `origin: "audiobookshelf"`,
+the linked ebook edition, and a Readium locator. Clients should accept
+new origin values without rejecting the operation.
 
 Keep those candidates separately from current position and the agreed
 baseline. Offer a jump to the greatest known progression without making it
@@ -1064,7 +1067,8 @@ per session, since their rollups no longer hold the times.
 Streaks use all positive-activity days, ending today or yesterday,
 independent of the selected window and without a ten-year cutoff.
 Rereads count time but never negative progression. Pace excludes inferred
-sessions, even after rollup. Current progression comes from the newest
+sessions and Audiobookshelf listening, even after rollup. Listening counts
+toward time, days, streaks, sittings and progression. Current progression comes from the newest
 position regardless of window; ETA uses that position and measured pace
 inside the window. Unknown legacy pace suppresses speed and ETA.
 Pages may be zero without edition metadata; koplugin-reported pages

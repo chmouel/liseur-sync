@@ -154,6 +154,32 @@ type Config struct {
 	// that speaks KOReader's sync protocol (ADR-0047). Disabled by
 	// default, and the only part of this server that dials out.
 	Mirror MirrorConfig `toml:"mirror"`
+
+	// Audiobookshelf follows audiobooks on one Audiobookshelf server
+	// (ADR-0055). Disabled by default; independent of the mirror.
+	Audiobookshelf AudiobookshelfConfig `toml:"audiobookshelf"`
+}
+
+// AudiobookshelfConfig is the one Audiobookshelf server whose listening
+// follows one account's reading, and back. Like the mirror's, the
+// credential lives here because it must be presented, and it is never
+// logged, stored or returned.
+type AudiobookshelfConfig struct {
+	SessionOverlap Duration `toml:"session_overlap"`
+	ActiveDays     int      `toml:"active_days"`
+	Enabled        bool     `toml:"enabled"`
+	// BaseURL is the server's root, the URL its web app is served at.
+	// Must be HTTPS unless insecure_http is set.
+	BaseURL string `toml:"base_url"`
+	// Account is the liseur-sync username whose reading is followed.
+	Account string `toml:"account"`
+	// APIKey is an Audiobookshelf API key for the listening account.
+	// Prefer LISEUR_ABS_API_KEY.
+	APIKey string `toml:"api_key"`
+	// PollInterval is how often the server is asked; it has no push.
+	PollInterval Duration `toml:"poll_interval"`
+	// Timeout bounds one request.
+	Timeout Duration `toml:"timeout"`
 }
 
 // MirrorConfig is one peer this server mirrors reading to and from.
@@ -308,6 +334,10 @@ func Default() Config {
 	c.Mirror.ResolveRetryInterval = Duration(24 * time.Hour)
 	c.Mirror.ActiveDays = 30
 	c.Mirror.Timeout = Duration(20 * time.Second)
+	c.Audiobookshelf.PollInterval = Duration(2 * time.Minute)
+	c.Audiobookshelf.Timeout = Duration(20 * time.Second)
+	c.Audiobookshelf.SessionOverlap = Duration(10 * time.Minute)
+	c.Audiobookshelf.ActiveDays = 30
 	return c
 }
 
@@ -322,7 +352,10 @@ func Default() Config {
 // LISEUR_MIRROR_REMOTE_USER, LISEUR_MIRROR_REMOTE_KEY,
 // LISEUR_MIRROR_REMOTE_PASSWORD, LISEUR_MIRROR_DEVICE_ID,
 // LISEUR_MIRROR_PEER_PATH_PREFIX, LISEUR_MIRROR_LOCAL_PATH_PREFIX,
-// LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL.
+// LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL,
+// LISEUR_ABS_ENABLED, LISEUR_ABS_BASE_URL, LISEUR_ABS_ACCOUNT,
+// LISEUR_ABS_API_KEY, LISEUR_ABS_POLL_INTERVAL, LISEUR_ABS_TIMEOUT,
+// LISEUR_ABS_SESSION_OVERLAP, LISEUR_ABS_ACTIVE_DAYS.
 //
 // The mirror's credential is an environment variable on purpose: it
 // belongs beside the database URL in a deployment's .env rather than in
@@ -380,6 +413,19 @@ func (c *Config) applyEnv() {
 	setStr(&c.Mirror.PeerPathPrefix, "LISEUR_MIRROR_PEER_PATH_PREFIX")
 	setStr(&c.Mirror.LocalPathPrefix, "LISEUR_MIRROR_LOCAL_PATH_PREFIX")
 	setDuration(&c.Mirror.ResolveRetryInterval, "LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL")
+
+	setBool(&c.Audiobookshelf.Enabled, "LISEUR_ABS_ENABLED")
+	setStr(&c.Audiobookshelf.BaseURL, "LISEUR_ABS_BASE_URL")
+	setStr(&c.Audiobookshelf.Account, "LISEUR_ABS_ACCOUNT")
+	setStr(&c.Audiobookshelf.APIKey, "LISEUR_ABS_API_KEY")
+	setDuration(&c.Audiobookshelf.PollInterval, "LISEUR_ABS_POLL_INTERVAL")
+	setDuration(&c.Audiobookshelf.Timeout, "LISEUR_ABS_TIMEOUT")
+	setDuration(&c.Audiobookshelf.SessionOverlap, "LISEUR_ABS_SESSION_OVERLAP")
+	if v, ok := os.LookupEnv("LISEUR_ABS_ACTIVE_DAYS"); ok {
+		if days, err := strconv.Atoi(v); err == nil {
+			c.Audiobookshelf.ActiveDays = days
+		}
+	}
 }
 
 // Validate checks the config is coherent.
@@ -480,7 +526,7 @@ func (c *Config) Validate() error {
 	if err := c.validateMirror(); err != nil {
 		return err
 	}
-	return nil
+	return c.validateAudiobookshelf()
 }
 
 // validateMirror refuses a half-configured mirror rather than starting
@@ -576,6 +622,61 @@ func (c *Config) validateMirror() error {
 	}
 	if m.Timeout.Duration() < time.Second {
 		return fmt.Errorf("mirror.timeout must be at least 1s")
+	}
+	return nil
+}
+
+// validateAudiobookshelf holds the integration to the mirror's rules:
+// nothing half-configured starts, and the key never crosses in the clear
+// or rides in a URL (ADR-0055).
+func (c *Config) validateAudiobookshelf() error {
+	a := &c.Audiobookshelf
+	a.BaseURL = strings.TrimSpace(a.BaseURL)
+	a.Account = strings.TrimSpace(a.Account)
+	a.APIKey = strings.TrimSpace(a.APIKey)
+	if !a.Enabled {
+		return nil
+	}
+	for _, r := range []struct{ name, value string }{
+		{"audiobookshelf.base_url", a.BaseURL},
+		{"audiobookshelf.account", a.Account},
+		{"audiobookshelf.api_key", a.APIKey},
+	} {
+		if r.value == "" {
+			return fmt.Errorf("%s is required when audiobookshelf is enabled", r.name)
+		}
+	}
+	u, err := url.Parse(a.BaseURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("audiobookshelf.base_url must be an absolute URL")
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !c.InsecureHTTP {
+			return fmt.Errorf("audiobookshelf.base_url must be https unless insecure_http is set")
+		}
+	default:
+		return fmt.Errorf("audiobookshelf.base_url must be http or https, got %q", u.Scheme)
+	}
+	if u.User != nil {
+		return fmt.Errorf("audiobookshelf.base_url must not contain a username or password")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("audiobookshelf.base_url must not contain a query string or fragment")
+	}
+	a.BaseURL = strings.TrimSuffix(u.String(), "/")
+	if a.PollInterval.Duration() < time.Minute {
+		return fmt.Errorf("audiobookshelf.poll_interval must be at least 1m")
+	}
+	if a.ActiveDays < 1 {
+		return fmt.Errorf("audiobookshelf.active_days must be positive")
+	}
+	if a.SessionOverlap.Duration() < time.Minute {
+		return fmt.Errorf("audiobookshelf.session_overlap must be at least 1m")
+	}
+	if a.Timeout.Duration() < time.Second {
+		return fmt.Errorf("audiobookshelf.timeout must be at least 1s")
 	}
 	return nil
 }

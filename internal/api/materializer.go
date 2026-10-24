@@ -227,7 +227,7 @@ func buildSessionRollups(sessions []store.Session, userID, timezone string, loc 
 		ru.Pages += pages
 		ru.ProgDelta += progDelta
 		ru.SessionCount++
-		if ses.Origin != store.OriginInferred {
+		if store.MeasuresReadingPace(ses.Origin) {
 			ru.MeasuredActiveSeconds += active
 			ru.MeasuredProgDelta += progDelta
 		}

@@ -63,6 +63,9 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 						<nav aria-label="Sections">
 							@railLink(prefix+"library", "Library", u.Section == "library")
 							@railLink(prefix+"insights", "Insights", u.Section == "insights")
+ if u.Audiobookshelf {
+ @railLink(prefix+"audiobookshelf", "Audiobookshelf", u.Section == "audiobookshelf")
+ }
 							if u.IsAdmin {
 								@railLink(settingsAdminHref(prefix, settingsAdminFolders), "Folders", u.Section == "folders")
 							}
@@ -108,7 +111,9 @@ templ uiIcon(name string) {
 		switch name {
 			case "Insights":
 				<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>
-			case "Library":
+			case "Audiobookshelf":
+ <path d="M4 14v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="12" width="4" height="8" rx="2"/><rect x="17" y="12" width="4" height="8" rx="2"/>
+ case "Library":
 				<path d="M12 6v15M3 4c4-1 6 0 9 2 3-2 5-3 9-2v15c-4-1-6 0-9 2-3-2-5-3-9-2Z"/>
 			case "Folders":
 				<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Zm0 2h18"/>

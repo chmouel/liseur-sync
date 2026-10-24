@@ -411,3 +411,36 @@ func testV2RollupsRejectMismatchedContributions(t *testing.T, open OpenFunc) {
 		t.Fatalf("archive proof lost per-session millisecond evidence: %+v", proof)
 	}
 }
+
+func testRollupsExcludeListeningFromPace(t *testing.T, open OpenFunc) {
+	ctx := t.Context()
+	s := open(t)
+	user := MkUser(t, s, "listening-pace")
+	work := MkWork(t, s, user, "listening-work", "listening-edition")
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+	sessions := []store.Session{
+		{SessionID: "read", WorkID: work.ID, EditionSHA: Ptr("listening-edition"), StartedAt: now, EndedAt: now.Add(10 * time.Minute),
+			StartProg: 0, EndProg: 0.25, ActiveMs: Ptr(int64(600000)), Origin: store.OriginNative},
+		{SessionID: "listen", WorkID: work.ID, EditionSHA: Ptr("listening-edition"), StartedAt: now.Add(time.Hour), EndedAt: now.Add(2 * time.Hour),
+			StartProg: 0.25, EndProg: 0.75, ActiveMs: Ptr(int64(1200000)), Origin: store.OriginAudiobookshelf},
+	}
+	if err := s.AppendSessions(ctx, user.ID, sessions); err != nil {
+		t.Fatal(err)
+	}
+	rollup := store.SessionRollup{UserID: user.ID, WorkID: work.ID, Day: now.Format("2006-01-02"), Timezone: user.Timezone,
+		AttributionVersion: 2, ActiveSeconds: 1800, Pages: 346.5, ProgDelta: 0.75, SessionCount: 2, MeasuredActiveSeconds: 600, MeasuredProgDelta: 0.25}
+	if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup}, sessions); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.StatisticsSnapshot(ctx, user.ID, []string{"listen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := snap.Archived["listen"]
+	if !proof.Present || proof.ActiveSeconds != 1200 || proof.Pages != 231 || proof.ProgDelta != 0.5 || proof.MeasuredActiveSeconds != 0 || proof.MeasuredProgDelta != 0 {
+		t.Fatalf("listening archive counted reading pace: %+v", proof)
+	}
+	if len(snap.Sessions) != 0 || len(snap.Rollups) != 1 || snap.Rollups[0].ActiveSeconds != 1800 || snap.Rollups[0].MeasuredActiveSeconds != 600 {
+		t.Fatalf("retention changed listening totals: %+v", snap.Rollups)
+	}
+}

@@ -770,6 +770,68 @@ const furthestFloor = `
 ALTER TABLE works ADD COLUMN furthest_floor BIGINT NOT NULL DEFAULT 0;
 `
 
+// audiobookLinks joins Audiobookshelf library items to works (ADR-0055).
+//
+// A link is unique on both sides per peer, in every state, so a paused
+// link still reserves its work and its item. book_id is deliberately not
+// a foreign key: a replaced or deleted catalog book suspends the link
+// rather than taking it away. Rejections are the pairs a reader unlinked,
+// which automatic matching must not propose again.
+//
+// session_supersessions gains the remote server's own revision time, so
+// an Audiobookshelf revision that arrives late can be recognised as older
+// than the one already current. Koplugin rows leave it NULL.
+const audiobookLinks = `
+CREATE TABLE IF NOT EXISTS audiobook_links (
+    user_id               TEXT NOT NULL,
+    peer_identity         TEXT NOT NULL,
+    abs_item_id           TEXT NOT NULL,
+    work_id               TEXT NOT NULL,
+    book_id               TEXT NOT NULL DEFAULT '',
+    edition_sha           TEXT NOT NULL DEFAULT '',
+    generation            TEXT NOT NULL,
+    source                TEXT NOT NULL,
+    state                 TEXT NOT NULL,
+    confirmed_linear      BOOLEAN NOT NULL DEFAULT FALSE,
+    mapping               TEXT NOT NULL DEFAULT '',
+    mapping_key           TEXT NOT NULL DEFAULT '',
+    pushed_seq            BIGINT NOT NULL DEFAULT 0,
+    pushed_mark           TEXT NOT NULL DEFAULT '',
+    remote_updated_ms     BIGINT NOT NULL DEFAULT 0,
+    sessions_watermark_ms BIGINT NOT NULL DEFAULT 0,
+    last_error            TEXT NOT NULL DEFAULT '',
+    created_at            TIMESTAMPTZ NOT NULL,
+    updated_at            TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, peer_identity, abs_item_id),
+    UNIQUE (user_id, peer_identity, work_id),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS audiobook_link_rejections (
+    user_id       TEXT NOT NULL,
+    peer_identity TEXT NOT NULL,
+    work_id       TEXT NOT NULL,
+    abs_item_id   TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, peer_identity, work_id, abs_item_id),
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS audiobook_mappings (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mapping_key TEXT NOT NULL,
+    mapping TEXT NOT NULL,
+    PRIMARY KEY (user_id, mapping_key)
+);
+CREATE TABLE IF NOT EXISTS audiobook_session_imports (
+    user_id TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    mapping_key TEXT NOT NULL,
+    first_imported_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, source_key),
+    FOREIGN KEY (user_id, mapping_key) REFERENCES audiobook_mappings(user_id, mapping_key) ON DELETE CASCADE
+);
+ALTER TABLE session_supersessions ADD COLUMN remote_updated_at TIMESTAMPTZ;
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -784,6 +846,7 @@ var migrations = []string{
 	workTranslations,
 	workTranslationStamps,
 	furthestFloor,
+	audiobookLinks,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -809,6 +872,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"workTranslations":         workTranslations,
 		"workTranslationStamps":    workTranslationStamps,
 		"furthestFloor":            furthestFloor,
+		"audiobookLinks":           audiobookLinks,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
 	"github.com/chmouel/liseur-sync/internal/buildinfo"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -76,7 +77,8 @@ type settingsDevicesView struct {
 }
 
 type settingsAdminView struct {
-	View string
+	Audiobookshelf audiobookshelf.Status
+	View           string
 
 	Counts store.AdminCounts
 	Build  buildinfo.Info
@@ -482,6 +484,9 @@ func (s *Server) settingsAdmin(
 			return err
 		}
 		v.Counts = counts
+		if s.AudiobookRunner != nil {
+			v.Audiobookshelf = s.AudiobookRunner.Status()
+		}
 		v.Build = buildinfo.Get()
 		v.Config = describeConfig(s.Cfg)
 		v.View = settingsAdminOverview

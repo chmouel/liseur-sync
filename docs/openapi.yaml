@@ -3505,7 +3505,7 @@ components:
           properties:
             seq: { type: integer, description: Server-assigned per-user monotonic sequence }
             device_id: { type: string }
-            origin: { type: string, enum: [native, kosync] }
+            origin: { type: string, enum: [native, kosync, audiobookshelf] }
             origin_alias:
               type: string
               description: "Source identifier for edition-less records, preserving ownership when a work is split."
