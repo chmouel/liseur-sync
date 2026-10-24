@@ -96,9 +96,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 			return "skipped", nil
 		}
 	}
-	if local.EditionSHA != nil && *local.EditionSHA != l.EditionSHA {
-		return "skipped", nil
-	}
+	sameEdition := local.EditionSHA == nil || *local.EditionSHA == l.EditionSHA
 	remoteTime := remote.CurrentTime
 	_, audioEnd, _, _ := m.Coverage()
 	if remote.IsFinished {
@@ -108,7 +106,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	if remote.IsFinished && m.FullNarrative {
 		p, mapped = 1, true
 	}
-	if have && mapped && local.Seq > 0 {
+	if have && mapped && local.Seq > 0 && sameEdition {
 		tolerance := (seg.BookEnd - seg.BookStart) / (seg.AudioEnd - seg.AudioStart)
 		complete := remote.IsFinished == (local.Progression >= 0.999 && m.CoversLast)
 		if !m.FullNarrative && remote.IsFinished && nearProgress(local.Progression, 0.998) {
@@ -119,7 +117,8 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 			return "skipped", nil
 		}
 	}
-	echo := have && l.PushedMark != "" && progressMark(remote) == l.PushedMark
+	echo := have && l.PushedMark != "" && progressMark(remote) == l.PushedMark &&
+		remote.LastUpdate <= l.RemoteUpdatedMs
 	if !echo {
 		l.PushedMark = ""
 	}
@@ -153,7 +152,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		l.PushedSeq, l.RemoteUpdatedMs = results[0].Seq, remote.LastUpdate
 		return "pulled", nil
 	}
-	if local.Seq == 0 || strings.HasPrefix(local.DeviceID, peerPrefix(l.PeerIdentity)) {
+	if local.Seq == 0 || !sameEdition || strings.HasPrefix(local.DeviceID, peerPrefix(l.PeerIdentity)) {
 		return "skipped", nil
 	}
 	at, mapped := m.ToAudio(local.Progression)
