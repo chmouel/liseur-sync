@@ -18,6 +18,7 @@ import (
 	"github.com/readium/go-toolkit/pkg/mediatype"
 	readium "github.com/readium/go-toolkit/pkg/parser/epub"
 	"github.com/readium/go-toolkit/pkg/pub"
+	rurl "github.com/readium/go-toolkit/pkg/util/url"
 )
 
 // Publication is a request-local, read-only view of an already catalogued EPUB.
@@ -122,6 +123,18 @@ func OpenPublication(ctx context.Context, source io.ReaderAt, size int64, limits
 	}
 	if builder == nil || len(builder.Manifest.ReadingOrder) == 0 {
 		return nil, validationError(CodeInvalidEPUB, errors.New("empty reading order"))
+	}
+	// Calibre / Ebook-lib EPUB 3.0 conversions often ship an EPUB 2 toc.ncx
+	// without a properties="nav" XHTML document; Readium ignores NCX when
+	// version >= 3.0, leaving TableOfContents empty unless we fall back here.
+	if len(builder.Manifest.TableOfContents) == 0 && details.ncxPath != "" {
+		if ncxURL, err := rurl.FromEPUBHref(details.ncxPath); err == nil {
+			if doc, rerr := fetcher.ReadResourceAsXML(ctx, a.Get(ctx, manifest.Link{Href: manifest.NewHREF(ncxURL)})); rerr == nil {
+				if nav := readium.ParseNCX(doc, ncxURL); len(nav["toc"]) > 0 {
+					builder.Manifest.TableOfContents = nav["toc"]
+				}
+			}
+		}
 	}
 	a.metadataOnly = false
 	p := &Publication{Publication: builder.Build(), PackagePath: packagePath, archive: a, allowed: make(map[string]manifest.Link), fontObfuscation: fontObfuscation}

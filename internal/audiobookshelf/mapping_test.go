@@ -321,3 +321,68 @@ func TestBookAnchorsPlacesFragmentsInsideADocument(t *testing.T) {
 		t.Fatal("an entry naming a missing element was placed")
 	}
 }
+
+func TestAlignSplitChaptersAndTrailingCredits(t *testing.T) {
+	// 12 numbered book chapters (plus unnumbered back matter), where
+	// Book Chapter 5 is twice as long and was split into Audio Chapters 5
+	// and 6, shifting Book Chapters 6..12 to Audio Chapters 7..13, followed
+	// by a trailing numbered back-matter/credits Audio Chapter 14.
+	var book []BookChapter
+	var res []Resource
+	weights := []float64{1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1}
+	totalW := 13.0
+	narrativeSpan := 0.98
+	pos := 0.0
+	for i, w := range weights {
+		span := narrativeSpan * (w / totalW)
+		href := fmt.Sprintf("ch%02d.xhtml", i+1)
+		book = append(book, BookChapter{
+			Title: fmt.Sprintf("CHAPTER %d: Part", i+1),
+			Href:  href,
+			Start: pos,
+			End:   pos + span,
+		})
+		res = append(res, Resource{Href: href, Start: pos, End: pos + span})
+		pos += span
+	}
+	book = append(book, BookChapter{
+		Title: "Appendix",
+		Href:  "bm.xhtml",
+		Start: pos,
+		End:   1.0,
+	})
+	res = append(res, Resource{Href: "bm.xhtml", Start: pos, End: 1.0})
+
+	// Audio chapters: 1..4 (100s each), 5 (110s) + 6 (90s) = 200s for Book Ch 5,
+	// 7..13 (100s each for Book Ch 6..12), 14 (25s trailing credits).
+	audioDurs := []float64{100, 100, 100, 100, 110, 90, 100, 100, 100, 100, 100, 100, 100, 25}
+	var audio []Chapter
+	tPos := 0.0
+	for i, d := range audioDurs {
+		audio = append(audio, Chapter{
+			Title: fmt.Sprintf("Chapter %d", i+1),
+			Start: tPos,
+			End:   tPos + d,
+		})
+		tPos += d
+	}
+
+	m, err := Align(book, res, audio, tPos)
+	if err != nil {
+		t.Fatalf("Align with split chapter failed: %v", err)
+	}
+	if len(m.Segments) != 13 {
+		t.Fatalf("len(Segments) = %d, want 13", len(m.Segments))
+	}
+	// Audio Chapter 5 and 6 both map into Book Chapter 5 (ch05.xhtml),
+	// and Audio Chapter 7 maps to Book Chapter 6 (ch06.xhtml).
+	if m.Segments[4].Href != "ch05.xhtml" || m.Segments[5].Href != "ch05.xhtml" {
+		t.Fatalf("split chapter hrefs = (%q, %q), want ch05.xhtml", m.Segments[4].Href, m.Segments[5].Href)
+	}
+	if m.Segments[6].Href != "ch06.xhtml" || m.Segments[6].Label != "Chapter 7" {
+		t.Fatalf("segment 6 = %+v, want Chapter 7 -> ch06.xhtml", m.Segments[6])
+	}
+	if m.Segments[12].Href != "ch12.xhtml" || m.Segments[12].Label != "Chapter 13" {
+		t.Fatalf("last segment = %+v, want Chapter 13 -> ch12.xhtml", m.Segments[12])
+	}
+}

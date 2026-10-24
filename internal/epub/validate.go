@@ -675,6 +675,7 @@ func parseContainer(value []byte, maxDepth int) (string, error) {
 
 type packageDetails struct {
 	navigationPath string
+	ncxPath        string
 	manifest       map[string]string
 	manifestByID   map[string]manifestItem
 	cover          *manifestItem
@@ -838,6 +839,9 @@ func parsePackage(
 			if mediaType == "application/x-dtbncx+xml" {
 				document.root = "ncx"
 				document.namespace = "http://www.daisy.org/z3986/2005/ncx/"
+				if details.ncxPath == "" {
+					details.ncxPath = resolved
+				}
 			}
 			navigation = append(navigation, document)
 		case xml.EndElement:

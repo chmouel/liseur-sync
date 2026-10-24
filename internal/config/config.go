@@ -180,6 +180,15 @@ type AudiobookshelfConfig struct {
 	PollInterval Duration `toml:"poll_interval"`
 	// Timeout bounds one request.
 	Timeout Duration `toml:"timeout"`
+	// STTURL is an optional OpenAI-compatible speech-to-text API root
+	// (e.g. https://api.groq.com/openai/v1 or http://127.0.0.1:8000/v1)
+	// used to transcribe short audio snippets for exact-page alignment.
+	STTURL string `toml:"stt_url"`
+	// STTAPIKey is an optional Bearer token for STTURL.
+	// Prefer LISEUR_ABS_STT_API_KEY.
+	STTAPIKey string `toml:"stt_api_key"`
+	// STTModel is the transcription model name (default "whisper-1").
+	STTModel string `toml:"stt_model"`
 }
 
 // MirrorConfig is one peer this server mirrors reading to and from.
@@ -338,6 +347,7 @@ func Default() Config {
 	c.Audiobookshelf.Timeout = Duration(20 * time.Second)
 	c.Audiobookshelf.SessionOverlap = Duration(10 * time.Minute)
 	c.Audiobookshelf.ActiveDays = 30
+	c.Audiobookshelf.STTModel = "whisper-1"
 	return c
 }
 
@@ -421,6 +431,9 @@ func (c *Config) applyEnv() {
 	setDuration(&c.Audiobookshelf.PollInterval, "LISEUR_ABS_POLL_INTERVAL")
 	setDuration(&c.Audiobookshelf.Timeout, "LISEUR_ABS_TIMEOUT")
 	setDuration(&c.Audiobookshelf.SessionOverlap, "LISEUR_ABS_SESSION_OVERLAP")
+	setStr(&c.Audiobookshelf.STTURL, "LISEUR_ABS_STT_URL")
+	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_ABS_STT_API_KEY")
+	setStr(&c.Audiobookshelf.STTModel, "LISEUR_ABS_STT_MODEL")
 	if v, ok := os.LookupEnv("LISEUR_ABS_ACTIVE_DAYS"); ok {
 		if days, err := strconv.Atoi(v); err == nil {
 			c.Audiobookshelf.ActiveDays = days
@@ -634,8 +647,24 @@ func (c *Config) validateAudiobookshelf() error {
 	a.BaseURL = strings.TrimSpace(a.BaseURL)
 	a.Account = strings.TrimSpace(a.Account)
 	a.APIKey = strings.TrimSpace(a.APIKey)
+	a.STTURL = strings.TrimSpace(a.STTURL)
+	a.STTAPIKey = strings.TrimSpace(a.STTAPIKey)
+	a.STTModel = strings.TrimSpace(a.STTModel)
+	if a.STTModel == "" {
+		a.STTModel = "whisper-1"
+	}
 	if !a.Enabled {
 		return nil
+	}
+	if a.STTURL != "" {
+		su, err := url.Parse(a.STTURL)
+		if err != nil || su.Host == "" || (su.Scheme != "http" && su.Scheme != "https") {
+			return fmt.Errorf("audiobookshelf.stt_url must be an absolute http or https URL")
+		}
+		if su.User != nil || su.RawQuery != "" || su.Fragment != "" {
+			return fmt.Errorf("audiobookshelf.stt_url must not contain credentials, query string or fragment")
+		}
+		a.STTURL = strings.TrimSuffix(su.String(), "/")
 	}
 	for _, r := range []struct{ name, value string }{
 		{"audiobookshelf.base_url", a.BaseURL},
