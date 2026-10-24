@@ -28,7 +28,7 @@ func TestAudiobookshelfIsOffByDefault(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Audiobookshelf.PollInterval.Duration(); got != 2*time.Minute {
+	if got := cfg.Audiobookshelf.PollInterval.Duration(); got != 30*time.Second {
 		t.Fatalf("default poll interval: %s", got)
 	}
 	if got := workingAudiobookshelf(t).Audiobookshelf.BaseURL; got != "https://abs.example.com" {
@@ -92,7 +92,7 @@ func TestTheShippedExampleDocumentsAudiobookshelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := strings.Replace(string(body), `poll_interval = "2m"`, `poll_interval = "9m"`, 1)
+	text := strings.Replace(string(body), `poll_interval = "30s"`, `poll_interval = "9m"`, 1)
 	cfg, err := Load(writeConfig(t, text))
 	if err != nil {
 		t.Fatal(err)

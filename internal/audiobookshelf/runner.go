@@ -39,7 +39,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	cfg := r.Service.Cfg
 	poll := cfg.PollInterval.Duration()
 	if poll <= 0 {
-		poll = 2 * time.Minute
+		poll = 30 * time.Second
 	}
 	r.mu.Lock()
 	r.status.Enabled = true

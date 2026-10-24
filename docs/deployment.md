@@ -774,7 +774,7 @@ Optional settings, in `[audiobookshelf]` or their environment overrides:
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
-| `poll_interval` | `LISEUR_ABS_POLL_INTERVAL` | `2m` (minimum `1m`) |
+| `poll_interval` | `LISEUR_ABS_POLL_INTERVAL` | `30s` (minimum `30s`) |
 | `timeout` | `LISEUR_ABS_TIMEOUT` | `20s` |
 | `session_overlap` | `LISEUR_ABS_SESSION_OVERLAP` | `10m` (minimum `1m`) |
 | `active_days` | `LISEUR_ABS_ACTIVE_DAYS` | `30` |
