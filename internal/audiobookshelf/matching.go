@@ -18,7 +18,7 @@ var ErrAmbiguous = errors.New("audiobookshelf: more than one book matches")
 
 var (
 	trailingBracket = regexp.MustCompile(`\s*[(\[][^()\[\]]*[)\]]\s*$`)
-	trailingVolume  = regexp.MustCompile(`[\s,.\-–—]*\b(?:book|tome|volume|vol\.?|livre)\s+\S+\s*$`)
+	trailingVolume  = regexp.MustCompile(`(?i)[\s,.\-–—]*\b(?:book|tome|volume|vol\.?|livre)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|[ivxlcdm]{1,8})\s*$`)
 )
 
 // titleKey reduces a title to what an audiobook and an ebook of the same
