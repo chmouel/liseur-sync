@@ -19,6 +19,10 @@ func TestTitleKey(t *testing.T) {
 		"Les Dieux Inquiets":                     "les dieux inquiets",
 		"Élan vital [Unabridged]":                "elan vital",
 		"The Book Thief":                         "the book thief",
+		"Example, Book 6":                        "example",
+		"Example, book 6":                        "example",
+		"Example, Book VI":                       "example",
+		"The Book Thief: A Novel":                "the book thief",
 	} {
 		if got := titleKey(in); got != want {
 			t.Errorf("titleKey(%q) = %q, want %q", in, got, want)

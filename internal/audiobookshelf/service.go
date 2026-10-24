@@ -142,7 +142,11 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 				if e == nil {
 					expanded, e := s.Client.Item(ctx, item.ID)
 					if e == nil {
-						_, row.LinearAllowed, _ = s.mapping(ctx, book, expanded, false)
+						var m Mapping
+						m, row.LinearAllowed, e = s.mapping(ctx, book, expanded, l.ConfirmedLinear)
+						if e == nil || errors.Is(e, ErrNoAlignment) {
+							row.Mapping = m
+						}
 					}
 				}
 			}
@@ -255,6 +259,7 @@ func (s *Service) Mutate(ctx context.Context, userID, itemID, generation, action
 	if l.State != store.AudiobookLinkNeedsMapping {
 		return store.ErrConflict
 	}
+	linear := action == "linear" || (action == "confirm" && l.ConfirmedLinear)
 	book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID)
 	if err != nil {
 		return err
@@ -269,7 +274,7 @@ func (s *Service) Mutate(ctx context.Context, userID, itemID, generation, action
 	if l.MappingKey != ChaptersKey(book.ContentSHA256, item.Chapters, item.Duration, l.ConfirmedLinear) {
 		return store.ErrConflict
 	}
-	m, _, err := s.mapping(ctx, book, item, action == "linear")
+	m, _, err := s.mapping(ctx, book, item, linear)
 	if err != nil {
 		return err
 	}
@@ -280,7 +285,7 @@ func (s *Service) Mutate(ctx context.Context, userID, itemID, generation, action
 	if err != nil {
 		return err
 	}
-	l.ConfirmedLinear = action == "linear"
+	l.ConfirmedLinear = linear
 	l.MappingKey = ChaptersKey(book.ContentSHA256, item.Chapters, item.Duration, l.ConfirmedLinear)
 	l.EditionSHA, l.State = book.ContentSHA256, store.AudiobookLinkActive
 	if _, err := s.account(ctx, userID); err != nil {
@@ -290,6 +295,13 @@ func (s *Service) Mutate(ctx context.Context, userID, itemID, generation, action
 }
 
 func (s *Service) ready(ctx context.Context, userID string, l store.AudiobookLink, expectedSeq int64) error {
+	return s.readyBook(ctx, userID, l, expectedSeq, true)
+}
+
+// readyBook rechecks everything a write depends on. Opening the ebook to
+// re-derive its anchors is only needed before a position exchange; a session
+// import already used the mapping validated earlier in the pass.
+func (s *Service) readyBook(ctx context.Context, userID string, l store.AudiobookLink, expectedSeq int64, anchors bool) error {
 	if _, err := s.account(ctx, userID); err != nil {
 		return err
 	}
@@ -308,8 +320,10 @@ func (s *Service) ready(ctx context.Context, userID string, l store.AudiobookLin
 	if book.Status != store.BookActive || book.ContentSHA256 != l.EditionSHA {
 		return store.ErrConflict
 	}
-	if _, _, err := s.chapters(ctx, book); err != nil {
-		return err
+	if anchors {
+		if _, _, err := s.chapters(ctx, book); err != nil {
+			return err
+		}
 	}
 	if expectedSeq >= 0 {
 		local, err := s.head(ctx, userID, l.WorkID)
@@ -355,19 +369,17 @@ func (s *Service) revalidate(ctx context.Context, userID string, l store.Audiobo
 		state = store.AudiobookLinkSuspended
 	} else {
 		key := ChaptersKey(book.ContentSHA256, item.Chapters, item.Duration, l.ConfirmedLinear)
-		m, _, e := s.mapping(ctx, book, item, l.ConfirmedLinear)
+		_, _, e := s.mapping(ctx, book, item, l.ConfirmedLinear)
 		if e != nil && !errors.Is(e, ErrNoAlignment) {
 			state = store.AudiobookLinkSuspended
 		} else if key != l.MappingKey || book.ID != l.BookID {
 			changed = true
 			l.BookID, l.EditionSHA, l.MappingKey = book.ID, book.ContentSHA256, key
+			// A recomputed alignment is only a preview until the reader
+			// confirms it, so it is not stored here; View derives it for
+			// display and Mutate recomputes it on confirmation. Keeping it
+			// would let a later suspension look like a confirmed mapping.
 			l.Mapping = nil
-			if e == nil {
-				l.Mapping, err = json.Marshal(m)
-				if err != nil {
-					return l, err
-				}
-			}
 			state = store.AudiobookLinkNeedsMapping
 		} else if state == store.AudiobookLinkSuspended {
 			state = store.AudiobookLinkActive

@@ -177,37 +177,24 @@ func TestPositionExchange(t *testing.T) {
 			}
 		})
 	}
-	t.Run("edition mismatch", func(t *testing.T) {
-		titles := []string{"Chapter 1", "Chapter 2", "Chapter 3"}
-		f := newABSFixture(t, titles, titles)
-		l := f.link(t)
-		now := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
-		otherWork := "work-other"
-		otherSHA := strings.Repeat("b", 64)
-		if err := f.st.CreateWork(t.Context(),
-			store.Work{ID: otherWork, UserID: f.user.ID, Title: "The Book", Author: "An Author", CreatedAt: now},
-			&store.Edition{UserID: f.user.ID, SHA256: otherSHA, WorkID: otherWork},
-			[]store.Identifier{{Kind: "sha256", Value: otherSHA}},
-		); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.st.MergeWorks(t.Context(), f.user.ID, otherWork, l.WorkID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.st.AppendOps(t.Context(), f.user.ID, "phone", []store.Op{{
-			OpID:        "local:edition-mismatch",
-			WorkID:      l.WorkID,
-			EditionSHA:  &otherSHA,
-			Progression: .6,
-			ClientTS:    now,
-			Origin:      store.OriginNative,
-		}}); err != nil {
-			t.Fatal(err)
-		}
-		f.remote(now.Add(-time.Second), .2, false)
+	t.Run("edition mismatch is not pushed", func(t *testing.T) {
+		f, _, at := editionMismatch(t)
+		f.remote(at.Add(-time.Second), .2, false)
 		rep := f.pass(t)
 		if rep.Pushed != 0 || rep.Pulled != 0 || rep.Skipped != 1 || f.patches != 0 {
 			t.Fatalf("edition mismatch: %+v patches=%d", rep, f.patches)
+		}
+	})
+	t.Run("edition mismatch still pulls", func(t *testing.T) {
+		f, l, at := editionMismatch(t)
+		f.remote(at.Add(time.Minute), .2, false)
+		rep := f.pass(t)
+		if rep.Pushed != 0 || rep.Pulled != 1 || f.patches != 0 {
+			t.Fatalf("edition mismatch pull: %+v patches=%d", rep, f.patches)
+		}
+		head, err := f.service.head(t.Context(), f.user.ID, l.WorkID)
+		if err != nil || !nearProgress(head.Progression, .2) {
+			t.Fatalf("head: %+v %v", head, err)
 		}
 	})
 }
@@ -414,5 +401,136 @@ func TestRevokedGrantPausesLinkWithoutWrites(t *testing.T) {
 	rep := f.pass(t)
 	if rep.Pushed != 0 || rep.Pulled != 0 || f.linked(t).State != store.AudiobookLinkSuspended {
 		t.Fatalf("revoked grant: %+v", rep)
+	}
+}
+
+// editionMismatch returns a linked fixture whose newest local op comes from
+// another edition of the same work.
+func editionMismatch(t *testing.T) (*absFixture, store.AudiobookLink, time.Time) {
+	t.Helper()
+	titles := []string{"Chapter 1", "Chapter 2", "Chapter 3"}
+	f := newABSFixture(t, titles, titles)
+	l := f.link(t)
+	now := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	otherWork := "work-other"
+	otherSHA := strings.Repeat("b", 64)
+	if err := f.st.CreateWork(t.Context(),
+		store.Work{ID: otherWork, UserID: f.user.ID, Title: "The Book", Author: "An Author", CreatedAt: now},
+		&store.Edition{UserID: f.user.ID, SHA256: otherSHA, WorkID: otherWork},
+		[]store.Identifier{{Kind: "sha256", Value: otherSHA}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.MergeWorks(t.Context(), f.user.ID, otherWork, l.WorkID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.AppendOps(t.Context(), f.user.ID, "phone", []store.Op{{
+		OpID:        "local:edition-mismatch",
+		WorkID:      l.WorkID,
+		EditionSHA:  &otherSHA,
+		Progression: .6,
+		ClientTS:    now,
+		Origin:      store.OriginNative,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	return f, l, now
+}
+
+func TestRemoteSeekBackIsNotAnEcho(t *testing.T) {
+	titles := []string{"Chapter 1", "Chapter 2"}
+	f := newABSFixture(t, titles, titles)
+	l := f.link(t)
+	now := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	f.read(t, l, .5, now)
+	f.remote(now.Add(-time.Second), .2, false)
+	if rep := f.pass(t); rep.Pushed != 1 {
+		t.Fatalf("push: %+v", rep)
+	}
+	// The reader moves on locally, then seeks back on the phone. The mark
+	// matches the pushed value, but the remote timestamp is newer.
+	f.read(t, l, .7, now.Add(time.Second))
+	f.remote(time.Now().Add(2*time.Second), .5, false)
+	rep := f.pass(t)
+	if rep.Pulled != 1 || f.patches != 1 {
+		t.Fatalf("seek back: %+v patches=%d", rep, f.patches)
+	}
+	head, err := f.service.head(t.Context(), f.user.ID, l.WorkID)
+	if err != nil || !nearProgress(head.Progression, .5) {
+		t.Fatalf("head: %+v %v", head, err)
+	}
+}
+
+func TestSuspendedPreviewNeedsConfirmationAgain(t *testing.T) {
+	f := newABSFixture(t,
+		[]string{"Chapter 1", "Chapter 2", "Chapter 3"},
+		[]string{"Chapter 1", "Chapter 2"})
+	l := f.link(t)
+	if l.State != store.AudiobookLinkActive {
+		t.Fatalf("link: %+v", l)
+	}
+	// The recording now covers the whole book, so the alignment moves.
+	f.audio = evenAudio("Chapter 1", "Chapter 2", "Chapter 3")
+	f.pass(t)
+	l = f.linked(t)
+	if l.State != store.AudiobookLinkNeedsMapping || len(l.Mapping) != 0 {
+		t.Fatalf("remap: %+v", l)
+	}
+	// The pending preview is still shown to the reader.
+	views, err := f.service.View(t.Context(), f.user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewed := false
+	for _, v := range views {
+		previewed = previewed || len(v.Mapping.Segments) > 0
+	}
+	if !previewed {
+		t.Fatal("View lost the unconfirmed preview")
+	}
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rep := f.pass(t); f.linked(t).State != store.AudiobookLinkSuspended {
+		t.Fatalf("suspended: %+v", rep)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.pass(t)
+	if got := f.linked(t); got.State != store.AudiobookLinkNeedsMapping {
+		t.Fatalf("suspension confirmed an unaccepted preview: %+v", got)
+	}
+	if err := f.service.Mutate(t.Context(), f.user.ID, "item", f.linked(t).Generation, "confirm"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.linked(t); got.State != store.AudiobookLinkActive {
+		t.Fatalf("confirm: %+v", got)
+	}
+}
+
+func TestConfirmKeepsAConfirmedLinearMapping(t *testing.T) {
+	f := newABSFixture(t, []string{"Intro", "Body"}, []string{"Intro", "Body"})
+	l := f.link(t)
+	if l.State != store.AudiobookLinkNeedsMapping {
+		t.Fatalf("link: %+v", l)
+	}
+	if err := f.service.Mutate(t.Context(), f.user.ID, "item", l.Generation, "linear"); err != nil {
+		t.Fatal(err)
+	}
+	l = f.linked(t)
+	if !l.ConfirmedLinear || l.State != store.AudiobookLinkActive {
+		t.Fatalf("linear: %+v", l)
+	}
+	f.audio = evenAudio("Intro", "Body", "Credits")
+	f.pass(t)
+	if l = f.linked(t); l.State != store.AudiobookLinkNeedsMapping || !l.ConfirmedLinear {
+		t.Fatalf("remap: %+v", l)
+	}
+	if err := f.service.Mutate(t.Context(), f.user.ID, "item", l.Generation, "confirm"); err != nil {
+		t.Fatalf("confirm linear: %v", err)
+	}
+	if got := f.linked(t); got.State != store.AudiobookLinkActive || !got.ConfirmedLinear {
+		t.Fatalf("confirm: %+v", got)
 	}
 }
