@@ -527,6 +527,7 @@ templ readerPage(v ReaderView, csrf string) {
 							<option value="2">2.0×</option>
 						</select>
 						<button type="button" id="reader-audio-follow" class="reader-audio-pill active" title="Toggle page follow mode">Following audio</button>
+						<span id="reader-audio-stt-status" class="reader-audio-stt-status" role="status" aria-live="off" aria-atomic="true"></span>
 						<button type="button" id="reader-audio-from-page" class="reader-audio-pill" title="Seek audio to current page" hidden>Play from page</button>
 						<button type="button" id="reader-audio-to-audio" class="reader-audio-pill" title="Jump page to current audio timestamp">Locate in text</button>
 						<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">&times;</button>

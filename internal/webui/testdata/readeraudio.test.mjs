@@ -22,7 +22,9 @@ class Element {
   value = "1";
   classList = { toggle() {} };
   listeners = new Map();
-  setAttribute() {}
+  attributes = new Map();
+  textContent = "";
+  setAttribute(name, value) { this.attributes.set(name, value); }
   addEventListener(type, fn, options = {}) {
     const entries = this.listeners.get(type) || [];
     entries.push({ fn, once: options.once });
@@ -56,10 +58,13 @@ function player() {
   const navigations = [];
   const errors = [];
   let scheduledPushes = 0;
+  let timerID = 0;
+  const timers = new Map();
   const context = createContext({
     openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction,
     planAudioTicketRefresh, AbortController, URL, console,
-    setTimeout: () => 1, clearTimeout() {},
+    setTimeout(fn, ms) { const id = ++timerID; timers.set(id, { fn, ms }); return id; },
+    clearTimeout(id) { timers.delete(id); },
     performance: { now: () => clock.now },
     document: { hidden: false },
     window: { location: { href: "https://books.test/ui/reader/b" } },
@@ -96,7 +101,7 @@ function player() {
     "audioToggleBtn", "audioBar", "audioPlayBtn",
     "audioBackBtn", "audioFwdBtn", "audioChapterLabel", "audioCurrentLabel",
     "audioDurationLabel", "audioSeekInput", "audioRateSelect", "audioFollowBtn",
-    "audioFromPageBtn", "audioToAudioBtn", "audioCloseBtn",
+    "audioFromPageBtn", "audioToAudioBtn", "audioCloseBtn", "audioSTTStatus",
   ]) context[name] = new Element();
   const run = script => runInContext(script, context);
   run(source.slice(source.indexOf("function locatorFor(location)"), source.indexOf("// withAnchor describes")));
@@ -112,7 +117,7 @@ function player() {
       full_narrative: true
     }
   };`);
-  return { audio, clock, context, navigations, errors, run, get scheduledPushes() { return scheduledPushes; } };
+  return { audio, clock, context, navigations, errors, timers, run, get scheduledPushes() { return scheduledPushes; } };
 }
 
 test("a manual page turn cancels an audio navigation still resolving", async () => {
@@ -436,6 +441,153 @@ const sttResponse = progression => ({
     progression,
     locator: { href: "chapter.xhtml", locations: { progression, totalProgression: progression } },
   }),
+});
+
+test("speech matching status shows pending, matched and timed dismissal without announcing periodic work", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  const held = deferred();
+  p.context.api = () => held.promise;
+  const request = p.run("refineAudioSTT(200, { allowPlaying: true })");
+  assert.equal(p.context.audioSTTStatus.textContent, "Matching speech…");
+  assert.equal(p.context.audioSTTStatus.attributes.get("aria-live"), "off");
+  held.resolve(sttResponse(0.25));
+  assert.equal(await request, true);
+  assert.equal(p.context.audioSTTStatus.textContent, "Speech matched");
+  const dismiss = [...p.timers.values()].find(timer => timer.ms === 4000);
+  assert.ok(dismiss);
+  dismiss.fn();
+  assert.equal(p.context.audioSTTStatus.textContent, "");
+});
+
+test("an explicit locate during playback politely reports speech matching", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  const held = deferred();
+  p.context.api = () => held.promise;
+  await p.context.audioToAudioBtn.emit("click");
+  assert.equal(p.context.audioSTTStatus.textContent, "Matching speech…");
+  assert.equal(p.context.audioSTTStatus.attributes.get("aria-live"), "polite");
+  held.resolve(sttResponse(0.25));
+  await flush();
+  assert.equal(p.context.audioSTTStatus.textContent, "Speech matched");
+});
+
+test("paused speech matching politely reports a genuine match", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  const held = deferred();
+  p.context.api = () => held.promise;
+  const request = p.run("refineAudioPauseSTT(200)");
+  assert.equal(p.context.audioSTTStatus.textContent, "Matching speech…");
+  assert.equal(p.context.audioSTTStatus.attributes.get("aria-live"), "polite");
+  held.resolve(sttResponse(0.25));
+  await request;
+  assert.equal(p.context.audioSTTStatus.textContent, "Speech matched");
+});
+
+for (const failure of ["HTTP", "network", "no match"]) {
+  test(`speech matching status reports estimated position after ${failure}`, async () => {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    p.audio.paused = false;
+    p.context.api = async () => {
+      if (failure === "network") throw new Error("offline");
+      if (failure === "HTTP") return { ok: false };
+      return { ok: true, json: async () => ({ stt_matched: false }) };
+    };
+    await p.run("refineAudioSTT(200, { allowPlaying: true })");
+    assert.equal(p.context.audioSTTStatus.textContent, "Using estimated position");
+    assert.equal(p.timers.size, 0);
+  });
+}
+
+test("a paused coarse locate does not claim a speech match", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.context.api = async () => ({
+    ok: true,
+    json: async () => ({ stt_matched: false, progression: 0.2,
+      locator: { href: "chapter.xhtml", locations: { progression: 0.2 } } }),
+  });
+  assert.equal(await p.run("refineAudioPauseSTT(200)"), true);
+  assert.equal(p.context.audioSTTStatus.textContent, "Using estimated position");
+});
+
+for (const cancel of ["seek", "close", "follow off", "credential expiry"]) {
+  test(`speech status is cleared on ${cancel} and ignores the late response`, async () => {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    p.audio.paused = false;
+    const held = deferred();
+    p.context.api = () => held.promise;
+    const request = p.run("refineAudioSTT(200, { allowPlaying: true })");
+    if (cancel === "seek") await p.audio.emit("seeking");
+    if (cancel === "close") await p.context.audioCloseBtn.emit("click");
+    if (cancel === "follow off") p.run("setFollowAudio(false)");
+    if (cancel === "credential expiry") p.run("ready = false; abortAudioSTT()");
+    assert.equal(p.context.audioSTTStatus.textContent, "");
+    held.resolve(sttResponse(0.25));
+    await request;
+    assert.equal(p.context.audioSTTStatus.textContent, "");
+    assert.equal(p.timers.size, 0);
+  });
+}
+
+test("stale completion and an old dismissal cannot overwrite newer speech matching", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  const held = deferred();
+  p.context.api = () => held.promise;
+  const old = p.run("refineAudioPauseSTT(200)");
+  p.context.api = async () => sttResponse(0.25);
+  await p.run("refineAudioPauseSTT(200)");
+  const dismiss = [...p.timers.values()].find(timer => timer.ms === 4000);
+  const latest = deferred();
+  p.context.api = () => latest.promise;
+  const next = p.run("refineAudioPauseSTT(200)");
+  dismiss.fn();
+  held.resolve({ ok: false });
+  await old;
+  assert.equal(p.context.audioSTTStatus.textContent, "Matching speech…");
+  latest.resolve(sttResponse(0.26));
+  await next;
+  assert.equal(p.context.audioSTTStatus.textContent, "Speech matched");
+  const latestDismiss = [...p.timers.values()].find(timer => timer.ms === 4000);
+  p.run("abortAudioSTT()");
+  latestDismiss.fn();
+  assert.equal(p.context.audioSTTStatus.textContent, "");
+  assert.equal(p.timers.size, 0);
+});
+
+test("obsolete credentials and expired playback targets never report a speech match", async () => {
+  for (const obsolete of ["credentials", "chapter", "navigation"]) {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    p.audio.paused = false;
+    const held = deferred();
+    p.context.api = () => held.promise;
+    const request = p.run("refineAudioSTT(200, { allowPlaying: true })");
+    if (obsolete === "credentials") p.context.auth.responseCurrent = () => false;
+    if (obsolete === "chapter") p.audio.currentTime = 900;
+    if (obsolete === "navigation") {
+      p.context.view.resolveNavigation = async () => { p.run("noteNavigation()"); return {}; };
+    }
+    held.resolve(sttResponse(0.25));
+    await request;
+    assert.equal(p.context.audioSTTStatus.textContent, "");
+    assert.equal(p.timers.size, 0);
+  }
+});
+
+test("a locate without STT configured shows no speech matching status", async () => {
+  const p = player();
+  p.context.api = async () => sttResponse(0.25);
+  await p.run("refineAudioPauseSTT(200)");
+  assert.equal(p.context.audioSTTStatus.textContent, "");
+  assert.equal(p.timers.size, 0);
 });
 
 for (const elapsedSeconds of [1, 20]) {
