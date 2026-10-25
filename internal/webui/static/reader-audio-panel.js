@@ -42,7 +42,8 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
   const sizeButton = panel.querySelector("[data-audio-size]");
   const details = panel.querySelector("[data-audio-details]");
   const transport = panel.querySelector(".reader-audio-transport");
-  const header = panel.querySelector(".reader-audio-header");
+  const heading = panel.querySelector(".reader-audio-heading");
+  const dockButtons = [...panel.querySelectorAll("[data-audio-dock]")];
   const announcement = panel.querySelector("[data-audio-announcement]");
   let prefs;
   try { prefs = panelPreferences(JSON.parse(win.localStorage.getItem(STORAGE_KEY))); }
@@ -69,6 +70,11 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     panel.style.left = `${position.x}px`;
     panel.style.top = `${position.y}px`;
   }
+  function renderDock() {
+    for (const button of dockButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.audioDock === prefs.edge));
+    }
+  }
   function layout() {
     frame = 0;
     if (destroyed || panel.hidden) {
@@ -90,8 +96,10 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     panel.style.maxWidth = `${Math.max(0, endX - minX)}px`;
     const boxHeight = ["padding-top", "padding-bottom", "border-top-width", "border-bottom-width"]
       .reduce((total, property) => total + (parseFloat(style.getPropertyValue(property)) || 0), 0);
-    const headerGap = parseFloat(win.getComputedStyle(header).getPropertyValue("margin-bottom")) || 0;
-    const compactHeight = Math.ceil(header.getBoundingClientRect().height + transport.getBoundingClientRect().height + boxHeight + headerGap);
+    // Expansion must not change the reading viewport reserved for the single-row mini player
+    const compactHeight = Math.ceil(Math.max(
+      heading.getBoundingClientRect().height, transport.getBoundingClientRect().height,
+    ) + boxHeight);
     docked = width <= 700 || endY - minY < compactHeight + 24;
     panel.dataset.audioLayout = docked ? "dock" : "floating";
     handle.hidden = docked;
@@ -101,6 +109,7 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     place(docked ? { x: left + (width - rect.width) / 2, y: bounds.bottom } : panelPosition(prefs, bounds));
     if (docked) stage?.style.setProperty("--reader-audio-inset", `${compactHeight + footerHeight + 12}px`);
     else stage?.style.removeProperty("--reader-audio-inset");
+    renderDock();
   }
   function schedule() {
     if (!destroyed && !frame) frame = win.requestAnimationFrame(layout);
@@ -127,7 +136,6 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     sizeButton.setAttribute("aria-expanded", String(!details.hidden));
     sizeButton.setAttribute("aria-label", details.hidden ? "Expand audiobook player" : "Minimize audiobook player");
     sizeButton.title = details.hidden ? "Expand player" : "Minimize player";
-    sizeButton.textContent = details.hidden ? "⤢" : "−";
   }
   on(sizeButton, "click", () => {
     finishDrag(true);
@@ -137,7 +145,7 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     save();
     layout();
   });
-  for (const button of panel.querySelectorAll("[data-audio-dock]")) {
+  for (const button of dockButtons) {
     on(button, "click", () => {
       finishDrag(true);
       prefs = { ...prefs, edge: button.dataset.audioDock, x: 1, y: 1 };

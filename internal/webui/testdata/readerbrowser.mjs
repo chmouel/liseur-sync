@@ -994,15 +994,17 @@ check('the same-origin external script did not run',
 check('the publication could not reach the parent page',
   !String(hostile.pageTitle).includes('pwned'), hostile.pageTitle);
 
-// The font-size slider at full stretch has to mean it: the chapter's
-// type is really 250% of the 16px default, and the publication's own
-// width caps — a wrapper's width and a nested wrapper's max-width,
-// which would otherwise keep the old, short lines pinned to the left
-// of a much wider column — are lifted, so the bigger type gets the
-// page. All of these were user reports before they were checks.
-check('a book that caps its own width starts capped',
-  hostile.wrapMaxWidth === '480px' && hostile.wrapWidth === '480px',
-  `max-width ${hostile.wrapMaxWidth}, width ${hostile.wrapWidth}`);
+// Publisher width caps apply at 100%, not at the reader's enlarged default
+await evalIn(`(() => {
+  const slider = document.querySelector('#reader-settings-form input[name="size"]');
+  slider.value = '100';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+})()`);
+await waitFor(`JSON.parse(${probe}).fontSize === '16px'`, 'publisher font sizing');
+const publisherSized = JSON.parse(await evalIn(probe));
+check('a book keeps its width caps at publisher font size',
+  publisherSized.wrapMaxWidth === '480px' && publisherSized.wrapWidth === '480px',
+  `max-width ${publisherSized.wrapMaxWidth}, width ${publisherSized.wrapWidth}`);
 await evalIn(`(() => {
   const slider = document.querySelector('#reader-settings-form input[name="size"]');
   slider.value = '250';
