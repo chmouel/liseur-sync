@@ -54,6 +54,12 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("AudiobookLinksFollowWorks", func(t *testing.T) { testAudiobookLinksFollowWorks(t, open) })
 	t.Run("AudiobookLinkDoesNotKeepAWork", func(t *testing.T) { testAudiobookLinkDoesNotKeepAWork(t, open) })
 	t.Run("AudiobookSessionRevisions", func(t *testing.T) { testAudiobookSessionRevisions(t, open) })
+	t.Run("CatalogAudiobooksReconcileAndGrants", func(t *testing.T) {
+		testCatalogAudiobooksReconcileAndGrants(t, open)
+	})
+	t.Run("OriginAudiobookPaceExclusion", func(t *testing.T) {
+		testOriginAudiobookPaceExclusion(t, open)
+	})
 	t.Run("Notifications", func(t *testing.T) { testNotifications(t, open) })
 	t.Run("Users", func(t *testing.T) { testUsers(t, open) })
 	t.Run("AdminRole", func(t *testing.T) { testAdminRole(t, open) })

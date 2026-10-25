@@ -201,6 +201,10 @@ const (
 	// server (ADR-0055): positions mapped onto the ebook through chapter
 	// anchors, and listening sessions.
 	OriginAudiobookshelf Origin = "audiobookshelf"
+	// OriginAudiobook is listening in the integrated audiobook player
+	// (ADR-0057): positions and sessions recorded against a watched-folder
+	// .m4b aligned with a catalog book.
+	OriginAudiobook Origin = "audiobook"
 )
 
 // MeasuresReadingPace reports whether a session of this origin is
@@ -209,7 +213,7 @@ const (
 // was set to, so both count toward time and progress but never toward
 // measured pace. Every place that splits measured from total asks this.
 func MeasuresReadingPace(o Origin) bool {
-	return o != OriginInferred && o != OriginAudiobookshelf
+	return o != OriginInferred && o != OriginAudiobookshelf && o != OriginAudiobook
 }
 
 // User is an account.
@@ -2186,6 +2190,100 @@ type Store interface {
 	// CurrentSourceSession reads the current revision of one source key.
 	// ErrNotFound when nothing was ever recorded under it.
 	CurrentSourceSession(ctx context.Context, userID, sourceKey string) (Session, error)
+
+	// Watched-folder audiobooks (ADR-0057).
+	AudiobooksInFolder(ctx context.Context, folderID string) ([]KnownAudiobook, error)
+	ReconcileFolderAudiobooks(ctx context.Context, folderID string, observed []ObservedAudiobook, complete bool, at time.Time) (ReconcileResult, error)
+	CatalogAudiobookByID(ctx context.Context, viewerID, audiobookID string) (CatalogAudiobook, error)
+	ActiveCatalogAudiobooks(ctx context.Context) ([]CatalogAudiobook, error)
+	BookAudiobookByBookID(ctx context.Context, viewerID, bookID string) (BookAudiobook, CatalogAudiobook, error)
+	ListBookAudiobooks(ctx context.Context) ([]BookAudiobook, error)
+	UpsertBookAudiobook(ctx context.Context, link BookAudiobook, at time.Time) error
+	DeleteBookAudiobook(ctx context.Context, bookID string) error
+}
+
+// CatalogAudiobook is one .m4b audiobook discovered in a watched folder.
+type CatalogAudiobook struct {
+	ID              string
+	FolderID        string
+	Status          BookStatus
+	RelativePath    string
+	CalibreID       *int64
+	SizeBytes       int64
+	MTime           time.Time
+	ContentSHA256   string
+	CueMTime        *time.Time
+	CueSizeBytes    int64
+	Title           string
+	AuthorsJSON     []byte
+	NarratorsJSON   []byte
+	SeriesName      string
+	ASIN            string
+	ISBN            string
+	DurationSeconds float64
+	ChaptersJSON    []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	SeenAt          *time.Time
+	AbsentAt        *time.Time
+}
+
+// KnownAudiobook is what ReconcileFolderAudiobooks's caller has on record
+// for one audiobook in a folder.
+type KnownAudiobook struct {
+	ID            string
+	Status        BookStatus
+	RelativePath  string
+	CalibreID     *int64
+	SizeBytes     int64
+	MTime         time.Time
+	ContentSHA256 string
+	CueMTime      *time.Time
+	CueSizeBytes  int64
+}
+
+// ObservedAudiobook is one .m4b file a watched-folder pass observed.
+type ObservedAudiobook struct {
+	RelativePath    string
+	CalibreID       *int64
+	SizeBytes       int64
+	MTime           time.Time
+	ContentSHA256   string
+	CueMTime        *time.Time
+	CueSizeBytes    int64
+	Title           string
+	AuthorsJSON     []byte
+	NarratorsJSON   []byte
+	SeriesName      string
+	ASIN            string
+	ISBN            string
+	DurationSeconds float64
+	ChaptersJSON    []byte
+	Replaces        bool
+	Unchanged       bool
+	Unservable      bool
+}
+
+// BookAudiobookState is the alignment state of a catalog book's paired audiobook.
+type BookAudiobookState string
+
+const (
+	BookAudiobookActive   BookAudiobookState = "active"
+	BookAudiobookUnmapped BookAudiobookState = "unmapped"
+)
+
+// BookAudiobook is the catalog-level alignment between a book in `books`
+// and an audiobook in `catalog_audiobooks`.
+type BookAudiobook struct {
+	BookID       string
+	AudiobookID  string
+	EditionSHA   string
+	AudiobookSHA string
+	Source       string
+	State        BookAudiobookState
+	MappingKey   string
+	MappingJSON  []byte
+	UpdatedAt    time.Time
 }
 
 // AudiobookLinkState is where a link stands. Only an active link

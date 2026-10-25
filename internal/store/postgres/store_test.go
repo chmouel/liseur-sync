@@ -42,6 +42,7 @@ func reset(t *testing.T, s *Store) {
 		"book_series_override_items", "book_series_overrides",
 		"series_name_overrides", "series_bindings", "book_series", "series",
 		"book_identifiers", "user_book_works", "user_folders",
+		"book_audiobooks", "catalog_audiobooks",
 		"books", "folders",
 		"audiobook_session_imports", "audiobook_mappings",
 		"mirror_cursors", "audiobook_links", "audiobook_link_rejections",

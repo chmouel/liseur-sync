@@ -832,6 +832,52 @@ CREATE TABLE IF NOT EXISTS audiobook_session_imports (
 ALTER TABLE session_supersessions ADD COLUMN remote_updated_at TIMESTAMPTZ;
 `
 
+// watchedFolderAudiobooks is migration 20 in Postgres (ADR-0057): watched-folder
+// .m4b audiobooks and their catalog-level alignment with books.
+const watchedFolderAudiobooks = `
+CREATE TABLE IF NOT EXISTS catalog_audiobooks (
+    id               TEXT NOT NULL PRIMARY KEY,
+    folder_id        TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    status           TEXT NOT NULL CHECK (status IN ('active', 'missing')),
+    relative_path    TEXT NOT NULL,
+    calibre_id       BIGINT,
+    size_bytes       BIGINT NOT NULL,
+    mtime            TIMESTAMPTZ NOT NULL,
+    content_sha256   TEXT NOT NULL,
+    cue_mtime        TIMESTAMPTZ,
+    cue_size_bytes   BIGINT NOT NULL DEFAULT 0,
+    title            TEXT NOT NULL,
+    authors_json     TEXT NOT NULL DEFAULT '[]',
+    narrators_json   TEXT NOT NULL DEFAULT '[]',
+    series_name      TEXT NOT NULL DEFAULT '',
+    asin             TEXT NOT NULL DEFAULT '',
+    isbn             TEXT NOT NULL DEFAULT '',
+    duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+    chapters_json    TEXT NOT NULL DEFAULT '[]',
+    seen_at          TIMESTAMPTZ,
+    absent_at        TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL,
+    UNIQUE (folder_id, relative_path)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS catalog_audiobooks_calibre_id
+    ON catalog_audiobooks(folder_id, calibre_id) WHERE calibre_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS catalog_audiobooks_folder_status
+    ON catalog_audiobooks(folder_id, status);
+
+CREATE TABLE IF NOT EXISTS book_audiobooks (
+    book_id       TEXT NOT NULL PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+    audiobook_id  TEXT NOT NULL UNIQUE REFERENCES catalog_audiobooks(id) ON DELETE CASCADE,
+    edition_sha   TEXT NOT NULL,
+    audiobook_sha TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    state         TEXT NOT NULL CHECK (state IN ('active', 'unmapped')),
+    mapping_key   TEXT NOT NULL,
+    mapping_json  TEXT NOT NULL DEFAULT '',
+    updated_at    TIMESTAMPTZ NOT NULL
+);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -847,6 +893,7 @@ var migrations = []string{
 	workTranslationStamps,
 	furthestFloor,
 	audiobookLinks,
+	watchedFolderAudiobooks,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -873,6 +920,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"workTranslationStamps":    workTranslationStamps,
 		"furthestFloor":            furthestFloor,
 		"audiobookLinks":           audiobookLinks,
+		"watchedFolderAudiobooks":  watchedFolderAudiobooks,
 	}
 	want, ok := named[name]
 	if !ok {
