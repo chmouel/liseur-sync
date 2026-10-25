@@ -516,6 +516,58 @@ func TestAudiobookEndpointsGrantsStreamingSTTAndSessions(t *testing.T) {
 		}
 	})
 
+	t.Run("STT requires readable EPUB text", func(t *testing.T) {
+		link, ab, err := st.BookAudiobookByBookID(ctx, u1.ID, bookID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var mapping audiomap.Mapping
+		if err := json.Unmarshal(link.MappingJSON, &mapping); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			name    string
+			href    string
+			chapter string
+			missing bool
+			wantSTT bool
+		}{
+			{name: "missing file", href: "OEBPS/ch1.xhtml", missing: true},
+			{name: "missing resource", href: "OEBPS/missing.xhtml", chapter: ch1XHTML},
+			{name: "empty resource", href: "OEBPS/ch1.xhtml"},
+			{name: "empty text", href: "OEBPS/ch1.xhtml", chapter: `<html><head><title>Chapter</title></head><body> </body></html>`},
+			{name: "readable text", href: "OEBPS/ch1.xhtml", chapter: ch1XHTML, wantSTT: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				book := books[0]
+				book.RelativePath = tc.name + ".epub"
+				if !tc.missing {
+					path := filepath.Join(booksDir, book.RelativePath)
+					data := buildTestAudioEPUB(t, book.Title, "Christopher Ruocchio", tc.chapter, ch2XHTML)
+					if err := os.WriteFile(path, data, 0o644); err != nil {
+						t.Fatal(err)
+					}
+					info, err := os.Stat(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					book.SizeBytes, book.MTime = info.Size(), info.ModTime()
+				}
+				before := sttCalls.Load()
+				_, _, _, _, _, _, matched := srv.refineAudioTimeWithSTT(
+					ctx, u1.ID, book, ab, mapping, mapping.Segments[0], tc.href, 25,
+				)
+				wantCalls := int32(0)
+				if tc.wantSTT {
+					wantCalls = 1
+				}
+				if calls := sttCalls.Load() - before; calls != wantCalls || matched != tc.wantSTT {
+					t.Fatalf("STT calls = %d, matched = %v; want %d, %v", calls, matched, wantCalls, tc.wantSTT)
+				}
+			})
+		}
+	})
+
 	t.Run("unusable locators never seek to the start", func(t *testing.T) {
 		for _, tc := range []struct {
 			locator any

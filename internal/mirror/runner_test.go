@@ -75,7 +75,9 @@ func TestAMirrorBuiltTheWayMainBuildsOneActuallySyncs(t *testing.T) {
 
 	waitFor(t, "a book to be mirrored", func() bool { return len(f.peer.pushed(t)) == 1 })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatalf("mirror run returned: %v", err)
+	}
 }
 
 // TestAMirrorNobodyConfiguredDoesNothing. Off is the normal state, and
@@ -195,7 +197,9 @@ func TestAPeerThatIsDownIsRetriedAndThenCaughtUpWith(t *testing.T) {
 	})
 
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatalf("mirror run returned: %v", err)
+	}
 }
 
 // TestBackoffWidensAndIsCapped. Without a cap a peer that is down
@@ -309,7 +313,9 @@ func TestTheCredentialIsCheckedOnce(t *testing.T) {
 		return r.Status().Consecutive == 0 && count(f, "/syncs/progress/") >= 3
 	})
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatalf("mirror run returned: %v", err)
+	}
 
 	if got := count(f, "/users/auth"); got != 1 {
 		t.Fatalf("the credential was checked %d times", got)

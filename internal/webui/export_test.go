@@ -2,6 +2,8 @@ package webui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,12 +14,16 @@ import (
 
 // Run the real migrations once, then give each fixture its own database file.
 // Closing the template checkpoints its WAL before the main file is copied.
-var testDatabase = sync.OnceValues(func() ([]byte, error) {
+var testDatabase = sync.OnceValues(func() (data []byte, err error) {
 	dir, err := os.MkdirTemp("", "webui-test-schema-")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if cleanupErr := os.RemoveAll(dir); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove temporary webui test directory: %w", cleanupErr))
+		}
+	}()
 	path := filepath.Join(dir, "template.db")
 	st, err := sqlite.Open(path)
 	if err != nil {
