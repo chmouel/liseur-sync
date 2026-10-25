@@ -490,21 +490,22 @@ templ readerPage(v ReaderView, csrf string) {
 					<button type="button" id="reader-sync-cancel">Cancel</button>
 				</div>
 			</dialog>
-			<aside id="reader-audio-bar" class="reader-audio-bar" aria-label="Audiobook player" hidden>
+			<aside id="reader-audio-bar" class="reader-audio-bar" data-audio-size="mini" aria-label="Audiobook player" hidden>
 				<audio id="reader-audio-el" preload="metadata"></audio>
-				<div class="reader-audio-main">
-					<div class="reader-audio-transport">
+				<div class="reader-audio-header">
+					<button type="button" class="reader-audio-btn reader-audio-handle" data-audio-handle aria-label="Move audiobook player" title="Drag to move; arrow keys move, Shift moves faster" aria-describedby="reader-audio-move-help">⠿</button>
+					<span id="reader-audio-chapter" class="reader-audio-chapter">Audiobook</span>
+					<button type="button" class="reader-audio-btn" data-audio-size aria-label="Expand audiobook player" aria-expanded="false" aria-controls="reader-audio-details" title="Expand player">⤢</button>
+					<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">&times;</button>
+				</div>
+				<div class="reader-audio-transport">
 						<button type="button" id="reader-audio-back" class="reader-audio-btn" title="Back 15 seconds" aria-label="Back 15 seconds">-15s</button>
 						<button type="button" id="reader-audio-play" class="reader-audio-btn reader-audio-play-btn" title="Play or pause audiobook" aria-label="Play audiobook">Play</button>
 						<button type="button" id="reader-audio-fwd" class="reader-audio-btn" title="Forward 30 seconds" aria-label="Forward 30 seconds">+30s</button>
-					</div>
+					<span class="reader-audio-times"><span id="reader-audio-current">0:00</span><span class="reader-audio-total"> / <span id="reader-audio-duration">0:00</span></span></span>
+				</div>
+				<div id="reader-audio-details" data-audio-details hidden>
 					<div class="reader-audio-timeline">
-						<div class="reader-audio-meta">
-							<span id="reader-audio-chapter" class="reader-audio-chapter">Audiobook</span>
-							<span class="reader-audio-times">
-								<span id="reader-audio-current">0:00</span> / <span id="reader-audio-duration">0:00</span>
-							</span>
-						</div>
 						<input
 							type="range"
 							id="reader-audio-seek"
@@ -530,9 +531,19 @@ templ readerPage(v ReaderView, csrf string) {
 						<span id="reader-audio-stt-status" class="reader-audio-stt-status" role="status" aria-live="off" aria-atomic="true"></span>
 						<button type="button" id="reader-audio-from-page" class="reader-audio-pill" title="Seek audio to current page" hidden>Play from page</button>
 						<button type="button" id="reader-audio-to-audio" class="reader-audio-pill" title="Jump page to current audio timestamp">Locate in text</button>
-						<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">&times;</button>
+					</div>
+					<div class="reader-audio-position" aria-label="Player position">
+						<span class="reader-audio-docking">
+							<button type="button" class="reader-audio-btn" data-audio-dock="top">Top</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="left">Left</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="right">Right</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="bottom">Bottom</button>
+						</span>
+						<button type="button" class="reader-audio-btn" data-audio-dock="bottom-right">Reset position</button>
 					</div>
 				</div>
+				<span id="reader-audio-move-help" class="reader-audio-sr">Drag to move, or use arrow keys. Hold Shift for larger steps. Escape cancels a drag. Expand for docking controls.</span>
+				<span class="reader-audio-sr" data-audio-announcement role="status" aria-live="polite"></span>
 			</aside>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>

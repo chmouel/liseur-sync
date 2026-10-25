@@ -21,6 +21,7 @@ const ASSETS = [
   new URL('./assets/reader-anchor.js', self.location).href,
   new URL('./assets/reader-annotations.js', self.location).href,
   new URL('./assets/reader-app.js', self.location).href,
+  new URL('./assets/reader-audio-panel.js', self.location).href,
   new URL('./assets/reader-auth.js', self.location).href,
   new URL('./assets/reader-chapters.js', self.location).href,
   new URL('./assets/reader-engine.js', self.location).href,
