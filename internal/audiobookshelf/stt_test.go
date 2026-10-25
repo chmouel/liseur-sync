@@ -1,16 +1,122 @@
 package audiobookshelf
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/m4b"
+	"github.com/chmouel/liseur-sync/internal/store"
 )
+
+func TestRefinePositionWithSTTRequiresReadableEPUBText(t *testing.T) {
+	const transcript = "the travelers reached the ancient bridge where the emerald river curved"
+	for _, tc := range []struct {
+		name    string
+		href    string
+		chapter string
+		missing bool
+		wantSTT bool
+	}{
+		{name: "missing file", href: "chapter.xhtml", missing: true},
+		{name: "missing resource", href: "missing.xhtml", chapter: "<html><body>Some text</body></html>"},
+		{name: "empty resource", href: "chapter.xhtml"},
+		{name: "empty text", href: "chapter.xhtml", chapter: `<html><head><title>Chapter</title></head><body> </body></html>`},
+		{name: "readable text", href: "chapter.xhtml", chapter: "<html><body><p>" + transcript + "</p><p>Evening fell.</p></body></html>", wantSTT: true},
+		{name: "resource from position", chapter: "<html><body><p>" + transcript + "</p><p>Evening fell.</p></body></html>", wantSTT: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			folder := f.folder
+			folder.ID, folder.RootPath = "f-stt", t.TempDir()
+			if err := f.st.CreateFolder(t.Context(), folder); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.st.AssignUserFolder(t.Context(), f.user.ID, folder.ID); err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			zw := zip.NewWriter(&buf)
+			for name, body := range map[string]string{
+				"mimetype":               "application/epub+zip",
+				"META-INF/container.xml": `<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+				"content.opf":            `<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">stt-test</dc:identifier><dc:title>Test</dc:title><dc:language>en</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>`,
+				"chapter.xhtml":          tc.chapter,
+			} {
+				w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.WriteString(w, body); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := zw.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(folder.RootPath, "book.epub")
+			if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.st.ReconcileFolder(t.Context(), folder.ID, []store.ObservedBook{{
+				RelativePath: "book.epub", ContentSHA256: fmt.Sprintf("%064x", 1),
+				SizeBytes: info.Size(), MTime: info.ModTime(), Title: "Test", MediaType: "application/epub+zip",
+			}}, true, f.now); err != nil {
+				t.Fatal(err)
+			}
+			books, err := f.st.ListCatalogBooks(t.Context(), f.user.ID, folder.ID, nil, 10)
+			if err != nil || len(books) != 1 {
+				t.Fatalf("catalog books: %v, %v", books, err)
+			}
+			if tc.missing {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var sttCalls, audioCalls atomic.Int32
+			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/audio/transcriptions" {
+					sttCalls.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]string{"text": transcript})
+					return
+				}
+				audioCalls.Add(1)
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = w.Write(bytes.Repeat([]byte("a"), 100))
+			})
+			svc := &Service{Store: f.st, Client: client, Cfg: config.AudiobookshelfConfig{STTURL: client.baseURL}}
+			item := Item{ID: "audio", Duration: 100, AudioFiles: []AudioFile{{Ino: "file", Duration: 100, Size: 1000, Ext: ".mp3"}}}
+			seg := Segment{AudioStart: 0, AudioEnd: 100, BookStart: 0, BookEnd: 1, Href: tc.href}
+			mapping := Mapping{Segments: []Segment{seg}, Resources: []Resource{{Href: "chapter.xhtml", Start: 0, End: 1}}}
+			got := svc.refinePositionWithSTT(t.Context(), f.user.ID, store.AudiobookLink{BookID: books[0].ID}, item, mapping, 50, 0.5, seg)
+			wantCalls := int32(0)
+			if tc.wantSTT {
+				wantCalls = 1
+			}
+			if sttCalls.Load() != wantCalls || audioCalls.Load() != wantCalls {
+				t.Fatalf("STT calls = %d, audio calls = %d; want %d each", sttCalls.Load(), audioCalls.Load(), wantCalls)
+			}
+			if (got != 0.5) != tc.wantSTT {
+				t.Fatalf("progression = %v, want refinement = %v", got, tc.wantSTT)
+			}
+		})
+	}
+}
 
 func testMakeBox(typ string, fn func(*bytes.Buffer)) []byte {
 	var body bytes.Buffer

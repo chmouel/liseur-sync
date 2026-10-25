@@ -62,15 +62,6 @@ func (s *Service) refinePositionWithSTT(ctx context.Context, userID string, l st
 	sttCtx, cancel := context.WithTimeout(ctx, 18*time.Second)
 	defer cancel()
 
-	clip, filename, err := SliceAudioSnippet(sttCtx, s.Client.FileRange, item, t0, t1)
-	if err != nil || len(clip) == 0 {
-		return linearP
-	}
-	transcript, err := TranscribeAudio(sttCtx, s.Cfg.STTURL, s.Cfg.STTAPIKey, s.Cfg.STTModel, clip, filename)
-	if err != nil || transcript == "" {
-		return linearP
-	}
-
 	f, size, err := content.NewFiles(s.Store).OpenBook(sttCtx, book)
 	if err != nil {
 		return linearP
@@ -104,7 +95,20 @@ func (s *Service) refinePositionWithSTT(ctx context.Context, userID string, l st
 	}
 
 	doc, err := pub.Resource(sttCtx, targetHref)
-	if err != nil {
+	if err != nil || len(doc) == 0 {
+		return linearP
+	}
+	_, resourceText, _ := audiomap.ExtractTextContextAtFraction(doc, 0)
+	if resourceText == "" {
+		return linearP
+	}
+
+	clip, filename, err := SliceAudioSnippet(sttCtx, s.Client.FileRange, item, t0, t1)
+	if err != nil || len(clip) == 0 {
+		return linearP
+	}
+	transcript, err := TranscribeAudio(sttCtx, s.Cfg.STTURL, s.Cfg.STTAPIKey, s.Cfg.STTModel, clip, filename)
+	if err != nil || transcript == "" {
 		return linearP
 	}
 	frac, _, ok := MatchTranscriptInXHTML(doc, transcript)
