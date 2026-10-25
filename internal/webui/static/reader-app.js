@@ -739,10 +739,9 @@ async function rememberFurthest(ops, { furthestFloor: nextFloor = furthestFloor,
   const stamp = snapshot();
   const floor = Math.max(furthestFloor, Number(nextFloor) > 0 ? Math.trunc(Number(nextFloor)) : 0);
   if (floor > furthestFloor) furthestFloor = floor;
-  const base = forced ? [] : furthest;
-  const observed = mergeFurthest(base, ops, workID, floor);
   if (!offlineContext) {
-    furthest = observed;
+    const base = forced ? [] : furthest;
+    furthest = mergeFurthest(base, ops, workID, floor);
     historyStorageError = true;
     say("Furthest positions are only kept until this tab closes; device storage is unavailable.", true);
     return;
@@ -750,7 +749,7 @@ async function rememberFurthest(ops, { furthestFloor: nextFloor = furthestFloor,
   let stored;
   try {
     stored = await observeReadingPositions({
-      ...offlineContext, bookID: cfg.bookID, workID, ops: observed, furthestFloor: floor, forced,
+      ...offlineContext, bookID: cfg.bookID, workID, ops, furthestFloor: floor, forced,
     });
   } catch (error) {
     historyStorageError = true;
@@ -4640,10 +4639,16 @@ let audioPlayTransitionGen = 0;
 let audioSwappingSrc = false;
 let audioLastCheckpointAt = 0;
 let audioLastSyncedProg = -1;
+let audioLastSyncedChapProg = -1;
+let audioLastSyncedAudioTime = -Infinity;
 let audioLastSyncedHref = "";
 let audioSyncLocator = null;
 let sttReqSeq = 0;
 let sttAbort = null;
+let audioLastLiveSTTAt = -Infinity;
+let audioLastLiveSTTTime = -Infinity;
+const LIVE_STT_INTERVAL_MS = 15000;
+const LIVE_STT_COOLDOWN_MS = 3500;
 
 function formatAudioSeconds(sec) {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -4798,6 +4803,12 @@ async function mintAudioTicket(preserveState = false, forceSwap = false) {
 function recordAudioPosition(locator, progression) {
   if (!locator || !finite(progression)) return;
   audioLastSyncedProg = progression;
+  if (finite(locator.locations?.progression)) {
+    audioLastSyncedChapProg = locator.locations.progression;
+  }
+  if (audioEl && finite(audioEl.currentTime)) {
+    audioLastSyncedAudioTime = audioEl.currentTime;
+  }
   if (locator.href) audioLastSyncedHref = locator.href;
   audioSyncLocator = {
     href: locator.href || "",
@@ -4833,6 +4844,12 @@ async function navigateToAudioTarget(locator, progression) {
         if (generation !== audioNavigationGeneration || !followAudio || !ready || audioBar?.hidden) return false;
         audioSyncLocator = null;
         if (finite(progression)) audioLastSyncedProg = progression;
+        if (finite(locator?.locations?.progression)) {
+          audioLastSyncedChapProg = locator.locations.progression;
+        }
+        if (audioEl && finite(audioEl.currentTime)) {
+          audioLastSyncedAudioTime = audioEl.currentTime;
+        }
         if (locator?.href) audioLastSyncedHref = locator.href;
         readingDirty = true;
         schedulePush();
@@ -4845,9 +4862,59 @@ async function navigateToAudioTarget(locator, progression) {
   return false;
 }
 
-async function refineAudioPauseSTT(reqTime) {
-  if (!audioInfo || cfg.offline) return;
-  abortAudioSTT();
+function applyAudioElapsedOffset(locator, progression, reqTime, curTime) {
+  let nextProg = progression;
+  let nextLoc = locator;
+  const dt = curTime - reqTime;
+  if (!finite(dt) || dt <= 0 || dt > 12 || !finite(progression) || !locator) {
+    return { locator: nextLoc, progression: nextProg };
+  }
+  const mappedReq = audioTimeToBook(reqTime);
+  const mappedCur = audioTimeToBook(curTime);
+  if (
+    mappedReq &&
+    mappedCur &&
+    mappedReq.href === mappedCur.href &&
+    mappedReq.href === locator.href
+  ) {
+    const dp = mappedCur.progression - mappedReq.progression;
+    const dChap = mappedCur.chapterProgress - mappedReq.chapterProgress;
+    if (finite(dp) && dp > 0) {
+      nextProg = Math.min(audioInfo?.mapping?.full_narrative ? 1 : 0.998, progression + dp);
+    }
+    if (finite(dChap) && dChap > 0 && finite(locator.locations?.progression)) {
+      nextLoc = {
+        ...locator,
+        locations: {
+          ...locator.locations,
+          progression: Math.min(1, locator.locations.progression + dChap),
+          totalProgression: nextProg,
+        },
+      };
+    } else if (nextProg !== progression) {
+      nextLoc = {
+        ...locator,
+        locations: {
+          ...(locator.locations || {}),
+          totalProgression: nextProg,
+        },
+      };
+    }
+  }
+  return { locator: nextLoc, progression: nextProg };
+}
+
+async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
+  if (!audioInfo || cfg.offline || !finite(reqTime) || reqTime < 0) return false;
+  if (allowPlaying) {
+    if (!audioInfo.stt_enabled || !followAudio || sttAbort) return false;
+    const now = performance.now();
+    if (now - audioLastLiveSTTAt < LIVE_STT_COOLDOWN_MS) return false;
+    audioLastLiveSTTAt = now;
+    audioLastLiveSTTTime = reqTime;
+  } else {
+    abortAudioSTT();
+  }
   const seq = sttReqSeq;
   const controller = new AbortController();
   sttAbort = controller;
@@ -4858,7 +4925,7 @@ async function refineAudioPauseSTT(reqTime) {
       body: JSON.stringify({ audio_time: reqTime, refine_stt: true }),
       signal: controller.signal,
     });
-    if (!resp.ok) return;
+    if (!resp.ok) return false;
     const data = await resp.json();
     if (
       seq !== sttReqSeq ||
@@ -4866,10 +4933,26 @@ async function refineAudioPauseSTT(reqTime) {
       !auth.responseCurrent(resp) ||
       audioBar?.hidden ||
       !audioEl ||
-      !audioEl.paused ||
-      Math.abs(audioEl.currentTime - reqTime) >= 0.5
+      audioEl.seeking
     ) {
-      return;
+      return false;
+    }
+    if (allowPlaying) {
+      if (!followAudio || !data?.stt_matched || !data?.locator) return false;
+      if (audioEl.paused || Math.abs(audioEl.currentTime - reqTime) > 25) return false;
+      const adjusted = applyAudioElapsedOffset(
+        data.locator,
+        data.progression,
+        reqTime,
+        audioEl.currentTime,
+      );
+      if (!(await navigateToAudioTarget(adjusted.locator, adjusted.progression))) {
+        recordAudioPosition(adjusted.locator, adjusted.progression);
+      }
+      return true;
+    }
+    if (!audioEl.paused || Math.abs(audioEl.currentTime - reqTime) >= 0.5) {
+      return false;
     }
     if (data?.locator) {
       if (followAudio) {
@@ -4879,8 +4962,18 @@ async function refineAudioPauseSTT(reqTime) {
       } else {
         recordAudioPosition(data.locator, data.progression);
       }
+      return true;
     }
-  } catch {}
+  } catch {} finally {
+    if (sttAbort === controller) {
+      sttAbort = null;
+    }
+  }
+  return false;
+}
+
+function refineAudioPauseSTT(reqTime) {
+  return refineAudioSTT(reqTime, { allowPlaying: false });
 }
 
 function updateAudioTimelineUI() {
@@ -5055,6 +5148,9 @@ if (audioToggleBtn && audioBar && audioEl) {
           mapped.progression,
         );
       }
+      if (!audioEl.paused && audioInfo?.stt_enabled) {
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+      }
     }
   });
 
@@ -5065,7 +5161,7 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioToAudioBtn?.addEventListener("click", () => {
     setFollowAudio(true);
     if (audioEl.paused) {
-      void refineAudioPauseSTT(audioEl.currentTime);
+      void refineAudioSTT(audioEl.currentTime, { allowPlaying: false });
     } else {
       const mapped = audioTimeToBook(audioEl.currentTime);
       if (mapped?.segment) {
@@ -5080,6 +5176,9 @@ if (audioToggleBtn && audioBar && audioEl) {
           },
           mapped.progression,
         );
+      }
+      if (audioInfo?.stt_enabled) {
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
       }
     }
   });
@@ -5117,6 +5216,9 @@ if (audioToggleBtn && audioBar && audioEl) {
       session.playing(performance.now(), currentAudioFraction());
       checkpointSession();
       audioLastCheckpointAt = performance.now();
+    }
+    if (followAudio && audioInfo?.stt_enabled) {
+      void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
     }
   });
 
@@ -5178,8 +5280,24 @@ if (audioToggleBtn && audioBar && audioEl) {
       }
     }
     if (mapped?.segment && !audioEl.seeking) {
-      const movedEnough = Math.abs(mapped.progression - audioLastSyncedProg) >= 0.003 ||
-        mapped.href !== audioLastSyncedHref;
+      if (
+        followAudio &&
+        audioActivelyPlaying &&
+        !audioEl.paused &&
+        audioInfo?.stt_enabled &&
+        !sttAbort &&
+        now - audioLastLiveSTTAt >= LIVE_STT_INTERVAL_MS &&
+        Math.abs(audioEl.currentTime - audioLastLiveSTTTime) >= 5
+      ) {
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+      }
+      const movedEnough = followAudio
+        ? Math.abs(mapped.chapterProgress - audioLastSyncedChapProg) >= 0.0005 ||
+          Math.abs(audioEl.currentTime - audioLastSyncedAudioTime) >= 15 ||
+          Math.abs(mapped.progression - audioLastSyncedProg) >= 0.003 ||
+          mapped.href !== audioLastSyncedHref
+        : Math.abs(mapped.progression - audioLastSyncedProg) >= 0.003 ||
+          mapped.href !== audioLastSyncedHref;
       if (movedEnough) {
         const targetLocator = {
           href: mapped.href,
@@ -5190,7 +5308,11 @@ if (audioToggleBtn && audioBar && audioEl) {
           },
         };
         if (followAudio) {
-          void navigateToAudioTarget(targetLocator, mapped.progression);
+          if (!sttAbort) {
+            void navigateToAudioTarget(targetLocator, mapped.progression);
+          } else {
+            recordAudioPosition(targetLocator, mapped.progression);
+          }
         } else {
           recordAudioPosition(targetLocator, mapped.progression);
         }

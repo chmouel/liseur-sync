@@ -411,6 +411,18 @@ async function storageChecks() {
   check(afterFloor.furthest.some(op => op.op_id === "pending-52") &&
     afterFloor.furthest.some(op => op.op_id === "remote-41"),
     "raising furthest_floor preserves pending outbox writes and post-floor maxima");
+  await s.observeReadingPositions({
+    ...context, bookID: floorBook, workID,
+    ops: [
+      page("cached-unseq-99", 0.99),
+      { ...page("post-floor-45", 0.45), seq: 15 },
+    ],
+    furthestFloor: 14,
+  });
+  const afterSecondFloor = await s.readingState({ ...context, bookID: floorBook });
+  check(!afterSecondFloor.furthest.some(op => op.op_id === "cached-unseq-99") &&
+    afterSecondFloor.furthest.some(op => op.op_id === "post-floor-45"),
+    "raising furthest_floor drops unsequenced non-pending observations from incoming ops");
   await s.removeOfflineOutbox({ ...context, kind: "position", id: "pending-52", settle: false });
 
   // Two windows of one account share one queue and one lock. Whichever
