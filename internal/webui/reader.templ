@@ -232,6 +232,29 @@ templ readerPage(v ReaderView, csrf string) {
 					</button>
 					<button
 						type="button"
+						id="reader-audio-toggle"
+						class="reader-icon-btn reader-audio-toggle"
+						title="Listen to audiobook"
+						aria-label="Listen to audiobook"
+						hidden
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+							<path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+						</svg>
+					</button>
+					<button
+						type="button"
 						id="reader-sync"
 						class="reader-icon-btn reader-sync-btn"
 						title="Sync this book (s)"
@@ -462,10 +485,54 @@ templ readerPage(v ReaderView, csrf string) {
 					<button type="button" id="reader-sync-take">Go to the other position</button>
 					<button type="button" id="reader-sync-keep">Keep this page</button>
 					<button type="button" id="reader-sync-furthest-take" hidden>Go to furthest seen</button>
+					<button type="button" id="reader-sync-furthest-forget" hidden>Forget furthest seen</button>
 					<button type="button" id="reader-sync-back" hidden>Return to previous place</button>
 					<button type="button" id="reader-sync-cancel">Cancel</button>
 				</div>
 			</dialog>
+			<aside id="reader-audio-bar" class="reader-audio-bar" aria-label="Audiobook player" hidden>
+				<audio id="reader-audio-el" preload="metadata"></audio>
+				<div class="reader-audio-main">
+					<div class="reader-audio-transport">
+						<button type="button" id="reader-audio-back" class="reader-audio-btn" title="Back 15 seconds" aria-label="Back 15 seconds">-15s</button>
+						<button type="button" id="reader-audio-play" class="reader-audio-btn reader-audio-play-btn" title="Play or pause audiobook" aria-label="Play audiobook">Play</button>
+						<button type="button" id="reader-audio-fwd" class="reader-audio-btn" title="Forward 30 seconds" aria-label="Forward 30 seconds">+30s</button>
+					</div>
+					<div class="reader-audio-timeline">
+						<div class="reader-audio-meta">
+							<span id="reader-audio-chapter" class="reader-audio-chapter">Audiobook</span>
+							<span class="reader-audio-times">
+								<span id="reader-audio-current">0:00</span> / <span id="reader-audio-duration">0:00</span>
+							</span>
+						</div>
+						<input
+							type="range"
+							id="reader-audio-seek"
+							class="reader-audio-seek"
+							min="0"
+							max="1000"
+							step="1"
+							value="0"
+							aria-label="Seek audiobook"
+						/>
+					</div>
+					<div class="reader-audio-Sync">
+						<label class="reader-audio-rate-label" for="reader-audio-rate">Speed</label>
+						<select id="reader-audio-rate" class="reader-audio-rate" aria-label="Playback speed">
+							<option value="0.75">0.75×</option>
+							<option value="1" selected>1.0×</option>
+							<option value="1.25">1.25×</option>
+							<option value="1.5">1.5×</option>
+							<option value="1.75">1.75×</option>
+							<option value="2">2.0×</option>
+						</select>
+						<button type="button" id="reader-audio-follow" class="reader-audio-pill active" title="Toggle page follow mode">Following audio</button>
+						<button type="button" id="reader-audio-from-page" class="reader-audio-pill" title="Seek audio to current page" hidden>Play from page</button>
+						<button type="button" id="reader-audio-to-audio" class="reader-audio-pill" title="Jump page to current audio timestamp">Locate in text</button>
+						<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">&times;</button>
+					</div>
+				</div>
+			</aside>
 			<script type="module" src={ v.StaticBase + "reader-app.js" } nonce={ v.ScriptNonce }></script>
 		</body>
 	</html>

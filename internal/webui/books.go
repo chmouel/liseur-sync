@@ -31,6 +31,12 @@ type Downloader interface {
 	ServeBookDownload(w http.ResponseWriter, r *http.Request, viewerID, bookID string)
 }
 
+// AudioStreamer streams the linked .m4b audiobook for a book on behalf of
+// a cookie-authenticated UI caller.
+type AudioStreamer interface {
+	ServeBookAudio(w http.ResponseWriter, r *http.Request, viewerID, bookID, expectedAudiobookID, expectedSHA string)
+}
+
 // booksPageSize keeps the page short enough to read. The UI paginates
 // with the same opaque cursor the API hands out.
 const booksPageSize = 25
@@ -240,6 +246,15 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request, a st
 		return
 	}
 	s.Downloads.ServeBookDownload(w, r, u.ID, r.PathValue("id"))
+}
+
+func (s *Server) handleBookAudio(w http.ResponseWriter, r *http.Request, _ store.AuthSession, u *store.User) {
+	streamer, ok := s.Downloads.(AudioStreamer)
+	if !ok || s.Downloads == nil {
+		http.Error(w, "content storage is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	streamer.ServeBookAudio(w, r, u.ID, r.PathValue("id"), "", "")
 }
 
 func encodeBooksCursor(c store.CatalogBookCursor) string {

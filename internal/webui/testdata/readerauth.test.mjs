@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readerAuth, REOPEN_MESSAGE } from "../static/reader-auth.js";
+import { planAudioTicketRefresh } from "../static/reader-session.js";
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status });
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
@@ -284,4 +285,80 @@ test("old servers without introspection still allow ordinary requests", async ()
   });
   assert.equal((await auth.request("v1/works/w/positions")).ok, true);
   assert.equal(auth.identity().device, "browser");
+});
+
+test("audio ticket renewal in the final 5 minutes rotates the reader token instead of looping every 10s", async () => {
+  const HOUR = 60 * 60_000;
+  const MIN = 60_000;
+  let nowMs = Date.parse("2026-09-04T10:00:00Z");
+  let tokenMints = 0;
+  let tokenExpiresMs = nowMs;
+
+  const auth = readerAuth({
+    ...options,
+    now: () => nowMs,
+    fetcher: async (url) => {
+      if (url === options.tokenURL) {
+        tokenMints++;
+        tokenExpiresMs = nowMs + HOUR;
+        return json({
+          token: "reader-token-" + tokenMints,
+          expires_at: new Date(tokenExpiresMs).toISOString(),
+        });
+      }
+      if (url.endsWith("v1/token")) return metadata();
+      if (url.endsWith("/audio/ticket")) {
+        // Server caps ticket expiry to the caller's token expiry
+        const ticketExpiresMs = Math.min(nowMs + HOUR, tokenExpiresMs);
+        return json({
+          stream_url: "/v1/audio/stream/t-" + tokenMints,
+          expires_at: new Date(ticketExpiresMs).toISOString(),
+        });
+      }
+      return json({});
+    },
+  });
+
+  // Initial ticket mint at t = 0
+  const resp1 = await auth.request("v1/books/b1/audio/ticket", { method: "POST" });
+  const data1 = await resp1.json();
+  const plan1 = planAudioTicketRefresh({
+    expiresAt: data1.expires_at,
+    previousExpiresMs: NaN,
+    nowMs,
+    preserveState: false,
+    forceSwap: true,
+  });
+  assert.equal(tokenMints, 1);
+  assert.equal(plan1.shouldSwapSrc, true);
+  assert.equal(plan1.refreshInMs, 55 * MIN);
+
+  // Advance fake clock to t = 55m (inside the final 5 minutes of reader-token-1)
+  nowMs += plan1.refreshInMs;
+  const remainingMs = Math.max(0, plan1.expiresMs - nowMs);
+  auth.refreshBefore(Math.max(5 * MIN + 30_000, remainingMs + 30_000));
+
+  const resp2 = await auth.request("v1/books/b1/audio/ticket", { method: "POST" });
+  const data2 = await resp2.json();
+  const plan2 = planAudioTicketRefresh({
+    expiresAt: data2.expires_at,
+    previousExpiresMs: plan1.expiresMs,
+    nowMs,
+    preserveState: true,
+    forceSwap: false,
+  });
+  assert.equal(tokenMints, 2, "reader token must rotate before minting the renewal ticket");
+  assert.equal(plan2.shouldSwapSrc, true);
+  assert.equal(plan2.refreshInMs, 55 * MIN, "renewed ticket gets a full 55m window, not a 10s loop");
+
+  // If a detached credential cannot rotate and returns the same expires_at, do not swap src or loop
+  const planUnchanged = planAudioTicketRefresh({
+    expiresAt: data2.expires_at,
+    previousExpiresMs: plan2.expiresMs,
+    nowMs: nowMs + 50 * MIN,
+    preserveState: true,
+    forceSwap: false,
+  });
+  assert.equal(planUnchanged.shouldSwapSrc, false);
+  assert.equal(planUnchanged.refreshInMs, null);
 });

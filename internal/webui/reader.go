@@ -162,8 +162,10 @@ func setReaderPolicy(w http.ResponseWriter, apiOrigin string) string {
 
 func readerPolicy(apiOrigin, nonce string) string {
 	connect := "connect-src 'self' blob:"
+	media := "media-src 'self' data: blob:"
 	if apiOrigin != "" {
 		connect += " " + apiOrigin
+		media += " " + apiOrigin
 	}
 	return strings.Join([]string{
 		"default-src 'none'",
@@ -171,7 +173,7 @@ func readerPolicy(apiOrigin, nonce string) string {
 		"style-src 'self' 'unsafe-inline' blob:",
 		"img-src 'self' data: blob:",
 		"font-src data: blob:",
-		"media-src data: blob:",
+		media,
 		connect,
 		"frame-src blob:",
 		"child-src blob:",

@@ -79,6 +79,11 @@ export function readerAuth({
   };
   return {
     acquire,
+    refreshBefore: (marginMs = 60000) => {
+      if (!detached && !stopped && credential && now() >= credential.expires - marginMs) {
+        credential = null;
+      }
+    },
     resume: () => {
       if (!detached && stopped) {
         stopped = false;

@@ -57,11 +57,13 @@ func CORS(cfg config.Config, next http.Handler) http.Handler {
 		}
 		header := w.Header()
 		header.Set("Access-Control-Allow-Origin", origin)
-		header.Set("Access-Control-Expose-Headers", "Retry-After")
+		header.Set("Access-Control-Expose-Headers",
+			"Retry-After, Content-Range, Content-Length, Accept-Ranges, ETag")
 		if r.Method == http.MethodOptions {
 			header.Set("Access-Control-Allow-Methods",
 				"GET, HEAD, POST, PUT, PATCH, DELETE")
-			header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			header.Set("Access-Control-Allow-Headers",
+				"Authorization, Content-Type, Range, If-Range")
 			// Ten minutes is Chrome's cap. A longer value is not honoured
 			// and a shorter one buys a preflight per request.
 			header.Set("Access-Control-Max-Age", "600")

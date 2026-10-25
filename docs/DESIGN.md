@@ -40,8 +40,9 @@ already have.**
 
 ### 1.2 Non-goals
 
-- **Formats other than EPUB.** PDF, comics, audiobooks, and fixed-layout
-  formats require separate format-specific decisions.
+- **General-purpose media hosting.** PDF, comics and fixed-layout formats
+  require separate format-specific decisions. Companion M4B audiobooks
+  are supported alongside EPUBs under [ADR-0057](adr/0057-native-watched-folder-audiobooks.md).
 - **Not a merge authority.** The server stores and orders operations; it
   never decides which position wins. Conflict resolution is a client
   concern (§5.4).

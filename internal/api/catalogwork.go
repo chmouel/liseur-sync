@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/audiomap"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/workident"
@@ -24,6 +25,7 @@ type catalogResolveResponse struct {
 	Confidence  string           `json:"confidence"`
 	Created     bool             `json:"created"`
 	Identifiers []identifierJSON `json:"identifiers"`
+	HasAudio    bool             `json:"has_audio,omitempty"`
 }
 
 // resolveBookWork joins a catalog book to one user's work and is the
@@ -113,10 +115,26 @@ func (s *Server) HandleResolveBookWork(w http.ResponseWriter, r *http.Request) {
 	if result.Created {
 		status = http.StatusCreated
 	}
+	link, ab, audioErr := s.St.BookAudiobookByBookID(r.Context(), tok.UserID, bookID)
+	hasAudio := audioErr == nil && ab.Status == store.BookActive && link.State == store.BookAudiobookActive
+	if audioErr != nil && !errors.Is(audioErr, store.ErrNotFound) {
+		writeCatalogError(w, audioErr, "audiobook lookup failed")
+		return
+	}
+	if hasAudio {
+		book, err := s.St.CatalogBookByID(r.Context(), tok.UserID, bookID)
+		if err != nil {
+			writeCatalogError(w, err, "book not found")
+			return
+		}
+		hasAudio = book.Status == store.BookActive && link.EditionSHA == book.ContentSHA256 &&
+			link.AudiobookSHA == ab.ContentSHA256 && link.MappingKey == audiomap.CatalogMappingKey(book, ab)
+	}
 	writeJSON(w, status, catalogResolveResponse{
 		BookID: bookID, WorkID: result.WorkID,
 		Confidence: result.Confidence, Created: result.Created,
 		Identifiers: identifiersJSON(ids),
+		HasAudio:    hasAudio,
 	})
 }
 
