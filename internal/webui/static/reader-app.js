@@ -2738,7 +2738,7 @@ function audioSessionOpen() {
 
 function liveAudioFraction() {
   if (!audioSwappingSrc && audioEl && audioInfo && (audioActivelyPlaying || audioWantsPlay || audioEl.currentTime > 0)) {
-    const mapped = audioTimeToBook(audioEl.currentTime);
+    const mapped = audioPlaybackPosition(audioEl.currentTime);
     if (mapped && finite(mapped.progression)) return mapped.progression;
   }
   return undefined;
@@ -4643,6 +4643,7 @@ let audioLastSyncedChapProg = -1;
 let audioLastSyncedAudioTime = -Infinity;
 let audioLastSyncedHref = "";
 let audioSyncLocator = null;
+let audioSTTAnchor = null;
 let sttReqSeq = 0;
 let sttAbort = null;
 let audioLastLiveSTTAt = -Infinity;
@@ -4661,6 +4662,7 @@ function formatAudioSeconds(sec) {
 }
 
 function abortAudioSTT() {
+  audioSTTAnchor = null;
   audioNavigationGeneration++;
   sttReqSeq++;
   if (sttAbort) {
@@ -4691,7 +4693,11 @@ function audioTimeToBook(t) {
   const frac = Math.min(1, (t - segment.a0) / (segment.a1 - segment.a0));
   const raw = segment.b0 + frac * (segment.b1 - segment.b0);
   const progression = audioInfo.mapping.full_narrative ? raw : Math.min(raw, 0.998);
-  const resources = audioInfo.mapping.resources;
+  return audioBookPosition(progression, segment);
+}
+
+function audioBookPosition(progression, segment) {
+  const resources = audioInfo?.mapping?.resources;
   if (!Array.isArray(resources) || resources.length === 0) return null;
   const resource = resources.find(r => progression >= r.start && progression < r.end) ||
     (progression === 1 ? resources[resources.length - 1] : null);
@@ -4700,6 +4706,21 @@ function audioTimeToBook(t) {
     progression, segment, href: resource.href,
     chapterProgress: (progression - resource.start) / (resource.end - resource.start),
   };
+}
+
+function audioPlaybackPosition(t) {
+  const mapped = audioTimeToBook(t);
+  const anchor = audioSTTAnchor;
+  if (!anchor) return mapped;
+  if (!mapped || mapped.segment !== anchor.segment || mapped.href !== anchor.mappedHref || t < anchor.audioTime) {
+    audioSTTAnchor = null;
+    return mapped;
+  }
+  const progression = Math.max(0, Math.min(
+    audioInfo.mapping.full_narrative ? 1 : 0.998,
+    anchor.progression + mapped.progression - anchor.mappedProgression,
+  ));
+  return audioBookPosition(progression, mapped.segment) || mapped;
 }
 
 function audioChapterAt(t) {
@@ -4940,13 +4961,26 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
     if (allowPlaying) {
       if (!followAudio || !data?.stt_matched || !data?.locator) return false;
       if (audioEl.paused || Math.abs(audioEl.currentTime - reqTime) > 25) return false;
+      const requested = audioTimeToBook(reqTime);
+      const mapped = audioTimeToBook(audioEl.currentTime);
+      if (!mapped || mapped.segment !== requested?.segment || mapped.href !== requested.href) return false;
       const adjusted = applyAudioElapsedOffset(
         data.locator,
         data.progression,
         reqTime,
         audioEl.currentTime,
       );
+      if (finite(adjusted.progression)) {
+        audioSTTAnchor = {
+          segment: mapped.segment,
+          mappedHref: mapped.href,
+          mappedProgression: mapped.progression,
+          audioTime: audioEl.currentTime,
+          progression: adjusted.progression,
+        };
+      }
       if (!(await navigateToAudioTarget(adjusted.locator, adjusted.progression))) {
+        if (seq !== sttReqSeq || !followAudio || !ready || audioBar?.hidden) return false;
         recordAudioPosition(adjusted.locator, adjusted.progression);
       }
       return true;
@@ -5134,7 +5168,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     const next = !followAudio;
     setFollowAudio(next);
     if (next && audioEl) {
-      const mapped = audioTimeToBook(audioEl.currentTime);
+      const mapped = audioPlaybackPosition(audioEl.currentTime);
       if (mapped?.segment) {
         void navigateToAudioTarget(
           {
@@ -5163,7 +5197,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     if (audioEl.paused) {
       void refineAudioSTT(audioEl.currentTime, { allowPlaying: false });
     } else {
-      const mapped = audioTimeToBook(audioEl.currentTime);
+      const mapped = audioPlaybackPosition(audioEl.currentTime);
       if (mapped?.segment) {
         void navigateToAudioTarget(
           {
@@ -5271,7 +5305,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     if (audioSwappingSrc || !ready || audioBar.hidden) return;
     updateAudioTimelineUI();
     const now = performance.now();
-    const mapped = audioTimeToBook(audioEl.currentTime);
+    const mapped = audioPlaybackPosition(audioEl.currentTime);
     if (audioActivelyPlaying && session && session.mode === "listening" && !audioEl.paused && !audioEl.seeking) {
       session.playing(now, mapped ? mapped.progression : currentAudioFraction());
       if (now - audioLastCheckpointAt >= 5000) {
@@ -5308,11 +5342,7 @@ if (audioToggleBtn && audioBar && audioEl) {
           },
         };
         if (followAudio) {
-          if (!sttAbort) {
-            void navigateToAudioTarget(targetLocator, mapped.progression);
-          } else {
-            recordAudioPosition(targetLocator, mapped.progression);
-          }
+          void navigateToAudioTarget(targetLocator, mapped.progression);
         } else {
           recordAudioPosition(targetLocator, mapped.progression);
         }
