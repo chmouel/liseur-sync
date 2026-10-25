@@ -288,3 +288,104 @@ test("an expired reading credential cannot install a delayed stream ticket", asy
   assert.equal(await mint, false);
   assert.equal(p.audio.src, "");
 });
+
+test("live Whisper refinement runs periodically while following audio and compensates for elapsed playback", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  const locateCalls = [];
+  const held = deferred();
+  p.context.api = async (url, opts) => {
+    if (url.endsWith("/audio/locate")) {
+      locateCalls.push(JSON.parse(opts.body));
+      return held.promise;
+    }
+    throw new Error("unexpected url " + url);
+  };
+
+  p.audio.paused = false;
+  p.audio.currentTime = 200;
+  p.clock.now = 5000;
+  await p.audio.emit("play");
+  await p.audio.emit("playing");
+  await flush();
+  assert.equal(locateCalls.length, 1);
+  assert.deepEqual(locateCalls[0], { audio_time: 200, refine_stt: true });
+
+  // While the first request is in flight, timeupdate must not launch a duplicate request.
+  p.audio.currentTime = 203;
+  p.clock.now = 7000;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(locateCalls.length, 1);
+
+  // Resolve the STT response 3s later; the progression is adjusted by the 3s chapter delta (+0.003).
+  held.resolve({
+    ok: true,
+    json: async () => ({
+      stt_matched: true,
+      progression: 0.25,
+      locator: {
+        href: "chapter.xhtml",
+        type: "application/xhtml+xml",
+        text: { before: 'whispered, "', highlight: "Don't stop, John", after: '," and hurried' },
+        locations: { progression: 0.25, totalProgression: 0.25 },
+      },
+    }),
+  });
+  await flush();
+  const lastNav = p.navigations.at(-1);
+  assert.equal(lastNav.href, "chapter.xhtml");
+  assert.equal(lastNav.text.highlight, "Don't stop, John");
+  assert.ok(Math.abs(lastNav.locations.progression - 0.253) < 1e-9);
+  assert.ok(Math.abs(lastNav.locations.totalProgression - 0.253) < 1e-9);
+
+  // After 15s of playback, timeupdate triggers the next live STT refinement.
+  p.context.api = async (url, opts) => {
+    if (url.endsWith("/audio/locate")) {
+      locateCalls.push(JSON.parse(opts.body));
+      return {
+        ok: true,
+        json: async () => ({
+          stt_matched: true,
+          progression: 0.27,
+          locator: {
+            href: "chapter.xhtml",
+            type: "application/xhtml+xml",
+            text: { highlight: "next spoken phrase" },
+            locations: { progression: 0.27, totalProgression: 0.27 },
+          },
+        }),
+      };
+    }
+    throw new Error("unexpected url " + url);
+  };
+  p.audio.currentTime = 218;
+  p.clock.now = 21000;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(locateCalls.length, 2);
+  assert.deepEqual(locateCalls[1], { audio_time: 218, refine_stt: true });
+  assert.equal(p.navigations.at(-1).text.highlight, "next spoken phrase");
+});
+
+test("following audio turns pages on fine chapter progression deltas even in multi-hour books", async () => {
+  const p = player();
+  // Simulate a 20-chapter book where this chapter spans only 5% of total book progression,
+  // and the audio segment is 1000s long (so 12s of audio is 0.0006 of the chapter, < 0.003 of the book).
+  p.run(`audioInfo.mapping = {
+    segments: [{ a0: 0, a1: 1000, b0: 0.10, b1: 0.15, href: "chapter.xhtml" }],
+    resources: [{ href: "chapter.xhtml", start: 0.10, end: 0.15 }],
+    full_narrative: true
+  };`);
+  p.audio.paused = false;
+  p.audio.currentTime = 100;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(p.navigations.length, 1);
+
+  // Advance by 12s: totalProgression delta is only 0.0006 (< 0.003), but chapterProgress delta is 0.012 (>= 0.0005).
+  p.audio.currentTime = 112;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(p.navigations.length, 2);
+});

@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
 import { catchupState, candidateID, topicRefresh, latestReadablePosition, positionAcknowledged, mergeFurthest, furthestPosition } from "../static/reader-sync.js";
+
+const appSource = readFileSync(new URL("../static/reader-app.js", import.meta.url), "utf8");
+const storageSource = readFileSync(new URL("../static/offline-storage.js", import.meta.url), "utf8");
 
 test("furthest keeps the original full op after lower latest and own echoes", () => {
   const peak = { op_id: "peak", work_id: "work", device_id: "ours", seq: 8,
@@ -385,4 +390,146 @@ test("a book with nothing agreed yet says so rather than inventing one", () => {
   const s = catchupState();
   s.bind("account", "work", "browser");
   assert.equal(s.agreed(), null);
+});
+
+test("rememberFurthest and observeReadingPositions do not resurrect forgotten unsequenced cached peaks when the floor rises", async () => {
+  const readingRecords = new Map();
+  const snapshotRecords = [{
+    key: "snap-1",
+    partition: "part",
+    account: "acc",
+    bookID: "book",
+    furthestFloor: 0,
+    localPosition: { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 },
+    furthest: [{ op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 }],
+  }];
+  const outboxRows = [
+    { partition: "part", account: "acc", bookID: "book", kind: "position", id: "pending-52" },
+  ];
+  const makeReq = (result) => {
+    const req = {};
+    queueMicrotask(() => req.onsuccess?.());
+    req.result = result;
+    return req;
+  };
+  const fakeTx = {
+    objectStore(name) {
+      if (name === "outbox") {
+        return { getAll: () => makeReq(outboxRows) };
+      }
+      if (name === "reading") {
+        return {
+          get: (key) => makeReq(readingRecords.get(key)),
+          put: (rec) => { readingRecords.set(rec.key, structuredClone(rec)); },
+        };
+      }
+      if (name === "snapshots") {
+        return {
+          index: () => ({ getAll: () => makeReq(snapshotRecords) }),
+          put: (copy) => {
+            const idx = snapshotRecords.findIndex(s => s.key === copy.key);
+            if (idx >= 0) snapshotRecords[idx] = structuredClone(copy);
+          },
+        };
+      }
+      throw new Error("unexpected store: " + name);
+    },
+  };
+  const storageCtx = createContext({
+    mergeFurthest,
+    storagePartition: () => "part",
+    keyForReading: ({ partition, account, deviceID, bookID }) =>
+      [partition, account, deviceID || "", bookID].join("\u001f"),
+    READING: "reading",
+    OUTBOX: "outbox",
+    SNAPSHOTS: "snapshots",
+    withDB: (fn) => fn({}),
+    guardedWork: (_db, _stores, _context, work) => new Promise((resolve, reject) => {
+      work(fakeTx, resolve, reject);
+    }),
+  });
+  runInContext(
+    storageSource.slice(
+      storageSource.indexOf("function floorOf(value)"),
+      storageSource.indexOf("export async function readingState("),
+    ).replace("export async function observeReadingPositions", "async function observeReadingPositions"),
+    storageCtx,
+  );
+  const observeReadingPositions = (args) => storageCtx.observeReadingPositions(args);
+
+  const readingKey = ["part", "acc", "web", "book"].join("\u001f");
+  readingRecords.set(readingKey, {
+    key: readingKey,
+    partition: "part",
+    account: "acc",
+    deviceID: "web",
+    bookID: "book",
+    workID: "work",
+    furthestFloor: 0,
+    baseline: { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 },
+    local: { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 },
+    furthest: [
+      { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 },
+      { op_id: "pending-52", work_id: "work", device_id: "web", edition_sha: "ed-pending", progression: 0.52 },
+    ],
+  });
+
+  const observedCalls = [];
+  const appCtx = createContext({
+    Number, Math,
+    cfg: { bookID: "book" },
+    workID: "work",
+    furthest: [
+      { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 },
+    ],
+    furthestFloor: 0,
+    historyStorageError: false,
+    offlineContext: { partition: "part", account: "acc", epoch: "ep", deviceID: "web" },
+    snapshot: () => ({ ok: true }),
+    current: () => true,
+    mergeFurthest,
+    say() {},
+    observeReadingPositions: async (args) => {
+      observedCalls.push(structuredClone(args.ops));
+      return observeReadingPositions(args);
+    },
+  });
+  runInContext(
+    appSource.slice(
+      appSource.indexOf("async function rememberFurthest("),
+      appSource.indexOf("// ------------------------------------------------------------- live"),
+    ),
+    appCtx,
+  );
+
+  const postFloor45 = {
+    op_id: "post-floor-45",
+    work_id: "work",
+    device_id: "web",
+    seq: 25140,
+    progression: 0.45,
+  };
+  const unseqStaleInOps = {
+    op_id: "stale-unseq-97",
+    work_id: "work",
+    device_id: "other",
+    progression: 0.97,
+  };
+  await appCtx.rememberFurthest([postFloor45, unseqStaleInOps], { furthestFloor: 24949 });
+
+  // 1) rememberFurthest passes only the fresh ops to observeReadingPositions, not pre-merged furthest.
+  assert.equal(observedCalls.length, 1);
+  assert.deepEqual(observedCalls[0], [postFloor45, unseqStaleInOps]);
+
+  // 2) Neither the cached 98% peak nor the unsequenced 97% op in incoming ops survives the raised floor,
+  // while the post-floor 45% peak and the pending 52% outbox op both survive.
+  const finalFurthest = JSON.parse(runInContext("JSON.stringify(furthest)", appCtx));
+  assert.deepEqual(
+    finalFurthest.map(o => o.op_id).sort(),
+    ["pending-52", "post-floor-45"],
+  );
+  assert.deepEqual(
+    snapshotRecords[0].furthest.map(o => o.op_id),
+    ["post-floor-45"],
+  );
 });
