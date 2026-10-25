@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,14 +18,16 @@ import (
 
 type absFixture struct {
 	*fixture
-	service  *Service
-	mu       sync.Mutex
-	progress *Progress
-	sessions []Session
-	patches  int
-	failPage int
-	bookID   string
-	audio    []Chapter
+	service        *Service
+	mu             sync.Mutex
+	progress       *Progress
+	sessions       []Session
+	openSessionIDs []string
+	closedSessions []string
+	patches        int
+	failPage       int
+	bookID         string
+	audio          []Chapter
 }
 
 func newABSFixture(t *testing.T, bookTitles, audioTitles []string) *absFixture {
@@ -70,6 +73,16 @@ func newABSFixture(t *testing.T, bookTitles, audioTitles []string) *absFixture {
 			} else {
 				write(f.progress)
 			}
+		case "/api/sessions/open":
+			var open []map[string]any
+			for _, id := range f.openSessionIDs {
+				userID := "remote-user"
+				if strings.HasPrefix(id, "other:") {
+					userID = "other-user"
+				}
+				open = append(open, map[string]any{"id": id, "userId": userID, "libraryItemId": "item"})
+			}
+			write(map[string]any{"sessions": open})
 		case "/api/me/item/listening-sessions/item":
 			if r.URL.Query().Get("page") == fmt.Sprint(f.failPage) {
 				http.Error(w, "retry", http.StatusServiceUnavailable)
@@ -81,6 +94,12 @@ func newABSFixture(t *testing.T, bookTitles, audioTitles []string) *absFixture {
 			end := min(start+100, len(f.sessions))
 			write(SessionPage{Total: len(f.sessions), NumPages: (len(f.sessions) + 99) / 100, Page: page, Sessions: f.sessions[start:end]})
 		default:
+			if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/session/") && strings.HasSuffix(r.URL.Path, "/close") {
+				id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/close")
+				f.closedSessions = append(f.closedSessions, id)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
 		}
@@ -554,5 +573,39 @@ func TestMismatchedNumberedChaptersAllowWholeBookLinearFallback(t *testing.T) {
 	}
 	if got := f.linked(t); !got.ConfirmedLinear || got.State != store.AudiobookLinkActive {
 		t.Fatalf("active linear: %+v", got)
+	}
+}
+
+func TestPushUsesIntraChapterLocatorAndClosesOpenSessions(t *testing.T) {
+	f := newABSFixture(t, []string{"Chapter 1", "Chapter 2", "Chapter 3"}, []string{"Chapter 1", "Chapter 2", "Chapter 3"})
+	l := f.link(t)
+	f.openSessionIDs = []string{"sess-android", "other:sess-bob", "sess-web"}
+
+	// Simulate a phone op in Chapter 2 (c1.xhtml, audio 100s..200s, book 1/3..2/3)
+	// where the phone's whole-book totalProgression (0.45) differs from the
+	// Readium block boundary plus intra-chapter progression (0.175 -> 117.5s).
+	locJSON := []byte(`{"href":"c01.xhtml","type":"application/xhtml+xml","locations":{"progression":0.175,"totalProgression":0.45}}`)
+	op := store.Op{
+		OpID:        "op-locator",
+		WorkID:      l.WorkID,
+		EditionSHA:  &l.EditionSHA,
+		ClientTS:    time.Now(),
+		Progression: 0.45,
+		LocatorJSON: locJSON,
+		Origin:      store.OriginNative,
+	}
+	if _, err := f.st.AppendOps(t.Context(), f.user.ID, "phone", []store.Op{op}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := f.service.Pass(t.Context())
+	if err != nil || rep.Pushed != 1 {
+		t.Fatalf("Pass: %+v %v", rep, err)
+	}
+	if f.progress == nil || math.Abs(f.progress.CurrentTime-117.5) > 0.01 {
+		t.Fatalf("pushed CurrentTime = %+v, want 117.5 (from intra-chapter locator 0.175, not whole-book 0.45 -> 135)", f.progress)
+	}
+	if len(f.closedSessions) != 2 || f.closedSessions[0] != "sess-android" || f.closedSessions[1] != "sess-web" {
+		t.Fatalf("closedSessions = %v, want [sess-android sess-web] (never other:sess-bob)", f.closedSessions)
 	}
 }

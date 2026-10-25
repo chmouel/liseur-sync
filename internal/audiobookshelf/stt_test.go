@@ -3,32 +3,143 @@ package audiobookshelf
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/chmouel/liseur-sync/internal/m4b"
 )
 
+func testMakeBox(typ string, fn func(*bytes.Buffer)) []byte {
+	var body bytes.Buffer
+	fn(&body)
+	var out bytes.Buffer
+	var tmp [4]byte
+	binary.BigEndian.PutUint32(tmp[:], uint32(8+body.Len()))
+	out.Write(tmp[:])
+	out.WriteString(typ)
+	out.Write(body.Bytes())
+	return out.Bytes()
+}
+
+func testMakeFullBox(typ string, version byte, flags uint32, fn func(*bytes.Buffer)) []byte {
+	return testMakeBox(typ, func(b *bytes.Buffer) {
+		b.WriteByte(version)
+		b.WriteByte(byte(flags >> 16))
+		b.WriteByte(byte(flags >> 8))
+		b.WriteByte(byte(flags))
+		fn(b)
+	})
+}
+
+func testPutU32(b *bytes.Buffer, v uint32) {
+	var tmp [4]byte
+	binary.BigEndian.PutUint32(tmp[:], v)
+	b.Write(tmp[:])
+}
+
+func testPutU16(b *bytes.Buffer, v uint16) {
+	var tmp [2]byte
+	binary.BigEndian.PutUint16(tmp[:], v)
+	b.Write(tmp[:])
+}
+
 func TestSliceAudioSnippetM4BAndRoundTrip(t *testing.T) {
-	// Build a synthetic M4B with 10 samples (each 1000 ticks at timescale 1000 = 1s each).
-	stsd := makeFullBox("stsd", 0, 0, func(b *bytes.Buffer) {
-		putU32(b, 1)
-		b.Write(makeBox("mp4a", func(m *bytes.Buffer) {
+	stsd := testMakeFullBox("stsd", 0, 0, func(b *bytes.Buffer) {
+		testPutU32(b, 1)
+		b.Write(testMakeBox("mp4a", func(m *bytes.Buffer) {
 			m.Write(make([]byte, 28))
 		}))
 	})
-	var spans []sampleSpan
 	var mdatPayload bytes.Buffer
 	for i := 0; i < 10; i++ {
-		frame := bytes.Repeat([]byte{byte('A' + i)}, 32)
-		spans = append(spans, sampleSpan{
-			offset: uint64(i * 32),
-			size:   32,
-			delta:  1000,
-		})
-		mdatPayload.Write(frame)
+		mdatPayload.Write(bytes.Repeat([]byte{byte('A' + i)}, 32))
 	}
-	fullM4B := buildSingleChunkM4A(1000, stsd, spans, mdatPayload.Bytes())
+	ftyp := testMakeBox("ftyp", func(b *bytes.Buffer) {
+		b.WriteString("M4A ")
+		testPutU32(b, 0x200)
+		b.WriteString("M4A isommp42")
+	})
+	buildMoov := func(chunkOffset uint32) []byte {
+		mvhd := testMakeFullBox("mvhd", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 0)
+			testPutU32(b, 0)
+			testPutU32(b, 1000)
+			testPutU32(b, 10000)
+			testPutU32(b, 0x00010000)
+			testPutU16(b, 0x0100)
+			b.Write(make([]byte, 10))
+			for _, v := range []uint32{0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000} {
+				testPutU32(b, v)
+			}
+			b.Write(make([]byte, 24))
+			testPutU32(b, 2)
+		})
+		mdhd := testMakeFullBox("mdhd", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 0)
+			testPutU32(b, 0)
+			testPutU32(b, 1000)
+			testPutU32(b, 10000)
+			testPutU16(b, 0x55c4)
+			testPutU16(b, 0)
+		})
+		hdlr := testMakeFullBox("hdlr", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 0)
+			b.WriteString("soun")
+			b.Write(make([]byte, 12))
+			b.WriteString("SoundHandler\x00")
+		})
+		stts := testMakeFullBox("stts", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 1)
+			testPutU32(b, 10)
+			testPutU32(b, 1000)
+		})
+		stsc := testMakeFullBox("stsc", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 1)
+			testPutU32(b, 1)
+			testPutU32(b, 10)
+			testPutU32(b, 1)
+		})
+		stsz := testMakeFullBox("stsz", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 0)
+			testPutU32(b, 10)
+			for i := 0; i < 10; i++ {
+				testPutU32(b, 32)
+			}
+		})
+		stco := testMakeFullBox("stco", 0, 0, func(b *bytes.Buffer) {
+			testPutU32(b, 1)
+			testPutU32(b, chunkOffset)
+		})
+		stbl := testMakeBox("stbl", func(b *bytes.Buffer) {
+			b.Write(stsd)
+			b.Write(stts)
+			b.Write(stsc)
+			b.Write(stsz)
+			b.Write(stco)
+		})
+		minf := testMakeBox("minf", func(b *bytes.Buffer) { b.Write(stbl) })
+		mdia := testMakeBox("mdia", func(b *bytes.Buffer) {
+			b.Write(mdhd)
+			b.Write(hdlr)
+			b.Write(minf)
+		})
+		trak := testMakeBox("trak", func(b *bytes.Buffer) { b.Write(mdia) })
+		return testMakeBox("moov", func(b *bytes.Buffer) {
+			b.Write(mvhd)
+			b.Write(trak)
+		})
+	}
+	moov0 := buildMoov(0)
+	moov := buildMoov(uint32(len(ftyp) + len(moov0) + 8))
+	mdat := testMakeBox("mdat", func(b *bytes.Buffer) { b.Write(mdatPayload.Bytes()) })
+	var fullBuf bytes.Buffer
+	fullBuf.Write(ftyp)
+	fullBuf.Write(moov)
+	fullBuf.Write(mdat)
+	fullM4B := fullBuf.Bytes()
 
 	item := Item{
 		ID:       "item-1",
@@ -56,19 +167,12 @@ func TestSliceAudioSnippetM4BAndRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected clip %q (%d bytes)", name, len(clip))
 	}
 
-	// Verify the synthesized .m4a parses back as a valid ISO BMFF sound track with 3 samples ('C', 'D', 'E').
-	moov, err := fetchMoovBox(context.Background(), func(_ context.Context, _, _ string, s, e int64) ([]byte, error) {
-		return clip[s : e+1], nil
-	}, "item-1", "ino-1", int64(len(clip)))
+	meta, err := m4b.ReadMetadata(context.Background(), m4b.SeekerRangeReader(bytes.NewReader(clip), int64(len(clip))), int64(len(clip)))
 	if err != nil {
-		t.Fatalf("re-parse moov failed: %v", err)
+		t.Fatalf("m4b.ReadMetadata(clip) failed: %v", err)
 	}
-	trk, err := parseSoundTrack(moov)
-	if err != nil {
-		t.Fatalf("re-parse sound track failed: %v", err)
-	}
-	if len(trk.sizes) != 3 {
-		t.Fatalf("len(trk.sizes) = %d, want 3", len(trk.sizes))
+	if meta.Duration != 3.0 {
+		t.Fatalf("clip duration = %v, want 3.0", meta.Duration)
 	}
 }
 
@@ -126,5 +230,54 @@ func TestTranscribeAudioOpenAICompatible(t *testing.T) {
 	}
 	if txt != "The ships hung in the sky in much the same way that bricks do not." {
 		t.Fatalf("unexpected transcript %q", txt)
+	}
+}
+
+func TestToAudioLocatorWithXHTMLTextContext(t *testing.T) {
+	doc := []byte(`<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<body>
+<p>I am all right, Selene, I said, not meaning to use her name. I am only tired.</p>
+<p>I would have to tell them . . . somehow.</p>
+<p>A small legion of identical women in black dresses waited in the corridor beyond the door, their hands folded in silence as the ship hummed around us.</p>
+<p>We trust that everything is to your liking, asked the woman who was Naya and was not. If you require anything, you need only ring the bell beside the bed.</p>
+</body>
+</html>`)
+
+	m := Mapping{
+		Duration: 90000,
+		Resources: []Resource{
+			{Href: "text/part0060.html", Start: 0.7181818, End: 0.7350649},
+		},
+		Segments: []Segment{
+			{
+				Label:      "Chapter 51",
+				Href:       "text/part0060.html",
+				AudioStart: 83090.085,
+				AudioEnd:   85154.55,
+				BookStart:  0.7181818,
+				BookEnd:    0.7350649,
+			},
+		},
+	}
+
+	locJSON := []byte(`{
+		"href": "text/part0060.html",
+		"locations": {"progression": 0.25, "totalProgression": 0.7220654},
+		"text": {"before": "I would have to tell ", "highlight": "them", "after": " . . . somehow."}
+	}`)
+
+	at, mapped, usedLocator := m.ToAudioLocator(0.7220654, locJSON, func(href string) ([]byte, error) {
+		if href == "text/part0060.html" {
+			return doc, nil
+		}
+		return nil, nil
+	})
+	if !mapped || !usedLocator {
+		t.Fatalf("ToAudioLocator: mapped=%v usedLocator=%v", mapped, usedLocator)
+	}
+	// The sentence is near the first third of the document (~0.24..0.32), not at 0.25*2064 if text refines it.
+	if at <= 83090.085 || at >= 83800 {
+		t.Fatalf("unexpected audio time %v", at)
 	}
 }

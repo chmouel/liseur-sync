@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/m4b"
 )
 
 // maxResponseBytes bounds what the server can make this one read. The
@@ -135,11 +136,7 @@ func cleanText(s string) string {
 }
 
 // Chapter is one chapter of an audiobook, in seconds.
-type Chapter struct {
-	Start float64 `json:"start"`
-	End   float64 `json:"end"`
-	Title string  `json:"title"`
-}
+type Chapter = m4b.Chapter
 
 // AudioFile is one underlying audio file of an audiobook item.
 type AudioFile struct {
@@ -374,6 +371,49 @@ func (c *Client) UpdateProgress(ctx context.Context, itemID string, u ProgressUp
 	}
 	_, err = c.do(ctx, http.MethodPatch, "/api/me/progress/"+url.PathEscape(itemID), body)
 	return err
+}
+
+// CloseOpenSessionsForItem closes any open playback sessions on the
+// Audiobookshelf server belonging to this client's authenticated user for
+// itemID without sending syncData, so stale open sessions in
+// PlaybackSessionManager.sessions do not overwrite a newly pushed reading
+// position on their next heartbeat and connected web/mobile players receive
+// user_session_closed.
+func (c *Client) CloseOpenSessionsForItem(ctx context.Context, itemID string) (int, error) {
+	if itemID == "" {
+		return 0, nil
+	}
+	me, err := c.Me(ctx)
+	if err != nil || me.ID == "" {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnauthorized) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var open struct {
+		Sessions []struct {
+			ID            string `json:"id"`
+			UserID        string `json:"userId"`
+			LibraryItemID string `json:"libraryItemId"`
+		} `json:"sessions"`
+	}
+	if err := c.getJSON(ctx, "/api/sessions/open", &open); err != nil {
+		// Non-admin ABS accounts receive 404 on /api/sessions/open; treat as best-effort.
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnauthorized) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	closed := 0
+	for _, s := range open.Sessions {
+		if s.LibraryItemID != itemID || s.UserID != me.ID || s.ID == "" || !storable(s.ID) {
+			continue
+		}
+		if _, err := c.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(s.ID)+"/close", nil); err == nil {
+			closed++
+		}
+	}
+	return closed, nil
 }
 
 // ItemSessions reads one page of the account's sessions for an item.
