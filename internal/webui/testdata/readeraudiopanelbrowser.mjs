@@ -49,6 +49,7 @@ export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
   check('mini defaults to a bounded non-modal player', await evalIn(`${panel}.dataset.audioSize === 'mini' && !document.querySelector('dialog[open]')`) && await bounded());
   check('one audio element and unique player controls', await evalIn(`(() => { const ids = [...${panel}.querySelectorAll('[id]')].map(e=>e.id); return new Set(ids).size === ids.length && ${panel}.querySelectorAll('audio').length === 1; })()`));
   await evalIn(`window.__panelAudio = document.getElementById('reader-audio-el')`);
+  check('desktop mini is a single row', (await rect('#reader-audio-bar')).height <= 64);
   await screenshot('desktop-mini');
   await click('button[data-audio-size]');
   check('expanded exposes existing controls without replacing audio', await evalIn(`!document.querySelector('[data-audio-details]').hidden && document.getElementById('reader-audio-el') === window.__panelAudio`));
@@ -97,19 +98,33 @@ export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
   check('reload does not reopen the player', await evalIn(`${panel}.hidden`));
   await open();
   check('reload restores size and placement', await evalIn(`${panel}.dataset.audioSize === 'expanded'`) && Math.abs((await rect('#reader-audio-bar')).x - afterKey.x) < 2);
+  const longMetadata = () => evalIn(`
+    document.getElementById('reader-audio-chapter').textContent = 'Chapter 55: The long road through the mountains and beyond';
+    document.getElementById('reader-audio-current').textContent = '24:40:44';
+    document.getElementById('reader-audio-duration').textContent = '31:08:16';
+  `);
+  await longMetadata();
   for (const width of [390, 360, 320]) {
     await S('Emulation.setDeviceMetricsOverride', { width, height: 780, deviceScaleFactor: 1, mobile: true });
     await waitFor(`${panel}.dataset.audioLayout === 'dock' && innerWidth === ${width}`, 'phone dock');
     await evalIn('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    const reserved = await evalIn("document.querySelector('.reader-stage').style.getPropertyValue('--reader-audio-inset')");
     check('phone ' + width + ' keeps expanded controls bounded', await bounded());
     await screenshot('phone-' + width + '-expanded');
     await click('button[data-audio-size]');
     await waitFor(`${panel}.dataset.audioSize === 'mini'`, 'mini phone player');
     check('phone ' + width + ' reserves text space above footer', await evalIn(`(() => { const p = ${panel}.getBoundingClientRect(), f = document.getElementById('reader-footer').getBoundingClientRect(), v = document.getElementById('reader-view').getBoundingClientRect(); return p.bottom <= f.top && v.bottom <= p.top + 1 && ${panel}.scrollWidth <= ${panel}.clientWidth; })()`));
+    check('phone ' + width + ' mini stays one row with long metadata', await evalIn(`(() => {
+      const p = ${panel}.getBoundingClientRect();
+      const time = document.querySelector('.reader-audio-times').getBoundingClientRect();
+      const transport = document.querySelector('.reader-audio-transport').getBoundingClientRect();
+      return p.height <= 64 && time.right <= transport.left && time.top >= p.top && time.bottom <= p.bottom;
+    })()`));
+    check('expansion does not repaginate for extra controls', reserved === await evalIn("document.querySelector('.reader-stage').style.getPropertyValue('--reader-audio-inset')"));
     await screenshot('phone-' + width + '-mini');
     await click('button[data-audio-size]');
   }
-  for (const theme of ['sepia', 'dark', 'light']) {
+  for (const theme of ['sepia', 'dark', 'tokyo-night', 'rose-pine', 'black', 'light']) {
     await click(`input[name="theme"][value="${theme}"]`);
     await waitFor(`document.body.dataset.readerTheme === '${theme}'`, 'reader theme ' + theme);
     check('player remains usable in ' + theme, await bounded());
@@ -121,6 +136,13 @@ export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
   await S('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 1, mobile: true });
   await waitFor(`${panel}.dataset.audioLayout === 'floating'`, 'landscape layout');
   check('rotation restores bounded floating placement', await bounded());
+  await S('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false });
+  await click('input[name="theme"][value="tokyo-night"]');
+  await click('button[data-audio-size]');
+  await longMetadata();
+  await screenshot('desktop-tokyo-night-mini');
+  await click('button[data-audio-size]');
+  await screenshot('desktop-tokyo-night-expanded');
   await evalIn("document.getElementById('reader-audio-close').click()");
   check('close returns focus to toolbar', await evalIn(`${panel}.hidden && document.activeElement.id === 'reader-audio-toggle'`));
 }

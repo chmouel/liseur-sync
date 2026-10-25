@@ -5272,8 +5272,8 @@ if (audioToggleBtn && audioBar && audioEl) {
     audioWantsPlay = true;
     abortAudioSTT();
     if (audioPlayBtn) {
-      audioPlayBtn.textContent = "Pause";
-      audioPlayBtn.setAttribute("aria-label", "Pause");
+      audioPlayBtn.setAttribute("data-playing", "true");
+      audioPlayBtn.setAttribute("aria-label", "Pause audiobook");
     }
   });
 
@@ -5321,8 +5321,8 @@ if (audioToggleBtn && audioBar && audioEl) {
       audioWantsPlay = false;
     }
     if (audioPlayBtn) {
-      audioPlayBtn.textContent = "Play";
-      audioPlayBtn.setAttribute("aria-label", "Play");
+      audioPlayBtn.setAttribute("data-playing", "false");
+      audioPlayBtn.setAttribute("aria-label", "Play audiobook");
     }
     pauseListeningInterval();
     if (document.hidden && !audioSwappingSrc && !audioEl.error) {

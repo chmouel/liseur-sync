@@ -150,7 +150,8 @@ test("stalled network fetch does not stop accounting while buffered audio is sti
   const p = player();
   p.audio.paused = false;
   await p.audio.emit("play");
-  assert.equal(p.context.audioPlayBtn.textContent, "Pause");
+  assert.equal(p.context.audioPlayBtn.attributes.get("aria-label"), "Pause audiobook");
+  assert.equal(p.context.audioPlayBtn.attributes.get("data-playing"), "true");
   await p.audio.emit("playing");
   p.clock.now = 10000;
   await p.audio.emit("stalled");
@@ -158,7 +159,8 @@ test("stalled network fetch does not stop accounting while buffered audio is sti
   await p.audio.emit("waiting");
   assert.equal(p.run("session.checkpoint().activeMs"), 20000);
   await p.audio.emit("pause");
-  assert.equal(p.context.audioPlayBtn.textContent, "Play");
+  assert.equal(p.context.audioPlayBtn.attributes.get("aria-label"), "Play audiobook");
+  assert.equal(p.context.audioPlayBtn.attributes.get("data-playing"), "false");
 });
 
 test("the player uses API segment keys and resource coordinates rather than chapter coordinates", () => {
