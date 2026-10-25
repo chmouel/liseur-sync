@@ -391,6 +391,28 @@ async function storageChecks() {
   check(late.local.op_id === "newer-tab" && late.furthest[0].op_id === "late-tab-peak",
     "rejecting a stale tab's current write still transactionally retains its peak");
 
+  // Raising furthest_floor drops settled and pre-floor maxima while
+  // keeping any position still queued in the outbox.
+  const floorBook = "floor-book";
+  await s.saveReadingPosition({ ...context, bookID: floorBook, workID,
+    requireSnapshot: false, op: page("settled-98", 0.9831) });
+  await s.removeOfflineOutbox({ ...context, kind: "position", id: "settled-98", seq: 10 });
+  await s.saveReadingPosition({ ...context, bookID: floorBook, workID,
+    requireSnapshot: false, op: page("pending-52", 0.52) });
+  await s.observeReadingPositions({
+    ...context, bookID: floorBook, workID,
+    ops: [{ ...page("remote-41", 0.4159), edition_sha: "other-edition", device_id: "phone", seq: 12 }],
+    furthestFloor: 11,
+  });
+  const afterFloor = await s.readingState({ ...context, bookID: floorBook });
+  check(afterFloor.furthestFloor === 11, "readingState persists the raised furthest floor");
+  check(!afterFloor.furthest.some(op => op.op_id === "settled-98"),
+    "raising furthest_floor prunes settled pre-floor maxima");
+  check(afterFloor.furthest.some(op => op.op_id === "pending-52") &&
+    afterFloor.furthest.some(op => op.op_id === "remote-41"),
+    "raising furthest_floor preserves pending outbox writes and post-floor maxima");
+  await s.removeOfflineOutbox({ ...context, kind: "position", id: "pending-52", settle: false });
+
   // Two windows of one account share one queue and one lock. Whichever
   // holds the lock does the sending; the other finds nothing left to do
   // rather than putting the same page turn on the wire twice.

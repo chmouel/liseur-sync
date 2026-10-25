@@ -268,6 +268,8 @@ if (process.env.SMOKE_FURTHEST === "1") {
   const goto = async percent => {
     await evalIn("document.getElementById('reader-progress-text').click()");
     await evalIn(`document.getElementById('reader-goto-input').value = '${percent}'; document.getElementById('reader-goto-form').requestSubmit()`);
+    await waitFor("!document.getElementById('reader-goto').open",
+      "the percentage navigation to finish");
   };
   await goto(70);
   check('detached reader records a local peak', await wait(`(${storage}).then(r => r?.furthest?.some(op => op.progression > 0.6))`));

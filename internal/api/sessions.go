@@ -25,6 +25,7 @@ type sessionReqJSON struct {
 	EndProg    *float64 `json:"end_progression"`
 	IdleMs     int64    `json:"idle_ms"`
 	ActiveMs   *int64   `json:"active_ms"`
+	Mode       string   `json:"mode,omitempty"`
 }
 
 // MaxSessionActiveMs is the largest explicit active_ms the native
@@ -33,7 +34,10 @@ type sessionReqJSON struct {
 // millisecond-to-second conversions.
 const MaxSessionActiveMs int64 = 9007199254740991
 
-const errCodeActiveOutOfRange = "active_out_of_range"
+const (
+	errCodeActiveOutOfRange = "active_out_of_range"
+	errCodeBadMode          = "bad_mode"
+)
 
 type sessionRequestError struct {
 	code      string
@@ -82,6 +86,15 @@ func parseSessionRequest(in sessionReqJSON, deviceID string) (store.Session, err
 	if in.ActiveMs != nil && (*in.ActiveMs < 0 || *in.ActiveMs > MaxSessionActiveMs) {
 		return refuse(errCodeActiveOutOfRange, "active_ms out of range")
 	}
+	var origin store.Origin
+	switch in.Mode {
+	case "", "reading":
+		origin = store.OriginNative
+	case "listening":
+		origin = store.OriginAudiobook
+	default:
+		return refuse(errCodeBadMode, "mode must be reading or listening")
+	}
 	return store.Session{
 		SessionID:  in.SessionID,
 		WorkID:     in.WorkID,
@@ -93,7 +106,7 @@ func parseSessionRequest(in sessionReqJSON, deviceID string) (store.Session, err
 		EndProg:    ep,
 		IdleMs:     in.IdleMs,
 		ActiveMs:   in.ActiveMs,
-		Origin:     store.OriginNative,
+		Origin:     origin,
 	}, nil
 }
 

@@ -15,3 +15,7 @@ func TestReaderSessionAccounting(t *testing.T) {
 func TestReaderSessionUploads(t *testing.T) {
 	runNodeTests(t, "readersessionupload.test.mjs")
 }
+
+func TestReaderAudioLifecycle(t *testing.T) {
+	runNodeTests(t, "readeraudio.test.mjs")
+}

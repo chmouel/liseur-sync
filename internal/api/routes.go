@@ -449,6 +449,16 @@ func (s *Server) Routes() *http.ServeMux {
 	// editor needs to know whether a reset would change anything.
 	mux.Handle("GET /v1/books/{id}/series", readH(s.HandleBookSeriesLayers))
 
+	// Linked audiobook metadata, bi-directional locator translation, and
+	// revocable path-ticket minting (ADR-0057).
+	mux.Handle("GET /v1/books/{id}/audio/info", readH(s.HandleBookAudioInfo))
+	mux.Handle("POST /v1/books/{id}/audio/ticket", readH(s.HandleCreateBookAudioTicket))
+	mux.Handle("POST /v1/books/{id}/audio/locate", readH(s.HandleBookAudioLocate))
+	mux.Handle("GET /v1/books/{id}/audio/stream/{ticket}",
+		auth.RequireSecureTransport(s.Cfg, http.HandlerFunc(s.HandleStreamBookAudioTicket)))
+	mux.Handle("HEAD /v1/books/{id}/audio/stream/{ticket}",
+		auth.RequireSecureTransport(s.Cfg, http.HandlerFunc(s.HandleStreamBookAudioTicket)))
+
 	// library-manage scope: stating what the folder got wrong
 	// (ADR-0018). These write to a layer beside the catalog, never into
 	// it and never under a watched folder. The shared layer additionally

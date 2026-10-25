@@ -2,11 +2,33 @@ import { reconcileReadingState } from "./reader-reconcile.js";
 
 const validFraction = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 
+function parseSeq(value) {
+  if (value == null) return null;
+  try {
+    const seq = BigInt(value);
+    return seq > 0n ? seq : null;
+  } catch {
+    return null;
+  }
+}
+
 // Keep original operations, not a locator assembled from different observations.
-export function mergeFurthest(previous, observations, workID) {
+export function mergeFurthest(previous, observations, workID, floor = 0) {
+  const cutoff = parseSeq(floor);
+  const all = [...(previous || []), ...(observations || [])];
+  const seqByID = new Map();
+  for (const op of all) {
+    const seq = parseSeq(op?.seq);
+    if (op?.op_id && seq !== null) seqByID.set(op.op_id, op.seq);
+  }
   const groups = new Map();
-  for (const op of [...(previous || []), ...(observations || [])]) {
-    if (!op?.op_id || op.work_id !== workID || !validFraction(op.progression)) continue;
+  for (const raw of all) {
+    if (!raw?.op_id || raw.work_id !== workID || !validFraction(raw.progression)) continue;
+    const op = raw.seq == null && seqByID.has(raw.op_id)
+      ? { ...raw, seq: seqByID.get(raw.op_id) }
+      : raw;
+    const seq = parseSeq(op.seq);
+    if (cutoff !== null && seq !== null && seq <= cutoff) continue;
     const key = JSON.stringify([op.work_id, op.edition_sha || "", op.origin_alias || ""]);
     const old = groups.get(key);
     if (!old || op.progression > old.progression ||
@@ -28,8 +50,8 @@ function earlierCandidate(a, b) {
   return String(a.op_id) < String(b.op_id);
 }
 
-export function furthestPosition(ops, workID) {
-  return mergeFurthest([], ops, workID).reduce((best, op) =>
+export function furthestPosition(ops, workID, floor = 0) {
+  return mergeFurthest([], ops, workID, floor).reduce((best, op) =>
     !best || op.progression > best.progression ||
       (op.progression === best.progression && earlierCandidate(op, best)) ? op : best, null);
 }
