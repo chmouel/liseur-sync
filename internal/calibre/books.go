@@ -104,6 +104,18 @@ func (b Book) ReadableFormats() []Format {
 	return out
 }
 
+// AudiobookFormats returns the book's M4B audiobook formats listed in
+// metadata.db's data table.
+func (b Book) AudiobookFormats() []Format {
+	var out []Format
+	for _, f := range b.Formats {
+		if strings.EqualFold(f.Format, "M4B") {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // Books reads the whole library.
 //
 // It is one pass of a handful of queries rather than a query per book:

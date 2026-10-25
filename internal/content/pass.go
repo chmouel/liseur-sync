@@ -137,7 +137,22 @@ func (r *Reconciler) reconcilePlain(
 		observed = append(observed, obs)
 	}
 
-	return r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, r.now())
+	now := r.now()
+	res, err := r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, now)
+	if err != nil {
+		return store.ReconcileResult{}, err
+	}
+	abRes, err := r.reconcilePlainAudiobooks(ctx, folder, report, now)
+	if err != nil {
+		return res, err
+	}
+	res.Added += abRes.Added
+	res.Updated += abRes.Updated
+	res.Replaced += abRes.Replaced
+	res.Returned += abRes.Returned
+	res.Missing += abRes.Missing
+	res.Purged += abRes.Purged
+	return res, nil
 }
 
 // unchanged is the stat gate. Size and modification time are what a
