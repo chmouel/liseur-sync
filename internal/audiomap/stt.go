@@ -89,7 +89,6 @@ func TranscribeAudio(ctx context.Context, baseURL, apiKey, model string, audioBy
 
 type docWord struct {
 	norm      string
-	raw       string
 	startRune int
 	endRune   int
 }
@@ -111,7 +110,8 @@ func MatchTranscriptDetailInXHTML(doc []byte, transcript string) (fraction float
 	if len(qWords) < 4 {
 		return 0, 0, 0, "", "", "", false
 	}
-	words, totalRunes := extractXHTMLWords(doc)
+	words, runes := extractXHTMLWords(doc)
+	totalRunes := len(runes)
 	if len(words) < len(qWords) || totalRunes <= 0 {
 		return 0, 0, 0, "", "", "", false
 	}
@@ -208,14 +208,15 @@ func MatchTranscriptDetailInXHTML(doc []byte, transcript string) (fraction float
 		}
 	}
 	margin = bestScore - secondBest
-	before, highlight, after = buildWordContext(words, best.firstHit, best.lastHit)
+	before, highlight, after = buildWordContext(words, runes, best.firstHit, best.lastHit)
 	return clamp01(float64(words[best.lastHit].endRune) / float64(totalRunes)), bestScore, margin, before, highlight, after, true
 }
 
 // ExtractTextContextAtFraction returns a short (before, highlight, after) text
 // snippet around a character fraction in [0, 1] of an XHTML document.
 func ExtractTextContextAtFraction(doc []byte, fraction float64) (before, highlight, after string) {
-	words, totalRunes := extractXHTMLWords(doc)
+	words, runes := extractXHTMLWords(doc)
+	totalRunes := len(runes)
 	if len(words) == 0 || totalRunes <= 0 {
 		return "", "", ""
 	}
@@ -236,11 +237,11 @@ func ExtractTextContextAtFraction(doc []byte, fraction float64) (before, highlig
 	if endIdx >= len(words) {
 		endIdx = len(words) - 1
 	}
-	return buildWordContext(words, startIdx, endIdx)
+	return buildWordContext(words, runes, startIdx, endIdx)
 }
 
-func buildWordContext(words []docWord, startIdx, endIdx int) (before, highlight, after string) {
-	if len(words) == 0 {
+func buildWordContext(words []docWord, runes []rune, startIdx, endIdx int) (before, highlight, after string) {
+	if len(words) == 0 || len(runes) == 0 {
 		return "", "", ""
 	}
 	if startIdx < 0 {
@@ -259,29 +260,46 @@ func buildWordContext(words []docWord, startIdx, endIdx int) (before, highlight,
 	if preStart < 0 {
 		preStart = 0
 	}
-	postEnd := endIdx + 7
-	if postEnd > len(words) {
-		postEnd = len(words)
+	postEnd := endIdx + 6
+	if postEnd >= len(words) {
+		postEnd = len(words) - 1
 	}
 
-	joinRaw := func(lo, hi int) string {
-		if lo >= hi {
+	sliceRunes := func(loRune, hiRune int) string {
+		if loRune < 0 {
+			loRune = 0
+		}
+		if hiRune > len(runes) {
+			hiRune = len(runes)
+		}
+		if loRune >= hiRune {
 			return ""
 		}
-		parts := make([]string, 0, hi-lo)
-		for i := lo; i < hi; i++ {
-			parts = append(parts, words[i].raw)
+		var b strings.Builder
+		b.Grow(hiRune - loRune)
+		inSpace := false
+		for _, r := range runes[loRune:hiRune] {
+			if unicode.IsSpace(r) {
+				if !inSpace {
+					b.WriteByte(' ')
+					inSpace = true
+				}
+				continue
+			}
+			inSpace = false
+			b.WriteRune(r)
 		}
-		return strings.Join(parts, " ")
+		return b.String()
 	}
-	before = joinRaw(preStart, startIdx)
-	if before != "" {
-		before += " "
+
+	hiStart := words[startIdx].startRune
+	hiEnd := words[endIdx].endRune
+	if preStart < startIdx {
+		before = sliceRunes(words[preStart].startRune, hiStart)
 	}
-	highlight = joinRaw(startIdx, endIdx+1)
-	after = joinRaw(endIdx+1, postEnd)
-	if after != "" {
-		after = " " + after
+	highlight = sliceRunes(hiStart, hiEnd)
+	if endIdx < postEnd {
+		after = sliceRunes(hiEnd, words[postEnd].endRune)
 	}
 	return before, highlight, after
 }
@@ -294,7 +312,8 @@ func MatchLocatorTextInXHTML(doc []byte, before, highlight, after string) (fract
 	if len(qWords) < 4 {
 		return 0, 0, false
 	}
-	words, totalRunes := extractXHTMLWords(doc)
+	words, runes := extractXHTMLWords(doc)
+	totalRunes := len(runes)
 	if len(words) < len(qWords) || totalRunes <= 0 {
 		return 0, 0, false
 	}
@@ -376,13 +395,13 @@ func MatchLocatorTextInXHTML(doc []byte, before, highlight, after string) (fract
 	return clamp01(float64(words[targetIdx].endRune) / float64(totalRunes)), bestScore, true
 }
 
-func extractXHTMLWords(doc []byte) ([]docWord, int) {
+func extractXHTMLWords(doc []byte) ([]docWord, []rune) {
 	dec := xml.NewDecoder(bytes.NewReader(doc))
 	dec.Strict = false
 	dec.Entity = xml.HTMLEntity
 	var (
 		words     []docWord
-		total     int
+		runes     []rune
 		skipDepth int
 	)
 	for {
@@ -407,39 +426,36 @@ func extractXHTMLWords(doc []byte) ([]docWord, int) {
 		case xml.CharData:
 			if skipDepth == 0 {
 				s := string(t)
-				var normBuf, rawBuf strings.Builder
+				var normBuf strings.Builder
 				wordStart := 0
 				for _, r := range s {
-					total++
+					runes = append(runes, r)
+					total := len(runes)
 					if unicode.IsLetter(r) || unicode.IsDigit(r) {
 						if normBuf.Len() == 0 {
 							wordStart = total - 1
 						}
 						normBuf.WriteRune(foldRune(unicode.ToLower(r)))
-						rawBuf.WriteRune(r)
 					} else if normBuf.Len() > 0 {
 						words = append(words, docWord{
 							norm:      normBuf.String(),
-							raw:       rawBuf.String(),
 							startRune: wordStart,
-							endRune:   total,
+							endRune:   total - 1,
 						})
 						normBuf.Reset()
-						rawBuf.Reset()
 					}
 				}
 				if normBuf.Len() > 0 {
 					words = append(words, docWord{
 						norm:      normBuf.String(),
-						raw:       rawBuf.String(),
 						startRune: wordStart,
-						endRune:   total,
+						endRune:   len(runes),
 					})
 				}
 			}
 		}
 	}
-	return words, total
+	return words, runes
 }
 
 func tokenizeWords(s string) []string {

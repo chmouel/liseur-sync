@@ -396,9 +396,11 @@ export async function observeReadingPositions({
         const prevFloor = floorOf(record.furthestFloor);
         const floor = Math.max(prevFloor, floorOf(furthestFloor));
         const raised = floor > prevFloor || forced;
+        const keepCandidate = op => op?.seq != null || (!forced && pendingIDs.has(op?.op_id));
+        const incoming = raised ? ops.filter(keepCandidate) : ops;
         let previous = record.furthest || [];
         if (raised) {
-          previous = previous.filter(op => op?.seq != null || (!forced && pendingIDs.has(op?.op_id)));
+          previous = previous.filter(keepCandidate);
           record.baseline = stampFloor(record.baseline, floor);
           if (forced || !pendingIDs.has(record.local?.op_id)) {
             record.local = stampFloor(record.local, floor);
@@ -406,7 +408,7 @@ export async function observeReadingPositions({
         }
         record.furthestFloor = floor;
         record.furthest = mergeFurthest(previous,
-          [record.local, record.baseline, ...ops], workID, floor);
+          [record.local, record.baseline, ...incoming], workID, floor);
         record.workID = workID;
         store.put(record);
         if (raised) {
@@ -414,15 +416,13 @@ export async function observeReadingPositions({
           const copies = snapshots.index("book").getAll([partition, account, bookID]);
           copies.onsuccess = () => {
             for (const copy of copies.result) {
-              const copyPrev = (copy.furthest || []).filter(
-                op => op?.seq != null || (!forced && pendingIDs.has(op?.op_id)),
-              );
+              const copyPrev = (copy.furthest || []).filter(keepCandidate);
               if (forced || !pendingIDs.has(copy.localPosition?.op_id)) {
                 copy.localPosition = stampFloor(copy.localPosition, floor);
               }
               copy.furthestFloor = floor;
               copy.furthest = mergeFurthest(copyPrev,
-                [copy.localPosition, ...ops], workID, floor);
+                [copy.localPosition, ...incoming], workID, floor);
               snapshots.put(copy);
             }
           };

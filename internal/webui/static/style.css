@@ -2600,7 +2600,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 .reader-audio-play-btn {
 	border-color: var(--primary);
 	background: var(--primary);
-	color: #fff;
+	color: var(--on-primary);
 	font-weight: 600;
 	min-width: 3.6rem;
 }
