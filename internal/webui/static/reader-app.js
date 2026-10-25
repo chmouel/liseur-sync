@@ -124,6 +124,7 @@ const audioDurationLabel = document.getElementById("reader-audio-duration");
 const audioSeekInput = document.getElementById("reader-audio-seek");
 const audioRateSelect = document.getElementById("reader-audio-rate");
 const audioFollowBtn = document.getElementById("reader-audio-follow");
+const audioSTTStatus = document.getElementById("reader-audio-stt-status");
 const audioFromPageBtn = document.getElementById("reader-audio-from-page");
 const audioToAudioBtn = document.getElementById("reader-audio-to-audio");
 const audioCloseBtn = document.getElementById("reader-audio-close");
@@ -4646,6 +4647,8 @@ let audioSyncLocator = null;
 let audioSTTAnchor = null;
 let sttReqSeq = 0;
 let sttAbort = null;
+let audioSTTStatusTimer = null;
+let audioSTTStatusGeneration = 0;
 let audioLastLiveSTTAt = -Infinity;
 let audioLastLiveSTTTime = -Infinity;
 const LIVE_STT_INTERVAL_MS = 15000;
@@ -4661,12 +4664,27 @@ function formatAudioSeconds(sec) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+function setAudioSTTStatus(text, announce = false) {
+  const generation = ++audioSTTStatusGeneration;
+  clearTimeout(audioSTTStatusTimer);
+  audioSTTStatusTimer = null;
+  if (!audioSTTStatus) return;
+  audioSTTStatus.setAttribute("aria-live", announce ? "polite" : "off");
+  audioSTTStatus.textContent = text;
+  if (text === "Speech matched") {
+    audioSTTStatusTimer = setTimeout(() => {
+      if (generation === audioSTTStatusGeneration) setAudioSTTStatus("");
+    }, 4000);
+  }
+}
+
 function abortAudioSTT() {
   audioSTTAnchor = null;
   cancelAudioSTTRequest();
 }
 
 function cancelAudioSTTRequest() {
+  setAudioSTTStatus("");
   audioNavigationGeneration++;
   sttReqSeq++;
   if (sttAbort) {
@@ -4929,7 +4947,7 @@ function applyAudioElapsedOffset(locator, progression, reqTime, curTime) {
   return { locator: nextLoc, progression: nextProg };
 }
 
-async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
+async function refineAudioSTT(reqTime, { allowPlaying = false, announce = !allowPlaying } = {}) {
   if (!audioInfo || cfg.offline || !finite(reqTime) || reqTime < 0) return false;
   if (allowPlaying) {
     if (!audioInfo.stt_enabled || !followAudio || sttAbort) return false;
@@ -4943,6 +4961,10 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
   const seq = sttReqSeq;
   const controller = new AbortController();
   sttAbort = controller;
+  const showStatus = !!audioInfo.stt_enabled;
+  let response = null;
+  let status = "";
+  if (showStatus) setAudioSTTStatus("Matching speech…", announce);
   try {
     const resp = await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/audio/locate", {
       method: "POST",
@@ -4950,7 +4972,12 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
       body: JSON.stringify({ audio_time: reqTime, refine_stt: true }),
       signal: controller.signal,
     });
-    if (!resp.ok) return false;
+    response = resp;
+    if (!auth.responseCurrent(resp)) return false;
+    if (!resp.ok) {
+      status = "Using estimated position";
+      return false;
+    }
     const data = await resp.json();
     if (
       seq !== sttReqSeq ||
@@ -4962,6 +4989,7 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
     ) {
       return false;
     }
+    if (!data?.stt_matched) status = "Using estimated position";
     if (allowPlaying) {
       if (!followAudio || !data?.stt_matched || !data?.locator) return false;
       if (audioEl.paused || Math.abs(audioEl.currentTime - reqTime) > 25) return false;
@@ -4987,6 +5015,7 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
         if (seq !== sttReqSeq || !followAudio || !ready || audioBar?.hidden) return false;
         recordAudioPosition(adjusted.locator, adjusted.progression);
       }
+      if (finite(adjusted.progression)) status = "Speech matched";
       return true;
     }
     if (!audioEl.paused || Math.abs(audioEl.currentTime - reqTime) >= 0.5) {
@@ -5000,11 +5029,19 @@ async function refineAudioSTT(reqTime, { allowPlaying = false } = {}) {
       } else {
         recordAudioPosition(data.locator, data.progression);
       }
+      if (data.stt_matched && finite(data.progression)) status = "Speech matched";
       return true;
     }
-  } catch {} finally {
+  } catch {
+    status = "Using estimated position";
+  } finally {
     if (sttAbort === controller) {
       sttAbort = null;
+      if (showStatus) {
+        const current = seq === sttReqSeq && ready && !audioBar?.hidden && !audioEl?.seeking &&
+          (!response || auth.responseCurrent(response));
+        setAudioSTTStatus(current ? status : "", announce);
+      }
     }
   }
   return false;
@@ -5187,7 +5224,7 @@ if (audioToggleBtn && audioBar && audioEl) {
         );
       }
       if (!audioEl.paused && audioInfo?.stt_enabled) {
-        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true, announce: true });
       }
     }
   });
@@ -5216,7 +5253,7 @@ if (audioToggleBtn && audioBar && audioEl) {
         );
       }
       if (audioInfo?.stt_enabled) {
-        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true, announce: true });
       }
     }
   });
