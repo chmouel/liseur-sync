@@ -364,3 +364,231 @@ func testAudiobookSessionRevisions(t *testing.T, open OpenFunc) {
 		t.Fatalf("work deletion removed import ledger: %v", err)
 	}
 }
+
+func testCatalogAudiobooksReconcileAndGrants(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+
+	u1 := MkUser(t, s, "ab-cat-u1")
+	u2 := MkUser(t, s, "ab-cat-u2")
+
+	plainFolder := store.Folder{
+		ID: "f-ab-plain", Name: "PlainAudio", RootPath: "/srv/ab-plain",
+		Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now,
+	}
+	calibreFolder := store.Folder{
+		ID: "f-ab-calibre", Name: "CalibreBooks", RootPath: "/srv/ab-calibre",
+		Kind: store.FolderCalibre, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.CreateFolder(ctx, plainFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateFolder(ctx, calibreFolder); err != nil {
+		t.Fatal(err)
+	}
+	// Grant u1 both folders, u2 only calibreFolder.
+	if err := s.AssignUserFolder(ctx, u1.ID, plainFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignUserFolder(ctx, u1.ID, calibreFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignUserFolder(ctx, u2.ID, calibreFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Plain folder reconcile + idempotency + cue stamp invalidation.
+	cueTime := now.Add(-time.Minute)
+	obs1 := store.ObservedAudiobook{
+		RelativePath:    "book1.m4b",
+		SizeBytes:       1000,
+		MTime:           now,
+		ContentSHA256:   "ab-sha-1",
+		CueMTime:        &cueTime,
+		CueSizeBytes:    100,
+		Title:           "Book One",
+		AuthorsJSON:     []byte(`["Author One"]`),
+		NarratorsJSON:   []byte(`["Narrator One"]`),
+		DurationSeconds: 3600,
+		ChaptersJSON:    []byte(`[{"index":0,"title":"Ch 1","start":0,"end":3600}]`),
+	}
+	res1, err := s.ReconcileFolderAudiobooks(ctx, plainFolder.ID, []store.ObservedAudiobook{obs1}, true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res1.Added != 1 || !res1.Changed() {
+		t.Fatalf("first plain reconcile: %+v", res1)
+	}
+
+	known, err := s.AudiobooksInFolder(ctx, plainFolder.ID)
+	if err != nil || len(known) != 1 {
+		t.Fatalf("AudiobooksInFolder: %v %+v", err, known)
+	}
+	abID := known[0].ID
+	if known[0].CueSizeBytes != 100 || known[0].CueMTime == nil {
+		t.Fatalf("expected cue size 100 and mtime, got %+v", known[0])
+	}
+
+	// Unchanged pass changes nothing.
+	res2, err := s.ReconcileFolderAudiobooks(ctx, plainFolder.ID, []store.ObservedAudiobook{{
+		RelativePath: "book1.m4b", SizeBytes: 1000, MTime: now, Unchanged: true,
+	}}, true, now.Add(time.Minute))
+	if err != nil || res2.Changed() {
+		t.Fatalf("unchanged pass reported change: %+v %v", res2, err)
+	}
+
+	// Incomplete or empty pass never marks missing.
+	if _, err := s.ReconcileFolderAudiobooks(ctx, plainFolder.ID, nil, true, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReconcileFolderAudiobooks(ctx, plainFolder.ID, []store.ObservedAudiobook{}, false, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ab, err := s.CatalogAudiobookByID(ctx, "", abID)
+	if err != nil || ab.Status != store.BookActive {
+		t.Fatalf("expected active audiobook after empty/incomplete passes, got %+v %v", ab, err)
+	}
+
+	// 2. Link book in calibreFolder to audiobook in plainFolder; verify dual-folder grant check.
+	calID := int64(10)
+	doReconcile(t, s, calibreFolder.ID, []store.ObservedBook{{
+		CalibreID: &calID, RelativePath: "Author/Book One (10)/book.epub",
+		SizeBytes: 500, MTime: now, ContentSHA256: "epub-sha-1", Title: "Book One",
+	}}, true, now)
+	bookID := knownByCalibreID(t, s, calibreFolder.ID)[calID].ID
+
+	link := store.BookAudiobook{
+		BookID:       bookID,
+		AudiobookID:  abID,
+		EditionSHA:   "epub-sha-1",
+		AudiobookSHA: "ab-sha-1",
+		Source:       "title_author",
+		State:        store.BookAudiobookActive,
+		MappingKey:   "mk-1",
+		MappingJSON:  []byte(`{"version":1,"duration":3600,"segments":[{"chapter_index":0,"href":"ch1.xhtml","audio_start":0,"audio_end":3600,"book_start":0,"book_end":1}]}`),
+		UpdatedAt:    now,
+	}
+	if err := s.UpsertBookAudiobook(ctx, link, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// u1 has grants on both folders -> succeeds.
+	gotLink, gotAB, err := s.BookAudiobookByBookID(ctx, u1.ID, bookID)
+	if err != nil {
+		t.Fatalf("u1 BookAudiobookByBookID: %v", err)
+	}
+	if gotLink.AudiobookID != abID || gotAB.ID != abID {
+		t.Fatalf("unexpected link/audiobook: %+v %+v", gotLink, gotAB)
+	}
+	// u2 only has grant on calibreFolder (book), NOT plainFolder (audiobook) -> ErrNotFound!
+	if _, _, err := s.BookAudiobookByBookID(ctx, u2.ID, bookID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for u2 lacking audiobook folder grant, got %v", err)
+	}
+
+	// 3. Plain-folder byte replacement at same path cascades book_audiobooks.
+	obsReplaced := obs1
+	obsReplaced.SizeBytes = 2000
+	obsReplaced.ContentSHA256 = "ab-sha-2"
+	obsReplaced.Replaces = true
+	resReplace, err := s.ReconcileFolderAudiobooks(ctx, plainFolder.ID, []store.ObservedAudiobook{obsReplaced}, true, now.Add(5*time.Minute))
+	if err != nil || resReplace.Replaced != 1 {
+		t.Fatalf("expected Replaced=1, got %+v %v", resReplace, err)
+	}
+	if _, _, err := s.BookAudiobookByBookID(ctx, "", bookID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected book_audiobooks link to cascade on replacement, got %v", err)
+	}
+
+	// 4. Calibre audiobook lifecycle: directory rename, Unservable, and ADR-0022 purge.
+	calAbID1 := int64(101)
+	calAbID2 := int64(102)
+	_, err = s.ReconcileFolderAudiobooks(ctx, calibreFolder.ID, []store.ObservedAudiobook{
+		{
+			CalibreID: &calAbID1, RelativePath: "Author/Book A (101)/book.m4b",
+			SizeBytes: 1000, MTime: now, ContentSHA256: "cal-ab-1", Title: "Book A",
+			DurationSeconds: 1800, ChaptersJSON: []byte(`[]`),
+		},
+		{
+			CalibreID: &calAbID2, RelativePath: "Author/Book B (102)/book.m4b",
+			SizeBytes: 1000, MTime: now, ContentSHA256: "cal-ab-2", Title: "Book B",
+			DurationSeconds: 1800, ChaptersJSON: []byte(`[]`),
+		},
+	}, true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calKnown, err := s.AudiobooksInFolder(ctx, calibreFolder.ID)
+	if err != nil || len(calKnown) != 2 {
+		t.Fatalf("expected 2 calibre audiobooks, got %d (%v)", len(calKnown), err)
+	}
+
+	// Rename directory for calAbID1, mark calAbID2 Unservable.
+	resCal2, err := s.ReconcileFolderAudiobooks(ctx, calibreFolder.ID, []store.ObservedAudiobook{
+		{
+			CalibreID: &calAbID1, RelativePath: "Author/Book B (102)/book.m4b",
+			SizeBytes: 1000, MTime: now, ContentSHA256: "cal-ab-1", Title: "Book A",
+			DurationSeconds: 1800, ChaptersJSON: []byte(`[]`),
+		},
+		{
+			CalibreID: &calAbID2, Unservable: true,
+		},
+	}, true, now.Add(10*time.Minute))
+	if err != nil || resCal2.Missing != 1 || resCal2.Purged != 0 {
+		t.Fatalf("expected Missing=1 Purged=0 on Unservable, got %+v %v", resCal2, err)
+	}
+
+	// Complete non-empty pass omitting calAbID2 purges it (ADR-0022).
+	resCal3, err := s.ReconcileFolderAudiobooks(ctx, calibreFolder.ID, []store.ObservedAudiobook{
+		{
+			CalibreID: &calAbID1, RelativePath: "Renamed Author/Book A (101)/book.m4b",
+			SizeBytes: 1000, MTime: now, ContentSHA256: "cal-ab-1", Title: "Book A",
+			DurationSeconds: 1800, ChaptersJSON: []byte(`[]`),
+		},
+	}, true, now.Add(20*time.Minute))
+	if err != nil || resCal3.Purged != 1 {
+		t.Fatalf("expected Purged=1 when omitted from Calibre pass, got %+v %v", resCal3, err)
+	}
+}
+
+func testOriginAudiobookPaceExclusion(t *testing.T, open OpenFunc) {
+	if store.MeasuresReadingPace(store.OriginAudiobook) {
+		t.Fatal("OriginAudiobook must not measure reading pace")
+	}
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "ab-pace-user")
+	w := MkWork(t, s, u, "ab-pace-work", "sha-ab-pace")
+	t0 := time.Date(2026, time.January, 10, 18, 0, 0, 0, time.UTC)
+
+	sess := store.Session{
+		SessionID: "sess-listen-1",
+		WorkID:    w.ID,
+		DeviceID:  "web-reader",
+		StartedAt: t0,
+		EndedAt:   t0.Add(30 * time.Minute),
+		StartProg: 0.10,
+		EndProg:   0.25,
+		ActiveMs:  Ptr(int64(30 * 60 * 1000)),
+		Origin:    store.OriginAudiobook,
+	}
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{sess}); err != nil {
+		t.Fatalf("AppendSessions: %v", err)
+	}
+	// Replay with same Origin is duplicate; replay with OriginNative is conflict.
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{sess}); err != nil {
+		t.Fatalf("replay AppendSessions: %v", err)
+	}
+	conflictSess := sess
+	conflictSess.Origin = store.OriginNative
+	if err := s.AppendSessions(ctx, u.ID, []store.Session{conflictSess}); !errors.Is(err, store.ErrIDMismatch) {
+		t.Fatalf("conflicting origin AppendSessions: %v", err)
+	}
+
+	snap, err := s.StatisticsSnapshot(ctx, u.ID, []string{w.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sessions) != 1 || snap.Sessions[0].Origin != store.OriginAudiobook {
+		t.Fatalf("expected 1 OriginAudiobook session in snapshot, got %+v", snap.Sessions)
+	}
+}
