@@ -223,6 +223,11 @@ async function waitFor(expression, description, timeout = 10000) {
   throw new Error('Timed out waiting for ' + description);
 }
 
+if (process.env.SMOKE_AUDIO_PANEL === '1') {
+  const { installAudioFixture } = await import('./readeraudiopanelbrowser.mjs');
+  await installAudioFixture(S);
+}
+
 await S('Page.navigate', { url });
 await waitFor(`(() => {
   const view = document.querySelector('readium-view');
@@ -239,6 +244,12 @@ const check = (name, ok, extra = '') => {
 
 const title = await evalIn('document.title');
 check('page loads', typeof title === 'string' && title.length > 0, title);
+
+if (process.env.SMOKE_AUDIO_PANEL === '1') {
+  const { checkAudioPanel } = await import('./readeraudiopanelbrowser.mjs');
+  await checkAudioPanel({ S, evalIn, waitFor, check, url });
+  await finish(fail.length ? 1 : 0);
+}
 
 if (process.env.SMOKE_FURTHEST === "1") {
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

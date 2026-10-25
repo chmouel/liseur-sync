@@ -2551,15 +2551,24 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	color: var(--primary);
 	background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
-.reader-audio-bar {
+.reader-stage { padding-bottom: var(--reader-audio-inset, 0px); }
+.reader-body:has(.reader-audio-bar[data-audio-layout="dock"]:not([hidden])) .reader-footer {
 	position: fixed;
-	left: max(.75rem, env(safe-area-inset-left, 0px));
-	right: max(.75rem, env(safe-area-inset-right, 0px));
-	bottom: calc(var(--reader-margin, 48px) + .35rem + env(safe-area-inset-bottom, 0px));
+}
+.reader-audio-bar {
+	--audio-safe-top: env(safe-area-inset-top, 0px);
+	--audio-safe-right: env(safe-area-inset-right, 0px);
+	--audio-safe-bottom: env(safe-area-inset-bottom, 0px);
+	--audio-safe-left: env(safe-area-inset-left, 0px);
+	position: fixed;
+	left: 12px;
+	top: var(--reader-bar-height, 4rem);
 	z-index: 54;
-	max-width: 54rem;
-	margin-inline: auto;
-	padding: .55rem .8rem;
+	width: 21rem;
+	box-sizing: border-box;
+	overflow: auto;
+	overscroll-behavior: contain;
+	padding: .6rem;
 	border: 1px solid var(--line);
 	border-radius: 12px;
 	background: color-mix(in srgb, var(--surface) 94%, transparent);
@@ -2570,14 +2579,25 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	color: var(--ink);
 }
 .reader-audio-bar[hidden] { display: none; }
-.reader-audio-main {
-	display: flex;
-	align-items: center;
-	gap: .75rem;
-	flex-wrap: wrap;
-}
+.reader-audio-bar[data-audio-size="expanded"] { width: 25rem; }
+.reader-audio-bar [hidden] { display: none !important; }
+.reader-audio-header { display: flex; align-items: center; gap: .3rem; margin-bottom: .25rem; }
+.reader-audio-header .reader-audio-chapter { flex: 1; min-width: 0; }
+.reader-audio-handle { cursor: grab; touch-action: none; }
+.reader-audio-bar[data-audio-dragging] { user-select: none; cursor: grabbing; }
+.reader-audio-bar[data-audio-dragging] .reader-audio-handle { cursor: grabbing; }
+.reader-audio-drag-shield { position: fixed; inset: 0; z-index: 53; cursor: grabbing; }
+.reader-audio-position, .reader-audio-docking { display: flex; flex-wrap: wrap; gap: .3rem; }
+.reader-audio-position { margin-top: .75rem; border-top: 1px solid var(--line); padding-top: .5rem; }
+.reader-audio-bar[data-audio-layout="dock"] .reader-audio-docking { display: none; }
+.reader-audio-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.reader-audio-bar[data-audio-size="mini"] .reader-audio-total { display: none; }
+.reader-audio-bar button:focus-visible, .reader-audio-bar input:focus-visible,
+.reader-audio-bar select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.reader-audio-transport .reader-audio-times { margin-left: auto; }
+#reader-audio-details { margin-top: .6rem; }
 .reader-audio-transport {
-	display: inline-flex;
+	display: flex;
 	align-items: center;
 	gap: .35rem;
 	flex: none;
@@ -2586,6 +2606,8 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	border: 1px solid var(--line);
 	border-radius: 7px;
 	padding: .3rem .55rem;
+	min-width: 44px;
+	min-height: 44px;
 	background: var(--surface-2);
 	color: inherit;
 	font: inherit;
@@ -2612,25 +2634,16 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	color: var(--primary);
 	background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
 }
-.reader-audio-pill[hidden] { display: none; }
 .reader-audio-stt-status {
 	color: var(--muted);
 	font-size: .76rem;
 }
 .reader-audio-stt-status:empty { display: none; }
 .reader-audio-timeline {
-	flex: 1 1 14rem;
-	min-width: 11rem;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
 	gap: .2rem;
-}
-.reader-audio-meta {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: .5rem;
-	font-size: .76rem;
 }
 .reader-audio-chapter {
 	overflow: hidden;
@@ -2645,6 +2658,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 }
 .reader-audio-seek {
 	width: 100%;
+	min-height: 44px;
 	margin: 0;
 }
 .reader-audio-Sync {
@@ -2661,6 +2675,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	clip: rect(0, 0, 0, 0);
 }
 .reader-audio-rate {
+	min-height: 44px;
 	border: 1px solid var(--line);
 	border-radius: 7px;
 	padding: .25rem .4rem;
@@ -2668,6 +2683,10 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	color: inherit;
 	font: inherit;
 	font-size: .78rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.reader-audio-bar button { transition: none; }
 }
 
 /* Paper has no rail, no chrome, no buttons and no dark theme: a printed
