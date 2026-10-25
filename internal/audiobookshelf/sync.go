@@ -7,10 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/content"
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -106,13 +111,21 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	if remote.IsFinished && m.FullNarrative {
 		p, mapped = 1, true
 	}
+	localAudioTime, localMapped, usedLocator := 0.0, false, false
+	if local.Seq > 0 && sameEdition && !strings.HasPrefix(local.DeviceID, peerPrefix(l.PeerIdentity)) {
+		localAudioTime, localMapped, usedLocator = s.toAudioTime(ctx, userID, *l, m, local)
+	}
 	if have && mapped && local.Seq > 0 && sameEdition {
 		tolerance := (seg.BookEnd - seg.BookStart) / (seg.AudioEnd - seg.AudioStart)
 		complete := remote.IsFinished == (local.Progression >= 0.999 && m.CoversLast)
 		if !m.FullNarrative && remote.IsFinished && nearProgress(local.Progression, 0.998) {
 			complete = true
 		}
-		if math.Abs(local.Progression-p) <= math.Max(tolerance, 1e-9) && complete {
+		samePos := math.Abs(local.Progression-p) <= math.Max(tolerance, 1e-9)
+		if usedLocator && localMapped {
+			samePos = math.Abs(localAudioTime-remoteTime) <= 1.0
+		}
+		if samePos && complete {
 			l.PushedSeq, l.RemoteUpdatedMs = local.Seq, remote.LastUpdate
 			return "skipped", nil
 		}
@@ -126,6 +139,9 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		return "skipped", nil
 	}
 	pull := have && !echo && (local.Seq == 0 || remote.LastUpdate > local.ClientTS.UnixMilli())
+	if pull && remote.LastUpdate <= l.RemoteUpdatedMs && local.Seq > l.PushedSeq {
+		pull = false
+	}
 	if pull {
 		if remote.LastUpdate <= l.RemoteUpdatedMs || !mapped || (remote.CurrentTime == 0 && local.Progression > 0) {
 			return "skipped", nil
@@ -153,12 +169,13 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 			return "", store.ErrConflict
 		}
 		l.PushedSeq, l.RemoteUpdatedMs = results[0].Seq, remote.LastUpdate
+		slog.Info("audiobookshelf pulled progress", "work_id", l.WorkID, "item_id", l.ItemID, "seq", results[0].Seq, "audio_time", remoteTime, "book_prog", p)
 		return "pulled", nil
 	}
 	if local.Seq == 0 || !sameEdition || strings.HasPrefix(local.DeviceID, peerPrefix(l.PeerIdentity)) {
 		return "skipped", nil
 	}
-	at, mapped := m.ToAudio(local.Progression)
+	at, mapped := localAudioTime, localMapped
 	finished := local.Progression >= 0.999 && m.CoversLast
 	if finished {
 		at, mapped = audioEnd, true
@@ -170,10 +187,12 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		return "", err
 	}
 	at = math.Min(at, m.Duration)
+	closedSessions, _ := s.Client.CloseOpenSessionsForItem(ctx, l.ItemID)
 	if err := s.Client.UpdateProgress(ctx, l.ItemID, ProgressUpdate{CurrentTime: at, Duration: m.Duration,
 		Progress: at / m.Duration, IsFinished: finished}); err != nil {
 		return "", err
 	}
+	slog.Info("audiobookshelf pushed progress", "work_id", l.WorkID, "item_id", l.ItemID, "seq", local.Seq, "book_prog", local.Progression, "audio_time", at, "used_locator", usedLocator, "closed_sessions", closedSessions)
 	// Persist the mark even if the readback fails so the next pass recognizes the echo
 	l.PushedSeq, l.PushedMark = local.Seq, progressMark(Progress{CurrentTime: at, IsFinished: finished})
 	readback, err := s.Client.Progress(ctx, l.ItemID)
@@ -187,6 +206,46 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		l.RemoteUpdatedMs = readback.LastUpdate
 	}
 	return "pushed", nil
+}
+
+func (s *Service) toAudioTime(ctx context.Context, userID string, l store.AudiobookLink, m Mapping, local store.Op) (float64, bool, bool) {
+	var (
+		pubOnce sync.Once
+		pub     *epub.Publication
+		closer  io.Closer
+	)
+	defer func() {
+		if closer != nil {
+			_ = closer.Close()
+		}
+	}()
+	readResource := func(href string) ([]byte, error) {
+		pubOnce.Do(func() {
+			if s.Store == nil || l.BookID == "" {
+				return
+			}
+			book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID)
+			if err != nil || book.Status != store.BookActive {
+				return
+			}
+			f, size, err := content.NewFiles(s.Store).OpenBook(ctx, book)
+			if err != nil {
+				return
+			}
+			p, err := epub.OpenPublication(ctx, f, size, epub.DefaultLimits())
+			if err != nil {
+				_ = f.Close()
+				return
+			}
+			closer = f
+			pub = p
+		})
+		if pub == nil {
+			return nil, errors.New("publication unavailable")
+		}
+		return pub.Resource(ctx, href)
+	}
+	return m.ToAudioLocator(local.Progression, local.LocatorJSON, readResource)
 }
 
 func nearProgress(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
