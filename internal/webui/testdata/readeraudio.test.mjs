@@ -96,6 +96,7 @@ function player() {
       renderer: { goTo: async target => navigations.push(target) },
     },
     audioEl: audio,
+    audioPanelView: { opens: [], setOpen(open) { this.opens.push(open); } },
   });
   for (const name of [
     "audioToggleBtn", "audioBar", "audioPlayBtn",

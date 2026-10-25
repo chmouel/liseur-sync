@@ -1,6 +1,7 @@
 // Reader controls and native sync over the Readium publication engine.
 
 import "./reader-engine.js";
+import { audioPanel } from "./reader-audio-panel.js";
 import {
   openSession,
   resolveListeningCheckpointFraction,
@@ -139,6 +140,13 @@ if (readerBar) {
   sizeBar();
   new ResizeObserver(sizeBar).observe(readerBar);
 }
+
+const audioPanelView = audioPanel(audioBar, {
+  toolbar: readerBar, footer, stage: stageArea, toggle: audioToggleBtn,
+});
+window.addEventListener("pagehide", event => {
+  if (!event.persisted) audioPanelView.destroy();
+});
 
 let chapterLoadingTimer = null;
 let chapterLoadingGeneration = 0;
@@ -5125,6 +5133,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     if (!audioEl.paused) audioEl.pause();
     pauseListeningInterval();
     audioBar.hidden = true;
+    audioPanelView.setOpen(false);
     audioToggleBtn.setAttribute("aria-expanded", "false");
     if (session && session.mode === "listening") {
       void endSession().then(() => {
@@ -5141,6 +5150,7 @@ if (audioToggleBtn && audioBar && audioEl) {
       closeAudioPlayer();
       return;
     }
+    audioPanelView.setOpen(true);
     setFollowAudio(true);
     if (!audioEl.src) {
       await mintAudioTicket(false);

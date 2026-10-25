@@ -79,3 +79,12 @@ accepts `"mode": "reading" | "listening"`, storing `"listening"`
 sessions with `OriginAudiobook`. `MeasuresReadingPace(OriginAudiobook)`
 is `false`, so listening time counts toward total time, daily activity,
 and streaks without skewing visual reading pace.
+
+**Web Reader player.** The player opens in mini mode and expands without
+blocking interaction with the book. Above 700px it can be dragged by its
+handle, moved with arrow keys, or docked to an edge. Narrower viewports use
+a bottom dock that reserves space for the mini controls and keeps the
+reading footer visible. Size and desktop placement are browser preferences;
+opening the reader never starts playback. Moving or minimizing the player
+does not change the stream, page-follow mode, or listening session. Closing
+it stops playback and returns to reading accounting.
