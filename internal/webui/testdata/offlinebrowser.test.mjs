@@ -415,7 +415,7 @@ async function storageChecks() {
     ...context, bookID: floorBook, workID,
     ops: [
       page("cached-unseq-99", 0.99),
-      { ...page("post-floor-45", 0.45), seq: 15 },
+      { ...page("post-floor-45", 0.45), edition_sha: "post-floor-edition", seq: 15 },
     ],
     furthestFloor: 14,
   });
