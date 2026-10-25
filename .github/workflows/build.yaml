@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, audiobooks-native]
     tags: ["v*"]
 
 jobs:
@@ -64,11 +64,11 @@ jobs:
       - name: Publish with ko (multi-arch, no daemon)
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
-          VERSION_TAGS: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+          VERSION_TAGS: ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref == 'refs/heads/audiobooks-native' && format('audiobooks-native,sha-{0}', github.sha) || github.ref_name }}
         run: ko build --bare --platform=linux/amd64,linux/arm64 --tags "$VERSION_TAGS" ./cmd/liseur-sync
       - name: Smoke-test the published image
         env:
-          IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref == 'refs/heads/audiobooks-native' && format('sha-{0}', github.sha) || github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
         run: |
           docker pull "$IMAGE"
           docker run -d --name ls -p 127.0.0.1:18585:8585 \
@@ -77,7 +77,7 @@ jobs:
             -e LISEUR_DATABASE_URL=/data/liseur-sync.db \
             -e LISEUR_CACHE_DIR=/data/cache \
             "$IMAGE" serve
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             sleep 1
             if curl -sf http://127.0.0.1:18585/healthz; then break; fi
           done
