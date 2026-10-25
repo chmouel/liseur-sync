@@ -2613,6 +2613,11 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
 }
 .reader-audio-pill[hidden] { display: none; }
+.reader-audio-stt-status {
+	color: var(--muted);
+	font-size: .76rem;
+}
+.reader-audio-stt-status:empty { display: none; }
 .reader-audio-timeline {
 	flex: 1 1 14rem;
 	min-width: 11rem;

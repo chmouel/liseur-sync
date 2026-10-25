@@ -421,6 +421,7 @@ func TestReaderPageRendersAudiobookPlayerControls(t *testing.T) {
 		`id="reader-audio-el"`,
 		`id="reader-audio-play"`,
 		`id="reader-audio-follow"`,
+		`id="reader-audio-stt-status" class="reader-audio-stt-status" role="status" aria-live="off" aria-atomic="true"`,
 		`id="reader-audio-from-page"`,
 		`id="reader-audio-to-audio"`,
 	} {
