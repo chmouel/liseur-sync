@@ -69,7 +69,7 @@ function fixture(stored, denied = false) {
       setItem(key, value) { if (denied) throw Error("denied"); stored = value; } },
   });
   const panel = new Element(doc, 116);
-  const controls = Object.fromEntries(["[data-audio-handle]", "[data-audio-size]", "[data-audio-details]", ".reader-audio-transport", ".reader-audio-header", "[data-audio-announcement]"].map(k => [k, new Element(doc)]));
+  const controls = Object.fromEntries(["[data-audio-handle]", "[data-audio-size]", "[data-audio-details]", ".reader-audio-transport", ".reader-audio-heading", "[data-audio-announcement]"].map(k => [k, new Element(doc)]));
   const docks = ["top", "left", "right", "bottom", "bottom-right"].map(edge => {
     const el = new Element(doc); el.dataset.audioDock = edge; return el;
   });
@@ -145,6 +145,8 @@ test("keyboard movement, resize, docking, and reset stay in bounds", () => {
   assert.equal(parseFloat(f.panel.style.left), x - 50);
   f.docks[0].fire("click");
   assert.equal(f.stored().edge, "top");
+  assert.equal(f.docks[0].attributes.get("aria-pressed"), "true");
+  assert.equal(f.docks[4].attributes.get("aria-pressed"), "false");
   f.win.innerWidth = 390;
   f.win.dispatchEvent(new Event("resize")); f.flush();
   assert.equal(f.panel.dataset.audioLayout, "dock");

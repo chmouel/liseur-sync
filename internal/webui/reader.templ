@@ -492,17 +492,49 @@ templ readerPage(v ReaderView, csrf string) {
 			</dialog>
 			<aside id="reader-audio-bar" class="reader-audio-bar" data-audio-size="mini" aria-label="Audiobook player" hidden>
 				<audio id="reader-audio-el" preload="metadata"></audio>
-				<div class="reader-audio-header">
-					<button type="button" class="reader-audio-btn reader-audio-handle" data-audio-handle aria-label="Move audiobook player" title="Drag to move; arrow keys move, Shift moves faster" aria-describedby="reader-audio-move-help">⠿</button>
-					<span id="reader-audio-chapter" class="reader-audio-chapter">Audiobook</span>
-					<button type="button" class="reader-audio-btn" data-audio-size aria-label="Expand audiobook player" aria-expanded="false" aria-controls="reader-audio-details" title="Expand player">⤢</button>
-					<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">&times;</button>
-				</div>
-				<div class="reader-audio-transport">
-						<button type="button" id="reader-audio-back" class="reader-audio-btn" title="Back 15 seconds" aria-label="Back 15 seconds">-15s</button>
-						<button type="button" id="reader-audio-play" class="reader-audio-btn reader-audio-play-btn" title="Play or pause audiobook" aria-label="Play audiobook">Play</button>
-						<button type="button" id="reader-audio-fwd" class="reader-audio-btn" title="Forward 30 seconds" aria-label="Forward 30 seconds">+30s</button>
-					<span class="reader-audio-times"><span id="reader-audio-current">0:00</span><span class="reader-audio-total"> / <span id="reader-audio-duration">0:00</span></span></span>
+				<div class="reader-audio-summary">
+					<div class="reader-audio-header">
+						<button type="button" class="reader-audio-btn reader-audio-handle" data-audio-handle aria-label="Move audiobook player" title="Drag to move; arrow keys move, Shift moves faster" aria-describedby="reader-audio-move-help">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01"></path>
+							</svg>
+						</button>
+						<div class="reader-audio-heading">
+							<span id="reader-audio-chapter" class="reader-audio-chapter">Audiobook</span>
+							<span class="reader-audio-times"><span id="reader-audio-current">0:00</span><span class="reader-audio-total">&nbsp;/&nbsp;<span id="reader-audio-duration">0:00</span></span></span>
+						</div>
+						<button type="button" class="reader-audio-btn reader-audio-size-btn" data-audio-size aria-label="Expand audiobook player" aria-expanded="false" aria-controls="reader-audio-details" title="Expand player">
+							<svg class="reader-audio-expand-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"></path>
+							</svg>
+							<svg class="reader-audio-collapse-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M8 3v5H3M16 3v5h5M3 16h5v5M21 16h-5v5"></path>
+							</svg>
+						</button>
+						<button type="button" id="reader-audio-close" class="reader-audio-btn" title="Close audiobook player" aria-label="Close audiobook player">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="m6 6 12 12M18 6 6 18"></path>
+							</svg>
+						</button>
+					</div>
+					<div class="reader-audio-transport">
+						<button type="button" id="reader-audio-back" class="reader-audio-btn reader-audio-skip" title="Back 15 seconds" aria-label="Back 15 seconds">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M3 10a9 9 0 1 1 2.7 8.4M3 4v6h6"></path>
+							</svg>
+							<span aria-hidden="true">15</span>
+						</button>
+						<button type="button" id="reader-audio-play" class="reader-audio-btn reader-audio-play-btn" data-playing="false" title="Play or pause audiobook" aria-label="Play audiobook">
+							<svg class="reader-audio-play-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+							<svg class="reader-audio-pause-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
+						</button>
+						<button type="button" id="reader-audio-fwd" class="reader-audio-btn reader-audio-skip" title="Forward 30 seconds" aria-label="Forward 30 seconds">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M21 10a9 9 0 1 0-2.7 8.4M21 4v6h-6"></path>
+							</svg>
+							<span aria-hidden="true">30</span>
+						</button>
+					</div>
 				</div>
 				<div id="reader-audio-details" data-audio-details hidden>
 					<div class="reader-audio-timeline">
@@ -517,7 +549,7 @@ templ readerPage(v ReaderView, csrf string) {
 							aria-label="Seek audiobook"
 						/>
 					</div>
-					<div class="reader-audio-Sync">
+					<div class="reader-audio-settings-row">
 						<label class="reader-audio-rate-label" for="reader-audio-rate">Speed</label>
 						<select id="reader-audio-rate" class="reader-audio-rate" aria-label="Playback speed">
 							<option value="0.75">0.75×</option>
@@ -527,19 +559,47 @@ templ readerPage(v ReaderView, csrf string) {
 							<option value="1.75">1.75×</option>
 							<option value="2">2.0×</option>
 						</select>
-						<button type="button" id="reader-audio-follow" class="reader-audio-pill active" title="Toggle page follow mode">Following audio</button>
-						<span id="reader-audio-stt-status" class="reader-audio-stt-status" role="status" aria-live="off" aria-atomic="true"></span>
-						<button type="button" id="reader-audio-from-page" class="reader-audio-pill" title="Seek audio to current page" hidden>Play from page</button>
-						<button type="button" id="reader-audio-to-audio" class="reader-audio-pill" title="Jump page to current audio timestamp">Locate in text</button>
+						<button type="button" id="reader-audio-follow" class="reader-audio-pill active" aria-pressed="true" title="Toggle page follow mode">Following audio</button>
 					</div>
+					<div class="reader-audio-text-actions">
+						<button type="button" id="reader-audio-from-page" class="reader-audio-text-btn" title="Seek audio to current page" hidden>Play from page</button>
+						<button type="button" id="reader-audio-to-audio" class="reader-audio-text-btn" title="Jump page to current audio timestamp">Locate in text</button>
+					</div>
+					<span id="reader-audio-stt-status" class="reader-audio-stt-status" role="status" aria-live="off" aria-atomic="true"></span>
 					<div class="reader-audio-position" aria-label="Player position">
-						<span class="reader-audio-docking">
-							<button type="button" class="reader-audio-btn" data-audio-dock="top">Top</button>
-							<button type="button" class="reader-audio-btn" data-audio-dock="left">Left</button>
-							<button type="button" class="reader-audio-btn" data-audio-dock="right">Right</button>
-							<button type="button" class="reader-audio-btn" data-audio-dock="bottom">Bottom</button>
-						</span>
-						<button type="button" class="reader-audio-btn" data-audio-dock="bottom-right">Reset position</button>
+						<span class="reader-audio-position-label">Position</span>
+						<div class="reader-audio-docking" role="group" aria-label="Player position">
+							<button type="button" class="reader-audio-btn" data-audio-dock="top" aria-label="Dock player to top" title="Dock player to top">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="3"></rect>
+									<path d="M3 8h18"></path>
+								</svg>
+							</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="left" aria-label="Dock player to left" title="Dock player to left">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="3"></rect>
+									<path d="M8 3v18"></path>
+								</svg>
+							</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="right" aria-label="Dock player to right" title="Dock player to right">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="3"></rect>
+									<path d="M16 3v18"></path>
+								</svg>
+							</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="bottom" aria-label="Dock player to bottom" title="Dock player to bottom">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="3"></rect>
+									<path d="M3 16h18"></path>
+								</svg>
+							</button>
+							<button type="button" class="reader-audio-btn" data-audio-dock="bottom-right" aria-label="Reset player to bottom right" title="Reset player to bottom right">
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="18" height="18" rx="3"></rect>
+									<path d="M12 17h5v-5M17 17l-6-6"></path>
+								</svg>
+							</button>
+						</div>
 					</div>
 				</div>
 				<span id="reader-audio-move-help" class="reader-audio-sr">Drag to move, or use arrow keys. Hold Shift for larger steps. Escape cancels a drag. Expand for docking controls.</span>
