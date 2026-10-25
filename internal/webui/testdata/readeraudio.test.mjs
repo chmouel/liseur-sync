@@ -438,6 +438,41 @@ const sttResponse = progression => ({
   }),
 });
 
+for (const elapsedSeconds of [1, 20]) {
+  test(`buffering recovery retains the live STT correction after ${elapsedSeconds}s`, async () => {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    p.audio.paused = false;
+    let requests = 0;
+    const refresh = deferred();
+    p.context.api = async () => ++requests === 1 ? sttResponse(0.25) : refresh.promise;
+    await p.audio.emit("play");
+    await p.audio.emit("playing");
+    await flush();
+    assert.equal(requests, 1);
+    assert.equal(p.navigations.at(-1).locations.progression, 0.25);
+
+    p.audio.currentTime += elapsedSeconds;
+    p.clock.now = elapsedSeconds * 1000;
+    await p.audio.emit("waiting");
+    await p.audio.emit("playing");
+    await p.audio.emit("timeupdate");
+    await flush();
+    assert.equal(requests, elapsedSeconds < 3.5 ? 1 : 2);
+    const expected = 0.25 + elapsedSeconds / 1000;
+    assert.ok(Math.abs(p.navigations.at(-1).locations.progression - expected) < 1e-9);
+    assert.ok(Math.abs(p.run("liveAudioFraction()") - expected) < 1e-9);
+
+    refresh.resolve({ ok: false });
+    await flush();
+    p.audio.currentTime++;
+    await p.audio.emit("timeupdate");
+    await flush();
+    assert.ok(Math.abs(p.navigations.at(-1).locations.progression - expected - 0.001) < 1e-9);
+    assert.ok(Math.abs(p.run("liveAudioFraction()") - expected - 0.001) < 1e-9);
+  });
+}
+
 test("live STT corrections are replaced by a newer refinement and cleared by seeking", async () => {
   const p = player();
   p.run("audioInfo.stt_enabled = true;");
