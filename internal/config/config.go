@@ -435,6 +435,9 @@ func (c *Config) applyEnv() {
 	setStr(&c.Audiobookshelf.STTURL, "LISEUR_ABS_STT_URL")
 	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_ABS_STT_API_KEY")
 	setStr(&c.Audiobookshelf.STTModel, "LISEUR_ABS_STT_MODEL")
+	setStr(&c.Audiobookshelf.STTURL, "LISEUR_STT_URL")
+	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_STT_API_KEY")
+	setStr(&c.Audiobookshelf.STTModel, "LISEUR_STT_MODEL")
 	if v, ok := os.LookupEnv("LISEUR_ABS_ACTIVE_DAYS"); ok {
 		if days, err := strconv.Atoi(v); err == nil {
 			c.Audiobookshelf.ActiveDays = days
@@ -657,9 +660,6 @@ func (c *Config) validateAudiobookshelf() error {
 	if a.STTModel == "" {
 		a.STTModel = "whisper-large-v3-turbo"
 	}
-	if !a.Enabled {
-		return nil
-	}
 	if a.STTURL != "" {
 		su, err := url.Parse(a.STTURL)
 		if err != nil || su.Host == "" || (su.Scheme != "http" && su.Scheme != "https") {
@@ -669,6 +669,9 @@ func (c *Config) validateAudiobookshelf() error {
 			return fmt.Errorf("audiobookshelf.stt_url must not contain credentials, query string or fragment")
 		}
 		a.STTURL = strings.TrimSuffix(su.String(), "/")
+	}
+	if !a.Enabled {
+		return nil
 	}
 	for _, r := range []struct{ name, value string }{
 		{"audiobookshelf.base_url", a.BaseURL},

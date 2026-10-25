@@ -45,6 +45,17 @@ func (f *Files) OpenBookCover(
 	return OpenBookCover(ctx, root, book)
 }
 
+// OpenAudiobook opens the .m4b file behind a catalog audiobook. The caller owns the file.
+func (f *Files) OpenAudiobook(
+	ctx context.Context, ab store.CatalogAudiobook,
+) (*os.File, int64, error) {
+	folder, err := f.folders.FolderByID(ctx, "", ab.FolderID)
+	if err != nil {
+		return nil, 0, ErrRootMissing
+	}
+	return OpenAudiobook(ctx, folder.RootPath, ab)
+}
+
 func (f *Files) root(ctx context.Context, book store.CatalogBook) (string, error) {
 	folder, err := f.folders.FolderByID(ctx, "", book.FolderID)
 	if err != nil {
