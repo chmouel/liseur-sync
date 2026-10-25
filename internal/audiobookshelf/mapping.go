@@ -251,6 +251,85 @@ func (m Mapping) ToAudio(p float64) (float64, bool) {
 	return lerp(p, s.BookStart, s.BookEnd, s.AudioStart, s.AudioEnd), true
 }
 
+// ToAudioLocator maps a book reading position to an audio time, preferring
+// the locator's chapter href, highlighted text snippet, and intra-chapter
+// progression over whole-book totalProgression subtraction. Whole-book
+// totalProgression denominators can differ slightly across clients, which
+// otherwise gets amplified by 50x-100x when divided by one chapter's width.
+func (m Mapping) ToAudioLocator(p float64, locatorJSON []byte, readResource func(href string) ([]byte, error)) (audioTime float64, mapped bool, usedLocator bool) {
+	if len(locatorJSON) > 0 {
+		var loc struct {
+			Href      string `json:"href"`
+			Locations struct {
+				Progression *float64 `json:"progression"`
+			} `json:"locations"`
+			Text struct {
+				Before    string `json:"before"`
+				Highlight string `json:"highlight"`
+				After     string `json:"after"`
+			} `json:"text"`
+		}
+		if err := json.Unmarshal(locatorJSON, &loc); err == nil {
+			href := cleanLocatorHref(loc.Href)
+			if href != "" {
+				chapterFrac := -1.0
+				if loc.Locations.Progression != nil && finite(*loc.Locations.Progression) && *loc.Locations.Progression >= 0 && *loc.Locations.Progression <= 1 {
+					chapterFrac = *loc.Locations.Progression
+				}
+				if (loc.Text.Before != "" || loc.Text.Highlight != "" || loc.Text.After != "") && readResource != nil {
+					if doc, err := readResource(href); err == nil && len(doc) > 0 {
+						if textFrac, conf, ok := MatchLocatorTextInXHTML(doc, loc.Text.Before, loc.Text.Highlight, loc.Text.After); ok && conf >= 0.65 {
+							if chapterFrac < 0 || math.Abs(textFrac-chapterFrac) <= 0.15 {
+								chapterFrac = textFrac
+							}
+						}
+					}
+				}
+				if chapterFrac >= 0 {
+					at, ok := m.toAudioInHref(href, chapterFrac)
+					return at, ok, ok
+				}
+			}
+		}
+	}
+	at, ok := m.ToAudio(p)
+	return at, ok, false
+}
+
+func (m Mapping) toAudioInHref(href string, chapterFrac float64) (float64, bool) {
+	chapterFrac = clamp01(chapterFrac)
+	for _, r := range m.Resources {
+		if cleanLocatorHref(r.Href) == href && r.End > r.Start {
+			bookP := lerp(chapterFrac, 0, 1, r.Start, r.End)
+			return m.ToAudio(bookP)
+		}
+	}
+	if len(m.Resources) > 0 {
+		return 0, false
+	}
+	var matched *Segment
+	for i := range m.Segments {
+		if cleanLocatorHref(m.Segments[i].Href) == href {
+			if matched != nil {
+				return 0, false
+			}
+			matched = &m.Segments[i]
+		}
+	}
+	if matched != nil && matched.AudioEnd > matched.AudioStart {
+		return lerp(chapterFrac, 0, 1, matched.AudioStart, matched.AudioEnd), true
+	}
+	return 0, false
+}
+
+func cleanLocatorHref(href string) string {
+	href = strings.TrimSpace(href)
+	if idx := strings.IndexAny(href, "#?"); idx >= 0 {
+		href = href[:idx]
+	}
+	return strings.TrimPrefix(href, "/")
+}
+
 func lerp(v, x0, x1, y0, y1 float64) float64 {
 	if x1 <= x0 {
 		return y0
