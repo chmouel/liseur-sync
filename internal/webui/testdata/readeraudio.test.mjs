@@ -317,6 +317,7 @@ test("live Whisper refinement runs periodically while following audio and compen
   await p.audio.emit("timeupdate");
   await flush();
   assert.equal(locateCalls.length, 1);
+  assert.equal(p.navigations.at(-1).locations.progression, 0.203);
 
   // Resolve the STT response 3s later; the progression is adjusted by the 3s chapter delta (+0.003).
   held.resolve({
@@ -338,6 +339,17 @@ test("live Whisper refinement runs periodically while following audio and compen
   assert.equal(lastNav.text.highlight, "Don't stop, John");
   assert.ok(Math.abs(lastNav.locations.progression - 0.253) < 1e-9);
   assert.ok(Math.abs(lastNav.locations.totalProgression - 0.253) < 1e-9);
+
+  for (const time of [204, 205, 210]) {
+    p.audio.currentTime = time;
+    p.clock.now = 7000 + (time - 203) * 1000;
+    await p.audio.emit("timeupdate");
+    await flush();
+    const progression = 0.253 + (time - 203) / 1000;
+    assert.ok(Math.abs(p.navigations.at(-1).locations.progression - progression) < 1e-9);
+    assert.ok(Math.abs(p.run("liveAudioFraction()") - progression) < 1e-9);
+    assert.equal(locateCalls.length, 1);
+  }
 
   // After 15s of playback, timeupdate triggers the next live STT refinement.
   p.context.api = async (url, opts) => {
@@ -365,7 +377,160 @@ test("live Whisper refinement runs periodically while following audio and compen
   await flush();
   assert.equal(locateCalls.length, 2);
   assert.deepEqual(locateCalls[1], { audio_time: 218, refine_stt: true });
-  assert.equal(p.navigations.at(-1).text.highlight, "next spoken phrase");
+  assert.equal(p.run("audioSTTAnchor.progression"), 0.27);
+  p.audio.currentTime = 219;
+  p.clock.now = 22000;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.ok(Math.abs(p.navigations.at(-1).locations.progression - 0.271) < 1e-9);
+});
+
+for (const result of ["HTTP failure", "network failure", "no match"]) {
+  test(`mapped following continues during repeated live STT requests with ${result}`, async () => {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    const requests = [];
+    p.context.api = () => {
+      const held = deferred();
+      requests.push(held);
+      return held.promise;
+    };
+    p.audio.paused = false;
+    await p.audio.emit("play");
+    await p.audio.emit("playing");
+    await flush();
+    assert.equal(requests.length, 1);
+
+    for (let round = 0; round < 3; round++) {
+      p.audio.currentTime = 215 + round * 16;
+      p.clock.now = 16000 + round * 16000;
+      await p.audio.emit("timeupdate");
+      await flush();
+      assert.equal(requests.length, round + 1);
+      assert.equal(p.navigations.at(-1).locations.progression, p.audio.currentTime / 1000);
+      requests[round].resolve(result === "HTTP failure" ? { ok: false } : {
+        ok: true,
+        json: async () => {
+          if (result === "network failure") throw Error("connection lost");
+          return { stt_matched: false, progression: 0.9, locator: { href: "chapter.xhtml" } };
+        },
+      });
+      await flush();
+      assert.equal(p.run("sttAbort"), null);
+      p.audio.currentTime++;
+      p.clock.now += 1000;
+      await p.audio.emit("timeupdate");
+      await flush();
+      assert.equal(requests.length, round + 2);
+      assert.equal(p.navigations.at(-1).locations.progression, p.audio.currentTime / 1000);
+    }
+    requests.at(-1).resolve({ ok: false });
+    await flush();
+  });
+}
+
+const sttResponse = progression => ({
+  ok: true,
+  json: async () => ({
+    stt_matched: true,
+    progression,
+    locator: { href: "chapter.xhtml", locations: { progression, totalProgression: progression } },
+  }),
+});
+
+test("live STT corrections are replaced by a newer refinement and cleared by seeking", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  p.context.api = async () => sttResponse(0.25);
+  assert.equal(await p.run("refineAudioSTT(200, { allowPlaying: true })"), true);
+  p.audio.currentTime = 205;
+  p.clock.now = 5000;
+  p.context.api = async () => sttResponse(0.3);
+  assert.equal(await p.run("refineAudioSTT(205, { allowPlaying: true })"), true);
+  p.audio.currentTime = 206;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.ok(Math.abs(p.navigations.at(-1).locations.progression - 0.301) < 1e-9);
+
+  p.audio.currentTime = 400;
+  await p.audio.emit("seeking");
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(p.navigations.at(-1).locations.progression, 0.4);
+});
+
+test("live STT corrections expire when playback leaves the mapped chapter", async () => {
+  const p = player();
+  p.run(`audioInfo.stt_enabled = true;
+    audioInfo.mapping.segments = [
+      { a0: 0, a1: 300, b0: 0, b1: 0.3, href: "chapter.xhtml" },
+      { a0: 300, a1: 1000, b0: 0.3, b1: 1, href: "next.xhtml" }
+    ];
+    audioInfo.mapping.resources = [
+      { href: "chapter.xhtml", start: 0, end: 0.3 },
+      { href: "next.xhtml", start: 0.3, end: 1 }
+    ];`);
+  p.audio.paused = false;
+  p.context.api = async () => sttResponse(0.25);
+  await p.run("refineAudioSTT(200, { allowPlaying: true })");
+  p.audio.currentTime = 290;
+  p.clock.now = 5000;
+  const held = deferred();
+  p.context.api = () => held.promise;
+  const refinement = p.run("refineAudioSTT(290, { allowPlaying: true })");
+  p.audio.currentTime = 301;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(p.navigations.at(-1).href, "next.xhtml");
+  assert.ok(Math.abs(p.navigations.at(-1).locations.totalProgression - 0.301) < 1e-9);
+  assert.equal(p.run("audioSTTAnchor"), null);
+  held.resolve(sttResponse(0.29));
+  assert.equal(await refinement, false);
+  assert.equal(p.run("audioSTTAnchor"), null);
+  assert.equal(p.navigations.at(-1).href, "next.xhtml");
+});
+
+test("manual navigation cancels a live STT result while its target is resolving", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  p.context.api = async () => sttResponse(0.25);
+  const held = deferred();
+  p.context.view.resolveNavigation = () => held.promise;
+  const refinement = p.run("refineAudioSTT(200, { allowPlaying: true })");
+  await flush();
+  assert.ok(p.run("audioSTTAnchor"));
+  p.run("noteNavigation();");
+  held.resolve({ href: "chapter.xhtml" });
+  assert.equal(await refinement, false);
+  assert.equal(p.navigations.length, 0);
+  assert.equal(p.scheduledPushes, 0);
+  assert.equal(p.run("audioSTTAnchor"), null);
+});
+
+test("a live STT result survives overlap with an ordinary mapped navigation", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  const response = deferred();
+  p.context.api = () => response.promise;
+  const refinement = p.run("refineAudioSTT(200, { allowPlaying: true })");
+  const navigation = deferred();
+  p.context.view.resolveNavigation = () => navigation.promise;
+  p.audio.currentTime = 201;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(p.run("audioNavInProgress"), 1);
+  response.resolve(sttResponse(0.25));
+  assert.equal(await refinement, true);
+  navigation.resolve({ href: "chapter.xhtml", locations: { progression: 0.201 } });
+  await flush();
+  p.context.view.resolveNavigation = async target => target;
+  p.audio.currentTime = 202;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.ok(Math.abs(p.navigations.at(-1).locations.progression - 0.252) < 1e-9);
 });
 
 test("following audio turns pages on fine chapter progression deltas even in multi-hour books", async () => {
