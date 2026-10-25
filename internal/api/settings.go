@@ -61,8 +61,8 @@ func (s *Server) HandlePutSettings(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt string          `json:"updated_at"`
 		} `json:"settings"`
 	}
-	max := s.Cfg.Ops.MaxBodyBytes
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, max))
+	maxBodyBytes := s.Cfg.Ops.MaxBodyBytes
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err := dec.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return

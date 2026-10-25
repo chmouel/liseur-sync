@@ -348,7 +348,7 @@ test("live Whisper refinement runs periodically while following audio and compen
   assert.ok(Math.abs(lastNav.locations.progression - 0.253) < 1e-9);
   assert.ok(Math.abs(lastNav.locations.totalProgression - 0.253) < 1e-9);
 
-  for (const time of [204, 205, 210]) {
+  for (const time of [204, 205, 210, 218, 229, 230]) {
     p.audio.currentTime = time;
     p.clock.now = 7000 + (time - 203) * 1000;
     await p.audio.emit("timeupdate");
@@ -359,7 +359,6 @@ test("live Whisper refinement runs periodically while following audio and compen
     assert.equal(locateCalls.length, 1);
   }
 
-  // After 15s of playback, timeupdate triggers the next live STT refinement.
   p.context.api = async (url, opts) => {
     if (url.endsWith("/audio/locate")) {
       locateCalls.push(JSON.parse(opts.body));
@@ -379,15 +378,15 @@ test("live Whisper refinement runs periodically while following audio and compen
     }
     throw new Error("unexpected url " + url);
   };
-  p.audio.currentTime = 218;
-  p.clock.now = 21000;
+  p.audio.currentTime = 231;
+  p.clock.now = 35000;
   await p.audio.emit("timeupdate");
   await flush();
   assert.equal(locateCalls.length, 2);
-  assert.deepEqual(locateCalls[1], { audio_time: 218, refine_stt: true });
+  assert.deepEqual(locateCalls[1], { audio_time: 231, refine_stt: true });
   assert.equal(p.run("audioSTTAnchor.progression"), 0.27);
-  p.audio.currentTime = 219;
-  p.clock.now = 22000;
+  p.audio.currentTime = 232;
+  p.clock.now = 36000;
   await p.audio.emit("timeupdate");
   await flush();
   assert.ok(Math.abs(p.navigations.at(-1).locations.progression - 0.271) < 1e-9);
@@ -410,8 +409,8 @@ for (const result of ["HTTP failure", "network failure", "no match"]) {
     assert.equal(requests.length, 1);
 
     for (let round = 0; round < 3; round++) {
-      p.audio.currentTime = 215 + round * 16;
-      p.clock.now = 16000 + round * 16000;
+      p.audio.currentTime = 230 + round * 31;
+      p.clock.now = 30000 + round * 31000;
       await p.audio.emit("timeupdate");
       await flush();
       assert.equal(requests.length, round + 1);
@@ -593,7 +592,7 @@ test("a locate without STT configured shows no speech matching status", async ()
   assert.equal(p.timers.size, 0);
 });
 
-for (const elapsedSeconds of [1, 20]) {
+for (const elapsedSeconds of [1, 20, 29.999, 30, 40]) {
   test(`buffering recovery retains the live STT correction after ${elapsedSeconds}s`, async () => {
     const p = player();
     p.run("audioInfo.stt_enabled = true;");
@@ -613,7 +612,7 @@ for (const elapsedSeconds of [1, 20]) {
     await p.audio.emit("playing");
     await p.audio.emit("timeupdate");
     await flush();
-    assert.equal(requests, elapsedSeconds < 3.5 ? 1 : 2);
+    assert.equal(requests, elapsedSeconds < 30 ? 1 : 2);
     const expected = 0.25 + elapsedSeconds / 1000;
     assert.ok(Math.abs(p.navigations.at(-1).locations.progression - expected) < 1e-9);
     assert.ok(Math.abs(p.run("liveAudioFraction()") - expected) < 1e-9);
@@ -625,6 +624,61 @@ for (const elapsedSeconds of [1, 20]) {
     await flush();
     assert.ok(Math.abs(p.navigations.at(-1).locations.progression - expected - 0.001) < 1e-9);
     assert.ok(Math.abs(p.run("liveAudioFraction()") - expected - 0.001) < 1e-9);
+  });
+}
+
+test("buffering recovery without a correction keeps the short cooldown", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  let requests = 0;
+  p.context.api = async () => {
+    requests++;
+    return { ok: true, json: async () => ({ stt_matched: false }) };
+  };
+  await p.audio.emit("play");
+  for (const [now, expected] of [[0, 1], [3499, 1], [3500, 2]]) {
+    p.clock.now = now;
+    await p.audio.emit("waiting");
+    await p.audio.emit("playing");
+    await flush();
+    assert.equal(requests, expected);
+  }
+});
+
+for (const boundary of ["segment", "resource"]) {
+  test(`buffering recovery refreshes a correction after leaving its ${boundary}`, async () => {
+    const p = player();
+    p.run("audioInfo.stt_enabled = true;");
+    if (boundary === "segment") {
+      p.run(`audioInfo.mapping.segments = [
+        { a0: 0, a1: 210, b0: 0, b1: 0.21, href: "chapter.xhtml" },
+        { a0: 210, a1: 1000, b0: 0.21, b1: 1, href: "chapter.xhtml" }
+      ];`);
+    } else {
+      p.run(`audioInfo.mapping.resources = [
+        { href: "chapter.xhtml", start: 0, end: 0.21 },
+        { href: "next.xhtml", start: 0.21, end: 1 }
+      ];`);
+    }
+    p.audio.paused = false;
+    let requests = 0;
+    p.context.api = async () => {
+      requests++;
+      return requests === 1 ? sttResponse(0.2) : { ok: false };
+    };
+    await p.audio.emit("play");
+    await p.audio.emit("playing");
+    await flush();
+    assert.ok(p.run("audioSTTAnchor"));
+
+    p.audio.currentTime = 211;
+    p.clock.now = 11000;
+    await p.audio.emit("waiting");
+    await p.audio.emit("playing");
+    await flush();
+    assert.equal(requests, 2);
+    assert.equal(p.run("audioSTTAnchor"), null);
   });
 }
 

@@ -4659,7 +4659,7 @@ let audioSTTStatusTimer = null;
 let audioSTTStatusGeneration = 0;
 let audioLastLiveSTTAt = -Infinity;
 let audioLastLiveSTTTime = -Infinity;
-const LIVE_STT_INTERVAL_MS = 15000;
+const LIVE_STT_INTERVAL_MS = 30000;
 const LIVE_STT_COOLDOWN_MS = 3500;
 
 function formatAudioSeconds(sec) {
@@ -5303,7 +5303,10 @@ if (audioToggleBtn && audioBar && audioEl) {
       audioLastCheckpointAt = performance.now();
     }
     if (followAudio && audioInfo?.stt_enabled) {
-      void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+      audioPlaybackPosition(audioEl.currentTime);
+      if (!audioSTTAnchor || performance.now() - audioLastLiveSTTAt >= LIVE_STT_INTERVAL_MS) {
+        void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
+      }
     }
   });
 

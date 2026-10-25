@@ -579,6 +579,15 @@ func (s *Server) refineAudioTimeWithSTT(
 	sttCtx, cancel := context.WithTimeout(ctx, sttRequestTimeout)
 	defer cancel()
 
+	xhtmlBytes, err := s.readBookResource(sttCtx, book, href)
+	if err != nil || len(xhtmlBytes) == 0 {
+		return 0, 0, "", "", "", "", false
+	}
+	_, resourceText, _ := audiomap.ExtractTextContextAtFraction(xhtmlBytes, 0)
+	if resourceText == "" {
+		return 0, 0, "", "", "", "", false
+	}
+
 	audioFile, audioSize, err := af.OpenAudiobook(sttCtx, ab)
 	if err != nil {
 		return 0, 0, "", "", "", "", false
@@ -601,11 +610,6 @@ func (s *Server) refineAudioTimeWithSTT(
 		clipFilename,
 	)
 	if err != nil || strings.TrimSpace(tr) == "" {
-		return 0, 0, "", "", "", "", false
-	}
-
-	xhtmlBytes, err := s.readBookResource(sttCtx, book, href)
-	if err != nil || len(xhtmlBytes) == 0 {
 		return 0, 0, "", "", "", "", false
 	}
 
