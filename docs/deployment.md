@@ -102,13 +102,15 @@ expects the upstream request to retain `/opds/v1.2`. The root OPDS route
 is protected by liseur-sync's own HTTP Basic authentication, just like
 the prefixed route.
 
-nginx example: the koplugin capability URLs carry a secret in the path.
-The app redacts it from its own logs; do the same at the proxy:
+nginx example: the koplugin capability URLs and audiobook stream ticket
+URLs carry bearer credentials in the path. The app redacts them from its
+own logs; do the same at the proxy:
 
 ```nginx
 map $uri $redacted_uri {
-    ~^/adapter/koplugin/(?<cap>[^/]+)(?<rest>/.*)$  /adapter/koplugin/[redacted]$rest;
-    default  $uri;
+    ~^/adapter/koplugin/(?<cap>[^/]+)(?<rest>/.*)$                      /adapter/koplugin/[redacted]$rest;
+    ~^(?<prefix>.*/v1/books/[^/]+/audio/stream/)[^/]+(?<rest>/.*)?$    ${prefix}[REDACTED]$rest;
+    default                                                             $uri;
 }
 log_format redacted '$remote_addr - $remote_user [$time_local] '
                     '"$request_method $redacted_uri $server_protocol" $status';

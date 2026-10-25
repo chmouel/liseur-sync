@@ -241,7 +241,7 @@ const kopluginPrefix = "/adapter/koplugin/"
 func RedactPath(p string) string {
 	rest, ok := strings.CutPrefix(p, kopluginPrefix)
 	if !ok {
-		return p
+		return RedactAudioStreamPath(p)
 	}
 	tail := ""
 	if i := strings.IndexByte(rest, '/'); i >= 0 {

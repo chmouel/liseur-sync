@@ -27,6 +27,21 @@ test("maxima retain zero, small advances, editions and alias ownership with stab
   assert.deepEqual(furthestPosition([{ ...tiny, seq: 3, op_id: "later" }, tiny], "work"), tiny);
 });
 
+test("furthest floor filters forgotten maxima and matches op_id sequences", () => {
+  const forgotten = { op_id: "forgotten-98", work_id: "work", device_id: "web", seq: 24948, progression: 0.9831 };
+  const unseqLocal = { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 };
+  const current = { op_id: "current-41", work_id: "work", device_id: "phone", seq: 25134, progression: 0.4159 };
+  const postFloorPeak = { op_id: "post-floor-45", work_id: "work", device_id: "web", edition_sha: "ed2", seq: 25140, progression: 0.45 };
+  assert.deepEqual(
+    mergeFurthest([unseqLocal], [forgotten, current, postFloorPeak], "work", 24949),
+    [current, postFloorPeak],
+  );
+  assert.deepEqual(
+    furthestPosition([forgotten, current, postFloorPeak], "work", 24949),
+    postFloorPeak,
+  );
+});
+
 test("position reads skip corrupt heads without inventing a zero", () => {
   const good = { op_id: "good", work_id: "work", progression: 0.7 };
   for (const progression of [null, undefined, NaN, Infinity, -0.1, 1.1, "bad"]) {

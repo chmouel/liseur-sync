@@ -2563,6 +2563,216 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
         "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
+
+  /v1/books/{id}/audio/info:
+    get:
+      tags: [library]
+      summary: Fetch linked audiobook metadata and chapter alignment
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Returns metadata, chapter marks, and the precomputed chapter-to-spine
+        alignment for the watched-folder `.m4b` audiobook linked to this book.
+        Requires `user_folders` grants on both the book's folder and the
+        audiobook's folder. If the caller already has a reading position for
+        this work, `audio_time` and `progression` report the mapped initial
+        listening timestamp.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Linked audiobook metadata and alignment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_id, audiobook, stt_enabled, mapping, audio_time, progression]
+                properties:
+                  book_id: { type: string }
+                  audiobook:
+                    type: object
+                    required: [id, title, authors, narrators, series_name, duration_seconds, chapters, content_sha256]
+                    properties:
+                      id: { type: string }
+                      title: { type: string }
+                      authors:
+                        type: array
+                        items: { type: string }
+                      narrators:
+                        type: array
+                        items: { type: string }
+                      series_name: { type: string }
+                      content_sha256: { type: string }
+                      duration_seconds: { type: number }
+                      chapters:
+                        type: array
+                        items:
+                          type: object
+                          required: [title, start, end]
+                          properties:
+                            title: { type: string }
+                            start: { type: number }
+                            end: { type: number }
+                  stt_enabled: { type: boolean }
+                  mapping:
+                    type: object
+                    required: [source, segments, resources, full_narrative]
+                    properties:
+                      source:
+                        type: string
+                        enum: [calibre, directory, identifier, title_author]
+                      full_narrative: { type: boolean }
+                      segments:
+                        type: array
+                        items:
+                          type: object
+                          required: [label, a0, a1, b0, b1]
+                          properties:
+                            label: { type: string }
+                            a0: { type: number, description: Audio start in seconds }
+                            a1: { type: number, description: Audio end in seconds }
+                            b0: { type: number, description: Book start progression }
+                            b1: { type: number, description: Book end progression }
+                            href: { type: string }
+                            frag: { type: string }
+                            approx: { type: boolean }
+                      resources:
+                        type: array
+                        items:
+                          type: object
+                          required: [href, start, end]
+                          properties:
+                            href: { type: string }
+                            start: { type: number, description: Resource start on the book progression axis }
+                            end: { type: number, description: Resource end on the book progression axis }
+                  audio_time: { type: [number, "null"] }
+                  progression: { type: [number, "null"] }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no active linked audiobook" }
+        "410": { $ref: "#/components/responses/Error", description: "Book or audiobook file is missing" }
+
+  /v1/books/{id}/audio/ticket:
+    post:
+      tags: [library]
+      summary: Mint a revocable stream ticket for a book's linked audiobook
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Mints an HMAC-signed path ticket valid for up to 6 hours, capped
+        by the caller's token expiry. The ticket is bound to the token,
+        user, book, and audiobook content SHA-256 so `<audio src>` elements
+        on same-origin or detached reader origins can stream and seek via
+        HTTP `Range` without custom `Authorization` headers.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Stream ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stream_url, expires_at]
+                properties:
+                  stream_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no active linked audiobook" }
+
+  /v1/books/{id}/audio/stream/{ticket}:
+    get:
+      tags: [library]
+      summary: Stream a book's linked .m4b audiobook via a signed ticket
+      security: []
+      description: |
+        Streams the `.m4b` file (`audio/mp4`) with `Accept-Ranges: bytes`
+        and a strong `ETag` (`"<audiobook_sha>"`) for `If-Range` resumption.
+        Verifies the ticket's HMAC signature and expiration, confirms the
+        originating token is still unrevoked and unexpired, and checks
+        current `user_folders` grants on both the book's folder and the
+        audiobook's folder.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: ticket, in: path, required: true, schema: { type: string } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+        - { name: If-Range, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Complete .m4b stream
+          content:
+            audio/mp4:
+              schema: { type: string, format: binary }
+        "206":
+          description: Partial .m4b byte range
+          content:
+            audio/mp4:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Error", description: "Invalid, expired, or revoked stream ticket" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no active linked audiobook" }
+        "409": { $ref: "#/components/responses/Error", description: "The audiobook file changed on disk since it was catalogued" }
+        "410": { $ref: "#/components/responses/Error", description: "The audiobook file is missing on disk" }
+        "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
+    head:
+      tags: [library]
+      summary: Probe headers for a book's linked .m4b audiobook stream
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: ticket, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Stream headers }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/books/{id}/audio/locate:
+    post:
+      tags: [library]
+      summary: Map between an audiobook timestamp and a Readium book locator
+      security: [{ deviceToken: [] }]  # requires library-read scope
+      description: |
+        Translates between an audio timestamp (`audio_time` → `locator`) and
+        a book position (`locator` or `progression` → `audio_time`). When
+        `refine_stt: true` is passed with `audio_time` and Whisper STT is
+        configured, slices `[max(seg.a0, t - 10s), t]` from the local `.m4b`,
+        transcribes the spoken passage, and matches it unambiguously within
+        the mapped EPUB spine document to return the exact sentence highlight;
+        falls back to chapter interpolation with `stt_matched: false` when
+        disabled, rate-limited, or ambiguous.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audio_time: { type: number, minimum: 0 }
+                refine_stt: { type: boolean, default: false }
+                progression: { type: number, minimum: 0, maximum: 1 }
+                locator: { type: object }
+      responses:
+        "200":
+          description: Resolved book locator or audio timestamp
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [direction, audio_time, progression]
+                properties:
+                  direction:
+                    type: string
+                    enum: [audio_to_book, book_to_audio]
+                  audio_time: { type: number }
+                  progression: { type: number }
+                  locator: { type: object }
+                  segment: { type: object }
+                  stt_matched: { type: boolean }
+                  transcript: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or unmapped position" }
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
@@ -2876,6 +3086,7 @@ components:
             - locator_too_large
             - idle_out_of_range
             - active_out_of_range
+            - bad_mode
             - id_reused
             - batch_too_large
           description: |
@@ -2910,6 +3121,9 @@ components:
       properties:
         book_id: { type: string }
         work_id: { type: string }
+        has_audio:
+          type: boolean
+          description: True when a currently aligned audiobook is available to this reader.
         confidence:
           type: string
           enum: [high, low]
@@ -3928,6 +4142,18 @@ components:
             through insights capabilities (active_ms) or token introspection
             (session_active_ms). Presence/value participates in immutable
             payload identity; do not change it on retries.
+        mode:
+          type: string
+          enum: [reading, listening]
+          default: reading
+          description: |
+            Optional session modality (`reading` or `listening`). Visual
+            reading (`reading`, the default) contributes to both reading
+            time and measured reading pace; audiobook listening (`listening`)
+            records under `OriginAudiobook`, contributing to total reading
+            time, daily activity, and streaks without affecting visual
+            reading-pace statistics. Participates in immutable payload
+            identity; changing `mode` on an existing `session_id` returns 409.
     AnnotationInput:
       type: object
       required: [id, base_rev, work_id, kind, client_ts]

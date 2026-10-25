@@ -34,9 +34,13 @@ function clamp01(v) {
 // compares payloads under; `now` is monotonic ms; `startedAt` is the
 // wall-clock Date; `fraction` may be non-finite, in which case the start
 // progression is the first finite one progress() or activity() reports.
+// `mode` is "reading" (default) or "listening" (audiobook playback, where
+// active time is accumulated strictly between playing() and paused()
+// transitions rather than inferred from page-turn idle thresholds).
 export function openSession({
-  id, workID, startedAt, now, fraction, supportsActiveMs = false, checkpoint = null,
+  id, workID, startedAt, now, fraction, supportsActiveMs = false, mode = "reading", checkpoint = null,
 }) {
+  const sessionMode = (checkpoint?.mode || mode) === "listening" ? "listening" : "reading";
   const originalStartedAt = checkpoint?.startedAt
     ? new Date(checkpoint.startedAt)
     : startedAt;
@@ -48,6 +52,7 @@ export function openSession({
     : 0;
   let last = now;
   let idle = 0;
+  let playingSince = null;
   let startProg = finite(checkpointProgress.startProgression)
     ? clamp01(checkpointProgress.startProgression)
     : finite(fraction) ? clamp01(fraction) : null;
@@ -57,6 +62,13 @@ export function openSession({
   let closed = null;
 
   const settle = (at) => {
+    if (sessionMode === "listening") {
+      if (playingSince !== null && at > playingSince) {
+        activeBase += at - playingSince;
+        playingSince = at;
+      }
+      return;
+    }
     const gap = at - last;
     if (gap > IDLE_AFTER_MS) idle += gap - IDLE_AFTER_MS;
     if (gap > 0) last = at;
@@ -70,6 +82,7 @@ export function openSession({
 
   return {
     id: sessionID,
+    mode: sessionMode,
     // progress records where the reader is without treating it as
     // activity. The engine relocates on a resize or a font change as
     // readily as on a page turn, and an untouched page must not earn
@@ -85,16 +98,48 @@ export function openSession({
       settle(at);
       note(frac);
     },
+    // playing marks the start (or continuation) of active audio playback
+    // for a listening session.
+    playing(at, frac) {
+      if (closed || sessionMode !== "listening") return;
+      note(frac);
+      if (playingSince === null) {
+        playingSince = at;
+      } else if (at > playingSince) {
+        activeBase += at - playingSince;
+        playingSince = at;
+      }
+    },
+    // paused marks the end of an active audio playback interval (pause,
+    // seeking, waiting, stalled, ended, or error) so non-playing spans
+    // are excluded from active_ms.
+    paused(at, frac) {
+      if (closed || sessionMode !== "listening") return;
+      note(frac);
+      if (playingSince !== null) {
+        if (at > playingSince) activeBase += at - playingSince;
+        playingSince = null;
+      }
+    },
     // close ends the sitting and returns the payload to send, or null
     // when there is nothing worth sending: too little reading, or no
     // position ever measured. A second close returns null too, so two
     // unload events cannot produce two sessions.
     close(at, endedAt, frac) {
       if (closed) return null;
-      settle(at);
+      if (sessionMode === "listening") {
+        if (playingSince !== null) {
+          if (at > playingSince) activeBase += at - playingSince;
+          playingSince = null;
+        }
+      } else {
+        settle(at);
+      }
       note(frac);
       closed = true;
-      const active = activeBase + at - openedAt - idle;
+      const active = sessionMode === "listening"
+        ? activeBase
+        : activeBase + at - openedAt - idle;
       if (!(active >= MIN_ACTIVE_MS)) return null;
       if (startProg === null) return null;
       const started = originalStartedAt.getTime();
@@ -115,6 +160,7 @@ export function openSession({
         end_progression: endProg,
         idle_ms: idleMs,
       };
+      if (sessionMode === "listening") payload.mode = "listening";
       // Capability is captured at open: renewing a token cannot change
       // the payload of a sitting already queued for an immutable retry.
       if (supportsActiveMs) payload.active_ms = Math.round(active);
@@ -122,8 +168,10 @@ export function openSession({
     },
     checkpoint() {
       if (closed) return null;
-      const active = activeBase + Math.max(0, last - openedAt - idle);
-      return {
+      const active = sessionMode === "listening"
+        ? activeBase
+        : activeBase + Math.max(0, last - openedAt - idle);
+      const cp = {
         id: sessionID,
         workID,
         startedAt: originalStartedAt.toISOString(),
@@ -132,6 +180,80 @@ export function openSession({
         activeMs: Math.round(active),
         supportsActiveMs,
       };
+      if (sessionMode === "listening") cp.mode = "listening";
+      return cp;
     },
+  };
+}
+
+export function resolveListeningCheckpointFraction(checkpoint, fallback) {
+  if (checkpoint && finite(checkpoint.endProgression)) return clamp01(checkpoint.endProgression);
+  if (checkpoint && finite(checkpoint.startProgression)) return clamp01(checkpoint.startProgression);
+  return finite(fallback) ? clamp01(fallback) : undefined;
+}
+
+export function resolveSessionEndFraction(session, liveAudioFraction, pageFraction) {
+  if (!session) return undefined;
+  if (session.mode === "listening") {
+    if (finite(liveAudioFraction)) return clamp01(liveAudioFraction);
+    return resolveListeningCheckpointFraction(session.checkpoint?.(), pageFraction);
+  }
+  return finite(pageFraction) ? clamp01(pageFraction) : undefined;
+}
+
+export function handleVisibilityHiddenSession({
+  session,
+  audioSessionOpen,
+  audioPlaying,
+  now,
+  audioFraction,
+  onCheckpoint,
+  onEndSession,
+}) {
+  if (session && session.mode === "listening" && audioSessionOpen) {
+    if (audioPlaying) {
+      session.playing(now, audioFraction);
+    }
+    onCheckpoint?.();
+    return "preserved";
+  }
+  onEndSession?.();
+  return "ended";
+}
+
+export function planAudioTicketRefresh({
+  expiresAt,
+  previousExpiresMs = NaN,
+  nowMs = Date.now(),
+  preserveState = false,
+  forceSwap = false,
+}) {
+  const expiresMs = typeof expiresAt === "number" ? expiresAt : Date.parse(expiresAt || "");
+  if (!finite(expiresMs)) {
+    return {
+      shouldSwapSrc: !preserveState || forceSwap,
+      expiresMs: previousExpiresMs,
+      refreshInMs: null,
+      authRefreshMarginMs: 5 * 60_000,
+    };
+  }
+  const advanced = !finite(previousExpiresMs) || expiresMs > previousExpiresMs + 1000;
+  if (preserveState && !forceSwap && !advanced) {
+    return {
+      shouldSwapSrc: false,
+      expiresMs: previousExpiresMs,
+      refreshInMs: null,
+      authRefreshMarginMs: 5 * 60_000,
+    };
+  }
+  const ttlMs = Math.max(0, expiresMs - nowMs);
+  const leadMs = Math.min(5 * 60_000, Math.floor(ttlMs * 0.2));
+  const refreshInMs = ttlMs > 10_000 ? Math.max(10_000, ttlMs - leadMs) : null;
+  const authRefreshMarginMs = Math.max(5 * 60_000 + 30_000, leadMs + 30_000);
+  return {
+    shouldSwapSrc: true,
+    expiresMs,
+    refreshInMs,
+    authRefreshMarginMs,
   };
 }

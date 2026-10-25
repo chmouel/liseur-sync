@@ -839,6 +839,14 @@ from positive progression delta times an edition page count when known.
 The koplugin adapter also retains its reported page contribution, which
 is specific to that source, not pagination shared by other readers.
 
+Sessions may also carry an optional `"mode": "reading" | "listening"`
+(default `"reading"`). A `"listening"` session is stored with
+`origin = "audiobook"`: it counts toward total reading time, daily
+activity, and streaks, and archives into daily rollups with zero
+measured visual reading-pace contribution so audiobook playback never
+skews reading-speed estimates. `mode` is part of the immutable session
+identity, and an unrecognised value is refused with `400` (`code: bad_mode`).
+
 ## Insights
 
 All `/v1/insights/*` routes require `read-insights`. The API and web
@@ -1166,6 +1174,41 @@ decoded — except at `?size=icon`, which serves a drawn placeholder card
 instead, since an icon asker needs an image rather than an answer.
 
 All of these need a token with `library-read`.
+
+When a watched folder also contains a companion `.m4b` audiobook aligned
+to the book (and the caller holds `user_folders` grants on both the
+book's folder and the audiobook's folder):
+
+- `GET /v1/books/{id}/audio/info` returns metadata and chapter marks under
+  `audiobook`, chapter-to-spine alignment under `mapping`, whether Whisper STT
+  refinement is configured (`stt_enabled`), and the initial `audio_time`
+  mapped from the caller's latest reading position.
+- `POST /v1/books/{id}/audio/ticket` mints an HMAC-signed stream
+  ticket bound to the caller's token and the audiobook's content digest,
+  valid for up to 6 hours or until that token expires, whichever is sooner.
+  It returns `{"stream_url": "v1/books/{id}/audio/stream/{ticket}", "expires_at": "…"}`.
+- `GET /v1/books/{id}/audio/stream/{ticket}` (and `HEAD`) streams the
+  `.m4b` (`audio/mp4`) with `Accept-Ranges: bytes` and a strong `ETag`
+  (`"<audiobook_sha>"`) for `If-Range` byte-range resumption, verifying
+  on each request that the originating token is unrevoked and folder
+  grants remain active.
+- `POST /v1/books/{id}/audio/locate` maps bi-directionally between an
+  `audio_time` and a Readium `locator` / `progression`. Passing
+  `{"audio_time": 420.5, "refine_stt": true}` slices the 10 seconds of
+  audio leading up to `audio_time` (`[max(seg.a0, t - 10s), t]`), runs
+  stateless Whisper STT when configured, and matches the spoken words
+  against the mapped EPUB chapter XHTML to return the exact sentence
+  highlight (`stt_matched: true`), falling back cleanly to chapter
+  interpolation (`stt_matched: false`) when disabled, rate-limited, or
+  ambiguous.
+
+`mapping.segments` pairs audio seconds (`a0`, `a1`) with whole-book
+progressions (`b0`, `b1`). `mapping.resources` gives each XHTML resource's
+`href`, `start`, and `end` on that same book axis. A chapter can span
+several resources, and one resource can contain several chapters, so
+resource-relative locator progression must use the resource bounds.
+Changed EPUB bytes, audio bytes or chapter marks invalidate an alignment
+until a folder pass rebuilds it.
 
 ### Finding a book
 

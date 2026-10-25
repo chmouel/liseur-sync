@@ -37,6 +37,7 @@ func TestReaderPageIsolatesThePublication(t *testing.T) {
 	}
 	for _, directive := range []string{
 		"default-src 'none'", "script-src 'self'",
+		"media-src 'self' data: blob:",
 		"base-uri 'self'", "form-action 'none'",
 	} {
 		if !strings.Contains(csp, directive) {
@@ -406,5 +407,25 @@ func TestReaderUsesTheDynamicMobileViewportAndPaginates(t *testing.T) {
 	}
 	if !strings.Contains(engine, "scroll: false") || strings.Contains(engine, "settings.flow") {
 		t.Error("reader engine can still select scroll mode")
+	}
+}
+
+func TestReaderPageRendersAudiobookPlayerControls(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, want := range []string{
+		`id="reader-audio-toggle"`,
+		`id="reader-audio-bar"`,
+		`id="reader-audio-el"`,
+		`id="reader-audio-play"`,
+		`id="reader-audio-follow"`,
+		`id="reader-audio-from-page"`,
+		`id="reader-audio-to-audio"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("reader page missing audiobook player element %q", want)
+		}
 	}
 }

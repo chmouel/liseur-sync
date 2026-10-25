@@ -1,7 +1,13 @@
 // Reader controls and native sync over the Readium publication engine.
 
 import "./reader-engine.js";
-import { openSession } from "./reader-session.js";
+import {
+  openSession,
+  resolveListeningCheckpointFraction,
+  resolveSessionEndFraction,
+  handleVisibilityHiddenSession,
+  planAudioTicketRefresh,
+} from "./reader-session.js";
 import { uploadSessions } from "./reader-session-upload.js";
 import { positionTable, pageAt, pageLocation } from "./reader-positions.js";
 import { readerAuth } from "./reader-auth.js";
@@ -106,6 +112,21 @@ const promptButton = document.getElementById("reader-prompt-copy");
 const promptFallback = document.getElementById("reader-prompt-fallback");
 const promptFallbackText = document.getElementById("reader-prompt-fallback-text");
 const promptFallbackCopy = document.getElementById("reader-prompt-fallback-copy");
+const audioToggleBtn = document.getElementById("reader-audio-toggle");
+const audioBar = document.getElementById("reader-audio-bar");
+const audioEl = document.getElementById("reader-audio-el");
+const audioPlayBtn = document.getElementById("reader-audio-play");
+const audioBackBtn = document.getElementById("reader-audio-back");
+const audioFwdBtn = document.getElementById("reader-audio-fwd");
+const audioChapterLabel = document.getElementById("reader-audio-chapter");
+const audioCurrentLabel = document.getElementById("reader-audio-current");
+const audioDurationLabel = document.getElementById("reader-audio-duration");
+const audioSeekInput = document.getElementById("reader-audio-seek");
+const audioRateSelect = document.getElementById("reader-audio-rate");
+const audioFollowBtn = document.getElementById("reader-audio-follow");
+const audioFromPageBtn = document.getElementById("reader-audio-from-page");
+const audioToAudioBtn = document.getElementById("reader-audio-to-audio");
+const audioCloseBtn = document.getElementById("reader-audio-close");
 
 // The bar grows with touch controls, safe areas and browser text sizing.
 // Reserve its measured height so rotating an iPad cannot cover the book.
@@ -216,6 +237,8 @@ const offlinePartition = cfg.detached
   ? storagePartition() + "|" + new URL(cfg.apiBase, location.href).href
   : storagePartition();
 let furthest = [];
+let furthestFloor = 0;
+let furthestUptoSeq = 0;
 let furthestVerified = false;
 let historyStorageError = false;
 let positionStorageFlight = Promise.resolve();
@@ -433,6 +456,8 @@ const auth = readerAuth({
       // under the fresh token would be requeued as if it never landed.
       lifecycle++;
       furthest = [];
+      furthestFloor = 0;
+      furthestUptoSeq = 0;
       furthestVerified = false;
       syncDialog?.close();
       auth.stop(); // A page opened for one account never writes under another.
@@ -448,6 +473,16 @@ const auth = readerAuth({
     }
     syncExpired = true;
     ready = false;
+    audioWantsPlay = false;
+    audioActivelyPlaying = false;
+    audioPlayTransitionGen++;
+    clearTimeout(audioTicketTimer);
+    abortAudioSTT();
+    if (audioEl) {
+      audioEl.pause();
+      audioEl.removeAttribute("src");
+      audioEl.load();
+    }
     lifecycle++;
     workID = null;
     catalogEditionSHA = "";
@@ -563,7 +598,8 @@ async function refreshLocalReadingState() {
   if (!offlineContext || !durableSync) return;
   const state = await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null);
   if (!state) return;
-  furthest = mergeFurthest(furthest, state.furthest, workID);
+  if ((state.furthestFloor || 0) > furthestFloor) furthestFloor = state.furthestFloor;
+  furthest = mergeFurthest(furthest, state.furthest, workID, furthestFloor);
   const queued = await listOfflineOutbox({
     ...offlineContext, kind: "position", state: null,
   }).catch(() => []);
@@ -620,6 +656,8 @@ document.addEventListener("visibilitychange", checkOfflineAccount);
 
 // ------------------------------------------------------------ sync
 
+let catalogHasAudio = false;
+
 async function resolveWork() {
   const resp = await api(
     "v1/books/" + encodeURIComponent(cfg.bookID) + "/resolve",
@@ -640,6 +678,7 @@ async function resolveWork() {
   // filed under none.
   catalogEditionSHA = (data.identifiers || [])
     .find(id => id && id.kind === "sha256")?.value || "";
+  catalogHasAudio = data.has_audio === true;
   return data.work_id || null;
 }
 
@@ -663,14 +702,21 @@ async function lastPosition() {
   stamp.identity = auth.responseIdentity(resp);
   const data = await resp.json();
   const ops = data.ops || [];
+  const floor = Number(data.furthest_floor) > 0 ? Math.trunc(Number(data.furthest_floor)) : 0;
+  const seen = [...ops, ...(data.furthest || [])].reduce(
+    (max, op) => Math.max(max, Number(op?.seq) > 0 ? Math.trunc(Number(op.seq)) : 0),
+    floor,
+  );
   if (work !== workID || !current(stamp)) return { ok: false };
+  if (floor > furthestFloor) furthestFloor = floor;
+  if (seen > furthestUptoSeq) furthestUptoSeq = seen;
   try {
-    await rememberFurthest([...ops, ...(data.furthest || [])]);
+    await rememberFurthest([...ops, ...(data.furthest || [])], { furthestFloor });
   } catch {
     // Persistence already reported its failure. A readable latest position
     // still restores the book; only durability, not the server read, failed.
     if (current(stamp)) furthest = mergeFurthest(furthest,
-      [...ops, ...(data.furthest || [])], work);
+      [...ops, ...(data.furthest || [])], work, furthestFloor);
   }
   if (!current(stamp)) return { ok: false };
   furthestVerified = Array.isArray(data.furthest);
@@ -682,12 +728,19 @@ async function loadFurthest(extra = []) {
   const stamp = snapshot();
   const state = await readingState({ ...offlineContext, bookID: cfg.bookID });
   if (!current(stamp)) return;
-  await rememberFurthest([...(state?.furthest || []), state?.local, state?.baseline, ...(extra || [])]);
+  if ((state?.furthestFloor || 0) > furthestFloor) furthestFloor = state.furthestFloor;
+  await rememberFurthest(
+    [...(state?.furthest || []), state?.local, state?.baseline, ...(extra || [])],
+    { furthestFloor },
+  );
 }
 
-async function rememberFurthest(ops) {
+async function rememberFurthest(ops, { furthestFloor: nextFloor = furthestFloor, forced = false } = {}) {
   const stamp = snapshot();
-  const observed = mergeFurthest(furthest, ops, workID);
+  const floor = Math.max(furthestFloor, Number(nextFloor) > 0 ? Math.trunc(Number(nextFloor)) : 0);
+  if (floor > furthestFloor) furthestFloor = floor;
+  const base = forced ? [] : furthest;
+  const observed = mergeFurthest(base, ops, workID, floor);
   if (!offlineContext) {
     furthest = observed;
     historyStorageError = true;
@@ -697,7 +750,7 @@ async function rememberFurthest(ops) {
   let stored;
   try {
     stored = await observeReadingPositions({
-      ...offlineContext, bookID: cfg.bookID, workID, ops: observed,
+      ...offlineContext, bookID: cfg.bookID, workID, ops: observed, furthestFloor: floor, forced,
     });
   } catch (error) {
     historyStorageError = true;
@@ -1085,6 +1138,7 @@ const syncFurthestSide = document.getElementById("reader-sync-furthest-side");
 const syncFurthestText = document.getElementById("reader-sync-furthest");
 const syncFurthestExcerpt = document.getElementById("reader-sync-furthest-excerpt");
 const syncFurthestTake = document.getElementById("reader-sync-furthest-take");
+const syncFurthestForget = document.getElementById("reader-sync-furthest-forget");
 const syncBack = document.getElementById("reader-sync-back");
 let furthestOffered = null;
 let furthestBack = null;
@@ -1240,13 +1294,18 @@ function presentBookSync(remote, note) {
     candidates: furthest, workID, local: positionHere(), remote: takeable ? remote : null,
     resolvable: op => startCandidates(op).length > 0,
   });
+  const knownSeq = furthest.reduce(
+    (max, op) => Math.max(max, Number(op?.seq) > 0 ? Math.trunc(Number(op.seq)) : 0),
+    Math.max(furthestUptoSeq, furthestFloor),
+  );
   furthestOffered = peak ? {
-    op: structuredClone(peak), stamp: snapshot(), activity: activityGeneration,
+    op: structuredClone(peak), uptoSeq: knownSeq, stamp: snapshot(), activity: activityGeneration,
     edition: editionSHA(), local: JSON.stringify(positionHere()),
   } : null;
   const peakPlace = placeOf(peak, seen);
   syncFurthestSide.hidden = !peak;
   syncFurthestTake.hidden = !peak;
+  if (syncFurthestForget) syncFurthestForget.hidden = !peak || cfg.offline || !furthestVerified || !!note;
   syncFurthestText.textContent = peak
     ? `${placeSentence(peakPlace) || percent(peak.progression)}. ${furthestVerified && !note
       ? "Includes retained server history." : "Furthest known on this device; server history has not been verified."}`
@@ -1319,11 +1378,56 @@ syncFurthestTake?.addEventListener("click", async () => {
   const choice = furthestOffered;
   if (!choice) return;
   syncFurthestTake.disabled = true;
+  if (syncFurthestForget) syncFurthestForget.disabled = true;
   try {
     await navigateHistorical(choice, () => furthestOffered === choice);
   } catch (error) {
     syncSummary.textContent = error.message;
   } finally {
+    syncFurthestTake.disabled = false;
+    if (syncFurthestForget) syncFurthestForget.disabled = false;
+  }
+});
+
+syncFurthestForget?.addEventListener("click", async () => {
+  const choice = furthestOffered;
+  if (!choice || !workID) return;
+  syncFurthestForget.disabled = true;
+  syncFurthestTake.disabled = true;
+  try {
+    const valid = () => current(choice.stamp) && !document.hidden &&
+      activityGeneration === choice.activity && editionSHA() === choice.edition &&
+      furthestOffered === choice;
+    if (!valid()) throw Error("The reading position changed. Open sync again before choosing.");
+    if (offlineContext) await assertOfflineContext(offlineContext);
+    if (!valid() || JSON.stringify(positionHere()) !== choice.local)
+      throw Error("The page moved. Open sync again before choosing.");
+    if (!await settleBeforeAnswer())
+      throw Error("This page could not be saved. The furthest position was not forgotten.");
+    if (!valid()) throw Error("The reading position changed. Open sync again before choosing.");
+    const uptoSeq = furthest.reduce(
+      (max, op) => Math.max(max, Number(op?.seq) > 0 ? Math.trunc(Number(op.seq)) : 0),
+      Math.max(choice.uptoSeq || 0, furthestUptoSeq, furthestFloor),
+    );
+    const resp = await api("v1/works/" + encodeURIComponent(workID) + "/furthest/forget", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ upto_seq: uptoSeq }),
+    });
+    if (!resp.ok) throw Error("The furthest position could not be forgotten.");
+    const body = await resp.json().catch(() => null);
+    const floor = Number(body?.furthest_floor);
+    if (!Number.isFinite(floor) || floor < 0)
+      throw Error("The server returned an invalid furthest floor.");
+    await rememberFurthest([], { furthestFloor: Math.trunc(floor), forced: true });
+    furthestOffered = null;
+    syncCovered = false;
+    syncDialog.close();
+    flash("Furthest position forgotten.");
+  } catch (error) {
+    syncSummary.textContent = error.message;
+  } finally {
+    syncFurthestForget.disabled = false;
     syncFurthestTake.disabled = false;
   }
 });
@@ -2296,6 +2400,21 @@ function locatorFor(location) {
   });
 }
 
+function pendingPositionLocator() {
+  if (audioSyncLocator) return audioSyncLocator;
+  return here ? locatorFor(here) : null;
+}
+
+function locatorMatchesCurrentPosition(locator) {
+  const currentLoc = pendingPositionLocator();
+  if (!currentLoc) return false;
+  return (
+    (currentLoc.href || "") === (locator.href || "") &&
+    (currentLoc.locations?.fragments?.[0] || "") === (locator.locations?.fragments?.[0] || "") &&
+    currentLoc.locations?.totalProgression === locator.locations?.totalProgression
+  );
+}
+
 // withAnchor describes the passage on screen well enough for another
 // client to find it again, when it can. A CFI says the same thing but
 // only to a reader that speaks CFI; the app on a phone does not, and a
@@ -2428,9 +2547,9 @@ async function recoverRefusal(resp, op) {
 }
 
 async function pushPosition() {
-  if (!workID || !here || !readingDirty || restoring) return;
+  if (!workID || (!here && !audioSyncLocator) || !readingDirty || restoring) return;
   const stamp = snapshot();
-  const locator = locatorFor(here);
+  const locator = pendingPositionLocator();
   // A non-finite fraction has no position to record. Return without
   // touching retryOp; the layout retry below will prod the engine for
   // a new relocate, and the next finite one goes through the normal
@@ -2446,9 +2565,11 @@ async function pushPosition() {
   // and reusing the old op for it would file the new reading under the
   // old bytes.
   const key =
-    (locator.locations.fragments[0] || "") +
+    (locator.href || "") +
     "@" +
-    locator.locations.totalProgression +
+    (locator.locations?.fragments?.[0] || "") +
+    "@" +
+    locator.locations?.totalProgression +
     "@" +
     edition;
   const op =
@@ -2482,7 +2603,7 @@ async function pushPosition() {
       await saving;
       if (leaving && context === offlineContext) readingCoordinator?.leave();
       if (!current(stamp)) return;
-      furthest = mergeFurthest(furthest, [{ ...op, device_id: context.deviceID }], workID);
+      furthest = mergeFurthest(furthest, [{ ...op, device_id: context.deviceID }], workID, furthestFloor);
       catchup.local(op);
       if (cfg.offline) notifyOfflineChange();
       else if (leaving) {
@@ -2492,8 +2613,7 @@ async function pushPosition() {
       } else scheduleSend();
       if (retryOp?.op === op) {
         retryOp = null;
-        if (locatorFor(here)?.locations.fragments[0] === locator.locations.fragments[0] &&
-            here.fraction === locator.locations.totalProgression) readingDirty = false;
+        if (locatorMatchesCurrentPosition(locator)) readingDirty = false;
       }
     } catch (err) {
       // An expired local account cannot be queued into. The reader
@@ -2546,8 +2666,7 @@ async function pushPosition() {
     if (retryOp && retryOp.op === op) {
       retryOp = null;
       // A newer local page still needs its own push.
-      if (locatorFor(here)?.locations.fragments[0] === locator.locations.fragments[0] &&
-          here.fraction === locator.locations.totalProgression) readingDirty = false;
+      if (locatorMatchesCurrentPosition(locator)) readingDirty = false;
     }
   } catch (err) {
     /* offline: the next page turn replays this exact op */
@@ -2599,6 +2718,10 @@ function schedulePush() {
 // reliably lets a page speak. Coming back opens a new one. The
 // arithmetic — idle cap, minimum, clamps — lives in reader-session.js.
 let session = null;
+let audioInfo = null;
+let followAudio = true;
+let audioNavInProgress = 0;
+let audioNavigationGeneration = 0;
 // Closed sittings the server has not yet confirmed. Each is kept whole
 // and replayed byte for byte, like retryOp: the server compares
 // payloads under the session id, and a figure that moved between
@@ -2606,21 +2729,71 @@ let session = null;
 // name.
 let unsent = [];
 
-function beginSession() {
-  if (session || !workID || document.hidden || offlineInvalidated) return;
-  if (!here || !finite(here.fraction)) return;
+function audioPlaying() {
+  return !!(audioEl && audioActivelyPlaying && !audioEl.paused && !audioEl.ended);
+}
+
+function audioSessionOpen() {
+  return !!(audioEl && (audioActivelyPlaying || audioWantsPlay || (!audioEl.paused && !audioEl.ended)));
+}
+
+function liveAudioFraction() {
+  if (!audioSwappingSrc && audioEl && audioInfo && (audioActivelyPlaying || audioWantsPlay || audioEl.currentTime > 0)) {
+    const mapped = audioTimeToBook(audioEl.currentTime);
+    if (mapped && finite(mapped.progression)) return mapped.progression;
+  }
+  return undefined;
+}
+
+function currentAudioFraction() {
+  const live = liveAudioFraction();
+  if (finite(live)) return live;
+  if (session && session.mode === "listening") {
+    const cpFrac = resolveListeningCheckpointFraction(session.checkpoint?.());
+    if (finite(cpFrac)) return cpFrac;
+  }
+  if (audioInfo && finite(audioInfo.progression)) return audioInfo.progression;
+  return here && finite(here.fraction) ? here.fraction : undefined;
+}
+
+function beginSession(mode = "reading") {
+  if (session || !workID || offlineInvalidated) return;
+  if (mode !== "listening" && document.hidden) return;
+  const frac = mode === "listening" ? currentAudioFraction() : (here && here.fraction);
+  if (!finite(frac)) return;
+  const pendingCheckpoint = cfg.offline || sessionOwner ? offlineCheckpoint : null;
+  offlineCheckpoint = null;
+  if (pendingCheckpoint && pendingCheckpoint.mode === "listening" && mode !== "listening") {
+    const recoveredFrac = resolveListeningCheckpointFraction(pendingCheckpoint, frac);
+    session = openSession({
+      id: opID(),
+      workID: workID,
+      startedAt: new Date(),
+      now: performance.now(),
+      fraction: recoveredFrac,
+      mode: "listening",
+      supportsActiveMs: cfg.offline
+        ? offlineSnapshot?.supportsActiveMs === true
+        : auth.identity()?.supportsActiveMs === true,
+      checkpoint: pendingCheckpoint,
+    });
+    void endSession(recoveredFrac).then(() => {
+      if (!session && !audioSessionOpen()) beginSession("reading");
+    });
+    return;
+  }
   session = openSession({
     id: opID(),
     workID: workID,
     startedAt: new Date(),
     now: performance.now(),
-    fraction: here.fraction,
+    fraction: frac,
+    mode,
     supportsActiveMs: cfg.offline
       ? offlineSnapshot?.supportsActiveMs === true
       : auth.identity()?.supportsActiveMs === true,
-    checkpoint: cfg.offline || sessionOwner ? offlineCheckpoint : null,
+    checkpoint: pendingCheckpoint,
   });
-  offlineCheckpoint = null;
   checkpointSession();
 }
 
@@ -2649,17 +2822,30 @@ function noteActivity() {
   activityGeneration++;
   if (document.hidden || restoring) return;
   interactionPending = true;
+  if (audioSessionOpen()) {
+    if (unsent.length) pushSession();
+    return;
+  }
+  if (session && session.mode === "listening") {
+    void endSession().then(() => {
+      if (!session && !audioSessionOpen()) beginSession("reading");
+    });
+    return;
+  }
   if (session) {
     session.activity(performance.now(), here && here.fraction);
     checkpointSession();
   } else {
-    beginSession();
+    beginSession("reading");
   }
   if (unsent.length) pushSession();
 }
 
 function noteNavigation() {
   if (!view || restoring || document.hidden || offlineInvalidated) return false;
+  if (audioBar && !audioBar.hidden && followAudio) {
+    setFollowAudio(false);
+  }
   noteActivity();
   catchup.moved();
   hideCatchup();
@@ -2670,7 +2856,7 @@ function noteNavigation() {
 // relocates on a resize or a font change too, and only a key, a tap or
 // a scroll says somebody was there.
 function noteProgress() {
-  if (session) {
+  if (session && session.mode !== "listening") {
     session.progress(here && here.fraction);
     checkpointSession();
   }
@@ -2683,13 +2869,16 @@ function noteProgress() {
 // sitting twice at once races itself at the server.
 let leaving = false;
 
-async function endSession() {
+async function endSession(explicitFraction) {
   if (!session) return;
   const sessionID = session.checkpoint()?.id;
+  const endFrac = finite(explicitFraction)
+    ? explicitFraction
+    : resolveSessionEndFraction(session, liveAudioFraction(), here && here.fraction);
   const payload = session.close(
     performance.now(),
     new Date(),
-    here && here.fraction,
+    endFrac,
   );
   session = null;
   if (cfg.offline || offlineContext) {
@@ -2794,7 +2983,15 @@ document.addEventListener("visibilitychange", () => {
     hideCatchup();
     cancelScheduledPush();
     push();
-    endSession();
+    handleVisibilityHiddenSession({
+      session,
+      audioSessionOpen: audioSessionOpen(),
+      audioPlaying: audioPlaying(),
+      now: performance.now(),
+      audioFraction: currentAudioFraction(),
+      onCheckpoint: checkpointSession,
+      onEndSession: endSession,
+    });
     return;
   }
   catchup.resume();
@@ -2802,7 +2999,7 @@ document.addEventListener("visibilitychange", () => {
   pushSession();
   readingCoordinator?.trigger();
   if (ready) startLive();
-  beginSession();
+  if (!audioSessionOpen() && session?.mode !== "listening") beginSession("reading");
   if (here && !finite(here.fraction)) {
     fractionRetryAttempt = 0;
     scheduleFractionRetry();
@@ -4077,7 +4274,7 @@ stageArea.addEventListener("click", (e) => {
 function handleKeys(e) {
   // Native buttons own Space/Enter; the reading shortcuts must not turn the
   // publication or invalidate the offer while its controls have keyboard focus.
-  if (catchupPanel?.contains(e.target)) return;
+  if (catchupPanel?.contains(e.target) || audioBar?.contains(e.target)) return;
   noteActivity();
   if (gotoDialog && gotoDialog.open) return;
   const helpDialog = document.getElementById("reader-help");
@@ -4213,9 +4410,13 @@ window.addEventListener("beforeunload", () => {
         if (!restoring) {
           if (interactionPending) {
             interactionPending = false;
+            audioSyncLocator = null;
             readingDirty = true;
             catchup.moved();
             hideCatchup();
+            if (!audioNavInProgress && audioBar && !audioBar.hidden && followAudio) {
+              setFollowAudio(false);
+            }
           }
           schedulePush();
           noteProgress();
@@ -4330,6 +4531,7 @@ window.addEventListener("beforeunload", () => {
       const stamped = op && { ...op, device_id: op.device_id || offlineSnapshot.deviceID };
       catchup.baseline(stamped);
       catchup.local(stamped, false);
+      if ((offlineSnapshot.furthestFloor || 0) > furthestFloor) furthestFloor = offlineSnapshot.furthestFloor;
       await loadFurthest(offlineSnapshot.furthest);
     }
     if (!cfg.offline) try {
@@ -4356,7 +4558,8 @@ window.addEventListener("beforeunload", () => {
       const stored = offlineContext
         ? await readingState({ ...offlineContext, bookID: cfg.bookID }).catch(() => null)
         : null;
-      furthest = mergeFurthest(furthest, stored?.furthest, workID);
+      if ((stored?.furthestFloor || 0) > furthestFloor) furthestFloor = stored.furthestFloor;
+      furthest = mergeFurthest(furthest, stored?.furthest, workID, furthestFloor);
       const queued = offlineContext
         ? await listOfflineOutbox({
           ...offlineContext, kind: "position", state: null,
@@ -4408,6 +4611,7 @@ window.addEventListener("beforeunload", () => {
     ready = !cfg.offline && !syncExpired;
     beginSession();
     if (cfg.offline) prepareOfflineSync();
+    if (!cfg.offline && ready) void probeAudiobook();
     if (!cfg.offline && ready && !document.hidden) startLive();
     if (document.hidden) catchup.hide();
     if (!syncExpired && !historyStorageError) say("");
@@ -4423,3 +4627,574 @@ window.addEventListener("beforeunload", () => {
     say((err && err.message) || "this book could not be opened", true);
   }
 })();
+
+// --------------------------------------------------------- audiobook
+
+let audioTicketTimer = null;
+let audioTicketRefreshing = false;
+let audioTicketExpiresMs = NaN;
+let audioScrubbing = false;
+let audioWantsPlay = false;
+let audioActivelyPlaying = false;
+let audioPlayTransitionGen = 0;
+let audioSwappingSrc = false;
+let audioLastCheckpointAt = 0;
+let audioLastSyncedProg = -1;
+let audioLastSyncedHref = "";
+let audioSyncLocator = null;
+let sttReqSeq = 0;
+let sttAbort = null;
+
+function formatAudioSeconds(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return "0:00";
+  const total = Math.floor(sec);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+function abortAudioSTT() {
+  audioNavigationGeneration++;
+  sttReqSeq++;
+  if (sttAbort) {
+    sttAbort.abort();
+    sttAbort = null;
+  }
+}
+
+function setFollowAudio(next) {
+  followAudio = !!next;
+  if (!followAudio) abortAudioSTT();
+  if (audioFollowBtn) {
+    audioFollowBtn.setAttribute("aria-pressed", followAudio ? "true" : "false");
+    audioFollowBtn.classList.toggle("active", followAudio);
+    audioFollowBtn.textContent = followAudio ? "Following audio" : "Follow audio";
+  }
+  if (audioFromPageBtn) audioFromPageBtn.hidden = followAudio;
+  if (audioToAudioBtn) audioToAudioBtn.hidden = followAudio;
+}
+
+function audioTimeToBook(t) {
+  const segs = audioInfo?.mapping?.segments;
+  if (!Array.isArray(segs) || segs.length === 0 || !Number.isFinite(t)) return null;
+  const last = segs[segs.length - 1];
+  const segment = segs.find(s => t >= s.a0 && t < s.a1) ||
+    (t >= last.a1 && t <= last.a1 + 1 ? last : null);
+  if (!segment || segment.a1 <= segment.a0) return null;
+  const frac = Math.min(1, (t - segment.a0) / (segment.a1 - segment.a0));
+  const raw = segment.b0 + frac * (segment.b1 - segment.b0);
+  const progression = audioInfo.mapping.full_narrative ? raw : Math.min(raw, 0.998);
+  const resources = audioInfo.mapping.resources;
+  if (!Array.isArray(resources) || resources.length === 0) return null;
+  const resource = resources.find(r => progression >= r.start && progression < r.end) ||
+    (progression === 1 ? resources[resources.length - 1] : null);
+  if (!resource || resource.end <= resource.start) return null;
+  return {
+    progression, segment, href: resource.href,
+    chapterProgress: (progression - resource.start) / (resource.end - resource.start),
+  };
+}
+
+function audioChapterAt(t) {
+  const chs = audioInfo?.audiobook?.chapters;
+  if (Array.isArray(chs)) {
+    for (const ch of chs) {
+      if (t >= ch.start && t < ch.end) return ch.title || "";
+    }
+  }
+  const mapped = audioTimeToBook(t);
+  return mapped?.segment?.label || "";
+}
+
+function resolveStreamURL(rel) {
+  const base = new URL(cfg.apiBase || "../", window.location.href);
+  return new URL(rel, base).href;
+}
+
+async function mintAudioTicket(preserveState = false, forceSwap = false) {
+  if (!audioEl || cfg.offline || audioTicketRefreshing) return false;
+  audioTicketRefreshing = true;
+  clearTimeout(audioTicketTimer);
+  try {
+    if (preserveState) {
+      const remainingMs = Number.isFinite(audioTicketExpiresMs)
+        ? Math.max(0, audioTicketExpiresMs - Date.now())
+        : 5 * 60_000;
+      auth.refreshBefore?.(Math.max(5 * 60_000 + 30_000, remainingMs + 30_000));
+    }
+    const resp = await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/audio/ticket", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!resp.ok) throw new Error("The audiobook stream could not be opened.");
+    const data = await resp.json();
+    if (!ready || !auth.responseCurrent(resp)) return false;
+    if (!data?.stream_url) throw new Error("The audiobook stream response is incomplete.");
+    const plan = planAudioTicketRefresh({
+      expiresAt: data.expires_at,
+      previousExpiresMs: audioTicketExpiresMs,
+      nowMs: Date.now(),
+      preserveState,
+      forceSwap: forceSwap || !audioEl.src,
+    });
+    audioTicketExpiresMs = plan.expiresMs;
+    if (plan.shouldSwapSrc) {
+      const nextSrc = resolveStreamURL(data.stream_url);
+      const savedTime = preserveState ? audioEl.currentTime : (Number(audioInfo?.audio_time) || 0);
+      const savedRate = Number(audioRateSelect?.value) || audioEl.playbackRate || 1;
+      const shouldResume = preserveState && (audioWantsPlay || !audioEl.paused);
+      audioActivelyPlaying = false;
+      audioPlayTransitionGen++;
+      if (session?.mode === "listening") {
+        session.paused(performance.now(), currentAudioFraction());
+        checkpointSession();
+      }
+      audioSwappingSrc = true;
+      try {
+        audioEl.src = nextSrc;
+        audioEl.playbackRate = savedRate;
+        if (audioEl.readyState < 1) {
+          await new Promise((resolve, reject) => {
+            const finish = (error) => {
+              clearTimeout(timer);
+              audioEl.removeEventListener("loadedmetadata", loaded);
+              audioEl.removeEventListener("error", failed);
+              if (error) reject(error);
+              else resolve();
+            };
+            const loaded = () => finish();
+            const failed = () => finish(new Error("The audiobook stream could not be loaded."));
+            const timer = setTimeout(() => finish(new Error("The audiobook stream timed out.")), 30000);
+            audioEl.addEventListener("loadedmetadata", loaded, { once: true });
+            audioEl.addEventListener("error", failed, { once: true });
+          });
+        }
+        audioEl.currentTime = savedTime;
+      } finally {
+        audioSwappingSrc = false;
+      }
+      if (shouldResume && audioWantsPlay && !audioBar?.hidden && ready) {
+        audioWantsPlay = true;
+        await audioEl.play();
+      }
+    }
+    if (plan.refreshInMs !== null) {
+      audioTicketTimer = setTimeout(() => {
+        if (audioBar && !audioBar.hidden) void mintAudioTicket(true, false);
+      }, plan.refreshInMs);
+    }
+    return true;
+  } catch (error) {
+    say(error.message || "The audiobook stream could not be opened.", true);
+    return false;
+  } finally {
+    audioTicketRefreshing = false;
+  }
+}
+
+function recordAudioPosition(locator, progression) {
+  if (!locator || !finite(progression)) return;
+  audioLastSyncedProg = progression;
+  if (locator.href) audioLastSyncedHref = locator.href;
+  audioSyncLocator = {
+    href: locator.href || "",
+    type: locator.type || "application/xhtml+xml",
+    ...(typeof bookTitle === "function" ? { title: bookTitle() } : {}),
+    ...(locator.text ? { text: locator.text } : {}),
+    locations: {
+      fragments: Array.isArray(locator.locations?.fragments) ? locator.locations.fragments : [],
+      ...(finite(locator.locations?.progression) ? { progression: locator.locations.progression } : {}),
+      totalProgression: progression,
+      ...(finite(locator.locations?.position) ? { position: locator.locations.position } : {}),
+    },
+  };
+  readingDirty = true;
+  schedulePush();
+}
+
+async function navigateToAudioTarget(locator, progression) {
+  if (!view || restoring || !ready || !followAudio || audioBar?.hidden || audioNavInProgress) return false;
+  const generation = audioNavigationGeneration;
+  const op = {
+    progression: finite(progression) ? progression : undefined,
+    locator: locator || {},
+    edition_sha: editionSHA(),
+  };
+  audioNavInProgress++;
+  try {
+    for (const target of startCandidates(op)) {
+      try {
+        const resolved = await view.resolveNavigation(target);
+        if (generation !== audioNavigationGeneration || !followAudio || !ready || audioBar?.hidden) return false;
+        await view.renderer.goTo(resolved);
+        if (generation !== audioNavigationGeneration || !followAudio || !ready || audioBar?.hidden) return false;
+        audioSyncLocator = null;
+        if (finite(progression)) audioLastSyncedProg = progression;
+        if (locator?.href) audioLastSyncedHref = locator.href;
+        readingDirty = true;
+        schedulePush();
+        return true;
+      } catch {}
+    }
+  } finally {
+    audioNavInProgress = Math.max(0, audioNavInProgress - 1);
+  }
+  return false;
+}
+
+async function refineAudioPauseSTT(reqTime) {
+  if (!audioInfo || cfg.offline) return;
+  abortAudioSTT();
+  const seq = sttReqSeq;
+  const controller = new AbortController();
+  sttAbort = controller;
+  try {
+    const resp = await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/audio/locate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ audio_time: reqTime, refine_stt: true }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (
+      seq !== sttReqSeq ||
+      !ready ||
+      !auth.responseCurrent(resp) ||
+      audioBar?.hidden ||
+      !audioEl ||
+      !audioEl.paused ||
+      Math.abs(audioEl.currentTime - reqTime) >= 0.5
+    ) {
+      return;
+    }
+    if (data?.locator) {
+      if (followAudio) {
+        if (!(await navigateToAudioTarget(data.locator, data.progression))) {
+          recordAudioPosition(data.locator, data.progression);
+        }
+      } else {
+        recordAudioPosition(data.locator, data.progression);
+      }
+    }
+  } catch {}
+}
+
+function updateAudioTimelineUI() {
+  if (!audioEl) return;
+  const cur = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
+  const dur = Number.isFinite(audioEl.duration) && audioEl.duration > 0
+    ? audioEl.duration
+    : (Number(audioInfo?.audiobook?.duration_seconds) || 0);
+  if (audioCurrentLabel) audioCurrentLabel.textContent = formatAudioSeconds(cur);
+  if (audioDurationLabel) audioDurationLabel.textContent = formatAudioSeconds(dur);
+  if (audioSeekInput && !audioScrubbing && dur > 0) {
+    audioSeekInput.max = String(Math.ceil(dur));
+    audioSeekInput.value = String(Math.min(dur, cur));
+  }
+  if (audioChapterLabel) {
+    const ch = audioChapterAt(cur);
+    audioChapterLabel.textContent = ch || audioInfo?.audiobook?.title || "Audiobook";
+  }
+}
+
+async function syncAudioFromCurrentPage(autoPlay = false) {
+  if (!audioEl || !here || cfg.offline) return;
+  abortAudioSTT();
+  const generation = audioNavigationGeneration;
+  const loc = locatorFor(here);
+  if (!loc?.href) return;
+  try {
+    const resp = await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/audio/locate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locator: loc }),
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!ready || audioBar?.hidden || generation !== audioNavigationGeneration || !auth.responseCurrent(resp)) return;
+    if (Number.isFinite(data?.audio_time)) {
+      audioSyncLocator = null;
+      audioEl.currentTime = data.audio_time;
+      updateAudioTimelineUI();
+      setFollowAudio(true);
+      if (autoPlay && audioEl.paused) await audioEl.play().catch(() => {});
+    }
+  } catch {}
+}
+
+async function probeAudiobook() {
+  if (!catalogHasAudio || !audioToggleBtn || !audioBar || !audioEl || cfg.offline) return;
+  try {
+    const resp = await api("v1/books/" + encodeURIComponent(cfg.bookID) + "/audio/info");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!ready || !auth.responseCurrent(resp)) return;
+    if (!data?.audiobook?.id) return;
+    audioInfo = data;
+    audioToggleBtn.hidden = false;
+    const dur = Number(data.audiobook.duration_seconds) || 0;
+    if (audioDurationLabel) audioDurationLabel.textContent = formatAudioSeconds(dur);
+    if (audioSeekInput && dur > 0) audioSeekInput.max = String(Math.ceil(dur));
+    if (Number.isFinite(data.audio_time) && data.audio_time > 0) {
+      if (audioCurrentLabel) audioCurrentLabel.textContent = formatAudioSeconds(data.audio_time);
+      if (audioSeekInput) audioSeekInput.value = String(Math.min(dur || data.audio_time, data.audio_time));
+    }
+    if (audioChapterLabel) {
+      audioChapterLabel.textContent = audioChapterAt(Number(data.audio_time) || 0) ||
+        data.audiobook.title || "Audiobook";
+    }
+  } catch {}
+}
+
+if (audioToggleBtn && audioBar && audioEl) {
+  function closeAudioPlayer() {
+    audioWantsPlay = false;
+    abortAudioSTT();
+    if (!audioEl.paused) audioEl.pause();
+    pauseListeningInterval();
+    audioBar.hidden = true;
+    audioToggleBtn.setAttribute("aria-expanded", "false");
+    if (session && session.mode === "listening") {
+      void endSession().then(() => {
+        if (!session && !audioSessionOpen()) beginSession("reading");
+      });
+    }
+  }
+
+  audioToggleBtn.addEventListener("click", async () => {
+    const opening = audioBar.hidden;
+    audioBar.hidden = !opening;
+    audioToggleBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+    if (!opening) {
+      closeAudioPlayer();
+      return;
+    }
+    setFollowAudio(true);
+    if (!audioEl.src) {
+      await mintAudioTicket(false);
+      await syncAudioFromCurrentPage(false);
+    }
+    updateAudioTimelineUI();
+  });
+
+  audioCloseBtn?.addEventListener("click", closeAudioPlayer);
+
+  audioPlayBtn?.addEventListener("click", async () => {
+    abortAudioSTT();
+    if (!audioEl.src) {
+      const ok = await mintAudioTicket(false, true);
+      if (!ok) return;
+    }
+    if (audioEl.paused) {
+      audioWantsPlay = true;
+      await audioEl.play().catch(async () => {
+        if (await mintAudioTicket(true, true)) await audioEl.play().catch(() => {});
+      });
+    } else {
+      audioWantsPlay = false;
+      audioEl.pause();
+    }
+  });
+
+  audioBackBtn?.addEventListener("click", () => {
+    abortAudioSTT();
+    audioEl.currentTime = Math.max(0, (audioEl.currentTime || 0) - 15);
+    updateAudioTimelineUI();
+  });
+
+  audioFwdBtn?.addEventListener("click", () => {
+    abortAudioSTT();
+    const dur = Number.isFinite(audioEl.duration) ? audioEl.duration : Infinity;
+    audioEl.currentTime = Math.min(dur, (audioEl.currentTime || 0) + 30);
+    updateAudioTimelineUI();
+  });
+
+  audioRateSelect?.addEventListener("change", () => {
+    const r = Number(audioRateSelect.value);
+    if (Number.isFinite(r) && r > 0) audioEl.playbackRate = r;
+  });
+
+  audioSeekInput?.addEventListener("input", () => {
+    audioScrubbing = true;
+    abortAudioSTT();
+    const target = Number(audioSeekInput.value);
+    if (audioCurrentLabel && Number.isFinite(target)) {
+      audioCurrentLabel.textContent = formatAudioSeconds(target);
+    }
+  });
+
+  audioSeekInput?.addEventListener("change", () => {
+    const target = Number(audioSeekInput.value);
+    audioScrubbing = false;
+    if (Number.isFinite(target)) {
+      abortAudioSTT();
+      audioEl.currentTime = target;
+      updateAudioTimelineUI();
+    }
+  });
+
+  audioFollowBtn?.addEventListener("click", () => {
+    const next = !followAudio;
+    setFollowAudio(next);
+    if (next && audioEl) {
+      const mapped = audioTimeToBook(audioEl.currentTime);
+      if (mapped?.segment) {
+        void navigateToAudioTarget(
+          {
+            href: mapped.href,
+            type: "application/xhtml+xml",
+            locations: {
+              progression: mapped.chapterProgress,
+              totalProgression: mapped.progression,
+            },
+          },
+          mapped.progression,
+        );
+      }
+    }
+  });
+
+  audioFromPageBtn?.addEventListener("click", () => {
+    void syncAudioFromCurrentPage(!audioEl.paused);
+  });
+
+  audioToAudioBtn?.addEventListener("click", () => {
+    setFollowAudio(true);
+    if (audioEl.paused) {
+      void refineAudioPauseSTT(audioEl.currentTime);
+    } else {
+      const mapped = audioTimeToBook(audioEl.currentTime);
+      if (mapped?.segment) {
+        void navigateToAudioTarget(
+          {
+            href: mapped.href,
+            type: "application/xhtml+xml",
+            locations: {
+              progression: mapped.chapterProgress,
+              totalProgression: mapped.progression,
+            },
+          },
+          mapped.progression,
+        );
+      }
+    }
+  });
+
+  audioEl.addEventListener("play", () => {
+    audioWantsPlay = true;
+    abortAudioSTT();
+    if (audioPlayBtn) {
+      audioPlayBtn.textContent = "Pause";
+      audioPlayBtn.setAttribute("aria-label", "Pause");
+    }
+  });
+
+  audioEl.addEventListener("playing", async () => {
+    audioWantsPlay = true;
+    audioActivelyPlaying = true;
+    const playGen = ++audioPlayTransitionGen;
+    abortAudioSTT();
+    if (session && session.mode !== "listening") {
+      await endSession();
+    }
+    if (
+      playGen !== audioPlayTransitionGen ||
+      !audioActivelyPlaying ||
+      audioEl.paused ||
+      audioEl.seeking ||
+      audioEl.ended
+    ) {
+      return;
+    }
+    if (!session) {
+      beginSession("listening");
+    }
+    if (session && session.mode === "listening") {
+      session.playing(performance.now(), currentAudioFraction());
+      checkpointSession();
+      audioLastCheckpointAt = performance.now();
+    }
+  });
+
+  const pauseListeningInterval = () => {
+    audioActivelyPlaying = false;
+    audioPlayTransitionGen++;
+    if (session && session.mode === "listening") {
+      session.paused(performance.now(), currentAudioFraction());
+      checkpointSession();
+    }
+  };
+
+  audioEl.addEventListener("pause", () => {
+    if (!audioSwappingSrc && !audioEl.error) {
+      audioWantsPlay = false;
+    }
+    if (audioPlayBtn) {
+      audioPlayBtn.textContent = "Play";
+      audioPlayBtn.setAttribute("aria-label", "Play");
+    }
+    pauseListeningInterval();
+    if (document.hidden && !audioSwappingSrc && !audioEl.error) {
+      void endSession();
+    }
+    if (!audioEl.seeking && !audioSwappingSrc && !audioEl.error && !audioBar?.hidden && ready) {
+      void refineAudioPauseSTT(audioEl.currentTime);
+    }
+  });
+
+  audioEl.addEventListener("seeking", () => {
+    abortAudioSTT();
+    pauseListeningInterval();
+  });
+
+  audioEl.addEventListener("waiting", pauseListeningInterval);
+  audioEl.addEventListener("ended", () => {
+    audioWantsPlay = false;
+    pauseListeningInterval();
+    void endSession();
+  });
+
+  audioEl.addEventListener("error", () => {
+    pauseListeningInterval();
+    if (!audioTicketRefreshing && audioBar && !audioBar.hidden) {
+      void mintAudioTicket(true, true);
+    }
+  });
+
+  audioEl.addEventListener("timeupdate", () => {
+    if (audioSwappingSrc || !ready || audioBar.hidden) return;
+    updateAudioTimelineUI();
+    const now = performance.now();
+    const mapped = audioTimeToBook(audioEl.currentTime);
+    if (audioActivelyPlaying && session && session.mode === "listening" && !audioEl.paused && !audioEl.seeking) {
+      session.playing(now, mapped ? mapped.progression : currentAudioFraction());
+      if (now - audioLastCheckpointAt >= 5000) {
+        checkpointSession();
+        audioLastCheckpointAt = now;
+      }
+    }
+    if (mapped?.segment && !audioEl.seeking) {
+      const movedEnough = Math.abs(mapped.progression - audioLastSyncedProg) >= 0.003 ||
+        mapped.href !== audioLastSyncedHref;
+      if (movedEnough) {
+        const targetLocator = {
+          href: mapped.href,
+          type: "application/xhtml+xml",
+          locations: {
+            progression: mapped.chapterProgress,
+            totalProgression: mapped.progression,
+          },
+        };
+        if (followAudio) {
+          void navigateToAudioTarget(targetLocator, mapped.progression);
+        } else {
+          recordAudioPosition(targetLocator, mapped.progression);
+        }
+      }
+    }
+  });
+}

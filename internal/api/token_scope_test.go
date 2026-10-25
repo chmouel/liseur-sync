@@ -130,18 +130,19 @@ func TestTokenScopeSetCompatibilityAndUpdate(t *testing.T) {
 type routeGate int
 
 const (
-	gatePublic        routeGate = iota // no credential at all
-	gateSync                           // bearer, scope sync
-	gateInsights                       // bearer, scope read-insights
-	gateLibraryRead                    // bearer, scope library-read
-	gateLibraryManage                  // bearer, scope library-manage
-	gateLibraryUpload                  // bearer, scope library-upload
-	gateLibraryDelete                  // bearer, scope library-delete
-	gateResolveBoth                    // bearer, library-read AND sync
-	gateOPDS                           // HTTP Basic, scope library-read
-	gateTokenSelf                      // bearer, no scope beyond authenticating
-	gateLiveEvents                     // bearer, authenticated then filtered per topic
-	gateLoginCred                      // the short-lived login credential, not a device token
+	gatePublic            routeGate = iota // no credential at all
+	gateSync                               // bearer, scope sync
+	gateInsights                           // bearer, scope read-insights
+	gateLibraryRead                        // bearer, scope library-read
+	gateLibraryManage                      // bearer, scope library-manage
+	gateLibraryUpload                      // bearer, scope library-upload
+	gateLibraryDelete                      // bearer, scope library-delete
+	gateResolveBoth                        // bearer, library-read AND sync
+	gateOPDS                               // HTTP Basic, scope library-read
+	gateTokenSelf                          // bearer, no scope beyond authenticating
+	gateLiveEvents                         // bearer, authenticated then filtered per topic
+	gateLoginCred                          // the short-lived login credential, not a device token
+	gateAudioStreamTicket                  // HMAC stream ticket bound to an active library-read token
 )
 
 // registeredRouteGates is the hand-kept half of the matrix: what each
@@ -204,6 +205,11 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /v1/books/{id}/cover":                                         gateLibraryRead,
 	"HEAD /v1/books/{id}/cover":                                        gateLibraryRead,
 	"GET /v1/books/{id}/series":                                        gateLibraryRead,
+	"GET /v1/books/{id}/audio/info":                                    gateLibraryRead,
+	"POST /v1/books/{id}/audio/ticket":                                 gateLibraryRead,
+	"POST /v1/books/{id}/audio/locate":                                 gateLibraryRead,
+	"GET /v1/books/{id}/audio/stream/{ticket}":                         gateAudioStreamTicket,
+	"HEAD /v1/books/{id}/audio/stream/{ticket}":                        gateAudioStreamTicket,
 
 	"PUT /v1/books/{id}/series":                gateLibraryManage,
 	"DELETE /v1/books/{id}/series":             gateLibraryManage,
@@ -535,6 +541,13 @@ func TestScopeMatrixCoversEveryRegisteredRoute(t *testing.T) {
 				}
 				if got := bearer(method, path, login); got == http.StatusUnauthorized {
 					t.Errorf("the login credential itself: %d, should have passed the gate", got)
+				}
+			case gateAudioStreamTicket:
+				if got := bearer(method, path, ""); got != http.StatusUnauthorized {
+					t.Errorf("invalid stream ticket: %d, want 401", got)
+				}
+				if got := bearer(method, path, both); got != http.StatusUnauthorized {
+					t.Errorf("bearer token with invalid path ticket: %d, want 401", got)
 				}
 			}
 		})

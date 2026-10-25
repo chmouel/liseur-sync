@@ -55,7 +55,7 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
     const record = await attemptOfflineRecord(context, queued.key);
     if (!record) continue;
     const options = { method: "POST", headers: { "Content-Type": "application/json" }, keepalive };
-    const done = () => removeOfflineOutbox({ ...context, kind: record.kind, id: record.id });
+    const done = (seq = null) => removeOfflineOutbox({ ...context, kind: record.kind, id: record.id, seq });
     // An annotation is the reader's own words, and it is never thrown
     // away on the server's say-so: a refused one waits to be answered.
     // A position and a sitting are records of something that happened,
@@ -133,7 +133,7 @@ export async function drainOfflineOutbox(context, request, { keepalive = false }
         const server = { ...record.payload.annotation, rev: result.rev, seq: result.seq };
         delete server.base_rev;
         await acknowledgeOfflineAnnotation(context, record, server);
-      } else await done();
+      } else await done(result.seq);
     } else if (result.status === "conflict") {
       // A conflict never says the change landed. It says the id is
       // already spent on a *different* payload, so this change was not

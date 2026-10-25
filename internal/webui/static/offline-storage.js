@@ -320,7 +320,7 @@ export async function saveReadingPosition({
             }
             if (current) {
               current.furthest = mergeFurthest(current.furthest,
-                [current.localPosition, { ...op, device_id: device }], workID);
+                [current.localPosition, { ...op, device_id: device }], workID, current.furthestFloor || 0);
               current.localPosition = op;
               snapshots.put(current);
             }
@@ -341,13 +341,26 @@ export async function saveReadingPosition({
   });
 }
 
+function floorOf(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+function stampFloor(op, floor) {
+  if (!op || floor <= 0) return op;
+  const seq = Number(op.seq);
+  if (Number.isFinite(seq) && seq >= floor) return op;
+  return { ...op, seq: floor };
+}
+
 function putReadingLocal(store, identity, workID, op, updatedAt) {
   const key = keyForReading(identity);
   const request = store.get(key);
   request.onsuccess = () => {
     const record = request.result || { key, ...identity, baseline: null, local: null };
     record.furthest = mergeFurthest(record.furthest,
-      [record.local, record.baseline, { ...op, device_id: identity.deviceID }], workID || record.workID);
+      [record.local, record.baseline, { ...op, device_id: identity.deviceID }],
+      workID || record.workID, floorOf(record.furthestFloor));
     // A late write from a slower tab must not resurrect an older page as
     // this device's local state.
     if ((record.updatedAt || 0) > updatedAt) {
@@ -363,19 +376,59 @@ function putReadingLocal(store, identity, workID, op, updatedAt) {
 
 export async function observeReadingPositions({
   partition = storagePartition(), account, epoch, deviceID, bookID, workID, ops = [],
+  furthestFloor = 0, forced = false,
 } = {}) {
-  return withDB(db => guardedWork(db, READING, { partition, account, epoch }, (tx, set) => {
-    const store = tx.objectStore(READING);
-    const identity = { partition, account, deviceID, bookID };
-    const key = keyForReading(identity);
-    const request = store.get(key);
-    request.onsuccess = () => {
-      const record = request.result || { key, ...identity, baseline: null, local: null };
-      record.furthest = mergeFurthest(record.furthest,
-        [record.local, record.baseline, ...ops], workID);
-      record.workID = workID;
-      store.put(record);
-      set(record.furthest);
+  return withDB(db => guardedWork(db, [READING, OUTBOX, SNAPSHOTS], { partition, account, epoch }, (tx, set) => {
+    const outbox = tx.objectStore(OUTBOX).getAll();
+    outbox.onsuccess = () => {
+      const pendingIDs = new Set(
+        outbox.result
+          .filter(row => row.partition === partition && row.account === account &&
+            row.bookID === bookID && row.kind === "position")
+          .map(row => row.id),
+      );
+      const store = tx.objectStore(READING);
+      const identity = { partition, account, deviceID, bookID };
+      const key = keyForReading(identity);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const record = request.result || { key, ...identity, baseline: null, local: null };
+        const prevFloor = floorOf(record.furthestFloor);
+        const floor = Math.max(prevFloor, floorOf(furthestFloor));
+        const raised = floor > prevFloor || forced;
+        let previous = record.furthest || [];
+        if (raised) {
+          previous = previous.filter(op => op?.seq != null || (!forced && pendingIDs.has(op?.op_id)));
+          record.baseline = stampFloor(record.baseline, floor);
+          if (forced || !pendingIDs.has(record.local?.op_id)) {
+            record.local = stampFloor(record.local, floor);
+          }
+        }
+        record.furthestFloor = floor;
+        record.furthest = mergeFurthest(previous,
+          [record.local, record.baseline, ...ops], workID, floor);
+        record.workID = workID;
+        store.put(record);
+        if (raised) {
+          const snapshots = tx.objectStore(SNAPSHOTS);
+          const copies = snapshots.index("book").getAll([partition, account, bookID]);
+          copies.onsuccess = () => {
+            for (const copy of copies.result) {
+              const copyPrev = (copy.furthest || []).filter(
+                op => op?.seq != null || (!forced && pendingIDs.has(op?.op_id)),
+              );
+              if (forced || !pendingIDs.has(copy.localPosition?.op_id)) {
+                copy.localPosition = stampFloor(copy.localPosition, floor);
+              }
+              copy.furthestFloor = floor;
+              copy.furthest = mergeFurthest(copyPrev,
+                [copy.localPosition, ...ops], workID, floor);
+              snapshots.put(copy);
+            }
+          };
+        }
+        set(record.furthest);
+      };
     };
   }));
 }
@@ -421,7 +474,7 @@ export async function agreeReadingBaseline({
     request.onsuccess = () => {
       const record = request.result || { key, ...identity, baseline: null, local: null };
       record.furthest = mergeFurthest(record.furthest,
-        [record.local, record.baseline, baseline], workID || record.workID);
+        [record.local, record.baseline, baseline], workID || record.workID, floorOf(record.furthestFloor));
       record.workID = workID || record.workID || "";
       record.baseline = baseline || null;
       if (settled) record.local = null;
@@ -679,7 +732,7 @@ export async function removeOfflineAnnotation({
 }
 
 export async function removeOfflineOutbox({
-  partition = storagePartition(), account, epoch, kind, id, settle = true,
+  partition = storagePartition(), account, epoch, kind, id, settle = true, seq = null,
 } = {}) {
   if (!partition || !account || !kind || !id) return null;
   // The annotation id this call actually took ownership of, if any. The
@@ -706,6 +759,7 @@ export async function removeOfflineOutbox({
         // or the reader is offered a catch-up to a page that exists
         // nowhere any more.
         if (record && kind === "position" && record.payload) {
+          const payload = settle && seq != null ? { ...record.payload, seq } : record.payload;
           const reading = tx.objectStore(READING);
           const identity = {
             partition, account, deviceID: record.deviceID, bookID: record.bookID,
@@ -720,10 +774,11 @@ export async function removeOfflineOutbox({
             // updatedAt and shadow a newer page from another tab.
             if (!settle && !authored) return;
             const value = state || { key: readingKey, ...identity, baseline: null, local: null };
-            value.workID = value.workID || record.payload.work_id || "";
+            value.workID = value.workID || payload.work_id || "";
             value.furthest = mergeFurthest(value.furthest,
-              [value.local, value.baseline, { ...record.payload, device_id: record.deviceID }], value.workID);
-            if (settle) value.baseline = record.payload;
+              [value.local, value.baseline, { ...payload, device_id: record.deviceID }],
+              value.workID, floorOf(value.furthestFloor));
+            if (settle) value.baseline = payload;
             if (authored) value.local = null;
             value.updatedAt = Date.now();
             reading.put(value);
@@ -962,15 +1017,18 @@ export async function reconcileOfflineBook(context, book, request, current = () 
   if (!current(positions) || !current(annotations)) throw new OfflineStorageError("The reading credential changed.", "auth");
   if (!Array.isArray(positionData.ops) || !Array.isArray(annotationData.annotations))
     throw new OfflineStorageError("The reading state response is incomplete.");
+  const floor = floorOf(positionData.furthest_floor);
   await observeReadingPositions({
     ...context, deviceID: book.deviceID, bookID: book.bookID, workID: book.workID,
     ops: [...positionData.ops, ...(positionData.furthest || [])],
+    furthestFloor: floor,
   });
   await withDB(db => guardedWork(db, [SNAPSHOTS, ANNOTATIONS, OUTBOX], context, tx => {
     const outbox = tx.objectStore(OUTBOX).getAll();
     outbox.onsuccess = () => {
       const pending = outbox.result.filter(value => value.partition === context.partition &&
         value.account === context.account && value.bookID === book.bookID);
+      const pendingIDs = new Set(pending.filter(value => value.kind === "position").map(value => value.id));
       const snapshots = tx.objectStore(SNAPSHOTS);
       const copies = snapshots.index("book").getAll([context.partition, context.account, book.bookID]);
       copies.onsuccess = () => {
@@ -978,8 +1036,19 @@ export async function reconcileOfflineBook(context, book, request, current = () 
         const position = pending.filter(value => value.kind === "position")
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
         for (const copy of copies.result) {
-          copy.furthest = mergeFurthest(copy.furthest,
-            [copy.localPosition, ...positionData.ops, ...(positionData.furthest || [])], book.workID);
+          const prevFloor = floorOf(copy.furthestFloor);
+          const nextFloor = Math.max(prevFloor, floor);
+          let copyPrev = copy.furthest || [];
+          if (nextFloor > prevFloor) {
+            copyPrev = copyPrev.filter(op => op?.seq != null || pendingIDs.has(op?.op_id));
+            if (!pendingIDs.has(copy.localPosition?.op_id)) {
+              copy.localPosition = stampFloor(copy.localPosition, nextFloor);
+            }
+          }
+          copy.furthestFloor = nextFloor;
+          copy.furthest = mergeFurthest(copyPrev,
+            [copy.localPosition, ...positionData.ops, ...(positionData.furthest || [])],
+            book.workID, nextFloor);
           copy.localPosition = position ? position.payload : latestReadablePosition(positionData.ops, book.workID) || copy.localPosition || null;
           snapshots.put(copy);
         }

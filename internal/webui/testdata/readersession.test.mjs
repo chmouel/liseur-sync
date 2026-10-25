@@ -2,7 +2,15 @@
 // Run by TestReaderSessionAccounting through `node --test`; no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openSession, IDLE_AFTER_MS, MIN_ACTIVE_MS } from '../static/reader-session.js';
+import {
+  openSession,
+  resolveListeningCheckpointFraction,
+  resolveSessionEndFraction,
+  handleVisibilityHiddenSession,
+  planAudioTicketRefresh,
+  IDLE_AFTER_MS,
+  MIN_ACTIVE_MS,
+} from '../static/reader-session.js';
 
 const MIN = 60 * 1000;
 const t0 = new Date('2026-09-04T10:00:00Z');
@@ -213,4 +221,118 @@ test('server invariants hold for random event sequences', () => {
       assert.ok(Number.isFinite(p) && p >= 0 && p <= 1);
     }
   }
+});
+
+test('listening session accumulates only playing intervals and preserves mode across checkpoints', () => {
+  const s = openSession({
+    id: 'listen-1',
+    workID: 'w1',
+    startedAt: t0,
+    now: 0,
+    fraction: 0.2,
+    supportsActiveMs: true,
+    mode: 'listening',
+  });
+  s.playing(1000, 0.2);
+  // 2 minutes of playback, then paused/seeking for 5 minutes
+  s.paused(1000 + 2 * MIN, 0.25);
+  // Resumed at 7 minutes for 1 more minute
+  s.playing(1000 + 7 * MIN, 0.25);
+  s.playing(1000 + 8 * MIN, 0.28);
+  const cp = s.checkpoint();
+  assert.equal(cp.mode, 'listening');
+  assert.equal(cp.activeMs, 3 * MIN);
+
+  // Simulated browser reload 30 minutes later: gap must NOT count as active_ms
+  const resumed = openSession({
+    id: 'ignored',
+    workID: 'w1',
+    startedAt: wall(38 * MIN),
+    now: 50000,
+    fraction: 0.28,
+    supportsActiveMs: true,
+    checkpoint: cp,
+  });
+  const out = resumed.close(50000, wall(38 * MIN), 0.28);
+  assert.equal(out.session_id, 'listen-1');
+  assert.equal(out.mode, 'listening');
+  assert.equal(out.active_ms, 3 * MIN);
+  assert.equal(out.start_progression, 0.2);
+  assert.equal(out.end_progression, 0.28);
+});
+
+test('recovering a listening checkpoint at 30% while page is at 80% closes with end_progression 0.3', () => {
+  const original = openSession({
+    id: 'listen-cp',
+    workID: 'w1',
+    startedAt: t0,
+    now: 0,
+    fraction: 0.1,
+    supportsActiveMs: true,
+    mode: 'listening',
+  });
+  original.playing(0, 0.1);
+  original.paused(2 * MIN, 0.3);
+  const cp = original.checkpoint();
+  assert.equal(cp.endProgression, 0.3);
+
+  // On reload, page is at 0.8 and idle <audio currentTime=0> has no liveAudioFraction.
+  const pageFraction = 0.8;
+  const recoveredFrac = resolveListeningCheckpointFraction(cp, pageFraction);
+  assert.equal(recoveredFrac, 0.3);
+
+  const recovered = openSession({
+    id: 'ignored',
+    workID: 'w1',
+    startedAt: wall(10 * MIN),
+    now: 1000,
+    fraction: recoveredFrac,
+    supportsActiveMs: true,
+    mode: 'listening',
+    checkpoint: cp,
+  });
+  const endFrac = resolveSessionEndFraction(recovered, undefined, pageFraction);
+  assert.equal(endFrac, 0.3);
+  const out = recovered.close(1000, wall(10 * MIN), endFrac);
+  assert.equal(out.session_id, 'listen-cp');
+  assert.equal(out.mode, 'listening');
+  assert.equal(out.start_progression, 0.1);
+  assert.equal(out.end_progression, 0.3);
+  assert.equal(out.active_ms, 2 * MIN);
+});
+
+test('hiding a buffering player at 20s after 10s of playback preserves session without restarting active_ms', () => {
+  const s = openSession({
+    id: 'listen-buf',
+    workID: 'w1',
+    startedAt: t0,
+    now: 0,
+    fraction: 0.2,
+    supportsActiveMs: true,
+    mode: 'listening',
+  });
+  // Play from 0s to 10s, then buffer ('waiting' pauses active interval)
+  s.playing(0, 0.2);
+  s.paused(10_000, 0.22);
+
+  let checkpointed = 0;
+  let ended = 0;
+  // At 20s, tab becomes hidden while still buffering (audioSessionOpen=true, audioPlaying=false)
+  const outcome = handleVisibilityHiddenSession({
+    session: s,
+    audioSessionOpen: true,
+    audioPlaying: false,
+    now: 20_000,
+    audioFraction: 0.22,
+    onCheckpoint: () => { checkpointed++; },
+    onEndSession: () => { ended++; },
+  });
+  assert.equal(outcome, 'preserved');
+  assert.equal(checkpointed, 1);
+  assert.equal(ended, 0);
+
+  // Closed at 60s without ever resuming playback: active_ms must be 10s, not 50s
+  const out = s.close(60_000, wall(60_000), 0.22);
+  assert.equal(out.active_ms, 10_000);
+  assert.equal(out.idle_ms, 50_000);
 });
