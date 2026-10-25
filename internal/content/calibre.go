@@ -173,7 +173,8 @@ func (r *Reconciler) reconcileCalibre(
 		}
 		observed = append(observed, obs)
 	}
-	result, err := r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, r.now())
+	now := r.now()
+	result, err := r.catalog.ReconcileFolder(ctx, folder.ID, observed, complete, now)
 	if err != nil {
 		return store.ReconcileResult{}, err
 	}
@@ -181,6 +182,16 @@ func (r *Reconciler) reconcileCalibre(
 		r.log.Info(tr.msg, "folder", folder.ID,
 			"calibre_id", tr.calibreID, "title", tr.title)
 	}
+	abRes, err := r.reconcileCalibreAudiobooks(ctx, folder, root, books, now)
+	if err != nil {
+		return result, err
+	}
+	result.Added += abRes.Added
+	result.Updated += abRes.Updated
+	result.Replaced += abRes.Replaced
+	result.Returned += abRes.Returned
+	result.Missing += abRes.Missing
+	result.Purged += abRes.Purged
 	return result, nil
 }
 

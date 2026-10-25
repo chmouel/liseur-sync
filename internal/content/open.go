@@ -51,6 +51,25 @@ func OpenBook(
 	return opened, info.Size(), nil
 }
 
+// OpenAudiobook opens a catalog audiobook's .m4b file under its folder's root,
+// enforcing the same rooted no-symlink open and stat verification as OpenBook.
+func OpenAudiobook(
+	ctx context.Context, rootPath string, ab store.CatalogAudiobook,
+) (*os.File, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
+	opened, info, err := openUnderRoot(rootPath, ab.RelativePath)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !audiobookFileMatches(ab, info) {
+		opened.Close()
+		return nil, 0, ErrSourceChanged
+	}
+	return opened, info.Size(), nil
+}
+
 // OpenBookCover opens the cover a folder's curator chose for this book —
 // Calibre's cover.jpg — which lives beside the publication rather than
 // inside it.
@@ -164,6 +183,17 @@ func fileMatches(book store.CatalogBook, info os.FileInfo) bool {
 	// the comparison is to the second.
 	return info.ModTime().UTC().Truncate(time.Second).
 		Equal(book.MTime.UTC().Truncate(time.Second))
+}
+
+func audiobookFileMatches(ab store.CatalogAudiobook, info os.FileInfo) bool {
+	if ab.SizeBytes > 0 && info.Size() != ab.SizeBytes {
+		return false
+	}
+	if ab.MTime.IsZero() {
+		return true
+	}
+	return info.ModTime().UTC().Truncate(time.Second).
+		Equal(ab.MTime.UTC().Truncate(time.Second))
 }
 
 // SafeRelativePath refuses anything a pass would never have recorded: an

@@ -29,11 +29,15 @@ const (
 	defaultMaxScanDepth = 32
 )
 
-// publicationExtension is the only file extension a sweep collects.
+// publicationExtension is the only file extension a sweep collects for books.
 // Ingest re-derives the media type from the bytes, so this is a cheap
 // filter to avoid staging every file in a user's home directory, not a
 // statement that the file is a valid EPUB.
-const publicationExtension = ".epub"
+const (
+	publicationExtension = ".epub"
+	audiobookExtension   = ".m4b"
+	cueExtension         = ".cue"
+)
 
 // ScanLimits bound one traversal.
 type ScanLimits struct {
@@ -62,6 +66,17 @@ type ScannedFile struct {
 	ModifiedAt   time.Time
 }
 
+// ScannedAudiobook is one .m4b audiobook a traversal found, together with
+// any companion .cue file sitting beside it in the same directory.
+type ScannedAudiobook struct {
+	RelativePath    string
+	SizeBytes       int64
+	ModifiedAt      time.Time
+	CueRelativePath string
+	CueSizeBytes    int64
+	CueModifiedAt   *time.Time
+}
+
 // ScanReport is one traversal's outcome.
 //
 // Complete is the whole point of this type. Only a completed full sweep
@@ -70,7 +85,8 @@ type ScannedFile struct {
 // the reconciler declines to mark anything absent. Everything else in the
 // report is diagnostics.
 type ScanReport struct {
-	Files []ScannedFile
+	Files      []ScannedFile
+	Audiobooks []ScannedAudiobook
 	// Complete reports that every directory beneath the root was read to
 	// the end. It is false whenever any part of the tree was not visited,
 	// for any reason.
@@ -126,6 +142,9 @@ func ScanWatchedRoot(
 	// by path — but a deterministic sweep makes a diff between two runs
 	// mean something, and makes a test that compares reports possible.
 	slices.SortFunc(report.Files, func(a, b ScannedFile) int {
+		return strings.Compare(a.RelativePath, b.RelativePath)
+	})
+	slices.SortFunc(report.Audiobooks, func(a, b ScannedAudiobook) int {
 		return strings.Compare(a.RelativePath, b.RelativePath)
 	})
 	return report, nil
@@ -203,19 +222,38 @@ func scanDirectory(
 				return err
 			}
 		case info.Mode().IsRegular():
-			if !isPublicationName(name) {
-				report.Skipped++
+			if isPublicationName(name) {
+				if len(report.Files)+len(report.Audiobooks) >= limits.MaxFiles {
+					report.Complete = false
+					return nil
+				}
+				report.Files = append(report.Files, ScannedFile{
+					RelativePath: path.Join(prefix, name),
+					SizeBytes:    info.Size(),
+					ModifiedAt:   info.ModTime().UTC(),
+				})
 				continue
 			}
-			if len(report.Files) >= limits.MaxFiles {
-				report.Complete = false
-				return nil
+			if isAudiobookName(name) {
+				if len(report.Files)+len(report.Audiobooks) >= limits.MaxFiles {
+					report.Complete = false
+					return nil
+				}
+				ab := ScannedAudiobook{
+					RelativePath: path.Join(prefix, name),
+					SizeBytes:    info.Size(),
+					ModifiedAt:   info.ModTime().UTC(),
+				}
+				if cueName, cueInfo, ok := findCompanionCue(dir, entries, name); ok {
+					ab.CueRelativePath = path.Join(prefix, cueName)
+					ab.CueSizeBytes = cueInfo.Size()
+					cueMod := cueInfo.ModTime().UTC()
+					ab.CueModifiedAt = &cueMod
+				}
+				report.Audiobooks = append(report.Audiobooks, ab)
+				continue
 			}
-			report.Files = append(report.Files, ScannedFile{
-				RelativePath: path.Join(prefix, name),
-				SizeBytes:    info.Size(),
-				ModifiedAt:   info.ModTime().UTC(),
-			})
+			report.Skipped++
 		default:
 			// Devices, sockets and fifos. Opening one can block forever,
 			// which is reason enough on a semi-trusted root.
@@ -227,4 +265,28 @@ func scanDirectory(
 
 func isPublicationName(name string) bool {
 	return strings.EqualFold(path.Ext(name), publicationExtension)
+}
+
+func isAudiobookName(name string) bool {
+	return strings.EqualFold(path.Ext(name), audiobookExtension)
+}
+
+func findCompanionCue(dir *os.Root, entries []fs.DirEntry, m4bName string) (string, os.FileInfo, bool) {
+	stem := strings.TrimSuffix(m4bName, path.Ext(m4bName))
+	for _, e := range entries {
+		other := e.Name()
+		if !strings.EqualFold(path.Ext(other), cueExtension) {
+			continue
+		}
+		otherStem := strings.TrimSuffix(other, path.Ext(other))
+		if !strings.EqualFold(otherStem, stem) {
+			continue
+		}
+		info, err := dir.Lstat(other)
+		if err != nil || !info.Mode().IsRegular() {
+			return "", nil, false
+		}
+		return other, info, true
+	}
+	return "", nil, false
 }
