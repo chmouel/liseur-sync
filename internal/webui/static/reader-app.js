@@ -4663,6 +4663,10 @@ function formatAudioSeconds(sec) {
 
 function abortAudioSTT() {
   audioSTTAnchor = null;
+  cancelAudioSTTRequest();
+}
+
+function cancelAudioSTTRequest() {
   audioNavigationGeneration++;
   sttReqSeq++;
   if (sttAbort) {
@@ -5230,7 +5234,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     audioWantsPlay = true;
     audioActivelyPlaying = true;
     const playGen = ++audioPlayTransitionGen;
-    abortAudioSTT();
+    cancelAudioSTTRequest();
     if (session && session.mode !== "listening") {
       await endSession();
     }
