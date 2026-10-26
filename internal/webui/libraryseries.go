@@ -78,7 +78,7 @@ func (s *Server) groupedCatalogEntries(
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryEntry, error) {
 	groups, byVolume, err := s.librarySeriesForRows(
-		r, userID, v.Selected, rows, byBook, loc)
+		r, userID, v.Selected, v.Filter, rows, byBook, loc)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +112,7 @@ func (s *Server) groupedReadingEntries(
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryEntry, error) {
 	groups, byVolume, err := s.librarySeriesForRows(
-		r, userID, v.Selected, rows, byBook, loc)
+		r, userID, v.Selected, v.Filter, rows, byBook, loc)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (s *Server) groupedReadingEntries(
 }
 
 func (s *Server) librarySeriesForRows(
-	r *http.Request, userID, folderID string, seeds []LibraryRow,
+	r *http.Request, userID, folderID, filter string, seeds []LibraryRow,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) (map[string]*LibrarySeries, map[string]*LibrarySeries, error) {
 	bookIDs := make([]string, 0, len(seeds))
@@ -166,6 +166,7 @@ func (s *Server) librarySeriesForRows(
 		volumeIDs = append(volumeIDs, volume.BookID)
 	}
 	authors, _ := s.St.CatalogAuthorsForBooks(r.Context(), userID, volumeIDs)
+	playable, _ := s.St.PlayableAudiobookBookIDs(r.Context(), userID, volumeIDs)
 
 	groups := make(map[string]*LibrarySeries)
 	for _, volume := range volumes {
@@ -175,12 +176,13 @@ func (s *Server) librarySeriesForRows(
 			groups[volume.SeriesID] = group
 		}
 		row := LibraryRow{
-			BookID:  volume.BookID,
-			Title:   volume.Title,
-			Author:  credit(authors[volume.BookID]),
-			Added:   volume.CreatedAt.In(loc).Format("Jan 2, 2006"),
-			CanGet:  true,
-			CanRead: isEPUB(volume.MediaType),
+			BookID:   volume.BookID,
+			Title:    volume.Title,
+			Author:   credit(authors[volume.BookID]),
+			Added:    volume.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			CanGet:   true,
+			CanRead:  isEPUB(volume.MediaType),
+			HasAudio: playable[volume.BookID],
 		}
 		if ws, ok := byBook[volume.BookID]; ok {
 			row.WorkID = ws.Work.ID
@@ -221,7 +223,7 @@ func (s *Server) librarySeriesForRows(
 			}
 			return left.Row.BookID < right.Row.BookID
 		})
-		finalizeLibrarySeries(group, folderID)
+		finalizeLibrarySeries(group, folderID, filter)
 		group.Author = commonSeriesAuthor(group.Volumes)
 		for _, volume := range group.Volumes {
 			byVolume[volume.Row.BookID] = group
@@ -262,7 +264,7 @@ func androidShelfSortKey(text string) string {
 	return key
 }
 
-func finalizeLibrarySeries(group *LibrarySeries, folderID string) {
+func finalizeLibrarySeries(group *LibrarySeries, folderID, filter string) {
 	cover := -1
 	unfinished := -1
 	complete := true
@@ -286,21 +288,27 @@ func finalizeLibrarySeries(group *LibrarySeries, folderID string) {
 		if volume.Row.lastActiveAt > group.LastActiveAt {
 			group.LastActiveAt = volume.Row.lastActiveAt
 		}
-		added := volume.createdAt.UnixNano()
-		if volume.FolderID == folderID && (newest < 0 || added > group.AddedAt ||
-			(added == group.AddedAt && volume.Row.BookID > group.Volumes[newest].Row.BookID)) {
-			newest = i
-			group.AddedAt = added
-		}
 	}
-	if newest < 0 {
+	// The pile stands where its newest volume does in the catalog order.
+	// The audiobooks shelf pages over playable books only, so there it
+	// must be the newest playable volume, or the pile never appears.
+	matching := func(v LibrarySeriesVolume) bool { return filter != filterAudio || v.Row.HasAudio }
+	inFolder := func(v LibrarySeriesVolume) bool { return v.FolderID == folderID }
+	for _, ok := range []func(LibrarySeriesVolume) bool{
+		func(v LibrarySeriesVolume) bool { return inFolder(v) && matching(v) },
+		matching, inFolder, func(LibrarySeriesVolume) bool { return true },
+	} {
 		for i := range group.Volumes {
-			added := group.Volumes[i].createdAt.UnixNano()
-			if newest < 0 || added > group.AddedAt ||
-				(added == group.AddedAt && group.Volumes[i].Row.BookID > group.Volumes[newest].Row.BookID) {
+			volume := group.Volumes[i]
+			added := volume.createdAt.UnixNano()
+			if ok(volume) && (newest < 0 || added > group.AddedAt ||
+				(added == group.AddedAt && volume.Row.BookID > group.Volumes[newest].Row.BookID)) {
 				newest = i
 				group.AddedAt = added
 			}
+		}
+		if newest >= 0 {
+			break
 		}
 	}
 	if cover < 0 {

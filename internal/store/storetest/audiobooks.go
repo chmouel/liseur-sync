@@ -592,3 +592,118 @@ func testOriginAudiobookPaceExclusion(t *testing.T, open OpenFunc) {
 		t.Fatalf("expected 1 OriginAudiobook session in snapshot, got %+v", snap.Sessions)
 	}
 }
+
+// The badge, the Audiobooks shelf and the upload's duplicate check all
+// ask "which audiobook can this reader hear", and all three must give a
+// reader without a grant on the audiobook's folder the same answer as a
+// reader with no audiobook at all.
+func testPlayableAudiobookQueries(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.May, 1, 12, 0, 0, 0, time.UTC)
+	both := MkUser(t, s, "ab-play-both")
+	booksOnly := MkUser(t, s, "ab-play-books")
+
+	for _, f := range []store.Folder{
+		{ID: "f-play-books", Name: "Books", RootPath: "/srv/play-books", Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now},
+		{ID: "f-play-audio", Name: "Audio", RootPath: "/srv/play-audio", Kind: store.FolderPlain, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := s.CreateFolder(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AssignUserFolder(ctx, both.ID, f.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AssignUserFolder(ctx, booksOnly.ID, "f-play-books"); err != nil {
+		t.Fatal(err)
+	}
+
+	var observed []store.ObservedBook
+	for i, name := range []string{"playable", "unmapped", "stale", "silent"} {
+		observed = append(observed, store.ObservedBook{
+			RelativePath: name + ".epub", SizeBytes: 10, MTime: now.Add(time.Duration(i) * time.Second),
+			ContentSHA256: "epub-" + name, Title: name,
+		})
+	}
+	doReconcile(t, s, "f-play-books", observed, true, now)
+	books := knownByPath(t, s, "f-play-books")
+
+	var audio []store.ObservedAudiobook
+	for _, name := range []string{"playable", "unmapped", "stale"} {
+		audio = append(audio, store.ObservedAudiobook{
+			RelativePath: name + ".m4b", SizeBytes: 10, MTime: now,
+			ContentSHA256: "m4b-" + name, Title: name, DurationSeconds: 60,
+		})
+	}
+	if _, err := s.ReconcileFolderAudiobooks(ctx, "f-play-audio", audio, true, now); err != nil {
+		t.Fatal(err)
+	}
+	audioByPath := map[string]string{}
+	knownAudio, err := s.AudiobooksInFolder(ctx, "f-play-audio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range knownAudio {
+		audioByPath[k.RelativePath] = k.ID
+	}
+	for name, l := range map[string]struct {
+		state   store.BookAudiobookState
+		edition string
+	}{
+		"playable": {store.BookAudiobookActive, "epub-playable"},
+		"unmapped": {store.BookAudiobookUnmapped, "epub-unmapped"},
+		"stale":    {store.BookAudiobookActive, "an older edition"},
+	} {
+		if err := s.UpsertBookAudiobook(ctx, store.BookAudiobook{
+			BookID: books[name+".epub"].ID, AudiobookID: audioByPath[name+".m4b"],
+			EditionSHA: l.edition, AudiobookSHA: "m4b-" + name,
+			Source: "filename", State: l.state, MappingKey: "k", UpdatedAt: now,
+		}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids := []string{}
+	for _, b := range books {
+		ids = append(ids, b.ID)
+	}
+	playable := books["playable.epub"].ID
+	for _, tc := range []struct {
+		viewer string
+		want   []string
+	}{{both.ID, []string{playable}}, {"", []string{playable}}, {booksOnly.ID, nil}} {
+		got, err := s.PlayableAudiobookBookIDs(ctx, tc.viewer, ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(tc.want) || (len(tc.want) == 1 && !got[tc.want[0]]) {
+			t.Errorf("PlayableAudiobookBookIDs(%q) = %v, want %v", tc.viewer, got, tc.want)
+		}
+		for _, ascending := range []bool{true, false} {
+			listed, err := s.ListAudiobookCatalogBooks(ctx, tc.viewer, "f-play-books", nil, 10, ascending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(listed) != len(tc.want) || (len(listed) == 1 && listed[0].ID != playable) {
+				t.Errorf("ListAudiobookCatalogBooks(%q, asc=%v) = %d books, want %v", tc.viewer, ascending, len(listed), tc.want)
+			}
+		}
+	}
+	// The cursor pages past the one match.
+	listed, err := s.ListAudiobookCatalogBooks(ctx, both.ID, "f-play-books",
+		&store.CatalogBookCursor{CreatedAt: now.Add(time.Hour), ID: "zzz"}, 10, true)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("listing past the cursor = %d, %v", len(listed), err)
+	}
+
+	if ab, err := s.CatalogAudiobookByDigest(ctx, both.ID, "m4b-stale"); err != nil || ab.ID != audioByPath["stale.m4b"] {
+		t.Fatalf("CatalogAudiobookByDigest = %+v, %v", ab, err)
+	}
+	if _, err := s.CatalogAudiobookByDigest(ctx, booksOnly.ID, "m4b-stale"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an ungranted audiobook was found by digest: %v", err)
+	}
+	if _, err := s.CatalogAudiobookByDigest(ctx, "", "nothing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown digest: %v", err)
+	}
+}

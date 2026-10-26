@@ -41,6 +41,9 @@ const (
 	filterUnread   = "unread"
 	filterFinished = "finished"
 	filterHere     = "here"
+	// filterAudio is books with an audiobook that plays against them
+	// (ADR-0057): a catalog question, answered from the catalog half.
+	filterAudio = "audio"
 )
 
 // The sorts. Alphabetical is missing on purpose: the catalog is paged
@@ -92,6 +95,9 @@ type LibraryRow struct {
 	// reader's to delete: a missing book is evidence about a disk, and
 	// the disk comes back (ADR-0024).
 	Bookless bool
+	// HasAudio is a book whose paired audiobook lines up with its text,
+	// so its details page can play it.
+	HasAudio bool
 	// lastActiveAt is the unformatted time, kept for sorting only.
 	lastActiveAt int64
 }
@@ -408,7 +414,7 @@ func (s *Server) libraryRows(
 		return rows, entries, "", err
 	}
 
-	books, next, err := s.listBooksPage(r, userID, v.Selected, v.Dir)
+	books, next, err := s.listBooksPage(r, userID, v.Selected, v.Dir, v.Filter == filterAudio)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -445,6 +451,7 @@ func (s *Server) libraryRows(
 		}
 		raw = append(raw, row)
 	}
+	s.markLibraryAudio(r.Context(), userID, raw)
 	rows := make([]LibraryRow, 0, len(raw))
 	for _, row := range raw {
 		if keepRow(row, v.Filter) {
@@ -491,18 +498,20 @@ func (s *Server) readingRows(
 	for _, ws := range works {
 		row := workRowOf(ws, links.active[ws.Work.ID], loc)
 		row.Bookless = !links.mapped[ws.Work.ID]
-		if !keepRow(row, v.Filter) {
+		if !catalogFilter(v.Filter) && !keepRow(row, v.Filter) {
 			continue
 		}
 		rows = append(rows, row)
 	}
 	rows = s.markLibraryReadable(r, userID, rows)
+	s.markLibraryAudio(r.Context(), userID, rows)
 	// A filter about the catalog, answered from reading data, still has
-	// to mean what it says on the chip.
-	if v.Filter == filterHere {
+	// to mean what it says on the chip, and can only be applied once the
+	// rows know what their books are.
+	if catalogFilter(v.Filter) {
 		kept := rows[:0]
 		for _, row := range rows {
-			if row.CanGet || row.CanRead {
+			if keepRow(row, v.Filter) {
 				kept = append(kept, row)
 			}
 		}
@@ -566,8 +575,38 @@ func keepRow(row LibraryRow, filter string) bool {
 		return row.Progression == nil || *row.Progression <= 0
 	case filterHere:
 		return row.CanGet || row.CanRead
+	case filterAudio:
+		return row.HasAudio
 	default:
 		return true
+	}
+}
+
+// catalogFilter is a chip about what this server holds rather than
+// about reading, so a row built from reading data alone cannot be
+// judged by it until its book has been looked up.
+func catalogFilter(filter string) bool {
+	return filter == filterHere || filter == filterAudio
+}
+
+// markLibraryAudio flags the rows whose book has an audiobook to play,
+// in one store read for the whole page.
+func (s *Server) markLibraryAudio(ctx context.Context, userID string, rows []LibraryRow) {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.BookID != "" {
+			ids = append(ids, row.BookID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	playable, err := s.St.PlayableAudiobookBookIDs(ctx, userID, ids)
+	if err != nil {
+		return
+	}
+	for i := range rows {
+		rows[i].HasAudio = playable[rows[i].BookID]
 	}
 }
 
@@ -603,6 +642,7 @@ func (s *Server) libraryHero(
 	if !rows[0].CanRead {
 		return nil
 	}
+	s.markLibraryAudio(r.Context(), userID, rows)
 	return &rows[0]
 }
 
@@ -652,6 +692,8 @@ func normalizeFilter(raw string) string {
 		return filterFinished
 	case filterHere:
 		return filterHere
+	case filterAudio:
+		return filterAudio
 	default:
 		return filterAll
 	}
@@ -727,6 +769,7 @@ func libraryChips(folder, filter, sortBy, dir string) []FilterChip {
 		{filterUnread, "Unread"},
 		{filterFinished, "Finished"},
 		{filterHere, "On this server"},
+		{filterAudio, "Audiobooks"},
 	}
 	chips := make([]FilterChip, 0, len(defs))
 	for _, d := range defs {

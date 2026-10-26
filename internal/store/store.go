@@ -2200,6 +2200,17 @@ type Store interface {
 	ListBookAudiobooks(ctx context.Context) ([]BookAudiobook, error)
 	UpsertBookAudiobook(ctx context.Context, link BookAudiobook, at time.Time) error
 	DeleteBookAudiobook(ctx context.Context, bookID string) error
+	// CatalogAudiobookByDigest finds an active audiobook by content
+	// digest, oldest first; ErrNotFound when none is visible.
+	CatalogAudiobookByDigest(ctx context.Context, viewerID, sha string) (CatalogAudiobook, error)
+	// PlayableAudiobookBookIDs answers which of bookIDs this viewer can
+	// listen to: an active alignment whose digests still hold, with a
+	// grant on both the book's and the audiobook's folders.
+	PlayableAudiobookBookIDs(ctx context.Context, viewerID string, bookIDs []string) (map[string]bool, error)
+	// ListAudiobookCatalogBooks pages a folder's books like
+	// ListCatalogBooks (ascending) or ListRecentCatalogBooks, keeping
+	// only those PlayableAudiobookBookIDs would answer for.
+	ListAudiobookCatalogBooks(ctx context.Context, viewerID, folderID string, cursor *CatalogBookCursor, limit int, ascending bool) ([]CatalogBook, error)
 }
 
 // CatalogAudiobook is one .m4b audiobook discovered in a watched folder.

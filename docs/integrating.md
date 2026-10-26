@@ -1202,6 +1202,15 @@ book's folder and the audiobook's folder):
   interpolation (`stt_matched: false`) when disabled, rate-limited, or
   ambiguous.
 
+A token with `library-upload` can add an audiobook to a book that has
+none: `POST /v1/books/{id}/audiobook` with the `.m4b` in a multipart
+`file` field, wherever the book's folder accepts uploads. The file lands
+beside the book (as an `M4B` format in a Calibre library) and the
+folder's pass pairs it. `201` carries `audiobook_id` and `state`
+(`active` or `unmapped`); `202` means the file is saved but not indexed
+yet. A book that already has an audiobook, or bytes already in the
+library, is `409`. The size limit is `content.max_audiobook_upload_bytes`.
+
 `mapping.segments` pairs audio seconds (`a0`, `a1`) with whole-book
 progressions (`b0`, `b1`). `mapping.resources` gives each XHTML resource's
 `href`, `start`, and `end` on that same book axis. A chapter can span

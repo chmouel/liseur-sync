@@ -49,10 +49,13 @@ observations.
 **Conservative auto-linking and dual-folder grant checks.** Active
 audiobooks with chapters are paired 1:1 with active books by:
 1. Same `folder_id` and `calibre_id`,
-2. Same dedicated subdirectory (`dir != "."`) containing exactly one
+2. Same `folder_id` and the same relative path without its extension
+   (`dir/book.epub` and `dir/book.m4b`, see
+   [ADR-0058](0058-uploading-an-audiobook-onto-a-book.md)),
+3. Same dedicated subdirectory (`dir != "."`) containing exactly one
    active `.epub` and one active `.m4b`,
-3. Unique normalized `ISBN` or `ASIN` across the catalog, or
-4. Unique normalized `(title, author)` across the catalog.
+4. Unique normalized `ISBN` or `ASIN` across the catalog, or
+5. Unique normalized `(title, author)` across the catalog.
 
 Every read, ticket, stream, and locate operation verifies `user_folders`
 grants on both `book.FolderID` and `audiobook.FolderID`.
@@ -88,6 +91,16 @@ reading footer visible. Size and desktop placement are browser preferences;
 opening the reader never starts playback. Moving or minimizing the player
 does not change the stream, page-follow mode, or listening session. Closing
 it stops playback and returns to reading accounting.
+
+**Details-page player.** A book with a playable audiobook is marked in
+the library (a badge, an "Audiobooks" filter and a "Listen" action) and
+its details page carries the reader's own player (one templ component,
+same markup and styles) over the same cookie stream, with a chapter
+picker, skip buttons and speed. It resumes from the reading position,
+saves its place back as an ordinary position op through `audio/locate`,
+and records a `listening` session. It has no highlight, page-follow or
+speech-to-text, since those need the text on screen. An audiobook that
+is paired but unmapped is named there without a player.
 
 **Sentence highlight.** While the audiobook plays, the reader highlights
 the sentence it estimates is being read, in the same tint as Android

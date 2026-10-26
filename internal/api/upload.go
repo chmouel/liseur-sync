@@ -31,6 +31,11 @@ type BookIngest interface {
 	Ingest(
 		ctx context.Context, folder store.Folder, up content.Upload,
 	) (string, error)
+	// IngestAudiobook writes an audiobook beside a book already in the
+	// folder and reconciles it (ADR-0058).
+	IngestAudiobook(
+		ctx context.Context, folder store.Folder, book store.CatalogBook, up content.AudiobookUpload,
+	) (string, error)
 }
 
 // HandleUploadBook implements POST /v1/folders/{folder}/books.

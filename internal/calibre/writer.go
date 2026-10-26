@@ -636,6 +636,137 @@ func FilenameSafe(value string, maxBytes int) string {
 // package's to hide.
 var ErrNoSuchBook = errors.New("calibre: no such book")
 
+// ErrFormatExists is a book that already has a file of the format being
+// added. Adding never replaces (ADR-0058).
+var ErrFormatExists = errors.New("calibre: the book already has that format")
+
+// AddFormat adds one file of a new format to a book that is already in
+// the library, and answers with the file's path relative to the root
+// (ADR-0058). It is how an audiobook joins its book: Calibre keeps every
+// format of one book in the book's own directory, under one name, with
+// one data row each.
+//
+// It writes the data row and a file that was not there, and nothing
+// else: the books row, the book's other files and its metadata.opf are
+// left exactly as they were. Like AddBook it is all-or-nothing, and a
+// failure removes only the file this call created.
+func (w *Writer) AddFormat(
+	ctx context.Context, id int64, format string, src io.Reader, size int64,
+) (string, error) {
+	format = strings.ToUpper(strings.TrimSpace(format))
+	if format == "" || strings.ContainsAny(format, "/\\.") {
+		return "", fmt.Errorf("calibre: invalid format %q", format)
+	}
+	tx, err := w.db.BeginTx(ctx, nil)
+	if err != nil {
+		if isLocked(err) {
+			return "", ErrLocked
+		}
+		return "", fmt.Errorf("calibre: begin: %w", err)
+	}
+	committed := false
+	created := ""
+	defer func() {
+		if committed {
+			return
+		}
+		_ = tx.Rollback()
+		if created != "" {
+			_ = w.dir.Remove(created)
+		}
+	}()
+
+	var dir, title string
+	switch err := tx.QueryRowContext(ctx,
+		`SELECT path, title FROM books WHERE id = ?`, id).Scan(&dir, &title); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", ErrNoSuchBook
+	case isLocked(err):
+		return "", ErrLocked
+	case err != nil:
+		return "", fmt.Errorf("calibre: read book: %w", err)
+	}
+	var existing int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM data WHERE book = ? AND format = ?`,
+		id, format).Scan(&existing); err != nil {
+		if isLocked(err) {
+			return "", ErrLocked
+		}
+		return "", fmt.Errorf("calibre: read formats: %w", err)
+	}
+	if existing > 0 {
+		return "", ErrFormatExists
+	}
+	// Calibre names every format of a book the same way, so the new
+	// file takes the name its other formats already have. A book with
+	// no format at all gets the title, which is what Calibre would
+	// derive before it knew the author.
+	var name string
+	err = tx.QueryRowContext(ctx,
+		`SELECT name FROM data WHERE book = ?
+		 ORDER BY CASE WHEN format = 'EPUB' THEN 0 ELSE 1 END, id
+		 LIMIT 1`, id).Scan(&name)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		name = FilenameSafe(title, 42)
+	case isLocked(err):
+		return "", ErrLocked
+	case err != nil:
+		return "", fmt.Errorf("calibre: read format name: %w", err)
+	}
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		return "", fmt.Errorf("calibre: unusable format name %q", name)
+	}
+
+	dir = path.Clean(dir)
+	if dir == "" || dir == "." || dir == "/" || strings.HasPrefix(dir, "../") {
+		return "", fmt.Errorf("calibre: refusing to write into %q", dir)
+	}
+	info, err := w.dir.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("calibre: stat book directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("calibre: %q is not a directory", dir)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO data (book, format, uncompressed_size, name)
+		 VALUES (?, ?, ?, ?)`, id, format, size, name); err != nil {
+		if isLocked(err) {
+			return "", ErrLocked
+		}
+		return "", fmt.Errorf("calibre: insert format: %w", err)
+	}
+	relative := path.Join(dir, name+"."+strings.ToLower(format))
+	if err := w.create(relative, func(f *os.File) error {
+		// Set before the copy: once the file exists, every failure
+		// after this point has to take it back out.
+		created = relative
+		if _, err := io.Copy(f, src); err != nil {
+			return err
+		}
+		return f.Sync()
+	}); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			// A file with the name Calibre would use is already there
+			// without a row naming it. It is somebody's, not ours.
+			created = ""
+			return "", ErrFormatExists
+		}
+		return "", fmt.Errorf("calibre: write %s: %w", format, err)
+	}
+	if err := tx.Commit(); err != nil {
+		if isLocked(err) {
+			return "", ErrLocked
+		}
+		return "", fmt.Errorf("calibre: commit: %w", err)
+	}
+	committed = true
+	return relative, nil
+}
+
 // DeleteBook removes one book from the library: its row, everything the
 // schema hangs off that row, and the directory holding its files
 // (ADR-0025).

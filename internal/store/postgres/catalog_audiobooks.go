@@ -589,3 +589,79 @@ func (s *Store) DeleteBookAudiobook(ctx context.Context, bookID string) error {
 	_, err := s.db.ExecContext(ctx, q(`DELETE FROM book_audiobooks WHERE book_id = ?`), bookID)
 	return err
 }
+
+// playableAudiobookClause is the SQL form of "this book b has an
+// audiobook a reader can play": an active file, an active alignment,
+// both digests still the ones it was aligned against, and, for a real
+// viewer, a grant on the audiobook's folder as well as the book's. It
+// leaves the mapping-key check to the audio routes, which a badge does
+// not need to repeat: a changed key re-aligns on the next pass.
+func playableAudiobookClause(viewerID string) (string, []any) {
+	clause := `EXISTS (SELECT 1 FROM book_audiobooks ba
+		JOIN catalog_audiobooks ca ON ca.id = ba.audiobook_id
+		WHERE ba.book_id = b.id AND ba.state = 'active' AND ca.status = 'active'
+		  AND ba.edition_sha = b.content_sha256
+		  AND ba.audiobook_sha = ca.content_sha256`
+	if viewerID == "" {
+		return clause + `)`, nil
+	}
+	return clause + `
+		  AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = ca.folder_id AND uf.user_id = ?))`, []any{viewerID}
+}
+
+// PlayableAudiobookBookIDs answers which of bookIDs have a playable
+// audiobook for this viewer, for a whole shelf page in one query.
+func (s *Store) PlayableAudiobookBookIDs(
+	ctx context.Context, viewerID string, bookIDs []string,
+) (map[string]bool, error) {
+	out := make(map[string]bool, len(bookIDs))
+	if len(bookIDs) == 0 {
+		return out, nil
+	}
+	placeholders, args := inArgs(bookIDs)
+	clause, clauseArgs := playableAudiobookClause(viewerID)
+	query := `SELECT b.id FROM books b
+		WHERE b.id IN (` + placeholders + `) AND b.status = 'active' AND ` + clause
+	args = append(args, clauseArgs...)
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	rows, err := s.db.QueryContext(ctx, q(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// CatalogAudiobookByDigest finds an active audiobook by content digest,
+// the oldest first, like CatalogBookByDigest.
+func (s *Store) CatalogAudiobookByDigest(
+	ctx context.Context, viewerID, sha string,
+) (store.CatalogAudiobook, error) {
+	query := `SELECT ` + catalogAudiobookColumns + `
+		   FROM catalog_audiobooks ca
+		  WHERE ca.content_sha256 = ? AND ca.status = 'active'`
+	args := []any{sha}
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = ca.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	query += ` ORDER BY ca.created_at, ca.id LIMIT 1`
+	ab, err := scanCatalogAudiobook(s.db.QueryRowContext(ctx, q(query), args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.CatalogAudiobook{}, store.ErrNotFound
+	}
+	return ab, err
+}

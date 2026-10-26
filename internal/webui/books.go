@@ -52,9 +52,9 @@ func isHTMXRequest(r *http.Request) bool {
 // listBooksPage returns one page of a folder's books and the cursor for
 // the next, or "" when this is the last one. dir picks the direction:
 // sortDirAsc pages oldest first, anything else (the default) newest
-// first.
+// first. audioOnly keeps the books with an audiobook to play.
 func (s *Server) listBooksPage(
-	r *http.Request, userID, folderID, dir string,
+	r *http.Request, userID, folderID, dir string, audioOnly bool,
 ) ([]store.CatalogBook, string, error) {
 	after, err := decodeBooksCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
@@ -66,6 +66,13 @@ func (s *Server) listBooksPage(
 	list := s.St.ListRecentCatalogBooks
 	if dir == sortDirAsc {
 		list = s.St.ListCatalogBooks
+	}
+	if audioOnly {
+		list = func(
+			ctx context.Context, viewerID, folderID string, cursor *store.CatalogBookCursor, limit int,
+		) ([]store.CatalogBook, error) {
+			return s.St.ListAudiobookCatalogBooks(ctx, viewerID, folderID, cursor, limit, dir == sortDirAsc)
+		}
 	}
 	books, err := list(r.Context(), userID, folderID, after, booksPageSize)
 	if err != nil {
@@ -157,14 +164,16 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	// one is still read-only to this server (ADR-0023, ADR-0025). Admin
 	// rather than a scope, because a browser session carries no scopes
 	// — the account carries the role.
-	if isAdmin(r) {
-		if folder, err := s.St.FolderByID(r.Context(), u.ID, book.FolderID); err == nil {
+	if folder, err := s.St.FolderByID(r.Context(), u.ID, book.FolderID); err == nil {
+		if isAdmin(r) {
 			if !v.Present {
 				v.Retirable = folder.Kind != store.FolderCalibre
 			}
 			v.Deletable = v.Present && folder.AcceptsUploads && s.Deletes != nil
 		}
+		v.CanAddAudio = s.canAddAudiobook(r.Context(), book, folder)
 	}
+	v.Audio = s.bookAudio(r.Context(), u.ID, book)
 	if rel, err := s.St.CatalogBookRelationsForBooks(
 		r.Context(), readerID(u), []string{book.ID},
 	); err == nil {

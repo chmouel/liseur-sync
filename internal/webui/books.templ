@@ -1,5 +1,7 @@
 package webui
 
+import "strconv"
+
 // Books: the browser side of the catalog — pick a folder, look at what
 // is in it, read it or take a copy.
 
@@ -88,6 +90,12 @@ type BookView struct {
 	SeriesFolderNote string
 	// Byline is the authors as one line, for the hero and the title tag.
 	Byline string
+	// Audio is the audiobook paired with this book, nil when there is
+	// none the reader can see.
+	Audio *BookAudioView
+	// CanAddAudio offers the audiobook upload: the book's folder accepts
+	// uploads and no audiobook is linked to it yet (ADR-0058).
+	CanAddAudio bool
 }
 
 // BookSeriesLine is one series the organization card names: the shelf it
@@ -139,6 +147,12 @@ templ bookBody(prefix, csrf string, b BookView) {
 			<div class="cta">
 				if b.CanRead {
 					<a class="btn primary" href={ prefix + "books/" + b.ID + "/read" }>Read</a>
+				}
+				if b.Audio != nil && b.Audio.Playable {
+					<a class="btn listen-btn" href="#listen">
+						<span aria-hidden="true">@uiIcon("Audiobookshelf")</span>
+						Listen
+					</a>
 				}
 				@markBookButton(prefix, csrf, b.ID, b.Finished)
 				if b.Present {
@@ -192,6 +206,9 @@ templ bookBody(prefix, csrf string, b BookView) {
 			</dl>
 		</div>
 	</section>
+	if b.Audio != nil || b.CanAddAudio {
+		@bookListen(prefix, csrf, b)
+	}
 	if b.Description != "" {
 		<section class="card">
 			<h2>About</h2>
@@ -307,6 +324,78 @@ templ bookBody(prefix, csrf string, b BookView) {
 		</div>
 	</details>
 	<p><a href={ prefix + "library?folder=" + b.FolderID }>Back to the library</a></p>
+}
+
+// bookListen is the audiobook card: a player when the audiobook lines
+// up with the text, a sentence when it does not, and the upload form
+// when there is none yet. The player is the browser's own <audio>;
+// book-audio.js resumes it from the reading position and files where
+// the listener got to.
+templ bookListen(prefix, csrf string, b BookView) {
+	<section
+		id="listen"
+		class="card book-listen"
+		tabindex="-1"
+		aria-labelledby="listen-title"
+		if b.Audio != nil && b.Audio.Playable {
+			data-book-audio={ b.ID }
+			data-api-base={ prefix + "../" }
+			data-token-url={ prefix + "reader/token" }
+			data-csrf={ csrf }
+			data-edition={ b.SHA256 }
+			data-duration={ strconv.FormatFloat(b.Audio.Seconds, 'f', -1, 64) }
+			data-title={ orPlaceholder(b.Title) }
+			data-artist={ b.Byline }
+			data-cover={ prefix + "books/" + b.ID + "/cover?size=full" }
+		}
+	>
+		<h2 id="listen-title">
+			<span class="listen-glyph" aria-hidden="true">@uiIcon("Audiobookshelf")</span>
+			Audiobook
+		</h2>
+		if b.Audio != nil {
+			<p class="muted listen-meta">
+				if b.Audio.Narrators != "" {
+					{ "Narrated by " + b.Audio.Narrators }
+					if b.Audio.Duration != "" {
+						{ " · " }
+					}
+				}
+				{ b.Audio.Duration }
+				if len(b.Audio.Chapters) > 0 {
+					{ " · " + plural(len(b.Audio.Chapters), "chapter") }
+				}
+			</p>
+			if b.Audio.Playable {
+				@audioPlayer(audioPlayerView{Inline: true, Src: prefix + "books/" + b.ID + "/audio", Seconds: b.Audio.Seconds, Chapters: b.Audio.Chapters})
+				<script type="module" src={ prefix + "static/book-audio.js" }></script>
+			} else {
+				<p class="muted">
+					This audiobook is attached, but its chapters could not be
+					lined up with the book's text, so it cannot follow your
+					reading position.
+				</p>
+			}
+		} else {
+			<p class="muted">
+				Add an .m4b audiobook of this book. It is saved with the book in
+				its folder, and you can listen from here or from the reader.
+			</p>
+			<form
+				class="upload audiobook-upload"
+				method="post"
+				enctype="multipart/form-data"
+				action={ prefix + "books/" + b.ID + "/audiobook?csrf=" + csrf }
+				data-audiobook-upload
+			>
+				<input type="file" name="file" accept=".m4b,audio/mp4,audio/x-m4b" required/>
+				<button class="btn" type="submit">Upload audiobook</button>
+				<progress max="100" value="0" hidden data-upload-progress></progress>
+				<span class="uploadstatus muted" role="status"></span>
+			</form>
+			<script type="module" src={ prefix + "static/book-audio.js" }></script>
+		}
+	</section>
 }
 
 templ markBookForm(prefix, csrf, bookID string, finished bool) {

@@ -167,6 +167,26 @@ func findMoovBox(ctx context.Context, readRange RangeFunc, fileSize int64) (boxR
 	return boxRef{}, errors.New("m4b: moov box not found")
 }
 
+// ValidateAudio reports whether the file has a sound track whose sample
+// tables point inside it. Metadata alone proves nothing: a bare movie
+// header carries a duration, and a video-only MP4 has every box but audio.
+func ValidateAudio(ctx context.Context, readRange RangeFunc, fileSize int64) error {
+	moov, err := findMoovBox(ctx, readRange, fileSize)
+	if err != nil {
+		return err
+	}
+	trk, err := locateSoundTrack(ctx, readRange, moov)
+	if err != nil {
+		return err
+	}
+	for _, c := range trk.chunks {
+		if c >= uint64(fileSize) {
+			return errors.New("m4b: sound chunk beyond end of file")
+		}
+	}
+	return nil
+}
+
 // ReadMetadataSeeker extracts duration, iTunes tags, and chapters from an M4B ReadSeeker.
 func ReadMetadataSeeker(r io.ReadSeeker, fileSize int64) (Metadata, error) {
 	return ReadMetadata(context.Background(), SeekerRangeReader(r, fileSize), fileSize)

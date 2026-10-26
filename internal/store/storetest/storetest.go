@@ -57,6 +57,9 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogAudiobooksReconcileAndGrants", func(t *testing.T) {
 		testCatalogAudiobooksReconcileAndGrants(t, open)
 	})
+	t.Run("PlayableAudiobookQueries", func(t *testing.T) {
+		testPlayableAudiobookQueries(t, open)
+	})
 	t.Run("OriginAudiobookPaceExclusion", func(t *testing.T) {
 		testOriginAudiobookPaceExclusion(t, open)
 	})

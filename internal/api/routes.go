@@ -499,6 +499,12 @@ func (s *Server) Routes() *http.ServeMux {
 		auth.RequireSecureTransport(s.Cfg,
 			auth.RequireScope(s.Auth, store.ScopeLibraryUpload,
 				http.HandlerFunc(s.HandleUploadBook))))
+	// An audiobook onto a book in such a folder (ADR-0058): the same
+	// write, so the same scope.
+	mux.Handle("POST /v1/books/{id}/audiobook",
+		auth.RequireSecureTransport(s.Cfg,
+			auth.RequireScope(s.Auth, store.ScopeLibraryUpload,
+				http.HandlerFunc(s.HandleUploadAudiobook))))
 
 	// library-delete scope: taking a book back out of a folder that
 	// accepts one (ADR-0025). Separate from library-upload for the
