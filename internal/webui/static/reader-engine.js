@@ -498,6 +498,44 @@ export class ReaderEngine extends HTMLElement {
     }
   }
 
+  // setSpoken marks the passage an audiobook is reading, in the tint the
+  // Android read-aloud uses. It is a group of its own, so redrawing the
+  // annotations never takes it away, and the navigator puts it back on a
+  // frame that reloads.
+  setSpoken(locator, id = "spoken") {
+    if (!this.navigator) return;
+    const deco = locator && Locator.deserialize(locator);
+    // The navigator hands the frame this object as it is, and the frame
+    // reads the selector only from a plain key: kept in otherLocations
+    // alone it is lost, and a sentence the chapter repeats is drawn at
+    // its first occurrence instead of the one being read.
+    if (deco) deco.locations.cssSelector = locator.locations?.cssSelector;
+    const list = deco ? [{ id, locator: deco, style: { tint: colors.yellow, enforceContrast: false } }] : [];
+    this.navigator.applyDecorations(list, "read-aloud");
+  }
+
+  // spokenDocument is the rendered document of a section, when one is on
+  // screen.
+  spokenDocument(sectionId) {
+    return this.contents().find(({ doc }) => doc.documentElement.dataset.readerHref === sectionId)?.doc || null;
+  }
+
+  // rangePlacement is "here" when the range is drawn on the visible page,
+  // "elsewhere" when another page of the chapter holds it, and "nowhere"
+  // when it is hidden or placed outside the chapter's pages altogether (a
+  // screen-reader-only heading), where no page turn would ever show it.
+  rangePlacement(range) {
+    const win = range?.startContainer?.ownerDocument?.defaultView;
+    if (!win) return "nowhere";
+    const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+    if (rects.some(rect => rect.right > 0 && rect.bottom > 0 &&
+      rect.left < win.innerWidth && rect.top < win.innerHeight)) return "here";
+    const root = win.document.scrollingElement || win.document.documentElement;
+    return rects.some(rect => rect.right + win.scrollX > 0 && rect.bottom + win.scrollY > 0 &&
+      rect.left + win.scrollX < root.scrollWidth && rect.top + win.scrollY < root.scrollHeight)
+      ? "elsewhere" : "nowhere";
+  }
+
   async destroy() { this.editionSHA = ""; this.resources?.close(); await this.navigator?.destroy(); }
 }
 customElements.define("readium-view", ReaderEngine);

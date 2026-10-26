@@ -19,3 +19,10 @@ func TestReaderSessionUploads(t *testing.T) {
 func TestReaderAudioLifecycle(t *testing.T) {
 	runNodeTests(t, "readeraudio.test.mjs")
 }
+
+// TestReaderNarration runs the node unit tests for the audiobook
+// sentence highlight (static/reader-narration.js): how a chapter's text
+// is counted, split into sentences and kept in step with the narrator.
+func TestReaderNarration(t *testing.T) {
+	runNodeTests(t, "readernarration.test.mjs")
+}

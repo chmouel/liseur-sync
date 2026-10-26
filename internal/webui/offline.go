@@ -89,6 +89,7 @@ var offlineReaderAssets = map[string]string{
 	"reader-chapters.js":        "application/javascript; charset=utf-8",
 	"reader-engine.js":          "application/javascript; charset=utf-8",
 	"reader-live.js":            "application/javascript; charset=utf-8",
+	"reader-narration.js":       "application/javascript; charset=utf-8",
 	"reader-place.js":           "application/javascript; charset=utf-8",
 	"reader-positions.js":       "application/javascript; charset=utf-8",
 	"reader-prompt.js":          "application/javascript; charset=utf-8",

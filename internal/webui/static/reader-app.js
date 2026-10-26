@@ -16,10 +16,13 @@ import { offlineSync, readingSync, outboxLock } from "./offline-sync.js";
 import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged, mergeFurthest } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
-import { agreedEdition, startCandidates as restoreCandidates } from "./reader-restore.js";
+import { agreedEdition, sectionHrefIn, startCandidates as restoreCandidates } from "./reader-restore.js";
 import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } from "./reader-place.js";
 import { decideBookSync, furthestChoice } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
+import {
+  chapterIndex, locatorOf, narrationClock, offsetOfFraction, quoteOffset, rangeOf, sentenceAt, wordAt,
+} from "./reader-narration.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import { fillPrompt } from "./reader-prompt.js";
 import { buildChapters, chapterForLocation, pagesLeftInChapter } from "./reader-chapters.js";
@@ -125,6 +128,7 @@ const audioDurationLabel = document.getElementById("reader-audio-duration");
 const audioSeekInput = document.getElementById("reader-audio-seek");
 const audioRateSelect = document.getElementById("reader-audio-rate");
 const audioFollowBtn = document.getElementById("reader-audio-follow");
+const audioHighlightBtn = document.getElementById("reader-audio-highlight");
 const audioSTTStatus = document.getElementById("reader-audio-stt-status");
 const audioFromPageBtn = document.getElementById("reader-audio-from-page");
 const audioToAudioBtn = document.getElementById("reader-audio-to-audio");
@@ -4444,6 +4448,7 @@ window.addEventListener("beforeunload", () => {
       wireChapterPointer(e.detail.doc);
       if (annotationsEnabled) wireSelection(e.detail.doc);
       wirePromptSelection(e.detail.doc);
+      showNarration({ navigate: false });
     });
     view.addEventListener("link", (e) => {
       e.preventDefault();
@@ -4662,6 +4667,17 @@ let audioLastLiveSTTTime = -Infinity;
 const LIVE_STT_INTERVAL_MS = 30000;
 const LIVE_STT_COOLDOWN_MS = 3500;
 
+// The sentence being read is highlighted, the way the Android read-aloud
+// does it, and following turns the page only once the narrator's words
+// have left it. With the highlight off, following goes by progression.
+const AUDIO_HIGHLIGHT_KEY = "liseur.reader.audio-highlight";
+let audioHighlight = true;
+try { audioHighlight = localStorage.getItem(AUDIO_HIGHLIGHT_KEY) !== "off"; } catch {}
+const narration = narrationClock();
+const narrationIndexes = new WeakMap();
+let narrationShown = "";
+let narrationFollowed = { key: "", at: -Infinity };
+
 function formatAudioSeconds(sec) {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
   const total = Math.floor(sec);
@@ -4711,6 +4727,96 @@ function setFollowAudio(next) {
   }
   if (audioFromPageBtn) audioFromPageBtn.hidden = followAudio;
   if (audioToAudioBtn) audioToAudioBtn.hidden = followAudio;
+}
+
+function setAudioHighlight(next) {
+  audioHighlight = !!next;
+  try { localStorage.setItem(AUDIO_HIGHLIGHT_KEY, audioHighlight ? "on" : "off"); } catch {}
+  if (audioHighlightBtn) {
+    audioHighlightBtn.setAttribute("aria-pressed", audioHighlight ? "true" : "false");
+    audioHighlightBtn.classList.toggle("active", audioHighlight);
+  }
+  if (!audioHighlight) clearNarration();
+}
+
+function clearNarration() {
+  narrationShown = "";
+  narrationFollowed = { key: "", at: -Infinity };
+  view?.setSpoken?.(null);
+}
+
+// narrationChapter is the rendered document of the chapter a mapped
+// position is in, indexed, or null when that chapter is not on screen.
+function narrationChapter(mapped) {
+  if (!mapped?.segment || !view?.spokenDocument) return null;
+  const section = sectionHrefIn(mapped.href, view.book?.sections, key => view.resources?.resolveKey(key) ?? null);
+  const doc = section && view.spokenDocument(section);
+  if (!doc) return null;
+  const index = chapterIndex(doc, narrationIndexes);
+  if (!index.sentences.length) return null;
+  // The mapping's own pace through this chapter, in characters a second.
+  const resource = audioInfo?.mapping?.resources?.find(r => r.href === mapped.href);
+  const { a0, a1, b0, b1 } = mapped.segment;
+  const rate = resource && a1 > a0 && resource.end > resource.start
+    ? (b1 - b0) / (a1 - a0) / (resource.end - resource.start) * index.text.length
+    : NaN;
+  return { section, doc, index, rate, estimate: offsetOfFraction(index, mapped.chapterProgress) };
+}
+
+// snapNarration sets the narration clock on a speech match: the words
+// the server heard end at audio time t. It answers whether the quote was
+// found in the chapter on screen.
+function snapNarration(locator, t) {
+  const mapped = audioTimeToBook(t);
+  const chapter = narrationChapter(mapped);
+  const href = chapter && sectionHrefIn(locator?.href, view.book?.sections, key => view.resources?.resolveKey(key) ?? null);
+  const offset = href === chapter?.section ? quoteOffset(chapter.index, locator?.text, chapter.estimate) : null;
+  if (offset == null) {
+    narration.reset();
+    return false;
+  }
+  narration.snap(mapped.href, t, offset, chapter.rate);
+  return true;
+}
+
+// showNarration highlights the sentence at the playhead and, when
+// following, turns to it if the word being read is off the page. It
+// answers whether it placed the narrator, so the caller need not also
+// navigate by progression; it cannot when the chapter is not rendered.
+function showNarration({ navigate = true } = {}) {
+  if (!audioHighlight || !audioEl || !audioInfo || audioBar?.hidden || !ready || !view) return false;
+  const t = audioEl.currentTime;
+  const mapped = audioPlaybackPosition(t);
+  const chapter = narrationChapter(mapped);
+  if (!chapter) {
+    if (narrationShown) clearNarration();
+    return false;
+  }
+  const { section, doc, index } = chapter;
+  const offset = narration.offsetAt(mapped.href, t, chapter.estimate, chapter.rate);
+  const sentence = sentenceAt(index.sentences, offset);
+  const id = `${section}#${sentence.start}`;
+  if (id !== narrationShown) {
+    const locator = locatorOf(doc, index, section, sentence.start, sentence.end);
+    if (locator) {
+      view.setSpoken(locator, id);
+      narrationShown = id;
+    }
+  }
+  if (!navigate || !followAudio || audioNavInProgress) return true;
+  const word = wordAt(index.text, sentence, offset);
+  const range = rangeOf(doc, index, word.start, word.end);
+  if (!range || view.rangePlacement(range) !== "elsewhere") return true;
+  const key = `${section}#${word.start}`;
+  const now = performance.now();
+  if (key === narrationFollowed.key && now - narrationFollowed.at < 2000) return true;
+  narrationFollowed = { key, at: now };
+  const target = locatorOf(doc, index, mapped.href, word.start, word.end);
+  if (target) {
+    target.locations.totalProgression = mapped.progression;
+    void navigateToAudioTarget(target, mapped.progression);
+  }
+  return true;
 }
 
 function audioTimeToBook(t) {
@@ -5004,6 +5110,7 @@ async function refineAudioSTT(reqTime, { allowPlaying = false, announce = !allow
       const requested = audioTimeToBook(reqTime);
       const mapped = audioTimeToBook(audioEl.currentTime);
       if (!mapped || mapped.segment !== requested?.segment || mapped.href !== requested.href) return false;
+      const snapped = audioHighlight && snapNarration(data.locator, reqTime);
       const adjusted = applyAudioElapsedOffset(
         data.locator,
         data.progression,
@@ -5019,7 +5126,9 @@ async function refineAudioSTT(reqTime, { allowPlaying = false, announce = !allow
           progression: adjusted.progression,
         };
       }
-      if (!(await navigateToAudioTarget(adjusted.locator, adjusted.progression))) {
+      if (snapped && showNarration()) {
+        // The narrator's sentence is on screen; the page follows it.
+      } else if (!(await navigateToAudioTarget(adjusted.locator, adjusted.progression))) {
         if (seq !== sttReqSeq || !followAudio || !ready || audioBar?.hidden) return false;
         recordAudioPosition(adjusted.locator, adjusted.progression);
       }
@@ -5030,7 +5139,9 @@ async function refineAudioSTT(reqTime, { allowPlaying = false, announce = !allow
       return false;
     }
     if (data?.locator) {
-      if (followAudio) {
+      if (audioHighlight && data.stt_matched && snapNarration(data.locator, reqTime) && showNarration()) {
+        if (!followAudio) recordAudioPosition(data.locator, data.progression);
+      } else if (followAudio) {
         if (!(await navigateToAudioTarget(data.locator, data.progression))) {
           recordAudioPosition(data.locator, data.progression);
         }
@@ -5130,6 +5241,8 @@ if (audioToggleBtn && audioBar && audioEl) {
   function closeAudioPlayer() {
     audioWantsPlay = false;
     abortAudioSTT();
+    narration.reset();
+    clearNarration();
     if (!audioEl.paused) audioEl.pause();
     pauseListeningInterval();
     audioBar.hidden = true;
@@ -5219,8 +5332,9 @@ if (audioToggleBtn && audioBar && audioEl) {
     const next = !followAudio;
     setFollowAudio(next);
     if (next && audioEl) {
+      narrationFollowed = { key: "", at: -Infinity };
       const mapped = audioPlaybackPosition(audioEl.currentTime);
-      if (mapped?.segment) {
+      if (mapped?.segment && !showNarration()) {
         void navigateToAudioTarget(
           {
             href: mapped.href,
@@ -5239,17 +5353,25 @@ if (audioToggleBtn && audioBar && audioEl) {
     }
   });
 
+  if (audioHighlightBtn) setAudioHighlight(audioHighlight);
+  audioHighlightBtn?.addEventListener("click", () => {
+    setAudioHighlight(!audioHighlight);
+    if (audioHighlight) showNarration();
+  });
+
   audioFromPageBtn?.addEventListener("click", () => {
     void syncAudioFromCurrentPage(!audioEl.paused);
   });
 
   audioToAudioBtn?.addEventListener("click", () => {
     setFollowAudio(true);
+    narrationFollowed = { key: "", at: -Infinity };
     if (audioEl.paused) {
+      showNarration();
       void refineAudioSTT(audioEl.currentTime, { allowPlaying: false });
     } else {
       const mapped = audioPlaybackPosition(audioEl.currentTime);
-      if (mapped?.segment) {
+      if (mapped?.segment && !showNarration()) {
         void navigateToAudioTarget(
           {
             href: mapped.href,
@@ -5338,6 +5460,7 @@ if (audioToggleBtn && audioBar && audioEl) {
 
   audioEl.addEventListener("seeking", () => {
     abortAudioSTT();
+    narration.reset();
     pauseListeningInterval();
   });
 
@@ -5368,6 +5491,7 @@ if (audioToggleBtn && audioBar && audioEl) {
       }
     }
     if (mapped?.segment && !audioEl.seeking) {
+      const narrated = showNarration();
       if (
         followAudio &&
         audioActivelyPlaying &&
@@ -5396,7 +5520,7 @@ if (audioToggleBtn && audioBar && audioEl) {
           },
         };
         if (followAudio) {
-          void navigateToAudioTarget(targetLocator, mapped.progression);
+          if (!narrated) void navigateToAudioTarget(targetLocator, mapped.progression);
         } else {
           recordAudioPosition(targetLocator, mapped.progression);
         }

@@ -15,7 +15,8 @@ export async function installAudioFixture(S) {
     const json = data => new Response(JSON.stringify(data), {headers: {'Content-Type': 'application/json'}});
     window.fetch = async function(input, init) {
       const url = typeof input === 'string' ? input : input.url;
-      if (url.endsWith('/audio/info')) return json({audiobook: {id: 'browser-audio', title: 'Moby-Dick', duration_seconds: 120, chapters: [{title: 'Title Page', start: 0, end: 120}]}, audio_time: 0, mapping: {segments: [], resources: []}});
+      const mapping = JSON.parse(sessionStorage.getItem('liseur-test-audio-mapping') || '{"segments":[],"resources":[]}');
+      if (url.endsWith('/audio/info')) return json({audiobook: {id: 'browser-audio', title: 'Moby-Dick', duration_seconds: 120, chapters: [{title: 'Title Page', start: 0, end: 120}]}, audio_time: 0, mapping});
       if (url.endsWith('/audio/ticket')) return json({stream_url: stream, expires_at: new Date(Date.now() + 3600000).toISOString()});
       if (url.endsWith('/audio/locate')) return json({audio_time: 0});
       const response = await original.call(this, input, init);
@@ -145,4 +146,64 @@ export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
   await screenshot('desktop-tokyo-night-expanded');
   await evalIn("document.getElementById('reader-audio-close').click()");
   check('close returns focus to toolbar', await evalIn(`${panel}.hidden && document.activeElement.id === 'reader-audio-toggle'`));
+  await checkNarration({ S, evalIn, waitFor, check, url, open, screenshot });
+}
+
+// checkNarration maps the whole audiobook onto Loomings, sixty identical
+// paragraphs, and follows the highlighted sentence through it: the
+// decoration must land on the paragraph the narrator is in, not the first
+// one quoting the same words, and the page must turn to it.
+async function checkNarration({ S, evalIn, waitFor, check, url, open, screenshot }) {
+  await S('Emulation.setDeviceMetricsOverride', { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false });
+  await evalIn(`(() => {
+    const href = document.querySelector('readium-view').book.sections.find(s => s.id.includes('chapter1')).id;
+    sessionStorage.setItem('liseur-test-audio-mapping', JSON.stringify({
+      segments: [{ a0: 0, a1: 120, b0: 0, b1: 1, href, label: 'Loomings' }],
+      resources: [{ href, start: 0, end: 1 }],
+      full_narrative: true,
+    }));
+  })()`);
+  await S('Page.navigate', { url });
+  await waitFor("document.querySelector('readium-view')?.renderer?.getContents?.().some(({doc}) => doc?.body)", 'publication with a mapped audiobook');
+  await open();
+  // What the frame actually paints: Chromium draws decorations as CSS
+  // custom highlights, so the range there is the one a reader sees, and
+  // its paragraph is where the highlight landed.
+  const spoken = `(() => {
+    const view = document.querySelector('readium-view');
+    if ((view.navigator._decorations.get('read-aloud') || []).length !== 1) return null;
+    const doc = view.contents().find(({ doc }) => doc.defaultView.frameElement.checkVisibility({ visibilityProperty: true }))?.doc;
+    const win = doc?.defaultView;
+    const ranges = [...(win?.CSS?.highlights?.values?.() || [])].flatMap(h => [...h]);
+    if (ranges.length !== 1) return null;
+    const range = ranges[0];
+    const node = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
+    return {
+      text: range.toString(),
+      paragraph: [...doc.querySelectorAll('p')].indexOf(node.closest('p')),
+      visible: [...range.getClientRects()].some(r => r.width > 0 && r.right > 0 && r.left < win.innerWidth && r.bottom > 0 && r.top < win.innerHeight),
+    };
+  })()`;
+  // The chapter opens on a heading positioned off every page, as
+  // screen-reader-only text is. The narrator reads it, so it is
+  // highlighted, but there is no page to turn to.
+  await waitFor(spoken, 'a highlighted sentence');
+  const heading = await evalIn(spoken);
+  check('the offscreen heading is highlighted first', heading.text === 'Chapter heading for a screen reader' && !heading.visible, JSON.stringify(heading));
+  await evalIn("document.getElementById('reader-audio-el').currentTime = 2");
+  await waitFor(`${spoken}?.paragraph === 0`, 'the first paragraph');
+  const first = await evalIn(spoken);
+  check('a sentence of the first paragraph is highlighted', ['Call me Ishmael.', 'Some years ago, never mind how long precisely.'].includes(first.text), JSON.stringify(first));
+  check('the highlighted sentence is on the page', first.visible, JSON.stringify(first));
+  await evalIn("document.getElementById('reader-audio-el').currentTime = 90");
+  await waitFor(`(() => { const s = ${spoken}; return s && s.paragraph > 40 && s.visible; })()`, 'the page following the highlight');
+  const later = await evalIn(spoken);
+  check('a later sentence is highlighted in its own paragraph', later.paragraph >= 43 && later.paragraph <= 46, JSON.stringify(later));
+  await screenshot('narration');
+  await evalIn("document.getElementById('reader-audio-highlight').click()");
+  await waitFor("document.querySelector('readium-view').contents().every(({ doc }) => [...doc.defaultView.CSS.highlights.values()].every(h => h.size === 0))", 'highlight turned off');
+  check('turning the highlight off clears it and is remembered', await evalIn("localStorage.getItem('liseur.reader.audio-highlight') === 'off' && document.getElementById('reader-audio-highlight').getAttribute('aria-pressed') === 'false'"));
+  await evalIn("document.getElementById('reader-audio-highlight').click()");
+  await evalIn("document.getElementById('reader-audio-close').click()");
+  await evalIn("sessionStorage.removeItem('liseur-test-audio-mapping')");
 }

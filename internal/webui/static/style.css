@@ -2758,9 +2758,13 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 }
 .reader-audio-settings-row {
 	display: grid;
-	grid-template-columns: 88px minmax(0, 1fr);
+	grid-template-columns: 76px minmax(0, 1fr) auto;
 	gap: 8px;
 	align-items: center;
+}
+.reader-audio-settings-row .reader-audio-pill {
+	padding: 0 8px;
+	white-space: nowrap;
 }
 .reader-audio-rate-label {
 	position: absolute;

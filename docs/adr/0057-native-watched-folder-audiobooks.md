@@ -88,3 +88,15 @@ reading footer visible. Size and desktop placement are browser preferences;
 opening the reader never starts playback. Moving or minimizing the player
 does not change the stream, page-follow mode, or listening session. Closing
 it stops playback and returns to reading accounting.
+
+**Sentence highlight.** While the audiobook plays, the reader highlights
+the sentence it estimates is being read, in the same tint as Android
+read-aloud, and page-follow turns the page only when the spoken word
+leaves it. The estimate is computed in the browser. The mapping's chapter
+fraction gives a starting point. Each speech-to-text match snaps it to the
+quoted words, and the gap between two matches sets the narrator's pace
+until the next one. Without speech-to-text the highlight follows the
+mapping alone and can drift inside a long chapter. A
+"Highlight" toggle in the player turns it off, which is a browser
+preference. Turned off, page-follow goes back to turning pages by chapter
+fraction. Nothing about the highlight is stored on the server or synced.
