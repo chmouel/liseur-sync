@@ -66,20 +66,27 @@ func (s *Server) bookAudio(ctx context.Context, viewerID string, book store.Cata
 	var narrators []string
 	_ = json.Unmarshal(ab.NarratorsJSON, &narrators)
 	v.Narrators = strings.Join(narrators, ", ")
-	var chapters []m4b.Chapter
-	_ = json.Unmarshal(ab.ChaptersJSON, &chapters)
-	for _, c := range chapters {
-		v.Chapters = append(v.Chapters, BookAudioChapter{
-			Title: c.Title, Value: strconv.FormatFloat(c.Start, 'f', -1, 64), Clock: audioClock(c.Start),
-		})
-	}
+	var mapping audiomap.Mapping
 	if book.Status == store.BookActive &&
 		link.State == store.BookAudiobookActive &&
 		link.EditionSHA == book.ContentSHA256 &&
 		link.AudiobookSHA == ab.ContentSHA256 &&
 		link.MappingKey == audiomap.CatalogMappingKey(book, ab) {
-		var mapping audiomap.Mapping
 		v.Playable = json.Unmarshal(link.MappingJSON, &mapping) == nil && len(mapping.Segments) > 0
+	}
+	var chapters []m4b.Chapter
+	_ = json.Unmarshal(ab.ChaptersJSON, &chapters)
+	for _, c := range chapters {
+		// "Track 07" says less than the book does about the same chapter.
+		title := c.Title
+		if audiomap.GenericTitle(title, ab.Title) {
+			if named := mapping.BookTitleAt(c.Start); named != "" {
+				title = named
+			}
+		}
+		v.Chapters = append(v.Chapters, BookAudioChapter{
+			Title: title, Value: strconv.FormatFloat(c.Start, 'f', -1, 64), Clock: audioClock(c.Start),
+		})
 	}
 	return v
 }

@@ -40,7 +40,7 @@ func seedAudiobook(t *testing.T, f *booksFixture, bookID string, mapped bool) {
 		t.Fatal(err)
 	}
 	chapters, _ := json.Marshal([]map[string]any{
-		{"title": "Opening", "start": 0, "end": 30},
+		{"title": "Track 01", "start": 0, "end": 30},
 		{"title": "Closing", "start": 30, "end": 60},
 	})
 	if _, err := f.st.ReconcileFolderAudiobooks(ctx, "folder-audio", []store.ObservedAudiobook{{
@@ -72,7 +72,7 @@ func seedAudiobook(t *testing.T, f *booksFixture, bookID string, mapped bool) {
 		link.State = store.BookAudiobookActive
 		link.MappingJSON, _ = json.Marshal(audiomap.Mapping{
 			Duration: 60,
-			Segments: []audiomap.Segment{{Label: "Opening", AudioEnd: 60, BookEnd: 1}},
+			Segments: []audiomap.Segment{{Label: "Track 01", Title: "Loomings", AudioEnd: 60, BookEnd: 1}},
 		})
 	}
 	if err := f.st.UpsertBookAudiobook(ctx, link, now); err != nil {
@@ -107,6 +107,8 @@ func TestPlayableAudiobookShowsInLibraryAndOnItsPage(t *testing.T) {
 	_, body := f.get(t, "/ui/books/"+bookID, f.cookie)
 	for _, want := range []string{
 		`id="listen"`, `data-book-audio="` + bookID + `"`, "Nell Narrator", "Closing", "listen-btn",
+		// A numbered track is named after the book chapter it was paired with.
+		"0:00 · Loomings",
 		`class="reader-audio-bar reader-audio-inline"`, `books/` + bookID + `/audio"></audio>`,
 	} {
 		if !strings.Contains(body, want) {

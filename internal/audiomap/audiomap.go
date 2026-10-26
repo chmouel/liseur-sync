@@ -46,7 +46,11 @@ type Resource struct {
 
 // Segment pairs one stretch of audio with one stretch of the book.
 type Segment struct {
-	Label      string  `json:"label"`
+	Label string `json:"label"`
+	// Title is the book's own name for the chapter this stretch was
+	// paired with, from its table of contents. A linear mapping pairs no
+	// chapters and has none.
+	Title      string  `json:"title,omitempty"`
 	AudioStart float64 `json:"a0"`
 	AudioEnd   float64 `json:"a1"`
 	BookStart  float64 `json:"b0"`
@@ -316,7 +320,7 @@ func Align(book []BookChapter, resources []Resource, audio []Chapter, duration f
 	for k, p := range pairs {
 		a, b := audio[p.a], book[p.b]
 		seg := Segment{
-			Label: a.Title, AudioStart: a.Start, AudioEnd: a.End, BookStart: b.Start, BookEnd: b.End,
+			Label: a.Title, Title: b.Title, AudioStart: a.Start, AudioEnd: a.End, BookStart: b.Start, BookEnd: b.End,
 			Href: b.Href, Fragment: b.Fragment, Approx: b.Approx,
 		}
 		if k+1 < len(pairs) {
@@ -423,6 +427,51 @@ func (m Mapping) ToAudio(p float64) (float64, bool) {
 		return 0, false
 	}
 	return lerp(p, s.BookStart, s.BookEnd, s.AudioStart, s.AudioEnd), true
+}
+
+// BookTitleAt is the book's name for the chapter an audio chapter
+// starting at t was paired with, or "" when it was paired with none.
+func (m Mapping) BookTitleAt(t float64) string {
+	for _, s := range m.Segments {
+		if math.Abs(s.AudioStart-t) < 0.5 {
+			return s.Title
+		}
+	}
+	return ""
+}
+
+// GenericTitle reports a chapter title that says only where it is:
+// empty, a number, "Chapter 3", "Track 07", "Part II of IV", or the
+// audiobook's title followed by one of those.
+func GenericTitle(title, bookTitle string) bool {
+	t := Fold(title)
+	if b := Fold(bookTitle); b != "" {
+		t = strings.TrimPrefix(t, b)
+	}
+	for _, w := range strings.Fields(t) {
+		if placeWords[w] || numberWords[w] || roman(w) > 0 || strings.Trim(w, "0123456789") == "" {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+var placeWords = setOf("chapter", "chap", "ch", "chapitre", "track", "piste", "part", "partie",
+	"disc", "disk", "cd", "section", "kapitel", "capitulo", "capitolo", "of", "de", "sur") //nolint:misspell // Spanish and Italian
+
+var numberWords = setOf("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+	"eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+	"nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred",
+	"un", "une", "deux", "trois", "quatre", "cinq", "sept", "huit", "neuf", "dix", "onze", "douze",
+	"treize", "quatorze", "quinze", "seize", "vingt", "trente", "quarante", "cinquante", "soixante") //nolint:misspell // French numbers
+
+func setOf(words ...string) map[string]bool {
+	m := make(map[string]bool, len(words))
+	for _, w := range words {
+		m[w] = true
+	}
+	return m
 }
 
 // ToAudioLocator maps a book reading position to an audio time, preferring
@@ -580,9 +629,14 @@ func ChaptersKey(bookSHA string, chapters []Chapter, duration float64, linear bo
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
+// mappingFormat is part of CatalogMappingKey, so a pass recomputes every
+// stored mapping once when what a mapping records changes (2: segments
+// carry the book's chapter titles).
+const mappingFormat = 2
+
 func CatalogMappingKey(book store.CatalogBook, ab store.CatalogAudiobook) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%.17g\x00", book.ContentSHA256, ab.ContentSHA256, ab.DurationSeconds)
+	fmt.Fprintf(h, "%d\x00%s\x00%s\x00%.17g\x00", mappingFormat, book.ContentSHA256, ab.ContentSHA256, ab.DurationSeconds)
 	h.Write(ab.ChaptersJSON)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -828,6 +882,7 @@ func alignWithSplits(book []BookChapter, bookNums []int, resources []Resource, a
 			}
 			m.Segments = append(m.Segments, Segment{
 				Label:      a.Title,
+				Title:      b.Title,
 				AudioStart: a.Start,
 				AudioEnd:   aEnd,
 				BookStart:  b.Start,
@@ -850,6 +905,7 @@ func alignWithSplits(book []BookChapter, bookNums []int, resources []Resource, a
 			m.Segments = append(m.Segments,
 				Segment{
 					Label:      a1.Title,
+					Title:      b.Title,
 					AudioStart: a1.Start,
 					AudioEnd:   a2.Start,
 					BookStart:  b.Start,
@@ -860,6 +916,7 @@ func alignWithSplits(book []BookChapter, bookNums []int, resources []Resource, a
 				},
 				Segment{
 					Label:      a2.Title,
+					Title:      b.Title,
 					AudioStart: a2.Start,
 					AudioEnd:   aEnd,
 					BookStart:  bMid,
