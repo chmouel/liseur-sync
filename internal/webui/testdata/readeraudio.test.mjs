@@ -741,6 +741,34 @@ test("rapid forward skips retry speech matching after the short cooldown at the 
   assert.equal(requests.length, 2, "a failed match resumes the ordinary refresh interval");
 });
 
+test("rapid forward skips catch up after an obsolete page turn finishes, even while paused", async () => {
+  const p = player();
+  const { state } = narrated(p);
+  state.visible = () => false;
+  const held = deferred();
+  p.context.view.renderer.goTo = async target => {
+    p.navigations.push(target);
+    if (p.navigations.length === 1) await held.promise;
+  };
+  const first = p.run('navigateToAudioTarget({ href: "chapter.xhtml", locations: { progression: 0.2 } }, 0.2)');
+  await flush();
+  for (let i = 0; i < 3; i++) {
+    await p.context.audioFwdBtn.emit("click");
+    p.audio.seeking = true;
+    await p.audio.emit("seeking");
+    p.audio.seeking = false;
+    await p.audio.emit("seeked");
+    await p.audio.emit("timeupdate");
+  }
+  held.resolve();
+  await first;
+  await flush();
+  const index = p.run('chapterIndex(view.spokenDocument("chapter.xhtml"), narrationIndexes)');
+  const offset = narrationModule.offsetOfFraction(index, 0.29);
+  assert.equal(p.navigations.length, 2);
+  assert.equal(p.navigations.at(-1).locations.progression, offset / index.text.length);
+});
+
 test("live STT corrections expire when playback leaves the mapped chapter", async () => {
   const p = player();
   p.run(`audioInfo.stt_enabled = true;
