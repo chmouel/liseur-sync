@@ -21,7 +21,7 @@ import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } 
 import { decideBookSync, furthestChoice } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import {
-  chapterIndex, locatorOf, narrationClock, offsetOfFraction, quoteOffset, rangeOf, sentenceAt, wordAt,
+  chapterIndex, characterAt, locatorOf, narrationClock, offsetOfFraction, quoteOffset, rangeOf, sentenceAt,
 } from "./reader-narration.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
 import { fillPrompt } from "./reader-prompt.js";
@@ -4780,7 +4780,7 @@ function snapNarration(locator, t) {
 }
 
 // showNarration highlights the sentence at the playhead and, when
-// following, turns to it if the word being read is off the page. It
+// following, turns to it if the character being read is off the page. It
 // answers whether it placed the narrator, so the caller need not also
 // navigate by progression; it cannot when the chapter is not rendered.
 function showNarration({ navigate = true } = {}) {
@@ -4804,14 +4804,14 @@ function showNarration({ navigate = true } = {}) {
     }
   }
   if (!navigate || !followAudio || audioNavInProgress) return true;
-  const word = wordAt(index.text, sentence, offset);
-  const range = rangeOf(doc, index, word.start, word.end);
+  const character = characterAt(index.text, sentence, offset);
+  const range = rangeOf(doc, index, character.start, character.end);
   if (!range || view.rangePlacement(range) !== "elsewhere") return true;
-  const key = `${section}#${word.start}`;
+  const key = `${section}#${character.start}`;
   const now = performance.now();
   if (key === narrationFollowed.key && now - narrationFollowed.at < 2000) return true;
   narrationFollowed = { key, at: now };
-  const target = locatorOf(doc, index, mapped.href, word.start, word.end);
+  const target = locatorOf(doc, index, mapped.href, character.start, character.end);
   if (target) {
     target.locations.totalProgression = mapped.progression;
     void navigateToAudioTarget(target, mapped.progression);

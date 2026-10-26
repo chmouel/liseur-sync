@@ -56,10 +56,15 @@ func TestReaderNarrationFollowsInARealBrowser(t *testing.T) {
 	if err != nil {
 		t.Skip("no node to drive the browser with")
 	}
+	var unspaced strings.Builder
+	for c := rune(0x4e00); c < 0x4e00+300; c++ {
+		unspaced.WriteRune(c)
+	}
 	for _, tc := range []struct {
 		name, direction, lang, body string
 	}{
 		{"rtl", "rtl", "ar", strings.Repeat("<p>هذا نص عربي طويل للقراءة مع الكتاب الصوتي.</p>", 40)},
+		{"unspaced", "ltr", "zh", "<p>" + unspaced.String() + "。</p>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			parallelBrowser(t)
