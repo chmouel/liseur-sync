@@ -227,6 +227,8 @@ var registeredRouteGates = map[string]routeGate{
 	// series claims and nothing else, and writing to this server's disk
 	// is a different question.
 	"POST /v1/folders/{folder}/books": gateLibraryUpload,
+	// ADR-0058. The same write, aimed at a book.
+	"POST /v1/books/{id}/audiobook": gateLibraryUpload,
 
 	// ADR-0025. Deliberately not library-upload either: sending your own
 	// book and destroying everyone's are not the same permission.

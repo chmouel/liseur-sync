@@ -364,6 +364,16 @@ Even then the server only ever *creates*: a file that was not there,
 or a book Calibre did not have. It still never modifies, renames or
 deletes one. The cover cache is the only directory it writes to.
 
+The same folders accept an audiobook uploaded onto an existing book
+([ADR-0058](adr/0058-uploading-an-audiobook-onto-a-book.md)): the `.m4b`
+is written beside the book, or added as an `M4B` format to the Calibre
+book. It is first spooled to `content.cache_dir`, so that directory
+needs free space as large as the biggest upload. The limit is
+`content.max_audiobook_upload_bytes`, 4 GiB by default. A reverse proxy
+in front of the server must allow request bodies that large too (nginx:
+`client_max_body_size`; Caddy has no limit unless `request_body` sets
+one).
+
 The browser form can be narrowed with `content.folder_roots`, which
 lists the directories an admin may choose from. Empty means anywhere the
 server can read, which is what the CLI allows. A root is accepted when

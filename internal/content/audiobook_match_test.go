@@ -113,3 +113,38 @@ func TestIdentifierMatchPairsUnambiguousBookAndAudiobook(t *testing.T) {
 		t.Fatalf("unexpected pair %+v", pairs[0])
 	}
 }
+
+// An audiobook named like its book, beside it, pairs with that book even
+// at a folder root where the dedicated-directory rule cannot apply, and
+// even when neither title nor identifier would have said so.
+func TestFilenameMatchPairsAnAudiobookBesideItsBook(t *testing.T) {
+	books := []store.CatalogBook{
+		{ID: "dune", FolderID: "f", RelativePath: "Frank Herbert - Dune.epub", Status: store.BookActive},
+		{ID: "other", FolderID: "f", RelativePath: "Other.epub", Status: store.BookActive},
+	}
+	audiobooks := []store.CatalogAudiobook{
+		{ID: "a", FolderID: "f", RelativePath: "Frank Herbert - Dune.m4b", Status: store.BookActive, Title: "Something Else"},
+		// The same name in another folder is a different file.
+		{ID: "b", FolderID: "g", RelativePath: "Other.m4b", Status: store.BookActive},
+	}
+	pairs := matchCatalogAudiobooksToBooks(books, audiobooks, nil, nil)
+	if len(pairs) != 1 || pairs[0].book.ID != "dune" || pairs[0].audiobook.ID != "a" ||
+		pairs[0].source != "filename" {
+		t.Fatalf("pairs = %+v, want dune with a by filename", pairs)
+	}
+}
+
+// Two books sharing a name (an EPUB and a PDF) make the name ambiguous,
+// and an ambiguous name pairs nothing.
+func TestFilenameMatchSkipsAnAmbiguousName(t *testing.T) {
+	books := []store.CatalogBook{
+		{ID: "epub", FolderID: "f", RelativePath: "dir/Dune.epub", Status: store.BookActive},
+		{ID: "pdf", FolderID: "f", RelativePath: "dir/Dune.pdf", Status: store.BookActive},
+	}
+	audiobooks := []store.CatalogAudiobook{
+		{ID: "a", FolderID: "f", RelativePath: "dir/Dune.m4b", Status: store.BookActive},
+	}
+	if pairs := matchCatalogAudiobooksToBooks(books, audiobooks, nil, nil); len(pairs) != 0 {
+		t.Fatalf("pairs = %+v, want none", pairs)
+	}
+}

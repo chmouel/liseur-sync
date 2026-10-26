@@ -2564,6 +2564,81 @@ paths:
         "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
         "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
 
+  /v1/books/{id}/audiobook:
+    post:
+      tags: [library]
+      summary: Upload an audiobook onto a book
+      security: [{ deviceToken: [] }]  # requires library-upload scope
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      description: |
+        Writes one `.m4b` beside the book in the book's own folder and runs
+        that folder's pass, which indexes and pairs it (ADR-0058). Allowed
+        exactly where a book upload is: the folder has `accepts_uploads`,
+        the caller is granted it, and the token carries `library-upload`.
+
+        In a plain folder the file is named after the book's EPUB
+        (`dir/book.epub` gets `dir/book.m4b`) and pairs by that shared
+        name. In a Calibre folder it becomes an `M4B` format of the
+        existing Calibre book and pairs by `calibre_id`.
+
+        Nothing is replaced: a book that already has an audiobook, a
+        Calibre book that already has an `M4B`, or bytes already in the
+        caller's visible catalog are refused with `409`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The M4B. Other parts are ignored.
+      responses:
+        "201":
+          description: |
+            The pass indexed the audiobook. `state` is `active` when it is
+            paired and lined up with the text, `unmapped` when it is paired
+            but its chapters could not be aligned, and absent when it was
+            indexed but not paired with this book.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_id, audiobook_id, content_sha256]
+                properties:
+                  book_id: { type: string, format: uuid }
+                  audiobook_id: { type: string, format: uuid }
+                  content_sha256: { type: string }
+                  state: { type: string, enum: [active, unmapped] }
+        "202":
+          description: |
+            The file is on the disk, but the pass concluded nothing yet.
+            The watcher will come back to it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [book_id, content_sha256]
+                properties:
+                  book_id: { type: string, format: uuid }
+                  content_sha256: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed multipart body or an empty upload" }
+        "403": { $ref: "#/components/responses/Error", description: "The folder does not accept uploads, or the token lacks `library-upload`" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or its folder is not granted to this account" }
+        "409":
+          $ref: "#/components/responses/Error"
+          description: |
+            The book already has an audiobook, the bytes are already in the
+            library, or the Calibre library is busy.
+        "410": { $ref: "#/components/responses/Error", description: "The book is missing from its folder" }
+        "413": { $ref: "#/components/responses/Error", description: "Larger than `content.max_audiobook_upload_bytes`" }
+        "422": { $ref: "#/components/responses/Error", description: "Not a playable M4B" }
+        "503": { $ref: "#/components/responses/Error", description: "This server is running without a folder watcher" }
+
   /v1/books/{id}/audio/info:
     get:
       tags: [library]

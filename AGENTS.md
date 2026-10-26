@@ -165,7 +165,11 @@ of them.
   `metadata.db` row
   ([ADR-0023](docs/adr/0023-uploads-land-in-a-folder.md)) — and a delete
   takes one back out
-  ([ADR-0025](docs/adr/0025-deleting-a-book.md)). It still never
+  ([ADR-0025](docs/adr/0025-deleting-a-book.md)). An audiobook uploaded
+  onto a book creates one `.m4b` beside it — in Calibre, an `M4B`
+  `data` row on that existing book
+  ([ADR-0058](docs/adr/0058-uploading-an-audiobook-onto-a-book.md)) —
+  and never replaces one already there. It still never
   modifies or renames anything, and the delete refuses a file that has
   changed since the last pass: there is no trash behind it, so it
   deletes the book the catalog described or nothing.

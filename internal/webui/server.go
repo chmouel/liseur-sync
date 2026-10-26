@@ -347,6 +347,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/library/scan", sec(s.requireAuth(s.handleLibraryScan)))
 	mux.Handle("POST /ui/books/{id}/series", sec(s.requireAuth(s.handleSeriesAssign)))
 	mux.Handle("POST /ui/books/{id}/reading-status", sec(s.requireAuth(s.handleBookReadingStatus)))
+	mux.Handle("POST /ui/books/{id}/audiobook", sec(s.requireAuth(s.handleBookAudiobookUpload)))
 	// Deleting (ADR-0024). A work is the reader's own, so it is
 	// requireAuth and the store checks whose it is; a catalog row is
 	// shared, so retiring one is admin work.
