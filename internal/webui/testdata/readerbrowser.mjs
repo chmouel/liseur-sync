@@ -223,7 +223,7 @@ async function waitFor(expression, description, timeout = 10000) {
   throw new Error('Timed out waiting for ' + description);
 }
 
-if (process.env.SMOKE_AUDIO_PANEL === '1') {
+if (process.env.SMOKE_AUDIO_PANEL === '1' || process.env.SMOKE_NARRATION) {
   const { installAudioFixture } = await import('./readeraudiopanelbrowser.mjs');
   await installAudioFixture(S);
 }
@@ -244,6 +244,12 @@ const check = (name, ok, extra = '') => {
 
 const title = await evalIn('document.title');
 check('page loads', typeof title === 'string' && title.length > 0, title);
+
+if (process.env.SMOKE_NARRATION) {
+  const { checkNarrationFollowing } = await import('./readeraudiopanelbrowser.mjs');
+  await checkNarrationFollowing({ S, evalIn, waitFor, check, url, mode: process.env.SMOKE_NARRATION });
+  await finish(fail.length ? 1 : 0);
+}
 
 if (process.env.SMOKE_AUDIO_PANEL === '1') {
   const { checkAudioPanel } = await import('./readeraudiopanelbrowser.mjs');

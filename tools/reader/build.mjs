@@ -31,6 +31,16 @@ await build({
           loader: "js",
         };
       });
+      build.onLoad({ filter: /@readium\/navigator-html-injectables\/dist\/modules\/snapper\/ColumnSnapper\.js$/ }, async ({ path: filename }) => {
+        const source = await readFile(filename, "utf8");
+        // Readium's RTL text targets need distance from the document's right edge
+        const needle = "this.snapNormOffset(a.getBoundingClientRect().left+t.scrollX)";
+        if (source.split(needle).length !== 2) throw Error("Readium RTL text navigation patch needs review");
+        return {
+          contents: source.replace(needle, "this.snapNormOffset(t.innerWidth-a.getBoundingClientRect().right-t.scrollX)"),
+          loader: "js",
+        };
+      });
       // Pinned Readium 2.8.2 patch. Neither pool manager frees a frame's own
       // blob (the built HTML document) once a chapter falls out of the
       // pool's live window (update()'s own pruning only marks the entry;

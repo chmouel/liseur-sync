@@ -531,8 +531,9 @@ export class ReaderEngine extends HTMLElement {
     if (rects.some(rect => rect.right > 0 && rect.bottom > 0 &&
       rect.left < win.innerWidth && rect.top < win.innerHeight)) return "here";
     const root = win.document.scrollingElement || win.document.documentElement;
-    return rects.some(rect => rect.right + win.scrollX > 0 && rect.bottom + win.scrollY > 0 &&
-      rect.left + win.scrollX < root.scrollWidth && rect.top + win.scrollY < root.scrollHeight)
+    const left = win.getComputedStyle(root).direction === "rtl" ? root.clientWidth - root.scrollWidth : 0;
+    return rects.some(rect => rect.right + win.scrollX > left && rect.bottom + win.scrollY > 0 &&
+      rect.left + win.scrollX < left + root.scrollWidth && rect.top + win.scrollY < root.scrollHeight)
       ? "elsewhere" : "nowhere";
   }
 
