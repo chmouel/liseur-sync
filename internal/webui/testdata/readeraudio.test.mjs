@@ -6,6 +6,8 @@ import {
   openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction,
   planAudioTicketRefresh,
 } from "../static/reader-session.js";
+import * as narrationModule from "../static/reader-narration.js";
+import { sectionHrefIn } from "../static/reader-restore.js";
 
 const source = readFileSync(new URL("../static/reader-app.js", import.meta.url), "utf8");
 const deferred = () => {
@@ -63,6 +65,7 @@ function player() {
   const context = createContext({
     openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction,
     planAudioTicketRefresh, AbortController, URL, console,
+    ...narrationModule, sectionHrefIn,
     setTimeout(fn, ms) { const id = ++timerID; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
     performance: { now: () => clock.now },
@@ -102,7 +105,7 @@ function player() {
     "audioToggleBtn", "audioBar", "audioPlayBtn",
     "audioBackBtn", "audioFwdBtn", "audioChapterLabel", "audioCurrentLabel",
     "audioDurationLabel", "audioSeekInput", "audioRateSelect", "audioFollowBtn",
-    "audioFromPageBtn", "audioToAudioBtn", "audioCloseBtn", "audioSTTStatus",
+    "audioFromPageBtn", "audioToAudioBtn", "audioCloseBtn", "audioSTTStatus", "audioHighlightBtn",
   ]) context[name] = new Element();
   const run = script => runInContext(script, context);
   run(source.slice(source.indexOf("function locatorFor(location)"), source.indexOf("// withAnchor describes")));
@@ -797,4 +800,139 @@ test("following audio turns pages on fine chapter progression deltas even in mul
   await p.audio.emit("timeupdate");
   await flush();
   assert.equal(p.navigations.length, 2);
+});
+
+// narrated puts a rendered chapter of ten sentences on screen. Ranges and
+// locators are stood in for, since there is no DOM here: what is under
+// test is when the player highlights and when it turns the page.
+function narrated(p) {
+  const text = Array.from({ length: 10 }, (_, i) => `Sentence number ${i} is spoken here.`).join(" ");
+  const doc = {};
+  const index = narrationModule.narrationIndex([{ node: "n", text, block: "p" }], "en");
+  p.run("narrationIndexes").set(doc, index);
+  const spoken = [];
+  const state = { visible: () => true };
+  Object.assign(p.context.view, {
+    book: { sections: [{ id: "chapter.xhtml" }] },
+    spokenDocument: id => (id === "chapter.xhtml" ? doc : null),
+    setSpoken: locator => spoken.push(locator ? locator.text.highlight : null),
+    rangePlacement: range => state.place?.(range) ?? (state.visible(range) ? "here" : "elsewhere"),
+  });
+  p.context.rangeOf = (_, ix, start, end) => ({ word: ix.text.slice(start, end) });
+  p.context.locatorOf = (_, ix, href, start, end) => ({
+    href, type: "application/xhtml+xml",
+    locations: { progression: start / ix.text.length },
+    text: { highlight: ix.text.slice(start, end) },
+  });
+  return { spoken, state };
+}
+
+async function tick(p, time) {
+  p.audio.currentTime = time;
+  await p.audio.emit("timeupdate");
+  await flush();
+}
+
+test("the spoken sentence is highlighted without turning a page that still shows it", async () => {
+  const p = player();
+  const { spoken } = narrated(p);
+  p.audio.paused = false;
+  await tick(p, 150);
+  assert.deepEqual(spoken, ["Sentence number 1 is spoken here."]);
+  await tick(p, 160);
+  assert.equal(spoken.length, 1, "the same sentence is not decorated again");
+  await tick(p, 520);
+  assert.deepEqual(spoken.at(-1), "Sentence number 5 is spoken here.");
+  assert.equal(p.navigations.length, 0);
+});
+
+test("following turns to the spoken word once it leaves the page, and only once", async () => {
+  const p = player();
+  const { state } = narrated(p);
+  state.visible = range => range.word !== "Sentence";
+  p.audio.paused = false;
+  await tick(p, 530);
+  assert.equal(p.navigations.length, 0);
+  await tick(p, 600);
+  assert.equal(p.navigations.length, 1);
+  assert.equal(p.navigations[0].href, "chapter.xhtml");
+  assert.equal(p.navigations[0].text.highlight, "Sentence");
+  await tick(p, 601);
+  assert.equal(p.navigations.length, 1, "the same word is not chased twice in a row");
+});
+
+test("words no page can show are highlighted but never chased", async () => {
+  const p = player();
+  const { spoken, state } = narrated(p);
+  state.place = () => "nowhere";
+  p.audio.paused = false;
+  await tick(p, 150);
+  await tick(p, 520);
+  assert.equal(spoken.length, 2);
+  assert.equal(p.navigations.length, 0);
+});
+
+test("detached from the audio, the highlight moves on and the page stays", async () => {
+  const p = player();
+  const { spoken, state } = narrated(p);
+  state.visible = () => false;
+  p.run("setFollowAudio(false)");
+  p.audio.paused = false;
+  await tick(p, 150);
+  await tick(p, 750);
+  assert.deepEqual(spoken, ["Sentence number 1 is spoken here.", "Sentence number 7 is spoken here."]);
+  assert.equal(p.navigations.length, 0);
+  assert.equal(p.run("audioSyncLocator.href"), "chapter.xhtml");
+});
+
+test("with the highlight off, following goes by progression and the highlight is cleared", async () => {
+  const p = player();
+  const { spoken } = narrated(p);
+  p.audio.paused = false;
+  await tick(p, 150);
+  p.run("setAudioHighlight(false)");
+  assert.equal(spoken.at(-1), null);
+  await tick(p, 520);
+  assert.equal(p.navigations.length, 1);
+  assert.equal(p.navigations[0].locations.progression, 0.52);
+});
+
+test("a chapter not on screen is reached by progression first", async () => {
+  const p = player();
+  const { spoken } = narrated(p);
+  p.context.view.spokenDocument = () => null;
+  p.audio.paused = false;
+  await tick(p, 520);
+  assert.equal(spoken.length, 0);
+  assert.equal(p.navigations.length, 1);
+  assert.equal(p.navigations[0].locations.progression, 0.52);
+});
+
+test("a speech match moves the highlight to the quoted words", async () => {
+  const p = player();
+  const { spoken } = narrated(p);
+  p.run("audioInfo.stt_enabled = true");
+  p.context.api = async () => ({
+    ok: true,
+    json: async () => ({
+      stt_matched: true,
+      progression: 0.8,
+      locator: {
+        href: "chapter.xhtml",
+        text: { before: "spoken here. Sentence ", highlight: "number 7 is", after: " spoken here. Sentence" },
+        locations: { progression: 0.8 },
+      },
+    }),
+  });
+  p.audio.paused = false;
+  p.audio.currentTime = 150;
+  assert.equal(await p.run("refineAudioSTT(150, { allowPlaying: true })"), true);
+  assert.equal(spoken.at(-1), "Sentence number 7 is spoken here.");
+  assert.equal(p.navigations.length, 0, "the quoted sentence is on the page");
+  await tick(p, 210);
+  assert.equal(spoken.at(-1), "Sentence number 8 is spoken here.", "the clock runs on from the match");
+  await p.audio.emit("seeking");
+  p.audio.seeking = false;
+  await tick(p, 150);
+  assert.equal(spoken.at(-1), "Sentence number 1 is spoken here.", "a seek forgets the match");
 });
