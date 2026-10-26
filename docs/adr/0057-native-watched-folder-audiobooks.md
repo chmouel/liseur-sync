@@ -96,7 +96,11 @@ it stops playback and returns to reading accounting.
 the library (a badge, an "Audiobooks" filter and a "Listen" action) and
 its details page carries the reader's own player (one templ component,
 same markup and styles) over the same cookie stream, with a chapter
-picker, skip buttons and speed. It resumes from the reading position,
+picker, skip buttons and speed. A chapter whose audiobook title only
+numbers it ("Track 07", "Chapter 3") is named after the book chapter
+the mapping paired it with; each segment keeps that table-of-contents
+title, and the mapping key carries a format version so existing
+mappings are recomputed once to gain it. It resumes from the reading position,
 saves its place back as an ordinary position op through `audio/locate`,
 and records a `listening` session. It has no highlight, page-follow or
 speech-to-text, since those need the text on screen. An audiobook that

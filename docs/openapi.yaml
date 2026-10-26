@@ -2702,7 +2702,8 @@ paths:
                           type: object
                           required: [label, a0, a1, b0, b1]
                           properties:
-                            label: { type: string }
+                            label: { type: string, description: The audiobook's chapter title }
+                            title: { type: string, description: "The paired book chapter's table-of-contents title; absent from a linear mapping" }
                             a0: { type: number, description: Audio start in seconds }
                             a1: { type: number, description: Audio end in seconds }
                             b0: { type: number, description: Book start progression }
