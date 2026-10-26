@@ -64,6 +64,9 @@ export async function checkNarrationFollowing({ S, evalIn, waitFor, check, url, 
   for (const time of [66, 108]) {
     const before = await evalIn(`__narrationProbe(${time})`);
     check(mode + ' later character is on another page', before.placement === 'elsewhere', JSON.stringify(before));
+    if (mode === 'unspaced') {
+      check('the same unspaced sentence is still partly visible', before.sentencePlacement === 'here' && before.highlighted, JSON.stringify(before));
+    }
     await evalIn(`document.getElementById('reader-audio-el').currentTime = ${time}`);
     await waitFor(`__narrationProbe(${time}).placement === 'here' && __narrationProbe(${time}).highlighted`, mode + ' follows the narrated character at ' + time);
   }

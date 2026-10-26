@@ -846,19 +846,19 @@ test("the spoken sentence is highlighted without turning a page that still shows
   assert.equal(p.navigations.length, 0);
 });
 
-test("following turns to the spoken word once it leaves the page, and only once", async () => {
+test("following turns to the spoken character once it leaves the page, and only once", async () => {
   const p = player();
   const { state } = narrated(p);
-  state.visible = range => range.word !== "Sentence";
+  state.visible = range => range.word !== "S";
   p.audio.paused = false;
   await tick(p, 530);
   assert.equal(p.navigations.length, 0);
   await tick(p, 600);
   assert.equal(p.navigations.length, 1);
   assert.equal(p.navigations[0].href, "chapter.xhtml");
-  assert.equal(p.navigations[0].text.highlight, "Sentence");
+  assert.equal(p.navigations[0].text.highlight, "S");
   await tick(p, 601);
-  assert.equal(p.navigations.length, 1, "the same word is not chased twice in a row");
+  assert.equal(p.navigations.length, 1, "the same character is not chased twice in a row");
 });
 
 test("words no page can show are highlighted but never chased", async () => {
