@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  narrationIndex, offsetOfFraction, sentenceAt, wordAt, position, quoteOffset, narrationClock,
+  narrationIndex, offsetOfFraction, sentenceAt, characterAt, position, quoteOffset, narrationClock,
 } from "../static/reader-narration.js";
 
 const index = (...blocks) => narrationIndex(
@@ -69,8 +69,29 @@ test("an offset belongs to its sentence, or to the next one between them", () =>
   assert.equal(sentenceAt(ix.sentences, 0).start, 0);
   assert.equal(sentenceAt(ix.sentences, second - 1).start, second);
   assert.equal(sentenceAt(ix.sentences, 1e9).start, second);
-  const word = wordAt(ix.text, ix.sentences[1], second + 8);
-  assert.equal(ix.text.slice(word.start, word.end), "one");
+});
+
+test("following stays at the narrated character in text without spaces", () => {
+  for (const text of ["这是一个没有空格的句子。", "これは空白のない文です。", "anunbrokenword."]) {
+    const ix = index(text);
+    const character = characterAt(ix.text, ix.sentences[0], 5.9);
+    assert.deepEqual(character, { start: 5, end: 6 });
+    assert.equal(ix.text.slice(character.start, character.end), text[5]);
+  }
+});
+
+test("the narrated character is clamped inside its sentence without splitting a code point", () => {
+  const text = "Before. 😀中𠮷";
+  const sentence = { start: 8, end: text.length };
+  for (const offset of [-1, 8, 9]) {
+    const character = characterAt(text, sentence, offset);
+    assert.equal(text.slice(character.start, character.end), "😀");
+  }
+  for (const offset of [11, 12, text.length, 1e9]) {
+    const character = characterAt(text, sentence, offset);
+    assert.equal(text.slice(character.start, character.end), "𠮷");
+    assert.equal(character.end, sentence.end);
+  }
 });
 
 test("a quote is found after its highlight, and a repeated one nearest the estimate", () => {

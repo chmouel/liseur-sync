@@ -196,14 +196,12 @@ export function sentenceAt(list, offset) {
   return found;
 }
 
-// wordAt is the word around offset, kept inside the sentence.
-export function wordAt(text, sentence, offset) {
-  const at = clamp(Math.floor(offset), sentence.start, sentence.end - 1);
-  let start = at;
-  let end = at;
-  while (start > sentence.start && text[start - 1] !== " ") start--;
-  while (end < sentence.end && text[end] !== " ") end++;
-  if (end <= start) end = Math.min(sentence.end, start + 1);
+export function characterAt(text, sentence, offset) {
+  let start = clamp(Math.floor(offset), sentence.start, sentence.end - 1);
+  const code = text.charCodeAt(start);
+  const prev = text.charCodeAt(start - 1);
+  if (start > sentence.start && code >= 0xdc00 && code <= 0xdfff && prev >= 0xd800 && prev <= 0xdbff) start--;
+  const end = Math.min(sentence.end, start + (text.codePointAt(start) > 0xffff ? 2 : 1));
   return { start, end };
 }
 
