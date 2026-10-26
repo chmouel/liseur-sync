@@ -53,6 +53,9 @@ type Config struct {
 		// reading a request body, so a client cannot fill a disk with
 		// one POST.
 		MaxUploadBytes int64 `toml:"max_upload_bytes"`
+		// MaxAudiobookUploadBytes is the same bound for an audiobook
+		// uploaded onto a book (ADR-0058), which runs to gigabytes.
+		MaxAudiobookUploadBytes int64 `toml:"max_audiobook_upload_bytes"`
 
 		EPUBMaxEntries        int   `toml:"epub_max_entries"`
 		EPUBMaxDirectoryBytes int64 `toml:"epub_max_directory_bytes"`
@@ -304,6 +307,7 @@ func Default() Config {
 	c.Database.URL = "liseur-sync.db"
 	c.Content.CacheDir = "cache"
 	c.Content.MaxUploadBytes = 200 << 20
+	c.Content.MaxAudiobookUploadBytes = 4 << 30
 	epubLimits := epub.DefaultLimits()
 	c.Content.EPUBMaxEntries = epubLimits.MaxEntries
 	c.Content.EPUBMaxDirectoryBytes = epubLimits.MaxDirectoryBytes
@@ -466,6 +470,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Content.MaxUploadBytes < 1 {
 		return fmt.Errorf("content.max_upload_bytes must be >= 1")
+	}
+	if c.Content.MaxAudiobookUploadBytes < 1 {
+		return fmt.Errorf("content.max_audiobook_upload_bytes must be >= 1")
 	}
 	if c.Content.ScanMaxDepth < 1 || c.Content.ScanMaxDepth > 256 {
 		return fmt.Errorf("content.scan_max_depth must be between 1 and 256")

@@ -208,6 +208,8 @@ templ libraryEmpty(v LibraryView) {
 			@emptyState("Nothing finished yet", "Books you have read to the end appear here.", "", "")
 		case filterUnread:
 			@emptyState("Nothing unread", "Every book here has been opened at least once.", "", "")
+		case filterAudio:
+			@emptyState("No audiobooks yet", "Books with an audiobook appear here. Add an .m4b from a book's page, or put one beside the book in its folder.", "", "")
 		case filterHere:
 			if v.CatalogUnavailable() {
 				if v.ServerHasFolders {
@@ -259,6 +261,9 @@ templ heroCard(prefix string, row LibraryRow) {
 			}
 			<p class="heroactions">
 				<a class="btn primary" href={ row.href(prefix) }>Resume reading</a>
+				if row.HasAudio {
+					<a class="btn" href={ prefix + "books/" + row.BookID + "#listen" }>Listen</a>
+				}
 				if row.WorkID != "" {
 					<a class="quiet" href={ prefix + "works/" + row.WorkID }>Reading log</a>
 				}
@@ -402,6 +407,9 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 						height="500"
 					/>
 				</a>
+				if row.HasAudio {
+					@audioBadge(prefix, row)
+				}
 				if row.Progression != nil {
 					@progressBar("prog", *row.Progression)
 				}
@@ -437,6 +445,19 @@ templ libraryCard(prefix, csrf string, row LibraryRow) {
 	</article>
 }
 
+// audioBadge marks a cover whose book has an audiobook, and is the
+// shortest way to it: the details page, scrolled to the player.
+templ audioBadge(prefix string, row LibraryRow) {
+	<a
+		class="audio-badge"
+		href={ prefix + "books/" + row.BookID + "#listen" }
+		title="Listen to the audiobook"
+		aria-label={ "Listen to the audiobook of " + orPlaceholder(row.Title) }
+	>
+		@uiIcon("Audiobookshelf")
+	</a>
+}
+
 // bookMenu is everything a card can do besides reading. "Download"
 // serves the stored file as it sits in the folder, so it names the
 // format when it knows one.
@@ -448,6 +469,9 @@ templ bookMenu(prefix, csrf string, row LibraryRow) {
 		<div class="menu">
 			if row.BookID != "" {
 				<a href={ prefix + "books/" + row.BookID }>Book details</a>
+				if row.HasAudio {
+					<a href={ prefix + "books/" + row.BookID + "#listen" }>Listen to the audiobook</a>
+				}
 				@markBookForm(prefix, csrf, row.BookID, row.Finished())
 			}
 			if row.WorkID != "" {
@@ -517,6 +541,12 @@ templ libraryTable(prefix, csrf string, v LibraryView) {
 				</td>
 				<td>
 					<a href={ row.href(prefix) }>{ orPlaceholder(row.Title) }</a>
+					if row.HasAudio {
+						<a class="audio-tag" href={ prefix + "books/" + row.BookID + "#listen" } title="Listen to the audiobook">
+							@uiIcon("Audiobookshelf")
+							<span>Audiobook</span>
+						</a>
+					}
 					if row.Pending {
 						<span class="muted">pending</span>
 					}

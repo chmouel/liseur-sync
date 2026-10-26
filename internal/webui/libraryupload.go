@@ -92,6 +92,7 @@ func (s *Server) uploadDone(w http.ResponseWriter, r *http.Request, back, notice
 		}
 		return
 	}
+	back, fragment, _ := strings.Cut(back, "#")
 	sep := "?"
 	if strings.Contains(back, "?") {
 		sep = "&"
@@ -101,6 +102,9 @@ func (s *Server) uploadDone(w http.ResponseWriter, r *http.Request, back, notice
 		back += sep + "problem=" + url.QueryEscape(problem)
 	case notice != "":
 		back += sep + "notice=" + url.QueryEscape(notice)
+	}
+	if fragment != "" {
+		back += "#" + fragment
 	}
 	redirectRel(w, back, http.StatusSeeOther)
 }

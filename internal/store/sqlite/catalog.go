@@ -116,13 +116,21 @@ func (s *Store) CatalogBookByDigest(
 func (s *Store) ListCatalogBooks(
 	ctx context.Context, viewerID, folderID string, after *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
-	return s.listCatalogBooks(ctx, viewerID, folderID, after, limit, true)
+	return s.listCatalogBooks(ctx, viewerID, folderID, after, limit, true, false)
 }
 
 func (s *Store) ListRecentCatalogBooks(
 	ctx context.Context, viewerID, folderID string, before *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {
-	return s.listCatalogBooks(ctx, viewerID, folderID, before, limit, false)
+	return s.listCatalogBooks(ctx, viewerID, folderID, before, limit, false, false)
+}
+
+// ListAudiobookCatalogBooks pages the same books, keeping only those with
+// a playable audiobook (see playableAudiobookClause).
+func (s *Store) ListAudiobookCatalogBooks(
+	ctx context.Context, viewerID, folderID string, cursor *store.CatalogBookCursor, limit int, ascending bool,
+) ([]store.CatalogBook, error) {
+	return s.listCatalogBooks(ctx, viewerID, folderID, cursor, limit, ascending, true)
 }
 
 // listCatalogBooks pages a folder's books in either direction. Only
@@ -132,7 +140,7 @@ func (s *Store) ListRecentCatalogBooks(
 // readers' work mappings, and it returns to the listing whole the moment
 // a complete pass sees its file again.
 func (s *Store) listCatalogBooks(
-	ctx context.Context, viewerID, folderID string, cursor *store.CatalogBookCursor, limit int, ascending bool,
+	ctx context.Context, viewerID, folderID string, cursor *store.CatalogBookCursor, limit int, ascending bool, playableOnly bool,
 ) ([]store.CatalogBook, error) {
 	if _, err := s.FolderByID(ctx, viewerID, folderID); err != nil {
 		return nil, err
@@ -143,6 +151,11 @@ func (s *Store) listCatalogBooks(
 	query := `SELECT ` + bookColumns + ` FROM books b
 		 WHERE b.folder_id = ? AND b.status = 'active'`
 	args := []any{folderID}
+	if playableOnly {
+		clause, clauseArgs := playableAudiobookClause(viewerID)
+		query += ` AND ` + clause
+		args = append(args, clauseArgs...)
+	}
 	if cursor != nil {
 		if ascending {
 			query += ` AND (b.created_at, b.id) > (?, ?)`

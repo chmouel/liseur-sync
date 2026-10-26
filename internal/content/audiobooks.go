@@ -737,7 +737,42 @@ func matchCatalogAudiobooksToBooks(
 		}
 	}
 
-	// 2. Dedicated subdirectory match (same folder_id and same dir != "." with 1 book and 1 audiobook).
+	// 2. Same name beside the book (ADR-0058): same folder_id, same
+	// directory, same filename without its extension, one of each. This
+	// is where an uploaded audiobook lands in a plain folder, and it is
+	// what somebody copying one in by hand would most likely do.
+	stemKey := func(folderID, relative string) string {
+		return folderID + ":" + strings.TrimSuffix(relative, path.Ext(relative))
+	}
+	booksByStem := make(map[string][]store.CatalogBook)
+	audioByStem := make(map[string][]store.CatalogAudiobook)
+	for _, b := range books {
+		if !usedBooks[b.ID] && b.RelativePath != "" {
+			key := stemKey(b.FolderID, b.RelativePath)
+			booksByStem[key] = append(booksByStem[key], b)
+		}
+	}
+	for _, ab := range audiobooks {
+		if !usedAudio[ab.ID] && ab.RelativePath != "" {
+			key := stemKey(ab.FolderID, ab.RelativePath)
+			audioByStem[key] = append(audioByStem[key], ab)
+		}
+	}
+	for _, ab := range audiobooks {
+		if usedAudio[ab.ID] || ab.RelativePath == "" {
+			continue
+		}
+		key := stemKey(ab.FolderID, ab.RelativePath)
+		stemBooks := booksByStem[key]
+		if len(stemBooks) != 1 || len(audioByStem[key]) != 1 || usedBooks[stemBooks[0].ID] {
+			continue
+		}
+		usedBooks[stemBooks[0].ID] = true
+		usedAudio[ab.ID] = true
+		pairs = append(pairs, matchedBookPair{book: stemBooks[0], audiobook: ab, source: "filename"})
+	}
+
+	// 3. Dedicated subdirectory match (same folder_id and same dir != "." with 1 book and 1 audiobook).
 	booksByDir := make(map[string][]store.CatalogBook)
 	audioByDir := make(map[string][]store.CatalogAudiobook)
 	for _, b := range books {
@@ -771,7 +806,7 @@ func matchCatalogAudiobooksToBooks(
 		}
 	}
 
-	// 3. Unique Identifier (ISBN / ASIN) match across remaining active books and audiobooks.
+	// 4. Unique Identifier (ISBN / ASIN) match across remaining active books and audiobooks.
 	bookIDKeys := func(b store.CatalogBook) []string {
 		var keys []string
 		seen := make(map[string]bool)
@@ -858,7 +893,7 @@ func matchCatalogAudiobooksToBooks(
 		pairs = append(pairs, matchedBookPair{book: candidateBook, audiobook: ab, source: "identifier"})
 	}
 
-	// 4. Unique Normalized (Title, Author) match across remaining active books and audiobooks.
+	// 5. Unique Normalized (Title, Author) match across remaining active books and audiobooks.
 	for _, ab := range audiobooks {
 		if usedAudio[ab.ID] {
 			continue

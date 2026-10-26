@@ -2886,3 +2886,49 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 		--shadow: none; --shadow-sm: none;
 	}
 }
+
+/* Audiobooks (ADR-0057, ADR-0058): a badge on covers that have one,
+   and the player and upload card on the book page. */
+.bookcard .audio-badge {
+	position: absolute; top: .4rem; right: .4rem; z-index: 4;
+	display: grid; place-items: center;
+	width: 1.9rem; height: 1.9rem; border-radius: 999px;
+	background: rgb(0 0 0 / .62); color: #fff;
+	box-shadow: 0 1px 3px rgb(0 0 0 / .3);
+}
+.bookcard .audio-badge:hover, .bookcard .audio-badge:focus-visible { background: var(--primary); }
+.bookcard .audio-badge .ui-icon { width: 1.05rem; height: 1.05rem; }
+.audio-tag {
+	display: inline-flex; align-items: center; gap: .25rem;
+	margin-left: .4rem; padding: .05rem .4rem;
+	border-radius: 999px; background: var(--surface-2);
+	color: var(--ink-dim); font-size: .72rem; text-decoration: none;
+	vertical-align: middle;
+}
+.audio-tag:hover { color: var(--primary); }
+.audio-tag .ui-icon { width: .85rem; height: .85rem; }
+.listen-btn { display: inline-flex; align-items: center; gap: .4rem; }
+.listen-btn .ui-icon { width: 1rem; height: 1rem; }
+.book-listen h2 { display: flex; align-items: center; gap: .5rem; }
+.book-listen h2 .ui-icon { color: var(--primary); }
+.book-listen:focus { outline: none; }
+.book-listen:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.book-listen .listen-meta { margin-top: -.25rem; }
+/* The reader's audiobook player, set in the page instead of over it. */
+.reader-audio-bar.reader-audio-inline,
+.reader-audio-bar.reader-audio-inline[data-audio-layout="dock"][data-audio-size] {
+	position: static;
+	z-index: auto;
+	width: 100%;
+	max-width: 30rem;
+	margin: .75rem 0 .25rem;
+	overflow: visible;
+	background: var(--surface);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+	box-shadow: none;
+}
+.reader-audio-inline .reader-audio-settings-row { grid-template-columns: 76px minmax(0, 1fr); }
+.reader-audio-bar.reader-audio-inline[data-audio-size="expanded"] .reader-audio-summary { grid-template-columns: minmax(0, 1fr) 44px; }
+.audiobook-upload { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; }
+.audiobook-upload progress { flex: 1 1 12rem; }

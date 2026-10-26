@@ -55,6 +55,9 @@ cache_dir = "cache"
 # `liseur-sync admin folder-uploads <id> on`; every other folder is
 # read-only to this server, as it always was.
 max_upload_bytes = 209715200              # 200 MiB
+# The same bound for an .m4b audiobook uploaded onto a book in such a
+# folder. A reverse proxy in front needs a body limit at least this big.
+max_audiobook_upload_bytes = 4294967296   # 4 GiB
 
 epub_max_entries = 10000
 epub_max_directory_bytes = 67108864       # 64 MiB
