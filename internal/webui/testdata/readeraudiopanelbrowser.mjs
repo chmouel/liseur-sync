@@ -26,6 +26,67 @@ export async function installAudioFixture(S) {
   })()` });
 }
 
+export async function checkNarrationFollowing({ S, evalIn, waitFor, check, url, mode }) {
+  await S('Emulation.setDeviceMetricsOverride', { width: 320, height: 300, deviceScaleFactor: 1, mobile: true });
+  await evalIn(`(() => {
+    const href = document.querySelector('readium-view').book.sections[0].id;
+    sessionStorage.setItem('liseur-test-audio-mapping', JSON.stringify({
+      segments: [{ a0: 0, a1: 120, b0: 0, b1: 1, href }],
+      resources: [{ href, start: 0, end: 1 }],
+      full_narrative: true,
+    }));
+  })()`);
+  await S('Page.navigate', { url });
+  await waitFor("document.querySelector('readium-view')?.contents().some(({doc}) => doc?.body)", 'mapped chapter');
+  await waitFor("!document.getElementById('reader-audio-toggle').hidden", 'available audiobook');
+  await evalIn("document.getElementById('reader-audio-toggle').click()");
+  await waitFor("!document.getElementById('reader-audio-bar').hidden && document.getElementById('reader-audio-el').readyState >= 1", 'audio metadata');
+  await evalIn(`(async () => {
+    const { chapterIndex, offsetOfFraction, sentenceAt, rangeOf } = await import('/ui/static/reader-narration.js');
+    window.__narrationProbe = time => {
+      const view = document.querySelector('readium-view');
+      const doc = view.contents()[0].doc;
+      const index = chapterIndex(doc);
+      const offset = Math.min(index.text.length - 1, offsetOfFraction(index, time / 120));
+      const sentence = sentenceAt(index.sentences, offset);
+      const character = rangeOf(doc, index, offset, offset + 1);
+      const full = rangeOf(doc, index, sentence.start, sentence.end);
+      const highlights = [...doc.defaultView.CSS.highlights.values()].flatMap(h => [...h]);
+      return {
+        placement: view.rangePlacement(character),
+        sentencePlacement: view.rangePlacement(full),
+        highlighted: highlights.some(r => r.toString() === full.toString()),
+        scrollX: doc.defaultView.scrollX,
+      };
+    };
+  })()`);
+  await waitFor('__narrationProbe(0).placement === "here" && __narrationProbe(0).highlighted', 'first narrated character');
+  for (const time of [66, 108]) {
+    const before = await evalIn(`__narrationProbe(${time})`);
+    check(mode + ' later character is on another page', before.placement === 'elsewhere', JSON.stringify(before));
+    await evalIn(`document.getElementById('reader-audio-el').currentTime = ${time}`);
+    await waitFor(`__narrationProbe(${time}).placement === 'here' && __narrationProbe(${time}).highlighted`, mode + ' follows the narrated character at ' + time);
+  }
+  if (mode === 'rtl') check('RTL following uses negative scroll coordinates', (await evalIn('__narrationProbe(108)')).scrollX < 0);
+  const hidden = await evalIn(`(() => {
+    const view = document.querySelector('readium-view');
+    const doc = view.contents()[0].doc;
+    const el = doc.createElement('span');
+    el.textContent = 'Hidden text';
+    doc.body.append(el);
+    const range = doc.createRange();
+    range.selectNodeContents(el);
+    el.style.display = 'none';
+    const notDisplayed = view.rangePlacement(range);
+    el.style.cssText = 'position: absolute; top: 0; width: 1px; overflow: hidden';
+    el.style[doc.defaultView.getComputedStyle(doc.scrollingElement).direction === 'rtl' ? 'right' : 'left'] = '-9999px';
+    const offscreen = view.rangePlacement(range);
+    el.remove();
+    return { notDisplayed, offscreen };
+  })()`);
+  check(mode + ' hidden text has no page to follow', hidden.notDisplayed === 'nowhere' && hidden.offscreen === 'nowhere', JSON.stringify(hidden));
+}
+
 export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
   const panel = "document.getElementById('reader-audio-bar')";
   const open = async () => {
