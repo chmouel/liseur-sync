@@ -71,6 +71,11 @@ export async function checkNarrationFollowing({ S, evalIn, waitFor, check, url, 
     await waitFor(`__narrationProbe(${time}).placement === 'here' && __narrationProbe(${time}).highlighted`, mode + ' follows the narrated character at ' + time);
   }
   if (mode === 'rtl') check('RTL following uses negative scroll coordinates', (await evalIn('__narrationProbe(108)')).scrollX < 0);
+  await evalIn("document.getElementById('reader-audio-el').currentTime = 0");
+  await waitFor('__narrationProbe(0).placement === "here" && __narrationProbe(0).highlighted', 'rewind before rapid skips');
+  await evalIn("for (let i = 0; i < 3; i++) document.getElementById('reader-audio-fwd').click()");
+  await waitFor("document.getElementById('reader-audio-el').currentTime === 90 && __narrationProbe(90).placement === 'here' && __narrationProbe(90).highlighted", mode + ' follows the final forward skip');
+  check(mode + ' rapid forward skips leave the narrated character on screen', true);
   const hidden = await evalIn(`(() => {
     const view = document.querySelector('readium-view');
     const doc = view.contents()[0].doc;

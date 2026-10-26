@@ -4820,6 +4820,17 @@ function showNarration({ navigate = true } = {}) {
   return true;
 }
 
+function followAudioAtPlayhead() {
+  if (!audioEl || audioEl.seeking || audioSwappingSrc || !followAudio || !ready || audioBar?.hidden) return;
+  const mapped = audioPlaybackPosition(audioEl.currentTime);
+  if (!mapped?.segment || showNarration()) return;
+  void navigateToAudioTarget({
+    href: mapped.href,
+    type: "application/xhtml+xml",
+    locations: { progression: mapped.chapterProgress, totalProgression: mapped.progression },
+  }, mapped.progression);
+}
+
 function audioTimeToBook(t) {
   const segs = audioInfo?.mapping?.segments;
   if (!Array.isArray(segs) || segs.length === 0 || !Number.isFinite(t)) return null;
@@ -5016,6 +5027,7 @@ async function navigateToAudioTarget(locator, progression) {
     }
   } finally {
     audioNavInProgress = Math.max(0, audioNavInProgress - 1);
+    if (generation !== audioNavigationGeneration) followAudioAtPlayhead();
   }
   return false;
 }
@@ -5463,9 +5475,12 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioEl.addEventListener("seeking", () => {
     abortAudioSTT();
     narration.reset();
+    narrationFollowed = { key: "", at: -Infinity };
     audioSeekNeedsSTT = true;
     pauseListeningInterval();
   });
+
+  audioEl.addEventListener("seeked", followAudioAtPlayhead);
 
   audioEl.addEventListener("waiting", pauseListeningInterval);
   audioEl.addEventListener("ended", () => {
