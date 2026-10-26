@@ -33,6 +33,12 @@ func TestAlignChaptersAndLocatorAt(t *testing.T) {
 	if m.Segments[0].Href != "Text/ch1.xhtml" || m.Segments[1].Href != "Text/ch2.xhtml" {
 		t.Fatalf("unexpected segment hrefs: %+v", m.Segments)
 	}
+	if got := m.BookTitleAt(510); got != "Chapter 2: The Departure" {
+		t.Fatalf("BookTitleAt(510) = %q, want the book's own chapter title", got)
+	}
+	if got := m.BookTitleAt(0); got != "" {
+		t.Fatalf("BookTitleAt(0) = %q, want none for unpaired opening credits", got)
+	}
 
 	// Unmapped opening credits returns ok=false.
 	if _, _, ok := m.ToBook(5); ok {
@@ -66,6 +72,27 @@ func TestAlignChaptersAndLocatorAt(t *testing.T) {
 	}
 	if math.Abs(*loc.Locations.Progression-0.5) > 1e-6 {
 		t.Fatalf("chapter progression = %v, want 0.5", *loc.Locations.Progression)
+	}
+}
+
+func TestGenericTitle(t *testing.T) {
+	for title, want := range map[string]bool{
+		"":                       true,
+		"07":                     true,
+		"Chapter 3":              true,
+		"Track 07 of 24":         true,
+		"Chapitre douze":         true,
+		"Part II":                true,
+		"The Tide - 03":          true,
+		"Chapter 3: The Storm":   false,
+		"1 - The Arrival":        false,
+		"Opening Credits":        false,
+		"The Tide":               true,
+		"Tide Pools and Shadows": false,
+	} {
+		if got := GenericTitle(title, "The Tide"); got != want {
+			t.Errorf("GenericTitle(%q) = %v, want %v", title, got, want)
+		}
 	}
 }
 
