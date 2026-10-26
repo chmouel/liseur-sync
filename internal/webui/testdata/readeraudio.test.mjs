@@ -707,6 +707,40 @@ test("live STT corrections are replaced by a newer refinement and cleared by see
   assert.equal(p.navigations.at(-1).locations.progression, 0.4);
 });
 
+test("rapid forward skips retry speech matching after the short cooldown at the final playhead", async () => {
+  const p = player();
+  p.run("audioInfo.stt_enabled = true;");
+  p.audio.paused = false;
+  const requests = [];
+  p.context.api = async (_, options) => {
+    requests.push(JSON.parse(options.body).audio_time);
+    return requests.length === 1 ? sttResponse(0.25) : { ok: false };
+  };
+  await p.audio.emit("play");
+  await p.audio.emit("playing");
+  await flush();
+  for (const time of [1000, 2000]) {
+    p.clock.now = time;
+    await p.context.audioFwdBtn.emit("click");
+    p.audio.seeking = true;
+    await p.audio.emit("seeking");
+    p.audio.seeking = false;
+    await p.audio.emit("seeked");
+    await p.audio.emit("playing");
+    await p.audio.emit("timeupdate");
+    await flush();
+  }
+  assert.deepEqual(requests, [200], "the seek burst respects the short request cooldown");
+  p.clock.now = 3500;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.deepEqual(requests, [200, 260], "the final seek does not wait for the 30-second periodic refresh");
+  p.clock.now = 7000;
+  await p.audio.emit("timeupdate");
+  await flush();
+  assert.equal(requests.length, 2, "a failed match resumes the ordinary refresh interval");
+});
+
 test("live STT corrections expire when playback leaves the mapped chapter", async () => {
   const p = player();
   p.run(`audioInfo.stt_enabled = true;

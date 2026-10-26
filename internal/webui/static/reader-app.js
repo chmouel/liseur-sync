@@ -4664,6 +4664,7 @@ let audioSTTStatusTimer = null;
 let audioSTTStatusGeneration = 0;
 let audioLastLiveSTTAt = -Infinity;
 let audioLastLiveSTTTime = -Infinity;
+let audioSeekNeedsSTT = false;
 const LIVE_STT_INTERVAL_MS = 30000;
 const LIVE_STT_COOLDOWN_MS = 3500;
 
@@ -5156,6 +5157,7 @@ async function refineAudioSTT(reqTime, { allowPlaying = false, announce = !allow
   } finally {
     if (sttAbort === controller) {
       sttAbort = null;
+      audioSeekNeedsSTT = false;
       if (showStatus) {
         const current = seq === sttReqSeq && ready && !audioBar?.hidden && !audioEl?.seeking &&
           (!response || auth.responseCurrent(response));
@@ -5461,6 +5463,7 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioEl.addEventListener("seeking", () => {
     abortAudioSTT();
     narration.reset();
+    audioSeekNeedsSTT = true;
     pauseListeningInterval();
   });
 
@@ -5498,8 +5501,8 @@ if (audioToggleBtn && audioBar && audioEl) {
         !audioEl.paused &&
         audioInfo?.stt_enabled &&
         !sttAbort &&
-        now - audioLastLiveSTTAt >= LIVE_STT_INTERVAL_MS &&
-        Math.abs(audioEl.currentTime - audioLastLiveSTTTime) >= 5
+        now - audioLastLiveSTTAt >= (audioSeekNeedsSTT ? LIVE_STT_COOLDOWN_MS : LIVE_STT_INTERVAL_MS) &&
+        (audioSeekNeedsSTT || Math.abs(audioEl.currentTime - audioLastLiveSTTTime) >= 5)
       ) {
         void refineAudioSTT(audioEl.currentTime, { allowPlaying: true });
       }
