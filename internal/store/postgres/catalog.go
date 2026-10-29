@@ -193,6 +193,9 @@ func (s *Store) CatalogBookRelationsForBooks(
 		Series:               map[string][]store.BookSeries{},
 		SeriesSource:         map[string]store.SeriesSource{},
 		SeriesClaimUpdatedAt: map[string]*time.Time{},
+		Tags:                 map[string][]string{},
+		Identifiers:          map[string][]store.BookIdentifier{},
+		Languages:            map[string][]string{},
 	}
 	if len(bookIDs) == 0 {
 		return out, nil
@@ -299,7 +302,68 @@ func (s *Store) CatalogBookRelationsForBooks(
 	}); err != nil {
 		return out, err
 	}
+	if err := s.catalogDescriptiveRelations(ctx, placeholders, args, &out); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// catalogDescriptiveRelations reads the subjects, identifiers and
+// languages a book page shows, one query each for the whole page.
+func (s *Store) catalogDescriptiveRelations(
+	ctx context.Context, placeholders string, args []any, out *store.CatalogBookRelations,
+) error {
+	rows, err := s.db.QueryContext(ctx, q(
+		`SELECT m.book_id, t.name FROM book_tags m
+		 JOIN tags t ON t.id = m.tag_id
+		 WHERE m.book_id IN (`+placeholders+`)
+		 ORDER BY m.book_id, t.normalized_name, t.id`), args...)
+	if err != nil {
+		return err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var bookID, name string
+		if err := scan(&bookID, &name); err != nil {
+			return err
+		}
+		out.Tags[bookID] = append(out.Tags[bookID], name)
+		return nil
+	}); err != nil {
+		return err
+	}
+	rows, err = s.db.QueryContext(ctx, q(
+		`SELECT book_id, scheme, value FROM book_identifiers
+		 WHERE book_id IN (`+placeholders+`)
+		 ORDER BY book_id, scheme, value`), args...)
+	if err != nil {
+		return err
+	}
+	if err := eachRow(rows, func(scan func(...any) error) error {
+		var bookID string
+		var id store.BookIdentifier
+		if err := scan(&bookID, &id.Scheme, &id.Value); err != nil {
+			return err
+		}
+		out.Identifiers[bookID] = append(out.Identifiers[bookID], id)
+		return nil
+	}); err != nil {
+		return err
+	}
+	rows, err = s.db.QueryContext(ctx, q(
+		`SELECT book_id, language FROM book_languages
+		 WHERE book_id IN (`+placeholders+`)
+		 ORDER BY book_id, language`), args...)
+	if err != nil {
+		return err
+	}
+	return eachRow(rows, func(scan func(...any) error) error {
+		var bookID, language string
+		if err := scan(&bookID, &language); err != nil {
+			return err
+		}
+		out.Languages[bookID] = append(out.Languages[bookID], language)
+		return nil
+	})
 }
 
 func (s *Store) CatalogSeriesVolumesForBooks(
