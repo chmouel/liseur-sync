@@ -375,6 +375,25 @@ func catalogBookJSON(b store.CatalogBook, rel store.CatalogBookRelations) map[st
 	}
 	out["contributors"] = contributors
 
+	// What the book is about, what it is written in and what else it is
+	// known by, as the folder pass found them. Sent empty rather than
+	// omitted, like contributors.
+	subjects := rel.Tags[b.ID]
+	if subjects == nil {
+		subjects = []string{}
+	}
+	out["subjects"] = subjects
+	languages := rel.Languages[b.ID]
+	if languages == nil {
+		languages = []string{}
+	}
+	out["languages"] = languages
+	identifiers := make([]map[string]any, 0, len(rel.Identifiers[b.ID]))
+	for _, id := range rel.Identifiers[b.ID] {
+		identifiers = append(identifiers, map[string]any{"scheme": id.Scheme, "value": id.Value})
+	}
+	out["identifiers"] = identifiers
+
 	// Every series row, because the catalog has always allowed several
 	// and a payload reporting one of them silently picks a winner.
 	series := make([]map[string]any, 0, len(rel.Series[b.ID]))

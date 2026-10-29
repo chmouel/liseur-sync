@@ -3283,6 +3283,9 @@ components:
         - updated_at
         - cover_url
         - contributors
+        - subjects
+        - languages
+        - identifiers
         - series
         - series_source
       properties:
@@ -3347,6 +3350,25 @@ components:
               id: { type: string, format: uuid }
               name: { type: string }
               role: { type: string, example: author }
+        subjects:
+          type: array
+          description: The book's subjects (tags), by display name, sorted by normalized name.
+          items: { type: string }
+        languages:
+          type: array
+          description: The language tags the book declares, as stored.
+          items: { type: string, example: en }
+        identifiers:
+          type: array
+          description: |
+            Publication identifiers the folder pass found, such as the
+            book's ISBN or the UUIDs it declares, sorted by scheme and value.
+          items:
+            type: object
+            required: [scheme, value]
+            properties:
+              scheme: { type: string, example: isbn }
+              value: { type: string }
         series:
           type: array
           description: |

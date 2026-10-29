@@ -573,6 +573,10 @@ type CatalogBookRelations struct {
 	Series               map[string][]BookSeries
 	SeriesSource         map[string]SeriesSource
 	SeriesClaimUpdatedAt map[string]*time.Time
+	// Tags are the book's subjects, by display name.
+	Tags        map[string][]string
+	Identifiers map[string][]BookIdentifier
+	Languages   map[string][]string
 }
 
 // CatalogSeriesVolume is one active book in the primary series the

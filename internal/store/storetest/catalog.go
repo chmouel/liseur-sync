@@ -333,7 +333,10 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 			Contributors: []store.ObservedContributor{
 				{Name: "Ann Leckie", Role: store.ContributorRoleAuthor, Position: 1},
 			},
-			Series: []store.ObservedSeries{{Name: "Imperial Radch", Position: Ptr(1.0)}},
+			Series:      []store.ObservedSeries{{Name: "Imperial Radch", Position: Ptr(1.0)}},
+			Tags:        []string{"Space Opera", "Fiction"},
+			Languages:   []string{"en"},
+			Identifiers: []store.BookIdentifier{{Scheme: "isbn", Value: "9780316246620"}},
 		},
 		{
 			RelativePath: "book-two.epub", SizeBytes: 1, MTime: now, ContentSHA256: "sha-two",
@@ -369,6 +372,20 @@ func testCatalogBookRelationsForBooks(t *testing.T, open OpenFunc) {
 	}
 	if *relations.Series[twoID][0].Position != 2.0 {
 		t.Fatalf("book two series position: %+v", relations.Series[twoID][0])
+	}
+
+	if got := relations.Tags[oneID]; len(got) != 2 || got[0] != "Fiction" || got[1] != "Space Opera" {
+		t.Fatalf("book one subjects: %+v", got)
+	}
+	if got := relations.Languages[oneID]; len(got) != 1 || got[0] != "en" {
+		t.Fatalf("book one languages: %+v", got)
+	}
+	if got := relations.Identifiers[oneID]; len(got) != 1 || got[0].Value != "9780316246620" {
+		t.Fatalf("book one identifiers: %+v", got)
+	}
+	if len(relations.Tags[standaloneID]) != 0 || len(relations.Languages[standaloneID]) != 0 ||
+		len(relations.Identifiers[standaloneID]) != 0 {
+		t.Fatalf("standalone book has descriptive relations: %+v", relations)
 	}
 
 	empty, err := s.CatalogBookRelationsForBooks(ctx, anyReader, nil)
