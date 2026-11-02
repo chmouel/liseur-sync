@@ -444,6 +444,17 @@ Operations imported from Audiobookshelf have `origin: "audiobookshelf"`,
 the linked ebook edition, and a Readium locator. Clients should accept
 new origin values without rejecting the operation.
 
+A kosync operation (a KOReader or CrossPoint device) stores only the
+device's xpointer. When the token also holds `library-read` and the
+account is granted the one catalog file behind the op's `origin_alias`,
+`/v1/changes`, `/v1/heads` and the positions route fill in that file's
+`edition_sha` and an exact Liseur locator for the same word, and mark the
+op with `"derived": {"from": "kosync-xpath"}`
+([ADR-0059](adr/0059-deriving-a-position-across-protocols.md)). Restore
+from it like any anchored locator, but do not keep it as the op, push it
+back, or use the derived `edition_sha` to regroup furthest candidates:
+the next read may come without it.
+
 Keep those candidates separately from current position and the agreed
 baseline. Offer a jump to the greatest known progression without making it
 win a normal merge. Before reducing a changes page to its latest operation
