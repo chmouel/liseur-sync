@@ -33,6 +33,9 @@ type Server struct {
 	PairingTTL  time.Duration
 	AuthRateLim *auth.RateLimiter
 	PairingUser func(r *http.Request) string // reserved for future web pairing
+	// Files lets GET answer with an XPath derived from a Liseur anchor;
+	// nil keeps the percentage.
+	Files BookOpener
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -220,8 +223,9 @@ func (s *Server) HandlePutProgress(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetProgress implements GET /syncs/progress/:document. Returns
 // the newest op, kosync-shaped: progress = foreign_pos verbatim when
-// present, else the percentage as a bare string (KOReader accepts that
-// for non-CRe engines).
+// present, else an XPath derived from a Liseur anchor in the same file,
+// else the percentage as a bare string (KOReader accepts that for
+// non-CRe engines).
 func (s *Server) HandleGetProgress(w http.ResponseWriter, r *http.Request) {
 	d, err := s.deviceFrom(r)
 	if err != nil {
@@ -245,6 +249,8 @@ func (s *Server) HandleGetProgress(w http.ResponseWriter, r *http.Request) {
 	progress := ""
 	if o.ForeignPos != nil {
 		progress = *o.ForeignPos
+	} else if xp := s.derivedXPath(r.Context(), d.UserID, strings.ToLower(doc), o); xp != "" {
+		progress = xp
 	} else {
 		progress = json.Number(floatToStr(o.Progression)).String()
 	}
