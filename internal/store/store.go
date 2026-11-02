@@ -1763,6 +1763,12 @@ type Store interface {
 	// take a folder id — the same file may already be somewhere else,
 	// and that copy is the answer.
 	CatalogBookByDigest(ctx context.Context, viewerID, sha string) (CatalogBook, error)
+	// CatalogBookByPartialMD5 finds the active book a KOReader
+	// fingerprint names, for translating a position inside it
+	// (ADR-0059). A partial MD5 can collide, so it answers only when
+	// every matching book is the same file; two different files under
+	// one fingerprint are ErrNotFound, like none.
+	CatalogBookByPartialMD5(ctx context.Context, viewerID, partialMD5 string) (CatalogBook, error)
 	// ListCatalogBooks pages one folder's books, oldest first.
 	ListCatalogBooks(ctx context.Context, viewerID, folderID string, after *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// ListRecentCatalogBooks pages the same books newest first, for the

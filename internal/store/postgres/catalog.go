@@ -106,6 +106,38 @@ func (s *Store) CatalogBookByDigest(
 	return book, err
 }
 
+func (s *Store) CatalogBookByPartialMD5(
+	ctx context.Context, viewerID, partialMD5 string,
+) (store.CatalogBook, error) {
+	if partialMD5 == "" {
+		return store.CatalogBook{}, store.ErrNotFound
+	}
+	grant := func(alias string) string {
+		if viewerID == "" {
+			return ""
+		}
+		return ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = ` + alias + `.folder_id AND uf.user_id = ?)`
+	}
+	args := []any{partialMD5}
+	query := `SELECT ` + bookColumns + `
+		   FROM books b
+		  WHERE b.partial_md5 = ? AND b.status = 'active'` + grant("b") + `
+		    AND (SELECT COUNT(DISTINCT b2.content_sha256) FROM books b2
+		          WHERE b2.partial_md5 = b.partial_md5 AND b2.status = 'active'` + grant("b2") + `) = 1
+		  ORDER BY b.created_at, b.id
+		  LIMIT 1`
+	if viewerID != "" {
+		args = append(args, viewerID, viewerID)
+	}
+	row := s.db.QueryRowContext(ctx, q(query), args...)
+	book, err := scanCatalogBook(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.CatalogBook{}, store.ErrNotFound
+	}
+	return book, err
+}
+
 func (s *Store) ListCatalogBooks(
 	ctx context.Context, viewerID, folderID string, after *store.CatalogBookCursor, limit int,
 ) ([]store.CatalogBook, error) {

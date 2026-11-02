@@ -1662,7 +1662,13 @@ used or expired code is `403`. Their positions
 land in the same per-user op log with
 `origin: "kosync"`, so a native client sees them through `/v1/changes`
 like any other device; the xpointer rides in `foreign_pos` and
-round-trips verbatim to kosync pulls.
+round-trips verbatim to kosync pulls. When the newest position came
+from a Liseur reader instead, a pull answers with an xpointer for the
+same word if that position quotes its passage (`liseurAnchor: 1`) and
+was written against the very file the device names: one catalog book
+behind the fingerprint, in a folder the account is granted. Otherwise
+it answers with the percentage, as before
+([ADR-0059](adr/0059-deriving-a-position-across-protocols.md)).
 
 ## Errors and limits
 
