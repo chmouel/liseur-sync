@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/xml"
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/cover"
@@ -15,6 +18,25 @@ import (
 // OPDS 1.2 lives under a versioned prefix so that a later OPDS 2.0
 // surface can be added beside it rather than replacing it.
 const opdsPrefix = "/opds/v1.2"
+
+// opdsPageSize is how many books an acquisition feed carries, and it is
+// deliberately smaller than defaultCatalogPageSize. An embedded catalog
+// client parses a feed as it streams and keeps every entry it retains in
+// RAM: one e-reader firmware budgets 64 entries by the size of its entry
+// struct, then stores up to 500 characters of description, plus a title,
+// an author and three links, for each of them on top. A page of 50
+// Calibre books is a 100 KB feed and some 40 KB of that client's heap,
+// which is enough for it to run out mid-parse and report a feed it could
+// not read. Twenty entries of bounded text stay well inside that budget,
+// and a reader pages to the rest through `next`.
+const opdsPageSize = 20
+
+// opdsSummaryLimit caps the description an entry carries. It is below the
+// 500 characters such a client keeps anyway, and Calibre comments are
+// routinely longer than either: one page of uncut descriptions was 70 KB
+// of the 108 KB feed. Truncation happens on a rune boundary so the feed
+// stays valid UTF-8.
+const opdsSummaryLimit = 400
 
 const (
 	opdsNavigationType  = "application/atom+xml;profile=opds-catalog;kind=navigation"
@@ -64,6 +86,9 @@ type opdsEntry struct {
 	Updated string    `xml:"updated"`
 	Content *opdsText `xml:"content,omitempty"`
 	Summary *opdsText `xml:"summary,omitempty"`
+	// Authors is plural in Atom, and every reader draws the first one.
+	// An embedded catalog client takes its author from author/name only.
+	Authors []opdsAuthor `xml:"author,omitempty"`
 	// Dublin Core carries the bibliographic fields Atom has no room for.
 	Publisher string     `xml:"dc:publisher,omitempty"`
 	Issued    string     `xml:"dc:issued,omitempty"`
@@ -132,7 +157,15 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	limit := defaultCatalogPageSize
+	// The folder is read first so the feed can be named after it: a feed
+	// whose title is the word "Folder" is one a reader cannot tell apart
+	// from the next one.
+	folder, err := s.St.FolderByID(r.Context(), tok.UserID, folderID)
+	if err != nil {
+		writeCatalogError(w, err, "folder not found")
+		return
+	}
+	limit := opdsPageSize
 	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, folderID, after, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -146,7 +179,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 	self := opdsPrefix + "/folders/" + url.PathEscape(folderID)
 	feed := opdsFeed{
 		ID:      "urn:liseur:folder:" + folderID,
-		Title:   "Folder",
+		Title:   opdsTitle(folder.Name, "Folder"),
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
@@ -174,9 +207,12 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 			Type: opdsNavigationType, Title: opdsKindTitles[segment],
 		})
 	}
-	for _, b := range books {
-		feed.Entries = append(feed.Entries, opdsBookEntry(b))
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
 	}
+	feed.Entries = entries
 	if len(books) == limit {
 		last := books[len(books)-1]
 		cursor := encodeCatalogCursor(store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})
@@ -189,7 +225,31 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 	writeOPDS(w, r, opdsAcquisitionType, feed)
 }
 
-func opdsBookEntry(b store.CatalogBook) opdsEntry {
+// opdsBookEntries renders one feed page, reading the page's contributors
+// in one batched query rather than one per entry: a page is a bounded
+// number of rows and must stay a bounded number of queries.
+func (s *Server) opdsBookEntries(
+	ctx context.Context, userID string, books []store.CatalogBook,
+) ([]opdsEntry, error) {
+	if len(books) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(books))
+	for _, b := range books {
+		ids = append(ids, b.ID)
+	}
+	rel, err := s.St.CatalogBookRelationsForBooks(ctx, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]opdsEntry, 0, len(books))
+	for _, b := range books {
+		out = append(out, opdsBookEntry(b, rel.Contributors[b.ID]))
+	}
+	return out, nil
+}
+
+func opdsBookEntry(b store.CatalogBook, contributors []store.BookContributor) opdsEntry {
 	entry := opdsEntry{
 		Title:     opdsTitle(b.Title, "Untitled"),
 		ID:        "urn:liseur:book:" + b.ID,
@@ -201,17 +261,31 @@ func opdsBookEntry(b store.CatalogBook) opdsEntry {
 			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/download",
 			Type: "application/epub+zip",
 		}, {
-			// Readers fetch these with the same Basic credential they
-			// used for the feed, which is why the cover is reachable
-			// under /opds as well as under /v1.
+			// Readers fetch covers with the same Basic credential they
+			// used for the feed, which is why they are reachable under
+			// /opds as well as under /v1.
+			//
+			// `image` is the relation a reader draws, so it points at
+			// the thumbnail and the thumbnail at the icon. A catalog is
+			// a grid of small pictures, and the full variant is a
+			// page-sized image that one e-reader client fetches by
+			// preference into a few hundred kilobytes of free RAM.
+			// The book page still serves it under /v1.
 			Rel:  opdsImageRel,
-			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover?size=full",
+			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover",
 			Type: cover.MediaType,
 		}, {
 			Rel:  opdsThumbnailRel,
-			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover",
+			Href: opdsPrefix + "/books/" + url.PathEscape(b.ID) + "/cover?size=icon",
 			Type: cover.MediaType,
 		}},
+	}
+	// Roles are normalized on the way into the catalog, so picking the
+	// authors out is a comparison rather than a guess.
+	for _, c := range contributors {
+		if c.Role == store.ContributorRoleAuthor {
+			entry.Authors = append(entry.Authors, opdsAuthor{Name: c.Name})
+		}
 	}
 	// A subtitle is worth showing even when there is no description, so
 	// the two are merged into the one field readers reliably render.
@@ -219,10 +293,24 @@ func opdsBookEntry(b store.CatalogBook) opdsEntry {
 	if summary == "" {
 		summary = b.Subtitle
 	}
-	if summary != "" {
+	if summary = opdsBounded(summary, opdsSummaryLimit); summary != "" {
 		entry.Summary = &opdsText{Type: "text", Body: summary}
 	}
 	return entry
+}
+
+// opdsBounded shortens text to at most limit bytes without splitting a
+// rune. Feed text is metadata out of somebody's EPUB, so it is UTF-8 that
+// may be cut anywhere, including a few bytes into a multi-byte sequence.
+func opdsBounded(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return strings.TrimRight(value[:cut], " \t\r\n") + "…"
 }
 
 // writeOPDS serialises the feed. It buffers nothing: a feed is small,

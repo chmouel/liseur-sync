@@ -1639,6 +1639,14 @@ last. Search results are unpaged and carry no `next` link: the best
 matches are already there, and more of them is a better query rather
 than another page.
 
+A page holds 20 books, fewer than the native catalog's 50. Embedded
+catalog clients parse a feed while it streams and hold every entry they
+keep in RAM, so a page is sized for a device with a few hundred
+kilobytes free rather than for a browser. Each entry carries its authors
+as `author/name` and a summary cut to 400 bytes, and the two cover links
+point at the thumbnail and icon variants rather than the page-sized
+image. Readers page through the rest with `next`.
+
 ## KOReader without a liseur-sync plugin
 
 Stock KOReader devices can join through the kosync adapter instead of
