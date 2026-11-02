@@ -1681,6 +1681,41 @@ behind the fingerprint, in a folder the account is granted. Otherwise
 it answers with the percentage, as before
 ([ADR-0059](adr/0059-deriving-a-position-across-protocols.md)).
 
+## CrossPoint
+
+CrossPoint Reader (the Xteink X3 and X4 firmware) uses both surfaces
+above with no plugin: OPDS for the catalog and the kosync adapter for
+positions.
+
+For the catalog, add an entry under OPDS Browser → OPDS Servers with
+the OPDS Server URL `https://<host>/opds/v1.2`, the username `token` and
+a `library-read` token secret as the password. CrossPoint reports every
+refusal other than a bad login as "Failed to parse feed", so a revoked
+token or a folder the account is no longer granted looks like a broken
+feed; the server logs each refused OPDS request at WARN with its status
+and token id.
+
+For positions, open Settings → CrossPoint Sync and set Sync Server URL
+to `https://<host>/adapter/kosync`, Server Type to KoSync, Document
+Matching to Binary, Username to a new device name and Password to a
+pairing code, then press Sign Up on the reader. Binary is KOReader's
+partial MD5, which is what the adapter and the catalog key on; the
+default, Filename, names a book by its path on the reader and can never
+be matched to one here. "Username is already registered" is the `402`
+above: that device name is paired already.
+
+Positions travel at paragraph precision, not just as a percentage, in
+both directions. CrossPoint sends a KOReader xpointer, which a Liseur
+reader receives as an exact locator for the same passage (see
+[Pulling](#pulling)), and a pull from CrossPoint gets an xpointer back
+for a position a Liseur reader wrote. Both need the reader to hold the
+very file the catalog serves, so download books to it through OPDS. A
+copy converted or rewritten on the way (Calibre's send-to-device can do
+this) has another fingerprint, so its positions land on a pending work
+of their own: they sync with other CrossPoint and KOReader devices
+holding the same copy, and never reach a Liseur reader. Clippings
+and CrossPoint's layout hints in `position` are not synced.
+
 ## Errors and limits
 
 - Every error is `{"error": "reason"}` with a 4xx; a 5xx is a server
