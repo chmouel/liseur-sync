@@ -353,6 +353,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("WorkTranslationsMerge", func(t *testing.T) { testWorkTranslationsMerge(t, open) })
 	t.Run("WorkTranslationsDelete", func(t *testing.T) { testWorkTranslationsDelete(t, open) })
 	t.Run("PairingCodeSingleUse", func(t *testing.T) { testPairingRedeem(t, open) })
+	t.Run("PairKosyncDeviceSpendsCodeOnlyWhenBound", func(t *testing.T) { testPairKosyncDevice(t, open) })
 	t.Run("KopluginSupersession", func(t *testing.T) { testKopluginUpsert(t, open) })
 	t.Run("LegacyAliasWritesAtomic", func(t *testing.T) { testLegacyAliasWritesAtomic(t, open) })
 	t.Run("InferredSessionIdentity", func(t *testing.T) { testInferredSessionIdentity(t, open) })
@@ -1320,6 +1321,43 @@ func testPairingRedeem(t *testing.T, open OpenFunc) {
 	}
 	if _, err := s.RedeemPairingCode(ctx, "hash2", time.Now()); err != store.ErrConflict {
 		t.Fatalf("expired redeem: want ErrConflict, got %v", err)
+	}
+}
+
+// testPairKosyncDevice: a pairing code is spent only when its slot is
+// bound. A refused slot must leave the code usable, or a device that
+// signs up under a taken name burns the code the user just typed.
+func testPairKosyncDevice(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "iris")
+	for _, pc := range []store.PairingCode{
+		{ID: "p1", UserID: u.ID, CodeSHA256: "key1", ExpiresAt: time.Now().Add(15 * time.Minute)},
+		{ID: "p2", UserID: u.ID, CodeSHA256: "key2", ExpiresAt: time.Now().Add(15 * time.Minute)},
+	} {
+		if err := s.CreatePairingCode(ctx, pc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := s.PairKosyncDevice(ctx, "key1", store.KosyncDevice{DeviceSlot: "x3", KeySHA256: "key1"}, time.Now())
+	if err != nil || d.UserID != u.ID {
+		t.Fatalf("pair: %+v %v", d, err)
+	}
+	if _, err := s.PairKosyncDevice(ctx, "key1", store.KosyncDevice{DeviceSlot: "x3b", KeySHA256: "key1"}, time.Now()); err != store.ErrConflict {
+		t.Fatalf("spent code: want ErrConflict, got %v", err)
+	}
+	if _, err := s.PairKosyncDevice(ctx, "key2", store.KosyncDevice{DeviceSlot: "x3", KeySHA256: "key2"}, time.Now()); err != store.ErrSlotTaken {
+		t.Fatalf("taken slot: want ErrSlotTaken, got %v", err)
+	}
+	if _, err := s.PairKosyncDevice(ctx, "key2", store.KosyncDevice{DeviceSlot: "x3b", KeySHA256: "key2"}, time.Now()); err != nil {
+		t.Fatalf("code refused for a taken slot was spent anyway: %v", err)
+	}
+	if _, err := s.PairKosyncDevice(ctx, "nope", store.KosyncDevice{DeviceSlot: "x3c", KeySHA256: "nope"}, time.Now()); err != store.ErrNotFound {
+		t.Fatalf("unknown code: want ErrNotFound, got %v", err)
+	}
+	devices, err := s.ListKosyncDevices(ctx, u.ID)
+	if err != nil || len(devices) != 2 {
+		t.Fatalf("devices: %+v %v", devices, err)
 	}
 }
 

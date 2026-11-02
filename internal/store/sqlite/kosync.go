@@ -33,10 +33,18 @@ func (s *Store) RedeemPairingCode(ctx context.Context, codeSHA256 string, at tim
 		return store.PairingCode{}, err
 	}
 	defer tx.Rollback()
+	p, err := redeemPairingCodeTx(ctx, tx, codeSHA256, at)
+	if err != nil {
+		return p, err
+	}
+	return p, tx.Commit()
+}
+
+func redeemPairingCodeTx(ctx context.Context, tx *sql.Tx, codeSHA256 string, at time.Time) (store.PairingCode, error) {
 	var p store.PairingCode
 	var expires string
 	var used sql.NullString
-	err = tx.QueryRowContext(ctx,
+	err := tx.QueryRowContext(ctx,
 		`SELECT id, user_id, code_sha256, expires_at, used_at FROM pairing_codes
 		 WHERE code_sha256 = ?
 		   AND EXISTS (SELECT 1 FROM users u
@@ -63,7 +71,38 @@ func (s *Store) RedeemPairingCode(ctx context.Context, codeSHA256 string, at tim
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return p, store.ErrConflict
 	}
-	return p, tx.Commit()
+	return p, nil
+}
+
+func (s *Store) PairKosyncDevice(ctx context.Context, codeSHA256 string, d store.KosyncDevice, at time.Time) (store.KosyncDevice, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return d, err
+	}
+	defer tx.Rollback()
+	p, err := redeemPairingCodeTx(ctx, tx, codeSHA256, at)
+	if err != nil {
+		return d, err
+	}
+	d.UserID = p.UserID
+	var taken int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM kosync_devices WHERE user_id = ? AND device_slot = ?`,
+		d.UserID, d.DeviceSlot).Scan(&taken); err != nil {
+		return d, err
+	}
+	if taken > 0 {
+		return d, store.ErrSlotTaken
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO kosync_devices (user_id, device_slot, key_sha256, label) VALUES (?, ?, ?, ?)`,
+		d.UserID, d.DeviceSlot, d.KeySHA256, d.Label); err != nil {
+		if isUniqueErr(err) {
+			return d, store.ErrConflict
+		}
+		return d, err
+	}
+	return d, tx.Commit()
 }
 
 func (s *Store) CreateKosyncDevice(ctx context.Context, d store.KosyncDevice) error {

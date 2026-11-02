@@ -1655,7 +1655,10 @@ this API: the user generates a pairing code in the web UI or with
 `https://<host>/adapter/kosync`, username to a device name, password to
 the pairing code. The client hashes that password itself — KOReader
 sends `md5(password)` to `users/create` and reuses it as `x-auth-key` —
-so the code is typed in once and never transmitted. Their positions
+so the code is typed in once and never transmitted. Signing up a device
+name that is already paired answers `402`, kosync's "user exists",
+whether the key matches or not, and leaves the code unspent; an unknown,
+used or expired code is `403`. Their positions
 land in the same per-user op log with
 `origin: "kosync"`, so a native client sees them through `/v1/changes`
 like any other device; the xpointer rides in `foreign_pos` and
