@@ -15,6 +15,7 @@ package kosync
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -92,7 +93,9 @@ func (s *Server) HandleAuth(w http.ResponseWriter, r *http.Request) {
 // KOSyncClient does likewise). So what arrives here is the derived key,
 // it is matched against the stored hash of that key, and it becomes the
 // device slot's credential directly. This route never creates an
-// account (ADR-0026).
+// account (ADR-0026). A slot that is already paired answers 402, the
+// kosync "user exists" status, and spends nothing: redeeming the code
+// and creating the device are one store transaction.
 func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -117,21 +120,37 @@ func (s *Server) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// The pairing code was stored as the hash of the key the client
 	// derives, so the value received here hashes to it directly.
 	userKey := strings.ToLower(req.Password)
-	p, err := s.St.RedeemPairingCode(ctx, auth.HashSecret(userKey), now)
-	if err != nil {
-		slog.Warn("kosync registration rejected", "reason", "invalid, expired or used pairing code", "slot", req.Username, "ip", auth.ClientIP(r, s.Cfg))
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired pairing code"})
+	keySHA := auth.HashSecret(userKey)
+	ip := auth.ClientIP(r, s.Cfg)
+
+	// A device signing up again with the credential it already paired
+	// with is told the account exists, kosync's 402, which every client
+	// reads as "now log in". Its code was spent by the first Sign Up, so
+	// without this it would be refused as an invalid code instead.
+	if d, err := s.St.KosyncDeviceByKey(ctx, keySHA); err == nil && d.RevokedAt == nil &&
+		subtle.ConstantTimeCompare([]byte(d.DeviceSlot), []byte(req.Username)) == 1 {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "device slot already paired"})
 		return
 	}
-	d := store.KosyncDevice{
-		UserID:     p.UserID,
+
+	_, err := s.St.PairKosyncDevice(ctx, keySHA, store.KosyncDevice{
 		DeviceSlot: req.Username, // kosync "username" names the device slot
-		KeySHA256:  auth.HashSecret(userKey),
+		KeySHA256:  keySHA,
 		Label:      "kosync:" + req.Username,
-	}
-	if err := s.St.CreateKosyncDevice(ctx, d); err != nil {
-		slog.Warn("kosync registration rejected", "reason", "device slot already paired", "slot", req.Username, "ip", auth.ClientIP(r, s.Cfg))
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "device slot already paired"})
+	}, now)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrSlotTaken):
+		slog.Warn("kosync registration rejected", "reason", "device slot already paired", "slot", req.Username, "ip", ip)
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "device slot already paired"})
+		return
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+		slog.Warn("kosync registration rejected", "reason", "invalid, expired or used pairing code", "slot", req.Username, "ip", ip)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired pairing code"})
+		return
+	default:
+		slog.Error("kosync registration failed", "err", err, "slot", req.Username, "ip", ip)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"username": req.Username})

@@ -49,6 +49,10 @@ var (
 	// convergent, so the answer is to stop, not to retry — the holder
 	// finishes what this worker started.
 	ErrRefreshLeaseLost = errors.New("store: refresh lease lost")
+
+	// ErrSlotTaken is PairKosyncDevice refusing a device slot the
+	// code's account already has paired. The code is left unspent.
+	ErrSlotTaken = errors.New("store: kosync device slot already paired")
 )
 
 // ItemError names which item of a batch a refusal is about. Batches are
@@ -2134,6 +2138,12 @@ type Store interface {
 	CreatePairingCode(ctx context.Context, p PairingCode) error
 	RedeemPairingCode(ctx context.Context, codeSHA256 string, at time.Time) (PairingCode, error)
 	CreateKosyncDevice(ctx context.Context, d KosyncDevice) error
+	// PairKosyncDevice redeems a pairing code and binds a device slot to
+	// the code's account in one transaction: a code is spent only when
+	// the slot is bound. d.UserID is ignored and taken from the code; the
+	// returned device carries it. ErrNotFound is an unknown code,
+	// ErrConflict a used or expired one, ErrSlotTaken an occupied slot.
+	PairKosyncDevice(ctx context.Context, codeSHA256 string, d KosyncDevice, at time.Time) (KosyncDevice, error)
 	KosyncDeviceByKey(ctx context.Context, keySHA256 string) (KosyncDevice, error)
 	AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID string, op Op) (OpResult, error)
 	CreateKopluginDevice(ctx context.Context, d KopluginDevice) error

@@ -382,3 +382,99 @@ func TestNoOpenRoutes(t *testing.T) {
 		}
 	}
 }
+
+// crosspointDo sends a request the way CrossPoint's KOReaderSyncClient
+// does: x-auth-* alongside Basic with the typed password, and its own
+// Accept header.
+func crosspointDo(t *testing.T, method, url, user, key, password string, body any) (int, map[string]any) {
+	t.Helper()
+	var rdr *bytes.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rdr = bytes.NewReader(b)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+	req, _ := http.NewRequest(method, url, rdr)
+	req.Header.Set("Accept", "application/vnd.koreader.v1+json")
+	if key != "" {
+		req.Header.Set("x-auth-user", user)
+		req.Header.Set("x-auth-key", key)
+		req.SetBasicAuth(user, password)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
+}
+
+// TestCrossPointSignUpAndSync replays CrossPoint 2.0's kosync traffic.
+// CrossPoint reads only 2xx and 402 from users/create, so Sign Up on a
+// slot that is already paired must be 402, and a code refused for a
+// taken slot must stay usable.
+func TestCrossPointSignUpAndSync(t *testing.T) {
+	ts, st := testServer(t)
+	hash, _ := auth.HashPassword("hunter2hunter")
+	u := store.User{ID: "u1", Name: "alice", Argon2Hash: hash, KosyncEnabled: true, KopluginEnabled: true, CreatedAt: time.Now()}
+	if err := st.CreateUser(t.Context(), u); err != nil {
+		t.Fatal(err)
+	}
+	user, key, pairingCode := pairDevice(t, ts, st, u.ID, "x3")
+	create := ts.URL + "/adapter/kosync/users/create"
+
+	// Pressing Sign Up again with the same settings.
+	code, _ := crosspointDo(t, "POST", create, "", "", "", map[string]string{"username": user, "password": key})
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("repeat sign up: want 402, got %d", code)
+	}
+
+	// A fresh code typed against the taken slot is refused, and kept.
+	fresh := "fresh-code-for-the-second-device"
+	if err := st.CreatePairingCode(t.Context(), store.PairingCode{
+		ID: "p-fresh", UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(fresh),
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	freshKey := auth.KosyncUserKey(fresh)
+	code, _ = crosspointDo(t, "POST", create, "", "", "", map[string]string{"username": user, "password": freshKey})
+	if code != http.StatusPaymentRequired {
+		t.Fatalf("taken slot: want 402, got %d", code)
+	}
+	code, _ = crosspointDo(t, "POST", create, "", "", "", map[string]string{"username": "x3-second", "password": freshKey})
+	if code != http.StatusCreated {
+		t.Fatalf("code refused for a taken slot was spent: %d", code)
+	}
+
+	code, out := crosspointDo(t, "GET", ts.URL+"/adapter/kosync/users/auth", user, key, pairingCode, nil)
+	if code != 200 || out["authorized"] != "OK" {
+		t.Fatalf("auth: %d %v", code, out)
+	}
+
+	// CrossPoint-server mode adds metadata and a rich position; strict
+	// kosync clients never send them, and they must not break the PUT.
+	doc := "0123456789abcdef0123456789abcdef"
+	xpath := "/body/DocFragment[3]/body/p[42]/text().17"
+	code, _ = crosspointDo(t, "PUT", ts.URL+"/adapter/kosync/syncs/progress", user, key, pairingCode, map[string]any{
+		"document": doc,
+		"metadata": map[string]any{"filename": "Author - Title.epub", "title": "Title", "authors": "Author"},
+		"progress": xpath, "percentage": 0.25,
+		"device": "CrossPoint", "device_id": "crosspoint-reader",
+		"position": map[string]any{"pctQ": 2500, "spine": 2, "page": 4, "pages": 17, "para": 42, "xpath": xpath},
+	})
+	if code != 200 {
+		t.Fatalf("put: %d", code)
+	}
+	code, out = crosspointDo(t, "GET", ts.URL+"/adapter/kosync/syncs/progress/"+doc+"?position_kinds=locator,percentage",
+		user, key, pairingCode, nil)
+	if code != 200 || out["progress"] != xpath || out["percentage"].(float64) != 0.25 {
+		t.Fatalf("get: %d %v", code, out)
+	}
+}
