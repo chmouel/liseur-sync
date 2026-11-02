@@ -173,8 +173,10 @@ func (s *Server) HandleChanges(w http.ResponseWriter, r *http.Request) {
 	if out.FurthestFloors == nil {
 		out.FurthestFloors = map[string]int64{}
 	}
+	derive := s.newLocatorDeriver(r)
+	defer derive.close()
 	for _, o := range page.Ops {
-		out.Ops = append(out.Ops, opToJSON(o))
+		out.Ops = append(out.Ops, derive.op(o))
 	}
 	if out.Ops == nil {
 		out.Ops = []opJSON{}
@@ -207,11 +209,13 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 		Furthest      []opJSON `json:"furthest"`
 		FurthestFloor int64    `json:"furthest_floor"`
 	}{Ops: []opJSON{}, Furthest: []opJSON{}, FurthestFloor: snapshot.FurthestFloor}
+	derive := s.newLocatorDeriver(r)
+	defer derive.close()
 	for _, o := range snapshot.Ops {
-		out.Ops = append(out.Ops, opToJSON(o))
+		out.Ops = append(out.Ops, derive.op(o))
 	}
 	for _, o := range snapshot.Furthest {
-		out.Furthest = append(out.Furthest, opToJSON(o))
+		out.Furthest = append(out.Furthest, derive.op(o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -234,11 +238,13 @@ func (s *Server) HandleHeads(w http.ResponseWriter, r *http.Request) {
 	if out.FurthestFloors == nil {
 		out.FurthestFloors = map[string]int64{}
 	}
+	derive := s.newLocatorDeriver(r)
+	defer derive.close()
 	for _, o := range h.Ops {
-		out.Ops = append(out.Ops, opToJSON(o))
+		out.Ops = append(out.Ops, derive.op(o))
 	}
 	for _, o := range h.Furthest {
-		out.Furthest = append(out.Furthest, opToJSON(o))
+		out.Furthest = append(out.Furthest, derive.op(o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
