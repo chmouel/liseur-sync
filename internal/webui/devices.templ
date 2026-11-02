@@ -146,6 +146,14 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 			username = device name, password = code, server =
 			<code>{ base + "/adapter/kosync" }</code>.
 		</p>
+		<p class="muted">
+			On a CrossPoint reader, open Settings → CrossPoint Sync: set
+			Sync Server URL to the address above, Server Type to KoSync,
+			Document Matching to Binary, Username to a new device name and
+			Password to the code, then press Sign Up. Leave Sync Clippings
+			off. "Username is already registered" means that device name
+			is paired already: pick another name or revoke it below.
+		</p>
 		<form method="post" action={ prefix + "pairing" } class="inline">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<button type="submit">Generate pairing code</button>
@@ -255,6 +263,12 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 			remember. The token needs the
 			<code>{ string(store.ScopeLibraryRead) }</code> scope; one
 			without it can sync positions but cannot see a book.
+		</p>
+		<p class="muted">
+			A CrossPoint reader shows "Failed to parse feed" for any
+			refusal other than a bad login, such as a revoked token or a
+			folder it is no longer granted. Check the token and its scope
+			first.
 		</p>
 	</section>
 }
