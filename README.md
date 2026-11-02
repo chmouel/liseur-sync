@@ -5,7 +5,7 @@
 
 Self-hosted server for book libraries and reading-position synchronization.
 
-`liseur-sync` is the companion server for [Liseur](https://github.com/chmouel/liseur). It also provides a kosync-compatible API for KOReader.
+`liseur-sync` is the companion server for [Liseur](https://github.com/chmouel/liseur). It also provides a kosync-compatible API for KOReader and CrossPoint.
 
 The server is a single Go binary with SQLite by default, optional PostgreSQL, and multi-user support.
 
@@ -19,7 +19,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 
 * reading-position synchronization using full locators
 * a native REST API
-* a kosync-compatible API for KOReader
+* a kosync-compatible API for KOReader and [CrossPoint](docs/integrating.md#crosspoint), with paragraph-precise positions shared with Liseur
 * OPDS 1.2
 * EPUB library indexing and search
 * EPUB upload and deletion for writable folders
@@ -110,7 +110,7 @@ See:
 
 ![Reader](docs/screenshots/reader.png)
 
-The reader uses the same synchronization API as other clients, so reading state is shared with Liseur, KOReader, and other compatible clients.
+The reader uses the same synchronization API as other clients, so reading state is shared with Liseur, KOReader, CrossPoint, and other compatible clients.
 
 When another device has read further, the reader offers to continue there, naming both pages, how long ago the other device was there, and the passage it had on screen. The same comparison can be asked for at any time with the sync button in the reader bar (`s`), which shows both positions and offers to take the other one, keep this page, or cancel and change nothing. The library and the offline shelf refresh on a pull-down, or with their refresh button: pending reading is delivered first, then the page is redrawn. See [ADR-0040](docs/adr/0040-asking-rather-than-waiting-to-be-asked.md).
 
