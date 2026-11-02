@@ -29,7 +29,10 @@ export function mergeFurthest(previous, observations, workID, floor = 0) {
       : raw;
     const seq = parseSeq(op.seq);
     if (cutoff !== null && seq !== null && seq <= cutoff) continue;
-    const key = JSON.stringify([op.work_id, op.edition_sha || "", op.origin_alias || ""]);
+    // A derived edition_sha comes and goes with the server's catalog
+    // (ADR-0059), so it never decides which group an op belongs to.
+    const edition = op.derived ? "" : op.edition_sha || "";
+    const key = JSON.stringify([op.work_id, edition, op.origin_alias || ""]);
     const old = groups.get(key);
     if (!old || op.progression > old.progression ||
         (op.progression === old.progression && earlierCandidate(op, old))) {
