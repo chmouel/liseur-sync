@@ -3829,6 +3829,24 @@ components:
               type: string
               description: "Source identifier for edition-less records, preserving ownership when a work is split."
             received_at: { type: string, format: date-time }
+            derived:
+              type: object
+              required: [from]
+              description: |
+                Present when the server filled `edition_sha` and `locator`
+                at read time rather than returning what was written
+                (ADR-0059). Today that is a kosync op whose `foreign_pos`
+                XPath resolved in the one catalog file behind its
+                `origin_alias`, in a folder the account is granted, read
+                with a credential that also holds `library-read`. The
+                locator is an exact Liseur anchor (`liseurAnchor: 1`,
+                `cssSelector` and a `text` quote). Every other field is as
+                stored. The same op may read without it later (a revoked
+                grant, a deleted book), so a client must not store it as
+                the op, push it back as its own position, or let it change
+                which ownership group the op belongs to.
+              properties:
+                from: { type: string, enum: [kosync-xpath] }
     OpResult:
       type: object
       properties:

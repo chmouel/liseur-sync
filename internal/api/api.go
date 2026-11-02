@@ -280,6 +280,7 @@ type opJSON struct {
 	Seq         int64           `json:"seq,omitempty"`
 	DeviceID    string          `json:"device_id,omitempty"`
 	ReceivedAt  string          `json:"received_at,omitempty"`
+	Derived     *derivedJSON    `json:"derived,omitempty"`
 }
 
 func opToJSON(o store.Op) opJSON {
