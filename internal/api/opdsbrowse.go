@@ -109,7 +109,7 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 		FolderID: folderID,
 		UserID:   tok.UserID,
 		Text:     text,
-		Limit:    defaultCatalogPageSize,
+		Limit:    opdsPageSize,
 	})
 	if err != nil {
 		writeCatalogError(w, err, "folder not found")
@@ -128,9 +128,12 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 				Type: opdsAcquisitionType},
 		},
 	}
-	for _, b := range result.Books {
-		feed.Entries = append(feed.Entries, opdsBookEntry(b))
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, result.Books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog search failed")
+		return
 	}
+	feed.Entries = entries
 	writeOPDS(w, r, opdsAcquisitionType, feed)
 }
 
@@ -161,7 +164,7 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cursor is too long")
 		return
 	}
-	limit := defaultCatalogPageSize
+	limit := opdsPageSize
 	entities, err := s.St.ListCatalogEntities(
 		r.Context(), readerID(r), kind, after, limit)
 	if err != nil {
@@ -226,7 +229,7 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		writeCatalogError(w, err, "entity not found")
 		return
 	}
-	limit := defaultCatalogPageSize
+	limit := opdsPageSize
 	books, next, err := s.St.ListBooksByEntity(
 		r.Context(), readerID(r), entity.ID, kind, after, limit)
 	if err != nil {
@@ -245,9 +248,12 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 			{Rel: "up", Href: kindHref, Type: opdsNavigationType},
 		},
 	}
-	for _, b := range books {
-		feed.Entries = append(feed.Entries, opdsBookEntry(b))
+	entries, err := s.opdsBookEntries(r.Context(), readerID(r), books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
 	}
+	feed.Entries = entries
 	if next != nil {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel:  "next",
@@ -287,7 +293,7 @@ func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	limit := defaultCatalogPageSize
+	limit := opdsPageSize
 	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, folderID, before, limit)
 	if err != nil {
 		writeCatalogError(w, err, "folder not found")
@@ -305,9 +311,12 @@ func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
 			{Rel: "up", Href: folderHref, Type: opdsAcquisitionType},
 		},
 	}
-	for _, b := range books {
-		feed.Entries = append(feed.Entries, opdsBookEntry(b))
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
 	}
+	feed.Entries = entries
 	if len(books) == limit {
 		last := books[len(books)-1]
 		feed.Links = append(feed.Links, opdsLink{

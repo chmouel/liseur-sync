@@ -3,10 +3,12 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -255,7 +257,7 @@ func TestOPDSRequiresLibraryReadScope(t *testing.T) {
 // drops books is worse than one that fails.
 func TestOPDSPagesWithoutLosingBooks(t *testing.T) {
 	f := newFolderFixture(t)
-	const total = defaultCatalogPageSize + 3
+	const total = opdsPageSize + 3
 	want := map[string]bool{}
 	for i := range total {
 		id, _ := f.publish(t, fmt.Sprintf("p%02d", i), []byte(fmt.Sprintf("body-%d", i)))
@@ -391,6 +393,13 @@ func TestOPDSEntriesCarryCoverLinks(t *testing.T) {
 	if !strings.Contains(thumbnail, bookID) {
 		t.Fatalf("thumbnail link %q is not this book's", thumbnail)
 	}
+	// Neither variant is the page-sized one. A catalog is a grid of small
+	// pictures, and the client that reads these feeds fetches `image` by
+	// preference: handing it a 1000-pixel cover spends hundreds of
+	// kilobytes of a device's RAM on a thumbnail's worth of pixels.
+	if strings.Contains(full, "size=full") || strings.Contains(thumbnail, "size=full") {
+		t.Fatalf("feed advertises the page-sized cover: image=%q thumbnail=%q", full, thumbnail)
+	}
 
 	// The links must be fetchable with the feed's own credential.
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
@@ -409,5 +418,330 @@ func TestOPDSEntriesCarryCoverLinks(t *testing.T) {
 	}
 	if got := fetched.Header.Get("Content-Type"); got != "image/jpeg" {
 		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+// crossPointFeed is what an embedded catalog client extracts from a feed:
+// a feed title, a list of entries, and whether it had to stop collecting.
+type crossPointFeed struct {
+	title     string
+	entries   []crossPointEntry
+	truncated bool
+}
+
+type crossPointEntry struct {
+	title     string
+	author    string
+	href      string
+	id        string
+	summary   string
+	publisher string
+}
+
+// crossPointEntryLimit is the entry ceiling of the client this test
+// mirrors: it reserves storage for a page in RAM and keeps a margin, so a
+// feed carrying more entries than this is silently cut short.
+const crossPointEntryLimit = 62
+
+// crossPointDescriptionLimit is how much of a summary that client keeps.
+const crossPointDescriptionLimit = 500
+
+// parseLikeCrossPoint walks the feed the way an embedded client's expat
+// handler does: prefixes are ignored rather than resolved (so `dc:publisher`
+// and `publisher` are the same element), the author comes from
+// author/name, the acquisition link is the entry's href, and collecting
+// stops at the entry ceiling. It is deliberately not encoding/xml's
+// struct unmarshalling: the client has no schema, and a test that used one
+// would not notice an element the client cannot reach.
+func parseLikeCrossPoint(t *testing.T, raw []byte) crossPointFeed {
+	t.Helper()
+	var (
+		feed         crossPointFeed
+		entry        crossPointEntry
+		inEntry      bool
+		collect      bool
+		inFeedTitle  bool
+		inTitle      bool
+		inAuthor     bool
+		inAuthorName bool
+		inID         bool
+		inSummary    bool
+		inPublisher  bool
+		text         strings.Builder
+	)
+	dec := xml.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("feed is not well-formed XML: %v\n%s", err, raw)
+		}
+		switch el := tok.(type) {
+		case xml.StartElement:
+			name := el.Name.Local
+			switch {
+			case name == "entry":
+				inEntry = true
+				collect = len(feed.entries) < crossPointEntryLimit
+				feed.truncated = feed.truncated || !collect
+				entry = crossPointEntry{}
+				inTitle, inAuthor, inAuthorName, inID = false, false, false, false
+				inSummary, inPublisher = false, false
+			case inEntry && inSummary:
+				// Nested markup inside a description is not an entry field.
+			case inEntry && inPublisher:
+			case name == "link":
+				if !inEntry {
+					continue
+				}
+				var rel string
+				for _, attr := range el.Attr {
+					switch attr.Name.Local {
+					case "rel":
+						rel = attr.Value
+					case "href":
+						if strings.Contains(rel, "acquisition") || strings.Contains(rel, "atom+xml") {
+							if entry.href == "" {
+								entry.href = attr.Value
+							}
+						}
+					}
+				}
+			case !inEntry && name == "title":
+				inFeedTitle = true
+				text.Reset()
+			case !collect:
+			case name == "title":
+				inTitle = true
+				text.Reset()
+			case name == "author":
+				inAuthor = true
+			case inAuthor && name == "name":
+				inAuthorName = true
+				text.Reset()
+			case name == "id":
+				inID = true
+				text.Reset()
+			case name == "summary" || name == "content":
+				inSummary = true
+				text.Reset()
+			case name == "publisher":
+				inPublisher = true
+				text.Reset()
+			}
+		case xml.CharData:
+			if inEntry {
+				if inTitle || inAuthorName || inID || inSummary || inPublisher {
+					text.Write(el)
+				}
+				continue
+			}
+			if inFeedTitle {
+				text.Write(el)
+			}
+		case xml.EndElement:
+			name := el.Name.Local
+			switch {
+			case name == "entry" && inEntry:
+				if collect && entry.title != "" && entry.href != "" {
+					feed.entries = append(feed.entries, entry)
+				}
+				inEntry, collect = false, false
+			case !inEntry && name == "title" && inFeedTitle:
+				feed.title = text.String()
+				inFeedTitle = false
+			case inEntry && name == "title" && inTitle:
+				entry.title = text.String()
+				inTitle = false
+			case inEntry && name == "author":
+				inAuthor = false
+			case inEntry && name == "name" && inAuthorName:
+				entry.author = text.String()
+				inAuthorName = false
+			case inEntry && name == "id" && inID:
+				entry.id = text.String()
+				inID = false
+			case inEntry && (name == "summary" || name == "content") && inSummary:
+				entry.summary = text.String()
+				inSummary = false
+			case inEntry && name == "publisher" && inPublisher:
+				entry.publisher = text.String()
+				inPublisher = false
+			}
+		}
+	}
+	return feed
+}
+
+// TestOPDSCrossPointLoadsTheFolderFeed pins what an embedded catalog
+// client needs from an acquisition feed, on the feed shape that client
+// actually fails on: a Calibre folder whose books carry long comments.
+//
+// It fails today in three ways: the entries have no author, each summary
+// carries the whole comment (tens of kilobytes per feed, most of it
+// thrown away by the client's own 500-character cap), and the page is
+// sized for a browser rather than for a device holding every entry in
+// RAM. The budget below is the regression guard: a feed that grows past
+// it is a feed that client reports as unparseable.
+func TestOPDSCrossPointLoadsTheFolderFeed(t *testing.T) {
+	f := newFolderFixture(t)
+	comment := strings.Repeat("Un commentaire de Calibre très long, avec de la ponctuation. ", 200)
+	total := opdsPageSize + 5
+	for i := range total {
+		f.publish(t, fmt.Sprintf("crosspoint-%02d", i),
+			makeEPUBWithDescription(t, fmt.Sprintf("Livre %02d", i),
+				fmt.Sprintf("Auteur %02d", i), comment, fmt.Sprintf("body-%d", i)))
+	}
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	resp, raw := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("folder feed: %d %s", resp.StatusCode, raw)
+	}
+
+	feed := parseLikeCrossPoint(t, raw)
+	if feed.truncated {
+		t.Fatalf("feed carries more than the %d entries a client can keep", crossPointEntryLimit)
+	}
+	if len(feed.entries) != opdsPageSize {
+		t.Fatalf("feed entries = %d, want %d", len(feed.entries), opdsPageSize)
+	}
+	if feed.title != "Books" {
+		t.Fatalf("feed title = %q, want the folder's own name", feed.title)
+	}
+	for _, entry := range feed.entries {
+		if entry.author == "" {
+			t.Fatalf("entry %q carries no author/name", entry.title)
+		}
+		if entry.href == "" {
+			t.Fatalf("entry %q has no acquisition link", entry.title)
+		}
+		if len(entry.summary) > crossPointDescriptionLimit {
+			t.Fatalf("entry %q summary is %d bytes, past the client's own %d cap",
+				entry.title, len(entry.summary), crossPointDescriptionLimit)
+		}
+	}
+	// The byte budget is roughly two orders of magnitude of headroom over
+	// what this page needs, and far under the 100 KB a browser-sized page
+	// reached: what is being pinned is that the feed stays small enough to
+	// parse on a device with a few hundred kilobytes of RAM.
+	const budget = 24 << 10
+	if len(raw) > budget {
+		t.Fatalf("folder feed is %d bytes, over the %d-byte budget", len(raw), budget)
+	}
+}
+
+// makeEPUBWithDescription builds a publication whose OPF carries a
+// dc:description and a dc:creator, the two fields a feed page renders and
+// the two that decide its size: Calibre writes the folder's whole comment
+// into dc:description, and a shelf of them is what a feed budget is for.
+func makeEPUBWithDescription(t *testing.T, title, author, description, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	add := func(name, content string, method uint16) {
+		t.Helper()
+		f, err := w.CreateHeader(&zip.FileHeader{Name: name, Method: method})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(f, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("mimetype", "application/epub+zip", zip.Store)
+	add("META-INF/container.xml", `<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OPS/book.opf"
+ media-type="application/oebps-package+xml"/></rootfiles></container>`, zip.Deflate)
+	add("OPS/book.opf", `<package xmlns="http://www.idpf.org/2007/opf">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+ <dc:title>`+xmlEscape(title)+`</dc:title>
+ <dc:creator>`+xmlEscape(author)+`</dc:creator>
+ <dc:description>`+xmlEscape(description)+`</dc:description>
+</metadata>
+<manifest><item href="nav.xhtml" media-type="application/xhtml+xml"
+ properties="nav"/></manifest></package>`, zip.Deflate)
+	add("OPS/nav.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><nav/>
+<!-- `+body+` --></body></html>`, zip.Deflate)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestOPDSLogsRefusedRequests: an e-reader reports "parse feed failed"
+// for every non-2xx answer and says nothing about which one it got, so the
+// server has to. What is logged is the status, the route pattern and the
+// credential's id; what is never logged is the secret, the folder id or
+// the book id, because this log is kept and a catalog of what somebody
+// reads is not the server's to publish.
+func TestOPDSLogsRefusedRequests(t *testing.T) {
+	f := newFolderFixture(t)
+	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// A wrong password: refused by the Basic middleware, before any
+	// handler ran.
+	resp, _ := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", "not-the-secret")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong password: %d", resp.StatusCode)
+	}
+	// A valid credential on a folder it was not granted: refused by the
+	// store, for a request the reader made on purpose.
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatalf("revoking the grant: %v", err)
+	}
+	resp, _ = f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("revoked grant: %d", resp.StatusCode)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		"status=401",
+		"status=404",
+		"route=\"GET /opds/v1.2/folders/{folder}\"",
+		// The credential that was refused is named by id, so an operator
+		// can revoke the one that is misconfigured instead of every one.
+		"token_id=",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log is missing %q:\n%s", want, logged)
+		}
+	}
+	var refusedWithCredential string
+	for _, line := range strings.Split(logged, "\n") {
+		if strings.Contains(line, "status=404") {
+			refusedWithCredential = line
+		}
+	}
+	if !strings.Contains(refusedWithCredential, "token_id=") ||
+		strings.Contains(refusedWithCredential, `token_id=""`) {
+		t.Fatalf("the credentialed refusal logged no token id: %q", refusedWithCredential)
+	}
+	for _, secret := range []string{"not-the-secret", read, f.folder.ID} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("%q leaked into the log:\n%s", secret, logged)
+		}
+	}
+
+	// A successful read is not logged: a shelf is a request per book, and
+	// that is a reading history, not a diagnostic.
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, f.folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	if resp, _ := f.opds(t, "/opds/v1.2", "token", read); resp.StatusCode != http.StatusOK {
+		t.Fatalf("root feed: %d", resp.StatusCode)
+	}
+	if strings.Contains(buf.String(), "opds request failed") {
+		t.Fatalf("a successful catalog read was logged as a failure:\n%s", buf.String())
 	}
 }
