@@ -2883,6 +2883,13 @@ paths:
         One page of books, each with an EPUB acquisition link. A `next`
         link appears while more pages remain; readers follow it rather
         than constructing cursors.
+
+        A page carries at most 20 books. That is deliberately fewer than
+        the native catalog: an embedded catalog client parses a feed as
+        it streams and keeps every entry in RAM, so the page size is
+        what a device with a few hundred kilobytes of free memory can
+        hold. Entries carry `author/name` for each author and a summary
+        truncated to 400 bytes.
       parameters:
         - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
         - name: cursor

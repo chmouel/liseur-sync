@@ -541,33 +541,47 @@ func (s *Server) Routes() *http.ServeMux {
 	// covers and downloads as well as feeds, so one screen of a folder
 	// is a request per visible book plus the feed itself, routinely
 	// outnumbering a budget sized for password attempts.
-	opdsH := func(h http.HandlerFunc) http.Handler {
-		return auth.RequireSecureTransport(s.Cfg,
-			auth.RateLimitIP(s.OPDSLimiter, s.Cfg,
-				auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead, h)))
+	//
+	// The logging wrapper is outermost so that a refusal by the
+	// transport, the limiter or the credential check is reported too:
+	// an e-reader that fails says nothing about why.
+	opdsH := func(pattern string, h http.HandlerFunc) http.Handler {
+		return s.opdsLogging(pattern,
+			auth.RequireSecureTransport(s.Cfg,
+				auth.RateLimitIP(s.OPDSLimiter, s.Cfg,
+					auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead,
+						opdsTokenCapture(h)))))
 	}
-	mux.Handle("GET /opds/v1.2", opdsH(s.HandleOPDSRoot))
+	mux.Handle("GET /opds/v1.2", opdsH("GET /opds/v1.2", s.HandleOPDSRoot))
 	// {$} rather than a bare trailing slash: a prefix pattern would
 	// answer every unknown path under /opds/v1.2 with the root feed,
 	// which hides client typos instead of reporting them.
-	mux.Handle("GET /opds/v1.2/{$}", opdsH(s.HandleOPDSRoot))
-	mux.Handle("GET /opds/v1.2/folders/{folder}", opdsH(s.HandleOPDSFolder))
+	mux.Handle("GET /opds/v1.2/{$}", opdsH("GET /opds/v1.2/{$}", s.HandleOPDSRoot))
+	mux.Handle("GET /opds/v1.2/folders/{folder}",
+		opdsH("GET /opds/v1.2/folders/{folder}", s.HandleOPDSFolder))
 	// A reader discovers these through links in the feeds above rather
 	// than being configured with them, which is the point of OPDS.
 	mux.Handle("GET /opds/v1.2/folders/{folder}/search.xml",
-		opdsH(s.HandleOPDSSearchDescription))
-	mux.Handle("GET /opds/v1.2/folders/{folder}/search", opdsH(s.HandleOPDSSearch))
-	mux.Handle("GET /opds/v1.2/folders/{folder}/recent", opdsH(s.HandleOPDSRecent))
-	mux.Handle("GET /opds/v1.2/entities/{kind}", opdsH(s.HandleOPDSEntities))
+		opdsH("GET /opds/v1.2/folders/{folder}/search.xml", s.HandleOPDSSearchDescription))
+	mux.Handle("GET /opds/v1.2/folders/{folder}/search",
+		opdsH("GET /opds/v1.2/folders/{folder}/search", s.HandleOPDSSearch))
+	mux.Handle("GET /opds/v1.2/folders/{folder}/recent",
+		opdsH("GET /opds/v1.2/folders/{folder}/recent", s.HandleOPDSRecent))
+	mux.Handle("GET /opds/v1.2/entities/{kind}",
+		opdsH("GET /opds/v1.2/entities/{kind}", s.HandleOPDSEntities))
 	mux.Handle("GET /opds/v1.2/entities/{kind}/{entity}",
-		opdsH(s.HandleOPDSEntityBooks))
-	mux.Handle("GET /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
-	mux.Handle("HEAD /opds/v1.2/books/{id}/download", opdsH(s.HandleBookDownload))
+		opdsH("GET /opds/v1.2/entities/{kind}/{entity}", s.HandleOPDSEntityBooks))
+	mux.Handle("GET /opds/v1.2/books/{id}/download",
+		opdsH("GET /opds/v1.2/books/{id}/download", s.HandleBookDownload))
+	mux.Handle("HEAD /opds/v1.2/books/{id}/download",
+		opdsH("HEAD /opds/v1.2/books/{id}/download", s.HandleBookDownload))
 	// Readers render covers in the feed, and they send the feed's Basic
 	// credential to do it. Without this the images in an acquisition feed
 	// would all fail to load.
-	mux.Handle("GET /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
-	mux.Handle("HEAD /opds/v1.2/books/{id}/cover", opdsH(s.HandleBookCover))
+	mux.Handle("GET /opds/v1.2/books/{id}/cover",
+		opdsH("GET /opds/v1.2/books/{id}/cover", s.HandleBookCover))
+	mux.Handle("HEAD /opds/v1.2/books/{id}/cover",
+		opdsH("HEAD /opds/v1.2/books/{id}/cover", s.HandleBookCover))
 
 	// Authenticated, no scope required. A token describing itself is the
 	// one route whose subject is the credential presenting it, so there
