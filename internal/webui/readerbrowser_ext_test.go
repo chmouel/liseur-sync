@@ -942,6 +942,13 @@ func TestReaderRefusesANaNPositionButRecovers(t *testing.T) {
 // expectations (RELOAD_* variables).
 func reopenCheck(t *testing.T, opID string, progression float64, locator map[string]any, expect ...string) {
 	t.Helper()
+	reopenSeeded(t, func(ts *httptest.Server, _ *booksFixture, cookie *http.Cookie, bookID string) {
+		seedPosition(t, ts.URL, cookie, bookID, opID, progression, locator)
+	}, expect...)
+}
+
+func reopenSeeded(t *testing.T, seed func(*httptest.Server, *booksFixture, *http.Cookie, string), expect ...string) {
+	t.Helper()
 	chrome := findChrome()
 	if chrome == "" {
 		t.Skip("no chromium; set LISEUR_CHROME to run the browser check")
@@ -958,7 +965,7 @@ func reopenCheck(t *testing.T, opID string, progression float64, locator map[str
 	ts := httptest.NewUnstartedServer(nil)
 	wholeServer(t, f, ts, "")
 	cookie := f.loginTo(t, ts, "alice")
-	seedPosition(t, ts.URL, cookie, bookID, opID, progression, locator)
+	seed(ts, f, cookie, bookID)
 
 	cmd := exec.Command(node, filepath.Join("testdata", "readerreload.mjs"))
 	cmd.Env = append(append(os.Environ(),
@@ -1031,6 +1038,33 @@ func TestReaderReopensOnTheQuotedPassage(t *testing.T) {
 			},
 		},
 		"RELOAD_SECTION=1", "RELOAD_INSIDE=1")
+}
+
+// TestReaderReopensWhereCrossPointLeftOff is the other direction of
+// ADR-0059: a CrossPoint device stores only its XPath, and the reader
+// must land on the paragraph it names, not on the chapter start its
+// percentage says. The server derives the anchor; this pins that the
+// reader takes it.
+func TestReaderReopensWhereCrossPointLeftOff(t *testing.T) {
+	reopenSeeded(t, func(ts *httptest.Server, f *booksFixture, cookie *http.Cookie, bookID string) {
+		_, workID := readerAPIFor(t, ts.URL, cookie, bookID)
+		book, err := f.st.CatalogBookByID(t.Context(), "", bookID)
+		if err != nil || book.PartialMD5 == "" {
+			t.Fatalf("catalogued book = %+v, %v", book, err)
+		}
+		u, err := f.st.UserByName(t.Context(), "alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		xpath := "/body/DocFragment[2]/body/div[1]/div[1]/p[40]/text().8"
+		alias := "partial-md5:" + book.PartialMD5
+		if _, err := f.st.AppendOps(t.Context(), u.ID, "kosync:x3", []store.Op{{
+			OpID: "00000000-0000-4000-8000-0000000c4055", WorkID: workID, ClientTS: time.Now(),
+			Progression: 0.1, ForeignPos: &xpath, Origin: store.OriginKosync, OriginAlias: &alias,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}, "RELOAD_SECTION=1", "RELOAD_INSIDE=1")
 }
 
 // TestReaderReopensOnTheNamedFragment is the same promise for a

@@ -32,6 +32,15 @@ test("maxima retain zero, small advances, editions and alias ownership with stab
   assert.deepEqual(furthestPosition([{ ...tiny, seq: 3, op_id: "later" }, tiny], "work"), tiny);
 });
 
+test("a derived edition does not move a kosync op into another group", () => {
+  const plain = { op_id: "x3", work_id: "work", progression: 0.4, seq: 1, origin_alias: "partial-md5:abc" };
+  const derived = { ...plain, op_id: "x3-later", progression: 0.5, seq: 2,
+    edition_sha: "catalog", derived: { from: "kosync-xpath" } };
+  const maxima = mergeFurthest([plain], [derived], "work");
+  assert.equal(maxima.length, 1);
+  assert.equal(maxima[0].op_id, "x3-later");
+});
+
 test("furthest floor filters forgotten maxima and matches op_id sequences", () => {
   const forgotten = { op_id: "forgotten-98", work_id: "work", device_id: "web", seq: 24948, progression: 0.9831 };
   const unseqLocal = { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 };
