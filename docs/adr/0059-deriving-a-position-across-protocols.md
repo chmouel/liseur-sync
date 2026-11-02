@@ -45,19 +45,36 @@ purpose, and a selector resolved in the wrong one can land on an
 unrelated passage.
 
 **Exact positions only.** An XPath is derived from an exact anchor: a
-Liseur text anchor or a CFI, resolved in that edition. A locator with only
-a progression never becomes an XPath. Readium progression and CRe
+Liseur text anchor (`liseurAnchor: 1`), resolved in that edition. A
+locator with only a progression never becomes an XPath, and neither does
+a CFI: no Liseur reader writes one, so the only CFIs on the server came
+from mirror peers, and translating them is left for when a client needs
+it. Readium progression and CRe
 offsets weigh images, markup and density differently, so turning one into
 the other would claim a precision nobody measured. An XPath names an
 element and an offset, so translating it into a Liseur anchor is exact,
 and the quote is taken from the file at that offset.
 
-**Text is counted the way CRe counts it.** XPath offsets follow
-KOReader's engine: visible text only, its whitespace handling, Unicode
-code points. Fixtures captured from real KOReader and CrossPoint
-positions pin the rules. Before a translated anchor is emitted, its quote
-is checked against the resolved text, and a mismatch means no
-translation.
+**Text is counted the way CrossPoint counts it.** `DocFragment[n]` is
+the nth spine itemref, counting `linear="no"` items that Readium's
+reading order leaves out. A text node is the
+character data between two pieces of markup (an element boundary, a
+comment, a processing instruction, a CDATA boundary). Text inside
+`head`, `style`, `script`, `title` and `rp` is not counted, though those
+elements keep their place among their siblings. Offsets are raw Unicode
+code points, and a position in whitespace-only text moves to the next
+text. Generated steps always carry an index, which KOReader reads too.
+KOReader's engine differs in two places: it drops some whitespace-only
+nodes, which shifts a `text()` index, and it collapses whitespace before
+counting, which shifts an offset inside a node whose source wraps lines.
+An XPath is read CrossPoint's way first and, when that lands in
+whitespace or past the end of the node, again skipping whitespace-only
+nodes. A KOReader offset can therefore land a few characters away inside
+the right node, never in another paragraph. CrossPoint's own resolver
+tests are the fixtures. A translated anchor is emitted only when its
+quote occurs exactly once in its block, and an anchor is translated
+only when its selector names an element whose text holds the quote
+exactly once; otherwise there is no translation.
 
 **Where translation happens.**
 
@@ -102,8 +119,8 @@ because a translation could not be made.
 ## Implementation phases
 
 1. `internal/xpointer`: parse and generate CRe XPaths, resolve them to a
-   spine resource and text offset, and convert to and from Liseur anchors
-   and CFIs, with fixtures from real devices.
+   spine resource and text offset, and convert to and from Liseur anchors,
+   with CrossPoint's resolver fixtures.
 2. The kosync read derives an XPath, with conformance tests for another
    edition, a progression-only op, a revoked grant and a partial-MD5
    collision.
