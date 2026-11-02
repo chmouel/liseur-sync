@@ -219,6 +219,7 @@ func cmdServe(args []string) error {
 			Cfg:         cfg,
 			PairingTTL:  time.Duration(cfg.PairingCodeTTLMin) * time.Minute,
 			AuthRateLim: auth.NewRateLimiter(10, time.Minute),
+			Files:       content.NewFiles(st),
 		},
 		Koplugin: &koplugin.Server{St: st},
 	}

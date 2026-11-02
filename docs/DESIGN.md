@@ -578,7 +578,7 @@ Implements the four calls KOReader's kosync plugin makes:
 | `POST /users/create` | Creates a device credential bound to an existing liseur-sync user via a valid, unexpired, single-use pairing code used as the kosync password. The client sends `md5(code)`, never the code itself, so the code is stored as the hash of that derived key and the key becomes the slot's credential. It never creates an account. |
 | `GET /users/auth` | Validates the device credential. |
 | `PUT /syncs/progress` | Resolves `document` (a partialMD5) via the alias table, then appends a native op with `origin: kosync`, `foreign_pos` = the xpointer, `progression` = percentage. |
-| `GET /syncs/progress/:document` | Returns the newest op: `progress` = stored `foreign_pos` if the newest op has one, else the percentage string; `percentage`, `device`, `timestamp` filled natively. |
+| `GET /syncs/progress/:document` | Returns the newest op: `progress` = stored `foreign_pos` if the newest op has one, else an xpointer derived from a Liseur anchor in the same granted file (ADR-0059), else the percentage string; `percentage`, `device`, `timestamp` filled natively. |
 
 Unresolvable `document` digests create a pending work keyed on the
 partialMD5 alias; when any client later resolves a file to that alias,
