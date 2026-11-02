@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, audiobooks-native]
+    branches: [main, wip/*]
     tags: ["v*"]
 
 jobs:
