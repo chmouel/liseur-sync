@@ -355,8 +355,11 @@ func (s *Server) settingsDevices(r *http.Request, u *store.User) settingsDevices
 	kosyncDevs, _ := s.St.ListKosyncDevices(r.Context(), u.ID)
 	kopluginDevs, _ := s.St.ListKopluginDevices(r.Context(), u.ID)
 	toks, browsers := splitReaderTokens(toks)
+	toks = activeTokens(toks)
 	sortTokens(toks)
+	kosyncDevs = activeKosyncDevices(kosyncDevs)
 	sortKosyncDevices(kosyncDevs)
+	kopluginDevs = activeKopluginDevices(kopluginDevs)
 	sortKopluginDevices(kopluginDevs)
 	return settingsDevicesView{
 		Tokens: toks, Browsers: browsers,
@@ -429,14 +432,14 @@ func (s *Server) settingsAdmin(
 		ownTokens, browsers := splitReaderTokens(
 			listOrNil(s.St.ListTokens(r.Context(), target.ID)),
 		)
-		view.Tokens, view.MoreTokens = capSlice(ownTokens)
+		view.Tokens, view.MoreTokens = capSlice(activeTokens(ownTokens))
 		view.Browsers = len(browsers)
-		view.Kosync, view.MoreKosync = capSlice(
+		view.Kosync, view.MoreKosync = capSlice(activeKosyncDevices(
 			listOrNil(s.St.ListKosyncDevices(r.Context(), target.ID)),
-		)
-		view.Koplugin, view.MoreKoplugin = capSlice(
+		))
+		view.Koplugin, view.MoreKoplugin = capSlice(activeKopluginDevices(
 			listOrNil(s.St.ListKopluginDevices(r.Context(), target.ID)),
-		)
+		))
 		all, tooMany, err := allFolders(r.Context(), s.St, "", adminUserFoldersMax)
 		if err != nil {
 			return err
