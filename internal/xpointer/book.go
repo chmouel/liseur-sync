@@ -78,7 +78,7 @@ func (b *Book) document(ctx context.Context, i int) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseDocument(data)
+	return ParseDocument(ctx, data)
 }
 
 // LocatorFor translates a CRe XPath into a Liseur anchored locator.
