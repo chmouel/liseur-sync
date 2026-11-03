@@ -66,7 +66,7 @@ func TestCrossPointFixtures(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := ""
-		if d, err := ParseDocument([]byte(c.doc)); err == nil {
+		if d, err := ParseDocument(t.Context(), []byte(c.doc)); err == nil {
 			if pos, err := d.at(c.offset); err == nil {
 				path, err := d.XPath(1, pos)
 				if err != nil {
@@ -97,7 +97,7 @@ func mustParse(t *testing.T, s string) Path {
 
 func mustDoc(t *testing.T, s string) *Document {
 	t.Helper()
-	d, err := ParseDocument([]byte(s))
+	d, err := ParseDocument(t.Context(), []byte(s))
 	if err != nil {
 		t.Fatalf("ParseDocument: %v", err)
 	}
@@ -481,5 +481,49 @@ func TestOpenPublication(t *testing.T) {
 	}
 	if loc.Href != "OPS/Text/chapter%201.xhtml" || loc.Anchor.Highlight != "me" {
 		t.Errorf("LocatorFor = %+v", loc)
+	}
+}
+
+func BenchmarkParseDocumentSiblings(b *testing.B) {
+	for _, count := range []int{1000, 20000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			data := []byte("<html><body>" + strings.Repeat("<p>A paragraph with enough text to represent ordinary EPUB content.</p>\n", count) + "</body></html>")
+			b.SetBytes(int64(len(data)))
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := ParseDocument(b.Context(), data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestDocumentManySiblingIndexes(t *testing.T) {
+	const count = 20000
+	d := mustDoc(t, "<html><body>\n"+strings.Repeat("<p>word</p>\n", count)+"</body></html>")
+	pos, err := d.Resolve(mustParse(t, fmt.Sprintf("/body/DocFragment[1]/body/p[%d]/text()[1].2", count)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := d.XPath(1, pos)
+	if err != nil || path.Steps[0].Index != count || path.Text != 1 || path.Offset != 2 {
+		t.Fatalf("last paragraph: %+v %v", path, err)
+	}
+	last := d.body.kids[len(d.body.kids)-1].run
+	if last == nil || last.index != count+1 {
+		t.Fatalf("body text count: %+v", last)
+	}
+}
+
+func TestBookTranslationCanceledAfterResourceRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	book := &Book{spine: []string{"chapter.xhtml"}, read: func(context.Context, string) ([]byte, error) {
+		cancel()
+		return []byte("<html><body><p>word</p></body></html>"), nil
+	}}
+	if _, err := book.LocatorFor(ctx, "/body/DocFragment[1]/body/p[1]/text()[1].0"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled translation: %v", err)
 	}
 }
