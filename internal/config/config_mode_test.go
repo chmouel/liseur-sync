@@ -331,9 +331,10 @@ func TestEnvironmentSecretsNeverMakeAFileOwnerOnly(t *testing.T) {
 
 // TestADatabaseURLPasswordCountsInEitherShape: libpq reads a connection
 // string as a URL or as keyword/value pairs, and either shape can carry a
-// password in more than the obvious place. The check deliberately
-// over-approximates: missing one leaks a secret, while matching text that
-// merely mentions `password` only makes the file owner-only.
+// password in more than the obvious place. The check is a total
+// over-approximation — the word `password` anywhere, or a URL with an `@` or
+// a `%` in it — because missing one leaks a secret while matching more than
+// a credential only makes the file owner-only.
 func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -345,6 +346,16 @@ func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
 		// net/url refuses both of these, and libpq does not: the socket
 		// host is percent-encoded and the query value holds a semicolon.
 		{"url userinfo password over a percent-encoded socket host", "postgres://alice:hunter2@%2Fvar%2Frun%2Fpostgresql/liseur", true},
+		// A query key pgx percent-decodes, so the word does not appear.
+		{"url percent-encoded password query key", "postgres://db/liseur?pass%77ord=hunter2", true},
+		// The first colon splits userinfo, so a password may hold one.
+		{"url password ending in a colon", "postgres://alice:hunter2:@db/liseur", true},
+		// pgx reads userinfo up to the first slash, so `?` and `#` do not
+		// end it and belong to the password.
+		{"url password holding a question mark", "postgresql://alice:hun?ter2@db/liseur", true},
+		{"url password holding a hash", "postgresql://alice:hun#ter2@db/liseur", true},
+		{"url with an upper-case scheme", "POSTGRES://U:P@H/D", true},
+		{"an environment-style password line", "PASSWORD=x", true},
 		{"url password query with a semicolon", "postgres://db/liseur?password=ab;cd", true},
 		{"url password query", "postgres://liseur@db:5432/liseur?password=hunter2", true},
 		{"url sslpassword query", "postgres://liseur@db:5432/liseur?sslpassword=hunter2", true},
@@ -359,15 +370,20 @@ func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
 		{"keyword quoted password with spaces in it", "host=db password=' two words '", true},
 		{"keyword escaped space", `host=db password=two\ words`, true},
 		{"keyword password, values split by a newline", "host=db\npassword=hunter2", true},
-		{"url empty userinfo password", "postgres://liseur:@db:5432/liseur", false},
-		{"url with no userinfo password", "postgres://liseur@db:5432/liseur?application_name=liseur-sync", false},
+		// A username-only userinfo is tightened too, which is the price of
+		// not deciding what userinfo means.
+		{"url empty userinfo password", "postgres://liseur:@db:5432/liseur", true},
+		{"url with a username and no password", "postgres://liseur@db:5432/liseur?application_name=liseur-sync", true},
 		{"keyword dsn with no password text", "host=db dbname=liseur application_name=liseur-sync", false},
+		{"keyword dsn naming a host alone", "host=db", false},
 		{"sqlite file path", "/var/lib/liseur-sync.db", false},
 		{"sqlite file uri", "file:/data/liseur.db?mode=rwc", false},
+		{"url with no userinfo and no encoding", "postgres://db/liseur", false},
 		{"empty", "", false},
 		{"only whitespace", "   ", false},
-		// Over-approximated on purpose: neither is a credential, but both
-		// spell the word, and tightening a file is the harmless mistake.
+		// Over-approximated on purpose: none of these is a credential, but
+		// each matches the rule, and tightening a file is the harmless
+		// mistake.
 		{"a password mentioned inside a quoted non-password value", "host=db application_name='backup password=fake' dbname=liseur", true},
 		{"an empty password query is still the word", "postgres://liseur@db:5432/liseur?password=", true},
 	} {
