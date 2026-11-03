@@ -672,6 +672,48 @@ func makeEPUBWithDescription(t *testing.T, title, author, description, body stri
 	return buf.Bytes()
 }
 
+// TestOPDSLogsScopeRefusal: a token without library-read is the OPDS
+// misconfiguration people actually hit, and it is refused by the scope
+// check rather than by authentication. The log has to name the credential
+// anyway: an operator reading "insufficient scope" needs to know which
+// token to widen, and a 403 with an empty token id says nothing.
+func TestOPDSLogsScopeRefusal(t *testing.T) {
+	f := newFolderFixture(t)
+	narrow := f.mintToken(t, f.user.ID, store.ScopeSync)
+	toks, err := f.st.ListTokens(t.Context(), f.user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantID string
+	for _, tok := range toks {
+		if !tok.Scopes.Allows(store.ScopeLibraryRead) {
+			wantID = tok.ID
+		}
+	}
+	if wantID == "" {
+		t.Fatal("no token without library-read was minted")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	resp, _ := f.opds(t, "/opds/v1.2", "token", narrow)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("narrow token: %d", resp.StatusCode)
+	}
+	logged := buf.String()
+	for _, want := range []string{"status=403", "token_id=" + wantID} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("log is missing %q:\n%s", want, logged)
+		}
+	}
+	if strings.Contains(logged, narrow) {
+		t.Fatalf("the secret leaked into the log:\n%s", logged)
+	}
+}
+
 // TestOPDSLogsRefusedRequests: an e-reader reports "parse feed failed"
 // for every non-2xx answer and says nothing about which one it got, so the
 // server has to. What is logged is the status, the route pattern and the

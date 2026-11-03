@@ -81,8 +81,10 @@ func scopeAllowed(have store.ScopeSet, want []store.Scope) bool {
 // it verbatim in their credential dialog.
 const BasicRealm = "Liseur catalog"
 
-// RequireBasicScope authenticates HTTP Basic credentials for OPDS, which
+// RequireBasicToken authenticates HTTP Basic credentials for OPDS, which
 // is the only authentication most e-reader catalog clients can perform.
+// It attaches the token and checks no scope; the caller adds
+// RequireAttachedScope.
 //
 // The password is a device token secret, never an account password:
 // AuthenticateToken only ever matches token hashes, so a login password
@@ -91,7 +93,12 @@ const BasicRealm = "Liseur catalog"
 // bearer credential — but it is checked against the token's name so that
 // a reader configured for the wrong account fails loudly instead of
 // silently browsing someone else's books.
-func RequireBasicScope(svc *Service, scope store.Scope, next http.Handler) http.Handler {
+//
+// Authentication and authorization are separable because a refusal has to
+// be reportable: a scope check folded in here would answer 403 before the
+// token existed anywhere a caller could read, and the one line that says
+// "insufficient scope" would not say which credential to widen.
+func RequireBasicToken(svc *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, secret, ok := r.BasicAuth()
 		if !ok || secret == "" {
@@ -107,13 +114,26 @@ func RequireBasicScope(svc *Service, scope store.Scope, next http.Handler) http.
 			challengeBasic(w, "invalid credentials")
 			return
 		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxToken, tok)))
+	})
+}
+
+// RequireAttachedScope requires a scope on the token an authenticating
+// middleware already attached to the request.
+func RequireAttachedScope(scope store.Scope, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok, ok := TokenFrom(r)
+		if !ok {
+			http.Error(w, `{"error":"missing bearer token"}`, http.StatusUnauthorized)
+			return
+		}
 		if !scopeAllowed(tok.Scopes, []store.Scope{scope}) {
 			// Not a challenge: the credential is good and retrying with
 			// the same one will not help. The token needs a wider scope.
 			http.Error(w, `{"error":"insufficient scope"}`, http.StatusForbidden)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxToken, tok)))
+		next.ServeHTTP(w, r)
 	})
 }
 
