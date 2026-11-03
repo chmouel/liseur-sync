@@ -108,7 +108,7 @@ type Client struct {
 // config.Validate is where a half-configured peer is refused.
 func NewClient(cfg config.MirrorConfig) *Client {
 	return &Client{
-		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
+		baseURL:  config.MirrorRoot(cfg.BaseURL),
 		user:     cfg.RemoteUser,
 		key:      cfg.RemoteKey,
 		deviceID: cfg.DeviceID,
@@ -235,13 +235,28 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]by
 	case resp.StatusCode == http.StatusNotFound && method == http.MethodGet:
 		return nil, ErrNoPosition
 	case resp.StatusCode >= 300:
+		// A peer's own message about what it disliked is usually the
+		// fastest way to the answer, so it is quoted — but never with
+		// the key left in it. This error is logged and stored on the
+		// cursor, and a peer or a proxy that echoes what it was sent
+		// must not be able to put a credential in either.
 		return nil, fmt.Errorf("mirror: %s %s: peer answered %s: %s",
-			method, path, resp.Status, firstLine(raw))
+			method, path, resp.Status, c.redact(firstLine(raw)))
 	}
 	if readErr != nil {
 		return nil, fmt.Errorf("mirror: %s %s: %w", method, path, readErr)
 	}
 	return raw, nil
+}
+
+// redact removes the credential from a peer's own error text. A peer or
+// a proxy in front of one that echoes what it was sent must not be able
+// to put the key in the log or on a cursor row.
+func (c *Client) redact(text string) string {
+	if c.key == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, c.key, "[redacted]")
 }
 
 // firstLine keeps a peer's error out of the log in bulk. Something is

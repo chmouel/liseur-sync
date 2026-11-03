@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -123,6 +124,22 @@ func run(args []string) error {
 	}
 }
 
+// mirrorRunners builds one worker per enabled mirror. Each entry is a
+// peer of its own, scoped to the account it names, so they share nothing
+// but the store. A configuration change needs a restart: a worker cannot
+// be swapped out mid-pass without the old one finishing on the same
+// cursors, and the admin page says so.
+func mirrorRunners(st store.Store, cfg config.Config) []*mirror.Runner {
+	entries := cfg.EnabledMirrors()
+	runners := make([]*mirror.Runner, 0, len(entries))
+	for _, entry := range entries {
+		runners = append(runners, &mirror.Runner{
+			Store: st, Cfg: entry, Log: slog.Default(),
+		})
+	}
+	return runners
+}
+
 // defaultConfigPath is the -config flag default: LISEUR_CONFIG if set,
 // else the conventional file name in the working directory.
 func defaultConfigPath() string {
@@ -228,10 +245,11 @@ func cmdServe(args []string) error {
 	// safety timer; a pass is idempotent and holds no state, so there is
 	// no queue to drain and nothing to recover on restart (ADR-0017).
 	watcher := content.NewWatcher(st, reconciler, slog.Default())
-	// The mirror exchanges reading positions with a peer that speaks
-	// KOReader's protocol (ADR-0047). It is off unless configured, and
-	// when it is on it is scoped to the single account it names.
-	mirrorRunner := &mirror.Runner{Store: st, Cfg: cfg.Mirror, Log: slog.Default()}
+	// The mirrors exchange reading positions with peers that speak
+	// KOReader's protocol or BookOrbit's own (ADR-0047, ADR-0061). Each
+	// entry gets its own worker, because each is scoped to the one
+	// account it names and keeps its own bookkeeping.
+	mirrorRunners := mirrorRunners(st, cfg)
 	absService := audiobookshelf.NewService(st, cfg.Audiobookshelf)
 	absRunner := &audiobookshelf.Runner{Service: absService, Log: slog.Default()}
 	// The UI delegates downloads, covers and uploads back to the API
@@ -277,14 +295,18 @@ func cmdServe(args []string) error {
 			errCh <- fmt.Errorf("folder watcher: %w", err)
 		}
 	}()
-	// The mirror is an accessory to this server, not a part of it: it
+	// A mirror is an accessory to this server, not a part of it: it
 	// reports nothing terminal, so it has no place on errCh. A peer
-	// that is down is the peer's problem (ADR-0047).
-	mirrorDone := make(chan struct{})
-	go func() {
-		defer close(mirrorDone)
-		_ = mirrorRunner.Run(bgCtx)
-	}()
+	// that is down is the peer's problem (ADR-0047). Every worker is
+	// waited for, so shutting down does not leave one mid-request.
+	var mirrorWG sync.WaitGroup
+	for _, runner := range mirrorRunners {
+		mirrorWG.Add(1)
+		go func() {
+			defer mirrorWG.Done()
+			_ = runner.Run(bgCtx)
+		}()
+	}
 	absDone := make(chan struct{})
 	go func() {
 		defer close(absDone)
@@ -320,7 +342,7 @@ func cmdServe(args []string) error {
 	}
 	<-serverDone
 	<-watcherDone
-	<-mirrorDone
+	mirrorWG.Wait()
 	<-absDone
 	<-materializerDone
 	return errors.Join(runErr, shutdownErr)

@@ -120,15 +120,59 @@ type settingsAdminView struct {
 }
 
 type mirrorView struct {
-	Config config.MirrorConfig
-	HasKey bool
-	Users  []store.User
+	Entries []mirrorEntryView
+	Users   []store.User
+	// Edit is the entry the form is open for, or nil when the page is
+	// only the list and the offer to add one.
+	Edit *mirrorEditView
+	// CanAdd is false when the page cannot offer a new entry at all:
+	// the mirrors list cannot be written to a file that does not parse.
+	CanAdd  bool
+	AddHref string
+	// FileError is why the config file could not be read, which leaves
+	// the page showing what the running process started with and the
+	// single entry repairable by saving it again.
+	FileError string
+}
+
+// mirrorEntryView is one row: what the page can say about an entry
+// without ever rendering its credential.
+type mirrorEntryView struct {
+	Name          string
+	ProtocolLabel string
+	URL           string
+	Account       string
+	// Credential says where the secret comes from — the file, a named
+	// environment variable, or nowhere yet — because who owns it is the
+	// one thing an editor must not get wrong.
+	Credential string
+	Enabled    bool
+	Legacy     bool
+	// ReadOnly is set when the environment owns the entry's non-secret
+	// settings: the form would save values the next start overrides.
+	ReadOnly bool
+	EditHref string
+}
+
+// mirrorEditView is the add/edit form. The credential fields of Config
+// are cleared before it is built: a page must never carry a secret, and
+// the form has no field that could show one back.
+type mirrorEditView struct {
+	Config    config.MirrorConfig
+	Original  string
+	Legacy    bool
+	BookOrbit bool
+	HasKey    bool
+	// CredentialFromEnv names the environment variable the credential
+	// comes from, empty when it comes from the file.
+	CredentialFromEnv string
+	Remove            bool
 }
 
 // BookOrbit reports whether the peer is spoken to over its own API
 // rather than over KOReader sync. The two need different credentials
 // and carry different fidelity, so the form says different things.
-func (v mirrorView) BookOrbit() bool {
+func (v mirrorEditView) BookOrbitProtocol() bool {
 	return v.Config.Protocol == config.ProtocolBookOrbit
 }
 
@@ -521,8 +565,11 @@ func (s *Server) settingsAdmin(
 		if err != nil {
 			return err
 		}
-		m := s.mirrorConfig()
-		v.Mirror = mirrorView{Config: m, HasKey: mirrorHasCredential(m), Users: users}
+		view, err := s.mirrorView(r, users)
+		if err != nil {
+			return err
+		}
+		v.Mirror = view
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {

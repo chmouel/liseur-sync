@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -156,7 +157,24 @@ type Config struct {
 	// Mirror configures outbound synchronisation with a peer server
 	// that speaks KOReader's sync protocol (ADR-0047). Disabled by
 	// default, and the only part of this server that dials out.
+	//
+	// It is the single entry this setting has always been. Mirrors below
+	// adds more of them, and the two are the same kind of thing: an
+	// entry's name keys its bookkeeping, so a deployment can keep this
+	// table exactly as it is and add peers beside it (ADR-0061).
 	Mirror MirrorConfig `toml:"mirror"`
+
+	// Mirrors are further peers, each with its own name, credential and
+	// local account. A field left at zero takes the same default the
+	// single entry above documents.
+	Mirrors []MirrorConfig `toml:"mirrors"`
+
+	// mirrorDefined records whether the configuration actually carries
+	// the single [mirror] entry: an operator's file has one, the
+	// environment may supply one, and neither is true of a server that
+	// never mirrored anything. It is what keeps the entry's default name
+	// from appearing as a peer nobody configured.
+	mirrorDefined bool
 
 	// Audiobookshelf follows audiobooks on one Audiobookshelf server
 	// (ADR-0055). Disabled by default; independent of the mirror.
@@ -195,10 +213,9 @@ type AudiobookshelfConfig struct {
 }
 
 // MirrorConfig is one peer this server mirrors reading to and from.
-// There is exactly one, for exactly one account: the credential lives
-// here rather than in a table because a secret this server must
-// *present* cannot be hashed, and a single account makes configuration
-// the honest place to keep it (ADR-0047). It is never logged and never
+// The credential lives here rather than in a table because a secret this
+// server must *present* cannot be hashed, which makes configuration the
+// honest place to keep it (ADR-0047). It is never logged and never
 // appears in a response.
 type MirrorConfig struct {
 	Enabled bool `toml:"enabled"`
@@ -273,6 +290,152 @@ const (
 	ProtocolKosync    = "kosync"
 	ProtocolBookOrbit = "bookorbit"
 )
+
+// mirrorListName is what a [[mirrors]] entry may be called. The name
+// becomes an environment variable name and a URL query value, so it is
+// restricted to what survives both unchanged: lower case, digits and
+// dashes. The 32-character bound keeps the variable name short enough to
+// be typed.
+var mirrorListName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+
+// mirrorDefault is the entry every mirror starts from, so an omitted
+// field behaves the same in the single entry and in a list entry.
+func mirrorDefault() MirrorConfig {
+	c := Default()
+	return c.Mirror
+}
+
+// applyMirrorDefaults fills a list entry's zero fields with the single
+// entry's defaults. A written "0s" therefore also means "the default":
+// a duration of zero is not a setting anybody wants, and a peer polled
+// flat out is one way to hammer somebody else's server.
+func applyMirrorDefaults(m *MirrorConfig) {
+	d := mirrorDefault()
+	if m.Protocol == "" {
+		m.Protocol = d.Protocol
+	}
+	if m.DeviceID == "" {
+		m.DeviceID = d.DeviceID
+	}
+	if m.PollInterval == 0 {
+		m.PollInterval = d.PollInterval
+	}
+	if m.ResolveRetryInterval == 0 {
+		m.ResolveRetryInterval = d.ResolveRetryInterval
+	}
+	if m.ActiveDays == 0 {
+		m.ActiveDays = d.ActiveDays
+	}
+	if m.Timeout == 0 {
+		m.Timeout = d.Timeout
+	}
+}
+
+// MirrorTableDefined reports whether this configuration carries the
+// single [mirror] entry, either from the file or from the environment.
+func (c Config) MirrorTableDefined() bool { return c.mirrorDefined }
+
+// SetMirrorTableDefined records that a candidate configuration carries
+// the single entry. The admin form builds one from a file it read and
+// validates it the way startup would.
+func (c *Config) SetMirrorTableDefined(defined bool) { c.mirrorDefined = defined }
+
+// EnabledMirrors is every peer this server should be talking to: the
+// single entry first, when there is one, then the list in file order.
+// It is the only view of the mirror configuration startup reads.
+func (c Config) EnabledMirrors() []MirrorConfig {
+	var out []MirrorConfig
+	if c.mirrorDefined && c.Mirror.Enabled {
+		out = append(out, c.Mirror)
+	}
+	for _, m := range c.Mirrors {
+		if m.Enabled {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// MirrorRoot is a peer address with every trailing slash removed. It is
+// idempotent on purpose: the duplicate-target check and the clients that build
+// routes from the address both call it, so two spellings of one root cannot
+// pass as two peers. A base URL with no path at all stays host-only.
+func MirrorRoot(baseURL string) string {
+	return strings.TrimRight(baseURL, "/")
+}
+
+// normalizedMirrorProtocol is a protocol name the way validation and the
+// credential lookup both spell it: case and surrounding space are the
+// operator's, not the protocol's. An entry that names none keeps the
+// default.
+func normalizedMirrorProtocol(protocol string) string {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol == "" {
+		return ProtocolKosync
+	}
+	return protocol
+}
+
+// MirrorCredentialEnv names the environment variables a mirror's
+// credential may come from. A list entry's name identifies its own pair,
+// so removing one entry can never hand its credential to another — which
+// is what a positional scheme like LISEUR_MIRROR_0_* would do.
+func MirrorCredentialEnv(name string, legacy bool) (keyVar, passwordVar string) {
+	if legacy {
+		return "LISEUR_MIRROR_REMOTE_KEY", "LISEUR_MIRROR_REMOTE_PASSWORD"
+	}
+	upper := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	return "LISEUR_MIRRORS_" + upper + "_REMOTE_KEY",
+		"LISEUR_MIRRORS_" + upper + "_REMOTE_PASSWORD"
+}
+
+// ApplyMirrorCredentialEnv replaces an entry's credential with the one
+// the environment holds for its protocol, and reports whether the
+// environment owns it. Only the protocol's own variable is read: an MD5
+// of a KOReader password is not an account password, and neither works
+// as the other. A variable set to the empty string means the entry has
+// no credential, so the entry is refused rather than silently started
+// with the stale one the file holds.
+func ApplyMirrorCredentialEnv(m *MirrorConfig, keyVar, passwordVar string) bool {
+	if m.Protocol == ProtocolBookOrbit {
+		if v, ok := os.LookupEnv(passwordVar); ok {
+			m.RemoteKey, m.RemotePassword = "", v
+			return true
+		}
+		return false
+	}
+	if v, ok := os.LookupEnv(keyVar); ok {
+		m.RemoteKey, m.RemotePassword = v, ""
+		return true
+	}
+	return false
+}
+
+// legacyMirrorEnvKeys are the LISEUR_MIRROR_* variables that set the
+// single entry's settings. The two credential variables are deliberately
+// absent: a credential in the environment is the ordinary way to deploy
+// a mirror, and it does not stop an administrator editing the settings
+// around it. Any other one does, because the environment would silently
+// override what the form saved at the next start.
+var legacyMirrorEnvKeys = []string{
+	"LISEUR_MIRROR_ENABLED", "LISEUR_MIRROR_NAME", "LISEUR_MIRROR_BASE_URL",
+	"LISEUR_MIRROR_ACCOUNT", "LISEUR_MIRROR_PROTOCOL",
+	"LISEUR_MIRROR_REMOTE_USER", "LISEUR_MIRROR_DEVICE_ID",
+	"LISEUR_MIRROR_PEER_PATH_PREFIX", "LISEUR_MIRROR_LOCAL_PATH_PREFIX",
+	"LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL",
+}
+
+// LegacyMirrorEnvironmentManaged reports whether the environment owns
+// the single entry's non-secret settings, in which case the admin page
+// shows them read-only.
+func LegacyMirrorEnvironmentManaged() bool {
+	for _, key := range legacyMirrorEnvKeys {
+		if _, ok := os.LookupEnv(key); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // Duration is a time.Duration that reads from TOML as a string like
 // "5m". The standard decoder has no duration type and the alternative
@@ -368,6 +531,8 @@ func Default() Config {
 // LISEUR_MIRROR_REMOTE_PASSWORD, LISEUR_MIRROR_DEVICE_ID,
 // LISEUR_MIRROR_PEER_PATH_PREFIX, LISEUR_MIRROR_LOCAL_PATH_PREFIX,
 // LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL,
+// LISEUR_MIRRORS_<NAME>_REMOTE_KEY and
+// LISEUR_MIRRORS_<NAME>_REMOTE_PASSWORD for each [[mirrors]] entry,
 // LISEUR_ABS_ENABLED, LISEUR_ABS_BASE_URL, LISEUR_ABS_ACCOUNT,
 // LISEUR_ABS_API_KEY, LISEUR_ABS_POLL_INTERVAL, LISEUR_ABS_TIMEOUT,
 // LISEUR_ABS_SESSION_OVERLAP, LISEUR_ABS_ACTIVE_DAYS.
@@ -376,36 +541,6 @@ func Default() Config {
 // belongs beside the database URL in a deployment's .env rather than in
 // a file somebody might commit.
 func (c *Config) applyEnv() {
-	setStr := func(dst *string, key string) {
-		if v, ok := os.LookupEnv(key); ok {
-			*dst = v
-		}
-	}
-	setBool := func(dst *bool, key string) {
-		if v, ok := os.LookupEnv(key); ok {
-			if b, err := strconv.ParseBool(v); err == nil {
-				*dst = b
-			}
-		}
-	}
-	setList := func(dst *[]string, key string) {
-		if v, ok := os.LookupEnv(key); ok {
-			var out []string
-			for _, p := range strings.Split(v, ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					out = append(out, p)
-				}
-			}
-			*dst = out
-		}
-	}
-	setDuration := func(dst *Duration, key string) {
-		if v, ok := os.LookupEnv(key); ok {
-			if d, err := time.ParseDuration(v); err == nil {
-				*dst = Duration(d)
-			}
-		}
-	}
 	setStr(&c.ListenAddr, "LISEUR_LISTEN_ADDR")
 	setStr(&c.Database.Driver, "LISEUR_DATABASE_DRIVER")
 	setStr(&c.Database.URL, "LISEUR_DATABASE_URL")
@@ -416,18 +551,7 @@ func (c *Config) applyEnv() {
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
 	setList(&c.Content.FolderRoots, "LISEUR_FOLDER_ROOTS")
 
-	setBool(&c.Mirror.Enabled, "LISEUR_MIRROR_ENABLED")
-	setStr(&c.Mirror.Name, "LISEUR_MIRROR_NAME")
-	setStr(&c.Mirror.BaseURL, "LISEUR_MIRROR_BASE_URL")
-	setStr(&c.Mirror.Account, "LISEUR_MIRROR_ACCOUNT")
-	setStr(&c.Mirror.Protocol, "LISEUR_MIRROR_PROTOCOL")
-	setStr(&c.Mirror.RemoteUser, "LISEUR_MIRROR_REMOTE_USER")
-	setStr(&c.Mirror.RemoteKey, "LISEUR_MIRROR_REMOTE_KEY")
-	setStr(&c.Mirror.RemotePassword, "LISEUR_MIRROR_REMOTE_PASSWORD")
-	setStr(&c.Mirror.DeviceID, "LISEUR_MIRROR_DEVICE_ID")
-	setStr(&c.Mirror.PeerPathPrefix, "LISEUR_MIRROR_PEER_PATH_PREFIX")
-	setStr(&c.Mirror.LocalPathPrefix, "LISEUR_MIRROR_LOCAL_PATH_PREFIX")
-	setDuration(&c.Mirror.ResolveRetryInterval, "LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL")
+	c.ApplyMirrorEnvironment()
 
 	setBool(&c.Audiobookshelf.Enabled, "LISEUR_ABS_ENABLED")
 	setStr(&c.Audiobookshelf.BaseURL, "LISEUR_ABS_BASE_URL")
@@ -446,6 +570,81 @@ func (c *Config) applyEnv() {
 		if days, err := strconv.Atoi(v); err == nil {
 			c.Audiobookshelf.ActiveDays = days
 		}
+	}
+}
+
+// The environment readers applyEnv is built from. The mirror's overlay is
+// one function startup and the admin page both call, so it is defined where
+// both can reach it.
+func setStr(dst *string, key string) {
+	if v, ok := os.LookupEnv(key); ok {
+		*dst = v
+	}
+}
+
+func setBool(dst *bool, key string) {
+	if v, ok := os.LookupEnv(key); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			*dst = b
+		}
+	}
+}
+
+func setList(dst *[]string, key string) {
+	if v, ok := os.LookupEnv(key); ok {
+		var out []string
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		*dst = out
+	}
+}
+
+func setDuration(dst *Duration, key string) {
+	if v, ok := os.LookupEnv(key); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			*dst = Duration(d)
+		}
+	}
+}
+
+// ApplyMirrorEnvironment overlays the LISEUR_MIRROR_* variables on the
+// mirror entries a configuration carries, exactly as startup does. The admin
+// page builds its candidate from the file and calls this, so a set it is
+// about to write is validated against what the next start will actually use.
+//
+// The protocol and the name are normalised first: the credential variable an
+// entry reads depends on both, and validating them after the fact would leave
+// "BookOrbit" reading the KOReader key. A variable set to the empty string
+// still wins, so an operator who cleared one gets a refused entry rather than
+// the stale credential the file holds.
+func (c *Config) ApplyMirrorEnvironment() {
+	setBool(&c.Mirror.Enabled, "LISEUR_MIRROR_ENABLED")
+	setStr(&c.Mirror.Name, "LISEUR_MIRROR_NAME")
+	setStr(&c.Mirror.BaseURL, "LISEUR_MIRROR_BASE_URL")
+	setStr(&c.Mirror.Account, "LISEUR_MIRROR_ACCOUNT")
+	setStr(&c.Mirror.Protocol, "LISEUR_MIRROR_PROTOCOL")
+	setStr(&c.Mirror.RemoteUser, "LISEUR_MIRROR_REMOTE_USER")
+	setStr(&c.Mirror.DeviceID, "LISEUR_MIRROR_DEVICE_ID")
+	setStr(&c.Mirror.PeerPathPrefix, "LISEUR_MIRROR_PEER_PATH_PREFIX")
+	setStr(&c.Mirror.LocalPathPrefix, "LISEUR_MIRROR_LOCAL_PATH_PREFIX")
+	setDuration(&c.Mirror.ResolveRetryInterval, "LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL")
+	c.Mirror.Name = strings.TrimSpace(c.Mirror.Name)
+	c.Mirror.Protocol = normalizedMirrorProtocol(c.Mirror.Protocol)
+	legacyKey, legacyPassword := MirrorCredentialEnv("", true)
+	ApplyMirrorCredentialEnv(&c.Mirror, legacyKey, legacyPassword)
+	if LegacyMirrorEnvironmentManaged() {
+		// The environment is the operator's answer for this entry, so
+		// there is one whether or not the file has a table.
+		c.mirrorDefined = true
+	}
+	for i := range c.Mirrors {
+		c.Mirrors[i].Name = strings.TrimSpace(c.Mirrors[i].Name)
+		c.Mirrors[i].Protocol = normalizedMirrorProtocol(c.Mirrors[i].Protocol)
+		key, password := MirrorCredentialEnv(c.Mirrors[i].Name, false)
+		ApplyMirrorCredentialEnv(&c.Mirrors[i], key, password)
 	}
 }
 
@@ -555,42 +754,77 @@ func (c *Config) Validate() error {
 
 // validateMirror refuses a half-configured mirror rather than starting
 // one that will fail on its first request. A mirror missing any of its
-// four required settings is a deployment mistake, not a degraded mode
+// required settings is a deployment mistake, not a degraded mode
 // (ADR-0047).
+//
+// It validates every entry on its own and then the set: a name is what
+// keys a mirror's bookkeeping, so two entries may not share one, and two
+// enabled entries may not reach the same peer account, because that would
+// merge two local accounts' reading through one remote one.
 func (c *Config) validateMirror() error {
-	m := &c.Mirror
+	if err := c.validateMirrorEntry(&c.Mirror, "mirror", true); err != nil {
+		return err
+	}
+	for i := range c.Mirrors {
+		applyMirrorDefaults(&c.Mirrors[i])
+		m := &c.Mirrors[i]
+		path := "mirrors[" + m.Name + "]"
+		if err := c.validateMirrorEntry(m, path, false); err != nil {
+			return err
+		}
+	}
+	return c.validateMirrorSet()
+}
+
+// validateMirrorEntry applies the rules for one entry with the prefix its
+// errors are named by. The single [mirror] entry keeps the paths its
+// messages have always had; a list entry is named by its own name so an
+// operator knows which one to fix.
+func (c *Config) validateMirrorEntry(m *MirrorConfig, path string, legacy bool) error {
 	m.Name = strings.TrimSpace(m.Name)
-	m.Protocol = strings.ToLower(strings.TrimSpace(m.Protocol))
+	m.Protocol = normalizedMirrorProtocol(m.Protocol)
 	m.BaseURL = strings.TrimSpace(m.BaseURL)
 	m.Account = strings.TrimSpace(m.Account)
 	m.RemoteUser = strings.TrimSpace(m.RemoteUser)
 	m.DeviceID = strings.TrimSpace(m.DeviceID)
 	m.PeerPathPrefix = strings.TrimSpace(m.PeerPathPrefix)
 	m.LocalPathPrefix = strings.TrimSpace(m.LocalPathPrefix)
-	if m.Protocol == "" {
-		// A file written before there was a choice means the only
-		// protocol there was.
-		m.Protocol = ProtocolKosync
-	}
-	if !m.Enabled {
+	if legacy && !m.Enabled {
+		// Settings left behind by somebody turning the mirror off must
+		// not keep the server from starting.
 		return nil
+	}
+	if !legacy {
+		if !mirrorListName.MatchString(m.Name) {
+			return fmt.Errorf(
+				"%s.name must be lower-case letters, digits and dashes, got %q",
+				path, m.Name)
+		}
+		if m.BaseURL != "" {
+			if err := c.cleanMirrorURL(m, path); err != nil {
+				return err
+			}
+		}
+		if !m.Enabled {
+			return nil
+		}
 	}
 	type setting struct{ name, value string }
 	required := []setting{
-		{"mirror.name", m.Name},
-		{"mirror.base_url", m.BaseURL},
-		{"mirror.account", m.Account},
-		{"mirror.remote_user", m.RemoteUser},
-		{"mirror.device_id", m.DeviceID},
+		{path + ".name", m.Name},
+		{path + ".base_url", m.BaseURL},
+		{path + ".account", m.Account},
+		{path + ".remote_user", m.RemoteUser},
+		{path + ".device_id", m.DeviceID},
 	}
 	switch m.Protocol {
 	case ProtocolKosync:
-		required = append(required, setting{"mirror.remote_key", m.RemoteKey})
+		required = append(required, setting{path + ".remote_key", m.RemoteKey})
 	case ProtocolBookOrbit:
-		required = append(required, setting{"mirror.remote_password", m.RemotePassword})
+		required = append(required, setting{path + ".remote_password", m.RemotePassword})
 	default:
-		return fmt.Errorf("mirror.protocol must be %q or %q, got %q",
-			ProtocolKosync, ProtocolBookOrbit, m.Protocol)
+		return fmt.Errorf("%s.protocol must be %q or %q, got %q",
+			path, ProtocolKosync, ProtocolBookOrbit, m.Protocol)
 	}
 	for _, r := range required {
 		if r.value == "" {
@@ -601,17 +835,37 @@ func (c *Config) validateMirror() error {
 	// rewrite a peer's path into nothing and silently stop confirming
 	// anything, which is worse than not mapping at all.
 	if (m.PeerPathPrefix == "") != (m.LocalPathPrefix == "") {
-		return fmt.Errorf("mirror.peer_path_prefix and mirror.local_path_prefix must be set together")
+		return fmt.Errorf("%s.peer_path_prefix and %s.local_path_prefix must be set together",
+			path, path)
 	}
 	// The name is joined to a remote device id with a colon to make the
 	// device a reader sees, so a name carrying one would make that id
-	// ambiguous about where it split.
-	if strings.ContainsAny(m.Name, ": \t") {
-		return fmt.Errorf("mirror.name must not contain a colon or whitespace, got %q", m.Name)
+	// ambiguous about where it split. A list entry's name is stricter
+	// than this and has already been checked.
+	if legacy && strings.ContainsAny(m.Name, ": \t") {
+		return fmt.Errorf("%s.name must not contain a colon or whitespace, got %q", path, m.Name)
+	}
+	if err := c.cleanMirrorURL(m, path); err != nil {
+		return err
+	}
+	if err := c.checkMirrorBounds(m, path); err != nil {
+		return err
+	}
+	return nil
+}
+
+// cleanMirrorURL holds a peer address to being an address: a scheme, a
+// host and a path, normalised once so every route built on it joins
+// without a second thought. A list entry is cleaned even when it is
+// disabled, because a credential or a query string in an address is
+// wrong whether or not the entry is currently on.
+func (c *Config) cleanMirrorURL(m *MirrorConfig, path string) error {
+	if m.BaseURL == "" {
+		return nil
 	}
 	u, err := url.Parse(m.BaseURL)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("mirror.base_url must be an absolute URL")
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("%s.base_url must be an absolute URL", path)
 	}
 	switch u.Scheme {
 	case "https":
@@ -619,33 +873,97 @@ func (c *Config) validateMirror() error {
 		// The credential is sent on every request, so this is the same
 		// boundary the inbound adapters hold.
 		if !c.InsecureHTTP {
-			return fmt.Errorf("mirror.base_url must be https unless insecure_http is set")
+			return fmt.Errorf("%s.base_url must be https unless insecure_http is set", path)
 		}
-	default:
-		return fmt.Errorf("mirror.base_url must be http or https, got %q", u.Scheme)
 	}
 	// An API root is a scheme, a host and a path. A password in the
 	// userinfo would be logged with the URL at every startup, and a
 	// query or a fragment would be carried onto every route built from
 	// it, so none of the three is accepted rather than quietly dropped.
 	if u.User != nil {
-		return fmt.Errorf("mirror.base_url must not contain a username or password")
+		return fmt.Errorf("%s.base_url must not contain a username or password", path)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("mirror.base_url must not contain a query string or fragment")
+		return fmt.Errorf("%s.base_url must not contain a query string or fragment", path)
 	}
-	m.BaseURL = strings.TrimSuffix(u.String(), "/")
+	m.BaseURL = MirrorRoot(u.String())
+	return nil
+}
+
+// checkMirrorBounds holds the polling of one enabled entry to what the
+// peer can bear. A peer has no push, so the interval is the entire cost
+// control.
+func (c *Config) checkMirrorBounds(m *MirrorConfig, path string) error {
 	if m.PollInterval.Duration() < 30*time.Second {
-		return fmt.Errorf("mirror.poll_interval must be at least 30s")
+		return fmt.Errorf("%s.poll_interval must be at least 30s", path)
 	}
 	if m.ResolveRetryInterval.Duration() < time.Minute {
-		return fmt.Errorf("mirror.resolve_retry_interval must be at least 1m")
+		return fmt.Errorf("%s.resolve_retry_interval must be at least 1m", path)
 	}
 	if m.ActiveDays < 1 {
-		return fmt.Errorf("mirror.active_days must be >= 1")
+		return fmt.Errorf("%s.active_days must be >= 1", path)
 	}
 	if m.Timeout.Duration() < time.Second {
-		return fmt.Errorf("mirror.timeout must be at least 1s")
+		return fmt.Errorf("%s.timeout must be at least 1s", path)
+	}
+	return nil
+}
+
+// validateMirrorSet holds the entries to being distinct from each other.
+// A name keys a mirror's cursors and prefixes the device a position from
+// it is filed under, so two entries sharing one would share both. Two
+// enabled entries reaching one peer account would merge everything they
+// mirror, which is somebody else's reading as much as this account's.
+func (c *Config) validateMirrorSet() error {
+	names := map[string]string{}
+	addName := func(name, label string) error {
+		key := strings.ToLower(name)
+		if key == "" {
+			return nil
+		}
+		if other, ok := names[key]; ok {
+			return fmt.Errorf(
+				"mirror names must be unique: %s and %s are both named %q",
+				other, label, name)
+		}
+		names[key] = label
+		return nil
+	}
+	if c.mirrorDefined {
+		if err := addName(c.Mirror.Name, "the [mirror] entry"); err != nil {
+			return err
+		}
+	}
+	for _, m := range c.Mirrors {
+		if err := addName(m.Name, "mirrors["+m.Name+"]"); err != nil {
+			return err
+		}
+	}
+
+	targets := map[string]string{}
+	addTarget := func(m MirrorConfig, label string) error {
+		if !m.Enabled {
+			return nil
+		}
+		key := strings.ToLower(m.BaseURL) + "\n" + strings.ToLower(m.RemoteUser)
+		if other, ok := targets[key]; ok {
+			return fmt.Errorf(
+				"%s and %s point at the same account on the same peer (%s as %s); "+
+					"two mirrors would share one remote reading position",
+				other, label, m.BaseURL, m.RemoteUser)
+		}
+		targets[key] = label
+		return nil
+	}
+	if c.mirrorDefined {
+		if err := addTarget(c.Mirror, "the [mirror] entry"); err != nil {
+			return err
+		}
+	}
+	for _, m := range c.Mirrors {
+		if err := addTarget(m, "mirrors["+m.Name+"]"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

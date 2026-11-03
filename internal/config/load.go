@@ -30,6 +30,10 @@ func Load(path string) (Config, error) {
 			if err := unknownKeyError(path, meta.Undecoded()); err != nil {
 				return c, err
 			}
+			// The single entry only exists when the file says so. Its
+			// default name would otherwise look like a peer nobody
+			// configured, and would refuse a list entry the same name.
+			c.mirrorDefined = meta.IsDefined("mirror")
 		} else if !os.IsNotExist(err) {
 			return c, err
 		}

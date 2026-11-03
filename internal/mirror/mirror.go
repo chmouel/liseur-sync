@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -169,6 +170,6 @@ func locatorWithCFI(cfi string, progression float64) []byte {
 // the same library and the cursor should survive it.
 func peerIdentity(protocol, baseURL, remoteUser string) string {
 	sum := sha256.Sum256([]byte(
-		protocol + "\n" + strings.TrimSuffix(baseURL, "/") + "\n" + remoteUser))
+		protocol + "\n" + config.MirrorRoot(baseURL) + "\n" + remoteUser))
 	return hex.EncodeToString(sum[:8])
 }

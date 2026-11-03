@@ -245,6 +245,7 @@ func (s *Server) reauth(r *http.Request, actor *store.User) error {
 var (
 	errRateLimited      = errors.New("too many attempts; wait a minute and try again")
 	errBadAdminPassword = errors.New("your password is wrong")
+	errNotAdmin         = errors.New("administrator rights are required")
 )
 
 // logAdminAction is the audit trail: one structured line per cross-user

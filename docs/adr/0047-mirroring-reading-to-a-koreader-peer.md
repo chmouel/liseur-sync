@@ -148,7 +148,9 @@ credential it would then fail to use.
 This is the narrow boundary a single account buys. A general
 multi-account version would need encrypted credential storage and a key
 to encrypt it with, which is a larger decision and is deliberately not
-taken here.
+taken here. [ADR-0061](0061-several-mirrors.md) keeps it: several
+entries may exist, but each still names exactly one account, and its
+credential is still read from configuration.
 
 ### Bounds
 
