@@ -417,6 +417,11 @@ paths:
         Preserves the token id, device id, and secret. Requires the
         short-lived login credential. Adding `admin` requires the user
         to already hold an active admin token.
+
+        The `Web reader` credential's scopes are fixed: a scope update
+        naming one is refused with `409` and `code: reserved_name`.
+        Allowing it would let the credential be reshaped out of the
+        reader token the server revokes at sign-out.
       security: [{ loginAuth: [] }]
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -455,6 +460,18 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409":
+          description: |
+            The token is the reserved browser reader credential (body
+            carries `code: reserved_name`).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [reserved_name] }
     delete:
       tags: [auth]
       summary: Revoke a token

@@ -341,3 +341,30 @@ func TestReaderTokenNameIsReserved(t *testing.T) {
 		t.Fatalf("reserved name with padding: want 400, got %d %v", code, out)
 	}
 }
+
+// TestReaderTokenScopesCannotBeChanged: reshaping the browser reader's
+// credential out of the reader scope set would make it survive the
+// sign-out that revokes it, since the revoke spares a genuine reader
+// token from "revoke all".
+func TestReaderTokenScopesCannotBeChanged(t *testing.T) {
+	url, svc, userID, login := tokenSelfFixture(t)
+	_, tok, err := svc.MintReaderToken(t.Context(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out := patch(t, url+"/v1/tokens/"+tok.ID, login, map[string]any{
+		"scopes": []string{"sync"},
+	})
+	if code != http.StatusConflict || out["code"] != "reserved_name" {
+		t.Fatalf("reshaping a reader token: want 409 reserved_name, got %d %v", code, out)
+	}
+	toks, err := svc.St.ListTokens(t.Context(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range toks {
+		if got.ID == tok.ID && !got.Scopes.Contains(store.ScopeLibraryRead) {
+			t.Fatalf("a refused scope update changed the reader token: %v", got.Scopes)
+		}
+	}
+}

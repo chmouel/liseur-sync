@@ -237,6 +237,20 @@ func (s *Server) HandleUpdateTokenScopes(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	toks, err := s.St.ListTokens(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token update failed")
+		return
+	}
+	for _, t := range toks {
+		if t.ID == r.PathValue("id") && auth.ReservedTokenName(t.Name) {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "the browser reader's token scopes cannot be changed",
+				"code":  "reserved_name",
+			})
+			return
+		}
+	}
 	if err := s.Auth.CheckScopeGrant(r.Context(), userID, scopes); err != nil {
 		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
 			writeError(w, http.StatusForbidden, err.Error())

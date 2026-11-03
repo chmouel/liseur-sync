@@ -138,6 +138,69 @@ func TestReaderTokenRequiresCSRF(t *testing.T) {
 	}
 }
 
+// TestSignOutRevokesAReshapedReaderToken: the reader shape is what
+// spares a token from "revoke all", but the reserved name is what signing
+// out has to catch. A reader token whose scopes were changed — straight
+// through the store here, since the PATCH edge refuses — is no longer
+// IsReaderToken, and must still not outlive the session that authorised
+// it.
+func TestSignOutRevokesAReshapedReaderToken(t *testing.T) {
+	for _, tc := range []struct{ name, path string }{
+		{"logout", "/ui/logout"},
+		{"browser revoke", "/ui/browsers/revoke"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, st := testServer(t)
+			svc := auth.NewService(st)
+			cookie := loginCookie(t, ts)
+			got := mintReaderToken(t, ts, cookie)
+
+			u, err := st.UserByName(t.Context(), "alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var id string
+			for _, tok := range listTokens(t, st) {
+				if tok.Name == auth.ReaderTokenName {
+					id = tok.ID
+				}
+			}
+			if id == "" {
+				t.Fatal("no reader token was stored")
+			}
+			if err := st.UpdateTokenScopes(t.Context(), u.ID, id,
+				store.ScopeSet{store.ScopeSync}); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, tok := range listTokens(t, st) {
+				if tok.ID != id {
+					continue
+				}
+				if auth.IsReaderToken(tok) {
+					t.Fatal("the scope change did not leave the reader token shape")
+				}
+				if tok.RevokedAt != nil {
+					t.Fatal("the token was already revoked before signing out")
+				}
+			}
+			if _, err := svc.AuthenticateToken(t.Context(), got.Token); err != nil {
+				t.Fatalf("reshaped reader token does not authenticate before sign-out: %v", err)
+			}
+
+			_, body := page(t, ts, cookie, "/ui/settings")
+			csrf := extractCSRF(t, body)
+			code, _ := postForm(t, ts, cookie, tc.path, url.Values{"csrf": {csrf}})
+			if code != http.StatusOK && code != http.StatusSeeOther {
+				t.Fatalf("%s: %d", tc.name, code)
+			}
+			if _, err := svc.AuthenticateToken(t.Context(), got.Token); err == nil {
+				t.Fatal("a reader token reshaped out of the reader shape survived sign-out")
+			}
+		})
+	}
+}
+
 // TestSigningOutEndsBrowserReading: a token derived from a session must
 // not outlive it, or signing out leaves working access behind.
 func TestSigningOutEndsBrowserReading(t *testing.T) {
