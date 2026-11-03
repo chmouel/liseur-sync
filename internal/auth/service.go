@@ -48,6 +48,14 @@ const readerTokenLifetimeSlack = time.Minute
 // credential and has to be treated as one — leaving it out of "revoke all
 // tokens" because of its name would spare exactly the thing an account
 // reaches for that button to kill.
+//
+// The rule is asymmetric. Where the answer spares a token or grants it
+// reader treatment — the revoke-all exemption, a display split, device-id
+// inheritance — use this strict shape, so a reshaped credential cannot
+// hide. Where the answer revokes or reaps, match the reserved name alone
+// (isReaderNamed): a reader token whose scopes were changed must still
+// not outlive the browser session that authorised it, and over-revoking is
+// the safe direction.
 func IsReaderToken(t store.Token) bool {
 	if t.Name != ReaderTokenName || t.DeviceID == "" || t.ExpiresAt == nil || len(t.Scopes) != len(readerScopes) {
 		return false
@@ -60,6 +68,10 @@ func IsReaderToken(t store.Token) bool {
 	life := t.ExpiresAt.Sub(t.CreatedAt)
 	return life <= ReaderTokenTTL && life >= ReaderTokenTTL-readerTokenLifetimeSlack
 }
+
+// isReaderNamed is the broad half of the rule above: the reserved name
+// alone, for work that revokes or reaps rather than spares.
+func isReaderNamed(t store.Token) bool { return t.Name == ReaderTokenName }
 
 // readerScopes is the whole capability of a browser reader: read the
 // catalog, sync positions. It is deliberately not derived from the
@@ -247,7 +259,7 @@ func (s *Service) MintReaderToken(ctx context.Context, userID string) (string, s
 	// replaces have nothing left to hold. Another browser's newest is
 	// still spared, dead or not — that is its op-log identity.
 	for _, t := range existing {
-		if !IsReaderToken(t) {
+		if !isReaderNamed(t) {
 			continue
 		}
 		if t.DeviceID != minted.DeviceID && t.ID == newestPerDevice[t.DeviceID].ID {
@@ -269,7 +281,7 @@ func (s *Service) RevokeReaderTokens(ctx context.Context, userID string) error {
 		return fmt.Errorf("list tokens: %w", err)
 	}
 	for _, t := range toks {
-		if !IsReaderToken(t) || t.RevokedAt != nil {
+		if !isReaderNamed(t) || t.RevokedAt != nil {
 			continue
 		}
 		if err := s.St.RevokeToken(ctx, userID, t.ID); err != nil {
