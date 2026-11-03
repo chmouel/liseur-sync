@@ -999,14 +999,26 @@ configuration or the new one and never a half-written mix.
 owner-only (`0600`).** That covers the mirror's `remote_key` and
 `remote_password` (in `[mirror]` and in any `[[mirrors]]` table, enabled
 or not), `[audiobookshelf] api_key` and `stt_api_key`, and a
-`database.url` that is a DSN carrying a password. It happens whether the
-save rewrote the section or found nothing to change, so an existing
-`0644` file is tightened the first time an administrator saves it. A file
-holding no credential keeps the permissions it had, and a file this
-server creates is created `0600`. The write renames a file the server
-itself created into place, so the configuration file ends up owned by
-the account the server runs as, and that account must be able to write
-the directory holding it.
+`database.url` that is a DSN carrying a password — in either shape libpq
+accepts, so `sslpassword`, a password in the URL's userinfo and a
+keyword/value string with space around the `=` all count. It also covers
+a password in the userinfo of any address the file holds: a mirror's
+`base_url` (a disabled entry is never validated), or `[audiobookshelf]`
+`base_url` or `stt_url`, or `reader_origin`. A username with no password
+is not a credential.
+
+What counts as a value follows the loader. A mirror credential is sent
+as written, so `remote_password` or `remote_key` set to nothing but
+whitespace is a stored credential; the `[audiobookshelf]` keys are
+trimmed before they are used, so a blank one there is not one.
+
+It happens whether the save rewrote the section or found nothing to
+change, so an existing `0644` file is tightened the first time an
+administrator saves it. A file holding no credential keeps the
+permissions it had, and a file this server creates is created `0600`. The
+write renames a file the server itself created into place, so the
+configuration file ends up owned by the account the server runs as, and
+that account must be able to write the directory holding it.
 
 A credential supplied through the environment is never written to the
 file, and never makes a secret-free file owner-only: `LISEUR_ABS_API_KEY`
@@ -1017,7 +1029,10 @@ any of this: a save that would write is refused exactly as it is today,
 because the file cannot be replaced. A save that has nothing to change
 but cannot tighten a credential-bearing file is refused too, rather than
 reporting success over a secret on a filesystem this server may not
-`chmod`.
+`chmod`. A file whose credential settings cannot be read at all — broken
+TOML, or a credential field with the wrong type — is refused rather than
+treated as secret-free, so the write that would protect it is never
+skipped silently.
 
 ## Backup
 
