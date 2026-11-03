@@ -54,6 +54,10 @@ func (b *bookOrbitPeer) Identity() string {
 	return peerIdentity(config.ProtocolBookOrbit, b.cfg.BaseURL, b.cfg.RemoteUser)
 }
 
+func (b *bookOrbitPeer) legacyIdentities() []string {
+	return legacyPeerIdentities(config.ProtocolBookOrbit, b.cfg.BaseURL, b.cfg.RemoteUser)
+}
+
 func (b *bookOrbitPeer) Authorize(ctx context.Context) error {
 	// A session already in hand is reused rather than replaced. The
 	// mirror re-authorizes whenever it rebuilds itself, which during
@@ -128,7 +132,7 @@ func (b *bookOrbitPeer) Pull(
 		place.Foreign = strconv.Itoa(*reply.PageNumber)
 	}
 	place.Mark = placeMark(place)
-	place.Echo = cur.PushedMark != "" && place.Mark == cur.PushedMark
+	place.Echo = echoMatch(cur.PushedMark, place)
 	if !place.Echo {
 		// The mark says what the peer's row holds because of us. It
 		// plainly holds something else now, so the mark is spent:
@@ -210,6 +214,29 @@ func placeMark(p Place) string {
 	default:
 		return "pct:" + strconv.FormatFloat(round(p.Percentage, 6), 'f', -1, 64)
 	}
+}
+
+// legacyPlaceMark is how a build before this one marked the same
+// position: any engine position at all went out as pos:, including the
+// bare fraction this one spells pct:. A cursor those builds left
+// carries that spelling, so the echo it describes has to be recognised
+// under it — a mark taken for news is cleared, and a push the peer has
+// since superseded is then free to overwrite newer reading.
+func legacyPlaceMark(p Place) string {
+	if p.CFI != "" || p.Foreign == "" {
+		return ""
+	}
+	return "pos:" + p.Foreign
+}
+
+// echoMatch reports whether a reply is the position this server last
+// pushed, marked either the way it would be written now or the way it
+// was written before.
+func echoMatch(pushedMark string, p Place) bool {
+	if pushedMark == "" {
+		return false
+	}
+	return pushedMark == placeMark(p) || pushedMark == legacyPlaceMark(p)
 }
 
 func round(v float64, places int) float64 {
