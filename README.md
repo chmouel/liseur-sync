@@ -19,7 +19,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 
 * reading-position synchronization using full locators
 * a native REST API
-* a kosync-compatible API for KOReader and [CrossPoint](docs/integrating.md#crosspoint), with paragraph-precise positions shared with Liseur
+* a kosync-compatible API for KOReader and [CrossPoint](docs/crosspoint.md), with paragraph-precise positions shared with Liseur
 * OPDS 1.2
 * EPUB library indexing and search
 * EPUB upload and deletion for writable folders
