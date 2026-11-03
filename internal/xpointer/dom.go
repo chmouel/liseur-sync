@@ -2,6 +2,7 @@ package xpointer
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -21,12 +22,14 @@ var ErrNoBody = errors.New("xpointer: document has no body")
 var hiddenNames = map[string]bool{"head": true, "style": true, "script": true, "title": true, "rp": true}
 
 type element struct {
-	name   string
-	id     string
-	index  int // 1-based among element siblings of the same name
-	parent *element
-	kids   []child
-	hidden bool
+	name          string
+	id            string
+	index         int // 1-based among element siblings of the same name
+	parent        *element
+	kids          []child
+	elementCounts map[string]int
+	textCount     int
+	hidden        bool
 }
 
 // child is one entry in an element's content: an element or a text run.
@@ -60,7 +63,7 @@ type Document struct {
 
 // ParseDocument reads an XHTML resource leniently, the way a reader has to take
 // an EPUB that is not quite well-formed.
-func ParseDocument(data []byte) (*Document, error) {
+func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 	dec.AutoClose = xml.HTMLAutoClose
@@ -78,6 +81,9 @@ func ParseDocument(data []byte) (*Document, error) {
 	done := false
 	visible := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		tok, err := dec.Token()
 		if err == io.EOF {
 			break
@@ -103,12 +109,11 @@ func ParseDocument(data []byte) (*Document, error) {
 				continue
 			}
 			el := &element{name: t.Name.Local, id: id, parent: cur, hidden: cur.hidden || hiddenNames[strings.ToLower(t.Name.Local)]}
-			for _, k := range cur.kids {
-				if k.el != nil && k.el.name == el.name {
-					el.index++
-				}
+			if cur.elementCounts == nil {
+				cur.elementCounts = make(map[string]int)
 			}
-			el.index++
+			cur.elementCounts[el.name]++
+			el.index = cur.elementCounts[el.name]
 			cur.kids = append(cur.kids, child{el: el})
 			cur = el
 		case xml.EndElement:
@@ -125,12 +130,8 @@ func ParseDocument(data []byte) (*Document, error) {
 			}
 			r := &run{parent: cur, text: string(t), length: utf8.RuneCount(t), blank: blank(string(t)), hidden: cur.hidden}
 			if !r.hidden {
-				for _, k := range cur.kids {
-					if k.run != nil && !k.run.hidden {
-						r.index++
-					}
-				}
-				r.index++
+				cur.textCount++
+				r.index = cur.textCount
 				r.start = visible
 				visible += r.length
 				if !r.blank {
