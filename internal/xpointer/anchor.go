@@ -71,10 +71,18 @@ func (d *Document) AnchorAt(pos Position) (Anchor, error) {
 		// from the start of the run.
 		prev, before := 0, 0
 		for _, w := range wordPattern.FindAllStringIndex(r.text, -1) {
+			length := utf8.RuneCountInString(r.text[w[0]:w[1]])
 			before += utf8.RuneCountInString(r.text[prev:w[1]])
 			prev = w[1]
 			if before <= skip {
 				continue
+			}
+			// A word the readers cannot quote whole cannot carry an offset
+			// inside it: the anchor would name the word's first rune, which
+			// in a run with no spaces (a CJK or Thai paragraph) is far from
+			// the position asked for.
+			if length > maxHighlight {
+				return Anchor{}, ErrNotFound
 			}
 			return d.anchorFor(r, w[0], w[1])
 		}

@@ -680,3 +680,18 @@ func TestAnchorAtMultibyteOffset(t *testing.T) {
 		t.Errorf("AnchorAt = %+v", a)
 	}
 }
+
+// A paragraph with no spaces is one word token. Anchoring inside it would
+// name the paragraph's first rune, so the derivation declines instead and
+// the caller keeps its percentage.
+func TestSpacelessTextDeclines(t *testing.T) {
+	var b strings.Builder
+	for i := range 1000 {
+		b.WriteRune(rune(0x4e00 + i))
+	}
+	book := bookOf(map[string]string{"chapter.xhtml": "<html><body><p>" + b.String() + "</p></body></html>"}, "chapter.xhtml")
+	xp := "/body/DocFragment[1]/body/p[1]/text()[1].900"
+	if _, err := book.LocatorFor(t.Context(), xp); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("spaceless run: %v, want ErrNotFound", err)
+	}
+}
