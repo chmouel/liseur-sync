@@ -75,6 +75,11 @@ For example, if your website is `https://reading.example.com`, the Sync
 Server URL is `https://reading.example.com/adapter/kosync`. Replace the
 example address with your own.
 
+If liseur-sync is served below a path prefix, this URL is still rooted at
+`/adapter/kosync` on the same host, and the statistics plugin posts there
+too: the proxy has to route `/adapter/kosync*` through without stripping
+it (see [deployment.md](deployment.md#serving-below-a-path-prefix)).
+
 Press **Sign Up** on the reader. This pairs your device with your existing
 liseur-sync account. Leave ordinary CrossPoint Sync enabled, and leave
 **Sync Clippings** off.
