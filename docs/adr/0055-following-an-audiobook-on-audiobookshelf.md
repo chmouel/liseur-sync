@@ -187,7 +187,8 @@ the API.
    revisions.
 2. Configuration, client, mapping, matching.
 3. Position and session sync, runner.
-4. Web UI for linking and confirming; documentation.
+4. Web UI for linking and confirming; documentation. The section is
+   also editable from the administration page (ADR-0062).
 
 ## Acceptance criteria
 

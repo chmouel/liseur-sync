@@ -619,6 +619,9 @@ through numbered chapters, only inside what the recording covers, and
 listening sessions are imported with origin `audiobookshelf`. They count
 in statistics but not in reading pace
 ([ADR-0055](adr/0055-following-an-audiobook-on-audiobookshelf.md)).
+It is configured in the `[audiobookshelf]` section or, for the settings
+that are not operational detail, from the administration page; a saved
+change needs a restart ([ADR-0062](adr/0062-configuring-audiobookshelf-from-the-admin-page.md)).
 
 ## 8. Security and auth
 

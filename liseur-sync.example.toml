@@ -163,7 +163,9 @@ timeout = "20s"
 
 # Follow audiobooks on an Audiobookshelf server (ADR-0055): listening
 # and reading positions cross through matching chapters, and listening
-# time counts in statistics. Off by default.
+# time counts in statistics. Off by default. The enabled flag, server
+# URL, local account and API key can also be set from the administration
+# page (ADR-0062), which preserves the operational settings below.
 [audiobookshelf]
 enabled = false
 # base_url = "https://audiobooks.example.com"

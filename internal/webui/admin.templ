@@ -68,7 +68,17 @@ templ adminOverviewBody(prefix string, v settingsAdminView) {
 		</p>
 	</section>
 	<section class="card">
-		<h2>Audiobookshelf</h2>
+		<div class="cardhead">
+			<h2>Audiobookshelf</h2>
+			<a class="section-link" href={ settingsAdminHref(prefix, settingsAdminAudiobookshelf) }>
+				if v.Audiobookshelf.Enabled {
+					{ "Manage" }
+				} else {
+					{ "Set up" }
+				}
+				<span aria-hidden="true">→</span>
+			</a>
+		</div>
 		<dl class="facts">
 			<dt>Status</dt>
 			<dd>

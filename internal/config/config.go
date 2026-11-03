@@ -364,6 +364,20 @@ func MirrorRoot(baseURL string) string {
 	return strings.TrimRight(baseURL, "/")
 }
 
+// canonicalAudiobookshelfURL is an address the way startup stores it:
+// parsed, with one trailing slash removed. Validation writes it and so
+// does the restart check, so a saved address is compared against what
+// the next start makes of it. Exactly one slash is removed because the
+// peer identity has always been derived from the result of that, and a
+// second pass over the same address would move every existing peer.
+func canonicalAudiobookshelfURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return strings.TrimSpace(raw)
+	}
+	return strings.TrimSuffix(u.String(), "/")
+}
+
 // normalizedMirrorProtocol is a protocol name the way validation and the
 // credential lookup both spell it: case and surrounding space are the
 // operator's, not the protocol's. An entry that names none keeps the
@@ -553,24 +567,7 @@ func (c *Config) applyEnv() {
 
 	c.ApplyMirrorEnvironment()
 
-	setBool(&c.Audiobookshelf.Enabled, "LISEUR_ABS_ENABLED")
-	setStr(&c.Audiobookshelf.BaseURL, "LISEUR_ABS_BASE_URL")
-	setStr(&c.Audiobookshelf.Account, "LISEUR_ABS_ACCOUNT")
-	setStr(&c.Audiobookshelf.APIKey, "LISEUR_ABS_API_KEY")
-	setDuration(&c.Audiobookshelf.PollInterval, "LISEUR_ABS_POLL_INTERVAL")
-	setDuration(&c.Audiobookshelf.Timeout, "LISEUR_ABS_TIMEOUT")
-	setDuration(&c.Audiobookshelf.SessionOverlap, "LISEUR_ABS_SESSION_OVERLAP")
-	setStr(&c.Audiobookshelf.STTURL, "LISEUR_ABS_STT_URL")
-	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_ABS_STT_API_KEY")
-	setStr(&c.Audiobookshelf.STTModel, "LISEUR_ABS_STT_MODEL")
-	setStr(&c.Audiobookshelf.STTURL, "LISEUR_STT_URL")
-	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_STT_API_KEY")
-	setStr(&c.Audiobookshelf.STTModel, "LISEUR_STT_MODEL")
-	if v, ok := os.LookupEnv("LISEUR_ABS_ACTIVE_DAYS"); ok {
-		if days, err := strconv.Atoi(v); err == nil {
-			c.Audiobookshelf.ActiveDays = days
-		}
-	}
+	c.ApplyAudiobookshelfEnvironment()
 }
 
 // The environment readers applyEnv is built from. The mirror's overlay is
@@ -993,7 +990,19 @@ func (c *Config) validateAudiobookshelf() error {
 		if su.User != nil || su.RawQuery != "" || su.Fragment != "" {
 			return fmt.Errorf("audiobookshelf.stt_url must not contain credentials, query string or fragment")
 		}
-		a.STTURL = strings.TrimSuffix(su.String(), "/")
+		a.STTURL = canonicalAudiobookshelfURL(a.STTURL)
+	}
+	if a.BaseURL != "" {
+		if a.Enabled {
+			if err := c.validateAudiobookshelfAddress(a); err != nil {
+				return err
+			}
+		} else {
+			// A disabled entry is never spoken to, and may hold an
+			// address for later: it is normalised but not refused, so
+			// a file that already held one keeps starting.
+			a.BaseURL = canonicalAudiobookshelfURL(a.BaseURL)
+		}
 	}
 	if !a.Enabled {
 		return nil
@@ -1007,26 +1016,6 @@ func (c *Config) validateAudiobookshelf() error {
 			return fmt.Errorf("%s is required when audiobookshelf is enabled", r.name)
 		}
 	}
-	u, err := url.Parse(a.BaseURL)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("audiobookshelf.base_url must be an absolute URL")
-	}
-	switch u.Scheme {
-	case "https":
-	case "http":
-		if !c.InsecureHTTP {
-			return fmt.Errorf("audiobookshelf.base_url must be https unless insecure_http is set")
-		}
-	default:
-		return fmt.Errorf("audiobookshelf.base_url must be http or https, got %q", u.Scheme)
-	}
-	if u.User != nil {
-		return fmt.Errorf("audiobookshelf.base_url must not contain a username or password")
-	}
-	if u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("audiobookshelf.base_url must not contain a query string or fragment")
-	}
-	a.BaseURL = strings.TrimSuffix(u.String(), "/")
 	if a.PollInterval.Duration() < 30*time.Second {
 		return fmt.Errorf("audiobookshelf.poll_interval must be at least 30s")
 	}
@@ -1039,6 +1028,38 @@ func (c *Config) validateAudiobookshelf() error {
 	if a.Timeout.Duration() < time.Second {
 		return fmt.Errorf("audiobookshelf.timeout must be at least 1s")
 	}
+	return nil
+}
+
+// validateAudiobookshelfAddress applies the rules an address a file may
+// hold must meet: an absolute address, and never a credential, query or
+// fragment that would leak. The scheme rule belongs to an enabled peer,
+// the only one ever spoken to. Validation applies it to a running
+// integration and a save to the value it is about to write, so a disabled
+// entry can hold an address for later that a start would never accept.
+func (c *Config) validateAudiobookshelfAddress(a *AudiobookshelfConfig) error {
+	u, err := url.Parse(a.BaseURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("audiobookshelf.base_url must be an absolute URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("audiobookshelf.base_url must not contain a username or password")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("audiobookshelf.base_url must not contain a query string or fragment")
+	}
+	if a.Enabled {
+		switch u.Scheme {
+		case "https":
+		case "http":
+			if !c.InsecureHTTP {
+				return fmt.Errorf("audiobookshelf.base_url must be https unless insecure_http is set")
+			}
+		default:
+			return fmt.Errorf("audiobookshelf.base_url must be http or https")
+		}
+	}
+	a.BaseURL = canonicalAudiobookshelfURL(a.BaseURL)
 	return nil
 }
 
