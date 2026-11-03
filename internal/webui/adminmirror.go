@@ -266,12 +266,19 @@ func (s *Server) mirrorCandidate(f config.MirrorFile) (config.Config, error) {
 // adoptMirrorSettings takes back from validation the settings it
 // normalises — a trimmed URL, a lower-case protocol, the defaults an
 // omitted field means — while leaving each entry's credential as the file
-// will hold it.
+// will hold it and each entry's address spelled as the entry spelled it.
+//
+// The spelling is not decoration: validation records it to recognise
+// cursors an earlier build folded with the slashes still on, so cleaning
+// an address nobody edited would strand that cursor.
 func adoptMirrorSettings(f *config.MirrorFile, c config.Config) {
 	adopt := func(dst *config.MirrorConfig, src config.MirrorConfig) {
-		key, password := dst.RemoteKey, dst.RemotePassword
+		key, password, baseURL := dst.RemoteKey, dst.RemotePassword, dst.BaseURL
 		*dst = src
 		dst.RemoteKey, dst.RemotePassword = key, password
+		if baseURL != "" && config.MirrorRoot(baseURL) == dst.BaseURL {
+			dst.BaseURL = baseURL
+		}
 	}
 	if f.HasLegacy && !config.LegacyMirrorEnvironmentManaged() {
 		// An entry the environment owns is shown read-only and refused

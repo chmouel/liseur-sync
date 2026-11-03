@@ -2,6 +2,8 @@ package webui
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/mirror"
+	"github.com/chmouel/liseur-sync/internal/store"
 )
 
 // mirrorTestServer stands in for the peer: it answers the one request a
@@ -934,5 +939,134 @@ func TestSavingAListEntryDoesNotCopyTheEnvironmentIntoTheSingleEntry(t *testing.
 	}
 	if !strings.Contains(string(after), `name = "kobo"`) {
 		t.Fatalf("the list entry was not written:\n%s", after)
+	}
+}
+
+// TestSavingAnUnrelatedMirrorLeavesASlashedAddressAsWritten. A build
+// before this one removed one trailing slash when it validated a peer
+// address and one more when it folded that address into a cursor
+// identity, so the digest a cursor carries comes from the address as it
+// was written. The page writes the whole list, and an entry nobody
+// edited has to stay byte-for-byte: cleaning its address on the way past
+// changes the alias the next start folds from it, and the first pass
+// then takes the cursor for another library's and resets it.
+func TestSavingAnUnrelatedMirrorLeavesASlashedAddressAsWritten(t *testing.T) {
+	ctx := t.Context()
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The peer answers a pass and holds nothing: what is under test
+		// is the cursor, not an exchange.
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/syncs/progress/") {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"authorized":"OK"}`))
+	}))
+	t.Cleanup(peer.Close)
+
+	typed := peer.URL + "/sync///"
+	ts, cookie, path, _ := mirrorAdminWithFile(t, `insecure_http = true
+
+[mirror]
+enabled = true
+protocol = "kosync"
+name = "peer"
+base_url = "`+typed+`"
+account = "alice"
+remote_user = "reader"
+remote_key = "0123456789abcdef0123456789abcdef"
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+`)
+
+	// The cursor an earlier build left, under the digest that build
+	// folded: the address with both of its slashes gone. The mirror's
+	// own store, since the page and the pass meet at the file.
+	const document = "43200deaa6b3a3cd67dc934fabe6f0f2"
+	st := NewTestStore(t)
+	if err := st.CreateUser(ctx, store.User{
+		ID: "u1", Name: "reader", Timezone: "UTC",
+		KosyncEnabled: true, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	work := store.Work{ID: "w1", UserID: "u1", Title: "A Memory Called Empire", CreatedAt: time.Now()}
+	sha := "sha-w1"
+	if err := st.CreateWork(ctx, work, &store.Edition{UserID: "u1", SHA256: sha, WorkID: work.ID},
+		[]store.Identifier{
+			{Kind: "sha256", Value: sha},
+			{Kind: "partial-md5", Value: document},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	appended, err := st.AppendOps(ctx, "u1", "phone", []store.Op{{
+		OpID: "op-1", WorkID: work.ID, EditionSHA: &sha,
+		ClientTS: time.Now().Add(-time.Hour), Progression: 0.42,
+		Origin: store.OriginNative,
+	}})
+	if err != nil || appended[0].Status != "applied" {
+		t.Fatalf("the local position: %v %+v", err, appended)
+	}
+	sum := sha256.Sum256([]byte("kosync\n" + strings.TrimSuffix(typed, "//") + "\nreader"))
+	seen := time.Now().Add(-30 * time.Minute)
+	if err := st.PutMirrorCursor(ctx, "u1", "peer", store.MirrorCursor{
+		WorkID: work.ID, Document: document, PeerIdentity: hex.EncodeToString(sum[:8]),
+		PushedSeq: appended[0].Seq, RemoteTS: seen.Unix(), PushedMark: "pct:0.42",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second, disabled mirror: a save an administrator makes on a page
+	// that has nothing to do with the single entry's address.
+	form := mirrorForm(addForm(t, ts, cookie))
+	form.Set("name", "kobo")
+	form.Set("protocol", config.ProtocolKosync)
+	form.Set("base_url", "https://kobo.example.com/sync")
+	form.Set("account", "alice")
+	form.Set("remote_user", "reader2")
+	if _, body := postForm(t, ts, cookie, "/ui/admin/mirror", form); !strings.Contains(body, "Mirror saved") {
+		t.Fatalf("the list entry was not saved:\n%s", body)
+	}
+
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `base_url = "`+typed+`"`) {
+		t.Fatalf("a save rewrote an address nobody edited:\n%s", saved)
+	}
+
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncer := &mirror.Syncer{
+		Store: st, Peer: loaded.Mirror.Name, UserID: "u1",
+		Proto:        mirror.KosyncProtocol(mirror.NewClient(loaded.Mirror), loaded.Mirror),
+		ActiveWindow: 30 * 24 * time.Hour, MaxPerPass: 100,
+	}
+	rep, err := syncer.Pass(ctx)
+	if err != nil || rep.FirstError != nil {
+		t.Fatalf("pass: %s err=%v", rep, err)
+	}
+	if rep.Pushed != 0 || rep.Pulled != 0 {
+		t.Fatalf("a save made an upgraded deployment repeat an exchange: %s", rep)
+	}
+	cursors, err := st.MirrorCursors(ctx, "u1", "peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur, ok := cursors[work.ID]
+	if !ok {
+		t.Fatal("the pass left no cursor")
+	}
+	if cur.PushedSeq != appended[0].Seq || cur.RemoteTS != seen.Unix() || cur.PushedMark != "pct:0.42" {
+		t.Fatalf("the cursor lost what it remembered: %+v", cur)
+	}
+	current := sha256.Sum256([]byte("kosync\n" + config.MirrorRoot(typed) + "\nreader"))
+	if want := hex.EncodeToString(current[:8]); cur.PeerIdentity != want {
+		t.Fatalf("the cursor still folds the address the old way: %q", cur.PeerIdentity)
 	}
 }
