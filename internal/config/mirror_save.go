@@ -417,10 +417,9 @@ type credentialMirror struct {
 // validation skips its URL, and a `https://alice:hunter2@peer` left in one
 // is a password on disk whether or not it is ever dialled: a mirror's
 // base_url, an audiobookshelf base_url or stt_url, and a userinfo password
-// in an origin. database.url is the same question, answered conservatively:
-// the word `password` anywhere, or a password in the authority's userinfo,
-// counts (`password` and `sslpassword` both carry a secret), and a sqlite
-// file path is not one.
+// in an origin. database.url is the same question, answered as a total
+// over-approximation: the word `password` anywhere, or a `://` URL with an
+// `@` or a `%` in it, counts, and a sqlite file path is not one.
 //
 // Text that does not decode tells nothing, and the answer then is an error
 // rather than "no": a save that cannot read its own result is refused
@@ -470,16 +469,16 @@ func urlHoldsUserPassword(raw string) bool {
 // The driver is not consulted: a password in the value is on disk whatever
 // ends up reading it.
 //
-// It is a deliberate over-approximation of what libpq accepts. Chasing that
-// grammar means under-detecting something — an apostrophe that only quotes
-// when it opens a value, a socket URL `net/url` refuses, a `password=ab;cd`
-// query `u.Query()` drops — and an under-detection leaves a secret
-// world-readable. Over-detecting only makes a file owner-only, and undoing
-// that is one chmod, so the checks here stay string tests: the word
-// `password` anywhere (case-insensitive, so `sslpassword`, any spacing, any
-// quoting and either shape), or a URL authority whose userinfo holds a
-// non-empty password. A DSN that merely mentions `password` is tightened
-// too, which is the cost of never missing one.
+// It is a total over-approximation and a pure string test, with no attempt
+// at a driver's grammar. Every such attempt is a way for a password to slip
+// past it — a percent-encoded query key, a password holding the `:` that
+// splits userinfo, a `?` the driver does not stop at — and one that slips
+// past leaves a secret world-readable. So only what encoding cannot hide
+// counts: the word `password` anywhere (case-insensitive, so `sslpassword`,
+// any spacing and either shape), or a `://` URL with an `@` or a `%` after
+// it, because a userinfo or any percent-encoding at all can hide a
+// credential. A username-only URL is tightened too; over-detection only
+// makes the file owner-only and undoing that is one chmod.
 func dsnMayHoldPassword(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -488,20 +487,8 @@ func dsnMayHoldPassword(raw string) bool {
 	if strings.Contains(strings.ToLower(raw), "password") {
 		return true
 	}
-	scheme := strings.Index(raw, "://")
-	if scheme < 0 {
-		return false
-	}
-	authority := raw[scheme+3:]
-	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
-		authority = authority[:end]
-	}
-	at := strings.LastIndexByte(authority, '@')
-	if at < 0 {
-		return false
-	}
-	colon := strings.LastIndexByte(authority[:at], ':')
-	return colon >= 0 && colon+1 < at
+	_, after, isURL := strings.Cut(raw, "://")
+	return isURL && strings.ContainsAny(after, "@%")
 }
 
 // tightenConfigCredentialMode makes a config file that already holds a

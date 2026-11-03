@@ -999,16 +999,19 @@ configuration or the new one and never a half-written mix.
 owner-only (`0600`).** That covers the mirror's `remote_key` and
 `remote_password` (in `[mirror]` and in any `[[mirrors]]` table, enabled
 or not), `[audiobookshelf] api_key` and `stt_api_key`, and a
-`database.url` that may carry a password — in either shape libpq
-accepts, so `sslpassword`, a password in the URL's userinfo and a
-keyword/value string with any spacing or quoting all count. That last
-check is conservative on purpose: a `database.url` that merely spells
-the word `password` is protected too, because missing one would leave a
-secret readable and protecting one only costs a `chmod`. It also covers
-a password in the userinfo of any address the file holds: a mirror's
-`base_url` (a disabled entry is never validated), or `[audiobookshelf]`
-`base_url` or `stt_url`, or `reader_origin`. A username with no password
-is not a credential.
+`database.url` that may carry a password. That last check is a total
+over-approximation and a pure string test, chosen because every attempt
+at libpq's grammar has a way to hide one: a `database.url` counts when
+it contains the word `password` anywhere case-insensitively
+(`sslpassword`, `pass%77ord`, any spacing, quoting or shape), or when it
+is a `://` URL with an `@` or a `%` anywhere after the scheme — any
+userinfo or any percent-encoding at all could hide a credential. A
+password-less username in a URL is protected too. Over-detecting only
+costs a `chmod`, while missing one would leave a secret readable. It
+also covers a password in the userinfo of any address the file holds: a
+mirror's `base_url` (a disabled entry is never validated), or
+`[audiobookshelf]` `base_url` or `stt_url`, or `reader_origin`. A
+username with no password is not a credential.
 
 What counts as a value follows the loader. A mirror credential is sent
 as written, so `remote_password` or `remote_key` set to nothing but
