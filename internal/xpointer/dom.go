@@ -17,6 +17,24 @@ var ErrNotFound = errors.New("xpointer: position not in document")
 // ErrNoBody reports a resource with no <body> to count from.
 var ErrNoBody = errors.New("xpointer: document has no body")
 
+// ErrTooComplex reports a resource past the limits translation reads and
+// builds a tree under. It is a declined derivation, not a failure: the
+// caller keeps the percentage it already had.
+var ErrTooComplex = errors.New("xpointer: chapter past translation limits")
+
+const (
+	// Translation wants one chapter's text. An EPUB entry may be 512 MiB
+	// (internal/epub), which is far more XHTML than a reading position is
+	// worth buffering and walking; every chapter that reads as a book is
+	// orders of magnitude smaller.
+	maxChapterBytes = 16 << 20
+	// Ordinary chapters are a few thousand nodes and a dozen elements
+	// deep. A pathological one must not turn a position read into an
+	// unbounded tree walk, so both are bounded.
+	maxChapterNodes = 200_000
+	maxChapterDepth = 200
+)
+
 // CrossPoint skips the text of these and of everything inside them; the
 // element itself still takes its place among its siblings.
 var hiddenNames = map[string]bool{"head": true, "style": true, "script": true, "title": true, "rp": true}
@@ -64,6 +82,9 @@ type Document struct {
 // ParseDocument reads an XHTML resource leniently, the way a reader has to take
 // an EPUB that is not quite well-formed.
 func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
+	if len(data) > maxChapterBytes {
+		return nil, ErrTooComplex
+	}
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = false
 	dec.AutoClose = xml.HTMLAutoClose
@@ -80,6 +101,7 @@ func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 	var cur *element // innermost open element under body, nil outside it
 	done := false
 	visible := 0
+	nodes, depth := 0, 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -93,6 +115,10 @@ func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			nodes++
+			if nodes > maxChapterNodes {
+				return nil, ErrTooComplex
+			}
 			id := attr(t, "id")
 			if id != "" {
 				d.ids[id]++
@@ -108,6 +134,10 @@ func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 				cur = d.body
 				continue
 			}
+			depth++
+			if depth > maxChapterDepth {
+				return nil, ErrTooComplex
+			}
 			el := &element{name: t.Name.Local, id: id, parent: cur, hidden: cur.hidden || hiddenNames[strings.ToLower(t.Name.Local)]}
 			if cur.elementCounts == nil {
 				cur.elementCounts = make(map[string]int)
@@ -120,6 +150,7 @@ func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 			if cur == nil {
 				continue
 			}
+			depth--
 			cur = cur.parent
 			if cur == nil {
 				done = true
@@ -127,6 +158,10 @@ func ParseDocument(ctx context.Context, data []byte) (*Document, error) {
 		case xml.CharData:
 			if cur == nil || len(t) == 0 {
 				continue
+			}
+			nodes++
+			if nodes > maxChapterNodes {
+				return nil, ErrTooComplex
 			}
 			r := &run{parent: cur, text: string(t), length: utf8.RuneCount(t), blank: blank(string(t)), hidden: cur.hidden}
 			if !r.hidden {
