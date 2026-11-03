@@ -322,3 +322,197 @@ func TestEnvironmentSecretsNeverMakeAFileOwnerOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestADatabaseURLPasswordCountsInEitherShape: libpq reads a connection
+// string as a URL or as keyword/value pairs, and either shape can carry a
+// password in more than the obvious place. A value that is not a secret must
+// not be read as one, and text nobody can parse must not panic.
+func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dsn  string
+		want bool
+	}{
+		{"url userinfo password", "postgres://liseur:hunter2@db:5432/liseur", true},
+		{"url password query", "postgres://liseur@db:5432/liseur?password=hunter2", true},
+		{"url sslpassword query", "postgres://liseur@db:5432/liseur?sslpassword=hunter2", true},
+		{"keyword password", "host=db password=hunter2 dbname=liseur", true},
+		{"keyword password, spaces around the equals", "host=db password = hunter2 dbname=liseur", true},
+		{"keyword quoted password, spaces around the equals", "host=db password = 'hunter2' dbname=liseur", true},
+		{"keyword sslpassword", "host=db sslpassword='hunter2'", true},
+		{"keyword quoted password with an escaped quote", `host=db password='it\'s'`, true},
+		{"keyword quoted password with spaces in it", "host=db password=' two words '", true},
+		{"keyword escaped space", `host=db password=two\ words`, true},
+		{"keyword pairs split by a newline", "host=db\npassword=hunter2", true},
+		{"url userinfo without a password", "postgres://liseur@db:5432/liseur", false},
+		{"url empty userinfo password", "postgres://liseur:@db:5432/liseur", false},
+		{"url empty password query", "postgres://liseur@db:5432/liseur?password=", false},
+		{"url without a password", "postgres://liseur@db:5432/liseur?application_name=liseur-sync", false},
+		{"keyword without a password", "host=db dbname=liseur", false},
+		// libpq skips the whitespace after the '=', so a bare token there
+		// is the value rather than an empty one.
+		{"keyword empty password at the end", "host=db dbname=liseur password=", false},
+		{"a bare token after the equals is the value", "host=db password= dbname=liseur", true},
+		{"keyword empty quoted password", "host=db password = '' dbname=liseur", false},
+		{"a password inside a quoted non-password value", "host=db application_name='backup password=fake' dbname=liseur", false},
+		{"a password inside a quoted non-password value, spaced", "host=db application_name = 'backup password = fake'", false},
+		{"sqlite file path", "/var/lib/liseur-sync.db", false},
+		{"empty", "", false},
+		{"only whitespace", "   ", false},
+		// Malformed text is scanned past rather than refused. An
+		// unterminated quote reads to the end of the text, which is where a
+		// password would be.
+		{"unterminated quote holding a password", "host=db password='hunter2", true},
+		{"unterminated empty quote", "host=db password='", false},
+		{"trailing equals", "host=db password=", false},
+		{"bare word", "password", false},
+		{"only an equals", "=", false},
+		{"stray backslash", `\`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dsnHoldsPassword(tc.dsn); got != tc.want {
+				t.Fatalf("%q: dsnHoldsPassword = %t, want %t", tc.dsn, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAWhitespaceMirrorCredentialCounts: a mirror's password is used as
+// written and validation tests it literally, so one made of a single space is
+// a stored credential. The [audiobookshelf] keys are trimmed before anything
+// uses them, so a blank one there is not.
+func TestAWhitespaceMirrorCredentialCounts(t *testing.T) {
+	orbit := workingEntry("orbit")
+	orbit.Protocol = ProtocolBookOrbit
+	orbit.BaseURL = "https://orbit.example.com/api/v1"
+	orbit.RemoteKey = ""
+	orbit.RemotePassword = " "
+
+	const plain = "[content]\ncache_dir = \"covers\"\n"
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		save     func(string) error
+		wantMode os.FileMode
+	}{
+		{"a rewrite writes the whitespace password", plain, func(path string) error {
+			return UpdateMirrors(path, setLegacy(orbit))
+		}, 0o600},
+		{"a no-op save over a whitespace password", "[mirror]\nenabled = false\nprotocol = \"bookorbit\"\nremote_password = \" \"\n", func(path string) error {
+			return UpdateMirrors(path, func(*MirrorFile) error { return nil })
+		}, 0o600},
+		{"a no-op save over a blank audiobookshelf key", "[audiobookshelf]\nenabled = false\napi_key = \"  \"\n", func(path string) error {
+			return UpdateAudiobookshelf(path, func(*AudiobookshelfConfig) error { return nil })
+		}, 0o644},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := readableConfig(t, tc.body, 0o644)
+			if err := tc.save(path); err != nil {
+				t.Fatalf("the save was refused: %v", err)
+			}
+			if got := configMode(t, path); got != tc.wantMode {
+				t.Fatalf("the file is %04o, want %04o", got, tc.wantMode)
+			}
+		})
+	}
+}
+
+// TestAMistypedSettingOtherThanACredentialStillTightens: reading the whole
+// configuration to answer "does this file hold a secret" meant an unrelated
+// setting with the wrong type brought the answer down with it, and a save
+// that changed nothing reported success over a readable secret.
+func TestAMistypedSettingOtherThanACredentialStillTightens(t *testing.T) {
+	const body = "[audiobookshelf]\napi_key = \"file-secret\"\n\n" +
+		"[content]\ncache_dir = \"covers\"\nscan_max_depth = \"oops\"\n"
+	path := readableConfig(t, body, 0o644)
+	if err := UpdateMirrors(path, func(*MirrorFile) error { return nil }); err != nil {
+		t.Fatalf("the no-op save was refused: %v", err)
+	}
+	if got := configMode(t, path); got != 0o600 {
+		t.Fatalf("the file is %04o after a no-op save, want 0600", got)
+	}
+	if got := readFile(t, path); got != body {
+		t.Fatalf("the no-op save changed the bytes:\n%s", got)
+	}
+}
+
+// TestASaveThatCannotReadTheCredentialFieldsIsRefused: a file whose own
+// credential field is mistyped cannot be read either way, and a save must not
+// report success over that — nor repeat the source literal in the refusal.
+func TestASaveThatCannotReadTheCredentialFieldsIsRefused(t *testing.T) {
+	const body = "[audiobookshelf]\napi_key = 5\n\n[content]\ncache_dir = \"covers\"\n"
+	path := readableConfig(t, body, 0o644)
+	err := UpdateMirrors(path, func(*MirrorFile) error { return nil })
+	if err == nil {
+		t.Fatal("a save that cannot tell whether the file holds a credential was accepted")
+	}
+	if strings.Contains(err.Error(), "api_key = 5") {
+		t.Fatalf("the refusal repeated the source literal: %v", err)
+	}
+	if got := readFile(t, path); got != body {
+		t.Fatalf("the refused save changed the bytes:\n%s", got)
+	}
+	if got := configMode(t, path); got != 0o644 {
+		t.Fatalf("the refused save changed the mode to %04o", got)
+	}
+}
+
+// TestACredentialInAnyStoredAddressTightensTheFile: validation skips a
+// disabled entry's address, so a file can hold one with a password in it, and
+// saving the other section does not make the file secret-free.
+func TestACredentialInAnyStoredAddressTightensTheFile(t *testing.T) {
+	const plain = "[content]\ncache_dir = \"covers\"\n"
+	const mirrorAddress = "[mirror]\nenabled = false\n" +
+		"base_url = \"https://alice:hunter2@peer.example/api/v1\"\n"
+	const listAddress = "[[mirrors]]\nenabled = false\nname = \"peer\"\n" +
+		"base_url = \"https://alice:hunter2@peer.example/api/v1\"\n"
+	const absAddress = "[audiobookshelf]\nenabled = false\n" +
+		"base_url = \"https://alice:hunter2@abs.example.com\"\n"
+	const sttAddress = "[audiobookshelf]\nenabled = false\n" +
+		"stt_url = \"https://alice:hunter2@stt.example.com/v1\"\n"
+	const usernameOnly = "[mirror]\nenabled = false\n" +
+		"base_url = \"https://alice@peer.example/api/v1\"\n"
+
+	saveMirror := func(path string) error {
+		return UpdateMirrors(path, setLegacy(secretFreeEntry("orbit")))
+	}
+	saveMirrorNoop := func(path string) error {
+		return UpdateMirrors(path, func(*MirrorFile) error { return nil })
+	}
+	saveABS := func(path string) error {
+		return UpdateAudiobookshelf(path, func(a *AudiobookshelfConfig) error {
+			a.BaseURL = "https://abs.example.com"
+			return nil
+		})
+	}
+	saveABSNoop := func(path string) error {
+		return UpdateAudiobookshelf(path, func(*AudiobookshelfConfig) error { return nil })
+	}
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		save     func(string) error
+		wantMode os.FileMode
+	}{
+		{"an audiobookshelf save over a mirror address", plain + mirrorAddress, saveABS, 0o600},
+		{"a mirror save over an audiobookshelf address", plain + absAddress, saveMirror, 0o600},
+		{"a mirror no-op over an stt address", plain + sttAddress, saveMirrorNoop, 0o600},
+		{"a mirror no-op over a list address", plain + listAddress, saveMirrorNoop, 0o600},
+		{"an audiobookshelf no-op over a mirror address", plain + mirrorAddress, saveABSNoop, 0o600},
+		{"a mirror no-op over an audiobookshelf address", plain + absAddress, saveMirrorNoop, 0o600},
+		{"a username is not a secret", plain + usernameOnly, saveMirrorNoop, 0o644},
+		{"a plain address is not a secret", plain + "[mirror]\nenabled = false\nbase_url = \"https://peer.example/api/v1\"\n", saveMirrorNoop, 0o644},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := readableConfig(t, tc.body, 0o644)
+			if err := tc.save(path); err != nil {
+				t.Fatalf("the save was refused: %v", err)
+			}
+			if got := configMode(t, path); got != tc.wantMode {
+				t.Fatalf("the file is %04o, want %04o", got, tc.wantMode)
+			}
+		})
+	}
+}

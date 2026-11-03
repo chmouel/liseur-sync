@@ -331,9 +331,16 @@ func resolveConfigPath(path string) (string, error) {
 // bytes about to land: a file holding a stored credential is owner-only, a
 // secret-free file keeps the mode it had, and a new secret-free file is
 // owner-only too, because what a later save puts in it cannot be known.
+// Bytes whose credential fields cannot be read are refused rather than
+// written at a guessed mode; every caller has proved its rewrite parses
+// first, so that refusal is a bug in the caller, not a file it was given.
 func writeConfigAtomically(path string, body []byte) error {
+	holds, err := configFileHoldsCredential(string(body))
+	if err != nil {
+		return err
+	}
 	mode := os.FileMode(0o600)
-	if !configFileHoldsCredential(string(body)) {
+	if !holds {
 		if info, err := os.Stat(path); err == nil {
 			mode = info.Mode().Perm()
 		}
@@ -365,6 +372,35 @@ func writeConfigAtomically(path string, body []byte) error {
 	return nil
 }
 
+// credentialProbe is the part of a config file that can carry a stored
+// credential. It is written by hand rather than taken from Config, and it
+// holds nothing else: a setting left out of it cannot make decoding fail,
+// and whether a file holds a secret is not something a save may guess at.
+type credentialProbe struct {
+	Mirror         credentialMirror   `toml:"mirror"`
+	Mirrors        []credentialMirror `toml:"mirrors"`
+	Audiobookshelf struct {
+		BaseURL   string `toml:"base_url"`
+		APIKey    string `toml:"api_key"`
+		STTURL    string `toml:"stt_url"`
+		STTAPIKey string `toml:"stt_api_key"`
+	} `toml:"audiobookshelf"`
+	Database struct {
+		URL string `toml:"url"`
+	} `toml:"database"`
+	// ReaderOrigin and CORSAllowedOrigins are origins, and neither could
+	// ever work with a password in it. They are here because a file can
+	// still hold one, and a file is where a secret leaks from.
+	ReaderOrigin       string   `toml:"reader_origin"`
+	CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
+}
+
+type credentialMirror struct {
+	BaseURL        string `toml:"base_url"`
+	RemoteKey      string `toml:"remote_key"`
+	RemotePassword string `toml:"remote_password"`
+}
+
 // configFileHoldsCredential reports whether config text about to be on
 // disk carries a stored credential, which is what makes the file
 // owner-only.
@@ -372,62 +408,173 @@ func writeConfigAtomically(path string, body []byte) error {
 // It reads the text the way a file is read, not the way startup is: no
 // environment is applied, so a secret a deployment keeps in a variable is
 // never mistaken for one on disk — and never copied into a file that did
-// not already hold it. The fields are listed by hand rather than found by
-// reflection, because a field that starts or stops being a credential is a
-// decision about deployment security, and not a side effect of an edit to
-// Config. The list: the single [mirror] entry's credential, every
-// [[mirrors]] entry's — a disabled entry is still written to the file —
-// the [audiobookshelf] API and STT keys, and a database.url that is a DSN
-// carrying a password, in either shape libpq accepts; a sqlite file path
-// is not a credential.
+// not already hold it. Which values count follows the loader rather than a
+// rule of thumb: a mirror's credential is used as written, so one that is
+// only whitespace is a secret the peer is sent, while the [audiobookshelf]
+// keys are trimmed before they are used, so there a blank one is nothing.
 //
-// A value that is only whitespace is not a secret, the same way the loader
-// trims one into nothing. Text that does not decode tells nothing, and a
-// save that cannot read its own result is refused before it writes: no
-// mode is changed rather than a guess made at one.
-func configFileHoldsCredential(rendered string) bool {
-	c := Default()
-	if _, err := toml.Decode(rendered, &c); err != nil {
-		return false
+// The addresses count too. A disabled entry keeps an operator's address,
+// validation skips its URL, and a `https://alice:hunter2@peer` left in one
+// is a password on disk whether or not it is ever dialled: a mirror's
+// base_url, an audiobookshelf base_url or stt_url, and a userinfo password
+// in an origin. database.url is the same question in either shape libpq
+// accepts, where `password` and `sslpassword` both carry a secret; a sqlite
+// file path is not one.
+//
+// Text that does not decode tells nothing, and the answer then is an error
+// rather than "no": a save that cannot read its own result is refused
+// before it writes, so no mode is changed rather than a guess made at one.
+func configFileHoldsCredential(rendered string) (bool, error) {
+	var probe credentialProbe
+	if _, err := toml.Decode(rendered, &probe); err != nil {
+		return false, safeConfigParseError("the configuration file does not parse", err)
 	}
-	secret := func(value string) bool { return strings.TrimSpace(value) != "" }
-	if secret(c.Mirror.RemoteKey) || secret(c.Mirror.RemotePassword) {
-		return true
-	}
-	for _, m := range c.Mirrors {
-		if secret(m.RemoteKey) || secret(m.RemotePassword) {
-			return true
+	for _, m := range append([]credentialMirror{probe.Mirror}, probe.Mirrors...) {
+		if m.RemoteKey != "" || m.RemotePassword != "" || urlHoldsUserPassword(m.BaseURL) {
+			return true, nil
 		}
 	}
-	if secret(c.Audiobookshelf.APIKey) || secret(c.Audiobookshelf.STTAPIKey) {
-		return true
+	abs := probe.Audiobookshelf
+	if strings.TrimSpace(abs.APIKey) != "" || strings.TrimSpace(abs.STTAPIKey) != "" {
+		return true, nil
 	}
-	return databaseURLHoldsPassword(c.Database.URL)
+	addresses := []string{abs.BaseURL, abs.STTURL, probe.ReaderOrigin}
+	addresses = append(addresses, probe.CORSAllowedOrigins...)
+	for _, raw := range addresses {
+		if urlHoldsUserPassword(raw) {
+			return true, nil
+		}
+	}
+	return dsnHoldsPassword(probe.Database.URL), nil
 }
 
-// databaseURLHoldsPassword reports whether a database.url carries a
-// password. Only a userinfo password or a password keyword counts, so a
-// sqlite file path is never one. The driver is not consulted: a password
-// in the value is on disk whatever ends up reading it.
-func databaseURLHoldsPassword(raw string) bool {
+// urlHoldsUserPassword reports whether a stored address carries a password
+// in its userinfo. A username alone is not a secret, an address with no
+// userinfo is not one, and a value that is not an address at all is left
+// to validation to refuse.
+func urlHoldsUserPassword(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return false
+	}
+	password, ok := u.User.Password()
+	return ok && password != ""
+}
+
+// dsnHoldsPassword reports whether a database.url carries a password. Both
+// shapes libpq reads are handled, and the driver is not consulted: a
+// password in the value is on disk whatever ends up reading it.
+func dsnHoldsPassword(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return false
 	}
 	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
 		if u.User != nil {
-			if _, ok := u.User.Password(); ok {
+			if password, ok := u.User.Password(); ok && password != "" {
 				return true
 			}
 		}
-		return strings.TrimSpace(u.Query().Get("password")) != ""
+		for key, values := range u.Query() {
+			if !strings.EqualFold(key, "password") && !strings.EqualFold(key, "sslpassword") {
+				continue
+			}
+			for _, value := range values {
+				if value != "" {
+					return true
+				}
+			}
+		}
 	}
-	// The keyword/value form: host=db password=secret dbname=liseur.
-	for _, field := range strings.Fields(raw) {
-		key, value, ok := strings.Cut(field, "=")
-		if ok && strings.EqualFold(key, "password") && strings.TrimSpace(value) != "" {
+	// A keyword/value string needs its own reader: a value may be quoted
+	// and may hold anything, whitespace and `password=` included, so
+	// splitting on spaces both misses `host=db password = 'x'` and reads
+	// `application_name='backup password=fake'` as a credential.
+	return dsnKeywordValueHoldsPassword(raw)
+}
+
+// dsnKeywordValueHoldsPassword scans the keyword/value form of a libpq
+// connection string: pairs separated by whitespace, whitespace allowed
+// around the '=', a value either bare up to the next whitespace or
+// single-quoted with backslash escapes. Malformed text is scanned past,
+// never refused: this only ever answers whether a password is in there.
+func dsnKeywordValueHoldsPassword(raw string) bool {
+	for i := 0; i < len(raw); {
+		for i < len(raw) && isDSNSpace(raw[i]) {
+			i++
+		}
+		if i >= len(raw) {
+			return false
+		}
+		keyStart := i
+		for i < len(raw) && !isDSNSpace(raw[i]) && raw[i] != '=' {
+			i++
+		}
+		key := raw[keyStart:i]
+		for i < len(raw) && isDSNSpace(raw[i]) {
+			i++
+		}
+		if i >= len(raw) || raw[i] != '=' {
+			// A word with no value: a trailing keyword, or one that was
+			// never an assignment. The scan has moved past it.
+			continue
+		}
+		i++
+		for i < len(raw) && isDSNSpace(raw[i]) {
+			i++
+		}
+		var value string
+		value, i = dsnValueAt(raw, i)
+		if value != "" && (strings.EqualFold(key, "password") || strings.EqualFold(key, "sslpassword")) {
 			return true
 		}
+	}
+	return false
+}
+
+// dsnValueAt reads one value starting at i and returns it with the index
+// just past it. An unterminated quote ends at the end of the text, which
+// is as far as there is anything to read.
+func dsnValueAt(raw string, i int) (string, int) {
+	var b strings.Builder
+	for i < len(raw) && !isDSNSpace(raw[i]) {
+		switch {
+		case raw[i] == '\\' && i+1 < len(raw):
+			b.WriteByte(raw[i+1])
+			i += 2
+		case raw[i] == '\\':
+			// A backslash with nothing behind it.
+			i++
+		case raw[i] == '\'':
+			i++
+			for i < len(raw) && raw[i] != '\'' {
+				if raw[i] == '\\' && i+1 < len(raw) {
+					b.WriteByte(raw[i+1])
+					i += 2
+					continue
+				}
+				b.WriteByte(raw[i])
+				i++
+			}
+			if i < len(raw) {
+				i++
+			}
+		default:
+			b.WriteByte(raw[i])
+			i++
+		}
+	}
+	return b.String(), i
+}
+
+func isDSNSpace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
 	}
 	return false
 }
@@ -436,14 +583,24 @@ func databaseURLHoldsPassword(raw string) bool {
 // stored credential owner-only, for a save that writes no bytes. A no-op is
 // an accepted save, and leaving a secret the file already held readable by
 // others across one is how this promise would break without anybody
-// noticing. A secret-free file is left as it is, and no refusal reaches
-// here: nothing calls this before the save was accepted.
+// noticing. A secret-free file is left as it is.
+//
+// A body whose credential fields cannot be read is refused: an unreadable
+// file is not a secret-free one, and a no-op save must not report success
+// over a file nobody can tell the contents of.
 //
 // It runs under the same lock as the read-modify-write it belongs to, so a
 // concurrent save cannot land between the read that found the secret and
 // the chmod that protects it.
 func tightenConfigCredentialMode(path, body string) error {
-	if !configFileHoldsCredential(body) {
+	holds, err := configFileHoldsCredential(body)
+	if err != nil {
+		// What the file holds cannot be read, so whether a secret is in
+		// it is unknown. Reporting success over that is how a save would
+		// leave one readable.
+		return fmt.Errorf("%w; whether it holds a stored credential could not be read, so nothing was saved", err)
+	}
+	if !holds {
 		return nil
 	}
 	info, err := os.Stat(path)

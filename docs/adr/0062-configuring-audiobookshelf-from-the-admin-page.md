@@ -70,11 +70,13 @@ the same rules as the mirror's, and startup keeps reading the file.**
   owner-only (`0600`), a secretless one keeps the permissions it had,
   and a new file is created `0600` — including when the save found
   nothing to change and only tightened a credential the file already
-  held. A file that does not parse is refused rather than repaired, and
-  the refusal names its line and column without repeating the source
-  literal the decoder quoted. Mirror and Audiobookshelf saves serialise
-  on one lock, so two tabs cannot each rewrite a body read before the
-  other wrote.
+  held. What counts as a stored credential, and why an unreadable one is
+  refused rather than reported secret-free, is ADR-0061's definition: it
+  is the same check for both saves. A file that does not parse is
+  refused rather than repaired, and the refusal names its line and
+  column without repeating the source literal the decoder quoted. Mirror
+  and Audiobookshelf saves serialise on one lock, so two tabs cannot
+  each rewrite a body read before the other wrote.
 - **No hot reload.** The page reads the file, so a saved setting can be
   edited while the running process keeps what it booted with; it says
   when the saved configuration differs from the running one.
