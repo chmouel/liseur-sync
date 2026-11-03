@@ -1147,3 +1147,81 @@ func TestCreateTokenRefusesReaderName(t *testing.T) {
 		t.Fatalf("a refused name minted a token anyway: %+v", toks)
 	}
 }
+
+func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	cookie := loginCookie(t, ts)
+
+	// With no paired devices and both adapters enabled, all three setup
+	// guides open by default so a new reader sees how to pair.
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	if got := strings.Count(body, `<details class="setup-guide" open>`); got != 3 {
+		t.Fatalf("open setup guides with 0 devices = %d, want 3", got)
+	}
+
+	// A sync-only token does not satisfy OPDS (which requires library-read),
+	// so the OPDS setup guide stays open until a library-read token exists.
+	now := time.Now()
+	if err := st.CreateToken(ctx, store.Token{
+		ID: "tok-sync", UserID: "u1", DeviceID: "d-sync", Name: "SyncOnly",
+		Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "tok-sync-sha", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	if got := strings.Count(body, `<details class="setup-guide" open>`); got != 3 {
+		t.Fatalf("open setup guides with only a sync token = %d, want 3", got)
+	}
+
+	// Pairing one device of each kind (including a library-read token for OPDS)
+	// collapses the corresponding setup guide on subsequent visits.
+	if err := st.CreateToken(ctx, store.Token{
+		ID: "tok-1", UserID: "u1", DeviceID: "d-1", Name: "Boox",
+		Scopes: store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}, SHA256: "tok-1-sha", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateKosyncDevice(ctx, store.KosyncDevice{
+		UserID: "u1", DeviceSlot: "kobo-slot", KeySHA256: "k-sha", Label: "Kobo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateKopluginDevice(ctx, store.KopluginDevice{
+		ID: "kop-1", UserID: "u1", TokenSHA256: "kop-sha", Label: "Kobo", DeviceID: "koplugin:Kobo", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	if strings.Contains(body, `<details class="setup-guide" open>`) {
+		t.Fatal("setup guide stayed open after devices were paired")
+	}
+
+	// Turning adapters off while devices are still paired keeps the full
+	// cards visible so existing devices can still be seen and revoked.
+	if err := st.UpdateUserSettings(ctx, "u1", store.UserSettings{
+		Timezone: "UTC", KosyncEnabled: false, KopluginEnabled: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	if strings.Contains(body, "adapter-disabled") {
+		t.Fatal("disabled adapter collapsed while an active device was still paired")
+	}
+
+	// Once those devices are revoked, disabled adapters collapse into a
+	// quiet notice pointing at Profile & security.
+	if err := st.RevokeKosyncDevice(ctx, "u1", "kobo-slot"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RevokeKopluginDevice(ctx, "u1", "kop-1"); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	if got := strings.Count(body, `class="card adapter-disabled"`); got != 2 {
+		t.Fatalf("collapsed disabled adapter cards = %d, want 2", got)
+	}
+	if strings.Contains(body, "Generate pairing code") || strings.Contains(body, "New capability") {
+		t.Fatal("disabled adapter still renders its pairing form")
+	}
+}
