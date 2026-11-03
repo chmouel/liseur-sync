@@ -46,6 +46,40 @@ func deviceLabels(ctx context.Context, st store.Store, userID string) map[string
 	return labels
 }
 
+// activeTokens keeps the credentials that still work. A revoked row is
+// history, not a device: the Devices page lists what can be used and
+// revoked from here, and offering a Revoke button for something already
+// revoked says the opposite.
+func activeTokens(toks []store.Token) []store.Token {
+	out := make([]store.Token, 0, len(toks))
+	for _, t := range toks {
+		if t.RevokedAt == nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func activeKosyncDevices(devs []store.KosyncDevice) []store.KosyncDevice {
+	out := make([]store.KosyncDevice, 0, len(devs))
+	for _, d := range devs {
+		if d.RevokedAt == nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+func activeKopluginDevices(devs []store.KopluginDevice) []store.KopluginDevice {
+	out := make([]store.KopluginDevice, 0, len(devs))
+	for _, d := range devs {
+		if d.RevokedAt == nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 const compactDeviceIDLimit = 20
 
 func compactDeviceID(id string) string {
@@ -148,7 +182,6 @@ func sortKopluginDevices(devs []store.KopluginDevice) {
 type browserSession struct {
 	DeviceID string
 	LastUsed time.Time
-	Active   bool
 }
 
 // splitReaderTokens separates the credentials a person made from the
@@ -160,6 +193,10 @@ type browserSession struct {
 // that will be replaced before the page is closed. So they are counted
 // as browsers instead — one row per device id, however many tokens that
 // took — and the table keeps only what somebody chose to create.
+//
+// A browser whose credentials were all revoked has signed out, so it is
+// not one of them any more and is left out rather than listed as a
+// device that no longer reads here.
 func splitReaderTokens(toks []store.Token) (mine []store.Token, browsers []browserSession) {
 	byDevice := map[string]browserSession{}
 	for _, t := range toks {
@@ -167,11 +204,11 @@ func splitReaderTokens(toks []store.Token) (mine []store.Token, browsers []brows
 			mine = append(mine, t)
 			continue
 		}
+		if t.RevokedAt != nil {
+			continue
+		}
 		b := byDevice[t.DeviceID]
 		b.DeviceID = t.DeviceID
-		if t.RevokedAt == nil {
-			b.Active = true
-		}
 		when := t.CreatedAt
 		if t.LastUsed != nil && t.LastUsed.After(when) {
 			when = *t.LastUsed

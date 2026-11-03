@@ -802,3 +802,69 @@ func TestAdminDisableAccount(t *testing.T) {
 		t.Fatal("the last enabled administrator was disabled")
 	}
 }
+
+// TestAdminUserPageHidesRevokedCredentials: the per-user page lists the
+// credentials the account can still use. A revoked one is history, so it
+// is not a row with a "Revoked" column beside it.
+func TestAdminUserPageHidesRevokedCredentials(t *testing.T) {
+	ts, st := testServer(t)
+	if err := st.SetUserAdmin(t.Context(), "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	bob := mkTarget(t, st, "bob")
+	ctx := t.Context()
+	now := time.Now()
+	for _, tok := range []store.Token{
+		{ID: "live-tok", UserID: bob.ID, DeviceID: "live-device-id", Name: "Boox Palma",
+			Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "live-sha", CreatedAt: now},
+		{ID: "dead-tok", UserID: bob.ID, DeviceID: "retired-device-id", Name: "Retired Palma",
+			Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "dead-sha", CreatedAt: now},
+	} {
+		if err := st.CreateToken(ctx, tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeToken(ctx, bob.ID, "dead-tok"); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []struct{ slot, label string }{{"slot-live", "kobo"}, {"slot-dead", "old kobo"}} {
+		if err := st.CreateKosyncDevice(ctx, store.KosyncDevice{
+			UserID: bob.ID, DeviceSlot: d.slot, KeySHA256: d.slot + "-sha", Label: d.label,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeKosyncDevice(ctx, bob.ID, "slot-dead"); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []struct{ id, label string }{{"kop-live", "clara"}, {"kop-dead", "old clara"}} {
+		if err := st.CreateKopluginDevice(ctx, store.KopluginDevice{
+			ID: d.id, UserID: bob.ID, TokenSHA256: d.id + "-sha", Label: d.label,
+			DeviceID: "dev:" + d.label, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeKopluginDevice(ctx, bob.ID, "kop-dead"); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=user&user="+bob.ID)
+	if code != 200 {
+		t.Fatalf("user page: %d", code)
+	}
+	for _, want := range []string{"Boox Palma", "slot-live", "clara"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("user page is missing the active credential %q", want)
+		}
+	}
+	for _, gone := range []string{"Retired Palma", "retired-device-id", "slot-dead", "old kobo", "old clara"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("user page still lists the revoked %q", gone)
+		}
+	}
+	if strings.Contains(body, ">Revoked<") {
+		t.Error("the per-user credential tables still have a Revoked column")
+	}
+}
