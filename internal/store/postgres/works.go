@@ -437,6 +437,10 @@ func (s *Store) SplitWork(ctx context.Context, userID, workID, editionSHA string
 			return err
 		}
 	}
+	if _, err := tx.ExecContext(ctx, q(`UPDATE crosspoint_session_receipts SET work_id = ? WHERE user_id = ? AND session_id IN (SELECT session_id FROM sessions WHERE user_id = ? AND work_id = ?)`), newWork.ID, userID, userID, newWork.ID); err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(ctx, q(
 		`UPDATE aliases
 		 SET work_id = ?
@@ -573,6 +577,10 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 		userID, fromWorkID, userID, intoWorkID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, q(`UPDATE crosspoint_session_receipts SET work_id = ? WHERE user_id = ? AND work_id = ?`), intoWorkID, userID, fromWorkID); err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(ctx, q(
 		`DELETE FROM works WHERE user_id = ? AND id = ?`), userID, fromWorkID); err != nil {
 		return err

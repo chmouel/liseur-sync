@@ -1,6 +1,7 @@
 package webui
 
 import "github.com/chmouel/liseur-sync/internal/store"
+import "net/url"
 
 // Flash carries one-time results (a shown-once secret).
 type Flash struct {
@@ -179,6 +180,10 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 								<span class="muted">revoked</span>
 							} else {
 								active
+								if d.MeasuredSessionsFrom != nil {
+									<br/>
+									<span class="muted">Measured statistics enabled</span>
+								}
 							}
 						</td>
 						<td>
@@ -195,6 +200,27 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 				}
 			</table>
 		}
+		<details>
+			<summary>CrossPoint reading statistics</summary>
+			<p>Requires firmware with the <code>reader.session</code> plugin event. Downloading enables measured statistics for this slot. Older estimates stay; future progress uploads stop producing estimates, even if the plugin is offline or disabled.</p>
+			<p>Copy the ZIP’s <code>liseur-stats</code> folder into <code>/plugins</code> on your SD card, enable plugins in Settings → Connectivity, refresh or restart, then close and reopen your book. Keep this ZIP private: it contains your device credential.</p>
+			for _, d := range kosyncDevs {
+				if d.RevokedAt == nil {
+					<form method="post" action={ prefix + "kosync/" + url.PathEscape(d.DeviceSlot) + "/crosspoint" }>
+						<input type="hidden" name="csrf" value={ csrf }/>
+						<label>
+							{ d.DeviceSlot } — existing KoSync pairing password
+							<input type="password" name="password" autocomplete="off" required/>
+						</label>
+						if d.MeasuredSessionsFrom == nil {
+							<button type="submit">Enable statistics &amp; download plugin</button>
+						} else {
+							<button type="submit">Download configured plugin again</button>
+						}
+					</form>
+				}
+			}
+		</details>
 	</section>
 
 	<section class="card">

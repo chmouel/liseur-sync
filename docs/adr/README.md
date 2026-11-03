@@ -83,6 +83,8 @@ loose ends that must come before any of it, are in
 | [0058](0058-uploading-an-audiobook-onto-a-book.md) | Uploading an audiobook onto a book | Now | Accepted; implemented | An `.m4b` uploaded onto a book lands beside it, or as an `M4B` format of its Calibre book, wherever book uploads are allowed; nothing is replaced, a book with an audiobook is `409`; a new same-name pairing rule; amends [0023](0023-uploads-land-in-a-folder.md) and [0057](0057-native-watched-folder-audiobooks.md) |
 | [0059](0059-deriving-a-position-across-protocols.md) | Deriving a position across protocols | Now | Accepted | `internal/xpointer`: CRe XPaths to and from Liseur text anchors in the same EPUB, pinned by device fixtures; then derivation on kosync reads and on `/v1/changes`, `/v1/heads` and positions, then exact restore in Liseur Android and the web reader |
 
+| [0060](0060-crosspoint-measured-reading-sessions.md) | CrossPoint measured reading sessions | Now | Accepted | Optional events-only plugin using the paired kosync slot; measured native sessions, durable event receipts and an explicit inference cutoff |
+
 ## Convention
 
 - Files use a four-digit sequence: `NNNN-short-title.md`.

@@ -24,6 +24,8 @@ const anyReader = ""
 
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
+	t.Run("CrossPointSessions", func(t *testing.T) { testCrossPointSessions(t, open) })
+	t.Run("CrossPointInferenceCutoff", func(t *testing.T) { testCrossPointInferenceCutoff(t, open) })
 	t.Run("MirrorCandidates", func(t *testing.T) { testMirrorCandidates(t, open) })
 	t.Run("MirrorCandidatesRespectFolderGrants", func(t *testing.T) {
 		testMirrorCandidatesRespectFolderGrants(t, open)

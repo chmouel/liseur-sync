@@ -364,3 +364,52 @@ func TestRollupPageUsesItsIndex(t *testing.T) {
 }
 
 var _ store.Store = (*Store)(nil)
+
+func TestCrossPointUpgradeKeepsInferenceOptIn(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := t.Context()
+	through, ok := migrationsThrough("crosspointSessions")
+	if !ok {
+		t.Fatal("missing migration boundary")
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, m := range through {
+		if _, err := s.db.ExecContext(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)`, i+1, formatTime(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateUser(ctx, store.User{ID: "u1", Name: "u1", Argon2Hash: "x", KosyncEnabled: true, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateKosyncDevice(ctx, store.KosyncDevice{UserID: "u1", DeviceSlot: "x3", KeySHA256: "key"}); err != nil {
+		t.Fatal(err)
+	}
+	work, _, err := s.CreatePendingWork(ctx, "u1", "md5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendSessions(ctx, "u1", []store.Session{{SessionID: "old-inferred", WorkID: work, DeviceID: "kosync:x3", StartedAt: now.Add(-time.Minute), EndedAt: now, Origin: store.OriginInferred}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.KosyncDeviceByKey(ctx, "key")
+	if err != nil || d.MeasuredSessionsFrom != nil || d.RevokedAt != nil {
+		t.Fatalf("credential changed during upgrade: %+v %v", d, err)
+	}
+	sessions, err := s.SessionsInRange(ctx, "u1", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil || len(sessions) != 1 || sessions[0].Origin != store.OriginInferred {
+		t.Fatalf("historical session changed: %+v %v", sessions, err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -2151,6 +2151,9 @@ type Store interface {
 	// ErrConflict a used or expired one, ErrSlotTaken an occupied slot.
 	PairKosyncDevice(ctx context.Context, codeSHA256 string, d KosyncDevice, at time.Time) (KosyncDevice, error)
 	KosyncDeviceByKey(ctx context.Context, keySHA256 string) (KosyncDevice, error)
+	// A zero at captures activation under the work-graph lock.
+	EnableKosyncStatistics(ctx context.Context, userID, slot string, at time.Time) (time.Time, error)
+	AppendKosyncSession(ctx context.Context, userID, slot, document, eventID, payloadHash string, session Session) (string, error)
 	AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID string, op Op) (OpResult, error)
 	CreateKopluginDevice(ctx context.Context, d KopluginDevice) error
 	KopluginDeviceByToken(ctx context.Context, tokenSHA256 string) (KopluginDevice, error)
@@ -2471,11 +2474,12 @@ type PairingCode struct {
 
 // KosyncDevice is a kosync device credential slot.
 type KosyncDevice struct {
-	UserID     string
-	DeviceSlot string
-	KeySHA256  string
-	Label      string
-	RevokedAt  *time.Time
+	MeasuredSessionsFrom *time.Time
+	UserID               string
+	DeviceSlot           string
+	KeySHA256            string
+	Label                string
+	RevokedAt            *time.Time
 }
 
 // AuthSession is a short-lived login credential (kind=login) or a web
