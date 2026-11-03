@@ -55,7 +55,8 @@ func (s *Server) opdsLogging(pattern string, next http.Handler) http.Handler {
 
 // opdsTokenCapture records which credential reached the handler. It sits
 // inside the Basic middleware, which is the only place the token exists,
-// and outside the handler, which may fail for its own reasons.
+// and outside both the scope check and the handler, either of which may
+// refuse for its own reasons.
 func opdsTokenCapture(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tok, ok := auth.TokenFrom(r); ok {
