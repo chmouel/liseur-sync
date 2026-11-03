@@ -1,17 +1,22 @@
 package webui
 
 templ settingsPage(prefix string, u userCtx, csrf string, v settingsView) {
+	{{ title := "Settings" }}
 	if v.Section == settingsAdmin && v.Admin.View == settingsAdminFolders {
-		@layout("Folders", prefix, u, csrf, adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash))
-	} else {
-		@layout("Settings", prefix, u, csrf, settingsBody(prefix, u, csrf, v))
+		{{ title = "Folders" }}
 	}
+	@layout(title, prefix, u, csrf, settingsBody(prefix, u, csrf, v))
 }
 
 templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
-	<header class="settings-heading">
-		<h1>Settings</h1>
-	</header>
+	// The Folders page brings its own heading and its own actions, so the
+	// shared one would only repeat it. The tabs and the admin subnav stay:
+	// a page reached from Administration belongs to it.
+	if v.Section != settingsAdmin || v.Admin.View != settingsAdminFolders {
+		<header class="settings-heading">
+			<h1>Settings</h1>
+		</header>
+	}
 	<nav class="settings-tabs" aria-label="Settings sections">
 		@settingsTab(settingsHref(prefix, settingsProfile), "Profile & security", v.Section == settingsProfile)
 		@settingsTab(settingsHref(prefix, settingsDevices), "Devices & integrations", v.Section == settingsDevices)
@@ -132,21 +137,18 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminUsers), "Users", v.Admin.View == settingsAdminUsers || v.Admin.View == settingsAdminUser)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminFolders), "Folders", v.Admin.View == settingsAdminFolders)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMirror), "Mirror", v.Admin.View == settingsAdminMirror)
-		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMaintenance), "Maintenance", v.Admin.View == settingsAdminMaintenance)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
 		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
 	} else if v.Admin.View == settingsAdminUsers {
-		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Flash)
+		@adminUsersBody(prefix, csrf, v.Admin.Users, v.Admin.UsersNext, v.Admin.Invites, v.Admin.Create, v.Flash)
 	} else if v.Admin.View == settingsAdminUser && v.Admin.HasUser {
 		@adminUserBody(prefix, csrf, v.Admin.User, v.Flash)
 	} else if v.Admin.View == settingsAdminMirror {
 		@adminMirrorBody(prefix, csrf, v.Admin.Mirror, v.Flash)
-	} else if v.Admin.View == settingsAdminMaintenance {
-		@adminMaintenanceBody(prefix, v.Admin.Maintenance, v.Flash)
 	} else {
 		@adminFlash(v.Flash)
-		@adminOverviewBody(prefix, v.Admin.Counts, v.Admin.Build, v.Admin.Config, v.Admin.Audiobookshelf)
+		@adminOverviewBody(prefix, v.Admin)
 	}
 }
 

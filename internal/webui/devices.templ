@@ -16,6 +16,11 @@ type Flash struct {
 	// redirect, rather than making the administrator start over.
 	OpenFolderForm bool
 	FolderUploads   *bool
+	// CreateName and CreateSelection are what the create-account form had
+	// in it when a validation refused it: the typed name, and the folder
+	// ticks. They never carry a password.
+	CreateName      string
+	CreateSelection *createSelection
 }
 
 templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {

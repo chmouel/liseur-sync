@@ -10,9 +10,30 @@
 The operator surface is implemented inside the account Settings hub rather
 than as a separate rail entry. Administrators use
 `/ui/settings?section=admin`, with `view=users`, `view=user&user={id}`,
-`view=folders`, and `view=maintenance` selecting the nested pages. The
+`view=folders` and `view=mirror` selecting the nested pages. The
 existing `/ui/admin/...` mutation endpoints remain in place so their
 authorization, CSRF, and reauthentication behavior is unchanged.
+
+**Revisions since this decision.** The `view=maintenance` page was folded
+into the Overview: its counts and their explanations sit in the library
+status card, and build and configuration facts moved behind a
+disclosure, so the page an operator lands on leads with what they can do
+and what the library looks like. The type that used to sit on a
+Maintenance page — folder kinds and book statuses — is exactly what the
+overview now counts, so there is no second page and no second route.
+Creating an account from the panel gained the folder grant set the
+per-account form already had, and lands on the new account's page. What
+a refused create form hands back — the typed name and the ticks —
+travels in the redirect's query as a bitmap over the folder list plus a
+fingerprint of that list, not as a list of ids: at the 500-folder limit
+an id list is ~19KB of `Location` header, past what a default nginx
+accepts, so a plain validation refusal would surface as a proxy error
+the operator could do nothing about. The fingerprint decides: when the
+folder list is not the one the ticks were taken on, nothing is ticked
+and the form says so, because reopening the form with every folder
+ticked would grant folders the operator had just cleared. The reauth
+budget's 429 renders in place, keeping its status, and carries the same
+state.
 
 ## Context
 
@@ -379,7 +400,7 @@ Administration tab is shown only to admins.
 | `GET /ui/settings?section=admin&view=users` | Users (paginated) and invites |
 | `GET /ui/settings?section=admin&view=user&user={id}` | One user: tokens, devices and actions |
 | `GET /ui/settings?section=admin&view=folders` | Watched folders and scans |
-| `GET /ui/settings?section=admin&view=maintenance` | Aggregate maintenance state |
+| `GET /ui/settings?section=admin&view=mirror` | Mirror peer configuration |
 
 Mutations, each `POST` with the per-session CSRF token, redirecting back
 with a flash:

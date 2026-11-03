@@ -1,92 +1,119 @@
 package webui
 
-import (
-	"github.com/chmouel/liseur-sync/internal/buildinfo"
-"github.com/chmouel/liseur-sync/internal/audiobookshelf"
-	"github.com/chmouel/liseur-sync/internal/store"
-)
+// adminOverview is the page an operator lands on: what can be done from
+// here, what the library looks like, and — behind a disclosure, because
+// nobody needs them to answer either question — the build and the
+// effective configuration.
 
-// adminOverview is the page an operator lands on: what this build is,
-// how much of everything there is, and how the server was configured.
-templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo.Info, cfg configFacts, abs audiobookshelf.Status) {
+templ adminOverviewBody(prefix string, v settingsAdminView) {
 	<h2>Administration overview</h2>
 	<section class="card">
-		<h2>This build</h2>
-		<dl class="facts">
-			<dt>Version</dt>
-			<dd>{ build.Short() }</dd>
-			if build.ShortRevision() != "" {
-				<dt>Revision</dt>
-				<dd><code>{ build.ShortRevision() }</code></dd>
-			}
-			if build.Go != "" {
-				<dt>Go</dt>
-				<dd>{ build.Go }</dd>
-			}
-		</dl>
+		<h2>Manage</h2>
+		<ul class="admin-jump">
+			<li>
+				<a href={ settingsAdminHref(prefix, settingsAdminUsers) }>Users</a>
+				<span class="muted">accounts, folders each one may read, credentials</span>
+			</li>
+			<li>
+				<a href={ settingsAdminHref(prefix, settingsAdminFolders) }>Folders</a>
+				<span class="muted">what this server reads, and a scan for each</span>
+			</li>
+			<li>
+				<a href={ settingsAdminHref(prefix, settingsAdminMirror) }>Mirror</a>
+				<span class="muted">the peer this instance reports to</span>
+			</li>
+		</ul>
 	</section>
 	<section class="card">
-		<h2>Instance</h2>
+		<div class="cardhead">
+			<h2>Library status</h2>
+			if v.Counts.BooksByStatus["missing"] > 0 {
+				<a class="section-link" href={ settingsAdminHref(prefix, settingsAdminFolders) }>Scan a folder<span aria-hidden="true">→</span></a>
+			}
+		</div>
 		<dl class="facts">
 			<dt>Accounts</dt>
 			<dd>
-				{ i2s(counts.Users) }
+				{ i2s(v.Counts.Users) }
 				<span class="muted">
-					{ "(" + i2s(counts.AdminUsers) + " admin, " +
-						i2s(counts.DisabledUsers) + " disabled)" }
+					{ "(" + i2s(v.Counts.AdminUsers) + " admin, " +
+						i2s(v.Counts.DisabledUsers) + " disabled)" }
 				</span>
 			</dd>
-			<dt>Folders</dt>
-			<dd>
-				{ i2s(counts.Folders) }
-				<span class="muted">
-					{ "(" + i2s(counts.FoldersByKind["plain"]) + " plain, " +
-						i2s(counts.FoldersByKind["calibre"]) + " Calibre)" }
-				</span>
-			</dd>
-			<dt>Books</dt>
-			<dd>
-				{ i2s(counts.BooksByStatus["active"]) } active
-				<span class="muted">
-					{ "(" + i2s(counts.BooksByStatus["missing"]) + " missing)" }
-				</span>
-			</dd>
+			for _, row := range v.Kinds {
+				<dt>{ folderKindLabel(row.Label) }</dt>
+				<dd>{ i2s(row.Count) }</dd>
+			}
+			for _, row := range v.Books {
+				<dt>{ bookStatusLabel(row.Label) }</dt>
+				<dd>{ i2s(row.Count) }</dd>
+			}
 		</dl>
 		<p class="muted">
-			<a href={ settingsAdminHref(prefix, "maintenance") }>Maintenance</a> breaks the
-			same figures down by folder kind and book status. A run of missing
-			books usually means a disk is not where it was.
+			Folders are the directories this server reflects: { i2s(v.Counts.Folders) }
+			watched, of which the kinds above. A folder's kind is read off the
+			disk rather than chosen — a tree holding a Calibre database is a
+			Calibre folder, everything else a plain one — and they are listed,
+			with their roots, on
+			<a href={ settingsAdminHref(prefix, settingsAdminFolders) }>Folders</a>.
+		</p>
+		<p class="muted">
+			A missing book is one the last completed pass could not find on
+			disk. Its row stays, with everybody's reading positions against it,
+			and it comes back on its own if the file does — so a few are
+			ordinary, and a great many at once usually mean a folder's disk is
+			not mounted where it was. There is no queue to drain: a folder is
+			read when it changes and again on a slow timer, which is why the
+			answer to a wrong count is a scan, not a job.
 		</p>
 	</section>
- <section class="card">
-  <h2>Audiobookshelf</h2>
-  <dl class="facts">
-   <dt>Status</dt><dd>
- if abs.Enabled {
- Enabled
- } else {
- Disabled
- }
- </dd>
-   <dt>Server version</dt><dd>
- if abs.Version != "" {
- { abs.Version }
- } else {
- Unknown
- }
- </dd>
-   <dt>Last successful pass</dt><dd>
- if abs.LastSuccess != nil {
- { abs.LastSuccess.Format("2006-01-02 15:04 UTC") }
- } else {
- Never
- }
- </dd>
-   <dt>Errors</dt><dd>{ i2s(abs.Errors) }</dd>
-  </dl>
- </section>
 	<section class="card">
-		<h2>Configuration</h2>
+		<h2>Audiobookshelf</h2>
+		<dl class="facts">
+			<dt>Status</dt>
+			<dd>
+				if v.Audiobookshelf.Enabled {
+					{ "Enabled" }
+				} else {
+					{ "Disabled" }
+				}
+			</dd>
+			<dt>Server version</dt>
+			<dd>
+				if v.Audiobookshelf.Version != "" {
+					{ v.Audiobookshelf.Version }
+				} else {
+					{ "Unknown" }
+				}
+			</dd>
+			<dt>Last successful pass</dt>
+			<dd>
+				if v.Audiobookshelf.LastSuccess != nil {
+					{ v.Audiobookshelf.LastSuccess.Format("2006-01-02 15:04 UTC") }
+				} else {
+					{ "Never" }
+				}
+			</dd>
+			<dt>Errors</dt>
+			<dd>{ i2s(v.Audiobookshelf.Errors) }</dd>
+		</dl>
+	</section>
+	<details class="card">
+		<summary>Build and configuration</summary>
+		<h3 class="card-section">This build</h3>
+		<dl class="facts">
+			<dt>Version</dt>
+			<dd>{ v.Build.Short() }</dd>
+			if v.Build.ShortRevision() != "" {
+				<dt>Revision</dt>
+				<dd><code>{ v.Build.ShortRevision() }</code></dd>
+			}
+			if v.Build.Go != "" {
+				<dt>Go</dt>
+				<dd>{ v.Build.Go }</dd>
+			}
+		</dl>
+		<h3 class="card-section">Configuration</h3>
 		<p class="muted">
 			Read from the configuration file at startup. There is no reload:
 			changing any of these means restarting the server. The database
@@ -94,10 +121,10 @@ templ adminOverviewBody(prefix string, counts store.AdminCounts, build buildinfo
 			password.
 		</p>
 		<dl class="facts">
-			for _, f := range cfg.Fields {
+			for _, f := range v.Config.Fields {
 				<dt>{ f.Label }</dt>
 				<dd>{ f.Value }</dd>
 			}
 		</dl>
-	</section>
+	</details>
 }

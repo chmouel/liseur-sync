@@ -410,10 +410,10 @@ func TestAdminMintsCredentialsForAnotherAccount(t *testing.T) {
 	}
 }
 
-// TestAdminMaintenanceReportsWhatIsStuck: the page that replaced the
-// queue board counts folders and book statuses, and nothing on it names
-// a book, a path or an account.
-func TestAdminMaintenanceReportsWhatIsStuck(t *testing.T) {
+// TestAdminOverviewReportsLibraryStatus: the counts that used to live on
+// a Maintenance page are on the overview now, broken down by folder kind
+// and book status, and nothing there names a book, a path or an account.
+func TestAdminOverviewReportsLibraryStatus(t *testing.T) {
 	ts, st := testServer(t)
 	ctx := t.Context()
 	if err := st.SetUserAdmin(ctx, "u1", true); err != nil {
@@ -427,17 +427,27 @@ func TestAdminMaintenanceReportsWhatIsStuck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, body := page(t, ts, loginCookie(t, ts), "/ui/settings?section=admin&view=maintenance")
+	code, body := page(t, ts, loginCookie(t, ts), "/ui/settings?section=admin")
 	if code != 200 {
-		t.Fatalf("maintenance: %d", code)
+		t.Fatalf("overview: %d", code)
 	}
-	for _, want := range []string{"Folders", "plain", "calibre", "active", "missing"} {
+	for _, want := range []string{
+		"Library status", "Plain folders", "Calibre folders",
+		"Active books", "Missing books", "Build and configuration",
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("maintenance page does not report %q:\n%s", want, body)
+			t.Errorf("overview does not report %q:\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, root) || strings.Contains(body, "Shelf") {
-		t.Errorf("maintenance named a folder rather than counting one:\n%s", body)
+		t.Errorf("overview named a folder rather than counting one:\n%s", body)
+	}
+	// The removed Maintenance view falls back to the overview rather than
+	// 404ing a bookmark.
+	code, body = page(t, ts, loginCookie(t, ts),
+		"/ui/settings?section=admin&view=maintenance")
+	if code != 200 || !strings.Contains(body, "Library status") {
+		t.Fatalf("maintenance view no longer folds into the overview: %d", code)
 	}
 }
 
@@ -497,5 +507,50 @@ func TestSettingsMutationLeavesTheBrowserOnTheSettingsPage(t *testing.T) {
 	// is exactly why the browser must not be left there.
 	if code, _ := page(t, ts, cookie, post); code != http.StatusNotFound {
 		t.Fatalf("GET %s = %d", post, code)
+	}
+}
+
+// TestAdminFoldersPageKeepsSettingsNavigation: the Folders page has its
+// own heading and its own actions, and used to be laid out outside the
+// settings chrome. It is still an Administration page, so the tabs and the
+// admin subnav travel with it — and the onboarding dialog still opens the
+// form when the instance watches nothing.
+func TestAdminFoldersPageKeepsSettingsNavigation(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	if err := st.SetUserAdmin(ctx, "u1", true); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if code != http.StatusOK {
+		t.Fatalf("folders page: %d", code)
+	}
+	for _, want := range []string{
+		`class="settings-tabs"`, `class="settings-subnav"`,
+		"Profile &amp; security", "Devices &amp; integrations", "Administration",
+		`settings?section=admin&amp;view=users`,
+		`settings?section=admin&amp;view=folders" aria-current="page"`,
+		`settings?section=admin&amp;view=mirror`,
+		`<dialog id="folder-dialog"`, "Add your book folder",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the folders page is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "view=maintenance") {
+		t.Fatal("the folders page still links the removed Maintenance view")
+	}
+
+	if err := st.CreateFolder(ctx, store.Folder{
+		ID: "folder-nav", Name: "Shelf", RootPath: t.TempDir(),
+		Kind: store.FolderPlain, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, body = page(t, ts, cookie, "/ui/settings?section=admin&view=folders")
+	if !strings.Contains(body, `class="settings-subnav"`) ||
+		!strings.Contains(body, "Scan now") {
+		t.Fatal("the watched-folder layout lost its navigation or its scans")
 	}
 }
