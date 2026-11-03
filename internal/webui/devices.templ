@@ -66,20 +66,26 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 						</td>
 						<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
 						<td>
-							if !hasScope(t.Scopes, store.ScopeAdmin) {
-								<form method="post" action={ prefix + "tokens/" + t.ID + "/scopes" }>
-									<input type="hidden" name="csrf" value={ csrf }/>
-									@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
-									@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
-									@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
-									@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
-									@scopeChoice(store.ScopeLibraryUpload, hasScope(t.Scopes, store.ScopeLibraryUpload))
-									@scopeChoice(store.ScopeLibraryDelete, hasScope(t.Scopes, store.ScopeLibraryDelete))
-									<button type="submit">Update</button>
-								</form>
-							} else {
-								{ formatScopes(t.Scopes) }
-							}
+							<div class="token-scopes">
+								for _, scope := range t.Scopes {
+									<span class="tag">{ string(scope) }</span>
+								}
+								if !hasScope(t.Scopes, store.ScopeAdmin) {
+									<details class="scope-disclosure">
+										<summary>Edit</summary>
+										<form method="post" action={ prefix + "tokens/" + t.ID + "/scopes" }>
+											<input type="hidden" name="csrf" value={ csrf }/>
+											@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
+											@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
+											@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
+											@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
+											@scopeChoice(store.ScopeLibraryUpload, hasScope(t.Scopes, store.ScopeLibraryUpload))
+											@scopeChoice(store.ScopeLibraryDelete, hasScope(t.Scopes, store.ScopeLibraryDelete))
+											<button type="submit">Update</button>
+										</form>
+									</details>
+								}
+							</div>
 						</td>
 						<td><code>{ t.DeviceID }</code></td>
 						<td>
@@ -94,15 +100,17 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 				}
 			</table>
 		}
-		<form method="post" action={ prefix + "tokens" } class="inline">
+		<form method="post" action={ prefix + "tokens" } class="inline token-create">
 			<input type="hidden" name="csrf" value={ csrf }/>
 			<input name="name" placeholder="Boox Palma" required/>
-			@scopeChoice(store.ScopeSync, true)
-			@scopeChoice(store.ScopeReadInsights, false)
-			@scopeChoice(store.ScopeLibraryRead, false)
-			@scopeChoice(store.ScopeLibraryManage, false)
-			@scopeChoice(store.ScopeLibraryUpload, false)
-			@scopeChoice(store.ScopeLibraryDelete, false)
+			<div class="scope-pills">
+				@scopeChoice(store.ScopeSync, true)
+				@scopeChoice(store.ScopeReadInsights, false)
+				@scopeChoice(store.ScopeLibraryRead, true)
+				@scopeChoice(store.ScopeLibraryManage, false)
+				@scopeChoice(store.ScopeLibraryUpload, false)
+				@scopeChoice(store.ScopeLibraryDelete, false)
+			</div>
 			<button type="submit" class="primary">New token</button>
 		</form>
 	</section>
