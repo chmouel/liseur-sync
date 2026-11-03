@@ -479,7 +479,7 @@ func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
 
 	for _, scope := range []store.Scope{
 		store.ScopeSync, store.ScopeReadInsights, store.ScopeLibraryRead,
-		store.ScopeLibraryManage, store.ScopeLibraryUpload,
+		store.ScopeLibraryManage, store.ScopeLibraryUpload, store.ScopeLibraryDelete,
 	} {
 		if !strings.Contains(body, `value="`+string(scope)+`"`) {
 			t.Errorf("the devices page offers no checkbox for %q", scope)
@@ -487,7 +487,7 @@ func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
 	}
 
 	// And the one that was missing can be granted, not just displayed.
-	code, _ := postForm(t, ts, cookie, "/ui/tokens", url.Values{
+	code, body := postForm(t, ts, cookie, "/ui/tokens", url.Values{
 		"name": {"Phone"}, "scopes": {"sync", "library-upload"}, "csrf": {csrf},
 	})
 	if code != 200 {
@@ -496,6 +496,11 @@ func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
 	toks, _ := st.ListTokens(t.Context(), "u1")
 	if len(toks) != 1 || !toks[0].Scopes.Contains(store.ScopeLibraryUpload) {
 		t.Fatalf("token did not keep the upload scope: %+v", toks)
+	}
+	if !strings.Contains(body, `<span class="tag">sync</span>`) ||
+		!strings.Contains(body, `<span class="tag">library-upload</span>`) ||
+		!strings.Contains(body, `<details class="scope-disclosure">`) {
+		t.Fatalf("token row does not render scope badges and disclosure: %s", body)
 	}
 }
 
