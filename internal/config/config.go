@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -357,11 +358,46 @@ func (c Config) EnabledMirrors() []MirrorConfig {
 }
 
 // MirrorRoot is a peer address with every trailing slash removed. It is
-// idempotent on purpose: the duplicate-target check and the clients that build
-// routes from the address both call it, so two spellings of one root cannot
-// pass as two peers. A base URL with no path at all stays host-only.
+// idempotent on purpose: the clients that build routes from the address
+// call it, so two spellings of one root cannot produce two different
+// routes. A base URL with no path at all stays host-only.
 func MirrorRoot(baseURL string) string {
 	return strings.TrimRight(baseURL, "/")
+}
+
+// mirrorTargetKey folds a peer address down to the account it names, so
+// that two spellings of one peer cannot pass as two. The route a protocol
+// is spoken at is not part of the identity: BookOrbit serves its native
+// API and its KOReader route from one installation, and a port the scheme
+// already implies is the same port. The scheme itself is dropped for the
+// same reason — both end at one server with one account behind it.
+// Discovery over the network is nobody's job here, so a path that is not
+// one of the two documented roots stays part of the key.
+//
+// This is a validation key and nothing more: a mirror's cursors and device
+// are keyed by its name and identified by peerIdentity, which keeps the
+// protocol and the address as typed, so relaxing this comparison never
+// makes a worker adopt another one's bookkeeping.
+func mirrorTargetKey(m MirrorConfig) string {
+	var host, port, route string
+	if u, err := url.Parse(m.BaseURL); err == nil && u.Host != "" {
+		host = strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+		port = u.Port()
+		if (u.Scheme == "https" && port == "443") ||
+			(u.Scheme == "http" && port == "80") {
+			port = ""
+		}
+		route = strings.ToLower(path.Clean("/" + strings.TrimPrefix(u.Path, "/")))
+		route = strings.TrimSuffix(route, "/")
+		for _, suffix := range []string{"/api/v1/koreader", "/api/v1"} {
+			if strings.HasSuffix(route, suffix) {
+				route = strings.TrimSuffix(route, suffix)
+				break
+			}
+		}
+	}
+	return host + "\x1f" + port + "\x1f" + route + "\x1f" +
+		strings.ToLower(m.RemoteUser)
 }
 
 // canonicalAudiobookshelfURL is an address the way startup stores it:
@@ -755,9 +791,11 @@ func (c *Config) Validate() error {
 // (ADR-0047).
 //
 // It validates every entry on its own and then the set: a name is what
-// keys a mirror's bookkeeping, so two entries may not share one, and two
-// enabled entries may not reach the same peer account, because that would
-// merge two local accounts' reading through one remote one.
+// keys a mirror's bookkeeping, so two entries may not share one, and there
+// is exactly one mirror per canonical remote account, whatever the local
+// account or the protocol. Two routes into one account hold one remote
+// reading position, so the second would write over the first's work with
+// nothing to reconcile them.
 func (c *Config) validateMirror() error {
 	if err := c.validateMirrorEntry(&c.Mirror, "mirror", true); err != nil {
 		return err
@@ -908,9 +946,12 @@ func (c *Config) checkMirrorBounds(m *MirrorConfig, path string) error {
 
 // validateMirrorSet holds the entries to being distinct from each other.
 // A name keys a mirror's cursors and prefixes the device a position from
-// it is filed under, so two entries sharing one would share both. Two
-// enabled entries reaching one peer account would merge everything they
-// mirror, which is somebody else's reading as much as this account's.
+// it is filed under, so two entries sharing one would share both. And one
+// canonical remote account has exactly one mirror, whatever local account
+// or protocol is behind it: the second route would share that one remote
+// reading position — merging two local accounts' reading into each other's
+// through it, or leaving two workers of one account racing over it — with
+// nothing to reconcile them.
 func (c *Config) validateMirrorSet() error {
 	names := map[string]string{}
 	addName := func(name, label string) error {
@@ -942,7 +983,7 @@ func (c *Config) validateMirrorSet() error {
 		if !m.Enabled {
 			return nil
 		}
-		key := strings.ToLower(m.BaseURL) + "\n" + strings.ToLower(m.RemoteUser)
+		key := mirrorTargetKey(m)
 		if other, ok := targets[key]; ok {
 			return fmt.Errorf(
 				"%s and %s point at the same account on the same peer (%s as %s); "+

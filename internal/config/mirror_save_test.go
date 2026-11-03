@@ -556,3 +556,111 @@ func TestUpdateMirrorsAtAnEmptyPathIsRefused(t *testing.T) {
 		t.Fatalf("the refusal does not say why: %v", err)
 	}
 }
+
+// TestUpdateMirrorsRewritesAMixedCaseHeaderInPlace. The section scan has
+// to find the header the decoder bound, whatever case it was written in:
+// appending a lower-case copy beside [Mirror] leaves a file whose two
+// tables decode in no particular order, so the proof run here would either
+// refuse the save or let the next start read the wrong one.
+func TestUpdateMirrorsRewritesAMixedCaseHeaderInPlace(t *testing.T) {
+	head := "listen_addr = \"127.0.0.1:8585\"\n\n" +
+		"[Mirror] # the old entry\n" +
+		"enabled = true\nname = \"orbit\"\nbase_url = \"https://orbit.example/sync\"\n" +
+		"account = \"alice\"\nremote_user = \"reader\"\n" +
+		"remote_key = \"0123456789abcdef0123456789abcdef\"\n" +
+		"device_id = \"liseur-sync\"\n\n" +
+		"[content]\ncache_dir = \"covers\"\n"
+	path := writeMirrorConfig(t, head)
+	file, err := ReadMirrors(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !file.HasLegacy {
+		t.Fatal("a [Mirror] table was reported absent")
+	}
+
+	m := workingEntry("orbit")
+	m.BaseURL = "https://orbit.example/sync"
+	if err := UpdateMirrors(path, setLegacy(m)); err != nil {
+		t.Fatal(err)
+	}
+	text := readFile(t, path)
+	if got := strings.Count(strings.ToLower(text), "[mirror]"); got != 1 {
+		t.Fatalf("the file holds %d mirror headers:\n%s", got, text)
+	}
+	if !strings.HasPrefix(text, "listen_addr = \"127.0.0.1:8585\"\n\n") ||
+		!strings.Contains(text, "cache_dir = \"covers\"") {
+		t.Fatalf("the save moved the rest of the file:\n%s", text)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.MirrorTableDefined() || loaded.Mirror.BaseURL != m.BaseURL {
+		t.Fatalf("the rewritten entry did not load: %+v", loaded.Mirror)
+	}
+}
+
+// TestUpdateMirrorsRewritesAMixedCaseListHeader is the same promise for
+// the list. Before this, [[Mirrors]] was invisible to the section scan, so
+// an edit appended a second list beside it.
+func TestUpdateMirrorsRewritesAMixedCaseListHeader(t *testing.T) {
+	path := writeMirrorConfig(t, "[[Mirrors]]\n"+
+		"enabled = true\nname = \"kobo\"\n"+
+		"base_url = \"https://kobo.example.com/sync\"\n"+
+		"account = \"alice\"\nremote_user = \"reader\"\n"+
+		"remote_key = \"0123456789abcdef0123456789abcdef\"\n")
+	file, err := ReadMirrors(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(file.List) != 1 {
+		t.Fatalf("a [[Mirrors]] list was not read: %+v", file.List)
+	}
+	if err := UpdateMirrors(path, func(f *MirrorFile) error {
+		f.List[0].PollInterval = Duration(10 * time.Minute)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := readFile(t, path)
+	if got := strings.Count(strings.ToLower(text), "[[mirrors]]"); got != 1 {
+		t.Fatalf("the file holds %d list headers:\n%s", got, text)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Mirrors) != 1 ||
+		loaded.Mirrors[0].PollInterval != Duration(10*time.Minute) {
+		t.Fatalf("the rewritten list did not load: %+v", loaded.Mirrors)
+	}
+}
+
+// TestUpdateMirrorsRefusesASecondRouteIntoOnePeerAccount puts the policy
+// on the page too: a save that would leave two entries reaching one
+// canonical remote account, whatever their local account or protocol, is
+// refused before the file is written. A save that reported success would
+// otherwise hand the operator a configuration the next start refuses.
+func TestUpdateMirrorsRefusesASecondRouteIntoOnePeerAccount(t *testing.T) {
+	original := "insecure_http = true\n\n" +
+		"[mirror]\nenabled = true\nname = \"orbit\"\nprotocol = \"bookorbit\"\n" +
+		"base_url = \"https://orbit.example.com/api/v1\"\n" +
+		"account = \"alice\"\nremote_user = \"reader\"\n" +
+		"remote_password = \"hunter2\"\n"
+	path := writeMirrorConfig(t, original)
+	err := UpdateMirrors(path, func(f *MirrorFile) error {
+		f.List = append(f.List, targetEntry("koreader", "alice",
+			"https://orbit.example.com/api/v1/koreader", "reader", ProtocolKosync))
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("a save wrote a second route into one peer account:\n%s", readFile(t, path))
+	}
+	if !strings.Contains(err.Error(), "same account on the same peer") {
+		t.Fatalf("the refusal does not say why: %v", err)
+	}
+	if got := readFile(t, path); got != original {
+		t.Fatalf("the refused save changed the file:\n%s", got)
+	}
+}

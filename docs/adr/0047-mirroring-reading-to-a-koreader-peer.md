@@ -76,6 +76,14 @@ ops is a loop with a permanent record.
 
 - Outbound writes carry a fixed device identity. A reply stamped with it
   is this server's own echo and is dropped.
+- A peer reached through a route of its own may restamp the write with
+  its own clock and keep no device of ours. The content of the last
+  push is remembered on the cursor for that reason, exactly as
+  [ADR-0048](0048-a-second-protocol-for-the-mirror.md) does for a peer
+  with no device field at all: a reply reproducing it is this server's
+  own writing, whatever it is stamped with, so a position this server
+  has since superseded cannot come back as news. The mark is spent as
+  soon as the peer shows anything else.
 - Inbound positions are appended as ops with `origin=kosync`, an
   `origin_alias` naming the fingerprint, and a device id marking the
   peer. That is what they are: kosync-shaped records from a kosync

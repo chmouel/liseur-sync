@@ -456,3 +456,32 @@ func TestADisabledEntryStillStartsWithAnAddressAStartWouldRefuse(t *testing.T) {
 		t.Fatal("a save wrote an address carrying a credential")
 	}
 }
+
+// TestUpdateAudiobookshelfRewritesAMixedCaseHeaderInPlace. The decoder
+// folds case when it binds the table, so the section scan has to as well:
+// appending [audiobookshelf] beside an [Audiobookshelf] the operator wrote
+// leaves two tables whose decode order decides which one wins.
+func TestUpdateAudiobookshelfRewritesAMixedCaseHeaderInPlace(t *testing.T) {
+	path := writeAudiobookshelfConfig(t, "listen_addr = \"127.0.0.1:8585\"\n\n"+
+		"[Audiobookshelf]\nenabled = false\n"+
+		"base_url = \"https://abs.example.com\"\naccount = \"alice\"\n"+
+		"api_key = \"file-secret\"\n")
+	want := workingAudiobookshelfEntry()
+	if err := UpdateAudiobookshelf(path, func(a *AudiobookshelfConfig) error {
+		*a = want
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := readFile(t, path)
+	if got := strings.Count(strings.ToLower(text), "[audiobookshelf]"); got != 1 {
+		t.Fatalf("the file holds %d audiobookshelf headers:\n%s", got, text)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Audiobookshelf.APIKey != "new-secret" || !loaded.Audiobookshelf.Enabled {
+		t.Fatalf("the rewritten section did not load: %+v", loaded.Audiobookshelf)
+	}
+}
