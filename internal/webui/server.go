@@ -341,6 +341,7 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/pairing", sec(s.requireAuth(s.handlePairing)))
 	mux.Handle("POST /ui/koplugin", sec(s.requireAuth(s.handleCreateKoplugin)))
 	mux.Handle("POST /ui/koplugin/{id}/revoke", sec(s.requireAuth(s.handleRevokeKoplugin)))
+	mux.Handle("POST /ui/kosync/{slot}/crosspoint", sec(s.requireAuth(s.handleCrossPointPlugin)))
 	mux.Handle("POST /ui/kosync/{slot}/revoke", sec(s.requireAuth(s.handleRevokeKosync)))
 	mux.Handle("POST /ui/preferences", sec(s.requireAuth(s.handlePreferences)))
 	mux.Handle("POST /ui/library/upload", sec(s.requireAuth(s.handleLibraryUpload)))

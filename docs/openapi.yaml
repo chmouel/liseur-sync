@@ -48,6 +48,53 @@ tags:
   - name: opds
 
 paths:
+  /adapter/kosync/sessions:
+    post:
+      tags: [sessions]
+      summary: Record a measured CrossPoint reader session
+      operationId: postKosyncSession
+      security: [{ kosyncUser: [], kosyncKey: [] }]
+      description: |
+        Extension for CrossPoint's reader.session plugin event, authenticated
+        with an existing, active kosync pairing slot. Enable measured statistics
+        for the slot on the Devices page before sending events. The body is at
+        most 4096 bytes; numeric fields are decimal strings as emitted by the
+        firmware. Unknown fields and trailing JSON are rejected.
+
+        Sessions starting before the slot's fixed activation cutoff are
+        acknowledged as ignored. Later events become native sessions with
+        origin kosync, device kosync:<slot>, and active_ms equal to counted
+        duration times 1000. The actual event_ts is the session end and controls
+        the account-local statistics day. end_time is only a consistency check
+        for CrossPoint's compact active end (start_time + duration_seconds).
+
+        Replaying an event_id on the same slot with the same canonical payload
+        returns the original status, including after rollup or identity changes.
+        A different payload conflicts. Unknown binary fingerprints create pending
+        works. Edition metadata requires a unique, granted catalog file whose
+        edition belongs to the resolved work. This endpoint does not write a
+        reading position.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CrossPointSession" }
+      responses:
+        "200":
+          description: Recorded, or acknowledged without counting a pre-cutoff session
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [stored, ignored] }
+        "400": { $ref: "#/components/responses/Error", description: "Invalid session event" }
+        "401": { $ref: "#/components/responses/Error", description: "Invalid or revoked slot, disabled account or disabled kosync" }
+        "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
+        "409": { $ref: "#/components/responses/Error", description: "Measured statistics not enabled, or event ID payload mismatch" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
   /v1/events:
     get:
       tags: [sync]
@@ -3080,6 +3127,16 @@ paths:
 
 components:
   securitySchemes:
+    kosyncUser:
+      type: apiKey
+      in: header
+      name: x-auth-user
+      description: Paired kosync device slot, not the account username
+    kosyncKey:
+      type: apiKey
+      in: header
+      name: x-auth-key
+      description: Hex MD5 of the original pairing password, never the account password
     deviceToken:
       type: http
       scheme: bearer
@@ -3138,6 +3195,49 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    CrossPointSession:
+      type: object
+      additionalProperties: false
+      required: [event_id, document, start_time, end_time, event_ts, duration_seconds, start_progress_bp, end_progress_bp, progress_scale]
+      properties:
+        event_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[!-~]+$'
+          description: Stable event.id, preserved across retries
+        document:
+          type: string
+          pattern: '^[a-fA-F0-9]{32}$'
+          description: Binary partial-MD5 fingerprint, normalized to lowercase
+        start_time:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Trusted positive Unix epoch of the first counted dwell
+        end_time:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Compact end, exactly start_time plus duration_seconds
+        event_ts:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Actual emission Unix epoch, at least end_time and at most five minutes in the future
+        duration_seconds:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Counted forward-page dwell, at least 10 seconds and no greater than event_ts minus start_time
+        start_progress_bp:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Initial whole-book basis points, 0 through 10000
+        end_progress_bp:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Final whole-book basis points, at least start_progress_bp and at most 10000
+        progress_scale:
+          type: string
+          const: "10000"
+
     Error:
       type: object
       required: [error]

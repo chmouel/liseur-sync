@@ -441,7 +441,7 @@ devices that already pulled them keep their copies.
   "end_progression":   0.413,
   "idle_ms":           30000,
   "active_ms":         120000,
-  "origin":            "native | koplugin | inferred"
+  "origin":            "native | kosync | koplugin | inferred"
 }
 ```
 
@@ -567,11 +567,22 @@ koplugin adapter instead. The web reader measures its own
 ([ADR-0030](adr/0030-web-reader-reading-sessions.md)): a sitting bounded
 by the tab's visibility, with a three-minute idle cap per page.
 
+CrossPoint's optional `reader.session` plugin reports measured sessions through
+`POST /adapter/kosync/sessions` using its paired slot (ADR-0060). Explicit
+activation fixes a per-slot cutoff: earlier inferred history stays, later
+received progress ops are excluded from inference and its compaction hold,
+and sessions that started before activation are ignored. Selection and
+transactional inference revalidation enforce the same cutoff. Measured
+sessions use counted duration as `active_ms`, actual emission as `ended_at`,
+and `origin: kosync`. Durable per-slot event receipts preserve idempotency
+through rollup and work split/merge. No inference resumes automatically.
+
 ## 7. Legacy adapters
 
 ### 7.1 kosync (`/adapter/kosync/*`)
 
-Implements the four calls KOReader's kosync plugin makes:
+Implements the four calls KOReader's kosync plugin makes, plus CrossPoint's
+measured-session extension (ADR-0060):
 
 | kosync call | Translation |
 |---|---|
@@ -579,6 +590,7 @@ Implements the four calls KOReader's kosync plugin makes:
 | `GET /users/auth` | Validates the device credential. |
 | `PUT /syncs/progress` | Resolves `document` (a partialMD5) via the alias table, then appends a native op with `origin: kosync`, `foreign_pos` = the xpointer, `progression` = percentage. |
 | `GET /syncs/progress/:document` | Returns the newest op: `progress` = stored `foreign_pos` if the newest op has one, else an xpointer derived from a Liseur anchor in the same granted file (ADR-0059), else the percentage string; `percentage`, `device`, `timestamp` filled natively. |
+| `POST /sessions` | Records CrossPoint `reader.session` events as measured native sessions after explicit per-slot activation; reuses kosync credentials and identity, with durable event receipts and an inference cutoff (§6.3). |
 
 Unresolvable `document` digests create a pending work keyed on the
 partialMD5 alias; when any client later resolves a file to that alias,

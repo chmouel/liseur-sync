@@ -107,11 +107,11 @@ func (s *Store) CreateKosyncDevice(ctx context.Context, d store.KosyncDevice) er
 func (s *Store) KosyncDeviceByKey(ctx context.Context, keySHA256 string) (store.KosyncDevice, error) {
 	var d store.KosyncDevice
 	err := s.db.QueryRowContext(ctx, q(
-		`SELECT user_id, device_slot, key_sha256, label, revoked_at
+		`SELECT user_id, device_slot, key_sha256, label, revoked_at, measured_sessions_from
 		 FROM kosync_devices WHERE key_sha256 = ?
 		   AND EXISTS (SELECT 1 FROM users u
 		               WHERE u.id = kosync_devices.user_id AND u.disabled_at IS NULL)`), keySHA256).
-		Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &d.RevokedAt)
+		Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &d.RevokedAt, &d.MeasuredSessionsFrom)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, store.ErrNotFound
 	}

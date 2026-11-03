@@ -878,6 +878,23 @@ CREATE TABLE IF NOT EXISTS book_audiobooks (
 );
 `
 
+const crosspointSessions = `
+ALTER TABLE kosync_devices ADD COLUMN measured_sessions_from TIMESTAMPTZ;
+CREATE TABLE crosspoint_session_receipts (
+    user_id TEXT NOT NULL,
+    device_slot TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('stored', 'ignored')),
+    work_id TEXT,
+    session_id TEXT,
+    PRIMARY KEY (user_id, device_slot, event_id),
+    FOREIGN KEY (user_id, device_slot) REFERENCES kosync_devices(user_id, device_slot) ON DELETE CASCADE,
+    FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX crosspoint_receipts_work ON crosspoint_session_receipts(user_id, work_id);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -894,6 +911,7 @@ var migrations = []string{
 	furthestFloor,
 	audiobookLinks,
 	watchedFolderAudiobooks,
+	crosspointSessions,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -921,6 +939,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"furthestFloor":            furthestFloor,
 		"audiobookLinks":           audiobookLinks,
 		"watchedFolderAudiobooks":  watchedFolderAudiobooks,
+		"crosspointSessions":       crosspointSessions,
 	}
 	want, ok := named[name]
 	if !ok {

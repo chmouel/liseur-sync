@@ -1,5 +1,5 @@
 // Package kosync implements the /adapter/kosync/* endpoints: the four
-// calls stock KOReader's kosync plugin makes. It translates the legacy
+// calls stock KOReader's kosync plugin makes and CrossPoint session uploads. It translates the legacy
 // wire format into native store records (design §7.1).
 //
 // Auth model: kosync's "username/password" is a dedicated pairing
@@ -277,6 +277,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		secure(auth.RateLimitIP(s.AuthRateLim, s.Cfg, http.HandlerFunc(s.HandleCreateUser))))
 	mux.Handle("GET /adapter/kosync/users/auth",
 		secure(auth.RateLimitIP(s.AuthRateLim, s.Cfg, http.HandlerFunc(s.HandleAuth))))
+	mux.Handle("POST /adapter/kosync/sessions",
+		secure(auth.RateLimitIP(s.AuthRateLim, s.Cfg, http.HandlerFunc(s.HandleSession))))
 	mux.Handle("PUT /adapter/kosync/syncs/progress",
 		secure(http.HandlerFunc(s.HandlePutProgress)))
 	mux.Handle("GET /adapter/kosync/syncs/progress/{document}",
