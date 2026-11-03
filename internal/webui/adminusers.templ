@@ -160,7 +160,7 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		} else {
 			<table>
 				<thead>
-					<tr><th scope="col">Name</th><th scope="col">Scopes</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+					<tr><th scope="col">Name</th><th scope="col">Scopes</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col"></th></tr>
 				</thead>
 				for _, t := range v.Tokens {
 					<tr>
@@ -168,16 +168,13 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 						<td><code>{ t.Scopes.String() }</code></td>
 						<td>{ t.CreatedAt.Format("2006-01-02") }</td>
 						<td>{ stamp(t.LastUsed) }</td>
-						<td>{ stamp(t.RevokedAt) }</td>
 						<td>
-							if t.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens/" + t.ID + "/revoke" }
-									hx-confirm="Revoke this API token? The device using it will lose access."
-								>
-									<input type="hidden" name="csrf" value={ csrf }/>
-									<button type="submit" class="danger">Revoke</button>
-								</form>
-							}
+							<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens/" + t.ID + "/revoke" }
+								hx-confirm="Revoke this API token? The device using it will lose access."
+							>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit" class="danger">Revoke</button>
+							</form>
 						</td>
 					</tr>
 				}
@@ -195,22 +192,19 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		} else {
 			<table>
 				<thead>
-					<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+					<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col"></th></tr>
 				</thead>
 				for _, d := range v.Kosync {
 					<tr>
 						<td><code>{ d.DeviceSlot }</code></td>
 						<td>{ orDash(d.Label) }</td>
-						<td>{ stamp(d.RevokedAt) }</td>
 						<td>
-							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/kosync/" + d.DeviceSlot + "/revoke" }
-									hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
-								>
-									<input type="hidden" name="csrf" value={ csrf }/>
-									<button type="submit" class="danger">Revoke</button>
-								</form>
-							}
+							<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/kosync/" + d.DeviceSlot + "/revoke" }
+								hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
+							>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit" class="danger">Revoke</button>
+							</form>
 						</td>
 					</tr>
 				}
@@ -227,23 +221,20 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		} else {
 			<table>
 				<thead>
-					<tr><th scope="col">Label</th><th scope="col">Device</th><th scope="col">Created</th><th scope="col">Revoked</th><th scope="col"></th></tr>
+					<tr><th scope="col">Label</th><th scope="col">Device</th><th scope="col">Created</th><th scope="col"></th></tr>
 				</thead>
 				for _, d := range v.Koplugin {
 					<tr>
 						<td>{ orDash(d.Label) }</td>
 						<td><code>{ d.DeviceID }</code></td>
 						<td>{ d.CreatedAt.Format("2006-01-02") }</td>
-						<td>{ stamp(d.RevokedAt) }</td>
 						<td>
-							if d.RevokedAt == nil {
-								<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin/" + d.ID + "/revoke" }
-									hx-confirm="Revoke this statistics device? It will stop sending reading data."
-								>
-									<input type="hidden" name="csrf" value={ csrf }/>
-									<button type="submit" class="danger">Revoke</button>
-								</form>
-							}
+							<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin/" + d.ID + "/revoke" }
+								hx-confirm="Revoke this statistics device? It will stop sending reading data."
+							>
+								<input type="hidden" name="csrf" value={ csrf }/>
+								<button type="submit" class="danger">Revoke</button>
+							</form>
 						</td>
 					</tr>
 				}

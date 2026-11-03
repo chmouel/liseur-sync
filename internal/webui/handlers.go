@@ -448,6 +448,33 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a sto
 	s.renderDevices(w, r, a, u, Flash{Notice: "Token revoked."})
 }
 
+// handleRevokeAllTokens revokes every API token the account holds, for
+// the case finding one compromised token has to be answered by not
+// knowing which one it was. Reader credentials are left alone: they are
+// not on that list, and cutting them here would sign the reader out of
+// the browser they pressed the button in.
+func (s *Server) handleRevokeAllTokens(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
+	if !s.checkCSRF(r, a) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	toks, err := s.St.ListTokens(r.Context(), u.ID)
+	if err != nil {
+		s.renderDevices(w, r, a, u, Flash{Error: "Could not revoke API tokens."})
+		return
+	}
+	for _, t := range toks {
+		if t.Name == auth.ReaderTokenName || t.RevokedAt != nil {
+			continue
+		}
+		if err := s.St.RevokeToken(r.Context(), u.ID, t.ID); err != nil {
+			s.renderDevices(w, r, a, u, Flash{Error: "Could not revoke API tokens."})
+			return
+		}
+	}
+	s.renderDevices(w, r, a, u, Flash{Notice: "All API tokens revoked."})
+}
+
 // handleRevokeBrowsers ends browser reading everywhere, for the case
 // this page exists to answer: a machine you no longer have, or no longer
 // trust, that you were signed in on.

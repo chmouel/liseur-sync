@@ -62,19 +62,28 @@ func TestBrowsersAreOneRowPerBrowser(t *testing.T) {
 func TestSignOutOfBrowserReadingRevokes(t *testing.T) {
 	ts, st := testServer(t)
 	svc := auth.NewService(st)
-	if _, _, err := svc.MintReaderToken(t.Context(), "u1"); err != nil {
+	_, reader, err := svc.MintReaderToken(t.Context(), "u1")
+	if err != nil {
 		t.Fatal(err)
 	}
 	cookie := loginCookie(t, ts)
 	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	if !strings.Contains(body, ">"+reader.DeviceID+"<") {
+		t.Fatal("the browser that read here is not listed")
+	}
 	csrf := extractCSRF(t, body)
 
 	if code, _ := postForm(t, ts, cookie, "/ui/browsers/revoke", url.Values{}); code != 403 {
 		t.Fatalf("sign-out without CSRF: want 403, got %d", code)
 	}
 	code, body := postForm(t, ts, cookie, "/ui/browsers/revoke", url.Values{"csrf": {csrf}})
-	if code != 200 || !strings.Contains(body, "signed out") {
+	if code != 200 || !strings.Contains(body, "Browser reading signed out") {
 		t.Fatalf("sign-out: %d", code)
+	}
+	// Its only credential is revoked, so it is no longer a browser that
+	// reads here.
+	if strings.Contains(body, ">"+reader.DeviceID+"<") {
+		t.Fatal("a signed-out browser is still listed")
 	}
 
 	toks, err := st.ListTokens(t.Context(), "u1")

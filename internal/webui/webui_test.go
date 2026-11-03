@@ -344,6 +344,130 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 	}
 }
 
+// TestDevicesHideRevokedCredentials: the page lists what a reader can
+// use, so a revoked credential is not a row with a state cell — it is
+// not a device any more and does not appear at all.
+func TestDevicesHideRevokedCredentials(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	now := time.Now()
+	for _, tok := range []store.Token{
+		{ID: "live-tok", UserID: "u1", DeviceID: "d-live", Name: "Boox Palma",
+			Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "live-sha", CreatedAt: now},
+		{ID: "dead-tok", UserID: "u1", DeviceID: "d-dead", Name: "Old Phone",
+			Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "dead-sha", CreatedAt: now},
+	} {
+		if err := st.CreateToken(ctx, tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeToken(ctx, "u1", "dead-tok"); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []struct{ slot, label string }{{"live-slot", "Kobo"}, {"dead-slot", "Retired Kobo"}} {
+		if err := st.CreateKosyncDevice(ctx, store.KosyncDevice{
+			UserID: "u1", DeviceSlot: d.slot, KeySHA256: d.slot + "-sha", Label: d.label,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeKosyncDevice(ctx, "u1", "dead-slot"); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []struct{ id, label string }{{"live-kop", "Clara"}, {"dead-kop", "Old Clara"}} {
+		if err := st.CreateKopluginDevice(ctx, store.KopluginDevice{
+			ID: d.id, UserID: "u1", TokenSHA256: d.id + "-sha", Label: d.label,
+			DeviceID: "koplugin:" + d.label, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RevokeKopluginDevice(ctx, "u1", "dead-kop"); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	if code != 200 {
+		t.Fatalf("devices page: %d", code)
+	}
+	for _, want := range []string{"Boox Palma", "live-slot", "Clara", "Revoke all tokens"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("devices page is missing the active device %q", want)
+		}
+	}
+	for _, gone := range []string{"Old Phone", "d-dead", "dead-slot", "Retired Kobo", "Old Clara"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("devices page still lists the revoked %q", gone)
+		}
+	}
+	if strings.Contains(body, ">State<") {
+		t.Error("devices page still has a state column")
+	}
+}
+
+// TestRevokeAllTokens: the button that answers a leaked token when
+// nobody knows which one leaked. Every API token goes, browser reader
+// credentials stay, and the account keeps its own session.
+func TestRevokeAllTokens(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	svc := auth.NewService(st)
+	if _, _, err := svc.MintReaderToken(ctx, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Boox Palma", "Phone"} {
+		if _, _, err := svc.MintToken(ctx, "u1", name, store.ScopeSet{store.ScopeSync}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	if code != 200 || !strings.Contains(body, "Revoke all tokens") {
+		t.Fatalf("devices page offers no revoke-all: %d", code)
+	}
+	// Relative like every other action on the page, so it survives a
+	// prefix-stripping proxy.
+	if !strings.Contains(body, `action="tokens/revoke"`) {
+		t.Fatal("the revoke-all form does not post to a relative path")
+	}
+	csrf := extractCSRF(t, body)
+
+	if code, _ := postForm(t, ts, cookie, "/ui/tokens/revoke", url.Values{}); code != 403 {
+		t.Fatalf("revoke all without CSRF: want 403, got %d", code)
+	}
+	code, body = postForm(t, ts, cookie, "/ui/tokens/revoke", url.Values{"csrf": {csrf}})
+	if code != 200 || !strings.Contains(body, "All API tokens revoked.") {
+		t.Fatalf("revoke all: %d", code)
+	}
+	if !strings.Contains(body, "No active API tokens.") {
+		t.Fatal("the page still shows a token table after revoking them all")
+	}
+
+	toks, err := st.ListTokens(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var readers, apis int
+	for _, tok := range toks {
+		if tok.Name == auth.ReaderTokenName {
+			readers++
+			if tok.RevokedAt != nil {
+				t.Error("revoking API tokens signed the reader out of browser reading")
+			}
+			continue
+		}
+		apis++
+		if tok.RevokedAt == nil {
+			t.Errorf("API token %q survived the sweep", tok.Name)
+		}
+	}
+	if readers != 1 || apis != 2 {
+		t.Fatalf("tokens after the sweep: %d readers %d API, want 1 and 2", readers, apis)
+	}
+}
+
 // A scope the store knows but no page offers is a scope only the admin
 // CLI can grant, which is how library-upload shipped: the reader could
 // see the offer in the app and had no way to authorise it.
