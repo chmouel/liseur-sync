@@ -897,9 +897,28 @@ Optional settings, in `[audiobookshelf]` or their environment overrides:
 
 `active_days` bounds position exchanges by recent activity on either
 side; linked listening history is still imported. HTTPS is required
-unless `insecure_http` is enabled. The key stays in configuration and is
-never saved by the web UI. Changing the server URL or remote account
-starts a separate set of links; already imported history stays.
+unless `insecure_http` is enabled.
+
+An administrator can also edit the section from
+**Settings → Administration → Audiobookshelf** instead of a file: the
+form sets whether it is enabled, the server URL, the local account and an
+API key. Saving it enabled checks that the local account exists and that
+the server accepts the key before writing anything; saving it disabled
+needs neither a reachable server nor a key. Only the section changes —
+the rest of the file keeps its bytes. A blank key field keeps the saved
+key, and the page never renders one.
+
+`LISEUR_ABS_API_KEY` still owns the effective key when it is set, and is
+never copied into the file. The non-secret `LISEUR_ABS_ENABLED`,
+`LISEUR_ABS_BASE_URL` and `LISEUR_ABS_ACCOUNT` variables make the page
+read-only, because the next start would override what it saved: change
+those in the environment and restart. Nothing is reloaded while the
+server runs, so a saved change takes effect at the next start. The form
+writes the server URL as typed and startup normalises it — one trailing
+slash removed — so re-saving a section nobody changed keeps the links,
+rejections and imported listening history keyed as they already were.
+Changing the server URL or remote account starts a separate set of
+links; already imported history stays.
 
 ## Configuration
 

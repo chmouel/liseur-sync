@@ -85,6 +85,7 @@ loose ends that must come before any of it, are in
 
 | [0060](0060-crosspoint-measured-reading-sessions.md) | CrossPoint measured reading sessions | Now | Accepted | Optional events-only plugin using the paired kosync slot; measured native sessions, durable event receipts and an explicit inference cutoff |
 | [0061](0061-several-mirrors.md) | Several named mirrors | Now | Accepted; implemented | `[[mirrors]]` beside the single `[mirror]` table, one worker per enabled entry, per-name credential variables, refuse two enabled entries on one peer account, and a no-op agreement rule so restamping peers stop feeding each other; needs a restart, and an older image refuses a file that carries the list |
+| [0062](0062-configuring-audiobookshelf-from-the-admin-page.md) | Configuring Audiobookshelf from the admin page | Now | Accepted; implemented | An administration page edits the `[audiobookshelf]` section surgically under the mirror writer's rules: enabled, URL, local account and API key, an enabled save checks the account and the key before writing, the environment owns `LISEUR_ABS_API_KEY` and never has it copied to disk, non-secret overrides make the page read-only, and a saved change needs a restart |
 
 ## Convention
 

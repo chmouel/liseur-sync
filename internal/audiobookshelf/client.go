@@ -69,7 +69,10 @@ func NewClient(cfg config.AudiobookshelfConfig) *Client {
 // PeerIdentity names one listening account on one server, as ADR-0048
 // names a mirror peer: everything the integration writes is keyed by
 // it, so pointing the integration at another server or account starts
-// afresh instead of mixing two histories.
+// afresh instead of mixing two histories. It drops one trailing slash
+// besides the one validation drops; the result is the namespace every
+// stored link, rejection and imported session is keyed by, so how many
+// slashes it drops is not a display decision.
 func PeerIdentity(baseURL, userID string) string {
 	sum := sha256.Sum256([]byte("audiobookshelf\n" + strings.TrimSuffix(baseURL, "/") + "\n" + userID))
 	return hex.EncodeToString(sum[:8])
