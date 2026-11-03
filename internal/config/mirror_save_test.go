@@ -664,3 +664,63 @@ func TestUpdateMirrorsRefusesASecondRouteIntoOnePeerAccount(t *testing.T) {
 		t.Fatalf("the refused save changed the file:\n%s", got)
 	}
 }
+
+// TestReadMirrorsDoesNotEchoAParseErrorLiteral: a TOML diagnostic quotes
+// the source it choked on, which can be a credential. The page, the
+// redirect that carries its message and the audit line must none of them
+// quote it, so what comes back says where the file stopped and nothing
+// else.
+func TestReadMirrorsDoesNotEchoAParseErrorLiteral(t *testing.T) {
+	const secret = "sup3r/secret+key"
+	// An invalid escape, because that is the diagnostic that quotes the
+	// string it could not read.
+	broken := func(t *testing.T, header, key string) string {
+		t.Helper()
+		return writeMirrorConfig(t,
+			header+"\n"+key+` = "`+secret+`\xZ"`+"\n")
+	}
+	appendToList := func(t *testing.T, path string) error {
+		return UpdateMirrors(path, func(f *MirrorFile) error {
+			f.List = append(f.List, workingEntry("kobo"))
+			return nil
+		})
+	}
+	replaceSingle := func(t *testing.T, path string) error {
+		return UpdateMirrors(path, setLegacy(workingEntry("orbit")))
+	}
+
+	for name, tc := range map[string]struct {
+		header, key string
+		call        func(*testing.T, string) error
+	}{
+		"read single": {"[mirror]", "remote_password",
+			func(t *testing.T, path string) error {
+				_, err := ReadMirrors(path)
+				return err
+			}},
+		"read list": {"[[mirrors]]", "remote_key",
+			func(t *testing.T, path string) error {
+				_, err := ReadMirrors(path)
+				return err
+			}},
+		"update single": {"[mirror]", "remote_password", appendToList},
+		"update list":   {"[[mirrors]]", "remote_key", replaceSingle},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := tc.call(t, broken(t, tc.header, tc.key))
+			if err == nil {
+				t.Fatal("a malformed file was accepted")
+			}
+			msg := err.Error()
+			if strings.Contains(msg, secret) || strings.Contains(msg, "+key") {
+				t.Fatalf("the error quoted the source literal: %q", msg)
+			}
+			if !strings.Contains(msg, "parse") {
+				t.Fatalf("the error does not say what failed: %q", msg)
+			}
+			if !strings.Contains(msg, "line 2") {
+				t.Fatalf("the error lost its location: %q", msg)
+			}
+		})
+	}
+}

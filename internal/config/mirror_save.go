@@ -88,7 +88,7 @@ func ReadMirrors(path string) (MirrorFile, error) {
 	}
 	meta, err := toml.Decode(string(body), &out)
 	if err != nil {
-		return out, err
+		return out, safeConfigParseError("the configuration file does not parse", err)
 	}
 	out.HasLegacy = tableDefined(meta, "mirror")
 	for i := range out.List {
@@ -205,7 +205,7 @@ func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest b
 	got := MirrorFile{Legacy: Default().Mirror}
 	meta, err := toml.Decode(rendered, &got)
 	if err != nil {
-		return fmt.Errorf("rewritten config would not parse: %w", err)
+		return safeConfigParseError("rewritten config would not parse", err)
 	}
 	got.HasLegacy = tableDefined(meta, "mirror")
 	for i := range got.List {
@@ -224,7 +224,7 @@ func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest b
 	var updated Config
 	meta, err = toml.Decode(rendered, &updated)
 	if err != nil {
-		return fmt.Errorf("rewritten config would not parse: %w", err)
+		return safeConfigParseError("rewritten config would not parse", err)
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, 0, len(undecoded))
@@ -242,7 +242,7 @@ func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest b
 	}
 	var original Config
 	if _, err := toml.Decode(before, &original); err != nil {
-		return fmt.Errorf("original config does not parse: %w", err)
+		return safeConfigParseError("original config does not parse", err)
 	}
 	original.Mirror, original.Mirrors = MirrorConfig{}, nil
 	updated.Mirror, updated.Mirrors = MirrorConfig{}, nil
@@ -263,7 +263,7 @@ func validateRenderedMirrors(rendered string) error {
 	c := Default()
 	meta, err := toml.Decode(rendered, &c)
 	if err != nil {
-		return fmt.Errorf("rewritten config would not parse: %w", err)
+		return safeConfigParseError("rewritten config would not parse", err)
 	}
 	c.mirrorDefined = tableDefined(meta, "mirror")
 	// The whole environment, not just the mirror variables: what an HTTP

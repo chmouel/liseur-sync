@@ -31,6 +31,10 @@ func (k *kosyncPeer) Identity() string {
 	return peerIdentity(config.ProtocolKosync, k.cfg.BaseURL, k.cfg.RemoteUser)
 }
 
+func (k *kosyncPeer) legacyIdentities() []string {
+	return legacyPeerIdentities(config.ProtocolKosync, k.cfg.BaseURL, k.cfg.RemoteUser)
+}
+
 func (k *kosyncPeer) Authorize(ctx context.Context) error { return k.client.Authorize(ctx) }
 
 func (k *kosyncPeer) Close(context.Context) {}
@@ -62,7 +66,7 @@ func (k *kosyncPeer) Pull(
 	}
 	place.Mark = placeMark(place)
 	place.Echo = p.DeviceID == k.client.DeviceID() ||
-		(cur.PushedMark != "" && place.Mark == cur.PushedMark)
+		echoMatch(cur.PushedMark, place)
 	if !place.Echo {
 		// The mark says what the peer holds because of us. It plainly
 		// holds something else now, so the mark is spent: keeping it

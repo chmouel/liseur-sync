@@ -563,6 +563,35 @@ func TestAPeerThatEchoesTheKeyDoesNotGetItIntoAnError(t *testing.T) {
 	}
 }
 
+// TestAKeyStraddlingTheCutIsStillRedacted. The peer's complaint is
+// quoted one line at a time and cut at 200 bytes, so redacting what was
+// kept would leave the first half of a key that began just before the
+// boundary — in an error that is logged and stored on a cursor row.
+func TestAKeyStraddlingTheCutIsStillRedacted(t *testing.T) {
+	peer := newFakePeer(t)
+	for name, body := range map[string]string{
+		"on the byte boundary": strings.Repeat("x", 190) + peer.key + " rejected",
+		"across the newline":   strings.Repeat("x", 190) + peer.key + "\nsecond line",
+	} {
+		t.Run(name, func(t *testing.T) {
+			peer.failWith(http.StatusInternalServerError, body)
+			_, err := peer.client(t).Pull(context.Background(), "43200deaa6b3a3cd67dc934fabe6f0f2")
+			if err == nil {
+				t.Fatal("a failing peer was not a failure")
+			}
+			msg := err.Error()
+			if strings.Contains(msg, peer.key) || strings.Contains(msg, peer.key[:8]) {
+				t.Fatalf("half a key reached an error string: %q", msg)
+			}
+			// Whatever of the complaint was going to be kept is still
+			// there, credential-free.
+			if !strings.Contains(msg, strings.Repeat("x", 32)) {
+				t.Fatalf("the peer's message was lost: %q", msg)
+			}
+		})
+	}
+}
+
 // TestTwoSpellingsOfOneRootAreOneClient. The client is the other half of the
 // duplicate check: an address the validator trimmed once and a client trimmed
 // again must not end up talking to the same routes while looking like two
