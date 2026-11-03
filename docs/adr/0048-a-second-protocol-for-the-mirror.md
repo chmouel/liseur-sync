@@ -29,6 +29,9 @@ the same language on either side of a border that discards it.
 ## Decision
 
 Add a second protocol behind the existing mirror, not a second mirror.
+[ADR-0061](0061-several-mirrors.md) later allowed several entries, each
+still one peer and one account; the seam below is what made that a list
+rather than a second implementation.
 
 Everything ADR-0047 decided about *when* a position crosses is
 unchanged and is now written once for both protocols: one peer, one

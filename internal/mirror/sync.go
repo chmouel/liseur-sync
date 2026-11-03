@@ -244,6 +244,19 @@ func (s *Syncer) exchange(
 		}
 		cur.PushedSeq = local.Seq
 		return outcomeNothing, nil
+
+	case samePlace(local, remote):
+		// The peer is saying the place this server already holds, in
+		// its own words and on its own clock. That is agreement, not
+		// news: applying it would append an op that says nothing new,
+		// and with more than one peer a position can be restamped on
+		// its way around a loop that never changes it. Two protocols
+		// reading one library — BookOrbit's own API and its KOReader
+		// route, say — are exactly that loop without this.
+		cur.RemoteTS = remote.At.Unix()
+		cur.PulledAt = ptr(time.Now().UTC())
+		cur.PushedSeq = local.Seq
+		return outcomeNothing, nil
 	}
 
 	cur.PulledAt = ptr(time.Now().UTC())
@@ -287,6 +300,61 @@ func (s *Syncer) exchange(
 		cur.PushedSeq = local.Seq
 		return outcomeNothing, nil
 	}
+}
+
+// samePlace reports whether the peer's position is the one at the top of
+// this server's op log, judged at the finest detail both sides carry.
+//
+// Comparing the fractions alone would be the cheap answer and the wrong
+// one in both directions: two readers can sit at the same percent of a
+// book in different sentences, and a peer that names the exact spot is
+// saying something a fraction cannot. So an exact field the peer sends is
+// compared with the same kind of field here when this side has one, and
+// the fraction decides only when neither side has anything finer to say.
+// A field the peer sends and this side lacks is news, not agreement:
+// treating it as agreement would skip a locator that is strictly better
+// than the one held, on every poll. A protocol that carries a fraction and
+// nothing else therefore still agrees with a fraction, which is what stops
+// a restamped loop.
+func samePlace(local store.Op, remote Place) bool {
+	// A position at the very start is not agreement. On one protocol it
+	// is what a pending reset looks like, and the rules above already
+	// decide what to do with it; taking it as a no-op here would answer
+	// them before they were asked.
+	if remote.Percentage == 0 && local.Progression == 0 {
+		return false
+	}
+	exact := false
+	if remote.CFI != "" {
+		localCFI := cfiFromLocator(local.LocatorJSON)
+		if localCFI != remote.CFI {
+			return false
+		}
+		exact = true
+	}
+	if exactForeign(remote) {
+		if local.ForeignPos == nil || strings.TrimSpace(*local.ForeignPos) != remote.Foreign {
+			return false
+		}
+		exact = true
+	}
+	if exact {
+		return true
+	}
+	return round(local.Progression, 6) == round(remote.Percentage, 6)
+}
+
+// exactForeign reports whether a peer's engine position names something the
+// fraction does not. KOReader has no locator for a client that sends none, so
+// this server tells it the percentage and a peer hands that back as Progress;
+// that string is the fraction written out again, not a finer answer, and
+// counting it as one would make every restamped round trip look like news.
+func exactForeign(p Place) bool {
+	if p.Foreign == "" {
+		return false
+	}
+	asFloat, err := strconv.ParseFloat(strings.TrimSpace(p.Foreign), 64)
+	return err != nil || round(asFloat, 6) != round(p.Percentage, 6)
 }
 
 // push sends a local position out. Everything the op knows goes into

@@ -400,7 +400,7 @@ Administration tab is shown only to admins.
 | `GET /ui/settings?section=admin&view=users` | Users (paginated) and invites |
 | `GET /ui/settings?section=admin&view=user&user={id}` | One user: tokens, devices and actions |
 | `GET /ui/settings?section=admin&view=folders` | Watched folders and scans |
-| `GET /ui/settings?section=admin&view=mirror` | Mirror peer configuration |
+| `GET /ui/settings?section=admin&view=mirror` | Mirror peers, with `&mirror={name}` editing one and `&add=1` adding one |
 
 Mutations, each `POST` with the per-session CSRF token, redirecting back
 with a flash:
@@ -417,7 +417,9 @@ with a flash:
 `/ui/admin/libraries/{id}/access`, `/ui/admin/libraries/{id}/layout`,
 `/ui/admin/libraries/{id}/refresh`,
 `/ui/admin/libraries/{id}/review/{bookID}/clear`,
-`/ui/admin/maintenance/verify`, and the two existing invite routes.
+`/ui/admin/maintenance/verify`, `/ui/admin/mirror` and
+`/ui/admin/mirror/delete` ([ADR-0061](0061-several-mirrors.md)), and the
+two existing invite routes.
 
 The panel is a superset of the `admin` subcommands, not a subset of
 them: every subcommand has a control here, and the ones that mint a

@@ -616,15 +616,16 @@ Administrators can configure either from `/ui/settings` →
 `Administration` → `Mirror`: choose the protocol, enter the peer URL,
 choose the local account, enter the peer credential, and press **Save
 and test connection**. The page signs in to the peer before writing the
-`[mirror]` section to the config file. Restart the server after saving.
-The shell configuration below remains available for unattended
-deployments.
+section to the config file. Restart the server after saving. The shell
+configuration below remains available for unattended deployments.
 
 Changing the protocol on that page clears the saved credential, because
-the two are not interchangeable.
+the two are not interchangeable. Saving or removing a mirror asks for
+your own password again, the same re-verification as any other
+administrator action, and says so in the audit log.
 
-It is off unless configured, and when it is on it covers exactly one
-account.
+It is off unless configured, and when it is on each mirror covers
+exactly one account.
 
 ```toml
 [mirror]
@@ -699,6 +700,79 @@ Every other field has a `LISEUR_MIRROR_*` equivalent:
 `LISEUR_MIRROR_REMOTE_USER`, `LISEUR_MIRROR_DEVICE_ID`,
 `LISEUR_MIRROR_PEER_PATH_PREFIX`, `LISEUR_MIRROR_LOCAL_PATH_PREFIX`,
 `LISEUR_MIRROR_RESOLVE_RETRY_INTERVAL`.
+
+### Several peers: `[[mirrors]]`
+
+One `[mirror]` table names one peer. More than one is a list, written
+beside it ([ADR-0061](adr/0061-several-mirrors.md)):
+
+```toml
+[[mirrors]]
+enabled = true
+name = "kobo"
+protocol = "kosync"         # or "bookorbit"
+base_url = "https://kobo.example.com/sync"
+account = "you"             # the local account whose reading is mirrored
+remote_user = "you"         # the peer's account name
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+```
+
+A field left out takes the same default the `[mirror]` table documents.
+An entry's credential comes from its own environment variables, named
+after the entry — upper-cased, dashes turned into underscores:
+
+```
+LISEUR_MIRRORS_KOBO_REMOTE_KEY=<md5 of the peer's KOReader sync password>
+LISEUR_MIRRORS_KOBO_REMOTE_PASSWORD=<the peer account password>
+```
+
+Only the protocol's own variable is read. A variable that is set but
+empty refuses that entry at startup rather than falling back to a
+credential in the file.
+
+`name` is restricted to lower-case letters, digits and dashes, and it
+never changes: it keys that mirror's bookkeeping and prefixes the device
+a position from it is filed under. Renaming means removing the entry and
+adding it again, which starts that peer over. Names are unique across
+every entry, and **no two enabled entries may reach the same peer
+account** — same address, same remote username — because two local
+accounts sharing one remote account would merge their reading through
+it. The page refuses that before writing anything.
+
+Every enabled entry runs its own worker, with its own polling, backoff
+and bookkeeping. Positions still flow between peers through this
+server: a position taken from one peer is offered to another, so the
+peers stay in step. A peer position that says exactly what this server
+already holds writes nothing, however it was stamped — that is what
+stops two peers that restamp their replies from feeding each other a new
+operation on every pass. Configuring two peers to sync with each other
+*directly*, so that the position changes on the way, is not supported:
+the log line `mirror took a position from the peer` repeating for one
+book on every pass is what that looks like.
+
+The page reads the config file on every request, so an entry saved and
+disabled can still be edited. The running process does not: **a saved
+change takes effect at the next restart**, and the page says so. There
+is no hot reload.
+
+Two things about the file are worth knowing before editing it by hand:
+
+- The page rewrites only the section it changed and keeps everything
+  else byte-for-byte. **Comments inside a `[[mirrors]]` entry are not
+  preserved** when that entry is saved from the page: the section is
+  written whole.
+- **After adding a `[[mirrors]]` section, an older image will refuse to
+  start** on this file: the loader rejects a key it does not know, and
+  `mirrors` is not one it knew. Rolling back means removing that section
+  first.
+
+The single `[mirror]` table keeps working exactly as before, and the
+page edits it where it is rather than converting it into a list entry.
+An upgrade therefore changes nothing: same name, same cursors, same
+device prefix.
 
 A half-configured mirror is refused at startup rather than started and
 left to fail quietly. Everything after that is retried instead: a peer

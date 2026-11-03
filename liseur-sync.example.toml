@@ -38,6 +38,11 @@ pairing_code_ttl_min = 15
 # days. Lowering it does not shorten sessions already issued.
 web_session_ttl_days = 180
 
+# More mirrors beside the single [mirror] table below (ADR-0061). Each
+# entry is a [[mirrors]] table with its own name, local account and
+# credential; see the commented example next to [mirror].
+# mirrors = []
+
 [database]
 driver = "sqlite"                  # sqlite | postgres
 url = "liseur-sync.db"             # sqlite path, or postgres DSN
@@ -131,6 +136,30 @@ poll_interval = "5m"        # the peer has no push, so it is asked
 resolve_retry_interval = "24h" # how often BookOrbit misses are retried
 active_days = 30            # only recently read books are asked about
 timeout = "20s"
+
+# More mirrors, beside the one above (ADR-0061). Each entry is a peer of
+# its own, with its own name, local account and credential; the single
+# [mirror] table keeps working exactly as it did. A field left out takes
+# the same default the table above documents.
+#
+# A list entry's credential comes from the environment:
+# LISEUR_MIRRORS_<NAME>_REMOTE_KEY for KOReader sync, or
+# LISEUR_MIRRORS_<NAME>_REMOTE_PASSWORD for BookOrbit's API, with the
+# name upper-cased and its dashes turned into underscores.
+#
+# [[mirrors]]
+# enabled = true
+# name = "kobo"             # lower-case, digits and dashes; never changes
+# protocol = "kosync"       # or "bookorbit"
+# base_url = "https://kobo.example.com/sync"
+# account = "you"           # the local account whose reading is mirrored
+# remote_user = "you"       # the peer's account name
+# remote_key = ""           # prefer LISEUR_MIRRORS_KOBO_REMOTE_KEY
+# device_id = "liseur-sync"
+# poll_interval = "5m"
+# resolve_retry_interval = "24h"
+# active_days = 30
+# timeout = "20s"
 
 # Follow audiobooks on an Audiobookshelf server (ADR-0055): listening
 # and reading positions cross through matching chapters, and listening

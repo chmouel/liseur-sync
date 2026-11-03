@@ -84,6 +84,7 @@ loose ends that must come before any of it, are in
 | [0059](0059-deriving-a-position-across-protocols.md) | Deriving a position across protocols | Now | Accepted | `internal/xpointer`: CRe XPaths to and from Liseur text anchors in the same EPUB, pinned by device fixtures; then derivation on kosync reads and on `/v1/changes`, `/v1/heads` and positions, then exact restore in Liseur Android and the web reader |
 
 | [0060](0060-crosspoint-measured-reading-sessions.md) | CrossPoint measured reading sessions | Now | Accepted | Optional events-only plugin using the paired kosync slot; measured native sessions, durable event receipts and an explicit inference cutoff |
+| [0061](0061-several-mirrors.md) | Several named mirrors | Now | Accepted; implemented | `[[mirrors]]` beside the single `[mirror]` table, one worker per enabled entry, per-name credential variables, refuse two enabled entries on one peer account, and a no-op agreement rule so restamping peers stop feeding each other; needs a restart, and an older image refuses a file that carries the list |
 
 ## Convention
 

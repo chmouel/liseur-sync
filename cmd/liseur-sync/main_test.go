@@ -120,3 +120,39 @@ func TestTopScanHelpFlagExitsZero(t *testing.T) {
 		t.Fatalf("scan -h output unexpected:\n%s", out)
 	}
 }
+
+// TestOneWorkerPerEnabledMirror. Each entry is a peer of its own, so
+// startup builds a worker per entry and none for the disabled ones. The
+// single [mirror] table counts as an entry like any other: a deployment
+// that upgrades keeps mirroring without editing its file.
+func TestOneWorkerPerEnabledMirror(t *testing.T) {
+	cfg := config.Default()
+	cfg.Mirror.Enabled = true
+	cfg.Mirror.Name = "peer"
+	cfg.Mirror.BaseURL = "https://orbit.example.com/sync"
+	cfg.Mirror.Account = "alice"
+	cfg.Mirror.RemoteUser = "reader"
+	cfg.Mirror.RemoteKey = "0123456789abcdef0123456789abcdef"
+	cfg.SetMirrorTableDefined(true)
+	cfg.Mirrors = []config.MirrorConfig{
+		{Enabled: true, Name: "kobo", BaseURL: "https://kobo.example.com/sync",
+			Account: "bob", RemoteUser: "reader2", RemoteKey: "0123456789abcdef0123456789abcdef"},
+		{Enabled: false, Name: "switched-off", BaseURL: "https://off.example.com/sync"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	runners := mirrorRunners(nil, cfg)
+	if len(runners) != 2 {
+		t.Fatalf("%d workers for two enabled entries", len(runners))
+	}
+	if runners[0].Cfg.Name != "peer" || runners[1].Cfg.Name != "kobo" {
+		t.Fatalf("workers: %q, %q", runners[0].Cfg.Name, runners[1].Cfg.Name)
+	}
+
+	// A server that mirrors nothing builds nothing.
+	if got := mirrorRunners(nil, config.Default()); len(got) != 0 {
+		t.Fatalf("an unconfigured server started %d workers", len(got))
+	}
+}
