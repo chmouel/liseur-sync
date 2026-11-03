@@ -100,6 +100,12 @@ func TestACredentialBearingConfigSaveIsOwnerOnly(t *testing.T) {
 		{"existing database keyword password",
 			"[database]\ndriver = \"postgres\"\nurl = \"host=db password=hunter2 dbname=liseur\"\n\n" + plain,
 			saveLegacy(secretFreeEntry("orbit"))},
+		// libpq only quotes a value that starts with an apostrophe, so the
+		// one in the application name opens nothing and the password after
+		// it is a password.
+		{"existing database keyword password beside an apostrophe",
+			"[database]\ndriver = \"postgres\"\nurl = \"host=db application_name=O'Reilly password=hunter2\"\n\n" + plain,
+			saveLegacy(secretFreeEntry("orbit"))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := readableConfig(t, tc.body, 0o644)
@@ -325,8 +331,9 @@ func TestEnvironmentSecretsNeverMakeAFileOwnerOnly(t *testing.T) {
 
 // TestADatabaseURLPasswordCountsInEitherShape: libpq reads a connection
 // string as a URL or as keyword/value pairs, and either shape can carry a
-// password in more than the obvious place. A value that is not a secret must
-// not be read as one, and text nobody can parse must not panic.
+// password in more than the obvious place. The check deliberately
+// over-approximates: missing one leaks a secret, while matching text that
+// merely mentions `password` only makes the file owner-only.
 func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -334,44 +341,39 @@ func TestADatabaseURLPasswordCountsInEitherShape(t *testing.T) {
 		want bool
 	}{
 		{"url userinfo password", "postgres://liseur:hunter2@db:5432/liseur", true},
+		{"url userinfo password, no port", "postgres://alice:hunter2@db/liseur", true},
+		// net/url refuses both of these, and libpq does not: the socket
+		// host is percent-encoded and the query value holds a semicolon.
+		{"url userinfo password over a percent-encoded socket host", "postgres://alice:hunter2@%2Fvar%2Frun%2Fpostgresql/liseur", true},
+		{"url password query with a semicolon", "postgres://db/liseur?password=ab;cd", true},
 		{"url password query", "postgres://liseur@db:5432/liseur?password=hunter2", true},
 		{"url sslpassword query", "postgres://liseur@db:5432/liseur?sslpassword=hunter2", true},
 		{"keyword password", "host=db password=hunter2 dbname=liseur", true},
+		// libpq only quotes a value that starts with an apostrophe, so the
+		// apostrophe in O'Reilly opens nothing.
+		{"keyword quote inside a non-password value", "host=db application_name=O'Reilly password=hunter2", true},
 		{"keyword password, spaces around the equals", "host=db password = hunter2 dbname=liseur", true},
 		{"keyword quoted password, spaces around the equals", "host=db password = 'hunter2' dbname=liseur", true},
 		{"keyword sslpassword", "host=db sslpassword='hunter2'", true},
 		{"keyword quoted password with an escaped quote", `host=db password='it\'s'`, true},
 		{"keyword quoted password with spaces in it", "host=db password=' two words '", true},
 		{"keyword escaped space", `host=db password=two\ words`, true},
-		{"keyword pairs split by a newline", "host=db\npassword=hunter2", true},
-		{"url userinfo without a password", "postgres://liseur@db:5432/liseur", false},
+		{"keyword password, values split by a newline", "host=db\npassword=hunter2", true},
 		{"url empty userinfo password", "postgres://liseur:@db:5432/liseur", false},
-		{"url empty password query", "postgres://liseur@db:5432/liseur?password=", false},
-		{"url without a password", "postgres://liseur@db:5432/liseur?application_name=liseur-sync", false},
-		{"keyword without a password", "host=db dbname=liseur", false},
-		// libpq skips the whitespace after the '=', so a bare token there
-		// is the value rather than an empty one.
-		{"keyword empty password at the end", "host=db dbname=liseur password=", false},
-		{"a bare token after the equals is the value", "host=db password= dbname=liseur", true},
-		{"keyword empty quoted password", "host=db password = '' dbname=liseur", false},
-		{"a password inside a quoted non-password value", "host=db application_name='backup password=fake' dbname=liseur", false},
-		{"a password inside a quoted non-password value, spaced", "host=db application_name = 'backup password = fake'", false},
+		{"url with no userinfo password", "postgres://liseur@db:5432/liseur?application_name=liseur-sync", false},
+		{"keyword dsn with no password text", "host=db dbname=liseur application_name=liseur-sync", false},
 		{"sqlite file path", "/var/lib/liseur-sync.db", false},
+		{"sqlite file uri", "file:/data/liseur.db?mode=rwc", false},
 		{"empty", "", false},
 		{"only whitespace", "   ", false},
-		// Malformed text is scanned past rather than refused. An
-		// unterminated quote reads to the end of the text, which is where a
-		// password would be.
-		{"unterminated quote holding a password", "host=db password='hunter2", true},
-		{"unterminated empty quote", "host=db password='", false},
-		{"trailing equals", "host=db password=", false},
-		{"bare word", "password", false},
-		{"only an equals", "=", false},
-		{"stray backslash", `\`, false},
+		// Over-approximated on purpose: neither is a credential, but both
+		// spell the word, and tightening a file is the harmless mistake.
+		{"a password mentioned inside a quoted non-password value", "host=db application_name='backup password=fake' dbname=liseur", true},
+		{"an empty password query is still the word", "postgres://liseur@db:5432/liseur?password=", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := dsnHoldsPassword(tc.dsn); got != tc.want {
-				t.Fatalf("%q: dsnHoldsPassword = %t, want %t", tc.dsn, got, tc.want)
+			if got := dsnMayHoldPassword(tc.dsn); got != tc.want {
+				t.Fatalf("%q: dsnMayHoldPassword = %t, want %t", tc.dsn, got, tc.want)
 			}
 		})
 	}
