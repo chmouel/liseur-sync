@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -73,3 +74,70 @@ func orValue(s, empty string) string {
 // enough to reach somebody by whatever channel is convenient and short
 // enough that a forgotten code is not a standing account.
 const inviteTTL = 7 * 24 * time.Hour
+
+// folderKindOrder is the order folder kinds are shown in: the ordinary
+// case first, then the one that is somebody's Calibre database.
+var folderKindOrder = []string{"plain", "calibre"}
+
+// bookStatusOrder is the two states a catalogued book can be in.
+var bookStatusOrder = []string{"active", "missing"}
+
+// countRow is one labelled number on the overview.
+type countRow struct {
+	Label string
+	Count int
+}
+
+// countRows lists the known keys first, in the order given, then
+// anything else the database holds — so a value added later shows up as
+// a number rather than disappearing.
+func countRows(counts map[string]int, order []string) []countRow {
+	seen := map[string]bool{}
+	out := make([]countRow, 0, len(counts))
+	add := func(key string) {
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, countRow{Label: key, Count: counts[key]})
+	}
+	for _, key := range order {
+		add(key)
+	}
+	extra := make([]string, 0, len(counts))
+	for key := range counts {
+		if !seen[key] {
+			extra = append(extra, key)
+		}
+	}
+	slices.Sort(extra)
+	for _, key := range extra {
+		add(key)
+	}
+	return out
+}
+
+// folderKindLabel and bookStatusLabel say what a count is counting in the
+// words the page uses elsewhere, and fall back to the key itself so a
+// value added later shows up as a number rather than disappearing.
+func folderKindLabel(key string) string {
+	switch key {
+	case "plain":
+		return "Plain folders"
+	case "calibre":
+		return "Calibre folders"
+	default:
+		return key
+	}
+}
+
+func bookStatusLabel(key string) string {
+	switch key {
+	case "active":
+		return "Active books"
+	case "missing":
+		return "Missing books"
+	default:
+		return key
+	}
+}

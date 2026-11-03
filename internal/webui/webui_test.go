@@ -670,15 +670,19 @@ func TestAdminOverview(t *testing.T) {
 			t.Fatalf("overview is missing %q", want)
 		}
 	}
-	// Nested navigation reaches every page of the section.
+	// Nested navigation reaches every page of the section, and no page
+	// that no longer exists is advertised.
 	for _, want := range []string{
 		`settings?section=admin&amp;view=users`,
 		`settings?section=admin&amp;view=folders`,
-		`settings?section=admin&amp;view=maintenance`,
+		`settings?section=admin&amp;view=mirror`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("subnav is missing %s", want)
 		}
+	}
+	if strings.Contains(body, "view=maintenance") {
+		t.Fatal("the subnav still advertises the removed Maintenance page")
 	}
 	if strings.Contains(body, adminTestDatabaseURL) ||
 		strings.Contains(strings.ToLower(body), "password=") {

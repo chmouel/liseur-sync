@@ -1409,6 +1409,23 @@ details.setup-guide[open] > summary::before { content: "−"; }
 details.setup-guide[open] > summary { margin-bottom: .35rem; }
 details.setup-guide > p { font-size: .87rem; max-width: 65ch; margin: .45rem 0; }
 
+/* A card that holds several kinds of thing (a user's devices, a user's
+   security controls) separates them with a heading that carries the rule
+   rather than a card apiece. */
+.card .card-section {
+	margin: 1.8rem 0 .7rem; padding-top: 1.3rem;
+	border-top: 1px solid var(--line-soft); color: var(--ink);
+}
+
+/* The destructive controls are readable as such before they are opened. */
+details.danger-zone > summary { color: var(--danger); }
+details.danger-zone > summary::before { color: var(--danger); }
+
+.admin-jump { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; }
+.admin-jump li { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.admin-jump a { font-weight: 600; }
+.admin-jump .muted { font-size: .85rem; }
+
 .card.adapter-disabled {
 	padding: 1rem 1.4rem;
 	background: var(--surface-2); border-color: var(--line-soft);
