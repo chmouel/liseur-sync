@@ -257,6 +257,37 @@ func TestUpdateMirrorsRepairsABrokenTableBesideAValidList(t *testing.T) {
 	}
 }
 
+// TestUpdateMirrorsRepairsABrokenTableEvenWhenNothingLooksChanged. The
+// decode of a file that does not parse fails part-way, so the entry it
+// hands back is the defaults plus whichever keys the decoder reached — an
+// invalid timeout leaves a default beside it. A form submitting the entry
+// the file already describes can therefore be compared against exactly
+// itself, and a guard that only rewrites a table the caller changed skips
+// the repair and reports success over a file the next start refuses. The
+// table is rewritten and proved whether or not the two look alike.
+func TestUpdateMirrorsRepairsABrokenTableEvenWhenNothingLooksChanged(t *testing.T) {
+	// Every intact key spells the default it would take anyway, so the
+	// partial decode is the same entry however far it got.
+	path := writeMirrorConfig(t, "insecure_http = true\n\n"+
+		"[mirror]\nenabled = false\nprotocol = \"kosync\"\nname = \"peer\"\n"+
+		"device_id = \"liseur-sync\"\npoll_interval = \"5m\"\n"+
+		"resolve_retry_interval = \"24h\"\nactive_days = 30\n"+
+		"timeout = \"soon\"\n")
+	if _, err := ReadMirrors(path); err == nil {
+		t.Fatal("the broken file was read as one that parses")
+	}
+	if err := UpdateMirrors(path, setLegacy(Default().Mirror)); err != nil {
+		t.Fatalf("the repair was refused: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("a save reported success and left a file the next start refuses: %v", err)
+	}
+	if loaded.Mirror.Name != "peer" || loaded.Mirror.Timeout != Default().Mirror.Timeout {
+		t.Fatalf("the repaired table is not the entry that was saved: %+v", loaded.Mirror)
+	}
+}
+
 // TestUpdateMirrorsRefusesARepairThatDuplicatesAPreservedEntry. The
 // [mirror] table is repaired while the list's bytes are left alone, so the
 // entry being written is proved against a set the broken file could not

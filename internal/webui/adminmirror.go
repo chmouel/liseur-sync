@@ -46,15 +46,31 @@ func mirrorProtocolLabel(protocol string) string {
 // mirrorCleanURL is the address as the page shows it: a scheme, a host
 // and a path, never with the credential somebody pasted into it. The
 // validator refuses those, so this is only for showing a URL it has not
-// seen yet.
+// seen yet; a value it could not read shows as nothing rather than as
+// text nobody has looked at.
 func mirrorCleanURL(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
-		return strings.TrimSpace(raw)
+		return ""
 	}
 	u.User = nil
 	u.RawQuery, u.Fragment = "", ""
 	return u.String()
+}
+
+// mirrorRootKey is an address normalised for comparison only: the file may
+// spell one root with whitespace or an upper-case scheme, which validation
+// accepts while storing its own spelling. Two entries are the same root
+// when their keys are equal, and a value that does not read as an address
+// has no key to compare.
+func mirrorRootKey(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	return config.MirrorRoot(u.String())
 }
 
 // mirrorHasCredential reports whether a credential for the configured
@@ -181,6 +197,9 @@ func mirrorEditViewFor(m config.MirrorConfig, legacy bool, original string) *mir
 	// normalisation validation applies, done before the lookup.
 	m.Name = strings.TrimSpace(m.Name)
 	m.Protocol = strings.ToLower(strings.TrimSpace(m.Protocol))
+	// A URL the file holds but validation has not accepted yet may carry
+	// a credential, and the form has no field that could show one back.
+	m.BaseURL = mirrorCleanURL(m.BaseURL)
 	v := &mirrorEditView{
 		Config:            m,
 		Original:          original,
@@ -270,13 +289,19 @@ func (s *Server) mirrorCandidate(f config.MirrorFile) (config.Config, error) {
 //
 // The spelling is not decoration: validation records it to recognise
 // cursors an earlier build folded with the slashes still on, so cleaning
-// an address nobody edited would strand that cursor.
+// an address nobody edited would strand that cursor. Validation accepts
+// spellings of its own (the whitespace around an address, an upper-case
+// scheme), so what is compared is the root the two spellings name.
 func adoptMirrorSettings(f *config.MirrorFile, c config.Config) {
 	adopt := func(dst *config.MirrorConfig, src config.MirrorConfig) {
 		key, password, baseURL := dst.RemoteKey, dst.RemotePassword, dst.BaseURL
 		*dst = src
 		dst.RemoteKey, dst.RemotePassword = key, password
-		if baseURL != "" && config.MirrorRoot(baseURL) == dst.BaseURL {
+		// Only the entry's own spelling is kept back, and only when it
+		// names the root validation accepted: an address an
+		// administrator edited is the one that gets validated and
+		// written.
+		if root := mirrorRootKey(baseURL); root != "" && root == mirrorRootKey(dst.BaseURL) {
 			dst.BaseURL = baseURL
 		}
 	}

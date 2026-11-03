@@ -1070,3 +1070,198 @@ timeout = "20s"
 		t.Fatalf("the cursor still folds the address the old way: %q", cur.PeerIdentity)
 	}
 }
+
+// TestSavingAnUnrelatedMirrorLeavesAnOddSpellingAsWritten. Validation
+// trims an address and lower-cases its scheme, so the spelling a file may
+// hold and the spelling validation stores are two different strings naming
+// one root. A cursor an earlier build left is folded from the text the file
+// held, so an entry nobody edited keeps that text, whitespace and case
+// included — which means the comparison has to be of roots, not of
+// spellings.
+func TestSavingAnUnrelatedMirrorLeavesAnOddSpellingAsWritten(t *testing.T) {
+	spellings := map[string]func(raw string) string{
+		"surrounding whitespace": func(raw string) string { return "  " + raw + "///  " },
+		"upper-case scheme": func(raw string) string {
+			return "HTTP://" + strings.TrimPrefix(raw, "http://") + "/sync///"
+		},
+	}
+	for name, spell := range spellings {
+		t.Run(name, func(t *testing.T) {
+			peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.HasPrefix(r.URL.Path, "/syncs/progress/") {
+					_, _ = w.Write([]byte(`{}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"authorized":"OK"}`))
+			}))
+			t.Cleanup(peer.Close)
+
+			typed := spell(peer.URL)
+			ts, cookie, path, _ := mirrorAdminWithFile(t, `insecure_http = true
+
+[mirror]
+enabled = true
+protocol = "kosync"
+name = "peer"
+base_url = "`+typed+`"
+account = "alice"
+remote_user = "reader"
+remote_key = "0123456789abcdef0123456789abcdef"
+device_id = "liseur-sync"
+poll_interval = "5m"
+active_days = 30
+timeout = "20s"
+
+[[mirrors]]
+enabled = false
+name = "kobo"
+base_url = "`+typed+`"
+account = "alice"
+remote_user = "reader2"
+device_id = "liseur-sync"
+`)
+
+			form := mirrorForm(addForm(t, ts, cookie))
+			form.Set("name", "third")
+			form.Set("protocol", config.ProtocolKosync)
+			form.Set("base_url", "https://third.example.com/sync")
+			form.Set("account", "alice")
+			form.Set("remote_user", "reader3")
+			form.Set("device_id", "liseur-sync")
+			if _, body := postForm(t, ts, cookie, "/ui/admin/mirror", form); !strings.Contains(body, "Mirror saved") {
+				t.Fatalf("the unrelated entry was not saved:\n%s", body)
+			}
+
+			saved, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(saved), `base_url = "`+typed+`"`); got != 2 {
+				t.Fatalf("a save rewrote %d of the 2 addresses nobody edited:\n%s", 2-got, saved)
+			}
+
+			loaded, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("the saved file does not load: %v", err)
+			}
+			// The identity the old build folded from this text: trimmed,
+			// re-written by the URL parser, then a slash off for
+			// validation and another for the fold.
+			want := func(raw string) string {
+				u, err := url.Parse(strings.TrimSpace(raw))
+				if err != nil {
+					t.Fatalf("the test's address does not parse: %v", err)
+				}
+				return strings.TrimSuffix(u.String(), "/")
+			}
+			if got, want := loaded.Mirror.LegacyPeerBaseURL(), want(typed); got != want {
+				t.Fatalf("the next start folds %q, the old build folded %q", got, want)
+			}
+			if got, want := loaded.Mirrors[0].LegacyPeerBaseURL(), want(typed); got != want {
+				t.Fatalf("the list entry's next start folds %q, the old build folded %q", got, want)
+			}
+		})
+	}
+}
+
+// TestAnAddressAnAdministratorEditedIsTheOneWritten. Keeping an entry's
+// own spelling is only ever about the entry nobody touched: a save that
+// changes the root writes the address the form submitted, and validation
+// still has the last word on it.
+func TestAnAddressAnAdministratorEditedIsTheOneWritten(t *testing.T) {
+	ts, cookie, path, _ := mirrorAdminWithFile(t, singleEntryFile)
+	peer := mirrorTestServer(t, http.StatusOK)
+	form := mirrorForm(addForm(t, ts, cookie))
+	form.Set("enabled", "on")
+	form.Set("original", "peer")
+	form.Set("legacy", "1")
+	form.Set("protocol", config.ProtocolKosync)
+	form.Set("base_url", peer.URL+"/other")
+	form.Set("account", "alice")
+	form.Set("remote_user", "reader")
+	form.Set("device_id", "liseur-sync")
+	if _, body := postForm(t, ts, cookie, "/ui/admin/mirror", form); !strings.Contains(body, "Mirror saved") {
+		t.Fatalf("the edited entry was not saved:\n%s", body)
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), `base_url = "`+peer.URL+`/other"`) {
+		t.Fatalf("the address the administrator typed was not written:\n%s", saved)
+	}
+
+	// And an address validation refuses is not written for the sake of
+	// whatever spelling the file held before it.
+	bad := mirrorForm(addForm(t, ts, cookie))
+	bad.Set("enabled", "on")
+	bad.Set("original", "peer")
+	bad.Set("legacy", "1")
+	bad.Set("protocol", config.ProtocolKosync)
+	bad.Set("base_url", peer.URL+"/other?token=abc")
+	bad.Set("account", "alice")
+	bad.Set("remote_user", "reader")
+	bad.Set("device_id", "liseur-sync")
+	if _, body := postForm(t, ts, cookie, "/ui/admin/mirror", bad); !strings.Contains(body, "must not contain a query string") {
+		t.Fatalf("an address validation refuses was accepted:\n%s", body)
+	}
+	if after, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if string(after) != string(saved) {
+		t.Fatalf("the refused address changed the file:\n%s", after)
+	}
+}
+
+// TestThePageNeverEchoesAnAddressItCannotShow. The page reads the file, not
+// the configuration this process validated, so it can hold an address
+// validation would refuse: one carrying a credential, or one that is not an
+// address at all. Neither the list nor the form may render such a value as
+// written.
+func TestThePageNeverEchoesAnAddressItCannotShow(t *testing.T) {
+	ts, cookie, _, _ := mirrorAdminWithFile(t, `insecure_http = true
+
+[mirror]
+enabled = false
+protocol = "kosync"
+name = "peer"
+base_url = "https://user:pw@peer.example/sync?token=abc#frag"
+account = "alice"
+remote_user = "reader"
+remote_key = "0123456789abcdef0123456789abcdef"
+device_id = "liseur-sync"
+
+[[mirrors]]
+enabled = false
+name = "nohost"
+base_url = "kobo.example/sync"
+
+[[mirrors]]
+enabled = false
+name = "unreadable"
+base_url = "http://[::1"
+`)
+	for _, path := range []string{
+		"/ui/settings?section=admin&view=mirror",
+		"/ui/settings?section=admin&view=mirror&mirror=peer",
+		"/ui/settings?section=admin&view=mirror&mirror=nohost",
+		"/ui/settings?section=admin&view=mirror&mirror=unreadable",
+	} {
+		_, page := page(t, ts, cookie, path)
+		for _, never := range []string{"user:pw", "token=abc", "#frag",
+			"kobo.example/sync", "http://[::1"} {
+			if strings.Contains(page, never) {
+				t.Fatalf("%s renders %q:\n%s", path, never, page)
+			}
+		}
+	}
+	// The address validation can name is still shown, and the ones it
+	// cannot are shown as empty rather than as nothing at all.
+	_, page := page(t, ts, cookie, "/ui/settings?section=admin&view=mirror")
+	if !strings.Contains(page, "https://peer.example/sync") {
+		t.Fatalf("the address the page can show is missing:\n%s", page)
+	}
+	if got := strings.Count(page, "<td><code></code></td>"); got != 2 {
+		t.Fatalf("%d of the 2 unreadable addresses render as empty:\n%s", got, page)
+	}
+}
