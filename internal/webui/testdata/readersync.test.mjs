@@ -41,6 +41,18 @@ test("a derived edition does not move a kosync op into another group", () => {
   assert.equal(maxima[0].op_id, "x3-later");
 });
 
+test("a reread peak refreshes the whole derived payload in both directions", () => {
+  const plain = { op_id: "x3", work_id: "work", device_id: "x3", seq: "8",
+    progression: 0.7, origin_alias: "partial-md5:abc", foreign_pos: "/body/DocFragment[1]/body/p[1]/text().0" };
+  const derived = { ...plain, edition_sha: "catalog", derived: { from: "kosync-xpath" },
+    locator: { href: "chapter.xhtml", locations: { liseurAnchor: 1, cssSelector: "#passage" }, text: { highlight: "Tail" } } };
+  const refreshed = mergeFurthest([plain], [derived], "work");
+  assert.deepEqual(refreshed, [derived]);
+  assert.deepEqual(mergeFurthest(refreshed, [plain], "work"), [plain]);
+  derived.locator.text.highlight = "mutated";
+  assert.equal(refreshed[0].locator.text.highlight, "Tail");
+});
+
 test("furthest floor filters forgotten maxima and matches op_id sequences", () => {
   const forgotten = { op_id: "forgotten-98", work_id: "work", device_id: "web", seq: 24948, progression: 0.9831 };
   const unseqLocal = { op_id: "forgotten-98", work_id: "work", device_id: "web", progression: 0.9831 };
