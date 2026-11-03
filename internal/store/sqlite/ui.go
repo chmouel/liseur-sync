@@ -130,7 +130,7 @@ func (s *Store) RevokeInvite(ctx context.Context, userID, inviteID string) error
 
 func (s *Store) ListKosyncDevices(ctx context.Context, userID string) ([]store.KosyncDevice, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT user_id, device_slot, key_sha256, label, revoked_at
+		`SELECT user_id, device_slot, key_sha256, label, revoked_at, measured_sessions_from
 		 FROM kosync_devices WHERE user_id = ? ORDER BY device_slot`, userID)
 	if err != nil {
 		return nil, err
@@ -139,9 +139,16 @@ func (s *Store) ListKosyncDevices(ctx context.Context, userID string) ([]store.K
 	var out []store.KosyncDevice
 	for rows.Next() {
 		var d store.KosyncDevice
-		var revoked sql.NullString
-		if err := rows.Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &revoked); err != nil {
+		var revoked, measured sql.NullString
+		if err := rows.Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &revoked, &measured); err != nil {
 			return nil, err
+		}
+		if measured.Valid {
+			t, err := parseTime(measured.String)
+			if err != nil {
+				return nil, err
+			}
+			d.MeasuredSessionsFrom = &t
 		}
 		if revoked.Valid {
 			t, err := parseTime(revoked.String)

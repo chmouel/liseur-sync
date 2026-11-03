@@ -97,7 +97,7 @@ func (s *Store) RevokeInvite(ctx context.Context, userID, inviteID string) error
 
 func (s *Store) ListKosyncDevices(ctx context.Context, userID string) ([]store.KosyncDevice, error) {
 	rows, err := s.db.QueryContext(ctx, q(
-		`SELECT user_id, device_slot, key_sha256, label, revoked_at
+		`SELECT user_id, device_slot, key_sha256, label, revoked_at, measured_sessions_from
 		 FROM kosync_devices WHERE user_id = ? ORDER BY device_slot`), userID)
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (s *Store) ListKosyncDevices(ctx context.Context, userID string) ([]store.K
 	var out []store.KosyncDevice
 	for rows.Next() {
 		var d store.KosyncDevice
-		if err := rows.Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &d.RevokedAt); err != nil {
+		if err := rows.Scan(&d.UserID, &d.DeviceSlot, &d.KeySHA256, &d.Label, &d.RevokedAt, &d.MeasuredSessionsFrom); err != nil {
 			return nil, err
 		}
 		out = append(out, d)

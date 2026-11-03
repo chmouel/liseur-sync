@@ -1710,11 +1710,59 @@ reader receives as an exact locator for the same passage (see
 [Pulling](#pulling)), and a pull from CrossPoint gets an xpointer back
 for a position a Liseur reader wrote. Both need the reader to hold the
 very file the catalog serves, so download books to it through OPDS. A
-copy converted or rewritten on the way (Calibre's send-to-device can do
-this) has another fingerprint, so its positions land on a pending work
+copy converted or rewritten on the way (including CrossPoint File
+Transfer's Optimize EPUB or Calibre's send-to-device) has another
+fingerprint, so its positions land on a pending work
 of their own: they sync with other CrossPoint and KOReader devices
 holding the same copy, and never reach a Liseur reader. Clippings
 and CrossPoint's layout hints in `position` are not synced.
+
+### Measured reading statistics
+
+CrossPoint firmware with the `reader.session` plugin event can report counted
+reading time without a firmware change. Position sync alone supplies only
+coarse estimates. Confirm that your firmware supports this event before
+activating measured statistics; older firmware with only `reader.exit` cannot
+send these sessions.
+
+On the server's Devices page, open **CrossPoint reading statistics**, enter the
+slot's existing KoSync pairing password, and download its configured plugin.
+Use the original password/code entered on the X3, not the account password or
+a fresh pairing code. Copy the ZIP's `liseur-stats` directory into `/plugins`
+on the SD card. Enable Settings → Connectivity → Plugins, refresh or restart
+plugins, then close and reopen the book for a fresh session. Keep normal
+CrossPoint Sync enabled, using Binary matching and the original EPUB.
+
+Downloading activates measured statistics for that slot. Its older estimates
+stay; progress uploads received after activation no longer produce estimates.
+Queued sessions that started before activation are acknowledged without
+counting. Re-downloading keeps the original activation time. Disabling the
+plugin or losing connectivity does not restore inference, so install it when
+you activate. The ZIP and `config.json` contain a password-equivalent device
+credential: keep them private. Revoking the slot revokes both uploads.
+
+The plugin subscribes only to `reader.session`, with `connect: true`, and posts
+to `POST /adapter/kosync/sessions` using the existing `x-auth-user` and
+`x-auth-key` headers. Its numeric fields are strings from the firmware. The
+request and response are specified in [OpenAPI](openapi.yaml). Event IDs are
+stable across retries: an identical payload is acknowledged once, while a
+changed payload returns `409`. The extension stores native sessions, so the
+usual statistics, rollups and measured pace include them without another
+statistics pipeline.
+
+Only successful ordinary forward turns count: each dwell contributes between
+2 seconds and 30 minutes, and a summary needs at least 10 counted seconds.
+Backward turns, chapter skips and failed turns do not count. The duration is
+counted reading time; it does not claim to measure all time spent looking at
+the device. `end_time` is compact active time, not the last interaction time.
+The server stores `event.ts` as the session end, so the account-local emission
+day receives its counted duration even when there were idle gaps.
+
+Events queue offline and upload when connected. At sleep, firmware may connect
+using saved Wi-Fi if the battery is at least 20%, within its connection
+deadline. The per-plugin outbox is only 4KB and may be dropped wholesale when
+full; delivery is best effort during extended offline reading. No historical
+reading is invented to fill missing events.
 
 ## Errors and limits
 

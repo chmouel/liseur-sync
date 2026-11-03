@@ -120,7 +120,10 @@ func (s *Store) AppendInferredSession(ctx context.Context, userID string, group 
 	for _, expected := range group.Ops {
 		current, err := scanOp(tx.QueryRowContext(ctx,
 			`SELECT `+opCols+` FROM ops
-			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL`,
+			 WHERE user_id = ? AND op_id = ? AND inferred_session_id IS NULL
+ AND NOT EXISTS (SELECT 1 FROM kosync_devices kd
+                 WHERE kd.user_id = ops.user_id AND ops.device_id = 'kosync:' || kd.device_slot
+                   AND kd.measured_sessions_from IS NOT NULL AND ops.received_at >= kd.measured_sessions_from)`,
 			userID, expected.OpID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return store.ErrConflict

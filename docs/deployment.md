@@ -1,5 +1,15 @@
 # Deploying liseur-sync
 
+## CrossPoint measured statistics
+
+ADR-0060 adds a nullable activation cutoff to kosync slots and durable event
+receipts. Upgrading alone leaves existing credentials, positions, sessions
+and inference unchanged. Downloading a configured plugin from Devices opts
+one slot into measured statistics permanently. Install it on firmware with
+`reader.session` support and reopen the book immediately afterward: progress
+received after activation no longer produces estimates, even if the plugin
+is absent. Older estimates remain. See [integration setup](integrating.md#measured-reading-statistics).
+
 ## Upgrading furthest-position retention
 
 ADR-0051 adds an index over position ownership and progression (migration 17

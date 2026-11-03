@@ -435,6 +435,9 @@ func (s *Store) PendingInferenceOps(ctx context.Context, userID string) ([]store
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT `+opCols+` FROM ops
 		 WHERE user_id = ? AND origin = 'kosync' AND inferred_session_id IS NULL
+ AND NOT EXISTS (SELECT 1 FROM kosync_devices kd
+                 WHERE kd.user_id = ops.user_id AND ops.device_id = 'kosync:' || kd.device_slot
+                   AND kd.measured_sessions_from IS NOT NULL AND ops.received_at >= kd.measured_sessions_from)
 		 ORDER BY device_id, work_id, received_at, seq`),
 		userID)
 	if err != nil {
@@ -467,7 +470,9 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
 	rows, err := tx.QueryContext(ctx, q(
 		`DELETE FROM ops
 		 WHERE user_id = ? AND received_at < ?
-		 AND (origin <> 'kosync' OR inferred_session_id IS NOT NULL)
+		 AND (origin <> 'kosync' OR inferred_session_id IS NOT NULL OR EXISTS (SELECT 1 FROM kosync_devices kd
+                 WHERE kd.user_id = ops.user_id AND ops.device_id = 'kosync:' || kd.device_slot
+                   AND kd.measured_sessions_from IS NOT NULL AND ops.received_at >= kd.measured_sessions_from))
 		 AND seq NOT IN (
 		     SELECT MAX(seq) FROM ops o2
 		     WHERE o2.user_id = ops.user_id AND o2.received_at < ?
