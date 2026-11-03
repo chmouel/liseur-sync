@@ -6,19 +6,33 @@ import (
 	"errors"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/epub"
 )
 
-// Book is the part of an EPUB a translation needs: the spine, and the
-// bytes of a resource in it.
+const (
+	maxCachedChapters = 4
+	// Charge uncompressed XHTML bytes, rather than compressed archive bytes
+	maxCachedChapterBytes = 4 << 20
+)
+
+// Book caches parsed chapters for one request and is not safe for concurrent use.
 type Book struct {
 	// spine holds archive paths, unescaped, in package order. It keeps
 	// linear="no" items, which Readium's reading order drops: a
 	// DocFragment index counts every itemref.
-	spine []string
-	read  func(ctx context.Context, name string) ([]byte, error)
+	spine         []string
+	read          func(ctx context.Context, name string) ([]byte, error)
+	documents     []cachedChapter
+	documentBytes int
+}
+
+type cachedChapter struct {
+	name  string
+	doc   *Document
+	bytes int
 }
 
 // Locator is the part of a Readium locator a translation fills in.
@@ -74,11 +88,33 @@ func parseSpine(opf []byte, opfPath string) ([]string, error) {
 }
 
 func (b *Book) document(ctx context.Context, i int) (*Document, error) {
-	data, err := b.read(ctx, b.spine[i])
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	name := b.spine[i]
+	for i, chapter := range b.documents {
+		if chapter.name == name {
+			b.documents = append(slices.Delete(b.documents, i, i+1), chapter)
+			return chapter.doc, nil
+		}
+	}
+	data, err := b.read(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return ParseDocument(ctx, data)
+	doc, err := ParseDocument(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) <= maxCachedChapterBytes {
+		for len(b.documents) >= maxCachedChapters || b.documentBytes+len(data) > maxCachedChapterBytes {
+			b.documentBytes -= b.documents[0].bytes
+			b.documents = slices.Delete(b.documents, 0, 1)
+		}
+		b.documents = append(b.documents, cachedChapter{name: name, doc: doc, bytes: len(data)})
+		b.documentBytes += len(data)
+	}
+	return doc, nil
 }
 
 // LocatorFor translates a CRe XPath into a Liseur anchored locator.
