@@ -65,12 +65,16 @@ the same rules as the mirror's, and startup keeps reading the file.**
   and comments. The result is decoded, compared against the original
   with the section cleared, and held to the environment a start reads —
   `insecure_http` included — but to the audiobookshelf rules only. The
-  write follows a symlink, keeps the file's permissions, and renames
-  into place. A file that does not parse is refused rather than
-  repaired, and the refusal names its line and column without repeating
-  the source literal the decoder quoted. Mirror and Audiobookshelf
-  saves serialise on one lock, so two tabs cannot each rewrite a body
-  read before the other wrote.
+  write follows a symlink and renames into place. Its mode follows what
+  it is about to hold: a file with a stored credential in it is made
+  owner-only (`0600`), a secretless one keeps the permissions it had,
+  and a new file is created `0600` — including when the save found
+  nothing to change and only tightened a credential the file already
+  held. A file that does not parse is refused rather than repaired, and
+  the refusal names its line and column without repeating the source
+  literal the decoder quoted. Mirror and Audiobookshelf saves serialise
+  on one lock, so two tabs cannot each rewrite a body read before the
+  other wrote.
 - **No hot reload.** The page reads the file, so a saved setting can be
   edited while the running process keeps what it booted with; it says
   when the saved configuration differs from the running one.
