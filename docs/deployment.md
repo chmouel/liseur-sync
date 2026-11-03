@@ -999,9 +999,12 @@ configuration or the new one and never a half-written mix.
 owner-only (`0600`).** That covers the mirror's `remote_key` and
 `remote_password` (in `[mirror]` and in any `[[mirrors]]` table, enabled
 or not), `[audiobookshelf] api_key` and `stt_api_key`, and a
-`database.url` that is a DSN carrying a password — in either shape libpq
+`database.url` that may carry a password — in either shape libpq
 accepts, so `sslpassword`, a password in the URL's userinfo and a
-keyword/value string with space around the `=` all count. It also covers
+keyword/value string with any spacing or quoting all count. That last
+check is conservative on purpose: a `database.url` that merely spells
+the word `password` is protected too, because missing one would leave a
+secret readable and protecting one only costs a `chmod`. It also covers
 a password in the userinfo of any address the file holds: a mirror's
 `base_url` (a disabled entry is never validated), or `[audiobookshelf]`
 `base_url` or `stt_url`, or `reader_origin`. A username with no password

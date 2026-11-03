@@ -417,8 +417,9 @@ type credentialMirror struct {
 // validation skips its URL, and a `https://alice:hunter2@peer` left in one
 // is a password on disk whether or not it is ever dialled: a mirror's
 // base_url, an audiobookshelf base_url or stt_url, and a userinfo password
-// in an origin. database.url is the same question in either shape libpq
-// accepts, where `password` and `sslpassword` both carry a secret; a sqlite
+// in an origin. database.url is the same question, answered conservatively:
+// the word `password` anywhere, or a password in the authority's userinfo,
+// counts (`password` and `sslpassword` both carry a secret), and a sqlite
 // file path is not one.
 //
 // Text that does not decode tells nothing, and the answer then is an error
@@ -445,7 +446,7 @@ func configFileHoldsCredential(rendered string) (bool, error) {
 			return true, nil
 		}
 	}
-	return dsnHoldsPassword(probe.Database.URL), nil
+	return dsnMayHoldPassword(probe.Database.URL), nil
 }
 
 // urlHoldsUserPassword reports whether a stored address carries a password
@@ -465,118 +466,42 @@ func urlHoldsUserPassword(raw string) bool {
 	return ok && password != ""
 }
 
-// dsnHoldsPassword reports whether a database.url carries a password. Both
-// shapes libpq reads are handled, and the driver is not consulted: a
-// password in the value is on disk whatever ends up reading it.
-func dsnHoldsPassword(raw string) bool {
+// dsnMayHoldPassword reports whether a database.url may carry a password.
+// The driver is not consulted: a password in the value is on disk whatever
+// ends up reading it.
+//
+// It is a deliberate over-approximation of what libpq accepts. Chasing that
+// grammar means under-detecting something — an apostrophe that only quotes
+// when it opens a value, a socket URL `net/url` refuses, a `password=ab;cd`
+// query `u.Query()` drops — and an under-detection leaves a secret
+// world-readable. Over-detecting only makes a file owner-only, and undoing
+// that is one chmod, so the checks here stay string tests: the word
+// `password` anywhere (case-insensitive, so `sslpassword`, any spacing, any
+// quoting and either shape), or a URL authority whose userinfo holds a
+// non-empty password. A DSN that merely mentions `password` is tightened
+// too, which is the cost of never missing one.
+func dsnMayHoldPassword(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return false
 	}
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
-		if u.User != nil {
-			if password, ok := u.User.Password(); ok && password != "" {
-				return true
-			}
-		}
-		for key, values := range u.Query() {
-			if !strings.EqualFold(key, "password") && !strings.EqualFold(key, "sslpassword") {
-				continue
-			}
-			for _, value := range values {
-				if value != "" {
-					return true
-				}
-			}
-		}
-	}
-	// A keyword/value string needs its own reader: a value may be quoted
-	// and may hold anything, whitespace and `password=` included, so
-	// splitting on spaces both misses `host=db password = 'x'` and reads
-	// `application_name='backup password=fake'` as a credential.
-	return dsnKeywordValueHoldsPassword(raw)
-}
-
-// dsnKeywordValueHoldsPassword scans the keyword/value form of a libpq
-// connection string: pairs separated by whitespace, whitespace allowed
-// around the '=', a value either bare up to the next whitespace or
-// single-quoted with backslash escapes. Malformed text is scanned past,
-// never refused: this only ever answers whether a password is in there.
-func dsnKeywordValueHoldsPassword(raw string) bool {
-	for i := 0; i < len(raw); {
-		for i < len(raw) && isDSNSpace(raw[i]) {
-			i++
-		}
-		if i >= len(raw) {
-			return false
-		}
-		keyStart := i
-		for i < len(raw) && !isDSNSpace(raw[i]) && raw[i] != '=' {
-			i++
-		}
-		key := raw[keyStart:i]
-		for i < len(raw) && isDSNSpace(raw[i]) {
-			i++
-		}
-		if i >= len(raw) || raw[i] != '=' {
-			// A word with no value: a trailing keyword, or one that was
-			// never an assignment. The scan has moved past it.
-			continue
-		}
-		i++
-		for i < len(raw) && isDSNSpace(raw[i]) {
-			i++
-		}
-		var value string
-		value, i = dsnValueAt(raw, i)
-		if value != "" && (strings.EqualFold(key, "password") || strings.EqualFold(key, "sslpassword")) {
-			return true
-		}
-	}
-	return false
-}
-
-// dsnValueAt reads one value starting at i and returns it with the index
-// just past it. An unterminated quote ends at the end of the text, which
-// is as far as there is anything to read.
-func dsnValueAt(raw string, i int) (string, int) {
-	var b strings.Builder
-	for i < len(raw) && !isDSNSpace(raw[i]) {
-		switch {
-		case raw[i] == '\\' && i+1 < len(raw):
-			b.WriteByte(raw[i+1])
-			i += 2
-		case raw[i] == '\\':
-			// A backslash with nothing behind it.
-			i++
-		case raw[i] == '\'':
-			i++
-			for i < len(raw) && raw[i] != '\'' {
-				if raw[i] == '\\' && i+1 < len(raw) {
-					b.WriteByte(raw[i+1])
-					i += 2
-					continue
-				}
-				b.WriteByte(raw[i])
-				i++
-			}
-			if i < len(raw) {
-				i++
-			}
-		default:
-			b.WriteByte(raw[i])
-			i++
-		}
-	}
-	return b.String(), i
-}
-
-func isDSNSpace(c byte) bool {
-	switch c {
-	case ' ', '\t', '\n', '\r', '\v', '\f':
+	if strings.Contains(strings.ToLower(raw), "password") {
 		return true
 	}
-	return false
+	scheme := strings.Index(raw, "://")
+	if scheme < 0 {
+		return false
+	}
+	authority := raw[scheme+3:]
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		authority = authority[:end]
+	}
+	at := strings.LastIndexByte(authority, '@')
+	if at < 0 {
+		return false
+	}
+	colon := strings.LastIndexByte(authority[:at], ':')
+	return colon >= 0 && colon+1 < at
 }
 
 // tightenConfigCredentialMode makes a config file that already holds a

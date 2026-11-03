@@ -130,7 +130,11 @@ The details that are load-bearing:
   `[audiobookshelf]` key (which is trimmed), a password in the userinfo
   of any address the file holds — a disabled entry's `base_url`
   included, since validation skips it — or a password in a
-  `database.url` DSN, where `sslpassword` counts too. Text whose
+  `database.url` DSN, where `sslpassword` counts too. The DSN check is
+  deliberately conservative: a URL or keyword/value string that merely
+  spells the word `password` is treated as carrying one, because
+  missing a real password leaves it readable while the false positive
+  only makes the file owner-only. Text whose
   credential settings cannot be decoded is refused rather than reported
   secret-free: "cannot tell" is not "no". Comments inside a
   rewritten `[[mirrors]]` section are not preserved: the section is
