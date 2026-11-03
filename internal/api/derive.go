@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -19,20 +20,21 @@ type derivedJSON struct {
 	From string `json:"from"`
 }
 
-// locatorDeriver fills kosync ops with the Liseur locator of the word
-// their XPath names, for one response. It opens each book at most once
-// and closes them all in close.
+const maxDerivedEditions = 4
+
+// locatorDeriver owns a bounded, request-local cache of open editions.
 type locatorDeriver struct {
 	s      *Server
 	ctx    context.Context
 	userID string
-	books  map[string]*derivedEdition
-	files  []*os.File
+	books  []*derivedEdition
 }
 
 type derivedEdition struct {
+	md5  string
 	sha  string
 	book *xpointer.Book
+	file *os.File
 }
 
 // newLocatorDeriver is nil when the credential may not read book text.
@@ -41,16 +43,19 @@ func (s *Server) newLocatorDeriver(r *http.Request) *locatorDeriver {
 	if s.Files == nil || tok.UserID == "" || !tok.Scopes.Allows(store.ScopeLibraryRead) {
 		return nil
 	}
-	return &locatorDeriver{s: s, ctx: r.Context(), userID: tok.UserID, books: map[string]*derivedEdition{}}
+	return &locatorDeriver{s: s, ctx: r.Context(), userID: tok.UserID}
 }
 
 func (d *locatorDeriver) close() {
 	if d == nil {
 		return
 	}
-	for _, f := range d.files {
-		f.Close()
+	for _, ed := range d.books {
+		if ed.file != nil {
+			ed.file.Close()
+		}
 	}
+	d.books = nil
 }
 
 // op renders o, with a derived edition and locator when o is a kosync
@@ -100,10 +105,24 @@ func (d *locatorDeriver) op(o store.Op) opJSON {
 }
 
 func (d *locatorDeriver) edition(md5 string) *derivedEdition {
-	if ed, seen := d.books[md5]; seen {
-		return ed
+	for i, ed := range d.books {
+		if ed.md5 == md5 {
+			d.books = append(slices.Delete(d.books, i, i+1), ed)
+			if ed.book == nil {
+				return nil
+			}
+			return ed
+		}
 	}
-	d.books[md5] = nil
+	// Evict before opening, so even a cache miss stays within the descriptor budget
+	if len(d.books) == maxDerivedEditions {
+		if f := d.books[0].file; f != nil {
+			f.Close()
+		}
+		d.books = slices.Delete(d.books, 0, 1)
+	}
+	ed := &derivedEdition{md5: md5}
+	d.books = append(d.books, ed)
 	book, err := d.s.St.CatalogBookByPartialMD5(d.ctx, d.userID, md5)
 	if err != nil {
 		return nil
@@ -112,16 +131,16 @@ func (d *locatorDeriver) edition(md5 string) *derivedEdition {
 	if err != nil {
 		return nil
 	}
-	d.files = append(d.files, f)
 	pub, err := epub.OpenPublication(d.ctx, f, size, epub.DefaultLimits())
 	if err != nil {
+		f.Close()
 		return nil
 	}
 	b, err := xpointer.Open(d.ctx, pub)
 	if err != nil {
+		f.Close()
 		return nil
 	}
-	ed := &derivedEdition{sha: book.ContentSHA256, book: b}
-	d.books[md5] = ed
+	ed.sha, ed.book, ed.file = book.ContentSHA256, b, f
 	return ed
 }
