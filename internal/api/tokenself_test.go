@@ -323,3 +323,21 @@ func headRequest(t *testing.T, url, token string) headResult {
 	b, _ := io.ReadAll(resp.Body)
 	return headResult{code: resp.StatusCode, body: len(b)}
 }
+
+// TestReaderTokenNameIsReserved: the browser reader's name is how the
+// server picks its own credentials out of an account's token list, so a
+// token a person names that way would sit outside "revoke all tokens".
+func TestReaderTokenNameIsReserved(t *testing.T) {
+	url, _, _, login := tokenSelfFixture(t)
+	code, out := post(t, url+"/v1/tokens", login, map[string]any{
+		"name": auth.ReaderTokenName, "scopes": []string{"sync", "library-read"},
+	})
+	if code != http.StatusBadRequest || out["code"] != "reserved_name" {
+		t.Fatalf("reserved name: want 400 reserved_name, got %d %v", code, out)
+	}
+	if code, out = post(t, url+"/v1/tokens", login, map[string]any{
+		"name": "  " + auth.ReaderTokenName + " ", "scope": "sync",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("reserved name with padding: want 400, got %d %v", code, out)
+	}
+}

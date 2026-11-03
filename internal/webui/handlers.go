@@ -367,6 +367,10 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a sto
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
+	if auth.ReservedTokenName(name) {
+		http.Error(w, auth.ErrReservedTokenName.Error(), http.StatusBadRequest)
+		return
+	}
 	scopes, err := formScopes(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -464,7 +468,7 @@ func (s *Server) handleRevokeAllTokens(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	for _, t := range toks {
-		if t.Name == auth.ReaderTokenName || t.RevokedAt != nil {
+		if auth.IsReaderToken(t) || t.RevokedAt != nil {
 			continue
 		}
 		if err := s.St.RevokeToken(r.Context(), u.ID, t.ID); err != nil {

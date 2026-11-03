@@ -82,12 +82,21 @@ func TestActiveFiltersKeepOnlyLiveCredentials(t *testing.T) {
 // browsers reading here and the page has no row to show for it.
 func TestSplitReaderTokensDropsSignedOutBrowsers(t *testing.T) {
 	now := time.Now()
+	reader := func(id, device string) store.Token {
+		expires := now.Add(auth.ReaderTokenTTL)
+		return store.Token{ID: id, Name: auth.ReaderTokenName, DeviceID: device,
+			Scopes: store.ScopeSet{store.ScopeSync, store.ScopeLibraryRead}, CreatedAt: now, ExpiresAt: &expires}
+	}
+	live, dead := reader("reader-live", "live"), reader("reader-dead", "dead")
+	dead.RevokedAt = &now
 	mine, browsers := splitReaderTokens([]store.Token{
-		{ID: "reader-live", Name: auth.ReaderTokenName, DeviceID: "live"},
-		{ID: "reader-dead", Name: auth.ReaderTokenName, DeviceID: "dead", RevokedAt: &now},
+		live,
+		dead,
 		{ID: "api", Name: "Boox", DeviceID: "d1"},
+		// The name alone does not make a server credential.
+		{ID: "spoof", Name: auth.ReaderTokenName, DeviceID: "d-spoof", Scopes: store.ScopeSet{store.ScopeSync}},
 	})
-	if len(mine) != 1 || mine[0].ID != "api" {
+	if len(mine) != 2 || mine[0].ID != "api" || mine[1].ID != "spoof" {
 		t.Fatalf("mine = %+v", mine)
 	}
 	if len(browsers) != 1 || browsers[0].DeviceID != "live" {
