@@ -402,6 +402,17 @@ func (s *Server) handleUpdateTokenScopes(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	toks, err := s.St.ListTokens(r.Context(), u.ID)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	for _, t := range toks {
+		if t.ID == r.PathValue("id") && auth.ReservedTokenName(t.Name) {
+			http.Error(w, "the browser reader's token scopes cannot be changed", http.StatusConflict)
+			return
+		}
+	}
 	if err := s.Auth.CheckScopeGrant(r.Context(), u.ID, scopes); err != nil {
 		if errors.Is(err, auth.ErrAdminGrantRequiresAdmin) {
 			http.Error(w, err.Error(), http.StatusForbidden)
