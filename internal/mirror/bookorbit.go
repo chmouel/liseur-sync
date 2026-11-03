@@ -43,6 +43,8 @@ func BookOrbitProtocol(cfg config.MirrorConfig, log *slog.Logger) Protocol {
 
 func (b *bookOrbitPeer) Name() string { return config.ProtocolBookOrbit }
 
+func (b *bookOrbitPeer) carriesCFI() bool { return true }
+
 // Identity matters more here than on the KOReader path, because what
 // this protocol remembers about a peer is a small integer. A
 // remembered file id would still address *something* on a different
@@ -183,9 +185,13 @@ func (b *bookOrbitPeer) Push(
 // A CFI is the whole of the mark when there is one: it is long, exact
 // and reproduced verbatim, so two positions sharing one are the same
 // position. Failing that, an engine position is the next most exact
-// thing either side holds. The fraction is the last resort, rounded to
-// the place where a float that has been through a database and a JSON
-// number still compares equal.
+// thing either side holds, unless it is only the fraction written out:
+// a peer that has nowhere to keep an engine position hands the
+// percentage back as one, and counting that as a finer answer would
+// make every restamped round trip a different mark from the one it
+// answers. The fraction is the last resort, rounded to the place where
+// a float that has been through a database and a JSON number still
+// compares equal.
 //
 // The mark misjudging is cheap in both directions. A position the peer
 // rewrote is taken back once and then held off by the timestamp guard;
@@ -195,7 +201,7 @@ func placeMark(p Place) string {
 	switch {
 	case p.CFI != "":
 		return "cfi:" + p.CFI
-	case p.Foreign != "":
+	case p.Foreign != "" && exactForeignString(p.Foreign, p.Percentage):
 		// A KOReader position is exact in its own way, and two of them
 		// at the same percentage are two different places. Falling
 		// through to the fraction here would read a device's new

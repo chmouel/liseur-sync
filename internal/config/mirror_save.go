@@ -90,7 +90,7 @@ func ReadMirrors(path string) (MirrorFile, error) {
 	if err != nil {
 		return out, err
 	}
-	out.HasLegacy = meta.IsDefined("mirror")
+	out.HasLegacy = tableDefined(meta, "mirror")
 	for i := range out.List {
 		applyMirrorDefaults(&out.List[i])
 	}
@@ -207,7 +207,7 @@ func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest b
 	if err != nil {
 		return fmt.Errorf("rewritten config would not parse: %w", err)
 	}
-	got.HasLegacy = meta.IsDefined("mirror")
+	got.HasLegacy = tableDefined(meta, "mirror")
 	for i := range got.List {
 		applyMirrorDefaults(&got.List[i])
 	}
@@ -265,7 +265,7 @@ func validateRenderedMirrors(rendered string) error {
 	if err != nil {
 		return fmt.Errorf("rewritten config would not parse: %w", err)
 	}
-	c.mirrorDefined = meta.IsDefined("mirror")
+	c.mirrorDefined = tableDefined(meta, "mirror")
 	// The whole environment, not just the mirror variables: what an HTTP
 	// peer address is held against (LISEUR_INSECURE_HTTP) is part of it.
 	c.applyEnv()
@@ -334,7 +334,7 @@ func rewriteTable(body, name string, array bool, blocks []string) string {
 	placed := false
 	for i := 0; i < len(lines); i++ {
 		if table, ok := tableHeaderName(trimmedLine(lines[i])); ok &&
-			table == name && isArrayHeader(lines[i]) == array {
+			strings.EqualFold(table, name) && isArrayHeader(lines[i]) == array {
 			for i++; i < len(lines); i++ {
 				if _, ok := tableHeaderName(trimmedLine(lines[i])); ok {
 					i--
@@ -362,7 +362,7 @@ func rewriteTable(body, name string, array bool, blocks []string) string {
 func hasTable(body, name string, array bool) bool {
 	for _, line := range splitLines(body) {
 		if table, ok := tableHeaderName(trimmedLine(line)); ok &&
-			table == name && isArrayHeader(line) == array {
+			strings.EqualFold(table, name) && isArrayHeader(line) == array {
 			return true
 		}
 	}

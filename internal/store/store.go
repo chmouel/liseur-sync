@@ -2430,12 +2430,16 @@ type MirrorCursor struct {
 	// A protocol that caches nothing leaves it empty.
 	PeerIdentity string
 	// PushedMark is the content of the last position sent, for a peer
-	// whose replies carry no device id. Comparing it to what comes
-	// back is how such a peer's echo is recognised (ADR-0048); a
-	// protocol that names devices leaves it empty.
+	// whose replies carry no device id of ours — one that has none, or
+	// one reached by a route that restamps the write and drops it.
+	// Comparing it to what comes back is how such a peer's echo is
+	// recognised (ADR-0048). A protocol that names devices may leave
+	// it empty.
 	PushedMark string
-	// RemoteTS is the peer's timestamp on the last position taken from
-	// it, in unix seconds, which is the resolution kosync carries.
+	// RemoteTS is the peer's timestamp on the last position from it
+	// this side has accounted for, in unix seconds, which is the
+	// resolution kosync carries. It moves when that position is taken
+	// or answered with one of our own, never on a failure.
 	RemoteTS    int64
 	PulledAt    *time.Time
 	LastError   string

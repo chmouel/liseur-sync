@@ -38,10 +38,12 @@ func (k *kosyncPeer) Close(context.Context) {}
 // Pull maps a kosync position onto a Place. Both of the judgements a
 // Place carries are made here, because both are facts about kosync: an
 // echo is a reply stamped with the device id this server writes under,
-// and a reset is the synthetic start-of-book position a peer answers
-// with while a reading reset is outstanding.
+// or one whose content is what was last written here — a peer reached
+// through a route of its own may restamp the write and drop the device
+// with it — and a reset is the synthetic start-of-book position a peer
+// answers with while a reading reset is outstanding.
 func (k *kosyncPeer) Pull(
-	ctx context.Context, c store.MirrorCandidate, _ *store.MirrorCursor,
+	ctx context.Context, c store.MirrorCandidate, cur *store.MirrorCursor,
 ) (Place, error) {
 	p, err := k.client.Pull(ctx, c.Document)
 	if err != nil {
@@ -51,14 +53,24 @@ func (k *kosyncPeer) Pull(
 	if device == "" {
 		device = p.Device
 	}
-	return Place{
+	place := Place{
 		Percentage: p.Percentage,
 		Foreign:    p.Progress,
 		Device:     device,
 		At:         p.Time(),
-		Echo:       p.DeviceID == k.client.DeviceID(),
 		Reset:      p.IsReset(),
-	}, nil
+	}
+	place.Mark = placeMark(place)
+	place.Echo = p.DeviceID == k.client.DeviceID() ||
+		(cur.PushedMark != "" && place.Mark == cur.PushedMark)
+	if !place.Echo {
+		// The mark says what the peer holds because of us. It plainly
+		// holds something else now, so the mark is spent: keeping it
+		// would call a reader's return to that spot our own writing,
+		// months later, and refuse to follow them back to it.
+		cur.PushedMark = ""
+	}
+	return place, nil
 }
 
 // Push sends a position out. A CFI is dropped on the floor: kosync has
@@ -66,12 +78,18 @@ func (k *kosyncPeer) Pull(
 // fills in an empty progress string with the percentage, which is what
 // this server already answers its own non-CRe clients with.
 func (k *kosyncPeer) Push(
-	ctx context.Context, c store.MirrorCandidate, _ *store.MirrorCursor, p Place,
+	ctx context.Context, c store.MirrorCandidate, cur *store.MirrorCursor, p Place,
 ) error {
-	return k.client.Push(ctx, Position{
+	if err := k.client.Push(ctx, Position{
 		Document:   c.Document,
 		Progress:   p.Foreign,
 		Percentage: p.Percentage,
 		Timestamp:  p.At.UTC().Unix(),
-	})
+	}); err != nil {
+		return err
+	}
+	// What crossed, so the same content coming back can be told from
+	// news even when the peer's reply carries no device of ours.
+	cur.PushedMark = placeMark(Place{Percentage: p.Percentage, Foreign: p.Foreign})
+	return nil
 }

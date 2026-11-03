@@ -109,6 +109,16 @@ type Protocol interface {
 	Close(ctx context.Context)
 }
 
+// cfiCarrier is a protocol that can carry an EPUB CFI. Only the agreement
+// rule asks, because a peer with no field to put one in cannot be
+// withholding a finer locator.
+type cfiCarrier interface{ carriesCFI() bool }
+
+func protocolCarriesCFI(p Protocol) bool {
+	c, ok := p.(cfiCarrier)
+	return ok && c.carriesCFI()
+}
+
 // cfiFromLocator digs the EPUB CFI out of an op's locator, if it has
 // one.
 //
