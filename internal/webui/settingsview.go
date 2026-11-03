@@ -24,6 +24,8 @@ const (
 	settingsAdminUser     = "user"
 	settingsAdminFolders  = "folders"
 	settingsAdminMirror   = "mirror"
+
+	settingsAdminAudiobookshelf = "audiobookshelf"
 )
 
 const (
@@ -117,6 +119,8 @@ type settingsAdminView struct {
 	Kinds  []countRow
 	Books  []countRow
 	Mirror mirrorView
+
+	AudiobookshelfPanel audiobookshelfAdminView
 }
 
 type mirrorView struct {
@@ -345,7 +349,8 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 	case settingsAdmin:
 		view = r.URL.Query().Get("view")
 		switch view {
-		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror:
+		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror,
+			settingsAdminAudiobookshelf:
 		case settingsAdminUser:
 			userID = r.URL.Query().Get("user")
 			if userID == "" {
@@ -570,6 +575,12 @@ func (s *Server) settingsAdmin(
 			return err
 		}
 		v.Mirror = view
+	case settingsAdminAudiobookshelf:
+		users, err := s.St.ListUsersPage(r.Context(), "", 1000)
+		if err != nil {
+			return err
+		}
+		v.AudiobookshelfPanel = s.audiobookshelfView(users)
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {
@@ -581,6 +592,7 @@ func (s *Server) settingsAdmin(
 		if s.AudiobookRunner != nil {
 			v.Audiobookshelf = s.AudiobookRunner.Status()
 		}
+		v.Audiobookshelf.Enabled = s.Cfg.Audiobookshelf.Enabled
 		v.Build = buildinfo.Get()
 		v.Config = describeConfig(s.Cfg)
 		v.View = settingsAdminOverview
