@@ -38,9 +38,11 @@ catalog file matches and its edition belongs to that work.
 A receipt keyed by account, slot and event ID stores a canonical payload hash
 and outcome in the same transaction as the session. It is checked before
 mutable identity resolution and survives session rollup. Receipts follow
-sessions on splits and works on merges; deleting the entire work removes its
-receipts with the rest of its reading graph. Pre-cutoff receipts have no work.
-An identical retry returns its original outcome; changed payloads conflict.
+sessions on splits and works on merges. Deleting a work detaches receipts for
+archived sessions so their canonical event proof survives with the native
+tombstones; other receipts are removed with the reading graph. Pre-cutoff
+receipts have no work. An identical retry returns its original outcome without
+recreating a deleted work; changed payloads conflict.
 
 ## Consequences
 
