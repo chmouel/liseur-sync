@@ -1085,3 +1085,65 @@ func TestSettingsRailAndAdminTab(t *testing.T) {
 		t.Fatal("the admin Folders entry is visible to a reader")
 	}
 }
+
+// TestRevokeAllTokensRevokesSpoofedReaderName: the reader exemption is
+// the shape of the credential the server mints for itself, not its name.
+// A row a person created under the reader's name — no creation edge
+// accepts it any more, so it is written straight through the store — is
+// an API token and goes with the rest.
+func TestRevokeAllTokensRevokesSpoofedReaderName(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	svc := auth.NewService(st)
+	if _, _, err := svc.MintReaderToken(ctx, "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateToken(ctx, store.Token{
+		ID: "spoof", UserID: "u1", DeviceID: "d-spoof", Name: auth.ReaderTokenName,
+		Scopes: store.ScopeSet{store.ScopeSync}, SHA256: "spoof-sha", CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	csrf := extractCSRF(t, body)
+	if code, _ := postForm(t, ts, cookie, "/ui/tokens/revoke", url.Values{"csrf": {csrf}}); code != 200 {
+		t.Fatalf("revoke all: %d", code)
+	}
+
+	toks, err := st.ListTokens(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(toks) != 2 {
+		t.Fatalf("tokens after the sweep: %+v", toks)
+	}
+	for _, tok := range toks {
+		if tok.ID == "spoof" && tok.RevokedAt == nil {
+			t.Error(`a token a person named "Web reader" survived revoke all`)
+		}
+		if auth.IsReaderToken(tok) && tok.RevokedAt != nil {
+			t.Error("revoking API tokens signed the browser reader out")
+		}
+	}
+}
+
+// TestCreateTokenRefusesReaderName: the browser reader's name belongs to
+// the server, or the exemption it earns is anybody's to take.
+func TestCreateTokenRefusesReaderName(t *testing.T) {
+	ts, st := testServer(t)
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	csrf := extractCSRF(t, body)
+
+	code, _ := postForm(t, ts, cookie, "/ui/tokens", url.Values{
+		"name": {" " + auth.ReaderTokenName + " "}, "scopes": {"sync"}, "csrf": {csrf},
+	})
+	if code != 400 {
+		t.Fatalf("reserved name: want 400, got %d", code)
+	}
+	if toks, _ := st.ListTokens(t.Context(), "u1"); len(toks) != 0 {
+		t.Fatalf("a refused name minted a token anyway: %+v", toks)
+	}
+}

@@ -200,7 +200,7 @@ type browserSession struct {
 func splitReaderTokens(toks []store.Token) (mine []store.Token, browsers []browserSession) {
 	byDevice := map[string]browserSession{}
 	for _, t := range toks {
-		if t.Name != auth.ReaderTokenName {
+		if !auth.IsReaderToken(t) {
 			mine = append(mine, t)
 			continue
 		}

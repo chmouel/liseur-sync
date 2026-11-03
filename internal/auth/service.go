@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -23,6 +24,42 @@ const ReaderTokenTTL = time.Hour
 // a reader token is recognised again, which is what keeps one browser to
 // one device identity in the op log.
 const ReaderTokenName = "Web reader"
+
+// ErrReservedTokenName refuses a name only the server may mint under.
+var ErrReservedTokenName = errors.New("token name is reserved for the browser reader")
+
+// ReservedTokenName reports a name a person may not choose at a token
+// creation edge: the browser reader's, which is how the server picks its
+// own credentials out of an account's token list.
+func ReservedTokenName(name string) bool { return strings.TrimSpace(name) == ReaderTokenName }
+
+// readerTokenLifetimeSlack is how far a reader token's expiry may sit
+// from one hour after its creation. mintToken reads the clock twice, so
+// the lifetime it writes is a hair under ReaderTokenTTL.
+const readerTokenLifetimeSlack = time.Minute
+
+// IsReaderToken reports whether t is a credential this server minted for
+// the browser reader, rather than one a person made under the same name.
+//
+// Reader tokens are recognised by more than the name (which until it was
+// reserved at the token edges anybody could choose): they carry the
+// reader scope set, the hour's life MintReaderToken gives them and a
+// device id. A token without that shape is the account's own API
+// credential and has to be treated as one — leaving it out of "revoke all
+// tokens" because of its name would spare exactly the thing an account
+// reaches for that button to kill.
+func IsReaderToken(t store.Token) bool {
+	if t.Name != ReaderTokenName || t.DeviceID == "" || t.ExpiresAt == nil || len(t.Scopes) != len(readerScopes) {
+		return false
+	}
+	for _, s := range readerScopes {
+		if !t.Scopes.Contains(s) {
+			return false
+		}
+	}
+	life := t.ExpiresAt.Sub(t.CreatedAt)
+	return life <= ReaderTokenTTL && life >= ReaderTokenTTL-readerTokenLifetimeSlack
+}
 
 // readerScopes is the whole capability of a browser reader: read the
 // catalog, sync positions. It is deliberately not derived from the
@@ -179,7 +216,7 @@ func (s *Service) MintReaderToken(ctx context.Context, userID string) (string, s
 
 	newestPerDevice := map[string]store.Token{}
 	for _, t := range existing {
-		if t.Name != ReaderTokenName {
+		if !IsReaderToken(t) {
 			continue
 		}
 		if cur, ok := newestPerDevice[t.DeviceID]; !ok || t.CreatedAt.After(cur.CreatedAt) {
@@ -210,7 +247,7 @@ func (s *Service) MintReaderToken(ctx context.Context, userID string) (string, s
 	// replaces have nothing left to hold. Another browser's newest is
 	// still spared, dead or not — that is its op-log identity.
 	for _, t := range existing {
-		if t.Name != ReaderTokenName {
+		if !IsReaderToken(t) {
 			continue
 		}
 		if t.DeviceID != minted.DeviceID && t.ID == newestPerDevice[t.DeviceID].ID {
@@ -232,7 +269,7 @@ func (s *Service) RevokeReaderTokens(ctx context.Context, userID string) error {
 		return fmt.Errorf("list tokens: %w", err)
 	}
 	for _, t := range toks {
-		if t.Name != ReaderTokenName || t.RevokedAt != nil {
+		if !IsReaderToken(t) || t.RevokedAt != nil {
 			continue
 		}
 		if err := s.St.RevokeToken(ctx, userID, t.ID); err != nil {
