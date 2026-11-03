@@ -135,6 +135,29 @@ func TestSavingEnabledAudiobookshelfTestsAndWrites(t *testing.T) {
 	}
 }
 
+func TestSavingAKeyMakesTheConfigFileOwnerOnly(t *testing.T) {
+	peer := audiobookshelfPeer(t, "hunter3")
+	ts, cookie, path, csrf := audiobookshelfAdminWithFile(t, audiobookshelfAdminFile, nil)
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	form := audiobookshelfForm(csrf)
+	form["enabled"] = []string{"on"}
+	form["base_url"] = []string{peer.URL}
+	form["account"] = []string{"alice"}
+	form["api_key"] = []string{"hunter3"}
+	if code, body := postForm(t, ts, cookie, "/ui/admin/audiobookshelf", form); code != http.StatusOK {
+		t.Fatalf("the save answered %d:\n%s", code, body)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("the config file holding an API key is %04o, want 0600", got)
+	}
+}
+
 func TestTheSaveRedirectsToACanonicalRelativeURL(t *testing.T) {
 	peer := audiobookshelfPeer(t, "hunter3")
 	ts, cookie, _, csrf := audiobookshelfAdminWithFile(t, audiobookshelfAdminFile, nil)

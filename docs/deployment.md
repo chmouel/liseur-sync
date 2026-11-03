@@ -988,6 +988,37 @@ value is a lifetime for the cookie only. Disabling an account, resetting
 its password, or revoking its credentials cuts every session at once,
 whatever the setting says.
 
+### What an admin save does to the config file
+
+The admin page's saves touch one section of the file and nothing else.
+The rewrite is proved before it replaces anything, follows a symlink to
+the file it names, and renames into place, so the file is either the old
+configuration or the new one and never a half-written mix.
+
+**A save that leaves a stored credential in the file makes the file
+owner-only (`0600`).** That covers the mirror's `remote_key` and
+`remote_password` (in `[mirror]` and in any `[[mirrors]]` table, enabled
+or not), `[audiobookshelf] api_key` and `stt_api_key`, and a
+`database.url` that is a DSN carrying a password. It happens whether the
+save rewrote the section or found nothing to change, so an existing
+`0644` file is tightened the first time an administrator saves it. A file
+holding no credential keeps the permissions it had, and a file this
+server creates is created `0600`. The write renames a file the server
+itself created into place, so the configuration file ends up owned by
+the account the server runs as, and that account must be able to write
+the directory holding it.
+
+A credential supplied through the environment is never written to the
+file, and never makes a secret-free file owner-only: `LISEUR_ABS_API_KEY`
+stays where the operator put it.
+
+A read-only configuration file — a ConfigMap mount, say — is unchanged by
+any of this: a save that would write is refused exactly as it is today,
+because the file cannot be replaced. A save that has nothing to change
+but cannot tighten a credential-bearing file is refused too, rather than
+reporting success over a secret on a filesystem this server may not
+`chmod`.
+
 ## Backup
 
 Back up the database. It holds users, tokens, reading state, folder rows
