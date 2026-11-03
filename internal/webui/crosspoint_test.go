@@ -160,3 +160,30 @@ func TestCrossPointPluginDownload(t *testing.T) {
 		t.Fatalf("revoked bundle: %d", code)
 	}
 }
+
+// TestCrossPointPluginConfigTooLarge: a device name long enough to push
+// config.json past CrossPoint's 2KB budget is the person's mistake, not a
+// server fault, and it must not activate statistics on the way out.
+func TestCrossPointPluginConfigTooLarge(t *testing.T) {
+	ts, st := testServer(t)
+	ctx := t.Context()
+	const password = "long-name-pairing-password"
+	slot := strings.Repeat("very-long-device-name-", 200)
+	key := auth.KosyncUserKey(password)
+	if err := st.CreateKosyncDevice(ctx, store.KosyncDevice{UserID: "u1", DeviceSlot: slot, KeySHA256: auth.HashSecret(key)}); err != nil {
+		t.Fatal(err)
+	}
+	cookie := loginCookie(t, ts)
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	csrf := extractCSRF(t, body)
+
+	code, text := postForm(t, ts, cookie, "/ui/kosync/"+url.PathEscape(slot)+"/crosspoint",
+		url.Values{"csrf": {csrf}, "password": {password}})
+	if code != http.StatusUnprocessableEntity || !strings.Contains(text, "shorter name") {
+		t.Fatalf("oversized plugin config: %d %q", code, text)
+	}
+	devices, err := st.ListKosyncDevices(ctx, "u1")
+	if err != nil || devices[0].MeasuredSessionsFrom != nil {
+		t.Fatalf("a refused bundle activated the slot: %+v %v", devices, err)
+	}
+}

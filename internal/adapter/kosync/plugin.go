@@ -5,7 +5,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
+
+// ErrPluginConfigTooLarge reports a slot whose config.json cannot fit the
+// 2KB budget CrossPoint gives one plugin. The slot name and the key are
+// the only parts a pairing decides, so it is a slot name a person chose.
+var ErrPluginConfigTooLarge = errors.New("plugin configuration exceeds CrossPoint's 2KB limit")
 
 func CrossPointPlugin(server, slot, key string) ([]byte, error) {
 	config, err := json.MarshalIndent(map[string]string{"server": server, "username": slot, "key": key}, "", "  ")
@@ -13,7 +19,7 @@ func CrossPointPlugin(server, slot, key string) ([]byte, error) {
 		return nil, err
 	}
 	if len(config) > 2048 {
-		return nil, errors.New("plugin configuration exceeds CrossPoint's 2KB limit")
+		return nil, fmt.Errorf("%w: %d bytes", ErrPluginConfigTooLarge, len(config))
 	}
 	body, _ := json.Marshal(sessionEvent{
 		EventID: "{event.id}", Document: "{event.document}", Start: "{event.start_time}", End: "{event.end_time}",

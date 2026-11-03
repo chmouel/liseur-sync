@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -28,6 +29,10 @@ func (s *Server) handleCrossPointPlugin(w http.ResponseWriter, r *http.Request, 
 	}
 	bundle, err := kosync.CrossPointPlugin(s.serverBaseURL(r), d.DeviceSlot, key)
 	if err != nil {
+		if errors.Is(err, kosync.ErrPluginConfigTooLarge) {
+			http.Error(w, "this device name is too long to fit CrossPoint's 2KB plugin config: pair a device with a shorter name", http.StatusUnprocessableEntity)
+			return
+		}
 		http.Error(w, "could not prepare plugin", http.StatusInternalServerError)
 		return
 	}
