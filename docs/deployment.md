@@ -101,6 +101,10 @@ reader.example.com {
         reverse_proxy 127.0.0.1:8585
     }
 
+    handle /adapter/kosync* {
+        reverse_proxy 127.0.0.1:8585
+    }
+
     handle_path /sync* {
         reverse_proxy 127.0.0.1:8585
     }
@@ -111,6 +115,13 @@ Use `handle`, rather than `handle_path`, for `/opds*`: liseur-sync
 expects the upstream request to retain `/opds/v1.2`. The root OPDS route
 is protected by liseur-sync's own HTTP Basic authentication, just like
 the prefixed route.
+
+The `/adapter/kosync*` block is there for the same reason: kosync clients
+and the CrossPoint statistics plugin (see [crosspoint.md](crosspoint.md))
+post to root `/adapter/kosync`, not under the UI prefix, so that path has
+to reach the upstream unstripped even when the reader is served below
+`/sync`. Without it the plugin's uploads and a device's progress sync get
+the proxy's 404.
 
 nginx example: the koplugin capability URLs and audiobook stream ticket
 URLs carry bearer credentials in the path. The app redacts them from its
@@ -131,6 +142,11 @@ location / {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
+
+An nginx prefix deployment needs the same two carve-outs: a
+`location /adapter/kosync` and a `location /opds` proxied to the
+upstream, ahead of the prefixed location, both passing the path through
+unchanged (no trailing slash on `proxy_pass`).
 
 `insecure_http = true` exists only for LAN-only setups where TLS is
 out of scope. It is a top-level key, so it must appear above
