@@ -535,3 +535,75 @@ func TestBookTranslationCanceledAfterResourceRead(t *testing.T) {
 		t.Fatalf("canceled translation: %v", err)
 	}
 }
+
+func TestBookReusesParsedChapter(t *testing.T) {
+	book := bookOf(map[string]string{"chapter.xhtml": "<html><body><p>Call me Ishmael.</p></body></html>"}, "chapter.xhtml")
+	read, reads := book.read, 0
+	book.read = func(ctx context.Context, name string) ([]byte, error) {
+		reads++
+		return read(ctx, name)
+	}
+	first, err := book.document(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 500 {
+		loc, err := book.LocatorFor(t.Context(), "/body/DocFragment[1]/body/p[1]/text().8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := book.XPathFor(t.Context(), loc.Href, loc.Anchor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("chapter read %d times, want 1", reads)
+	}
+	if cached, err := book.document(t.Context(), 0); err != nil || cached != first {
+		t.Fatalf("parsed chapter was not reused: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := book.document(ctx, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cached chapter ignored cancellation: %v", err)
+	}
+}
+
+func TestBookChapterCacheBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		chapter  string
+		retained int
+	}{
+		{"entry limit", "<html><body><p>word</p></body></html>", maxCachedChapters},
+		{"byte limit", "<html><body><p>" + strings.Repeat("a", maxCachedChapterBytes/2) + "</p></body></html>", 1},
+		{"oversized", "<html><body><p>" + strings.Repeat("a", maxCachedChapterBytes) + "</p></body></html>", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]string{}
+			var spine []string
+			for i := range maxCachedChapters + 1 {
+				name := fmt.Sprintf("chapter-%d.xhtml", i)
+				files[name] = tc.chapter
+				spine = append(spine, name)
+			}
+			book := bookOf(files, spine...)
+			for i := range spine {
+				if _, err := book.document(t.Context(), i); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(book.documents) != tc.retained || book.documentBytes > maxCachedChapterBytes {
+				t.Fatalf("retained %d chapters, %d bytes", len(book.documents), book.documentBytes)
+			}
+			for _, chapter := range book.documents {
+				if chapter.name == spine[0] {
+					t.Fatal("oldest chapter was not evicted")
+				}
+			}
+			if _, err := book.document(t.Context(), 0); err != nil {
+				t.Fatalf("evicted chapter could not be read: %v", err)
+			}
+		})
+	}
+}

@@ -112,9 +112,10 @@ because a translation could not be made.
   `library-read`, or deleting the book takes the translation away, and
   restoring the book brings it back. Clients must not cache a derived
   locator as if it were the op.
-- Responses that carry kosync ops now open EPUBs. That cost is bounded by
-  the number of kosync ops in a response, and a translation is cheap next
-  to downloading the book.
+- Responses carrying kosync ops use request-local caches bounded by open
+  edition count, parsed chapter count and uncompressed XHTML bytes.
+  Eviction closes EPUBs and allows chapters to be rebuilt. Chapters above
+  the byte budget are translated without being retained in the cache.
 - `mirror` still pushes only what an op holds. Translating for peer
   servers is a separate decision.
 
