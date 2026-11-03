@@ -1338,6 +1338,43 @@ button.linkish:hover, button.linkish:focus-visible {
 .dev-ereader { color: var(--primary); background: var(--surface-1); opacity: .85; }
 .dev-desktop { color: var(--ink); background: var(--surface-1); opacity: .75; }
 
+.browser-summary {
+	display: flex; align-items: center; justify-content: space-between;
+	gap: .75rem 1rem; flex-wrap: wrap;
+	padding: .65rem .85rem; margin: .6rem 0 .4rem;
+	background: var(--surface-2); border: 1px solid var(--line-soft);
+	border-radius: var(--radius-sm); font-size: .88rem;
+}
+.browser-summary form { margin: 0; }
+.browser-summary-meta {
+	display: inline-flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+}
+
+details.setup-guide { margin: .5rem 0 .85rem; }
+details.setup-guide:last-child { margin-bottom: 0; }
+details.setup-guide > summary {
+	cursor: pointer; color: var(--ink-dim); list-style: none;
+	display: inline-flex; align-items: center; gap: .45rem;
+	font-size: .85rem; font-weight: 500; user-select: none;
+}
+details.setup-guide > summary::-webkit-details-marker { display: none; }
+details.setup-guide > summary:hover { color: var(--ink); }
+details.setup-guide > summary::before { content: "+"; color: var(--muted); font-weight: 600; }
+details.setup-guide[open] > summary::before { content: "−"; }
+details.setup-guide[open] > summary { margin-bottom: .35rem; }
+details.setup-guide > p { font-size: .87rem; max-width: 65ch; margin: .45rem 0; }
+
+.card.adapter-disabled {
+	padding: 1rem 1.4rem;
+	background: var(--surface-2); border-color: var(--line-soft);
+}
+.adapter-disabled-row {
+	display: flex; align-items: baseline; justify-content: space-between;
+	gap: .35rem 1rem; flex-wrap: wrap;
+}
+.adapter-disabled-row h2 { margin: 0; font-size: .95rem; color: var(--ink-dim); }
+.adapter-disabled-row p { margin: 0; font-size: .85rem; }
+
 /* ----------------------------------------------------- audiobookshelf */
 
 .abs-head {
