@@ -446,10 +446,6 @@ func formScopes(r *http.Request) (store.ScopeSet, error) {
 	return store.NormalizeScopes(requested)
 }
 
-func formatScopes(scopes store.ScopeSet) string {
-	return scopes.String()
-}
-
 func hasScope(scopes store.ScopeSet, scope store.Scope) bool {
 	return scopes.Contains(scope)
 }

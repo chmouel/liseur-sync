@@ -1338,6 +1338,51 @@ button.linkish:hover, button.linkish:focus-visible {
 .dev-ereader { color: var(--primary); background: var(--surface-1); opacity: .85; }
 .dev-desktop { color: var(--ink); background: var(--surface-1); opacity: .75; }
 
+.token-scopes {
+	display: flex; align-items: center; gap: .35rem .45rem; flex-wrap: wrap;
+}
+details.scope-disclosure { display: contents; }
+details.scope-disclosure > summary {
+	cursor: pointer; color: var(--primary); list-style: none;
+	font-size: .78rem; font-weight: 500; user-select: none;
+	padding: .1rem .35rem; border-radius: var(--radius-sm);
+}
+details.scope-disclosure > summary::-webkit-details-marker { display: none; }
+details.scope-disclosure > summary:hover {
+	color: var(--ink); background: var(--surface-3);
+}
+details.scope-disclosure[open] > summary {
+	color: var(--ink); background: var(--surface-3);
+}
+details.scope-disclosure > form {
+	flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center;
+	gap: .35rem .5rem; margin-top: .35rem; padding: .55rem .65rem;
+	background: var(--surface-2); border: 1px solid var(--line-soft);
+	border-radius: var(--radius-sm);
+}
+
+.scope-pills, details.scope-disclosure > form {
+	display: flex; flex-wrap: wrap; align-items: center; gap: .35rem;
+}
+.scope-pills label.check, details.scope-disclosure label.check {
+	margin: 0; padding: .2rem .55rem; gap: .35rem;
+	font-size: .78rem; color: var(--ink-dim); cursor: pointer;
+	background: var(--surface-2); border: 1px solid var(--line);
+	border-radius: 999px; user-select: none;
+	transition: background .15s, border-color .15s, color .15s;
+}
+.scope-pills label.check:hover, details.scope-disclosure label.check:hover {
+	border-color: var(--muted); color: var(--ink);
+}
+.scope-pills label.check:has(input:checked),
+details.scope-disclosure label.check:has(input:checked) {
+	background: color-mix(in srgb, var(--primary) 14%, var(--surface-2));
+	border-color: var(--primary); color: var(--ink);
+}
+details.scope-disclosure > form button {
+	padding: .25rem .65rem; font-size: .78rem; margin-left: .15rem;
+}
+
 .browser-summary {
 	display: flex; align-items: center; justify-content: space-between;
 	gap: .75rem 1rem; flex-wrap: wrap;
