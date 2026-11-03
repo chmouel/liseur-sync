@@ -163,7 +163,7 @@ func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
 		}
 		rendered = rewriteTable(rendered, "mirror", false, blocks)
 	}
-	if !slices.Equal(want.List, current.List) {
+	if !sameEntries(want.List, current.List) {
 		rendered = rewriteTable(rendered, "mirrors", true, mirrorListBlocks(want.List))
 	}
 	if rendered == before {
@@ -188,7 +188,29 @@ func sameLegacy(a, b MirrorFile) bool {
 	if !a.HasLegacy {
 		return true
 	}
-	return a.Legacy == b.Legacy
+	return sameEntry(a.Legacy, b.Legacy)
+}
+
+// sameEntry compares two mirror entries by what a config file holds.
+// The address an earlier build folded is remembered from the file this
+// process read and is never written back, so it is not part of what a
+// rendered file can be held to.
+func sameEntry(a, b MirrorConfig) bool {
+	a.legacyBaseURL, b.legacyBaseURL = "", ""
+	return a == b
+}
+
+// sameEntries compares a list of entries, order included.
+func sameEntries(a, b []MirrorConfig) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !sameEntry(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // verifyMirrorRewrite is the proof UpdateMirrors demands before it
@@ -214,7 +236,7 @@ func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest b
 	if !sameLegacy(got, want) {
 		return errors.New("rewritten config does not hold the mirror entry it was given")
 	}
-	if compareRest && !slices.Equal(got.List, want.List) {
+	if compareRest && !sameEntries(got.List, want.List) {
 		return errors.New("rewritten config does not hold the mirror entries it was given")
 	}
 

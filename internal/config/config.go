@@ -281,7 +281,21 @@ type MirrorConfig struct {
 	ActiveDays int `toml:"active_days"`
 	// Timeout bounds one request to the peer.
 	Timeout Duration `toml:"timeout"`
+
+	// legacyBaseURL is BaseURL as a build before this one folded it:
+	// the address as typed with one trailing slash removed, which that
+	// build's identity folded with one more removed. Validation records
+	// it and nothing else touches it, so it is neither written to a
+	// config file nor settable by hand.
+	legacyBaseURL string
 }
+
+// LegacyPeerBaseURL is the peer address as a build before this one
+// folded it into a cursor identity, and empty when no validation has
+// seen this entry. A mirror strips one more trailing slash off it to
+// reach the exact digest that build stored; current digests come from
+// BaseURL.
+func (m MirrorConfig) LegacyPeerBaseURL() string { return m.legacyBaseURL }
 
 // The protocols a mirror can speak. They are spelled here rather than
 // in internal/mirror because configuration is validated before a
@@ -920,6 +934,13 @@ func (c *Config) cleanMirrorURL(m *MirrorConfig, path string) error {
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("%s.base_url must not contain a query string or fragment", path)
+	}
+	// Recorded before the address is canonicalised, and only the first
+	// time: validation cleans an entry more than once, and the legacy
+	// form is the one an operator typed rather than the one that
+	// follows from it.
+	if m.legacyBaseURL == "" {
+		m.legacyBaseURL = strings.TrimSuffix(u.String(), "/")
 	}
 	m.BaseURL = MirrorRoot(u.String())
 	return nil
