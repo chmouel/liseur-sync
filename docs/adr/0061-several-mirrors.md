@@ -119,10 +119,15 @@ The details that are load-bearing:
   the original — mirror fields cleared on both — before it replaces
   anything, which is what turns a line-oriented scan meeting a `[mirror]`
   inside a multi-line string into a refusal instead of a mangled file.
-  The write follows symlinks, keeps the file's permissions, and renames
-  into place. Comments inside a rewritten `[[mirrors]]` section are not
-  preserved: the section is written whole, because a field that was
-  switched off has to stop existing rather than linger.
+  The write follows symlinks and renames into place. The mode comes from
+  what is about to land: a file that will hold a stored credential is
+  made owner-only (`0600`), a secretless file keeps the permissions it
+  had, and a new file is created `0600`. A save that changes nothing
+  still tightens a file that already holds a credential, and a refused
+  save changes neither the bytes nor the mode. Comments inside a
+  rewritten `[[mirrors]]` section are not preserved: the section is
+  written whole, because a field that was switched off has to stop
+  existing rather than linger.
 
 ## Consequences
 

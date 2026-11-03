@@ -147,12 +147,16 @@ func TestUpdateMirrorsLeavesTheSingleEntryAloneWhenTheListChanges(t *testing.T) 
 	}
 }
 
-func TestUpdateMirrorsKeepsTheFilesPermissions(t *testing.T) {
+// TestUpdateMirrorsKeepsASecretFreeFileSPermissions: the file an
+// operator wrote with an editor keeps the mode they gave it as long as
+// what a save puts in it holds no credential. The credential cases are
+// held in TestACredentialBearingConfigSaveIsOwnerOnly.
+func TestUpdateMirrorsKeepsASecretFreeFileSPermissions(t *testing.T) {
 	path := writeMirrorConfig(t, "[content]\ncache_dir = \"covers\"\n")
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpdateMirrors(path, setLegacy(workingEntry("orbit"))); err != nil {
+	if err := UpdateMirrors(path, setLegacy(secretFreeEntry("orbit"))); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
