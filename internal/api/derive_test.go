@@ -3,10 +3,15 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +23,11 @@ const crosspointXPath = "/body/DocFragment[2]/body/p[2]/text().8"
 // chapterEPUB has a linear="no" cover ahead of the chapter, so the
 // chapter is DocFragment[2] the way CrossPoint counts it.
 func chapterEPUB(t *testing.T) []byte {
+	t.Helper()
+	return chapterEPUBWithText(t, "Call me Ishmael. Some years ago, never mind how long.")
+}
+
+func chapterEPUBWithText(t *testing.T, text string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -37,7 +47,7 @@ func chapterEPUB(t *testing.T) []byte {
 <spine><itemref idref="cover" linear="no"/><itemref idref="c1"/></spine></package>`},
 		{"OEBPS/nav.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="chapter1.xhtml">Loomings</a></li></ol></nav></body></html>`},
 		{"OEBPS/cover.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Moby-Dick</p></body></html>`},
-		{"OEBPS/chapter1.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Loomings</h1><p>Chapter one.</p><p>Call me Ishmael. Some years ago, never mind how long.</p></body></html>`},
+		{"OEBPS/chapter1.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Loomings</h1><p>Chapter one.</p><p>` + text + `</p></body></html>`},
 	} {
 		method := zip.Deflate
 		if f.name == "mimetype" {
@@ -194,4 +204,86 @@ func TestNativeReadsDeriveOnlyWithinTheCatalogBoundary(t *testing.T) {
 			t.Fatalf("reader sees %d ops, want only their own", n)
 		}
 	})
+}
+
+type boundedDerivationFiles struct {
+	BookFiles
+	mu     sync.Mutex
+	opened []*os.File
+	limit  int
+}
+
+func (f *boundedDerivationFiles) OpenBook(ctx context.Context, book store.CatalogBook) (*os.File, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	active := 0
+	for _, file := range f.opened {
+		if _, err := file.Stat(); err == nil {
+			active++
+		}
+	}
+	if active >= f.limit {
+		return nil, 0, errors.New("descriptor budget exhausted")
+	}
+	file, size, err := f.BookFiles.OpenBook(ctx, book)
+	if err == nil {
+		f.opened = append(f.opened, file)
+	}
+	return file, size, err
+}
+
+func (f *boundedDerivationFiles) assertClosed(t *testing.T) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.opened) == 0 {
+		t.Fatal("no files opened")
+	}
+	for _, file := range f.opened {
+		if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("file retained: %v", err)
+		}
+	}
+}
+
+func TestNativeHeadsBoundOpenBooks(t *testing.T) {
+	f := newFolderFixture(t)
+	files := &boundedDerivationFiles{BookFiles: f.srv.Files, limit: maxDerivedEditions}
+	f.srv.Files = files
+	const count = 2*maxDerivedEditions + 1
+	for i := range count {
+		id, _ := f.writeBook(t, fmt.Sprintf("book-%d.epub", i), chapterEPUBWithText(t, fmt.Sprintf("Call me Ishmael. Book number %d.", i)))
+		book, err := f.st.CatalogBookByID(t.Context(), f.user.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.readOnX3(t, f.user.ID, book.PartialMD5)
+	}
+	ops := opsAt(t, f, "/v1/heads", f.token)
+	if len(ops) < count {
+		t.Fatalf("got %d ops, want at least %d", len(ops), count)
+	}
+	for _, op := range ops {
+		if op["derived"] == nil {
+			t.Fatalf("lost derivation after descriptor exhaustion: %v", op)
+		}
+	}
+	files.assertClosed(t)
+}
+
+func TestLocatorDeriverClosesFailedPublication(t *testing.T) {
+	f := newFolderFixture(t)
+	id, _ := f.writeBook(t, "broken.epub", []byte("not an EPUB"))
+	book, err := f.st.CatalogBookByID(t.Context(), f.user.ID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := &boundedDerivationFiles{BookFiles: f.srv.Files, limit: maxDerivedEditions}
+	f.srv.Files = files
+	d := &locatorDeriver{s: f.srv, ctx: t.Context(), userID: f.user.ID}
+	defer d.close()
+	if ed := d.edition(book.PartialMD5); ed != nil {
+		t.Fatal("broken EPUB opened")
+	}
+	files.assertClosed(t)
 }
