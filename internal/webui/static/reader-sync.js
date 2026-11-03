@@ -35,7 +35,8 @@ export function mergeFurthest(previous, observations, workID, floor = 0) {
     const key = JSON.stringify([op.work_id, edition, op.origin_alias || ""]);
     const old = groups.get(key);
     if (!old || op.progression > old.progression ||
-        (op.progression === old.progression && earlierCandidate(op, old))) {
+        (op.progression === old.progression &&
+          (op.op_id === old.op_id || earlierCandidate(op, old)))) {
       groups.set(key, structuredClone(op));
     }
   }
