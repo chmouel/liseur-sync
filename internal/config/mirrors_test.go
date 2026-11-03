@@ -432,6 +432,41 @@ func TestTwoSpellingsOfOneRootAreOnePeerAccount(t *testing.T) {
 	}
 }
 
+// TestALegacyFoldedAddressIsKeptAsWritten. A build before this one
+// removed one trailing slash when it validated an address and one more
+// when it folded that address into a cursor identity, so it stored a
+// digest no spelling of the canonical root can be guessed from. The
+// address as it was written is recorded for exactly that, and a second
+// validation must not fold the already-cleaned address back over it.
+func TestALegacyFoldedAddressIsKeptAsWritten(t *testing.T) {
+	typed := "https://kobo.example.com/sync/" + strings.Repeat("/", 10)
+	cfg, err := Load(writeConfig(t, `
+[mirror]
+enabled = true
+name = "kobo"
+base_url = "`+typed+`"
+account = "you"
+remote_user = "you"
+remote_key = "0123456789abcdef0123456789abcdef"
+`))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if want := MirrorRoot(typed); cfg.Mirror.BaseURL != want {
+		t.Fatalf("the address kept its slashes: %q, want %q", cfg.Mirror.BaseURL, want)
+	}
+	want := strings.TrimSuffix(typed, "/")
+	if got := cfg.Mirror.LegacyPeerBaseURL(); got != want {
+		t.Fatalf("the address as written: %q, want %q", got, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("second validation: %v", err)
+	}
+	if got := cfg.Mirror.LegacyPeerBaseURL(); got != want {
+		t.Fatalf("a second validation refolded the address: %q, want %q", got, want)
+	}
+}
+
 // TestACredentialVariableIsChosenAfterNormalisingTheEntry. The variable an
 // entry reads depends on its protocol and its name, and both arrive from a
 // file an operator wrote: "BookOrbit" is the protocol, " kobo " is the name.

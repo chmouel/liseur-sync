@@ -2,12 +2,11 @@ package mirror
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -97,6 +96,22 @@ func peerConfig(url string) config.MirrorConfig {
 		RemoteKey: "0123456789abcdef0123456789abcdef",
 		DeviceID:  "liseur-sync", Timeout: config.Duration(20 * time.Second),
 	}
+}
+
+// validatedPeerConfig is peerConfig held to what a start would make of
+// it: the address cleaned and recorded the way validation records it,
+// which is what an upgraded deployment's own cursors were folded from.
+func validatedPeerConfig(t *testing.T, url string) config.MirrorConfig {
+	t.Helper()
+	c := config.Default()
+	c.InsecureHTTP = true
+	m := peerConfig(url)
+	m.Name = "orbit"
+	c.Mirrors = []config.MirrorConfig{m}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("peer config: %v", err)
+	}
+	return c.Mirrors[0]
 }
 
 // TestTwoRestampingPeersDoNotFeedEachOtherForever is the regression that
@@ -315,55 +330,59 @@ func TestACursorFromTheSingleEntryKeepsItsPlace(t *testing.T) {
 
 // TestACursorFromASlashedAddressKeepsItsPlace. An earlier build removed
 // one trailing slash when it validated a peer address and one more when
-// it folded that address into an identity, so a base_url typed with three
-// slashes was folded as the root plus one. This build removes every
-// slash, which folds that same peer differently: without an alias the
-// first pass after an upgrade takes its own cursors for another
-// library's and drops the watermarks and the echo mark with them.
+// it folded that address into an identity, so an address typed with n
+// slashes was folded as its root plus n-2 of them, whatever n was. This
+// build removes every slash, which folds that same peer differently:
+// without an alias the first pass after an upgrade takes its own cursors
+// for another library's and drops the watermarks and the echo mark with
+// them.
 func TestACursorFromASlashedAddressKeepsItsPlace(t *testing.T) {
-	f := newSyncFixture(t)
-	local := f.read("op-1", 0.42, time.Now().Add(-time.Hour))
-	peer := newRestampingPeer(t)
-	cfg := peerConfig(peer.URL + "///")
-	syncer := &Syncer{
-		Store: f.st, Peer: "orbit", UserID: f.user.ID,
-		Proto:        KosyncProtocol(NewClient(cfg), cfg),
-		ActiveWindow: 30 * 24 * time.Hour, MaxPerPass: 100,
-	}
+	for _, slashes := range []int{0, 1, 3, 11} {
+		t.Run(strconv.Itoa(slashes)+" trailing slashes", func(t *testing.T) {
+			f := newSyncFixture(t)
+			local := f.read("op-1", 0.42, time.Now().Add(-time.Hour))
+			peer := newRestampingPeer(t)
+			cfg := validatedPeerConfig(t, peer.URL+strings.Repeat("/", slashes))
+			syncer := &Syncer{
+				Store: f.st, Peer: "orbit", UserID: f.user.ID,
+				Proto:        KosyncProtocol(NewClient(cfg), cfg),
+				ActiveWindow: 30 * 24 * time.Hour, MaxPerPass: 100,
+			}
 
-	// What that build stored for this address, hashed the way it hashed
-	// it: the address with the one slash its validation left on.
-	sum := sha256.Sum256([]byte("kosync\n" + peer.URL + "/\nreader"))
-	legacy := hex.EncodeToString(sum[:8])
-	if legacy == syncer.Proto.Identity() {
-		t.Fatal("the earlier folding is the current one, so this proves nothing")
-	}
-	seen := time.Now().Add(-30 * time.Minute)
-	if err := f.st.PutMirrorCursor(context.Background(), f.user.ID, syncer.Peer,
-		store.MirrorCursor{
-			WorkID: f.work.ID, Document: f.document, PeerIdentity: legacy,
-			PushedSeq: local.Seq, RemoteTS: seen.Unix(), PushedMark: "pct:0.42",
-		}); err != nil {
-		t.Fatal(err)
-	}
+			// What that build stored for this address, hashed the way it
+			// hashed it: the address with both of its slashes gone, one
+			// from validation and one from the folding.
+			legacy := identityDigest(config.ProtocolKosync,
+				peer.URL+strings.Repeat("/", max(slashes-2, 0)), "reader")
+			seen := time.Now().Add(-30 * time.Minute)
+			if err := f.st.PutMirrorCursor(context.Background(), f.user.ID, syncer.Peer,
+				store.MirrorCursor{
+					WorkID: f.work.ID, Document: f.document, PeerIdentity: legacy,
+					PushedSeq: local.Seq, RemoteTS: seen.Unix(), PushedMark: "pct:0.42",
+				}); err != nil {
+				t.Fatal(err)
+			}
 
-	rep, err := syncer.Pass(context.Background())
-	if err != nil || rep.FirstError != nil {
-		t.Fatalf("pass: %s err=%v", rep, err)
-	}
-	if rep.Pushed != 0 || rep.Pulled != 0 {
-		t.Fatalf("an upgraded deployment repeated an exchange: %s", rep)
-	}
-	cursors, err := f.st.MirrorCursors(context.Background(), f.user.ID, syncer.Peer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cur := cursors[f.work.ID]
-	if cur.PeerIdentity != syncer.Proto.Identity() {
-		t.Fatalf("the cursor still folds the address the old way: %q", cur.PeerIdentity)
-	}
-	if cur.PushedSeq != local.Seq || cur.RemoteTS != seen.Unix() || cur.PushedMark != "pct:0.42" {
-		t.Fatalf("an upgrade dropped what the cursor remembered: %+v", cur)
+			rep, err := syncer.Pass(context.Background())
+			if err != nil || rep.FirstError != nil {
+				t.Fatalf("pass: %s err=%v", rep, err)
+			}
+			if rep.Pushed != 0 || rep.Pulled != 0 {
+				t.Fatalf("an upgraded deployment repeated an exchange: %s", rep)
+			}
+			cursors, err := f.st.MirrorCursors(context.Background(), f.user.ID, syncer.Peer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur := cursors[f.work.ID]
+			if cur.PeerIdentity != syncer.Proto.Identity() {
+				t.Fatalf("the cursor still folds the address the old way: %q", cur.PeerIdentity)
+			}
+			if cur.PushedSeq != local.Seq || cur.RemoteTS != seen.Unix() ||
+				cur.PushedMark != "pct:0.42" {
+				t.Fatalf("an upgrade dropped what the cursor remembered: %+v", cur)
+			}
+		})
 	}
 }
 
