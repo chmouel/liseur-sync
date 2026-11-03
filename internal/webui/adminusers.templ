@@ -25,7 +25,7 @@ templ adminFlash(flash Flash) {
 	}
 }
 
-templ adminUsersBody(prefix string, csrf string, users []store.User, next string, invites []store.Invite, flash Flash) {
+templ adminUsersBody(prefix string, csrf string, users []store.User, next string, invites []store.Invite, create adminCreateView, flash Flash) {
 	<h2>Users</h2>
 	@adminFlash(flash)
 	<section class="card">
@@ -63,9 +63,42 @@ templ adminUsersBody(prefix string, csrf string, users []store.User, next string
 		</p>
 		<form method="post" action={ prefix + "admin/users" }>
 			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Name <input name="name" required autocomplete="off"/></label>
+			<label>Name <input name="name" value={ create.Name } required autocomplete="off"/></label>
 			<label>Password <input name="password" type="password" required autocomplete="new-password"/></label>
 			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
+			<fieldset>
+				<legend>Folder access</legend>
+				if create.Unmanageable {
+					<p class="muted">
+						This instance watches too many folders for this form to
+						submit the whole grant set safely, so the account starts
+						with no folder access. Grant folders afterwards with the
+						admin CLI: <code>assign-all-folders</code>, or
+						<code>assign-folder</code> one at a time.
+					</p>
+				} else if len(create.Folders) == 0 {
+					<p class="muted">
+						No folders are watched, so this account starts with none.
+					</p>
+				} else {
+					if create.SelectionDropped {
+						<p class="error">
+							The folders changed while this form was open, so none is
+							ticked: choose them again before creating the account.
+						</p>
+					}
+					<p class="muted">
+						Every folder is granted unless you clear it. Administrator
+						rights do not grant reading access; only these grants do.
+					</p>
+					for _, f := range create.Folders {
+						<label class="check">
+							<input type="checkbox" name="folders" value={ f.Folder.ID } checked?={ f.Granted }/>
+							{ f.Folder.Name }
+						</label>
+					}
+				}
+			</fieldset>
 			@adminPasswordField(csrf)
 			<button type="submit" class="primary">Create</button>
 		</form>
@@ -154,7 +187,13 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		</form>
 	</section>
 	<section class="card">
-		<h2>API tokens</h2>
+		<h2>Devices &amp; integrations</h2>
+		<p class="muted">
+			Every active way into this account, and the forms that add one.
+			Nothing here can read what the account has been reading.
+		</p>
+
+		<h3 class="card-section">API tokens</h3>
 		if len(v.Tokens) == 0 {
 			<p class="muted">None.</p>
 		} else {
@@ -165,7 +204,13 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				for _, t := range v.Tokens {
 					<tr>
 						<td>{ t.Name }</td>
-						<td><code>{ t.Scopes.String() }</code></td>
+						<td>
+							<div class="token-scopes">
+								for _, scope := range t.Scopes {
+									<span class="tag">{ string(scope) }</span>
+								}
+							</div>
+						</td>
 						<td>{ t.CreatedAt.Format("2006-01-02") }</td>
 						<td>{ stamp(t.LastUsed) }</td>
 						<td>
@@ -184,9 +229,35 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 			}
 		}
 		<p class="muted">{ browserNote(v.Browsers) }</p>
-	</section>
-	<section class="card">
-		<h2>kosync devices</h2>
+		<details class="setup-guide">
+			<summary>Mint an API token</summary>
+			<p class="muted">
+				A working credential for { v.User.Name }'s account, shown once
+				and stored hashed. Mint one while you are setting up somebody's
+				reader with them; otherwise let them make their own under
+				Devices. The admin scope can only go on an administrator's
+				account.
+			</p>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<label>Name <input name="name" required autocomplete="off" placeholder="Boox Palma"/></label>
+				<div class="scope-pills">
+					@scopeChoice(store.ScopeSync, true)
+					@scopeChoice(store.ScopeReadInsights, false)
+					@scopeChoice(store.ScopeLibraryRead, false)
+					@scopeChoice(store.ScopeLibraryManage, false)
+					@scopeChoice(store.ScopeLibraryUpload, false)
+					@scopeChoice(store.ScopeLibraryDelete, false)
+					if v.User.IsAdmin {
+						@scopeChoice(store.ScopeAdmin, false)
+					}
+				</div>
+				@adminPasswordField(csrf)
+				<button type="submit" class="primary">Mint token</button>
+			</form>
+		</details>
+
+		<h3 class="card-section">KOReader (kosync)</h3>
 		if len(v.Kosync) == 0 {
 			<p class="muted">None.</p>
 		} else {
@@ -213,9 +284,23 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				<p class="muted">{ moreNote(v.MoreKosync) }</p>
 			}
 		}
-	</section>
-	<section class="card">
-		<h2>Statistics plugin devices</h2>
+		<details class="setup-guide">
+			<summary>Pair a KOReader</summary>
+			<p class="muted">
+				A single-use code, shown once. In KOReader's kosync settings:
+				username = a device name, password = the code, custom server =
+				<code>{ v.Base + "/adapter/kosync" }</code>. The code is a
+				pairing credential bound to one device slot, never the account
+				password.
+			</p>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/pairing" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				@adminPasswordField(csrf)
+				<button type="submit" class="primary">Generate pairing code</button>
+			</form>
+		</details>
+
+		<h3 class="card-section">Statistics plugin devices</h3>
 		if len(v.Koplugin) == 0 {
 			<p class="muted">None.</p>
 		} else {
@@ -243,60 +328,20 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 				<p class="muted">{ moreNote(v.MoreKoplugin) }</p>
 			}
 		}
-	</section>
-	<section class="card">
-		<h2>Mint an API token</h2>
-		<p class="muted">
-			A working credential for { v.User.Name }'s account, shown once and
-			stored hashed. Mint one while you are setting up somebody's
-			reader with them; otherwise let them make their own under
-			Devices. The admin scope can only go on an administrator's
-			account.
-		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/tokens" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Name <input name="name" required autocomplete="off" placeholder="Boox Palma"/></label>
-			@scopeChoice(store.ScopeSync, true)
-			@scopeChoice(store.ScopeReadInsights, false)
-			@scopeChoice(store.ScopeLibraryRead, false)
-			@scopeChoice(store.ScopeLibraryManage, false)
-			@scopeChoice(store.ScopeLibraryUpload, false)
-			@scopeChoice(store.ScopeLibraryDelete, false)
-			if v.User.IsAdmin {
-				@scopeChoice(store.ScopeAdmin, false)
-			}
-			@adminPasswordField(csrf)
-			<button type="submit" class="primary">Mint token</button>
-		</form>
-	</section>
-	<section class="card">
-		<h2>Pair a KOReader (kosync)</h2>
-		<p class="muted">
-			A single-use code, shown once. In KOReader's kosync settings:
-			username = a device name, password = the code, custom server =
-			<code>{ v.Base + "/adapter/kosync" }</code>. The code is a
-			pairing credential bound to one device slot, never the account
-			password.
-		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/pairing" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			@adminPasswordField(csrf)
-			<button type="submit" class="primary">Generate pairing code</button>
-		</form>
-	</section>
-	<section class="card">
-		<h2>Add a statistics plugin device</h2>
-		<p class="muted">
-			A capability URL for KOReader's statistics plugin, shown once. The
-			plugin's server is
-			<code>{ v.Base + "/adapter/koplugin/<capability>" }</code>.
-		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>Device name <input name="name" required autocomplete="off" placeholder="Kobo Libra"/></label>
-			@adminPasswordField(csrf)
-			<button type="submit" class="primary">Create capability</button>
-		</form>
+		<details class="setup-guide">
+			<summary>Add a statistics plugin device</summary>
+			<p class="muted">
+				A capability URL for KOReader's statistics plugin, shown once.
+				The plugin's server is
+				<code>{ v.Base + "/adapter/koplugin/<capability>" }</code>.
+			</p>
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<label>Device name <input name="name" required autocomplete="off" placeholder="Kobo Libra"/></label>
+				@adminPasswordField(csrf)
+				<button type="submit" class="primary">Create capability</button>
+			</form>
+		</details>
 	</section>
 	<section class="card">
 		<h2>Map books to works</h2>
@@ -313,108 +358,119 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		</form>
 	</section>
 	<section class="card">
-		<h2>Reset the password</h2>
+		<h2>Account &amp; security</h2>
 		<p class="muted">
-			Revokes { v.User.Name }'s web and login sessions. Their API tokens,
-			kosync slots and statistics devices keep working — a password
-			nobody used on those is not a reason to unpair a household's
-			e-readers.
+			Each control opens on its own, so the disruptive ones are never a
+			click away by accident. Every one of them asks for your password.
 		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/password" }
-			hx-confirm="Reset this user's password? Their web sessions will be revoked."
-		>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<label>New password <input name="password" type="password" required autocomplete="new-password"/></label>
-			<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
-			@adminPasswordField(csrf)
-			<button type="submit" class="danger">Reset password</button>
-		</form>
-	</section>
-	<section class="card">
-		<h2>Administrator rights</h2>
-		if v.Self {
+
+		<details class="setup-guide">
+			<summary>Reset the password</summary>
 			<p class="muted">
-				This is your own account. Give up your administrator rights from
-				another administrator's account, so that a mistake is somebody
-				else's to undo.
+				Revokes { v.User.Name }'s web and login sessions. Their API tokens,
+				kosync slots and statistics devices keep working — a password
+				nobody used on those is not a reason to unpair a household's
+				e-readers.
 			</p>
-		} else {
-			<p class="muted">
-				An administrator can reach every page in this section. Removing
-				the rights also revokes any admin-scoped API token the account
-				holds, and the last remaining administrator cannot be demoted.
-			</p>
-			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/admin" }
-				if v.User.IsAdmin {
-					hx-confirm="Remove this user's administrator rights? Any admin-scoped API tokens will be revoked."
-				}
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/password" }
+				hx-confirm="Reset this user's password? Their web sessions will be revoked."
 			>
 				<input type="hidden" name="csrf" value={ csrf }/>
-				if v.User.IsAdmin {
-					<input type="hidden" name="admin" value="off"/>
-				} else {
-					<input type="hidden" name="admin" value="on"/>
-				}
+				<label>New password <input name="password" type="password" required autocomplete="new-password"/></label>
+				<label>Repeat <input name="repeat" type="password" required autocomplete="new-password"/></label>
 				@adminPasswordField(csrf)
-				if v.User.IsAdmin {
-					<button type="submit" class="danger">Remove administrator rights</button>
-				} else {
-					<button type="submit" class="primary">Make administrator</button>
-				}
+				<button type="submit" class="danger">Reset password</button>
 			</form>
-		}
-	</section>
-	<section class="card">
-		<h2>Account status</h2>
-		if v.Self {
+		</details>
+
+		<details class="setup-guide">
+			<summary>Administrator rights</summary>
+			if v.Self {
+				<p class="muted">
+					This is your own account. Give up your administrator rights from
+					another administrator's account, so that a mistake is somebody
+					else's to undo.
+				</p>
+			} else {
+				<p class="muted">
+					An administrator can reach every page in this section. Removing
+					the rights also revokes any admin-scoped API token the account
+					holds, and the last remaining administrator cannot be demoted.
+				</p>
+				<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/admin" }
+					if v.User.IsAdmin {
+						hx-confirm="Remove this user's administrator rights? Any admin-scoped API tokens will be revoked."
+					}
+				>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					if v.User.IsAdmin {
+						<input type="hidden" name="admin" value="off"/>
+					} else {
+						<input type="hidden" name="admin" value="on"/>
+					}
+					@adminPasswordField(csrf)
+					if v.User.IsAdmin {
+						<button type="submit" class="danger">Remove administrator rights</button>
+					} else {
+						<button type="submit" class="primary">Make administrator</button>
+					}
+				</form>
+			}
+		</details>
+
+		<details class="setup-guide">
+			<summary>Account status</summary>
+			if v.Self {
+				<p class="muted">
+					This is your own account. Disable it from another
+					administrator's, so that somebody is left who can turn it back
+					on.
+				</p>
+			} else {
+				<p class="muted">
+					A disabled account cannot sign in and every credential it holds
+					— tokens, kosync slots, statistics devices, pairing codes — is
+					refused as if it did not exist. Nothing is deleted: enabling it
+					again brings the tokens and devices back. Web sessions do not
+					come back, because disabling revoked them.
+				</p>
+				<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/disabled" }
+					if v.User.Enabled() {
+						hx-confirm="Disable this account? Every credential will be refused until re-enabled."
+					}
+				>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					if v.User.Enabled() {
+						<input type="hidden" name="disabled" value="on"/>
+					} else {
+						<input type="hidden" name="disabled" value="off"/>
+					}
+					@adminPasswordField(csrf)
+					if v.User.Enabled() {
+						<button type="submit" class="danger">Disable this account</button>
+					} else {
+						<button type="submit" class="primary">Enable this account</button>
+					}
+				</form>
+			}
+		</details>
+
+		<details class="setup-guide danger-zone">
+			<summary>Revoke every credential</summary>
 			<p class="muted">
-				This is your own account. Disable it from another
-				administrator's, so that somebody is left who can turn it back
-				on.
+				For a password known to be compromised: API tokens, web and login
+				sessions, kosync slots, statistics devices and any unused pairing
+				code, all at once. The account keeps its password — reset that as
+				well when the password is what leaked.
 			</p>
-		} else {
-			<p class="muted">
-				A disabled account cannot sign in and every credential it holds
-				— tokens, kosync slots, statistics devices, pairing codes — is
-				refused as if it did not exist. Nothing is deleted: enabling it
-				again brings the tokens and devices back. Web sessions do not
-				come back, because disabling revoked them.
-			</p>
-			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/disabled" }
-				if v.User.Enabled() {
-					hx-confirm="Disable this account? Every credential will be refused until re-enabled."
-				}
+			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/credentials/revoke" }
+				hx-confirm="Revoke every credential for this user? All tokens, sessions, kosync slots and statistics devices will stop working."
 			>
 				<input type="hidden" name="csrf" value={ csrf }/>
-				if v.User.Enabled() {
-					<input type="hidden" name="disabled" value="on"/>
-				} else {
-					<input type="hidden" name="disabled" value="off"/>
-				}
 				@adminPasswordField(csrf)
-				if v.User.Enabled() {
-					<button type="submit" class="danger">Disable this account</button>
-				} else {
-					<button type="submit" class="primary">Enable this account</button>
-				}
+				<button type="submit" class="danger">Revoke everything</button>
 			</form>
-		}
-	</section>
-	<section class="card">
-		<h2>Revoke every credential</h2>
-		<p class="muted">
-			For a password known to be compromised: API tokens, web and login
-			sessions, kosync slots, statistics devices and any unused pairing
-			code, all at once. The account keeps its password — reset that as
-			well when the password is what leaked.
-		</p>
-		<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/credentials/revoke" }
-			hx-confirm="Revoke every credential for this user? All tokens, sessions, kosync slots and statistics devices will stop working."
-		>
-			<input type="hidden" name="csrf" value={ csrf }/>
-			@adminPasswordField(csrf)
-			<button type="submit" class="danger">Revoke everything</button>
-		</form>
+		</details>
 	</section>
 	<p><a href={ settingsAdminHref(prefix, "users") }>← All users</a></p>
 }

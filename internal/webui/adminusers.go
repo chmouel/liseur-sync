@@ -1,6 +1,9 @@
 package webui
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -84,6 +87,134 @@ type adminUserFolderView struct {
 	Granted bool
 }
 
+// adminCreateView is the create-account form's folder half: every
+// watched folder, checked unless the operator cleared it. A new account
+// starts with no way into any catalog until a grant says otherwise —
+// administrator rights included — so the form grants the whole library
+// by default and the unticking is the deliberate act.
+type adminCreateView struct {
+	Name string
+	// Folders is every watched folder, only when the instance watches
+	// few enough for the form to submit a complete set.
+	Folders []adminUserFolderView
+	// Unmanageable says the instance watches more folders than
+	// adminUserFoldersMax, so Folders is empty on purpose: the account
+	// is created with no folder access and the CLI grants it, rather
+	// than from a form whose set could not be submitted whole.
+	Unmanageable bool
+	// SelectionDropped says a restored selection was not applied because
+	// the folder list is not the one it was taken on. Nothing is ticked
+	// rather than everything: a guess here would grant folders the
+	// operator had cleared.
+	SelectionDropped bool
+}
+
+// createSelection is the create form's folder ticks as a refusal hands
+// them back: one bit per watched folder, in the order the folder table
+// listed them, and a fingerprint of that list.
+type createSelection struct {
+	// Ticked is the bitmap, base64url, one bit per folder.
+	Ticked string
+	// Folders is the fingerprint the bits were taken against. A
+	// selection is restored only onto the list it was made on: a shifted
+	// bit would tick a folder the operator had cleared.
+	Folders string
+}
+
+// createSelectionFor is the selection a submitted grant set amounts to,
+// taken against the folder list the form was rendered from.
+func createSelectionFor(all []store.Folder, submitted []string) *createSelection {
+	tickedIDs := make(map[string]bool, len(submitted))
+	for _, id := range submitted {
+		tickedIDs[id] = true
+	}
+	ticked := make([]bool, len(all))
+	for i, folder := range all {
+		ticked[i] = tickedIDs[folder.ID]
+	}
+	return &createSelection{Ticked: encodeTicks(ticked), Folders: foldersFingerprint(all)}
+}
+
+func encodeTicks(ticked []bool) string {
+	packed := make([]byte, (len(ticked)+7)/8)
+	for i, on := range ticked {
+		if on {
+			packed[i/8] |= 1 << (i % 8)
+		}
+	}
+	return base64.RawURLEncoding.EncodeToString(packed)
+}
+
+// decodeTicks is encodeTicks undone, and false for anything that is not
+// the width a selection over n folders has.
+func decodeTicks(encoded string, n int) ([]bool, bool) {
+	packed, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(packed) != (n+7)/8 {
+		return nil, false
+	}
+	ticked := make([]bool, n)
+	for i := range ticked {
+		ticked[i] = packed[i/8]&(1<<(i%8)) != 0
+	}
+	return ticked, true
+}
+
+// foldersFingerprint identifies the folder list a selection was taken
+// against, so that restoring it onto a different one is refused rather
+// than silently wrong.
+func foldersFingerprint(all []store.Folder) string {
+	h := sha256.New()
+	for _, folder := range all {
+		h.Write([]byte(folder.ID))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil)[:6])
+}
+
+// adminCreateFolders builds the create form's folder list from the
+// current folder table and, after a refusal, from what was submitted.
+// Without a selection every box starts checked, which is the form's
+// default; a selection is whatever the operator left ticked.
+func (s *Server) adminCreateFolders(r *http.Request, flash Flash) (adminCreateView, error) {
+	view := adminCreateView{Name: flash.CreateName}
+	all, tooMany, err := allFolders(r.Context(), s.St, "", adminUserFoldersMax)
+	if err != nil {
+		return view, err
+	}
+	if tooMany {
+		view.Unmanageable = true
+		return view, nil
+	}
+	var ticked []bool
+	if sel := flash.CreateSelection; sel != nil {
+		// The ticks are positions, so they only mean anything against the
+		// list they were taken on. When it has changed, or when the bitmap
+		// is not even the right width, none is restored: a guessed tick
+		// could grant a folder somebody had cleared.
+		decoded, ok := decodeTicks(sel.Ticked, len(all))
+		switch {
+		case sel.Folders != foldersFingerprint(all), !ok:
+			view.SelectionDropped = true
+		default:
+			ticked = decoded
+		}
+	}
+	view.Folders = make([]adminUserFolderView, 0, len(all))
+	for i, folder := range all {
+		granted := true
+		switch {
+		case view.SelectionDropped:
+			granted = false
+		case ticked != nil:
+			granted = ticked[i]
+		}
+		view.Folders = append(view.Folders, adminUserFolderView{
+			Folder: folder, Granted: granted,
+		})
+	}
+	return view, nil
+}
+
 // reauth is the shared gate in front of every high-impact mutation: the
 // acting admin types their own password, and it is checked against two
 // independent budgets before it is checked against the hash.
@@ -148,6 +279,17 @@ func (s *Server) renderAdminUsersInPlace(
 	s.renderSettings(w, r, a, u, settingsAdmin, settingsAdminUsers, "", flash, false, "", false)
 }
 
+// handleAdminCreateUser creates an account and the folder grants the
+// form asked for.
+//
+// Everything the form can refuse is refused before a row is written:
+// the name and password are validated in internal/admin, and every
+// submitted folder id is checked against the folders this server
+// actually watches. What remains after that is one insert and one
+// grant-set replacement, neither of which is atomic with the other. A
+// store failure between them therefore does not report success: the
+// browser is sent to the new account's page with the truth, which is
+// also the one page that can finish the job.
 func (s *Server) handleAdminCreateUser(
 	w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User,
 ) {
@@ -155,38 +297,145 @@ func (s *Server) handleAdminCreateUser(
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	name := r.FormValue("name")
+	name := strings.TrimSpace(r.FormValue("name"))
+	submitted := uniqueStrings(r.PostForm["folders"])
+
+	// Read the folder table once: it says whether the selection can be
+	// granted safely at all, and it is what a validation refusal hands
+	// back to the form.
+	all, tooMany, err := allFolders(r.Context(), s.St, "", adminUserFoldersMax)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "create account: could not list folders", "error", err)
+		s.renderAdminUsers(w, r, a, u, Flash{Error: "Could not create account."})
+		return
+	}
+	// What a refusal hands back, minus anything a refusal is answered
+	// for: no password, and no name past the length the account rules
+	// allow — the state travels in a Location header, which has a size.
+	keep := Flash{}
+	if len(name) <= admin.MaxUserNameLength {
+		keep.CreateName = name
+	}
+	grants := submitted
+	if tooMany {
+		grants = nil
+	} else {
+		keep.CreateSelection = createSelectionFor(all, submitted)
+	}
+	refuse := func(err error) {
+		flash := keep
+		flash.Error = err.Error()
+		s.renderAdminUsers(w, r, a, u, flash)
+	}
+
 	if err := s.reauth(r, u); err != nil {
 		logAdminAction(r, u, "create-user", name, err)
 		if errors.Is(err, errRateLimited) {
+			// The status has to stay 429, so this one renders in place
+			// rather than redirecting — with the same preserved state, so
+			// that a retry after the wait does not quietly grant every
+			// folder the operator cleared.
+			flash := keep
+			flash.Error = err.Error()
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
-			s.renderAdminUsersInPlace(w, r, a, u, Flash{Error: err.Error()})
+			s.renderAdminUsersInPlace(w, r, a, u, flash)
 			return
 		}
-		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+		refuse(err)
 		return
 	}
 	pw, repeat := r.FormValue("password"), r.FormValue("repeat")
 	if err := admin.ValidatePassword(pw, repeat); err != nil {
 		logAdminAction(r, u, "create-user", name, err)
-		s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+		refuse(err)
 		return
 	}
+	if tooMany {
+		// The page offered no checkboxes, so any folder field in the body
+		// came from somewhere else. Refusing beats silently dropping a
+		// selection somebody believes they made.
+		if len(submitted) > 0 {
+			err := errTooManyFolders
+			logAdminAction(r, u, "create-user", name, err)
+			refuse(err)
+			return
+		}
+	} else if err := checkFolderIDs(all, submitted); err != nil {
+		logAdminAction(r, u, "create-user", name, err)
+		refuse(err)
+		return
+	}
+
 	created, err := admin.CreateUser(r.Context(), s.St, name, pw)
 	logAdminAction(r, u, "create-user", name, err)
 	if err != nil {
 		if isUserError(err) {
-			s.renderAdminUsers(w, r, a, u, Flash{Error: err.Error()})
+			refuse(err)
 			return
 		}
 		slog.ErrorContext(r.Context(), "create account failed", "error", err)
 		s.renderAdminUsers(w, r, a, u, Flash{Error: "Could not create account."})
 		return
 	}
-	s.renderAdminUsers(w, r, a, u, Flash{
-		Notice: "Created " + created.Name + ".",
-	})
+	notice := "Created " + created.Name + "."
+	if len(grants) > 0 {
+		if err := s.St.ReplaceUserFolders(r.Context(), created.ID, grants); err != nil {
+			logAdminAction(r, u, "set-folder-access", created.ID, err)
+			slog.ErrorContext(r.Context(), "grant folders to a new account failed",
+				"actor_id", u.ID, "user_id", created.ID, "error", err)
+			s.renderAdminUser(w, r, a, u, created.ID, Flash{Error: notice +
+				" Its folder access could not be set: " + err.Error() +
+				". Set it below."})
+			return
+		}
+		notice = "Created " + created.Name + " with access to " +
+			plural(len(grants), "folder") + "."
+	}
+	if tooMany {
+		notice += " This instance watches too many folders for this form to" +
+			" grant them safely, so the account has none: run" +
+			" liseur-sync admin assign-all-folders " + created.Name +
+			" (or assign-folder) to give it library access."
+	}
+	// Land on the account itself, which is where the rest of its setup
+	// lives and where a folder grant can be corrected.
+	s.renderAdminUser(w, r, a, u, created.ID, Flash{Notice: notice})
+}
+
+// uniqueStrings is a submitted id list with its repeats dropped: the
+// stores insert a grant set once per folder, so a body that names one
+// folder twice grants one folder and must not be counted or reported as
+// two.
+func uniqueStrings(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// checkFolderIDs refuses a grant set naming a folder this server does not
+// watch, before anything is created. It is the only check that makes the
+// create form's folder half trustworthy: a stale page is an ordinary
+// thing, and a grant that silently skipped an unknown id would leave a
+// new account with less access than the operator saw themselves choose.
+func checkFolderIDs(all []store.Folder, submitted []string) error {
+	known := make(map[string]bool, len(all))
+	for _, folder := range all {
+		known[folder.ID] = true
+	}
+	for _, id := range submitted {
+		if !known[id] {
+			return errors.New("one of those folders is no longer watched: " +
+				"reload this page and choose again")
+		}
+	}
+	return nil
 }
 
 func (s *Server) renderAdminUser(

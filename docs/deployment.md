@@ -291,24 +291,28 @@ reconciles the folder immediately and watches it without a restart.
 ## The Administration section
 
 The Administration section of `/ui/settings` is where an administrator runs
-the instance without a shell. It holds four things:
+the instance without a shell. It holds three things:
 
-- **Overview**: version, build and uptime, how many accounts, folders,
-  books and devices there are, and the effective configuration with the
-  database URL left out on purpose.
+- **Overview**: where to go next, and the state of the library — how many
+  accounts, folders (by kind) and books (active and missing) there are,
+  with the build and the effective configuration (the database URL left
+  out on purpose) behind a disclosure. A run of missing books is flagged
+  here, because it usually means a disk is not mounted where it was.
 - **Users**: the account list, and a page per account: reset a password,
   grant or revoke the administrator role, revoke a device credential or
   every credential at once, disable or enable the account, mint an API
   token with the scopes you choose, generate a kosync pairing code, add
   a statistics-plugin capability, and map the account's books to works.
-  Creating an account or invite, and every action that hands out or takes
-  away a way into an account, asks for your password again; every attempt
-  is logged.
+  Creating an account grants it the folders you tick, and lands on the
+  new account's page; the grants are a set, so every folder is ticked
+  unless you clear it, and an instance watching more folders than one
+  form can replace safely (500) creates the account without grants and
+  says to use the CLI. Creating an account or invite, and every action
+  that hands out or takes away a way into an account, asks for your
+  password again; every attempt is logged.
 - **Folders**: every watched folder on the instance. Add a plain or
   Calibre folder by naming an existing path, or remove one the server
   should stop reflecting. Only this page shows `root_path`.
-- **Maintenance**: whether scheduled jobs are running, whether folders
-  have missing books, and the backup check.
 
 The panel administers accounts and folders. It never shows what anybody
 is reading, and no page there can open another user's private reading

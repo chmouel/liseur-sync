@@ -19,18 +19,33 @@ const (
 	settingsDevices = "devices"
 	settingsAdmin   = "admin"
 
-	settingsAdminOverview    = "overview"
-	settingsAdminUsers       = "users"
-	settingsAdminUser        = "user"
-	settingsAdminFolders     = "folders"
-	settingsAdminMirror      = "mirror"
-	settingsAdminMaintenance = "maintenance"
+	settingsAdminOverview = "overview"
+	settingsAdminUsers    = "users"
+	settingsAdminUser     = "user"
+	settingsAdminFolders  = "folders"
+	settingsAdminMirror   = "mirror"
 )
 
 const (
 	folderOnboardingQuery = "onboarding"
 	folderOnboardingValue = "folder"
 	folderUploadsQuery    = "folder_uploads"
+)
+
+// The create-account form's non-secret state survives a validation
+// bounce: what was typed in the name field, and a bitmap of the folder
+// ticks with a fingerprint of the folder list it was taken against.
+//
+// The ticks travel as positions rather than ids because the form may
+// legitimately hold 500 folders, and 500 UUIDs in a Location header is
+// ~19KB — past what a default nginx accepts, which would turn a plain
+// refusal into a proxy error. A bitmap over the same 500 folders is 84
+// characters, and the fingerprint is what keeps a positional replay
+// from ticking a folder somebody cleared because the list shifted.
+const (
+	createUserNameQuery = "create_name"
+	createTicksQuery    = "create_ticks"
+	createShelvesQuery  = "create_shelves"
 )
 
 // The reader prompt (see static/reader-prompt.js) is the account's own
@@ -97,8 +112,11 @@ type settingsAdminView struct {
 	User    adminUserView
 	HasUser bool
 
-	Maintenance maintenanceView
-	Mirror      mirrorView
+	Create adminCreateView
+
+	Kinds  []countRow
+	Books  []countRow
+	Mirror mirrorView
 }
 
 type mirrorView struct {
@@ -217,6 +235,14 @@ func flashQuery(flash Flash) string {
 	if flash.OpenFolderForm {
 		query = append(query, folderOnboardingQuery+"="+folderOnboardingValue)
 	}
+	if flash.CreateName != "" {
+		query = append(query, createUserNameQuery+"="+url.QueryEscape(flash.CreateName))
+	}
+	if sel := flash.CreateSelection; sel != nil {
+		query = append(query,
+			createTicksQuery+"="+url.QueryEscape(sel.Ticked),
+			createShelvesQuery+"="+url.QueryEscape(sel.Folders))
+	}
 	if flash.FolderUploads != nil {
 		value := "0"
 		if *flash.FolderUploads {
@@ -233,6 +259,20 @@ func flashFromQuery(r *http.Request) Flash {
 		Notice:         r.URL.Query().Get("notice"),
 		Error:          r.URL.Query().Get("problem"),
 		OpenFolderForm: folderOnboardingRequested(r),
+	}
+	// The name travels on its own, because an instance past the folder
+	// cap sends no selection with it.
+	if name := r.URL.Query().Get(createUserNameQuery); name != "" {
+		flash.CreateName = name
+	}
+	// The fingerprint is what says a create-form selection came back: it
+	// is always written with the ticks, and an empty bitmap over an empty
+	// folder table looks exactly like no bitmap at all.
+	if shelves, ok := r.URL.Query()[createShelvesQuery]; ok && len(shelves) == 1 {
+		flash.CreateSelection = &createSelection{
+			Ticked:  r.URL.Query().Get(createTicksQuery),
+			Folders: shelves[0],
+		}
 	}
 	if values, ok := r.URL.Query()[folderUploadsQuery]; ok && len(values) == 1 {
 		switch values[0] {
@@ -261,7 +301,7 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 	case settingsAdmin:
 		view = r.URL.Query().Get("view")
 		switch view {
-		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror, settingsAdminMaintenance:
+		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror:
 		case settingsAdminUser:
 			userID = r.URL.Query().Get("user")
 			if userID == "" {
@@ -301,6 +341,12 @@ func (s *Server) renderSettings(
 	passwordMessage string,
 	passwordError bool,
 ) {
+	// A page that renders a once-shown secret must not be stored: it is a
+	// working credential, and a back button or a cached copy would hand it
+	// out a second time.
+	if flash.Secret != "" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if section == "" {
 		section = settingsProfile
 	}
@@ -330,7 +376,7 @@ func (s *Server) renderSettings(
 			adminView = settingsAdminOverview
 		}
 		view.Admin.View = adminView
-		if err := s.settingsAdmin(r, u, &view.Admin, adminView, targetID); err != nil {
+		if err := s.settingsAdmin(r, u, &view.Admin, adminView, targetID, flash); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				http.Error(w, "no such user", http.StatusNotFound)
 				return
@@ -374,6 +420,7 @@ func (s *Server) settingsAdmin(
 	v *settingsAdminView,
 	view string,
 	targetID string,
+	flash Flash,
 ) error {
 	switch view {
 	case settingsAdminFolders:
@@ -420,6 +467,11 @@ func (s *Server) settingsAdmin(
 		}
 		v.Users = users
 		v.Invites, _ = s.St.ListInvites(r.Context(), u.ID)
+		create, err := s.adminCreateFolders(r, flash)
+		if err != nil {
+			return err
+		}
+		v.Create = create
 	case settingsAdminUser:
 		target, err := s.St.UserByID(r.Context(), targetID)
 		if err != nil {
@@ -464,16 +516,6 @@ func (s *Server) settingsAdmin(
 		}
 		v.User = view
 		v.HasUser = true
-	case settingsAdminMaintenance:
-		counts, err := s.St.AdminCounts(r.Context())
-		if err != nil {
-			return err
-		}
-		v.Maintenance = maintenanceView{
-			Counts: counts,
-			Kinds:  countRows(counts.FoldersByKind, folderKindOrder),
-			Books:  countRows(counts.BooksByStatus, bookStatusOrder),
-		}
 	case settingsAdminMirror:
 		users, err := s.St.ListUsersPage(r.Context(), "", 1000)
 		if err != nil {
@@ -487,6 +529,8 @@ func (s *Server) settingsAdmin(
 			return err
 		}
 		v.Counts = counts
+		v.Kinds = countRows(counts.FoldersByKind, folderKindOrder)
+		v.Books = countRows(counts.BooksByStatus, bookStatusOrder)
 		if s.AudiobookRunner != nil {
 			v.Audiobookshelf = s.AudiobookRunner.Status()
 		}
