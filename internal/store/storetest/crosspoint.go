@@ -184,3 +184,80 @@ func testCrossPointInferenceCutoff(t *testing.T, open OpenFunc) {
 		t.Fatalf("historical inference lost: %v", err)
 	}
 }
+
+func testCrossPointArchivedRetryAfterWorkDeletion(t *testing.T, open OpenFunc) {
+	for _, version := range []int{0, 2} {
+		t.Run(fmt.Sprintf("rollup-v%d", version), func(t *testing.T) {
+			s := open(t)
+			ctx := t.Context()
+			user := MkUser(t, s, "archived-crosspoint")
+			now := time.Now().UTC().Truncate(time.Second)
+			if err := s.CreateKosyncDevice(ctx, store.KosyncDevice{UserID: user.ID, DeviceSlot: "x3", KeySHA256: "key"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.EnableKosyncStatistics(ctx, user.ID, "x3", now.Add(-2*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			session := store.Session{SessionID: "archived-event", StartedAt: now.Add(-time.Minute), EndedAt: now, StartProg: 0, EndProg: .1, ActiveMs: Ptr(int64(60000))}
+			upload := func(eventID, payloadHash string, session store.Session) (string, error) {
+				return s.AppendKosyncSession(ctx, user.ID, "x3", "document", eventID, payloadHash, session)
+			}
+			if status, err := upload("event-1", "payload-1", session); err != nil || status != "stored" {
+				t.Fatalf("initial upload: %s %v", status, err)
+			}
+			raw, err := s.SessionsEndedBefore(ctx, user.ID, now.Add(time.Hour), 0)
+			if err != nil || len(raw) != 1 {
+				t.Fatalf("archive input: %+v %v", raw, err)
+			}
+			workID := raw[0].WorkID
+			loc, err := time.LoadLocation(user.Timezone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rollup := store.SessionRollup{UserID: user.ID, WorkID: workID, Day: now.In(loc).Format("2006-01-02"), ActiveSeconds: 60, ProgDelta: .1, SessionCount: 1}
+			if version == 2 {
+				rollup.AttributionVersion = 2
+				rollup.Timezone = user.Timezone
+				rollup.MeasuredActiveSeconds = 60
+				rollup.MeasuredProgDelta = .1
+			}
+			if err := s.ApplyRollups(ctx, user.ID, []store.SessionRollup{rollup}, raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.DeleteWork(ctx, user.ID, workID); err != nil {
+				t.Fatal(err)
+			}
+			changed := session
+			changed.EndProg = .2
+			if _, err := upload("event-1", "changed", changed); !errors.Is(err, store.ErrIDMismatch) {
+				t.Fatalf("changed archived retry: %v", err)
+			}
+			if status, err := upload("event-1", "payload-1", session); err != nil || status != "stored" {
+				t.Fatalf("unchanged archived retry: %s %v", status, err)
+			}
+			if _, err := s.WorkIDByAlias(ctx, user.ID, "partial-md5", "document"); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("retry recreated work: %v", err)
+			}
+			snapshot, err := s.StatisticsSnapshot(ctx, user.ID, []string{session.SessionID})
+			if err != nil || len(snapshot.Sessions) != 0 || len(snapshot.Rollups) != 0 || len(snapshot.Archived) != 1 {
+				t.Fatalf("retry changed deleted statistics: %+v %v", snapshot, err)
+			}
+			next := session
+			next.SessionID = "next-event"
+			if status, err := upload("event-2", "payload-2", next); err != nil || status != "stored" {
+				t.Fatalf("next event blocked: %s %v", status, err)
+			}
+			freshWork, err := s.WorkIDByAlias(ctx, user.ID, "partial-md5", "document")
+			if err != nil || freshWork == workID {
+				t.Fatalf("next event work: %s %v", freshWork, err)
+			}
+			if status, err := upload("event-1", "payload-1", session); err != nil || status != "stored" {
+				t.Fatalf("retry after new identity: %s %v", status, err)
+			}
+			sessions, err := s.SessionsInRange(ctx, user.ID, now.Add(-time.Hour), now.Add(time.Hour))
+			if err != nil || len(sessions) != 1 || sessions[0].SessionID != next.SessionID {
+				t.Fatalf("retried archive counted again: %+v %v", sessions, err)
+			}
+		})
+	}
+}

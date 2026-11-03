@@ -59,6 +59,15 @@ func deleteWorkTx(ctx context.Context, tx *sql.Tx, userID, workID string) error 
 		userID, workID); err != nil {
 		return err
 	}
+	// Archived event proof must survive the work cascade, like its native tombstone.
+	if _, err := tx.ExecContext(ctx, `UPDATE crosspoint_session_receipts SET work_id = NULL
+         WHERE user_id = ? AND work_id = ?
+           AND EXISTS (SELECT 1 FROM session_tombstones st
+                       WHERE st.user_id = crosspoint_session_receipts.user_id
+                         AND st.session_id = crosspoint_session_receipts.session_id)`, userID, workID); err != nil {
+		return err
+	}
+
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM works WHERE user_id = ? AND id = ?`, userID, workID)
 	if err != nil {
