@@ -66,8 +66,14 @@ func (d *Document) AnchorAt(pos Position) (Anchor, error) {
 		if i == from {
 			skip = pos.offset
 		}
+		// Words arrive in byte order, so the rune count up to each word's
+		// end is accumulated from the previous one rather than recounted
+		// from the start of the run.
+		prev, before := 0, 0
 		for _, w := range wordPattern.FindAllStringIndex(r.text, -1) {
-			if utf8.RuneCountInString(r.text[:w[1]]) <= skip {
+			before += utf8.RuneCountInString(r.text[prev:w[1]])
+			prev = w[1]
+			if before <= skip {
 				continue
 			}
 			return d.anchorFor(r, w[0], w[1])

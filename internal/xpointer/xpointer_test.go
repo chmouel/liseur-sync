@@ -657,3 +657,26 @@ func TestParseDocumentDeclinesTooManyNodes(t *testing.T) {
 		t.Fatalf("dense resource: %v, want ErrTooComplex", err)
 	}
 }
+
+// The word at an offset deep in a multibyte run is the one the code point
+// count picks, however many words precede it.
+func TestAnchorAtMultibyteOffset(t *testing.T) {
+	var b strings.Builder
+	for i := range 400 {
+		fmt.Fprintf(&b, "mots\u00e9%d ", i)
+	}
+	b.WriteString("cible ici")
+	text := b.String()
+	d := mustDoc(t, "<html><body><p>"+text+"</p></body></html>")
+	pos, err := d.at(len([]rune(text[:strings.Index(text, "cible")])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := d.AnchorAt(pos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Highlight != "cible" || !strings.HasSuffix(a.Before, "mots\u00e9399 ") || a.After != " ici" {
+		t.Errorf("AnchorAt = %+v", a)
+	}
+}
