@@ -29,6 +29,11 @@ const (
 // chapter is DocFragment[2] the way CrossPoint counts it.
 func mobyEPUB(t *testing.T) []byte {
 	t.Helper()
+	return mobyEPUBWithChapter(t, `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Loomings</h1><p>Chapter one.</p><p>Call me Ishmael. Some years ago, never mind how long.</p></body></html>`)
+}
+
+func mobyEPUBWithChapter(t *testing.T, chapter string) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for _, f := range []struct{ name, body string }{
@@ -47,7 +52,7 @@ func mobyEPUB(t *testing.T) []byte {
 <spine><itemref idref="cover" linear="no"/><itemref idref="c1"/></spine></package>`},
 		{"OEBPS/nav.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol><li><a href="chapter1.xhtml">Loomings</a></li></ol></nav></body></html>`},
 		{"OEBPS/cover.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Moby-Dick</p></body></html>`},
-		{"OEBPS/chapter1.xhtml", `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Loomings</h1><p>Chapter one.</p><p>Call me Ishmael. Some years ago, never mind how long.</p></body></html>`},
+		{"OEBPS/chapter1.xhtml", chapter},
 	} {
 		method := zip.Deflate
 		if f.name == "mimetype" {
@@ -235,5 +240,25 @@ func TestGetProgressFallsBackToPercentage(t *testing.T) {
 				t.Fatalf("GET = %v, want the percentage", out)
 			}
 		})
+	}
+}
+
+func TestGetProgressDeclinesReceiverSpecificTextIndex(t *testing.T) {
+	f := newDeriveFixture(t, deriveSHA)
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, "lib"); err != nil {
+		t.Fatal(err)
+	}
+	f.addBook(t, "whitespace", "whitespace.epub", deriveSHA, mobyEPUBWithChapter(t, "<html><body><div>\n  <p>x</p>\n  Tail text</div></body></html>"))
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, "whitespace"); err != nil {
+		t.Fatal(err)
+	}
+	f.readOnWeb(t, deriveSHA, map[string]any{
+		"href":      "OEBPS/chapter1.xhtml",
+		"locations": map[string]any{"liseurAnchor": 1, "cssSelector": "body > div:nth-of-type(1)"},
+		"text":      map[string]any{"before": "\n  ", "highlight": "Tail", "after": " text"},
+	})
+	_, out := kreq(t, "GET", f.ts.URL+"/adapter/kosync/syncs/progress/"+deriveDoc, f.slot, f.key, nil)
+	if out["progress"] != "0.42" {
+		t.Fatalf("KOReader received a receiver-specific XPath: %v", out)
 	}
 }

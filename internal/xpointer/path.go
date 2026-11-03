@@ -15,9 +15,10 @@
 // boundary, a comment, a processing instruction, a CDATA boundary) is
 // one node, empty runs make no node, content of non-visible elements is
 // not counted, and offsets are raw Unicode code points. KOReader's own
-// engine collapses whitespace runs before counting, so in a text node
-// whose source wraps lines a KOReader offset can land a few characters
-// from a CrossPoint one; the node, and so the paragraph, is the same.
+// engine may discard whitespace-only nodes and collapses whitespace runs
+// before counting. Outgoing derivation declines paths when discarded sibling
+// whitespace could change the text-node index; offsets within a wrapped node
+// can still differ between engines.
 package xpointer
 
 import (

@@ -1715,7 +1715,9 @@ Transfer's Optimize EPUB or Calibre's send-to-device) has another
 fingerprint, so its positions land on a pending work
 of their own: they sync with other CrossPoint and KOReader devices
 holding the same copy, and never reach a Liseur reader. Clippings
-and CrossPoint's layout hints in `position` are not synced.
+and CrossPoint's layout hints in `position` are not synced. A derived XPath
+also falls back to the percentage when formatting whitespace would give
+CrossPoint and KOReader different text-node indexes.
 
 ### Measured reading statistics
 
