@@ -375,11 +375,11 @@ func TestParseSpine(t *testing.T) {
 }
 
 func bookOf(files map[string]string, spine ...string) *Book {
-	return &Book{spine: spine, read: func(_ context.Context, name string) ([]byte, error) {
+	return &Book{spine: spine, open: func(_ context.Context, name string) (io.ReadCloser, int64, error) {
 		if s, ok := files[name]; ok {
-			return []byte(s), nil
+			return io.NopCloser(strings.NewReader(s)), int64(len(s)), nil
 		}
-		return nil, errors.New("no such resource")
+		return nil, 0, errors.New("no such resource")
 	}}
 }
 
@@ -527,9 +527,10 @@ func TestDocumentManySiblingIndexes(t *testing.T) {
 func TestBookTranslationCanceledAfterResourceRead(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	book := &Book{spine: []string{"chapter.xhtml"}, read: func(context.Context, string) ([]byte, error) {
+	book := &Book{spine: []string{"chapter.xhtml"}, open: func(context.Context, string) (io.ReadCloser, int64, error) {
 		cancel()
-		return []byte("<html><body><p>word</p></body></html>"), nil
+		chapter := "<html><body><p>word</p></body></html>"
+		return io.NopCloser(strings.NewReader(chapter)), int64(len(chapter)), nil
 	}}
 	if _, err := book.LocatorFor(ctx, "/body/DocFragment[1]/body/p[1]/text()[1].0"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled translation: %v", err)
@@ -538,10 +539,10 @@ func TestBookTranslationCanceledAfterResourceRead(t *testing.T) {
 
 func TestBookReusesParsedChapter(t *testing.T) {
 	book := bookOf(map[string]string{"chapter.xhtml": "<html><body><p>Call me Ishmael.</p></body></html>"}, "chapter.xhtml")
-	read, reads := book.read, 0
-	book.read = func(ctx context.Context, name string) ([]byte, error) {
+	open, reads := book.open, 0
+	book.open = func(ctx context.Context, name string) (io.ReadCloser, int64, error) {
 		reads++
-		return read(ctx, name)
+		return open(ctx, name)
 	}
 	first, err := book.document(t.Context(), 0)
 	if err != nil {
@@ -605,5 +606,54 @@ func TestBookChapterCacheBounds(t *testing.T) {
 				t.Fatalf("evicted chapter could not be read: %v", err)
 			}
 		})
+	}
+}
+
+func TestTranslateDeclinesOversizedChapter(t *testing.T) {
+	chapter := "<html><body><p>word</p></body></html>"
+	// A resource that declares more than the limit is refused unread.
+	book := &Book{spine: []string{"chapter.xhtml"}, open: func(context.Context, string) (io.ReadCloser, int64, error) {
+		return io.NopCloser(strings.NewReader(chapter)), maxChapterBytes + 1, nil
+	}}
+	if _, err := book.LocatorFor(t.Context(), "/body/DocFragment[1]/body/p[1]/text()[1].0"); !errors.Is(err, ErrTooComplex) {
+		t.Fatalf("declared size past the limit: %v, want ErrTooComplex", err)
+	}
+	// One that understates it is stopped at the cap rather than buffered whole.
+	book.open = func(context.Context, string) (io.ReadCloser, int64, error) {
+		return io.NopCloser(strings.NewReader(strings.Repeat("a", maxChapterBytes+1))), 1, nil
+	}
+	if _, err := book.LocatorFor(t.Context(), "/body/DocFragment[1]/body/p[1]/text()[1].0"); !errors.Is(err, ErrTooComplex) {
+		t.Fatalf("undeclared size past the limit: %v, want ErrTooComplex", err)
+	}
+	// Right up to the cap the chapter is read and translated.
+	book.open = func(context.Context, string) (io.ReadCloser, int64, error) {
+		return io.NopCloser(strings.NewReader(chapter)), int64(len(chapter)), nil
+	}
+	if _, err := book.LocatorFor(t.Context(), "/body/DocFragment[1]/body/p[1]/text()[1].0"); err != nil {
+		t.Fatalf("small chapter: %v", err)
+	}
+}
+
+func TestParseDocumentDeclinesOversizedData(t *testing.T) {
+	if _, err := ParseDocument(t.Context(), make([]byte, maxChapterBytes+1)); !errors.Is(err, ErrTooComplex) {
+		t.Fatalf("oversized resource: %v, want ErrTooComplex", err)
+	}
+}
+
+func TestParseDocumentDeclinesDeepNesting(t *testing.T) {
+	data := "<html><body>" + strings.Repeat("<div>", maxChapterDepth+1) + "text</body></html>"
+	if _, err := ParseDocument(t.Context(), []byte(data)); !errors.Is(err, ErrTooComplex) {
+		t.Fatalf("deep nesting: %v, want ErrTooComplex", err)
+	}
+	ok := "<html><body>" + strings.Repeat("<div>", maxChapterDepth) + "text</body></html>"
+	if _, err := ParseDocument(t.Context(), []byte(ok)); err != nil {
+		t.Fatalf("nesting up to the limit: %v", err)
+	}
+}
+
+func TestParseDocumentDeclinesTooManyNodes(t *testing.T) {
+	data := "<html><body>" + strings.Repeat("<p>word</p>", maxChapterNodes/2+1) + "</body></html>"
+	if _, err := ParseDocument(t.Context(), []byte(data)); !errors.Is(err, ErrTooComplex) {
+		t.Fatalf("dense resource: %v, want ErrTooComplex", err)
 	}
 }

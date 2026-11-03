@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"io"
 	"net/url"
 	"path"
 	"slices"
@@ -24,7 +25,7 @@ type Book struct {
 	// linear="no" items, which Readium's reading order drops: a
 	// DocFragment index counts every itemref.
 	spine         []string
-	read          func(ctx context.Context, name string) ([]byte, error)
+	open          func(ctx context.Context, name string) (io.ReadCloser, int64, error)
 	documents     []cachedChapter
 	documentBytes int
 }
@@ -52,7 +53,9 @@ func Open(ctx context.Context, pub *epub.Publication) (*Book, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Book{spine: spine, read: pub.Resource}, nil
+	return &Book{spine: spine, open: func(_ context.Context, name string) (io.ReadCloser, int64, error) {
+		return pub.OpenResource(name)
+	}}, nil
 }
 
 func parseSpine(opf []byte, opfPath string) ([]string, error) {
@@ -98,7 +101,7 @@ func (b *Book) document(ctx context.Context, i int) (*Document, error) {
 			return chapter.doc, nil
 		}
 	}
-	data, err := b.read(ctx, name)
+	data, err := readChapter(ctx, b.open, name)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +118,30 @@ func (b *Book) document(ctx context.Context, i int) (*Document, error) {
 		b.documentBytes += len(data)
 	}
 	return doc, nil
+}
+
+// readChapter reads one resource up to maxChapterBytes, so a chapter is
+// never buffered whole past the point translation would decline it.
+func readChapter(ctx context.Context, open func(context.Context, string) (io.ReadCloser, int64, error), name string) ([]byte, error) {
+	r, size, err := open(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	if size > maxChapterBytes {
+		return nil, ErrTooComplex
+	}
+	data, err := io.ReadAll(io.LimitReader(r, maxChapterBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxChapterBytes {
+		return nil, ErrTooComplex
+	}
+	if int64(len(data)) != size {
+		return nil, errors.New("xpointer: truncated chapter")
+	}
+	return data, nil
 }
 
 // LocatorFor translates a CRe XPath into a Liseur anchored locator.
