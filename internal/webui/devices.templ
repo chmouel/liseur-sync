@@ -18,7 +18,7 @@ type Flash struct {
 	FolderUploads   *bool
 }
 
-templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
+templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
 	<h2>Devices & integrations</h2>
 	if flash.Secret != "" {
 		<div class="card secret">
@@ -118,139 +118,176 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 		if len(browsers) == 0 {
 			<p class="muted">You have not read in a browser on this account.</p>
 		} else {
-			<table>
-				<thead>
-					<tr><th scope="col">Device id</th><th scope="col">Last read</th></tr>
-				</thead>
-				for _, b := range browsers {
-					<tr>
-						<td><code>{ b.DeviceID }</code></td>
-						<td><time datetime={ b.LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ b.LastUsed.Format("2006-01-02 15:04") }</time></td>
-					</tr>
-				}
-			</table>
-			<form method="post" action={ prefix + "browsers/revoke" }
-				hx-confirm="Sign out of every browser? You will need to sign in again to read in a browser."
-			>
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<button type="submit" class="danger">Sign out of browser reading</button>
-			</form>
-		}
-	</section>
-
-	<section class="card">
-		<h2>KOReader (kosync)</h2>
-		<p class="muted">
-			Generate a pairing code, then in KOReader's kosync settings:
-			username = device name, password = code, server =
-			<code>{ base + "/adapter/kosync" }</code>.
-		</p>
-		<p class="muted">
-			On a CrossPoint reader, open Settings → CrossPoint Sync: set
-			Sync Server URL to the address above, Server Type to KoSync,
-			Document Matching to Binary, Username to a new device name and
-			Password to the code, then press Sign Up. Leave Sync Clippings
-			off. "Username is already registered" means that device name
-			is paired already, and revoking a pairing does not free it:
-			pick another name.
-		</p>
-		<form method="post" action={ prefix + "pairing" } class="inline">
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<button type="submit">Generate pairing code</button>
-		</form>
-		if len(kosyncDevs) > 0 {
-			<table>
-				<thead>
-					<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col"></th></tr>
-				</thead>
-				for _, d := range kosyncDevs {
-					{{ devType := detectDeviceType(d.Label, d.DeviceSlot) }}
-					<tr>
-						<td><code>{ d.DeviceSlot }</code></td>
-						<td>
-							<span class="dev-cell">
-								@deviceIcon(devType)
-								<span>{ d.Label }</span>
-							</span>
-							if d.MeasuredSessionsFrom != nil {
-								<br/>
-								<span class="muted">Measured statistics enabled</span>
-							}
-						</td>
-						<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
-						<td>
-							<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }
-								hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
-							>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<button type="submit" class="danger">Revoke</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		}
-		<details>
-			<summary>CrossPoint reading statistics</summary>
-			<p>Requires firmware with the <code>reader.session</code> plugin event. Downloading enables measured statistics for this slot. Older estimates stay; future progress uploads stop producing estimates, even if the plugin is offline or disabled.</p>
-			<p>Copy the ZIP’s <code>liseur-stats</code> folder into <code>/plugins</code> on your SD card, enable plugins in Settings → Connectivity, refresh or restart, then close and reopen your book. Keep this ZIP private: it contains your device credential.</p>
-			for _, d := range kosyncDevs {
-				<form method="post" action={ prefix + "kosync/" + url.PathEscape(d.DeviceSlot) + "/crosspoint" }>
+			<div class="browser-summary">
+				<span class="browser-summary-meta">
+					<strong>{ activeBrowsersLabel(len(browsers)) }</strong>
+					<span class="muted">· Last read <time datetime={ browsers[0].LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ browsers[0].LastUsed.Format("2006-01-02 15:04") }</time></span>
+				</span>
+				<form method="post" action={ prefix + "browsers/revoke" }
+					hx-confirm="Sign out of every browser? You will need to sign in again to read in a browser."
+				>
 					<input type="hidden" name="csrf" value={ csrf }/>
-					<label>
-						{ d.DeviceSlot } — existing KoSync pairing password
-						<input type="password" name="password" autocomplete="off" required/>
-					</label>
-					if d.MeasuredSessionsFrom == nil {
-						<button type="submit">Enable statistics &amp; download plugin</button>
-					} else {
-						<button type="submit">Download configured plugin again</button>
-					}
+					<button type="submit" class="danger">Sign out of browser reading</button>
 				</form>
-			}
-		</details>
-	</section>
-
-	<section class="card">
-		<h2>KOReader statistics plugin</h2>
-		<p class="muted">
-			Point the plugin's server at
-			<code>{ base + "/adapter/koplugin/<capability>" }</code>.
-		</p>
-		<form method="post" action={ prefix + "koplugin" } class="inline">
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<input name="name" placeholder="Kobo Clara" required/>
-			<button type="submit" class="primary">New capability</button>
-		</form>
-		if len(kopluginDevs) > 0 {
-			<table>
-				<thead>
-					<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Device id</th><th scope="col"></th></tr>
-				</thead>
-				for _, d := range kopluginDevs {
-					{{ devType := detectDeviceType(d.Label, d.DeviceID) }}
-					<tr>
-						<td>
-							<span class="dev-cell">
-								@deviceIcon(devType)
-								<span>{ d.Label }</span>
-							</span>
-						</td>
-						<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
-						<td><code>{ d.DeviceID }</code></td>
-						<td>
-							<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }
-								hx-confirm="Revoke this statistics device? It will stop sending reading data until re-paired."
-							>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<button type="submit" class="danger">Revoke</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
+			</div>
+			<details class="setup-guide">
+				<summary>Device IDs</summary>
+				<table>
+					<thead>
+						<tr><th scope="col">Device id</th><th scope="col">Last read</th></tr>
+					</thead>
+					for _, b := range browsers {
+						<tr>
+							<td><code>{ b.DeviceID }</code></td>
+							<td><time datetime={ b.LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ b.LastUsed.Format("2006-01-02 15:04") }</time></td>
+						</tr>
+					}
+				</table>
+			</details>
 		}
 	</section>
+
+	if !u.User.KosyncEnabled && len(kosyncDevs) == 0 {
+		<section class="card adapter-disabled">
+			<div class="adapter-disabled-row">
+				<h2>KOReader (kosync)</h2>
+				<p class="muted">
+					Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
+				</p>
+			</div>
+		</section>
+	} else {
+		<section class="card">
+			<h2>KOReader (kosync)</h2>
+			<details class="setup-guide" open?={ len(kosyncDevs) == 0 }>
+				<summary>Setup instructions</summary>
+				<p class="muted">
+					Generate a pairing code, then in KOReader's kosync settings:
+					username = device name, password = code, server =
+					<code>{ base + "/adapter/kosync" }</code>.
+				</p>
+				<p class="muted">
+					On a CrossPoint reader, open Settings → CrossPoint Sync: set
+					Sync Server URL to the address above, Server Type to KoSync,
+					Document Matching to Binary, Username to a new device name and
+					Password to the code, then press Sign Up. Leave Sync Clippings
+					off. "Username is already registered" means that device name
+					is paired already, and revoking a pairing does not free it:
+					pick another name.
+				</p>
+			</details>
+			<form method="post" action={ prefix + "pairing" } class="inline">
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<button type="submit">Generate pairing code</button>
+			</form>
+			if len(kosyncDevs) > 0 {
+				<table>
+					<thead>
+						<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col"></th></tr>
+					</thead>
+					for _, d := range kosyncDevs {
+						{{ devType := detectDeviceType(d.Label, d.DeviceSlot) }}
+						<tr>
+							<td><code>{ d.DeviceSlot }</code></td>
+							<td>
+								<span class="dev-cell">
+									@deviceIcon(devType)
+									<span>{ d.Label }</span>
+								</span>
+								if d.MeasuredSessionsFrom != nil {
+									<br/>
+									<span class="muted">Measured statistics enabled</span>
+								}
+							</td>
+							<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
+							<td>
+								<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }
+									hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
+								>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			}
+			<details class="setup-guide">
+				<summary>CrossPoint reading statistics</summary>
+				<p>Requires firmware with the <code>reader.session</code> plugin event. Downloading enables measured statistics for this slot. Older estimates stay; future progress uploads stop producing estimates, even if the plugin is offline or disabled.</p>
+				<p>Copy the ZIP’s <code>liseur-stats</code> folder into <code>/plugins</code> on your SD card, enable plugins in Settings → Connectivity, refresh or restart, then close and reopen your book. Keep this ZIP private: it contains your device credential.</p>
+				for _, d := range kosyncDevs {
+					<form method="post" action={ prefix + "kosync/" + url.PathEscape(d.DeviceSlot) + "/crosspoint" }>
+						<input type="hidden" name="csrf" value={ csrf }/>
+						<label>
+							{ d.DeviceSlot } — existing KoSync pairing password
+							<input type="password" name="password" autocomplete="off" required/>
+						</label>
+						if d.MeasuredSessionsFrom == nil {
+							<button type="submit">Enable statistics &amp; download plugin</button>
+						} else {
+							<button type="submit">Download configured plugin again</button>
+						}
+					</form>
+				}
+			</details>
+		</section>
+	}
+
+	if !u.User.KopluginEnabled && len(kopluginDevs) == 0 {
+		<section class="card adapter-disabled">
+			<div class="adapter-disabled-row">
+				<h2>KOReader statistics plugin</h2>
+				<p class="muted">
+					Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
+				</p>
+			</div>
+		</section>
+	} else {
+		<section class="card">
+			<h2>KOReader statistics plugin</h2>
+			<details class="setup-guide" open?={ len(kopluginDevs) == 0 }>
+				<summary>Setup instructions</summary>
+				<p class="muted">
+					Point the plugin's server at
+					<code>{ base + "/adapter/koplugin/<capability>" }</code>.
+				</p>
+			</details>
+			<form method="post" action={ prefix + "koplugin" } class="inline">
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input name="name" placeholder="Kobo Clara" required/>
+				<button type="submit" class="primary">New capability</button>
+			</form>
+			if len(kopluginDevs) > 0 {
+				<table>
+					<thead>
+						<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Device id</th><th scope="col"></th></tr>
+					</thead>
+					for _, d := range kopluginDevs {
+						{{ devType := detectDeviceType(d.Label, d.DeviceID) }}
+						<tr>
+							<td>
+								<span class="dev-cell">
+									@deviceIcon(devType)
+									<span>{ d.Label }</span>
+								</span>
+							</td>
+							<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
+							<td><code>{ d.DeviceID }</code></td>
+							<td>
+								<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }
+									hx-confirm="Revoke this statistics device? It will stop sending reading data until re-paired."
+								>
+									<input type="hidden" name="csrf" value={ csrf }/>
+									<button type="submit" class="danger">Revoke</button>
+								</form>
+							</td>
+						</tr>
+					}
+				</table>
+			}
+		</section>
+	}
 
 	<section class="card">
 		<h2>OPDS catalog</h2>
@@ -260,21 +297,24 @@ templ devicesBody(prefix string, csrf string, toks []store.Token, browsers []bro
 			serves the same books as the Library page.
 		</p>
 		<p><code class="big">{ base + "/opds/v1.2" }</code></p>
-		<p class="muted">
-			When it asks for a login, the password is an API token secret
-			from above — not your account password, which the catalog does
-			not accept. The username is that token's name — or the word
-			<code>token</code>, for an app that insists on one it can
-			remember. The token needs the
-			<code>{ string(store.ScopeLibraryRead) }</code> scope; one
-			without it can sync positions but cannot see a book.
-		</p>
-		<p class="muted">
-			A CrossPoint reader shows "Failed to parse feed" for any
-			refusal other than a bad login, such as a revoked token or a
-			folder it is no longer granted. Check the token and its scope
-			first.
-		</p>
+		<details class="setup-guide" open?={ !hasOPDSToken(toks) }>
+			<summary>Setup instructions</summary>
+			<p class="muted">
+				When it asks for a login, the password is an API token secret
+				from above — not your account password, which the catalog does
+				not accept. The username is that token's name — or the word
+				<code>token</code>, for an app that insists on one it can
+				remember. The token needs the
+				<code>{ string(store.ScopeLibraryRead) }</code> scope; one
+				without it can sync positions but cannot see a book.
+			</p>
+			<p class="muted">
+				A CrossPoint reader shows "Failed to parse feed" for any
+				refusal other than a bad login, such as a revoked token or a
+				folder it is no longer granted. Check the token and its scope
+				first.
+			</p>
+		</details>
 	</section>
 }
 

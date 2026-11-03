@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -228,4 +229,20 @@ func splitReaderTokens(toks []store.Token) (mine []store.Token, browsers []brows
 		return browsers[i].LastUsed.After(browsers[j].LastUsed)
 	})
 	return mine, browsers
+}
+
+func activeBrowsersLabel(n int) string {
+	if n == 1 {
+		return "1 active browser"
+	}
+	return strconv.Itoa(n) + " active browsers"
+}
+
+func hasOPDSToken(toks []store.Token) bool {
+	for _, t := range toks {
+		if t.Scopes.Contains(store.ScopeLibraryRead) {
+			return true
+		}
+	}
+	return false
 }

@@ -54,6 +54,9 @@ func TestBrowsersAreOneRowPerBrowser(t *testing.T) {
 	if n := strings.Count(body, ">"+deviceID+"<"); n != 1 {
 		t.Fatalf("four reader credentials rendered %d rows, want 1", n)
 	}
+	if !strings.Contains(body, "<strong>1 active browser</strong>") {
+		t.Fatal("browser summary bar does not show the active browser count")
+	}
 }
 
 // TestSignOutOfBrowserReadingRevokes checks the button does what it
