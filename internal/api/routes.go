@@ -568,13 +568,17 @@ func (s *Server) Routes() *http.ServeMux {
 	//
 	// The logging wrapper is outermost so that a refusal by the
 	// transport, the limiter or the credential check is reported too:
-	// an e-reader that fails says nothing about why.
+	// an e-reader that fails says nothing about why. The capture sits
+	// between authentication and authorization for the same reason — a
+	// token without library-read is refused by the scope check, and that
+	// is the refusal most worth attributing to a credential.
 	opdsH := func(pattern string, h http.HandlerFunc) http.Handler {
 		return s.opdsLogging(pattern,
 			auth.RequireSecureTransport(s.Cfg,
 				auth.RateLimitIP(s.OPDSLimiter, s.Cfg,
-					auth.RequireBasicScope(s.Auth, store.ScopeLibraryRead,
-						opdsTokenCapture(h)))))
+					auth.RequireBasicToken(s.Auth,
+						opdsTokenCapture(
+							auth.RequireAttachedScope(store.ScopeLibraryRead, h))))))
 	}
 	mux.Handle("GET /opds/v1.2", opdsH("GET /opds/v1.2", s.HandleOPDSRoot))
 	// {$} rather than a bare trailing slash: a prefix pattern would
