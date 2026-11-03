@@ -33,13 +33,26 @@ func Load(path string) (Config, error) {
 			// The single entry only exists when the file says so. Its
 			// default name would otherwise look like a peer nobody
 			// configured, and would refuse a list entry the same name.
-			c.mirrorDefined = meta.IsDefined("mirror")
+			c.mirrorDefined = tableDefined(meta, "mirror")
 		} else if !os.IsNotExist(err) {
 			return c, err
 		}
 	}
 	c.applyEnv()
 	return c, c.Validate()
+}
+
+// tableDefined reports whether the file carries a table named name,
+// whatever case the operator wrote it in. The decoder binds a key to a
+// struct field by folding case, while MetaData.IsDefined matches exactly,
+// so a [Mirror] header fills the struct and looks absent at the same time.
+func tableDefined(meta toml.MetaData, name string) bool {
+	for _, key := range meta.Keys() {
+		if len(key) > 0 && strings.EqualFold(key[0], name) {
+			return true
+		}
+	}
+	return false
 }
 
 func unknownKeyError(path string, undecoded []toml.Key) error {

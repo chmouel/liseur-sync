@@ -137,9 +137,12 @@ those passes would lose the position for good: the next time the book
 did resolve, the only local position would look like one of that
 peer's own and never be offered to it. Those two watermarks are used
 and no others, because both are written when something crosses or is
-deliberately refused and neither is written by a failure. The time of
-the last poll is not one of them: it is recorded the moment the peer
-answers at all, which is before the push that answer may call for.
+deliberately refused and neither is written by a failure. That includes
+the push whose whole point is detail rather than place — a peer at the
+same fraction that lacks this server's CFI — so its remote clock moves
+only once that push has landed. The time of the last poll is not one of
+them: it is recorded the moment the peer answers at all, which is
+before the push that answer may call for.
 
 This is the syncer's job rather than any protocol's, so it holds for
 the KOReader path as much as the native one. The credential is

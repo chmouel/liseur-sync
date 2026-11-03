@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -163,6 +164,11 @@ const (
 // exchange is one work's conversation. It mutates the cursor in place;
 // the caller writes it back either way, so a failure still records that
 // it happened.
+//
+// The request happens outside the account lock: a slow peer must not hold
+// another worker of the same account up. What the answer means is decided
+// under that lock, from a snapshot of the op log read at that moment
+// rather than the one the candidate carried into the request.
 func (s *Syncer) exchange(
 	ctx context.Context, c store.MirrorCandidate, cur *store.MirrorCursor,
 ) (outcome, error) {
@@ -195,7 +201,58 @@ func (s *Syncer) exchange(
 		return outcomeNothing, err
 	}
 
-	local := c.Latest
+	push, out, err := s.settle(ctx, c, cur, remote, have, fresh)
+	if err != nil || push == nil {
+		return out, err
+	}
+	out, err = s.push(ctx, c, *push, cur)
+	if err != nil {
+		return out, err
+	}
+	// The peer's clock is a watermark of its own, and like the other
+	// one it records something that crossed. A push that failed leaves
+	// both alone, so the retry it owes is still owed (ADR-0048).
+	if have {
+		cur.RemoteTS = remote.At.Unix()
+	}
+	return out, nil
+}
+
+// accountLocks holds one mutex per mirrored account, for the life of the
+// process. Peers of one account read and write the same op log, and a
+// decision taken from a snapshot read before a network call can commit a
+// position a newer peer result has already superseded. The lock spans the
+// re-read and the commit, never the request: event delivery is local to
+// this process (docs/deployment.md), so one mutex is the whole of the
+// coordination.
+var accountLocks sync.Map
+
+func accountLock(userID string) *sync.Mutex {
+	mu, _ := accountLocks.LoadOrStore(userID, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
+// settle decides what crosses for one work, holding the account lock from
+// the moment the latest op is read to the moment the answer is committed.
+// A push comes back as the op to send rather than being performed here:
+// the request leaves the lock, and it sends what was just read.
+func (s *Syncer) settle(
+	ctx context.Context, c store.MirrorCandidate, cur *store.MirrorCursor,
+	remote Place, have, fresh bool,
+) (*store.Op, outcome, error) {
+	mu := accountLock(s.UserID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	ops, err := s.Store.Positions(ctx, s.UserID, c.WorkID, 1)
+	if err != nil {
+		return nil, outcomeNothing, err
+	}
+	if len(ops) == 0 {
+		return nil, outcomeNothing, nil
+	}
+	local := ops[0]
+
 	// A position filed under the peer's device prefix came from a
 	// peer, and sending it straight back would be writing somebody's
 	// own position to them under our name. Unless this is a peer we
@@ -215,9 +272,9 @@ func (s *Syncer) exchange(
 		// them under our name.
 		if !haveNewLocal || localFromPeer {
 			cur.PushedSeq = local.Seq
-			return outcomeNothing, nil
+			return nil, outcomeNothing, nil
 		}
-		return s.push(ctx, c, local, cur)
+		return &local, outcomeNothing, nil
 
 	case remote.Reset:
 		// A standing instruction to go back to the beginning, not a
@@ -228,24 +285,27 @@ func (s *Syncer) exchange(
 			"peer", s.Peer, "work", c.WorkID)
 		cur.PulledAt = ptr(time.Now().UTC())
 		if haveNewLocal && !localFromPeer {
-			return s.push(ctx, c, local, cur)
+			return &local, outcomeNothing, nil
 		}
 		cur.PushedSeq = local.Seq
-		return outcomeNothing, nil
+		return nil, outcomeNothing, nil
 
 	case remote.Echo:
 		// Our own writing, come back around. The peer is up to date by
 		// definition, so the only question is whether anything has
 		// happened here since.
-		cur.RemoteTS = remote.At.Unix()
 		cur.PulledAt = ptr(time.Now().UTC())
 		if haveNewLocal && !localFromPeer {
-			return s.push(ctx, c, local, cur)
+			return &local, outcomeNothing, nil
 		}
+		cur.RemoteTS = remote.At.Unix()
 		cur.PushedSeq = local.Seq
-		return outcomeNothing, nil
+		return nil, outcomeNothing, nil
+	}
 
-	case samePlace(local, remote):
+	place := comparePlaces(local, remote, protocolCarriesCFI(s.Proto))
+	switch place {
+	case agree:
 		// The peer is saying the place this server already holds, in
 		// its own words and on its own clock. That is agreement, not
 		// news: applying it would append an op that says nothing new,
@@ -256,7 +316,26 @@ func (s *Syncer) exchange(
 		cur.RemoteTS = remote.At.Unix()
 		cur.PulledAt = ptr(time.Now().UTC())
 		cur.PushedSeq = local.Seq
-		return outcomeNothing, nil
+		return nil, outcomeNothing, nil
+
+	case localFiner:
+		// Same place, and the spot this server names is one the peer
+		// lacks. Sending it once is the only way that detail can
+		// cross; a push appends nothing here, and the watermark makes
+		// it once per op.
+		//
+		// Nothing is recorded until the push has happened, because a
+		// failed one must not spend either watermark: the first
+		// exchange with a peer is read off them, and a position the
+		// peer never received would then look like its own and never
+		// be offered again.
+		cur.PulledAt = ptr(time.Now().UTC())
+		if haveNewLocal && !localFromPeer {
+			return &local, outcomeNothing, nil
+		}
+		cur.RemoteTS = remote.At.Unix()
+		cur.PushedSeq = local.Seq
+		return nil, outcomeNothing, nil
 	}
 
 	cur.PulledAt = ptr(time.Now().UTC())
@@ -273,7 +352,7 @@ func (s *Syncer) exchange(
 			// Already taken. The peer repeats itself on every poll
 			// until something changes there.
 			cur.PushedSeq = local.Seq
-			return outcomeNothing, nil
+			return nil, outcomeNothing, nil
 		}
 		// A position at the very start never displaces a real one. On
 		// the kosync path that judgement is the peer's, which answers
@@ -286,76 +365,141 @@ func (s *Syncer) exchange(
 				"peer", s.Peer, "work", c.WorkID)
 			cur.RemoteTS = remote.At.Unix()
 			cur.PushedSeq = local.Seq
-			return outcomeNothing, nil
+			return nil, outcomeNothing, nil
 		}
-		return s.apply(ctx, c, remote, cur)
+		out, err := s.apply(ctx, c, remote, cur)
+		return nil, out, err
 	case localTime.After(remoteTime):
+		if place == peerFiner {
+			// The peer holds the same place with a spot this server
+			// lacks. Pushing the coarser copy would erase it, so the
+			// answer is recorded and nothing goes out.
+			cur.RemoteTS = remote.At.Unix()
+			cur.PushedSeq = local.Seq
+			return nil, outcomeNothing, nil
+		}
 		if !haveNewLocal || localFromPeer {
 			cur.PushedSeq = local.Seq
-			return outcomeNothing, nil
+			return nil, outcomeNothing, nil
 		}
-		return s.push(ctx, c, local, cur)
+		return &local, outcomeNothing, nil
 	default:
 		cur.RemoteTS = remote.At.Unix()
 		cur.PushedSeq = local.Seq
-		return outcomeNothing, nil
+		return nil, outcomeNothing, nil
 	}
 }
 
-// samePlace reports whether the peer's position is the one at the top of
-// this server's op log, judged at the finest detail both sides carry.
+// agreement is how two sides compare at one book's place.
+type agreement int
+
+const (
+	// disagree: the two sides are at different places, or at places
+	// that cannot be compared exactly.
+	disagree agreement = iota
+	// agree: neither side has anything the other could take.
+	agree
+	// peerFiner: same place, and the peer names a spot this server
+	// lacks.
+	peerFiner
+	// localFiner: same place, and this server names a spot the peer
+	// lacks.
+	localFiner
+)
+
+// comparePlaces judges whether the peer's position is the one this server
+// already holds, and which side names it more exactly.
 //
-// Comparing the fractions alone would be the cheap answer and the wrong
-// one in both directions: two readers can sit at the same percent of a
-// book in different sentences, and a peer that names the exact spot is
-// saying something a fraction cannot. So an exact field the peer sends is
-// compared with the same kind of field here when this side has one, and
-// the fraction decides only when neither side has anything finer to say.
-// A field the peer sends and this side lacks is news, not agreement:
-// treating it as agreement would skip a locator that is strictly better
-// than the one held, on every poll. A protocol that carries a fraction and
-// nothing else therefore still agrees with a fraction, which is what stops
-// a restamped loop.
-func samePlace(local store.Op, remote Place) bool {
+// It compares the finest thing both sides can carry, in both directions.
+// Two readers can sit at the same percent of a book in different
+// sentences, so an exact field one side sends is compared with the same
+// kind of field here when both have one; the fraction decides only when
+// neither has anything finer to say. A kind of field only one side holds
+// is a difference in detail rather than in place, and is reported as which
+// side has the finer answer instead of as agreement or disagreement.
+//
+// carriesCFI says whether the protocol could have carried a CFI at all. A
+// peer with nowhere to put one is not withholding detail, and this server's
+// own ops may hold a CFI another protocol recorded: demanding that such a
+// peer echo it would call every poll news.
+func comparePlaces(local store.Op, remote Place, carriesCFI bool) agreement {
 	// A position at the very start is not agreement. On one protocol it
 	// is what a pending reset looks like, and the rules above already
 	// decide what to do with it; taking it as a no-op here would answer
 	// them before they were asked.
 	if remote.Percentage == 0 && local.Progression == 0 {
-		return false
+		return disagree
 	}
-	exact := false
-	if remote.CFI != "" {
-		localCFI := cfiFromLocator(local.LocatorJSON)
-		if localCFI != remote.CFI {
-			return false
+
+	localCFI := ""
+	if carriesCFI {
+		localCFI = cfiFromLocator(local.LocatorJSON)
+	}
+	localForeign := false
+	if local.ForeignPos != nil {
+		localForeign = exactForeignString(*local.ForeignPos, local.Progression)
+	}
+	peerCFI := remote.CFI != ""
+	peerForeign := exactForeign(remote)
+
+	// The same kind of field on both sides, saying different things, is a
+	// different place however the fractions compare.
+	if peerCFI && localCFI != "" && remote.CFI != localCFI {
+		return disagree
+	}
+	if peerForeign && localForeign &&
+		strings.TrimSpace(*local.ForeignPos) != remote.Foreign {
+		return disagree
+	}
+
+	matched := (peerCFI && localCFI == remote.CFI) ||
+		(peerForeign && localForeign &&
+			strings.TrimSpace(*local.ForeignPos) == remote.Foreign)
+	peerOnly := (peerCFI && localCFI == "") || (peerForeign && !localForeign)
+	localOnly := (localCFI != "" && !peerCFI) || (localForeign && !peerForeign)
+
+	if matched {
+		switch {
+		case peerOnly && !localOnly:
+			return peerFiner
+		case localOnly && !peerOnly:
+			return localFiner
+		default:
+			return agree
 		}
-		exact = true
 	}
-	if exactForeign(remote) {
-		if local.ForeignPos == nil || strings.TrimSpace(*local.ForeignPos) != remote.Foreign {
-			return false
-		}
-		exact = true
+	if round(local.Progression, 6) != round(remote.Percentage, 6) {
+		return disagree
 	}
-	if exact {
-		return true
+	switch {
+	case peerOnly && localOnly:
+		// Each side names a spot the other cannot read, so neither
+		// answer supersedes the other: newest wins.
+		return disagree
+	case peerOnly:
+		return peerFiner
+	case localOnly:
+		return localFiner
+	default:
+		return agree
 	}
-	return round(local.Progression, 6) == round(remote.Percentage, 6)
 }
 
-// exactForeign reports whether a peer's engine position names something the
+// exactForeignString reports whether an engine position names something the
 // fraction does not. KOReader has no locator for a client that sends none, so
 // this server tells it the percentage and a peer hands that back as Progress;
 // that string is the fraction written out again, not a finer answer, and
 // counting it as one would make every restamped round trip look like news.
-func exactForeign(p Place) bool {
-	if p.Foreign == "" {
+func exactForeignString(foreign string, percentage float64) bool {
+	foreign = strings.TrimSpace(foreign)
+	if foreign == "" {
 		return false
 	}
-	asFloat, err := strconv.ParseFloat(strings.TrimSpace(p.Foreign), 64)
-	return err != nil || round(asFloat, 6) != round(p.Percentage, 6)
+	asFloat, err := strconv.ParseFloat(foreign, 64)
+	return err != nil || round(asFloat, 6) != round(percentage, 6)
 }
+
+func exactForeign(p Place) bool { return exactForeignString(p.Foreign, p.Percentage) }
 
 // push sends a local position out. Everything the op knows goes into
 // the Place and the protocol takes what it can carry: the engine

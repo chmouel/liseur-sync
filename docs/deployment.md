@@ -737,10 +737,26 @@ credential in the file.
 never changes: it keys that mirror's bookkeeping and prefixes the device
 a position from it is filed under. Renaming means removing the entry and
 adding it again, which starts that peer over. Names are unique across
-every entry, and **no two enabled entries may reach the same peer
-account** — same address, same remote username — because two local
-accounts sharing one remote account would merge their reading through
-it. The page refuses that before writing anything.
+every entry, and there is **one mirror per canonical remote
+account**, whatever local account or protocol points at it: a second
+route would share one remote reading position with nothing to reconcile
+them — two local accounts would merge their reading through it. The page
+refuses that before writing anything.
+
+The address is compared the way the protocols are actually served, not
+as typed: the host ignores case and one trailing dot, a port the scheme
+already implies is dropped, and a trailing `/api/v1` or
+`/api/v1/koreader` is removed whatever the entry's protocol. So
+BookOrbit's native API and its KOReader route on one installation are
+one target, as are `https://h:443/x` and `https://h/x`. A reader may
+still mirror to several different peers: those are several remote
+accounts. **Upgrading from a release without this check can therefore
+refuse to start** if two entries were reaching one peer account through
+different spellings — including the same local account over both
+protocols; the error names both entries, and one of them has to change
+address or account. The check is an address comparison and
+cannot see a BookOrbit account whose KOReader username is its own
+separate pair, so keeping those apart is up to you.
 
 Every enabled entry runs its own worker, with its own polling, backoff
 and bookkeeping. Positions still flow between peers through this
@@ -748,7 +764,10 @@ server: a position taken from one peer is offered to another, so the
 peers stay in step. A peer position that says exactly what this server
 already holds writes nothing, however it was stamped — that is what
 stops two peers that restamp their replies from feeding each other a new
-operation on every pass. Configuring two peers to sync with each other
+operation on every pass. When the two sides agree on the place but one
+names it more exactly, the finer position is sent once to a peer that
+can store it, and a finer position already on the peer is never
+overwritten by a coarser copy here. Configuring two peers to sync with each other
 *directly*, so that the position changes on the way, is not supported:
 the log line `mirror took a position from the peer` repeating for one
 book on every pass is what that looks like.

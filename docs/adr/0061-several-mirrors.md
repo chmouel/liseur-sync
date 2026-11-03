@@ -69,22 +69,44 @@ The details that are load-bearing:
   read-only in the browser.** The environment would override what a form
   saved at the next start, and a form that reports success for values
   nothing reads is worse than one that says who owns them.
-- **No two enabled entries may reach the same peer account.** The key is
-  the normalised address plus the remote username, whatever the protocol
-  and whatever the local account. Two local accounts reaching one remote
-  account would merge their reading through it, which is a cross-user
-  leak between readers of this server, so it is refused before anything
-  is written rather than discovered later. The single table is included
-  in this and in the name rule.
+- **There is one mirror per canonical remote account.** The key is
+  the peer's host (case-folded, one trailing dot ignored), its port when
+  it is not the one the scheme implies, its path with a documented API
+  root removed (`/api/v1` or `/api/v1/koreader`, whatever the protocol),
+  and the case-folded remote username. So BookOrbit's native API and its
+  KOReader route on one installation are one target, as are `:443` and no
+  port. It is one mirror whatever local account or protocol is behind it:
+  a second route shares one remote reading position, so two local accounts
+  would merge their reading through it — a cross-user leak between readers
+  of this server — and two routes for one local account would leave two
+  workers racing over it with nothing to reconcile them. The duplicate is
+  refused before anything is written rather than discovered later. The
+  single table is included in this and in the name rule. One reader may
+  still mirror to several different peers: those are several remote
+  accounts.
+  The check sees an address, not a server: a BookOrbit account whose
+  KOReader username is a different pair (ADR-0048) still looks like two
+  targets, and keeping those apart stays the operator's job.
 - **A peer position that agrees with the newest local op is a no-op.**
-  Agreement is judged at the finest detail both sides carry — a CFI
-  against a CFI, an engine position against an engine position, and the
-  fraction only when neither side says more. That is what stops a
-  restamped loop without discarding a real move: two places at the same
-  percent of a book are not the same place, and a peer that names one is
-  still saying something new. A position at the very start is excluded,
-  because there the two protocols disagree about whether it is a place
-  or a reset, and the existing rules already answer that.
+  Agreement is judged at the finest detail both sides can carry, in both
+  directions — a CFI against a CFI, an engine position against an engine
+  position, and the fraction only when neither side says more. That is
+  what stops a restamped loop without discarding a real move: two places
+  at the same percent of a book are not the same place, and a peer that
+  names one is still saying something new. When one side names the same
+  place more exactly than the other, that difference is reported as such:
+  the finer local spot is sent to the peer once (a push appends nothing,
+  and the watermark makes it once per op), and a finer peer spot is never
+  overwritten by a coarser local copy. A protocol that cannot carry a CFI
+  is not asked to echo one. A position at the very start is excluded,
+  because there the two protocols disagree about whether it is a place or
+  a reset, and the existing rules already answer that.
+- **Peers of one account decide one at a time.** A worker asks its peer
+  before it knows what the other worker of the same account will do with
+  the answer. Once it has an answer, it takes a per-account lock, re-reads
+  the newest op and commits its decision before letting go. Network calls
+  stay outside the lock, so one slow peer cannot stall the others; the
+  lock covers database time only.
 - **A configuration change needs a restart.** There is no hot reload.
   Swapping a worker out mid-pass would have an old worker finishing on
   the cursors a new one just started from, and a supervisor to manage

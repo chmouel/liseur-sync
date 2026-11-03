@@ -498,3 +498,225 @@ remote_password = "stale-file-password"
 		}
 	})
 }
+
+// targetEntry builds a complete list entry for one route into a peer.
+func targetEntry(name, account, baseURL, remoteUser, protocol string) MirrorConfig {
+	m := Default().Mirror
+	m.Enabled = true
+	m.Name = name
+	m.Account = account
+	m.BaseURL = baseURL
+	m.RemoteUser = remoteUser
+	m.Protocol = protocol
+	if protocol == ProtocolBookOrbit {
+		m.RemotePassword = "hunter2"
+	} else {
+		m.RemoteKey = "0123456789abcdef0123456789abcdef"
+	}
+	return m
+}
+
+// TestOnePeerReachedByTwoRoutesIsOneTargetAccount. The duplicate-target
+// check is what keeps two local accounts from sharing one remote account's
+// reading. An address alone does not identify that account: BookOrbit
+// serves its native API and its KOReader route from one installation, a
+// default port is the port the scheme already implies, and the host name is
+// the host name however it is typed. Each spelling below is two entries
+// that reach one account with different local authentication behind them.
+func TestOnePeerReachedByTwoRoutesIsOneTargetAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		firstURL   string
+		secondURL  string
+		firstUser  string
+		secondUser string
+	}{
+		{
+			name:       "the native API and its KOReader route",
+			firstURL:   "https://orbit.example.com/api/v1",
+			secondURL:  "https://orbit.example.com/api/v1/koreader",
+			firstUser:  "reader",
+			secondUser: "reader",
+		},
+		{
+			name:       "the same pair under a deployment prefix",
+			firstURL:   "https://orbit.example.com/orbit/api/v1",
+			secondURL:  "https://orbit.example.com/orbit/api/v1/koreader",
+			firstUser:  "reader",
+			secondUser: "reader",
+		},
+		{
+			name:       "a default port, a trailing slash and a shouted host",
+			firstURL:   "https://ORBIT.example.com:443/api/v1",
+			secondURL:  "https://orbit.example.com/api/v1/",
+			firstUser:  "Reader",
+			secondUser: "reader",
+		},
+		{
+			name:       "the default port of an HTTP peer",
+			firstURL:   "http://orbit.example.com:80/sync",
+			secondURL:  "http://orbit.example.com/sync",
+			firstUser:  "reader",
+			secondUser: "reader",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.InsecureHTTP = true
+			cfg.Mirrors = []MirrorConfig{
+				targetEntry("alpha", "alice", tc.firstURL, tc.firstUser, ProtocolBookOrbit),
+				targetEntry("beta", "bob", tc.secondURL, tc.secondUser, ProtocolKosync),
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("two local accounts shared one peer account under two addresses")
+			}
+			if !strings.Contains(err.Error(), "same account on the same peer") {
+				t.Fatalf("the error does not say what is wrong: %v", err)
+			}
+		})
+	}
+}
+
+// TestOneLocalAccountMayMirrorToTwoDifferentPeers keeps the shape the
+// rule is not about: one reader with several peers is several remote
+// accounts, each with its own mirror and its own bookkeeping.
+func TestOneLocalAccountMayMirrorToTwoDifferentPeers(t *testing.T) {
+	cfg := Default()
+	cfg.Mirrors = []MirrorConfig{
+		targetEntry("orbit", "alice",
+			"https://orbit.example.com/api/v1", "reader", ProtocolBookOrbit),
+		targetEntry("kobo", "alice",
+			"https://kobo.example.com/sync", "reader", ProtocolKosync),
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("one reader's two peers were refused: %v", err)
+	}
+}
+
+// TestASecondRouteIntoOnePeerAccountIsRefused. There is one mirror per
+// canonical remote account, whatever the local account or the protocol:
+// two routes address one remote reading position, and nothing reconciles
+// them. BookOrbit's native API and its KOReader route on one installation
+// are therefore refused like any other duplicate, even for one reader.
+func TestASecondRouteIntoOnePeerAccountIsRefused(t *testing.T) {
+	cfg := Default()
+	cfg.Mirrors = []MirrorConfig{
+		targetEntry("orbit", "alice",
+			"https://orbit.example.com/api/v1", "reader", ProtocolBookOrbit),
+		targetEntry("koreader", "alice",
+			"https://orbit.example.com/api/v1/koreader", "reader", ProtocolKosync),
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("one reader's two routes into one peer were accepted")
+	}
+	if !strings.Contains(err.Error(), "same account on the same peer") {
+		t.Fatalf("the error does not say what is wrong: %v", err)
+	}
+}
+
+// TestAThirdEntryRepeatingATargetIsRefused. A repeated target is refused
+// wherever it appears in the list, including a repeat of the same protocol
+// after two distinct peers: the third entry reaches one of them again,
+// spelled another way, and the startup check has to fold case and the
+// scheme's default port to see it.
+func TestAThirdEntryRepeatingATargetIsRefused(t *testing.T) {
+	cfg := Default()
+	cfg.Mirrors = []MirrorConfig{
+		targetEntry("orbit", "alice",
+			"https://orbit.example.com/api/v1", "reader", ProtocolBookOrbit),
+		targetEntry("kobo", "alice",
+			"https://kobo.example.com/sync", "reader", ProtocolKosync),
+		targetEntry("orbit-again", "alice",
+			"https://ORBIT.example.com:443/api/v1/", "Reader", ProtocolBookOrbit),
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("the third entry reached one peer account a second time")
+	}
+	if !strings.Contains(err.Error(), "same account on the same peer") {
+		t.Fatalf("the error does not say what is wrong: %v", err)
+	}
+}
+
+// TestLoadRefusesASecondRouteIntoOnePeerAccount puts the rule where it
+// matters: startup. A file carrying two routes into one account must not
+// reach the point of starting a worker, and case or a scheme's default
+// port must not hide the second from the check.
+func TestLoadRefusesASecondRouteIntoOnePeerAccount(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+[mirror]
+enabled = true
+name = "orbit"
+protocol = "bookorbit"
+base_url = "https://ORBIT.example.com:443/api/v1"
+account = "alice"
+remote_user = "Reader"
+remote_password = "hunter2"
+
+[[mirrors]]
+enabled = true
+name = "koreader"
+protocol = "kosync"
+base_url = "https://orbit.example.com/api/v1/koreader/"
+account = "alice"
+remote_user = "reader"
+remote_key = "0123456789abcdef0123456789abcdef"
+`))
+	if err == nil {
+		t.Fatal("a startup accepted two routes into one peer account")
+	}
+	if !strings.Contains(err.Error(), "same account on the same peer") {
+		t.Fatalf("the error does not say what is wrong: %v", err)
+	}
+}
+
+// TestAMixedCaseTableHeaderStartsItsWorker. The TOML decoder binds a key
+// to a struct field by folding case, so [Mirror] fills the struct. Reading
+// the table's presence with an exact match then says the peer was never
+// configured, and the mirror silently never runs.
+func TestAMixedCaseTableHeaderStartsItsWorker(t *testing.T) {
+	for _, header := range []string{"[Mirror]", "[MIRROR]"} {
+		t.Run(header, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, header+"\n"+
+				"enabled = true\nname = \"orbit\"\n"+
+				"base_url = \"https://orbit.example.com/sync\"\n"+
+				"account = \"you\"\nremote_user = \"you\"\n"+
+				"remote_key = \"0123456789abcdef0123456789abcdef\"\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !cfg.MirrorTableDefined() {
+				t.Fatalf("a %s table was reported absent", header)
+			}
+			if got := len(cfg.EnabledMirrors()); got != 1 {
+				t.Fatalf("enabled entries: %d", got)
+			}
+		})
+	}
+}
+
+// TestAMixedCaseTableCountsAgainstTheList. The same table is one entry, so
+// its name is as taken as a lower-case table's would be.
+func TestAMixedCaseTableCountsAgainstTheList(t *testing.T) {
+	_, err := Load(writeConfig(t, `
+[Mirror]
+enabled = false
+name = "kobo"
+
+[[mirrors]]
+enabled = true
+name = "kobo"
+base_url = "https://kobo.example.com/sync"
+account = "you"
+remote_user = "you"
+remote_key = "0123456789abcdef0123456789abcdef"
+`))
+	if err == nil {
+		t.Fatal("a [Mirror] table and a list entry shared a name")
+	}
+	if !strings.Contains(err.Error(), "unique") {
+		t.Fatalf("the error does not say what is wrong: %v", err)
+	}
+}
