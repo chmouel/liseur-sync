@@ -69,9 +69,11 @@ nodes, which shifts a `text()` index, and it collapses whitespace before
 counting, which shifts an offset inside a node whose source wraps lines.
 An XPath is read CrossPoint's way first and, when that lands in
 whitespace or past the end of the node, again skipping whitespace-only
-nodes. A KOReader offset can therefore land a few characters away inside
-the right node, never in another paragraph. CrossPoint's own resolver
-tests are the fixtures. A translated anchor is emitted only when its
+nodes. For outgoing derivation, preceding whitespace-only siblings can make
+the generated text index unresolvable in KOReader. Since a kosync request does
+not reliably identify the receiving engine, those anchors retain percentage
+fallback. Offsets inside a wrapped node can still differ between engines.
+CrossPoint's own resolver tests are the fixtures. A translated anchor is emitted only when its
 quote occurs exactly once in its block, and an anchor is translated
 only when its selector names an element whose text holds the quote
 exactly once; otherwise there is no translation.

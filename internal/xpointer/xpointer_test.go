@@ -499,6 +499,14 @@ func BenchmarkParseDocumentSiblings(b *testing.B) {
 	}
 }
 
+func TestXPathForDeclinesShiftedTextIndex(t *testing.T) {
+	book := bookOf(map[string]string{"chapter.xhtml": "<html><body><div>\n  <p>x</p>\n  Tail text</div></body></html>"}, "chapter.xhtml")
+	_, err := book.XPathFor(t.Context(), "chapter.xhtml", Anchor{Selector: "body > div:nth-of-type(1)", Before: "\n  ", Highlight: "Tail", After: " text"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ambiguous receiver text index: %v", err)
+	}
+}
+
 func TestDocumentManySiblingIndexes(t *testing.T) {
 	const count = 20000
 	d := mustDoc(t, "<html><body>\n"+strings.Repeat("<p>word</p>\n", count)+"</body></html>")
