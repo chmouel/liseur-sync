@@ -109,8 +109,8 @@ func (b *Book) LocatorFor(ctx context.Context, xpath string) (Locator, error) {
 	}, nil
 }
 
-// XPathFor translates a Liseur anchor in the resource at href into the
-// XPath CrossPoint would write for the same word.
+// XPathFor derives a CrossPoint XPath only when its text index is also
+// readable by KOReader, which may drop preceding whitespace-only nodes.
 func (b *Book) XPathFor(ctx context.Context, href string, a Anchor) (string, error) {
 	want, ok := normalizeHref(href)
 	if !ok {
@@ -127,6 +127,14 @@ func (b *Book) XPathFor(ctx context.Context, href string, a Anchor) (string, err
 		pos, err := doc.Find(a)
 		if err != nil {
 			return "", err
+		}
+		for _, sibling := range pos.run.parent.kids {
+			if sibling.run == pos.run {
+				break
+			}
+			if sibling.run != nil && !sibling.run.hidden && sibling.run.blank {
+				return "", ErrNotFound
+			}
 		}
 		p, err := doc.XPath(i+1, pos)
 		if err != nil {
