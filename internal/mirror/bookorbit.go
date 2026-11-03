@@ -54,8 +54,8 @@ func (b *bookOrbitPeer) Identity() string {
 	return peerIdentity(config.ProtocolBookOrbit, b.cfg.BaseURL, b.cfg.RemoteUser)
 }
 
-func (b *bookOrbitPeer) legacyIdentities() []string {
-	return legacyPeerIdentities(config.ProtocolBookOrbit, b.cfg.BaseURL, b.cfg.RemoteUser)
+func (b *bookOrbitPeer) legacyPeerIdentity() string {
+	return legacyPeerIdentity(config.ProtocolBookOrbit, b.cfg)
 }
 
 func (b *bookOrbitPeer) Authorize(ctx context.Context) error {

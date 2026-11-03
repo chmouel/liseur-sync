@@ -31,8 +31,8 @@ func (k *kosyncPeer) Identity() string {
 	return peerIdentity(config.ProtocolKosync, k.cfg.BaseURL, k.cfg.RemoteUser)
 }
 
-func (k *kosyncPeer) legacyIdentities() []string {
-	return legacyPeerIdentities(config.ProtocolKosync, k.cfg.BaseURL, k.cfg.RemoteUser)
+func (k *kosyncPeer) legacyPeerIdentity() string {
+	return legacyPeerIdentity(config.ProtocolKosync, k.cfg)
 }
 
 func (k *kosyncPeer) Authorize(ctx context.Context) error { return k.client.Authorize(ctx) }

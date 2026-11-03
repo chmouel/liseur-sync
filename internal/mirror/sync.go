@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,13 +76,13 @@ func (s *Syncer) log() *slog.Logger {
 // and so a later pass can tell them from something read here.
 func (s *Syncer) devicePrefix() string { return s.Peer + ":" }
 
-// legacyIdentities is what a peer says an earlier build folded for it,
+// legacyIdentity is what a peer says an earlier build folded for it,
 // empty for a protocol that has nothing to add.
-func (s *Syncer) legacyIdentities() []string {
+func (s *Syncer) legacyIdentity() string {
 	if p, ok := s.Proto.(legacyIdentity); ok {
-		return p.legacyIdentities()
+		return p.legacyPeerIdentity()
 	}
-	return nil
+	return ""
 }
 
 // defaultMaxPerPass is how many works one pass will talk about when
@@ -110,7 +109,7 @@ func (s *Syncer) Pass(ctx context.Context) (Report, error) {
 		return rep, err
 	}
 	identity := s.Proto.Identity()
-	legacy := s.legacyIdentities()
+	legacy := s.legacyIdentity()
 	for _, c := range candidates {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -135,7 +134,7 @@ func (s *Syncer) Pass(ctx context.Context) (Report, error) {
 		// the same library under another spelling of its address, so
 		// the cursor keeps its watermarks and adopts the current one.
 		if cur.PeerIdentity != identity {
-			if slices.Contains(legacy, cur.PeerIdentity) {
+			if legacy != "" && cur.PeerIdentity == legacy {
 				cur.PeerIdentity = identity
 			} else {
 				cur = store.MirrorCursor{
