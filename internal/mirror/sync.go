@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,15 @@ func (s *Syncer) log() *slog.Logger {
 // and so a later pass can tell them from something read here.
 func (s *Syncer) devicePrefix() string { return s.Peer + ":" }
 
+// legacyIdentities is what a peer says an earlier build folded for it,
+// empty for a protocol that has nothing to add.
+func (s *Syncer) legacyIdentities() []string {
+	if p, ok := s.Proto.(legacyIdentity); ok {
+		return p.legacyIdentities()
+	}
+	return nil
+}
+
 // defaultMaxPerPass is how many works one pass will talk about when
 // nothing says otherwise. The store reads a limit below one as "no
 // works", so a syncer built without this knob set would poll nothing
@@ -100,6 +110,7 @@ func (s *Syncer) Pass(ctx context.Context) (Report, error) {
 		return rep, err
 	}
 	identity := s.Proto.Identity()
+	legacy := s.legacyIdentities()
 	for _, c := range candidates {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -119,9 +130,17 @@ func (s *Syncer) Pass(ctx context.Context) (Report, error) {
 		// the cursor records which library it is about. Where the two
 		// sides had got to, what the peer called this book, what was
 		// last said to it: every word of it is about one library.
+		//
+		// An identity an earlier build folded for this same peer is
+		// the same library under another spelling of its address, so
+		// the cursor keeps its watermarks and adopts the current one.
 		if cur.PeerIdentity != identity {
-			cur = store.MirrorCursor{
-				WorkID: c.WorkID, Document: c.Document, PeerIdentity: identity,
+			if slices.Contains(legacy, cur.PeerIdentity) {
+				cur.PeerIdentity = identity
+			} else {
+				cur = store.MirrorCursor{
+					WorkID: c.WorkID, Document: c.Document, PeerIdentity: identity,
+				}
 			}
 		}
 

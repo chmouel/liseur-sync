@@ -1025,6 +1025,55 @@ func TestAMarkIsSpentOnceThePeerMovesOn(t *testing.T) {
 	}
 }
 
+// TestAMarkWrittenByAnEarlierBuildIsStillRecognised. A build before
+// this one marked any engine position as pos:, including the bare
+// fraction this one spells pct:. A cursor it left describes an echo the
+// peer is still holding, and reading that echo as news would clear the
+// mark and let a push the peer has since superseded overwrite newer
+// reading.
+func TestAMarkWrittenByAnEarlierBuildIsStillRecognised(t *testing.T) {
+	orbit := newFakeOrbit(t)
+	orbit.hold("7", "A Memory Called Empire", orbitFile())
+	peer := orbit.protocol(t)
+	ctx := context.Background()
+	if err := peer.Authorize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c := orbitBook()
+
+	// What an earlier build wrote for this push, and what the peer's row
+	// says because of it: the fraction handed back as an engine
+	// position, with no spot beside it.
+	cur := &store.MirrorCursor{
+		WorkID: c.WorkID, Document: c.Document, RemoteFileID: "41",
+		PushedMark: "pos:0.55",
+	}
+	read := time.Now().UTC()
+	orbit.place("41", progressReply{
+		KoreaderProgress: ptr("0.55"), Percentage: 55, LastReadAt: &read,
+	})
+	back, err := peer.Pull(ctx, c, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.Echo {
+		t.Fatalf("a mark an earlier build wrote was taken for news: %+v", back)
+	}
+	if cur.PushedMark != "pos:0.55" {
+		t.Fatalf("an upgraded deployment spent a live mark: %q", cur.PushedMark)
+	}
+
+	// The new spelling is what this one writes, so the old one is read
+	// and never written again.
+	fresh := &store.MirrorCursor{WorkID: c.WorkID, Document: c.Document, RemoteFileID: "41"}
+	if err := peer.Push(ctx, c, fresh, Place{Percentage: 0.55, Foreign: "0.55"}); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.PushedMark != "pct:0.55" {
+		t.Fatalf("a push marked itself %q", fresh.PushedMark)
+	}
+}
+
 // TestACrowdedSearchIdentifiesNothing. A full page of results is not a
 // shortlist: the match picked from it may have a twin on the page
 // nobody asked for, and the rule is to refuse rather than guess.

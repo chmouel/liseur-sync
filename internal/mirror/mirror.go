@@ -179,7 +179,39 @@ func locatorWithCFI(cfi string, progression float64) []byte {
 // credential is deliberately not part of it — a rotated password is
 // the same library and the cursor should survive it.
 func peerIdentity(protocol, baseURL, remoteUser string) string {
-	sum := sha256.Sum256([]byte(
-		protocol + "\n" + config.MirrorRoot(baseURL) + "\n" + remoteUser))
+	return identityDigest(protocol, config.MirrorRoot(baseURL), remoteUser)
+}
+
+// legacySlashCount bounds how many trailing slashes an address written
+// by an earlier build is folded with when its cursor is recognised. A
+// hand-typed address carries a stray slash or two; anything longer is
+// not an address somebody meant.
+const legacySlashCount = 8
+
+// legacyPeerIdentities is the digests a build before this one could
+// have stored for this same peer, so a cursor it wrote is adopted
+// rather than taken for another library.
+//
+// That build removed one trailing slash when it validated an address and
+// one more when it folded the address into an identity, so an address
+// typed with n trailing slashes was folded as the root plus n-2 of them.
+// This build removes every slash, so the only addresses that fold
+// differently are the ones typed with three or more, and each folds to
+// the root plus between one and legacySlashCount slashes.
+func legacyPeerIdentities(protocol, baseURL, remoteUser string) []string {
+	root := config.MirrorRoot(baseURL)
+	out := make([]string, 0, legacySlashCount)
+	for n := 1; n <= legacySlashCount; n++ {
+		out = append(out, identityDigest(protocol, root+strings.Repeat("/", n), remoteUser))
+	}
+	return out
+}
+
+func identityDigest(protocol, address, remoteUser string) string {
+	sum := sha256.Sum256([]byte(protocol + "\n" + address + "\n" + remoteUser))
 	return hex.EncodeToString(sum[:8])
 }
+
+// legacyIdentity is a protocol that can name the identities an earlier
+// build folded for the peer it speaks to now.
+type legacyIdentity interface{ legacyIdentities() []string }

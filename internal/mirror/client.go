@@ -239,9 +239,11 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) ([]by
 		// fastest way to the answer, so it is quoted — but never with
 		// the key left in it. This error is logged and stored on the
 		// cursor, and a peer or a proxy that echoes what it was sent
-		// must not be able to put a credential in either.
+		// must not be able to put a credential in either. The whole
+		// body is redacted before it is cut to a line, so a key on a
+		// boundary leaves no half of itself behind.
 		return nil, fmt.Errorf("mirror: %s %s: peer answered %s: %s",
-			method, path, resp.Status, c.redact(firstLine(raw)))
+			method, path, resp.Status, firstLine([]byte(c.redact(string(raw)))))
 	}
 	if readErr != nil {
 		return nil, fmt.Errorf("mirror: %s %s: %w", method, path, readErr)
