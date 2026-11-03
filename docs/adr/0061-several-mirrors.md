@@ -124,7 +124,15 @@ The details that are load-bearing:
   made owner-only (`0600`), a secretless file keeps the permissions it
   had, and a new file is created `0600`. A save that changes nothing
   still tightens a file that already holds a credential, and a refused
-  save changes neither the bytes nor the mode. Comments inside a
+  save changes neither the bytes nor the mode. A *stored credential* is
+  read the way the loader reads one: a mirror's `remote_key` or
+  `remote_password` as written (so whitespace counts), an
+  `[audiobookshelf]` key (which is trimmed), a password in the userinfo
+  of any address the file holds — a disabled entry's `base_url`
+  included, since validation skips it — or a password in a
+  `database.url` DSN, where `sslpassword` counts too. Text whose
+  credential settings cannot be decoded is refused rather than reported
+  secret-free: "cannot tell" is not "no". Comments inside a
   rewritten `[[mirrors]]` section are not preserved: the section is
   written whole, because a field that was switched off has to stop
   existing rather than linger.
