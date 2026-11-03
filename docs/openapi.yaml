@@ -304,6 +304,10 @@ paths:
         with `403`. The first admin token on an instance is minted with
         `liseur-sync admin mint-token -scope admin`.
 
+        `Web reader` is reserved for the credential the browser reader
+        mints for itself; a request naming a token that is refused with
+        `400` and `code: reserved_name`.
+
         Legacy clients may send `scope`. New clients send `scopes`.
         Supplying both is accepted only when they describe the same
         singleton set. Responses always return `scopes` and return the
@@ -366,9 +370,10 @@ paths:
                   expires_at: { type: [string, "null"], format: date-time }
         "400":
           description: |
-            Malformed request, or `device_id` names no device of this
+            Malformed request, `device_id` names no device of this
             account (body carries `code: unknown_device` and echoes
-            `device_id`).
+            `device_id`), or `name` is the reserved `Web reader` (body
+            carries `code: reserved_name`).
           content:
             application/json:
               schema:
@@ -376,7 +381,7 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
-                  code: { type: string, enum: [unknown_device] }
+                  code: { type: string, enum: [unknown_device, reserved_name] }
                   device_id: { type: string }
         "401": { $ref: "#/components/responses/Error" }
         "403":

@@ -85,6 +85,16 @@ func (s *Server) HandleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name required")
 		return
 	}
+	if auth.ReservedTokenName(req.Name) {
+		// Structured like unknown_device below: a client that picked the
+		// name the browser reader mints under has to be able to tell a
+		// refusal of the name from any other refusal.
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": auth.ErrReservedTokenName.Error(),
+			"code":  "reserved_name",
+		})
+		return
+	}
 	if len(req.DeviceID) > 64 {
 		writeError(w, http.StatusBadRequest, "device_id too long")
 		return

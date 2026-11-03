@@ -67,7 +67,11 @@ The server honours it when any token of the same account — live,
 expired or revoked — already carries that id. If none does (the
 predecessor was deleted, or the id belongs to another account) it
 answers `400` with `code: unknown_device`; retry once without the field
-and store the fresh id. An older server ignores the field and mints a
+and store the fresh id. A `name` of `Web reader` is reserved for the
+credential the browser reader mints for itself; it is refused with `400`
+and `code: reserved_name`, so pick any other name.
+
+An older server ignores the `device_id` field and mints a
 new id: compare the `device_id` in the response with the one you sent,
 and treat a mismatch as "not inherited", nothing more. Never offer a
 device id to a different server.
