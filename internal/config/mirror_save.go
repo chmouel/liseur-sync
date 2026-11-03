@@ -156,7 +156,11 @@ func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
 	}
 
 	rendered := before
-	if !sameLegacy(want, current) {
+	// A file that does not parse is rewritten whether or not the entry the
+	// caller handed back differs from what the file decoded to: that decode
+	// failed part-way, so the two can look alike while the file is still
+	// broken, and a save that changed nothing would report success over it.
+	if decodeErr != nil || !sameLegacy(want, current) {
 		var blocks []string
 		if want.HasLegacy {
 			blocks = mirrorTableBlocks(want.Legacy)
@@ -167,6 +171,13 @@ func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
 		rendered = rewriteTable(rendered, "mirrors", true, mirrorListBlocks(want.List))
 	}
 	if rendered == before {
+		if decodeErr != nil {
+			// Rewriting the table left the bytes alone, so the file is
+			// broken somewhere the repair cannot reach and nothing can
+			// prove it would start.
+			return fmt.Errorf(
+				"the configuration file does not parse (%w); only the [mirror] entry can be rewritten until it does", decodeErr)
+		}
 		return nil
 	}
 	if err := verifyMirrorRewrite(before, rendered, want, decodeErr == nil); err != nil {
