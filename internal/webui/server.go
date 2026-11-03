@@ -10,7 +10,6 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
@@ -44,16 +43,11 @@ type Server struct {
 	// backend is spoken to over HTTP, so r.TLS is nil even though the
 	// browser is on HTTPS.
 	Cfg config.Config
-	// ConfigPath is the startup TOML file used by the admin mirror form.
+	// ConfigPath is the TOML file the admin forms read and write. A form
+	// reads it on every request rather than remembering what it saved:
+	// Cfg is what this process started with and never changes, and the
+	// running workers keep reading that until a restart.
 	ConfigPath string
-	// mirrorMu guards mirrorSaved, the mirror settings the admin form
-	// last wrote. Cfg is read by every request goroutine and is never
-	// written after startup, so a save records what it wrote here
-	// instead: the form then shows the file's contents rather than the
-	// values this process booted with. The running mirror still reads
-	// its settings only at startup, which is what the page says.
-	mirrorMu    sync.RWMutex
-	mirrorSaved *config.MirrorConfig
 	// Downloads delegates the content server's byte-handling to the
 	// API's implementation. It is an interface rather than a concrete
 	// server so that this package keeps depending on nothing but the
@@ -380,7 +374,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/entities/series/{entity}/unbind",
 		sec(s.requireAuth(s.handleSeriesUnbind)))
 	mux.Handle("POST /ui/settings", sec(s.requireAuth(s.handleSaveSettings)))
-	mux.Handle("POST /ui/admin/mirror", sec(s.requireAdmin(s.handleSaveMirror)))
+	mux.Handle("POST /ui/admin/mirror", sec(s.requireAdminAction("mirror.save", s.handleSaveMirror)))
+	mux.Handle("POST /ui/admin/mirror/delete", sec(s.requireAdminAction("mirror.delete", s.handleDeleteMirror)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))
 	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))
@@ -457,6 +452,16 @@ func (s *Server) adminFlag(r *http.Request, u *store.User) *bool {
 // without them never sees a link here, so arriving is either a typed
 // URL or a stale bookmark: both deserve a page that says what happened.
 func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, store.AuthSession, *store.User)) http.HandlerFunc {
+	return s.requireAdminAction("", next)
+}
+
+// requireAdminAction is requireAdmin for a route whose refusals have to leave
+// an audit line. An empty action keeps the silent refusal every other admin
+// route has always had: a forged or non-administrator mirror mutation is the
+// one case the audit trail is asked to record even when nothing was written.
+func (s *Server) requireAdminAction(
+	action string, next func(http.ResponseWriter, *http.Request, store.AuthSession, *store.User),
+) http.HandlerFunc {
 	return s.requireAuth(func(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
 		isAdmin := adminFromContext(r)
 		if isAdmin == nil {
@@ -464,6 +469,9 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, stor
 			return
 		}
 		if !*isAdmin {
+			if action != "" && r.Method != http.MethodGet {
+				logAdminAction(r, u, action, "", errNotAdmin)
+			}
 			if r.Method == http.MethodGet {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(http.StatusForbidden)

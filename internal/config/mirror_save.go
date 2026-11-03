@@ -5,54 +5,409 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-// SaveMirror replaces the [mirror] table while leaving the rest of the
-// operator's config file untouched. The admin UI uses this so configuring a
-// mirror does not rewrite unrelated settings or comments.
-func SaveMirror(path string, m MirrorConfig) error {
+// MirrorFile is the mirror configuration one config file holds: the
+// single [mirror] table an older deployment has, the [[mirrors]] list a
+// newer one adds, and whether the table is there at all.
+//
+// The distinction matters. A file with no [mirror] table has no entry —
+// nothing to show and no name to keep unique — while the struct beside
+// it is pre-filled with the defaults an entry would start from.
+type MirrorFile struct {
+	Legacy    MirrorConfig   `toml:"mirror"`
+	HasLegacy bool           `toml:"-"`
+	List      []MirrorConfig `toml:"mirrors"`
+}
+
+// Entry returns the list entry called name.
+func (f MirrorFile) Entry(name string) (MirrorConfig, bool) {
+	for _, m := range f.List {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return MirrorConfig{}, false
+}
+
+// LegacyEntry returns the single [mirror] entry when the file has one.
+func (f MirrorFile) LegacyEntry() (MirrorConfig, bool) {
+	if !f.HasLegacy {
+		return MirrorConfig{}, false
+	}
+	return f.Legacy, true
+}
+
+// WithEnvironment applies the LISEUR_MIRROR_* overlay to these entries the
+// way startup does, and returns the set a start would actually run. The file
+// values are left alone: this is the view and the candidate to validate, not
+// what a save writes. An entry the environment supplies with no [mirror]
+// table of its own appears here, which is what makes it visible — and
+// read-only — on the page.
+func (f MirrorFile) WithEnvironment() MirrorFile {
+	var c Config
+	c.Mirror = f.Legacy
+	c.Mirrors = slices.Clone(f.List)
+	c.mirrorDefined = f.HasLegacy
+	c.ApplyMirrorEnvironment()
+	return MirrorFile{Legacy: c.Mirror, HasLegacy: c.mirrorDefined, List: c.Mirrors}
+}
+
+// configWriteMu serialises the read-modify-write of the config file. Two
+// administrator tabs saving different sections would otherwise each
+// rewrite a body they read before the other wrote, and one of the two
+// changes would vanish.
+var configWriteMu sync.Mutex
+
+// ReadMirrors reads the mirror configuration out of the file at path,
+// without applying environment overrides. The admin page needs that
+// distinction: a credential supplied by the environment may be used to
+// test a connection without being copied into the file on the next save.
+//
+// Every entry comes back with the defaults an omitted setting would take,
+// so what the page shows is what the server would do, and what the page
+// writes back leaves nothing implied.
+func ReadMirrors(path string) (MirrorFile, error) {
+	out := MirrorFile{Legacy: Default().Mirror}
 	if strings.TrimSpace(path) == "" {
-		return errors.New("the server was not started with a writable config file")
+		return out, nil
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("read config: %w", err)
+		if os.IsNotExist(err) {
+			return out, nil
 		}
-		body = nil
+		return out, fmt.Errorf("read config: %w", err)
 	}
-	lines := strings.SplitAfter(string(body), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		lines = nil
+	meta, err := toml.Decode(string(body), &out)
+	if err != nil {
+		return out, err
 	}
-	kept := make([]string, 0, len(lines)+12)
-	removed := false
+	out.HasLegacy = meta.IsDefined("mirror")
+	for i := range out.List {
+		applyMirrorDefaults(&out.List[i])
+	}
+	return out, nil
+}
+
+// UpdateMirrors rewrites the mirror parts of the file at path with
+// whatever apply leaves in the MirrorFile it is handed, and nothing else.
+//
+// The file is read again under the write lock, so apply sees what is on
+// disk now rather than what a caller read a moment ago. A section that did
+// not change is left byte-for-byte, which is what keeps an operator's
+// comments, ordering and unrelated settings intact.
+//
+// The rewrite is proved before it replaces anything: the original and the
+// result are both decoded, their mirror fields cleared and the rest
+// required to be identical. A table header inside a multi-line string is
+// the case that makes this necessary — the line-based scan that finds
+// sections cannot tell it from a real one, and the proof is what turns a
+// corrupted file into a refusal.
+func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
+	if strings.TrimSpace(path) == "" {
+		return errors.New("the server was not started with a writable config file")
+	}
+	configWriteMu.Lock()
+	defer configWriteMu.Unlock()
+
+	target, err := resolveConfigPath(path)
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	before := string(body)
+
+	current, decodeErr := ReadMirrors(target)
+	// The caller is handed a copy of the list, not the list itself: what
+	// it edits is what gets written, and the value it started from is
+	// what says whether anything changed.
+	want := current
+	want.List = slices.Clone(current.List)
+	if decodeErr != nil {
+		// A file that does not parse can still be repaired, but only by
+		// replacing the single table: the list is unknown, so a change to
+		// it would have to guess at what it held. The list's own bytes
+		// are left untouched by the repair and proved by the result
+		// parsing whole.
+		current.HasLegacy = hasTable(before, "mirror", false)
+		current.List = nil
+		want = current
+		want.List = slices.Clone(current.List)
+	}
+	if err := apply(&want); err != nil {
+		return err
+	}
+	if decodeErr != nil {
+		if len(want.List) != 0 {
+			return fmt.Errorf(
+				"the configuration file does not parse (%w); only the [mirror] entry can be rewritten until it does", decodeErr)
+		}
+	}
+
+	rendered := before
+	if !sameLegacy(want, current) {
+		var blocks []string
+		if want.HasLegacy {
+			blocks = mirrorTableBlocks(want.Legacy)
+		}
+		rendered = rewriteTable(rendered, "mirror", false, blocks)
+	}
+	if !slices.Equal(want.List, current.List) {
+		rendered = rewriteTable(rendered, "mirrors", true, mirrorListBlocks(want.List))
+	}
+	if rendered == before {
+		return nil
+	}
+	if err := verifyMirrorRewrite(before, rendered, want, decodeErr == nil); err != nil {
+		return err
+	}
+	if err := writeConfigAtomically(target, []byte(rendered)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// sameLegacy compares the single entry, treating a removed table as one
+// thing whatever the struct beside it holds: what a caller leaves there
+// after removing the entry is not a setting.
+func sameLegacy(a, b MirrorFile) bool {
+	if a.HasLegacy != b.HasLegacy {
+		return false
+	}
+	if !a.HasLegacy {
+		return true
+	}
+	return a.Legacy == b.Legacy
+}
+
+// verifyMirrorRewrite is the proof UpdateMirrors demands before it
+// replaces an operator's file: the result parses, it holds no key this
+// server does not know, it decodes to the mirror configuration that was
+// meant, the mirror set it now holds is one startup would accept, and
+// everything outside the mirrors is exactly what it was. The list is only
+// compared field by field when the original parsed: repairing a broken
+// [mirror] table leaves the [[mirrors]] bytes alone, so there is nothing
+// decoded to hold them against, and reading the rendered file whole is what
+// proves they survived — and that they do not collide with the repaired
+// entry.
+func verifyMirrorRewrite(before, rendered string, want MirrorFile, compareRest bool) error {
+	got := MirrorFile{Legacy: Default().Mirror}
+	meta, err := toml.Decode(rendered, &got)
+	if err != nil {
+		return fmt.Errorf("rewritten config would not parse: %w", err)
+	}
+	got.HasLegacy = meta.IsDefined("mirror")
+	for i := range got.List {
+		applyMirrorDefaults(&got.List[i])
+	}
+	if !sameLegacy(got, want) {
+		return errors.New("rewritten config does not hold the mirror entry it was given")
+	}
+	if compareRest && !slices.Equal(got.List, want.List) {
+		return errors.New("rewritten config does not hold the mirror entries it was given")
+	}
+
+	// The same text decoded the way startup reads it, for the two things
+	// only the whole configuration can answer: that no key became
+	// unknown, and that nothing outside the mirrors moved.
+	var updated Config
+	meta, err = toml.Decode(rendered, &updated)
+	if err != nil {
+		return fmt.Errorf("rewritten config would not parse: %w", err)
+	}
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, key := range undecoded {
+			keys = append(keys, key.String())
+		}
+		return fmt.Errorf("rewritten config carries unknown key(s): %s",
+			strings.Join(keys, ", "))
+	}
+	if err := validateRenderedMirrors(rendered); err != nil {
+		return err
+	}
+	if !compareRest {
+		return nil
+	}
+	var original Config
+	if _, err := toml.Decode(before, &original); err != nil {
+		return fmt.Errorf("original config does not parse: %w", err)
+	}
+	original.Mirror, original.Mirrors = MirrorConfig{}, nil
+	updated.Mirror, updated.Mirrors = MirrorConfig{}, nil
+	if !reflect.DeepEqual(original, updated) {
+		return errors.New("rewriting the mirrors would change other settings; nothing was saved")
+	}
+	return nil
+}
+
+// validateRenderedMirrors holds the result to the mirror rules the next
+// start applies: the defaults an omitted setting takes, whether the [mirror]
+// table is there, the environment overlay and the set rules. A broken
+// file hands the caller no list to validate against, so only the whole
+// rendered text can show that repairing the table did not leave a
+// configuration startup would refuse — two enabled entries reaching one peer
+// account, say — and a save that reports success must not write one.
+func validateRenderedMirrors(rendered string) error {
+	c := Default()
+	meta, err := toml.Decode(rendered, &c)
+	if err != nil {
+		return fmt.Errorf("rewritten config would not parse: %w", err)
+	}
+	c.mirrorDefined = meta.IsDefined("mirror")
+	// The whole environment, not just the mirror variables: what an HTTP
+	// peer address is held against (LISEUR_INSECURE_HTTP) is part of it.
+	c.applyEnv()
+	if err := c.validateMirror(); err != nil {
+		return fmt.Errorf("the rewritten config would not start: %w; nothing was saved", err)
+	}
+	return nil
+}
+
+// resolveConfigPath follows a symlinked config file to the file it names.
+// Replacing the link itself would leave a deployment whose config lives
+// in a mounted volume pointing at nothing.
+func resolveConfigPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if os.IsNotExist(err) {
+		return path, nil
+	}
+	return "", fmt.Errorf("resolve config path: %w", err)
+}
+
+// writeConfigAtomically replaces a file in one step, keeping the
+// permissions it had. A new file is written 0600: it may hold a peer
+// password.
+func writeConfigAtomically(path string, body []byte) error {
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	dir, file := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, "."+file+".")
+	if err != nil {
+		return fmt.Errorf("create config temporary file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return fmt.Errorf("protect config temporary file: %w", err)
+	}
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close config: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
+}
+
+// rewriteTable replaces every block named name (a table, or an array of
+// tables when array is true) with blocks, in the place the first one
+// occupied. Nothing else in the body moves, so a section nobody edited
+// keeps its bytes, its comments and its position.
+func rewriteTable(body, name string, array bool, blocks []string) string {
+	lines := splitLines(body)
+	out := make([]string, 0, len(lines)+len(blocks))
+	placed := false
 	for i := 0; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(strings.TrimSuffix(lines[i], "\n"))
-		if name, ok := tableHeaderName(trimmed); ok && name == "mirror" {
-			removed = true
+		if table, ok := tableHeaderName(trimmedLine(lines[i])); ok &&
+			table == name && isArrayHeader(lines[i]) == array {
 			for i++; i < len(lines); i++ {
-				next := strings.TrimSpace(strings.TrimSuffix(lines[i], "\n"))
-				if _, ok := tableHeaderName(next); ok {
+				if _, ok := tableHeaderName(trimmedLine(lines[i])); ok {
 					i--
 					break
 				}
 			}
+			if !placed {
+				out = append(out, blocks...)
+				placed = true
+			}
 			continue
 		}
-		kept = append(kept, lines[i])
+		out = append(out, lines[i])
 	}
-	if len(kept) > 0 && !strings.HasSuffix(kept[len(kept)-1], "\n") {
-		kept = append(kept, "\n")
-	} else if removed && len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) != "" {
-		kept = append(kept, "\n")
+	if !placed && len(blocks) > 0 {
+		if n := len(out); n > 0 && strings.TrimSpace(out[n-1]) != "" {
+			out = append(out, "\n")
+		}
+		out = append(out, blocks...)
 	}
-	kept = append(kept,
-		"[mirror]\n",
+	return strings.Join(out, "")
+}
+
+// hasTable reports whether body carries a section named name.
+func hasTable(body, name string, array bool) bool {
+	for _, line := range splitLines(body) {
+		if table, ok := tableHeaderName(trimmedLine(line)); ok &&
+			table == name && isArrayHeader(line) == array {
+			return true
+		}
+	}
+	return false
+}
+
+func splitLines(body string) []string {
+	lines := strings.SplitAfter(body, "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	return lines
+}
+
+func trimmedLine(line string) string {
+	return strings.TrimSpace(strings.TrimSuffix(line, "\n"))
+}
+
+func isArrayHeader(line string) bool {
+	return strings.HasPrefix(trimmedLine(line), "[[")
+}
+
+// mirrorTableBlocks is the single entry as a file section. The trailing
+// empty line is what separates it from whatever follows.
+func mirrorTableBlocks(m MirrorConfig) []string {
+	lines := append([]string{"[mirror]\n"}, mirrorEntryFields(m)...)
+	return append(lines, "\n")
+}
+
+// mirrorListBlocks writes the list, one section each. Comments inside a
+// [[mirrors]] section are not preserved: the section is rewritten whole,
+// because a field the page switched off has to stop existing rather than
+// linger with an old value.
+func mirrorListBlocks(list []MirrorConfig) []string {
+	var out []string
+	for _, m := range list {
+		out = append(out, "[[mirrors]]\n")
+		out = append(out, mirrorEntryFields(m)...)
+		out = append(out, "\n")
+	}
+	return out
+}
+
+func mirrorEntryFields(m MirrorConfig) []string {
+	return []string{
 		fmt.Sprintf("enabled = %t\n", m.Enabled),
 		fmt.Sprintf("protocol = %q\n", m.Protocol),
 		fmt.Sprintf("name = %q\n", m.Name),
@@ -68,66 +423,7 @@ func SaveMirror(path string, m MirrorConfig) error {
 		fmt.Sprintf("resolve_retry_interval = %q\n", writtenDuration(m.ResolveRetryInterval)),
 		fmt.Sprintf("active_days = %d\n", m.ActiveDays),
 		fmt.Sprintf("timeout = %q\n", writtenDuration(m.Timeout)),
-	)
-	rendered := strings.Join(kept, "")
-	// A header the loop above misjudged, or any other mistake in the
-	// rewrite, must not reach disk: parse the result the same way Load
-	// does before it replaces the operator's file.
-	var scratch Config
-	if _, err := toml.Decode(rendered, &scratch); err != nil {
-		return fmt.Errorf("rewritten config would not parse: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".liseur-sync-config-")
-	if err != nil {
-		return fmt.Errorf("create config temporary file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("protect config temporary file: %w", err)
-	}
-	if _, err := tmp.WriteString(rendered); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close config: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace config: %w", err)
-	}
-	return nil
-}
-
-// MirrorFromFile reads only the config file's mirror table, without
-// applying environment overrides. The admin UI needs that distinction
-// so a credential supplied by LISEUR_MIRROR_REMOTE_KEY or
-// LISEUR_MIRROR_REMOTE_PASSWORD can be used for a connection test
-// without being copied back into the TOML file on the next save.
-func MirrorFromFile(path string) (MirrorConfig, bool, error) {
-	c := Default()
-	if strings.TrimSpace(path) == "" {
-		return c.Mirror, false, nil
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return c.Mirror, false, nil
-		}
-		return c.Mirror, false, fmt.Errorf("read config: %w", err)
-	}
-	hasMirror := false
-	for _, line := range strings.Split(string(body), "\n") {
-		if name, ok := tableHeaderName(strings.TrimSpace(line)); ok && name == "mirror" {
-			hasMirror = true
-			break
-		}
-	}
-	if _, err := toml.Decode(string(body), &c); err != nil {
-		return c.Mirror, hasMirror, err
-	}
-	return c.Mirror, hasMirror, nil
 }
 
 // tableHeaderName reports the table name a TOML header line names, if

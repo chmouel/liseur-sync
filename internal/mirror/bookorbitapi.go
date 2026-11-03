@@ -73,7 +73,7 @@ func newBookOrbitAPI(cfg config.MirrorConfig, log *slog.Logger) *bookOrbitAPI {
 		log = slog.Default()
 	}
 	return &bookOrbitAPI{
-		baseURL:  strings.TrimSuffix(cfg.BaseURL, "/"),
+		baseURL:  config.MirrorRoot(cfg.BaseURL),
 		user:     cfg.RemoteUser,
 		password: cfg.RemotePassword,
 		label:    cfg.DeviceID,

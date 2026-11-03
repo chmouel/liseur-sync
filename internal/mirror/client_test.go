@@ -536,3 +536,42 @@ func TestADocumentWithNothingInItIsRefusedLocally(t *testing.T) {
 		t.Fatalf("the peer was called %d times for an empty document", len(peer.requests))
 	}
 }
+
+// TestAPeerThatEchoesTheKeyDoesNotGetItIntoAnError. A peer's own
+// message is quoted because it is usually the fastest way to the answer,
+// but this error is logged and stored on a cursor row, and a proxy that
+// echoes back what it was sent would otherwise put the credential in
+// both. The native protocol already redacts; the KOReader one did not.
+func TestAPeerThatEchoesTheKeyDoesNotGetItIntoAnError(t *testing.T) {
+	peer := newFakePeer(t)
+	peer.failWith(http.StatusInternalServerError,
+		"upstream rejected x-auth-key: "+peer.key)
+	_, err := peer.client(t).Pull(context.Background(), "43200deaa6b3a3cd67dc934fabe6f0f2")
+	if err == nil {
+		t.Fatal("a reflecting peer was not a failure")
+	}
+	if strings.Contains(err.Error(), peer.key) {
+		t.Fatalf("the key reached an error string: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("nothing was redacted, so the guard did not run: %q", err.Error())
+	}
+	// The rest of the peer's complaint still comes through, because that
+	// is the whole point of quoting it.
+	if !strings.Contains(err.Error(), "upstream rejected") {
+		t.Fatalf("the peer's message was lost: %q", err.Error())
+	}
+}
+
+// TestTwoSpellingsOfOneRootAreOneClient. The client is the other half of the
+// duplicate check: an address the validator trimmed once and a client trimmed
+// again must not end up talking to the same routes while looking like two
+// peers. Both spellings here have to build on one root.
+func TestTwoSpellingsOfOneRootAreOneClient(t *testing.T) {
+	one := NewClient(peerConfig("https://kobo.example.com/sync//"))
+	two := NewClient(peerConfig("https://kobo.example.com/sync"))
+	if one.baseURL != two.baseURL || one.baseURL != "https://kobo.example.com/sync" {
+		t.Fatalf("two spellings of one root built two bases: %q and %q",
+			one.baseURL, two.baseURL)
+	}
+}
