@@ -180,6 +180,34 @@ type Config struct {
 	// Audiobookshelf follows audiobooks on one Audiobookshelf server
 	// (ADR-0055). Disabled by default; independent of the mirror.
 	Audiobookshelf AudiobookshelfConfig `toml:"audiobookshelf"`
+
+	// SpeechToText is the transcription service both audiobook paths use
+	// to pin a listening position to a sentence: native folder audiobooks
+	// and Audiobookshelf alike, so it belongs to neither.
+	SpeechToText SpeechToTextConfig `toml:"speech_to_text"`
+}
+
+// SpeechToTextConfig is an OpenAI-compatible transcription endpoint. A
+// configured one receives short slices of a reader's audiobook.
+type SpeechToTextConfig struct {
+	// Enabled is on by default: Active still needs a usable endpoint.
+	Enabled bool `toml:"enabled"`
+	// URL is the API root, e.g. https://api.groq.com/openai/v1 or
+	// http://127.0.0.1:8000/v1. Left empty it is the Groq default, which
+	// stays off until APIKey is set.
+	URL string `toml:"url"`
+	// APIKey is an optional Bearer token for URL. Prefer LISEUR_STT_API_KEY.
+	APIKey string `toml:"api_key"`
+	Model  string `toml:"model"`
+}
+
+// Active reports whether transcription can be attempted. The default
+// Groq endpoint refuses anonymous calls, so it needs a key to count.
+func (s SpeechToTextConfig) Active() bool {
+	if !s.Enabled || s.URL == "" {
+		return false
+	}
+	return !strings.Contains(s.URL, "api.groq.com") || s.APIKey != ""
 }
 
 // AudiobookshelfConfig is the one Audiobookshelf server whose listening
@@ -202,15 +230,6 @@ type AudiobookshelfConfig struct {
 	PollInterval Duration `toml:"poll_interval"`
 	// Timeout bounds one request.
 	Timeout Duration `toml:"timeout"`
-	// STTURL is an optional OpenAI-compatible speech-to-text API root
-	// (e.g. https://api.groq.com/openai/v1 or http://127.0.0.1:8000/v1)
-	// used to transcribe short audio snippets for exact-page alignment.
-	STTURL string `toml:"stt_url"`
-	// STTAPIKey is an optional Bearer token for STTURL.
-	// Prefer LISEUR_ABS_STT_API_KEY.
-	STTAPIKey string `toml:"stt_api_key"`
-	// STTModel is the transcription model name (default "whisper-large-v3-turbo").
-	STTModel string `toml:"stt_model"`
 }
 
 // MirrorConfig is one peer this server mirrors reading to and from.
@@ -578,8 +597,9 @@ func Default() Config {
 	c.Audiobookshelf.Timeout = Duration(20 * time.Second)
 	c.Audiobookshelf.SessionOverlap = Duration(10 * time.Minute)
 	c.Audiobookshelf.ActiveDays = 30
-	c.Audiobookshelf.STTURL = "https://api.groq.com/openai/v1"
-	c.Audiobookshelf.STTModel = "whisper-large-v3-turbo"
+	c.SpeechToText.Enabled = true
+	c.SpeechToText.URL = defaultSTTURL
+	c.SpeechToText.Model = defaultSTTModel
 	return c
 }
 
@@ -599,7 +619,8 @@ func Default() Config {
 // LISEUR_MIRRORS_<NAME>_REMOTE_PASSWORD for each [[mirrors]] entry,
 // LISEUR_ABS_ENABLED, LISEUR_ABS_BASE_URL, LISEUR_ABS_ACCOUNT,
 // LISEUR_ABS_API_KEY, LISEUR_ABS_POLL_INTERVAL, LISEUR_ABS_TIMEOUT,
-// LISEUR_ABS_SESSION_OVERLAP, LISEUR_ABS_ACTIVE_DAYS.
+// LISEUR_ABS_SESSION_OVERLAP, LISEUR_ABS_ACTIVE_DAYS,
+// LISEUR_STT_ENABLED, LISEUR_STT_URL, LISEUR_STT_API_KEY, LISEUR_STT_MODEL.
 //
 // The mirror's credential is an environment variable on purpose: it
 // belongs beside the database URL in a deployment's .env rather than in
@@ -618,6 +639,8 @@ func (c *Config) applyEnv() {
 	c.ApplyMirrorEnvironment()
 
 	c.ApplyAudiobookshelfEnvironment()
+
+	c.ApplySpeechToTextEnvironment()
 }
 
 // The environment readers applyEnv is built from. The mirror's overlay is
@@ -796,7 +819,10 @@ func (c *Config) Validate() error {
 	if err := c.validateMirror(); err != nil {
 		return err
 	}
-	return c.validateAudiobookshelf()
+	if err := c.validateAudiobookshelf(); err != nil {
+		return err
+	}
+	return c.validateSpeechToText()
 }
 
 // validateMirror refuses a half-configured mirror rather than starting
@@ -1035,25 +1061,6 @@ func (c *Config) validateAudiobookshelf() error {
 	a.BaseURL = strings.TrimSpace(a.BaseURL)
 	a.Account = strings.TrimSpace(a.Account)
 	a.APIKey = strings.TrimSpace(a.APIKey)
-	a.STTURL = strings.TrimSpace(a.STTURL)
-	a.STTAPIKey = strings.TrimSpace(a.STTAPIKey)
-	a.STTModel = strings.TrimSpace(a.STTModel)
-	if a.STTURL == "" {
-		a.STTURL = "https://api.groq.com/openai/v1"
-	}
-	if a.STTModel == "" {
-		a.STTModel = "whisper-large-v3-turbo"
-	}
-	if a.STTURL != "" {
-		su, err := url.Parse(a.STTURL)
-		if err != nil || su.Host == "" || (su.Scheme != "http" && su.Scheme != "https") {
-			return fmt.Errorf("audiobookshelf.stt_url must be an absolute http or https URL")
-		}
-		if su.User != nil || su.RawQuery != "" || su.Fragment != "" {
-			return fmt.Errorf("audiobookshelf.stt_url must not contain credentials, query string or fragment")
-		}
-		a.STTURL = canonicalAudiobookshelfURL(a.STTURL)
-	}
 	if a.BaseURL != "" {
 		if a.Enabled {
 			if err := c.validateAudiobookshelfAddress(a); err != nil {
@@ -1089,6 +1096,24 @@ func (c *Config) validateAudiobookshelf() error {
 	}
 	if a.Timeout.Duration() < time.Second {
 		return fmt.Errorf("audiobookshelf.timeout must be at least 1s")
+	}
+	return nil
+}
+
+const (
+	defaultSTTURL   = "https://api.groq.com/openai/v1"
+	defaultSTTModel = "whisper-large-v3-turbo"
+)
+
+func (c *Config) validateSpeechToText() error {
+	s := &c.SpeechToText
+	*s = normalizedSpeechToText(*s)
+	u, err := url.Parse(s.URL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("speech_to_text.url must be an absolute http or https URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("speech_to_text.url must not contain credentials, query string or fragment")
 	}
 	return nil
 }

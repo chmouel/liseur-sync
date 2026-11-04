@@ -191,3 +191,47 @@ func TestEveryTopLevelKeyIsNamedInTheHint(t *testing.T) {
 		}
 	}
 }
+
+// TestMovedSpeechToTextSettingsAreRefusedByName: the settings left
+// [audiobookshelf] because native audiobooks use them too. A deployment
+// still carrying the old spelling must be told where they went, not have
+// transcription quietly switch off.
+func TestMovedSpeechToTextSettingsAreRefusedByName(t *testing.T) {
+	_, err := Load(writeConfig(t, "[audiobookshelf]\nstt_api_key = \"k\"\n"))
+	if err == nil || !strings.Contains(err.Error(), "speech_to_text.api_key") {
+		t.Fatalf("old file key: got %v", err)
+	}
+
+	t.Setenv("LISEUR_ABS_STT_API_KEY", "k")
+	_, err = Load("")
+	if err == nil || !strings.Contains(err.Error(), "LISEUR_STT_API_KEY") {
+		t.Fatalf("old environment variable: got %v", err)
+	}
+}
+
+func TestSpeechToTextSection(t *testing.T) {
+	t.Setenv("LISEUR_STT_API_KEY", "env-key")
+	cfg, err := Load(writeConfig(t,
+		"[speech_to_text]\nurl = \"http://127.0.0.1:8000/v1/\"\nmodel = \"whisper-small\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := SpeechToTextConfig{Enabled: true, URL: "http://127.0.0.1:8000/v1", APIKey: "env-key", Model: "whisper-small"}
+	if cfg.SpeechToText != want || !cfg.SpeechToText.Active() {
+		t.Fatalf("got %+v", cfg.SpeechToText)
+	}
+
+	if _, err := Load(writeConfig(t, "[speech_to_text]\nurl = \"https://u:p@stt.example/v1\"\n")); err == nil {
+		t.Fatal("a URL carrying credentials was accepted")
+	}
+}
+
+func TestDefaultSpeechToTextNeedsAKey(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SpeechToText.Active() {
+		t.Fatalf("the keyless Groq default counts as enabled: %+v", cfg.SpeechToText)
+	}
+}

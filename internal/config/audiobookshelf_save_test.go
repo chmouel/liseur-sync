@@ -47,9 +47,11 @@ poll_interval = "45s"
 timeout = "15s"
 session_overlap = "20m"
 active_days = 7
-stt_url = "https://stt.example/v1"
-stt_api_key = "stt-secret"
-stt_model = "whisper-small"
+
+[speech_to_text]
+url = "https://stt.example/v1"
+api_key = "stt-secret"
+model = "whisper-small"
 
 [content]
 cache_dir = "covers"
@@ -82,8 +84,9 @@ func TestUpdateAudiobookshelfPreservesEverythingElse(t *testing.T) {
 		"[mirror]", "[[mirrors]]", `name = "kobo"`,
 		`poll_interval = "45s"`, `timeout = "15s"`,
 		`session_overlap = "20m"`, `active_days = 7`,
-		`stt_url = "https://stt.example/v1"`, `stt_api_key = "stt-secret"`,
-		`stt_model = "whisper-small"`, `cache_dir = "covers"`,
+		"[speech_to_text]", `url = "https://stt.example/v1"`,
+		`api_key = "stt-secret"`, `model = "whisper-small"`,
+		`cache_dir = "covers"`,
 	} {
 		if !strings.Contains(text, kept) {
 			t.Fatalf("a save lost %q:\n%s", kept, text)
@@ -102,8 +105,8 @@ func TestUpdateAudiobookshelfPreservesEverythingElse(t *testing.T) {
 	if loaded.Audiobookshelf.APIKey != "new-secret" || !loaded.Audiobookshelf.Enabled {
 		t.Fatalf("the saved entry did not load: %+v", loaded.Audiobookshelf)
 	}
-	if loaded.Audiobookshelf.STTModel != "whisper-small" {
-		t.Fatalf("STT settings moved: %+v", loaded.Audiobookshelf)
+	if loaded.SpeechToText.Model != "whisper-small" || loaded.SpeechToText.APIKey != "stt-secret" {
+		t.Fatalf("speech-to-text settings changed: %+v", loaded.SpeechToText)
 	}
 }
 
@@ -485,5 +488,22 @@ func TestUpdateAudiobookshelfRewritesAMixedCaseHeaderInPlace(t *testing.T) {
 	}
 	if loaded.Audiobookshelf.APIKey != "new-secret" || !loaded.Audiobookshelf.Enabled {
 		t.Fatalf("the rewritten section did not load: %+v", loaded.Audiobookshelf)
+	}
+}
+
+// TestAnAudiobookshelfSaveRefusesMovedSpeechToTextKeys: rewriting the
+// table would drop them, and with them the operator's transcription key.
+func TestAnAudiobookshelfSaveRefusesMovedSpeechToTextKeys(t *testing.T) {
+	const body = "[audiobookshelf]\nenabled = false\nstt_api_key = \"stt-secret\"\n"
+	path := writeAudiobookshelfConfig(t, body)
+	err := UpdateAudiobookshelf(path, func(a *AudiobookshelfConfig) error {
+		a.Account = "alice"
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "speech_to_text.api_key") {
+		t.Fatalf("got %v", err)
+	}
+	if got := readFile(t, path); got != body {
+		t.Fatalf("the file changed:\n%s", got)
 	}
 }

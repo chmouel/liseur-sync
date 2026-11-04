@@ -16,13 +16,21 @@ import (
 	"unicode/utf8"
 )
 
+// StatusError is a transcription service's refusal. It carries the code
+// only: the reason text is the service's to choose and may echo a key.
+type StatusError struct{ Code int }
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("audiomap: stt server answered %d", e.Code)
+}
+
 // TranscribeAudio posts a short audio snippet (.m4a or .mp3) to an
 // OpenAI-compatible /v1/audio/transcriptions endpoint and returns the
 // recognized text.
 func TranscribeAudio(ctx context.Context, baseURL, apiKey, model string, audioBytes []byte, filename string) (string, error) {
 	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
 	if base == "" {
-		return "", errors.New("audiomap: stt_url is not configured")
+		return "", errors.New("audiomap: speech_to_text.url is not configured")
 	}
 	endpoint := base + "/audio/transcriptions"
 	if !strings.HasSuffix(base, "/v1") && !strings.Contains(base, "/v1/") {
@@ -76,7 +84,7 @@ func TranscribeAudio(ctx context.Context, baseURL, apiKey, model string, audioBy
 		return "", err
 	}
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("audiomap: stt server answered %s", strings.TrimSpace(resp.Status))
+		return "", &StatusError{Code: resp.StatusCode}
 	}
 	var out struct {
 		Text string `json:"text"`

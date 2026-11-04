@@ -38,8 +38,55 @@ func Load(path string) (Config, error) {
 			return c, err
 		}
 	}
+	if err := legacySTTEnvError(); err != nil {
+		return c, err
+	}
 	c.applyEnv()
 	return c, c.Validate()
+}
+
+// movedSTTKeys maps the speech-to-text settings that used to sit under
+// [audiobookshelf] to where they live now. They are refused rather than
+// read: a key that silently stopped loading would just turn
+// transcription off.
+var movedSTTKeys = map[string]string{
+	"audiobookshelf.stt_url":     "speech_to_text.url",
+	"audiobookshelf.stt_api_key": "speech_to_text.api_key",
+	"audiobookshelf.stt_model":   "speech_to_text.model",
+}
+
+var movedSTTEnv = map[string]string{
+	"LISEUR_ABS_STT_URL":     "LISEUR_STT_URL",
+	"LISEUR_ABS_STT_API_KEY": "LISEUR_STT_API_KEY",
+	"LISEUR_ABS_STT_MODEL":   "LISEUR_STT_MODEL",
+}
+
+func legacySTTEnvError() error {
+	var moved []string
+	for old, now := range movedSTTEnv {
+		if _, ok := os.LookupEnv(old); ok {
+			moved = append(moved, old+" is now "+now)
+		}
+	}
+	if len(moved) == 0 {
+		return nil
+	}
+	sort.Strings(moved)
+	return fmt.Errorf("speech-to-text settings moved: %s", strings.Join(moved, ", "))
+}
+
+// movedSTTHint names the new home of any moved key among keys.
+func movedSTTHint(keys []string) string {
+	var moved []string
+	for _, key := range keys {
+		if now, ok := movedSTTKeys[strings.ToLower(key)]; ok {
+			moved = append(moved, key+" is now "+now)
+		}
+	}
+	if len(moved) == 0 {
+		return ""
+	}
+	return "; speech-to-text settings moved to [speech_to_text]: " + strings.Join(moved, ", ")
 }
 
 // tableDefined reports whether the file carries a table named name,
@@ -64,11 +111,14 @@ func unknownKeyError(path string, undecoded []toml.Key) error {
 		keys = append(keys, key.String())
 	}
 	sort.Strings(keys)
-	hint := ""
+	hint := movedSTTHint(keys)
 	// The overwhelmingly likely cause is a top-level key written below a
 	// table header, so name that case instead of leaving the operator to
 	// work out why a key they can see in the example file is unknown.
 	for _, key := range keys {
+		if hint != "" {
+			break
+		}
 		if base := key[strings.LastIndex(key, ".")+1:]; base != key &&
 			isTopLevelKey(base) {
 			hint = fmt.Sprintf(

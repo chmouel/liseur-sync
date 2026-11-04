@@ -26,6 +26,7 @@ const (
 	settingsAdminMirror   = "mirror"
 
 	settingsAdminAudiobookshelf = "audiobookshelf"
+	settingsAdminSpeechToText   = "speech-to-text"
 )
 
 const (
@@ -121,6 +122,7 @@ type settingsAdminView struct {
 	Mirror mirrorView
 
 	AudiobookshelfPanel audiobookshelfAdminView
+	SpeechToText        speechToTextAdminView
 }
 
 type mirrorView struct {
@@ -350,7 +352,7 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 		view = r.URL.Query().Get("view")
 		switch view {
 		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror,
-			settingsAdminAudiobookshelf:
+			settingsAdminAudiobookshelf, settingsAdminSpeechToText:
 		case settingsAdminUser:
 			userID = r.URL.Query().Get("user")
 			if userID == "" {
@@ -581,6 +583,8 @@ func (s *Server) settingsAdmin(
 			return err
 		}
 		v.AudiobookshelfPanel = s.audiobookshelfView(users)
+	case settingsAdminSpeechToText:
+		v.SpeechToText = s.speechToTextView()
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {

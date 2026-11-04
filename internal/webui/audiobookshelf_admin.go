@@ -26,9 +26,8 @@ const audiobookshelfTestTimeout = 10 * time.Second
 
 // audiobookshelfAdminView is the page: what the saved section says, the
 // status this process reports, and who owns the credential. It carries
-// no configuration value: the saved key and speech-to-text key never
-// leave the handler, and the address is here only as the sanitised text
-// the page may show.
+// no configuration value: the saved key never leaves the handler, and
+// the address is here only as the sanitised text the page may show.
 type audiobookshelfAdminView struct {
 	// SavedURL is the saved address as the page may show it: the
 	// credential, query and fragment a file can carry are stripped, and
@@ -140,8 +139,8 @@ func audiobookshelfCredentialSource(fileKey string) string {
 // normalising it here again would trim a second trailing slash and hide
 // a difference a restart would really apply. An environment-managed
 // setting that a restart would not change is therefore not reported, and
-// a file change to any setting the worker reads, including polling,
-// timeout and STT, is.
+// a file change to any setting the worker reads, including polling and
+// timeout, is.
 func audiobookshelfRestartRequired(saved, runtime config.AudiobookshelfConfig) bool {
 	return config.EffectiveAudiobookshelf(saved) != runtime
 }

@@ -3,7 +3,6 @@ package audiobookshelf
 import (
 	"context"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/audiomap"
@@ -35,13 +34,10 @@ func MatchLocatorTextInXHTML(doc []byte, before, highlight, after string) (fract
 }
 
 // refinePositionWithSTT attempts to refine a chapter-interpolated book
-// progression using a 12-second audio snippet around remoteTime when stt_url
-// is configured. Any failure falls back cleanly to linearP.
+// progression using a 12-second audio snippet around remoteTime when
+// speech-to-text is configured. Any failure falls back cleanly to linearP.
 func (s *Service) refinePositionWithSTT(ctx context.Context, userID string, l store.AudiobookLink, item Item, m Mapping, remoteTime, linearP float64, seg Segment) float64 {
-	if s.Cfg.STTURL == "" || s.Client == nil || len(item.AudioFiles) == 0 || remoteTime <= 0 {
-		return linearP
-	}
-	if strings.Contains(s.Cfg.STTURL, "api.groq.com") && s.Cfg.STTAPIKey == "" {
+	if !s.STT.Active() || s.Client == nil || len(item.AudioFiles) == 0 || remoteTime <= 0 {
 		return linearP
 	}
 	book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID)
@@ -107,7 +103,7 @@ func (s *Service) refinePositionWithSTT(ctx context.Context, userID string, l st
 	if err != nil || len(clip) == 0 {
 		return linearP
 	}
-	transcript, err := TranscribeAudio(sttCtx, s.Cfg.STTURL, s.Cfg.STTAPIKey, s.Cfg.STTModel, clip, filename)
+	transcript, err := TranscribeAudio(sttCtx, s.STT.URL, s.STT.APIKey, s.STT.Model, clip, filename)
 	if err != nil || transcript == "" {
 		return linearP
 	}

@@ -57,6 +57,18 @@ func noopAudiobookshelfSave(path string) error {
 	return UpdateAudiobookshelf(path, func(*AudiobookshelfConfig) error { return nil })
 }
 
+// saveSpeechToText is a speech-to-text save that writes no credential.
+func saveSpeechToText(path string) error {
+	return UpdateSpeechToText(path, func(s *SpeechToTextConfig) error {
+		s.Enabled = false
+		return nil
+	})
+}
+
+func noopSpeechToTextSave(path string) error {
+	return UpdateSpeechToText(path, func(*SpeechToTextConfig) error { return nil })
+}
+
 type configWriter struct {
 	name string
 	save func(string) error
@@ -67,6 +79,7 @@ func configWriters() []configWriter {
 	return []configWriter{
 		{"mirror", saveSecretFreeMirror, noopMirrorSave},
 		{"audiobookshelf", saveAudiobookshelf, noopAudiobookshelfSave},
+		{"speech_to_text", saveSpeechToText, noopSpeechToTextSave},
 	}
 }
 
@@ -201,7 +214,7 @@ func TestANewConfigFileIsOwnerOnly(t *testing.T) {
 func TestEnvironmentSecretsNeverReachTheFile(t *testing.T) {
 	t.Setenv("LISEUR_MIRROR_REMOTE_KEY", "env-mirror-key")
 	t.Setenv("LISEUR_ABS_API_KEY", "env-abs-key")
-	t.Setenv("LISEUR_ABS_STT_API_KEY", "env-stt-key")
+	t.Setenv("LISEUR_STT_API_KEY", "env-stt-key")
 
 	for _, w := range configWriters() {
 		t.Run(w.name, func(t *testing.T) {

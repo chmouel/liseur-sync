@@ -16,6 +16,7 @@ type Service struct {
 	Store    store.Store
 	Client   *Client
 	Cfg      config.AudiobookshelfConfig
+	STT      config.SpeechToTextConfig
 	gate     chan struct{}
 	loadBook func(context.Context, store.CatalogBook) ([]BookChapter, []Resource, error)
 }
@@ -34,8 +35,8 @@ type ItemView struct {
 	LocalProgression *float64
 }
 
-func NewService(st store.Store, cfg config.AudiobookshelfConfig) *Service {
-	return &Service{Store: st, Client: NewClient(cfg), Cfg: cfg, gate: make(chan struct{}, 1)}
+func NewService(st store.Store, cfg config.AudiobookshelfConfig, stt config.SpeechToTextConfig) *Service {
+	return &Service{Store: st, Client: NewClient(cfg), Cfg: cfg, STT: stt, gate: make(chan struct{}, 1)}
 }
 
 func (s *Service) account(ctx context.Context, userID string) (store.User, error) {

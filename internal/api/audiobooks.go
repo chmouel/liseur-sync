@@ -205,16 +205,7 @@ func (s *Server) loadActiveBookAudiobook(
 	return book, link, ab, mapping, true
 }
 
-func (s *Server) sttEnabled() bool {
-	u := strings.TrimSpace(s.Cfg.Audiobookshelf.STTURL)
-	if u == "" {
-		return false
-	}
-	if strings.Contains(u, "api.groq.com") && strings.TrimSpace(s.Cfg.Audiobookshelf.STTAPIKey) == "" {
-		return false
-	}
-	return true
-}
+func (s *Server) sttEnabled() bool { return s.Cfg.SpeechToText.Active() }
 
 // HandleBookAudioInfo implements GET /v1/books/{id}/audio/info.
 func (s *Server) HandleBookAudioInfo(w http.ResponseWriter, r *http.Request) {
@@ -603,9 +594,9 @@ func (s *Server) refineAudioTimeWithSTT(
 
 	tr, err := audiomap.TranscribeAudio(
 		sttCtx,
-		s.Cfg.Audiobookshelf.STTURL,
-		s.Cfg.Audiobookshelf.STTAPIKey,
-		s.Cfg.Audiobookshelf.STTModel,
+		s.Cfg.SpeechToText.URL,
+		s.Cfg.SpeechToText.APIKey,
+		s.Cfg.SpeechToText.Model,
 		clipBytes,
 		clipFilename,
 	)

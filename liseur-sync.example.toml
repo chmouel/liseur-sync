@@ -175,6 +175,14 @@ poll_interval = "30s"
 timeout = "20s"
 session_overlap = "10m"
 active_days = 30
-stt_url = "https://api.groq.com/openai/v1"
-stt_model = "whisper-large-v3-turbo"
-# stt_api_key = ""          # prefer LISEUR_ABS_STT_API_KEY
+
+# Speech-to-text pins a listening position to the sentence being read,
+# for native folder audiobooks and Audiobookshelf alike. Any
+# OpenAI-compatible transcription API works; a configured one receives
+# short slices of the audio. The Groq default stays off until it has a
+# key. Also editable from the administration page (ADR-0063).
+[speech_to_text]
+enabled = true
+url = "https://api.groq.com/openai/v1"
+model = "whisper-large-v3-turbo"
+# api_key = ""              # prefer LISEUR_STT_API_KEY

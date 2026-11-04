@@ -106,7 +106,7 @@ func newABSFixture(t *testing.T, bookTitles, audioTitles []string) *absFixture {
 	})
 	cfg := config.Default().Audiobookshelf
 	cfg.Enabled, cfg.Account, cfg.BaseURL = true, f.user.Name, client.BaseURL()
-	f.service = NewService(f.st, cfg)
+	f.service = NewService(f.st, cfg, config.SpeechToTextConfig{})
 	f.service.Client = client
 	f.service.loadBook = func(context.Context, store.CatalogBook) ([]BookChapter, []Resource, error) {
 		chapters, resources := evenBook(bookTitles...)
@@ -395,7 +395,7 @@ func TestFutureSessionIsRetriedAcrossRestart(t *testing.T) {
 	if err := f.st.UpdateAudiobookCursor(t.Context(), f.user.ID, l); err != nil {
 		t.Fatal(err)
 	}
-	restarted := NewService(f.st, f.service.Cfg)
+	restarted := NewService(f.st, f.service.Cfg, f.service.STT)
 	restarted.Client = f.service.Client
 	restarted.loadBook = f.service.loadBook
 	l = f.linked(t)

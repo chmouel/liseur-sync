@@ -32,9 +32,11 @@ poll_interval = "30s"
 timeout = "5s"
 session_overlap = "10m"
 active_days = 30
-stt_url = "https://stt.example/v1"
-stt_api_key = "stt-key"
-stt_model = "whisper-small"
+
+[speech_to_text]
+url = "https://stt.example/v1"
+api_key = "stt-key"
+model = "whisper-small"
 
 [content]
 cache_dir = "covers"
@@ -100,7 +102,7 @@ func TestALegacyAddressKeepsItsStoredHistory(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	service := NewService(f.st, loaded.Audiobookshelf)
+	service := NewService(f.st, loaded.Audiobookshelf, loaded.SpeechToText)
 	service.Client = client
 	service.loadBook = func(context.Context, store.CatalogBook) ([]BookChapter, []Resource, error) {
 		chapters, resources := evenBook("Chapter 1", "Chapter 2", "Chapter 3")

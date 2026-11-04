@@ -939,6 +939,33 @@ rejections and imported listening history keyed as they already were.
 Changing the server URL or remote account starts a separate set of
 links; already imported history stays.
 
+## Speech-to-text for audiobooks
+
+When an audiobook position is turned into a reading position, the server
+can transcribe the few seconds just before it and match the words to the
+text, rather than interpolating within the chapter. This applies to
+audiobooks in watched folders and to Audiobookshelf alike. Any
+OpenAI-compatible transcription API works, hosted or local; the server
+sends it short slices of the audio.
+
+| Setting in `[speech_to_text]` | Environment variable | Default |
+| --- | --- | --- |
+| `enabled` | `LISEUR_STT_ENABLED` | `true` |
+| `url` | `LISEUR_STT_URL` | `https://api.groq.com/openai/v1` |
+| `api_key` | `LISEUR_STT_API_KEY` | none |
+| `model` | `LISEUR_STT_MODEL` | `whisper-large-v3-turbo` |
+
+The Groq default stays off until it has a key.
+
+An administrator can also edit the section from
+**Settings → Administration → Speech-to-text**, under the same rules as
+the Audiobookshelf page (ADR-0063): saving it enabled first transcribes
+one second of silence and writes nothing if that fails, a blank key
+field keeps the saved key, `LISEUR_STT_API_KEY` is used but never copied
+into the file, and `LISEUR_STT_ENABLED`, `LISEUR_STT_URL` or
+`LISEUR_STT_MODEL` in the environment makes the page read-only. A saved
+change applies at the next start.
+
 ## Configuration
 
 The content block is intentionally small:
@@ -1064,6 +1091,25 @@ that did nothing from one that did.
 Migrations run at startup under a cross-process lock. If a migration
 fails, the server refuses to start rather than run against a partially
 migrated schema. Back up before upgrades.
+
+### Speech-to-text moved to `[speech_to_text]`
+
+The speech-to-text settings used to sit under `[audiobookshelf]`, though
+native audiobooks use them too. They now have their own section, and a
+server still carrying the old names refuses to start and names the
+replacement for each one, rather than quietly turning transcription off:
+
+| Old | New |
+| --- | --- |
+| `[audiobookshelf]` `stt_url` | `[speech_to_text]` `url` |
+| `[audiobookshelf]` `stt_api_key` | `[speech_to_text]` `api_key` |
+| `[audiobookshelf]` `stt_model` | `[speech_to_text]` `model` |
+| `LISEUR_ABS_STT_URL` | `LISEUR_STT_URL` |
+| `LISEUR_ABS_STT_API_KEY` | `LISEUR_STT_API_KEY` |
+| `LISEUR_ABS_STT_MODEL` | `LISEUR_STT_MODEL` |
+
+The Audiobookshelf admin page refuses to save while the file still holds
+the old keys, because rewriting the section would drop them.
 
 ### Settings stay on the device, the deviceSettings migration
 
