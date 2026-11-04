@@ -65,14 +65,12 @@ the same rules as the mirror's, and startup keeps reading the file.**
   and comments. The result is decoded, compared against the original
   with the section cleared, and held to the environment a start reads —
   `insecure_http` included — but to the audiobookshelf rules only. The
-  write follows a symlink and renames into place. Its mode follows what
-  it is about to hold: a file with a stored credential in it is made
-  owner-only (`0600`), a secretless one keeps the permissions it had,
-  and a new file is created `0600` — including when the save found
-  nothing to change and only tightened a credential the file already
-  held. What counts as a stored credential, and why an unreadable one is
-  refused rather than reported secret-free, is ADR-0061's definition: it
-  is the same check for both saves. A file that does not parse is
+  write follows a symlink and renames into place, and leaves the file
+  `0600` — owner read and write only — a new file too, and a save that
+  found nothing to change too. ADR-0061 has the rule in full: it is the
+  same writer for both pages, and it detects nothing about what the file
+  holds, so the process account must own the file and one it cannot
+  `chmod` fails the save with a clear error. A file that does not parse is
   refused rather than repaired, and the refusal names its line and
   column without repeating the source literal the decoder quoted. Mirror
   and Audiobookshelf saves serialise on one lock, so two tabs cannot
@@ -103,7 +101,7 @@ the same rules as the mirror's, and startup keeps reading the file.**
   environment key is used for the test and never appears in the file,
   the page, a redirect or an error.
 - A file with a mirror, a list entry, STT settings and unrelated keys
-  keeps all of them, its mode and its symlink through a save.
+  keeps all of them, keeps its symlink through a save and ends up `0600`.
 - A forged CSRF token, a reader and a rate-limited reauth all write
   nothing; an accepted save redirects relatively to the page.
 - The page shows the credential's source and the running status beside

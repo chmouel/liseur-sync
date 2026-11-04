@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -113,9 +112,8 @@ func ReadMirrors(path string) (MirrorFile, error) {
 // sections cannot tell it from a real one, and the proof is what turns a
 // corrupted file into a refusal.
 //
-// A save that writes no bytes still makes a file that already holds a
-// stored credential owner-only. See writeConfigAtomically for how the mode
-// of a written file is chosen.
+// A save that writes no bytes still makes an existing file owner-only. See
+// writeConfigAtomically for how the mode of a written file is chosen.
 func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("the server was not started with a writable config file")
@@ -183,7 +181,7 @@ func UpdateMirrors(path string, apply func(*MirrorFile) error) error {
 			return fmt.Errorf(
 				"the configuration file does not parse (%w); only the [mirror] entry can be rewritten until it does", decodeErr)
 		}
-		return tightenConfigCredentialMode(target, before)
+		return enforceConfigMode(target)
 	}
 	if err := verifyMirrorRewrite(before, rendered, want, decodeErr == nil); err != nil {
 		return err
@@ -327,24 +325,10 @@ func resolveConfigPath(path string) (string, error) {
 	return "", fmt.Errorf("resolve config path: %w", err)
 }
 
-// writeConfigAtomically replaces a file in one step. Its mode follows the
-// bytes about to land: a file holding a stored credential is owner-only, a
-// secret-free file keeps the mode it had, and a new secret-free file is
-// owner-only too, because what a later save puts in it cannot be known.
-// Bytes whose credential fields cannot be read are refused rather than
-// written at a guessed mode; every caller has proved its rewrite parses
-// first, so that refusal is a bug in the caller, not a file it was given.
+// writeConfigAtomically replaces a file in one step. The file a save writes
+// is always owner-only, whatever mode the one it replaces had: what a later
+// save puts in it cannot be known, so there is no mode to preserve.
 func writeConfigAtomically(path string, body []byte) error {
-	holds, err := configFileHoldsCredential(string(body))
-	if err != nil {
-		return err
-	}
-	mode := os.FileMode(0o600)
-	if !holds {
-		if info, err := os.Stat(path); err == nil {
-			mode = info.Mode().Perm()
-		}
-	}
 	dir, file := filepath.Split(path)
 	if dir == "" {
 		dir = "."
@@ -355,7 +339,7 @@ func writeConfigAtomically(path string, body []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(mode); err != nil {
+	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
 		return fmt.Errorf("protect config temporary file: %w", err)
 	}
@@ -372,149 +356,15 @@ func writeConfigAtomically(path string, body []byte) error {
 	return nil
 }
 
-// credentialProbe is the part of a config file that can carry a stored
-// credential. It is written by hand rather than taken from Config, and it
-// holds nothing else: a setting left out of it cannot make decoding fail,
-// and whether a file holds a secret is not something a save may guess at.
-type credentialProbe struct {
-	Mirror         credentialMirror   `toml:"mirror"`
-	Mirrors        []credentialMirror `toml:"mirrors"`
-	Audiobookshelf struct {
-		BaseURL   string `toml:"base_url"`
-		APIKey    string `toml:"api_key"`
-		STTURL    string `toml:"stt_url"`
-		STTAPIKey string `toml:"stt_api_key"`
-	} `toml:"audiobookshelf"`
-	Database struct {
-		URL string `toml:"url"`
-	} `toml:"database"`
-	// ReaderOrigin and CORSAllowedOrigins are origins, and neither could
-	// ever work with a password in it. They are here because a file can
-	// still hold one, and a file is where a secret leaks from.
-	ReaderOrigin       string   `toml:"reader_origin"`
-	CORSAllowedOrigins []string `toml:"cors_allowed_origins"`
-}
-
-type credentialMirror struct {
-	BaseURL        string `toml:"base_url"`
-	RemoteKey      string `toml:"remote_key"`
-	RemotePassword string `toml:"remote_password"`
-}
-
-// configFileHoldsCredential reports whether config text about to be on
-// disk carries a stored credential, which is what makes the file
-// owner-only.
-//
-// It reads the text the way a file is read, not the way startup is: no
-// environment is applied, so a secret a deployment keeps in a variable is
-// never mistaken for one on disk — and never copied into a file that did
-// not already hold it. Which values count follows the loader rather than a
-// rule of thumb: a mirror's credential is used as written, so one that is
-// only whitespace is a secret the peer is sent, while the [audiobookshelf]
-// keys are trimmed before they are used, so there a blank one is nothing.
-//
-// The addresses count too. A disabled entry keeps an operator's address,
-// validation skips its URL, and a `https://alice:hunter2@peer` left in one
-// is a password on disk whether or not it is ever dialled: a mirror's
-// base_url, an audiobookshelf base_url or stt_url, and a userinfo password
-// in an origin. database.url is the same question, answered as a total
-// over-approximation: the word `password` anywhere, or a `://` URL with an
-// `@` or a `%` in it, counts, and a sqlite file path is not one.
-//
-// Text that does not decode tells nothing, and the answer then is an error
-// rather than "no": a save that cannot read its own result is refused
-// before it writes, so no mode is changed rather than a guess made at one.
-func configFileHoldsCredential(rendered string) (bool, error) {
-	var probe credentialProbe
-	if _, err := toml.Decode(rendered, &probe); err != nil {
-		return false, safeConfigParseError("the configuration file does not parse", err)
-	}
-	for _, m := range append([]credentialMirror{probe.Mirror}, probe.Mirrors...) {
-		if m.RemoteKey != "" || m.RemotePassword != "" || urlHoldsUserPassword(m.BaseURL) {
-			return true, nil
-		}
-	}
-	abs := probe.Audiobookshelf
-	if strings.TrimSpace(abs.APIKey) != "" || strings.TrimSpace(abs.STTAPIKey) != "" {
-		return true, nil
-	}
-	addresses := []string{abs.BaseURL, abs.STTURL, probe.ReaderOrigin}
-	addresses = append(addresses, probe.CORSAllowedOrigins...)
-	for _, raw := range addresses {
-		if urlHoldsUserPassword(raw) {
-			return true, nil
-		}
-	}
-	return dsnMayHoldPassword(probe.Database.URL), nil
-}
-
-// urlHoldsUserPassword reports whether a stored address carries a password
-// in its userinfo. A username alone is not a secret, an address with no
-// userinfo is not one, and a value that is not an address at all is left
-// to validation to refuse.
-func urlHoldsUserPassword(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return false
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return false
-	}
-	password, ok := u.User.Password()
-	return ok && password != ""
-}
-
-// dsnMayHoldPassword reports whether a database.url may carry a password.
-// The driver is not consulted: a password in the value is on disk whatever
-// ends up reading it.
-//
-// It is a total over-approximation and a pure string test, with no attempt
-// at a driver's grammar. Every such attempt is a way for a password to slip
-// past it — a percent-encoded query key, a password holding the `:` that
-// splits userinfo, a `?` the driver does not stop at — and one that slips
-// past leaves a secret world-readable. So only what encoding cannot hide
-// counts: the word `password` anywhere (case-insensitive, so `sslpassword`,
-// any spacing and either shape), or a `://` URL with an `@` or a `%` after
-// it, because a userinfo or any percent-encoding at all can hide a
-// credential. A username-only URL is tightened too; over-detection only
-// makes the file owner-only and undoing that is one chmod.
-func dsnMayHoldPassword(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return false
-	}
-	if strings.Contains(strings.ToLower(raw), "password") {
-		return true
-	}
-	_, after, isURL := strings.Cut(raw, "://")
-	return isURL && strings.ContainsAny(after, "@%")
-}
-
-// tightenConfigCredentialMode makes a config file that already holds a
-// stored credential owner-only, for a save that writes no bytes. A no-op is
-// an accepted save, and leaving a secret the file already held readable by
-// others across one is how this promise would break without anybody
-// noticing. A secret-free file is left as it is.
-//
-// A body whose credential fields cannot be read is refused: an unreadable
-// file is not a secret-free one, and a no-op save must not report success
-// over a file nobody can tell the contents of.
+// enforceConfigMode makes an existing config file owner-only, for a save
+// that writes no bytes: a no-op is an accepted save, and a file it leaves
+// readable by others is the same plaintext secret one a rewrite would have
+// left. A file that is not there is left absent: a no-op save invents
+// nothing.
 //
 // It runs under the same lock as the read-modify-write it belongs to, so a
-// concurrent save cannot land between the read that found the secret and
-// the chmod that protects it.
-func tightenConfigCredentialMode(path, body string) error {
-	holds, err := configFileHoldsCredential(body)
-	if err != nil {
-		// What the file holds cannot be read, so whether a secret is in
-		// it is unknown. Reporting success over that is how a save would
-		// leave one readable.
-		return fmt.Errorf("%w; whether it holds a stored credential could not be read, so nothing was saved", err)
-	}
-	if !holds {
-		return nil
-	}
+// concurrent save cannot land between the stat and the chmod.
+func enforceConfigMode(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -522,7 +372,7 @@ func tightenConfigCredentialMode(path, body string) error {
 		}
 		return fmt.Errorf("read config permissions: %w", err)
 	}
-	if info.Mode().Perm()&0o077 == 0 {
+	if info.Mode().Perm() == 0o600 {
 		return nil
 	}
 	if err := os.Chmod(path, 0o600); err != nil {

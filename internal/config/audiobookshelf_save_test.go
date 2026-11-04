@@ -128,7 +128,9 @@ func TestUpdateAudiobookshelfAddsTheSection(t *testing.T) {
 	}
 }
 
-func TestUpdateAudiobookshelfKeepsPermissionsAndSymlinks(t *testing.T) {
+// TestUpdateAudiobookshelfFollowsASymlinkToAnOwnerOnlyFile: the write
+// follows the link and leaves the file it names owner-only.
+func TestUpdateAudiobookshelfFollowsASymlinkToAnOwnerOnlyFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real.toml")
 	if err := os.WriteFile(target, []byte("[content]\ncache_dir = \"covers\"\n"), 0o640); err != nil {
@@ -151,8 +153,8 @@ func TestUpdateAudiobookshelfKeepsPermissionsAndSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o640 {
-		t.Fatalf("permissions became %04o, want 0640", got)
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("permissions became %04o, want 0600", got)
 	}
 }
 
