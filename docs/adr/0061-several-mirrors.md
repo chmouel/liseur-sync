@@ -119,29 +119,17 @@ The details that are load-bearing:
   the original — mirror fields cleared on both — before it replaces
   anything, which is what turns a line-oriented scan meeting a `[mirror]`
   inside a multi-line string into a refusal instead of a mangled file.
-  The write follows symlinks and renames into place. The mode comes from
-  what is about to land: a file that will hold a stored credential is
-  made owner-only (`0600`), a secretless file keeps the permissions it
-  had, and a new file is created `0600`. A save that changes nothing
-  still tightens a file that already holds a credential, and a refused
-  save changes neither the bytes nor the mode. A *stored credential* is
-  read the way the loader reads one: a mirror's `remote_key` or
-  `remote_password` as written (so whitespace counts), an
-  `[audiobookshelf]` key (which is trimmed), a password in the userinfo
-  of any address the file holds — a disabled entry's `base_url`
-  included, since validation skips it — or a password in a
-  `database.url` DSN. The DSN check is a total over-approximation, a pure
-  string test rather than libpq's grammar: a `database.url` counts when it
-  spells the word `password` anywhere case-insensitively, or when it is a
-  `://` URL holding an `@` or a `%` after the scheme, since a userinfo or
-  any percent-encoding could hide a credential there. A username-only URL
-  is protected as well. Missing a real password leaves it readable, while
-  the false positive only makes the file owner-only. Text whose
-  credential settings cannot be decoded is refused rather than reported
-  secret-free: "cannot tell" is not "no". Comments inside a
-  rewritten `[[mirrors]]` section are not preserved: the section is
-  written whole, because a field that was switched off has to stop
-  existing rather than linger.
+  The write follows symlinks and renames into place. A save leaves the
+  config file `0600` — owner read and write only — whether it rewrote the
+  section or found nothing to change, and a file this server creates is
+  created `0600`. There is no detection of what the file holds: the
+  promise is unconditional, so the process account must own the file, and
+  one it cannot `chmod` makes the save fail with a clear error. Operators
+  who share the file with other users or a group should expect it to
+  become owner-only after a save. A refused save changes neither the
+  bytes nor the mode. Comments inside a rewritten `[[mirrors]]` section
+  are not preserved: the section is written whole, because a field that
+  was switched off has to stop existing rather than linger.
 
 ## Consequences
 
@@ -203,8 +191,8 @@ The details that are load-bearing:
   log after that, even when the peers restamp what they are told.
 - A peer position that differs only in the exact spot it names is still
   applied.
-- A save rewrites only the section it changed, keeps the file's
-  permissions and symlink, and refuses rather than corrupts a file whose
-  text contains a table header inside a string.
+- A save rewrites only the section it changed, leaves the file
+  owner-only, and keeps its symlink, and refuses rather than corrupts a
+  file whose text contains a table header inside a string.
 - A wrong password, a forged CSRF token, or a non-administrator writes
   nothing and leaves one audit line.

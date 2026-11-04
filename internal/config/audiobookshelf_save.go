@@ -176,9 +176,8 @@ func (c *Config) validateSavedAudiobookshelf() error {
 // The rewrite is proved before it replaces anything: the result parses,
 // it carries no unknown key, it decodes to the entry that was meant, it
 // would start, and everything outside the section is exactly what it was.
-// A save that writes no bytes still makes a file that already holds a
-// stored credential owner-only. See writeConfigAtomically for how the mode
-// of a written file is chosen.
+// A save that writes no bytes still makes an existing file owner-only. See
+// writeConfigAtomically for how the mode of a written file is chosen.
 func UpdateAudiobookshelf(path string, apply func(*AudiobookshelfConfig) error) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("the server was not started with a writable config file")
@@ -205,7 +204,7 @@ func UpdateAudiobookshelf(path string, apply func(*AudiobookshelfConfig) error) 
 		return err
 	}
 	if want == current {
-		return tightenConfigCredentialMode(target, before)
+		return enforceConfigMode(target)
 	}
 	rendered := rewriteTable(before, "audiobookshelf", false, audiobookshelfTableBlocks(want))
 	if err := verifyAudiobookshelfRewrite(before, rendered, want); err != nil {

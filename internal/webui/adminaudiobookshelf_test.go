@@ -135,7 +135,7 @@ func TestSavingEnabledAudiobookshelfTestsAndWrites(t *testing.T) {
 	}
 }
 
-func TestSavingAKeyMakesTheConfigFileOwnerOnly(t *testing.T) {
+func TestASaveThroughTheAdminPageLeavesTheConfigFileOwnerOnly(t *testing.T) {
 	peer := audiobookshelfPeer(t, "hunter3")
 	ts, cookie, path, csrf := audiobookshelfAdminWithFile(t, audiobookshelfAdminFile, nil)
 	if err := os.Chmod(path, 0o644); err != nil {
@@ -154,7 +154,7 @@ func TestSavingAKeyMakesTheConfigFileOwnerOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("the config file holding an API key is %04o, want 0600", got)
+		t.Fatalf("the config file is %04o after a save, want 0600", got)
 	}
 }
 
