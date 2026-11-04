@@ -99,7 +99,7 @@ func TestRefinePositionWithSTTRequiresReadableEPUBText(t *testing.T) {
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write(bytes.Repeat([]byte("a"), 100))
 			})
-			svc := &Service{Store: f.st, Client: client, Cfg: config.AudiobookshelfConfig{STTURL: client.baseURL}}
+			svc := &Service{Store: f.st, Client: client, STT: config.SpeechToTextConfig{Enabled: true, URL: client.baseURL}}
 			item := Item{ID: "audio", Duration: 100, AudioFiles: []AudioFile{{Ino: "file", Duration: 100, Size: 1000, Ext: ".mp3"}}}
 			seg := Segment{AudioStart: 0, AudioEnd: 100, BookStart: 0, BookEnd: 1, Href: tc.href}
 			mapping := Mapping{Segments: []Segment{seg}, Resources: []Resource{{Href: "chapter.xhtml", Start: 0, End: 1}}}

@@ -49,9 +49,11 @@ poll_interval = "30s"
 timeout = "20s"
 session_overlap = "10m"
 active_days = 30
-stt_url = "https://stt.example/v1"
-stt_api_key = "stt-secret"
-stt_model = "whisper-small"
+
+[speech_to_text]
+url = "https://stt.example/v1"
+api_key = "stt-secret"
+model = "whisper-small"
 
 [content]
 cache_dir = "covers"
@@ -129,7 +131,7 @@ func TestSavingEnabledAudiobookshelfTestsAndWrites(t *testing.T) {
 		loaded.Audiobookshelf.APIKey != "hunter3" {
 		t.Fatalf("the saved section did not load: %+v", loaded.Audiobookshelf)
 	}
-	if loaded.Audiobookshelf.STTModel != "whisper-small" ||
+	if loaded.SpeechToText.Model != "whisper-small" ||
 		loaded.Audiobookshelf.PollInterval.Duration() != 30*time.Second {
 		t.Fatalf("advanced settings moved: %+v", loaded.Audiobookshelf)
 	}
@@ -613,8 +615,8 @@ func TestAnEnvironmentOverrideThatChangesNothingNeedsNoRestart(t *testing.T) {
 	}
 }
 
-// TestAChangedOperationalSettingNeedsARestart: polling, timeout and the
-// speech-to-text settings are not on the form, but they decide how the
+// TestAChangedOperationalSettingNeedsARestart: polling, timeout, overlap
+// and active days are not on the form, but they decide how the
 // worker runs, so a saved change to one is a restart.
 func TestAChangedOperationalSettingNeedsARestart(t *testing.T) {
 	for name, change := range map[string]func(*config.AudiobookshelfConfig){
@@ -628,10 +630,6 @@ func TestAChangedOperationalSettingNeedsARestart(t *testing.T) {
 			a.SessionOverlap = config.Duration(30 * time.Minute)
 		},
 		"active_days": func(a *config.AudiobookshelfConfig) { a.ActiveDays = 5 },
-		"stt_url": func(a *config.AudiobookshelfConfig) {
-			a.STTURL = "https://other.example/v1"
-		},
-		"stt_model": func(a *config.AudiobookshelfConfig) { a.STTModel = "whisper-base" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			ts, cookie, _, _ := audiobookshelfAdminWithFile(t, audiobookshelfAdminFile,

@@ -250,7 +250,7 @@ func cmdServe(args []string) error {
 	// entry gets its own worker, because each is scoped to the one
 	// account it names and keeps its own bookkeeping.
 	mirrorRunners := mirrorRunners(st, cfg)
-	absService := audiobookshelf.NewService(st, cfg.Audiobookshelf)
+	absService := audiobookshelf.NewService(st, cfg.Audiobookshelf, cfg.SpeechToText)
 	absRunner := &audiobookshelf.Runner{Service: absService, Log: slog.Default()}
 	// The UI delegates downloads, covers and uploads back to the API
 	// server, so the two surfaces share one implementation of the rules

@@ -38,22 +38,8 @@ func AudiobookshelfEnvironmentManaged() []string {
 // what the server would do and what it writes back leaves nothing
 // implied.
 func ReadAudiobookshelf(path string) (AudiobookshelfConfig, error) {
-	out := Default().Audiobookshelf
-	if strings.TrimSpace(path) == "" {
-		return out, nil
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return out, nil
-		}
-		return out, fmt.Errorf("read config: %w", err)
-	}
-	c := Default()
-	if _, err := toml.Decode(string(body), &c); err != nil {
-		return out, safeConfigParseError("the configuration file does not parse", err)
-	}
-	return c.Audiobookshelf, nil
+	c, err := readConfigFile(path)
+	return c.Audiobookshelf, err
 }
 
 // safeConfigParseError says where a file stopped parsing without repeating
@@ -80,12 +66,6 @@ func (c *Config) ApplyAudiobookshelfEnvironment() {
 	setDuration(&c.Audiobookshelf.PollInterval, "LISEUR_ABS_POLL_INTERVAL")
 	setDuration(&c.Audiobookshelf.Timeout, "LISEUR_ABS_TIMEOUT")
 	setDuration(&c.Audiobookshelf.SessionOverlap, "LISEUR_ABS_SESSION_OVERLAP")
-	setStr(&c.Audiobookshelf.STTURL, "LISEUR_ABS_STT_URL")
-	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_ABS_STT_API_KEY")
-	setStr(&c.Audiobookshelf.STTModel, "LISEUR_ABS_STT_MODEL")
-	setStr(&c.Audiobookshelf.STTURL, "LISEUR_STT_URL")
-	setStr(&c.Audiobookshelf.STTAPIKey, "LISEUR_STT_API_KEY")
-	setStr(&c.Audiobookshelf.STTModel, "LISEUR_STT_MODEL")
 	if v, ok := os.LookupEnv("LISEUR_ABS_ACTIVE_DAYS"); ok {
 		if days, err := strconv.Atoi(v); err == nil {
 			c.Audiobookshelf.ActiveDays = days
@@ -111,19 +91,9 @@ func EffectiveAudiobookshelf(saved AudiobookshelfConfig) AudiobookshelfConfig {
 // saved entry to the running one cannot report a restart over a spelling
 // difference the next start would erase.
 func normalizedAudiobookshelf(a AudiobookshelfConfig) AudiobookshelfConfig {
-	defaults := Default().Audiobookshelf
 	a.BaseURL = canonicalAudiobookshelfURL(a.BaseURL)
 	a.Account = strings.TrimSpace(a.Account)
 	a.APIKey = strings.TrimSpace(a.APIKey)
-	a.STTURL = canonicalAudiobookshelfURL(a.STTURL)
-	a.STTAPIKey = strings.TrimSpace(a.STTAPIKey)
-	a.STTModel = strings.TrimSpace(a.STTModel)
-	if a.STTURL == "" {
-		a.STTURL = defaults.STTURL
-	}
-	if a.STTModel == "" {
-		a.STTModel = defaults.STTModel
-	}
 	return a
 }
 
@@ -274,9 +244,6 @@ func audiobookshelfTableBlocks(a AudiobookshelfConfig) []string {
 		fmt.Sprintf("timeout = %q\n", writtenDuration(a.Timeout)),
 		fmt.Sprintf("session_overlap = %q\n", writtenDuration(a.SessionOverlap)),
 		fmt.Sprintf("active_days = %d\n", a.ActiveDays),
-		fmt.Sprintf("stt_url = %q\n", a.STTURL),
-		fmt.Sprintf("stt_api_key = %q\n", a.STTAPIKey),
-		fmt.Sprintf("stt_model = %q\n", a.STTModel),
 		"\n",
 	}
 }

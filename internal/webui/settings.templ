@@ -138,6 +138,7 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminFolders), "Folders", v.Admin.View == settingsAdminFolders)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminMirror), "Mirror", v.Admin.View == settingsAdminMirror)
 		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminAudiobookshelf), "Audiobookshelf", v.Admin.View == settingsAdminAudiobookshelf)
+		@settingsAdminTab(settingsAdminHref(prefix, settingsAdminSpeechToText), "Speech-to-text", v.Admin.View == settingsAdminSpeechToText)
 	</nav>
 	if v.Admin.View == settingsAdminFolders {
 		@adminFoldersBody(prefix, csrf, v.Admin.Folders, v.Admin.HasFolders, v.Admin.FoldersNext, v.Admin.Roots, v.Admin.OpenFolderForm, v.Flash)
@@ -149,6 +150,8 @@ templ settingsAdminBody(prefix string, csrf string, v settingsView) {
 		@adminMirrorBody(prefix, csrf, v.Admin.Mirror, v.Flash)
 	} else if v.Admin.View == settingsAdminAudiobookshelf {
 		@adminAudiobookshelfBody(prefix, csrf, v.Admin.AudiobookshelfPanel, v.Flash)
+	} else if v.Admin.View == settingsAdminSpeechToText {
+		@adminSpeechToTextBody(prefix, csrf, v.Admin.SpeechToText, v.Flash)
 	} else {
 		@adminFlash(v.Flash)
 		@adminOverviewBody(prefix, v.Admin)

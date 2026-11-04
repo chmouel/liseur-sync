@@ -378,6 +378,8 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("POST /ui/admin/mirror/delete", sec(s.requireAdminAction("mirror.delete", s.handleDeleteMirror)))
 	mux.Handle("POST /ui/admin/audiobookshelf",
 		sec(s.requireAdminAction("audiobookshelf.save", s.handleSaveAudiobookshelf)))
+	mux.Handle("POST /ui/admin/speech-to-text",
+		sec(s.requireAdminAction("speech_to_text.save", s.handleSaveSpeechToText)))
 	mux.Handle("POST /ui/settings/password", sec(s.requireAuth(s.handleChangePassword)))
 	mux.Handle("GET /ui/books/{id}/read", sec(s.handleReaderRoute))
 	mux.Handle("POST /ui/reader/token", sec(s.requireAuth(s.handleReaderToken)))

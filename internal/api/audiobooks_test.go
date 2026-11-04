@@ -262,8 +262,8 @@ func TestAudiobookEndpointsGrantsStreamingSTTAndSessions(t *testing.T) {
 	cfg := config.Default()
 	cfg.InsecureHTTP = true
 	cfg.ReaderOrigin = "http://reader.example.test"
-	cfg.Audiobookshelf.STTURL = sttServer.URL
-	cfg.Audiobookshelf.STTModel = "whisper-large-v3-turbo"
+	cfg.SpeechToText.URL = sttServer.URL
+	cfg.SpeechToText.Model = "whisper-large-v3-turbo"
 
 	authSvc := auth.NewService(st)
 	srv := &Server{

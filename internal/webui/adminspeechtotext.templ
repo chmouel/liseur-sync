@@ -1,0 +1,109 @@
+package webui
+
+templ adminSpeechToTextBody(prefix string, csrf string, v speechToTextAdminView, flash Flash) {
+	<h2>Speech-to-text</h2>
+	<p class="muted">
+		When an audiobook position becomes a reading position, a
+		transcription service can hear the few seconds before it and match
+		the words to the text, instead of guessing within the chapter. This
+		covers audiobooks in watched folders and on Audiobookshelf. The
+		service receives those short slices of audio.
+	</p>
+	@adminFlash(flash)
+	<section class="card">
+		<h3>Status</h3>
+		<dl class="facts">
+			<dt>Running</dt>
+			<dd>{ onOff(v.Running) }</dd>
+			<dt>Saved setting</dt>
+			<dd>{ onOff(v.SavedEnabled) }</dd>
+			<dt>Service</dt>
+			<dd><code>{ orValue(v.SavedURL, "not set") }</code></dd>
+			<dt>Model</dt>
+			<dd>{ orValue(v.SavedModel, "not set") }</dd>
+			<dt>Credential</dt>
+			<dd>{ v.CredentialSource }</dd>
+		</dl>
+		if v.RestartRequired {
+			<p class="ok">
+				The saved settings differ from what this process started with.
+				Restart liseur-sync to apply them.
+			</p>
+		}
+	</section>
+	if len(v.EnvManaged) > 0 {
+		<p class="muted">
+			These settings are managed by the environment
+			(<code>{ audiobookshelfEnvManagedList(v.EnvManaged) }</code>).
+			Change the variables and restart; a form save here would be
+			overridden at the next start.
+		</p>
+	} else if v.NoConfigPath {
+		<p class="error">
+			The server was not started with a writable configuration file,
+			so these settings cannot be changed here. Set them in the
+			server's configuration file and restart.
+		</p>
+	} else if v.FileError != "" {
+		<p class="error">
+			The configuration file could not be read: { v.FileError }
+			Fix it and reload this page before saving.
+		</p>
+	} else {
+		@adminSpeechToTextForm(prefix, csrf, v)
+	}
+}
+
+templ adminSpeechToTextForm(prefix string, csrf string, v speechToTextAdminView) {
+	<section class="card">
+		<h3>Settings</h3>
+		<form method="post" action={ prefix + "admin/speech-to-text" } autocomplete="off">
+			<input type="hidden" name="csrf" value={ csrf }/>
+			<label class="check">
+				if v.SavedEnabled {
+					<input type="checkbox" name="enabled" checked/>
+				} else {
+					<input type="checkbox" name="enabled"/>
+				}
+				Transcribe audiobook positions
+			</label>
+			<label>Service URL
+				<input name="url" type="url" value={ v.SavedURL } placeholder="https://api.groq.com/openai/v1"/>
+			</label>
+			<p class="muted">
+				Any OpenAI-compatible transcription API, hosted or local, such
+				as <code>http://127.0.0.1:8000/v1</code>. Left blank, it is Groq.
+			</p>
+			<label>Model
+				<input name="model" value={ v.SavedModel } placeholder="whisper-large-v3-turbo"/>
+			</label>
+			<label>API key
+				<input name="api_key" type="password" autocomplete="new-password" placeholder={ v.KeyPlaceholder() }/>
+			</label>
+			if v.HasKey {
+				<label class="check">
+					<input type="checkbox" name="remove_key"/>
+					Remove the saved key
+				</label>
+			}
+			if v.CredentialFromEnv {
+				<p class="muted">
+					The effective key comes from <code>LISEUR_STT_API_KEY</code>.
+					It is used for the test and never written to the
+					configuration file.
+				</p>
+			}
+			<label>Your password
+				<input name="admin_password" type="password" required autocomplete="current-password"/>
+			</label>
+			<p class="muted">
+				Saving it enabled sends one second of silence to the service
+				first, and writes nothing if that fails. Restart liseur-sync to
+				apply a saved change.
+			</p>
+			<div class="form-actions">
+				<button type="submit" class="primary">Save and test</button>
+			</div>
+		</form>
+	</section>
+}
