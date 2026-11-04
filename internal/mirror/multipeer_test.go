@@ -806,3 +806,204 @@ func TestAFinerLocalSpotCrossesOnceAndSettles(t *testing.T) {
 		t.Fatalf("the kosync peer was told %d times, want 1", got)
 	}
 }
+
+// TestTheNewerPositionWinsWhicheverPeerIsPolledFirst is the two-peer
+// ordering the agreement rule got wrong: a peer that agrees, or that
+// holds the same place with less detail, must not have its timestamp
+// recorded as taken when no local op was written for it. Recorded that
+// way it outruns every local op, the peer's own later position looks
+// already applied, and the account settles on whichever position was
+// taken first instead of the newest one.
+func TestTheNewerPositionWinsWhicheverPeerIsPolledFirst(t *testing.T) {
+	cases := []struct {
+		name    string
+		order   []string
+		rebuild bool
+	}{
+		{
+			name:  "alpha first",
+			order: []string{"alpha", "beta", "alpha", "beta", "alpha", "beta"},
+		},
+		{
+			name:  "beta first",
+			order: []string{"beta", "alpha", "beta", "alpha", "beta", "alpha"},
+		},
+		{
+			name:    "alpha first, rebuilt between passes",
+			order:   []string{"alpha", "beta", "alpha", "beta", "alpha", "beta"},
+			rebuild: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSyncFixture(t)
+			f.read("op-1", 0.37, time.Now().Add(-3*time.Hour))
+
+			// Progress written out as the fraction is not a finer
+			// answer, so alpha is at the place this server holds and
+			// beta, further on, is at the place newest-wins has to
+			// decide about.
+			alphaAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			betaAt := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+			alpha, beta := newRestampingPeer(t), newRestampingPeer(t)
+			alpha.set(Position{
+				Document: f.document, Progress: "0.37", Percentage: 0.37,
+				Device: "kindle", DeviceID: "kindle-oasis", Timestamp: alphaAt.Unix(),
+			})
+			beta.set(Position{
+				Document: f.document, Progress: "0.60", Percentage: 0.60,
+				Device: "kobo", DeviceID: "kobo-libra", Timestamp: betaAt.Unix(),
+			})
+			peers := map[string]*restampingPeer{"alpha": alpha, "beta": beta}
+			syncers := map[string]*Syncer{
+				"alpha": f.syncerFor("alpha", alpha),
+				"beta":  f.syncerFor("beta", beta),
+			}
+			pass := func(name string) Report {
+				t.Helper()
+				if tc.rebuild {
+					syncers[name] = f.syncerFor(name, peers[name])
+				}
+				rep, err := syncers[name].Pass(context.Background())
+				if err != nil || rep.FirstError != nil {
+					t.Fatalf("pass (%s): %s err=%v", name, rep, err)
+				}
+				return rep
+			}
+			for _, name := range tc.order {
+				pass(name)
+			}
+
+			ops := f.positions()
+			if len(ops) != 3 {
+				t.Fatalf("%d ops, want the original and the two peer positions:\n%+v",
+					len(ops), ops)
+			}
+			newest := ops[0]
+			if newest.Progression != 0.37 || newest.DeviceID != "alpha:kindle-oasis" ||
+				newest.ClientTS.Unix() != alphaAt.Unix() {
+				t.Fatalf("the newest position is %g from %s at %s, want alpha's 0.37 at %s",
+					newest.Progression, newest.DeviceID, newest.ClientTS, alphaAt)
+			}
+			if pushes := beta.pushed(t); len(pushes) != 1 || pushes[0].Percentage != 0.37 {
+				t.Fatalf("what beta has been told: %+v", pushes)
+			}
+			if got := len(alpha.pushed(t)); got != 0 {
+				t.Fatalf("alpha was told %d positions, want 0: it held the newest one", got)
+			}
+
+			// Settled is settled: neither peer is asked again and the op
+			// log does not grow.
+			for _, name := range []string{"alpha", "beta", "alpha", "beta"} {
+				if rep := pass(name); rep.Pulled+rep.Pushed != 0 {
+					t.Fatalf("%s crossed a settled position: %s", name, rep)
+				}
+			}
+			if after := f.positions(); len(after) != len(ops) {
+				t.Fatalf("polling added ops: %d, want %d", len(after), len(ops))
+			}
+			if got := len(beta.pushed(t)); got != 1 {
+				t.Fatalf("beta was told %d times, want 1", got)
+			}
+		})
+	}
+}
+
+// TestACoarserPeerPositionNewerThanOursIsNotRecordedAsTaken is the same
+// rule on the localFiner path, where a push has already been spent and
+// the peer keeps answering the same place without the detail. Its newer
+// stamp says when it last wrote, not that anything crossed, so recording
+// it as a watermark makes the position it holds look already applied once
+// another peer has moved the reader on.
+func TestACoarserPeerPositionNewerThanOursIsNotRecordedAsTaken(t *testing.T) {
+	f := newSyncFixture(t)
+	ctx := context.Background()
+	local := appendLocatorOp(t, f, "epubcfi(/6/8!/4/2:41)", 0.37,
+		time.Now().Add(-3*time.Hour))
+	spent := time.Now().Add(-5 * time.Hour).UTC().Truncate(time.Second)
+	coarseAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	betaAt := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+
+	// alpha carries a CFI on the wire and answers without one, so this
+	// server names the finer spot and there is nothing left to send.
+	alpha := &cfiRestampingPeer{who: "peer-a", reply: Place{
+		Percentage: 0.37, Device: "kobo", At: coarseAt,
+	}}
+	alphaSync := &Syncer{
+		Store: f.st, Peer: "alpha", UserID: f.user.ID, Proto: alpha,
+		ActiveWindow: 30 * 24 * time.Hour, MaxPerPass: 100,
+	}
+	if err := f.st.PutMirrorCursor(ctx, f.user.ID, "alpha", store.MirrorCursor{
+		WorkID: f.work.ID, Document: f.document, PeerIdentity: alpha.Identity(),
+		PushedSeq: local.Seq, RemoteTS: spent.Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	beta := newRestampingPeer(t)
+	beta.set(Position{
+		Document: f.document, Progress: "0.50", Percentage: 0.50,
+		Device: "kobo", DeviceID: "kobo-libra", Timestamp: betaAt.Unix(),
+	})
+	betaSync := f.syncerFor("beta", beta)
+
+	rep, err := alphaSync.Pass(ctx)
+	if err != nil || rep.FirstError != nil {
+		t.Fatalf("alpha: %s err=%v", rep, err)
+	}
+	if rep.Pulled+rep.Pushed != 0 {
+		t.Fatalf("alpha crossed the position its detail was already sent for: %s", rep)
+	}
+	cursors, err := f.st.MirrorCursors(ctx, f.user.ID, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur := cursors[f.work.ID]; cur.RemoteTS != spent.Unix() {
+		t.Fatalf("alpha's stamp was recorded at %d, past our newest op at %d",
+			cur.RemoteTS, local.ClientTS.Unix())
+	}
+
+	// Another peer moves the reader on, and alpha's own newer position
+	// must still be able to win after that.
+	if rep, err := betaSync.Pass(ctx); err != nil || rep.Pulled != 1 {
+		t.Fatalf("beta: %s err=%v", rep, err)
+	}
+	if rep, err := alphaSync.Pass(ctx); err != nil || rep.Pulled != 1 {
+		t.Fatalf("alpha's newer position was taken as already applied: %s err=%v", rep, err)
+	}
+
+	ops := f.positions()
+	if len(ops) != 3 {
+		t.Fatalf("%d ops:\n%+v", len(ops), ops)
+	}
+	if newest := ops[0]; newest.Progression != 0.37 ||
+		newest.ClientTS.Unix() != coarseAt.Unix() {
+		t.Fatalf("the newest position is %g at %s, want alpha's 0.37 at %s",
+			newest.Progression, newest.ClientTS, coarseAt)
+	}
+	if got := alpha.pushCount(); got != 0 {
+		t.Fatalf("alpha was told %d positions, want 0", got)
+	}
+
+	// alpha's position reaches beta once, and then both sides settle on it.
+	if rep, err := alphaSync.Pass(ctx); err != nil || rep.Pulled+rep.Pushed != 0 {
+		t.Fatalf("alpha crossed a settled position: %s err=%v", rep, err)
+	}
+	if rep, err := betaSync.Pass(ctx); err != nil || rep.Pushed != 1 {
+		t.Fatalf("beta: %s err=%v", rep, err)
+	}
+	for _, s := range []*Syncer{alphaSync, betaSync, alphaSync, betaSync} {
+		rep, err := s.Pass(ctx)
+		if err != nil || rep.FirstError != nil {
+			t.Fatalf("%s: %s err=%v", s.Peer, rep, err)
+		}
+		if rep.Pulled+rep.Pushed != 0 {
+			t.Fatalf("%s crossed a settled position: %s", s.Peer, rep)
+		}
+	}
+	if after := f.positions(); len(after) != len(ops) {
+		t.Fatalf("polling added ops: %d, want %d", len(after), len(ops))
+	}
+	if pushes := beta.pushed(t); len(pushes) != 1 || pushes[0].Percentage != 0.37 {
+		t.Fatalf("what beta has been told: %+v", pushes)
+	}
+}

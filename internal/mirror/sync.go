@@ -331,7 +331,7 @@ func (s *Syncer) settle(
 		// its way around a loop that never changes it. Two protocols
 		// reading one library — BookOrbit's own API and its KOReader
 		// route, say — are exactly that loop without this.
-		cur.RemoteTS = remote.At.Unix()
+		noteRemoteTime(cur, local, remote)
 		cur.PulledAt = ptr(time.Now().UTC())
 		cur.PushedSeq = local.Seq
 		return nil, outcomeNothing, nil
@@ -351,7 +351,7 @@ func (s *Syncer) settle(
 		if haveNewLocal && !localFromPeer {
 			return &local, outcomeNothing, nil
 		}
-		cur.RemoteTS = remote.At.Unix()
+		noteRemoteTime(cur, local, remote)
 		cur.PushedSeq = local.Seq
 		return nil, outcomeNothing, nil
 	}
@@ -405,6 +405,17 @@ func (s *Syncer) settle(
 		cur.RemoteTS = remote.At.Unix()
 		cur.PushedSeq = local.Seq
 		return nil, outcomeNothing, nil
+	}
+}
+
+// noteRemoteTime records a peer timestamp for an answer that appends no
+// op here, and only when our newest op is at least as new. A watermark
+// past every local op would make the peer's own next position look
+// already taken, so a second peer moving the reader on would leave that
+// position neither applied nor pushed.
+func noteRemoteTime(cur *store.MirrorCursor, local store.Op, remote Place) {
+	if remote.At.Unix() <= local.ClientTS.Unix() {
+		cur.RemoteTS = remote.At.Unix()
 	}
 }
 
