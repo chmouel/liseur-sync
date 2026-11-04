@@ -995,50 +995,32 @@ The rewrite is proved before it replaces anything, follows a symlink to
 the file it names, and renames into place, so the file is either the old
 configuration or the new one and never a half-written mix.
 
-**A save that leaves a stored credential in the file makes the file
-owner-only (`0600`).** That covers the mirror's `remote_key` and
-`remote_password` (in `[mirror]` and in any `[[mirrors]]` table, enabled
-or not), `[audiobookshelf] api_key` and `stt_api_key`, and a
-`database.url` that may carry a password. That last check is a total
-over-approximation and a pure string test, chosen because every attempt
-at libpq's grammar has a way to hide one: a `database.url` counts when
-it contains the word `password` anywhere case-insensitively
-(`sslpassword`, `pass%77ord`, any spacing, quoting or shape), or when it
-is a `://` URL with an `@` or a `%` anywhere after the scheme — any
-userinfo or any percent-encoding at all could hide a credential. A
-password-less username in a URL is protected too. Over-detecting only
-costs a `chmod`, while missing one would leave a secret readable. It
-also covers a password in the userinfo of any address the file holds: a
-mirror's `base_url` (a disabled entry is never validated), or
-`[audiobookshelf]` `base_url` or `stt_url`, or `reader_origin`. A
-username with no password is not a credential.
+**A save through the admin pages leaves the config file owner-only
+(`0600`, read and write for the account the server runs as).** That is
+unconditional: it does not depend on what the file holds, on the database
+driver, or on the mode the file had. A save that rewrites a section and a
+save that finds nothing to change both do it, so an existing `0644` file
+is tightened the first time an administrator saves it. A file the server
+creates is created `0600`.
 
-What counts as a value follows the loader. A mirror credential is sent
-as written, so `remote_password` or `remote_key` set to nothing but
-whitespace is a stored credential; the `[audiobookshelf]` keys are
-trimmed before they are used, so a blank one there is not one.
-
-It happens whether the save rewrote the section or found nothing to
-change, so an existing `0644` file is tightened the first time an
-administrator saves it. A file holding no credential keeps the
-permissions it had, and a file this server creates is created `0600`. The
-write renames a file the server itself created into place, so the
-configuration file ends up owned by the account the server runs as, and
-that account must be able to write the directory holding it.
+The write follows a symlink to the file it names, so a symlinked
+configuration has its target set to `0600` and the link stays a link. The
+rename that puts the file in place makes it owned by the account the
+server runs as, so that account must own the file and be able to write
+the directory holding it.
 
 A credential supplied through the environment is never written to the
-file, and never makes a secret-free file owner-only: `LISEUR_ABS_API_KEY`
-stays where the operator put it.
+file: `LISEUR_ABS_API_KEY` stays where the operator put it.
 
-A read-only configuration file — a ConfigMap mount, say — is unchanged by
-any of this: a save that would write is refused exactly as it is today,
-because the file cannot be replaced. A save that has nothing to change
-but cannot tighten a credential-bearing file is refused too, rather than
-reporting success over a secret on a filesystem this server may not
-`chmod`. A file whose credential settings cannot be read at all — broken
-TOML, or a credential field with the wrong type — is refused rather than
-treated as secret-free, so the write that would protect it is never
-skipped silently.
+A file this server may not `chmod` — one owned by another account, or a
+read-only mount — makes the save fail with a clear error rather than
+report success over a file it left readable. A read-only configuration
+file, a ConfigMap mount say, stays unwritable: a save that would write is
+refused exactly as it was before. If you share the configuration file
+with other users or a group — a `0640` file in a shared group, an editor
+session under another account — expect it to become owner-only after an
+admin save, and keep a copy elsewhere if that sharing is how the rest of
+your tooling reads it.
 
 ## Backup
 
