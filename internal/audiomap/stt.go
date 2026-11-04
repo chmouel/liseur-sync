@@ -86,13 +86,18 @@ func TranscribeAudio(ctx context.Context, baseURL, apiKey, model string, audioBy
 	if resp.StatusCode >= 300 {
 		return "", &StatusError{Code: resp.StatusCode}
 	}
+	// A pointer tells a silent clip ({"text":""}) from a body that is not
+	// a transcript at all, such as {} or an error object.
 	var out struct {
-		Text string `json:"text"`
+		Text *string `json:"text"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out.Text), nil
+	if out.Text == nil {
+		return "", errors.New("audiomap: stt server answered without a transcript")
+	}
+	return strings.TrimSpace(*out.Text), nil
 }
 
 type docWord struct {
