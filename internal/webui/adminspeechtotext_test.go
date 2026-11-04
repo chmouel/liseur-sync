@@ -305,3 +305,24 @@ func TestATransportErrorNeverEchoesAnEncodedKey(t *testing.T) {
 		}
 	}
 }
+
+// TestANonTranscriptAnswerIsNotATest: a 200 that carries no text field,
+// such as an error object, proves nothing about the settings.
+func TestANonTranscriptAnswerIsNotATest(t *testing.T) {
+	for _, answer := range []string{`{}`, `null`, `{"error":"invalid model"}`, `{"text":null}`} {
+		t.Run(answer, func(t *testing.T) {
+			peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(answer))
+			}))
+			t.Cleanup(peer.Close)
+			ts, cookie, path, csrf := speechToTextAdminWithFile(t, speechToTextAdminFile)
+			_, body := postForm(t, ts, cookie, "/ui/admin/speech-to-text", speechToTextForm(csrf, map[string]string{
+				"enabled": "on", "url": peer.URL + "/v1", "api_key": "k",
+			}))
+			if !strings.Contains(body, "transcription test failed") {
+				t.Fatalf("a non-transcript answer passed the test:\n%s", body)
+			}
+			fileUnchanged(t, path, speechToTextAdminFile)
+		})
+	}
+}
