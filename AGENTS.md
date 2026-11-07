@@ -51,6 +51,17 @@ the same CDP walk the UI tests use
 browser, node and jq, so it is never part of a test run. Retake them
 when a page in a shot changes shape.
 
+## KOReader plugin
+
+`koreader-plugin/liseur.koplugin` is a Lua client of the native API
+(catalogue, downloads, positions). It has its own checks, outside the Go
+suite: `make koplugin-test` (pure-Lua specs, needs `luajit`) and
+`KOREADER_DIR=/path/to/koreader make koplugin-integration`, which builds
+this server, seeds a throwaway instance and drives the plugin through a
+real KOReader `ReaderUI`. Run both after touching the plugin or any route
+it calls (listed in `koreader-plugin/README.md`). Its module names keep the
+`liseur_` prefix: KOReader shares one `package.path` across plugins.
+
 ## Architecture in one paragraph
 
 One binary, two subcommands (`serve`, `admin`). Storage goes through the
