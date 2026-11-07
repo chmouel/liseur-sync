@@ -327,12 +327,17 @@ function UI.entities(plugin, browser, kind, title)
 end
 
 function UI.summary(plugin)
+    local api = api_or_info(plugin)
+    if not api then return end
+    local probe, perr = plugin:ensureProbe()
+    if not probe then
+        plugin:info(perr)
+        return
+    end
     if not plugin:hasScope("read-insights") then
         plugin:info(_("Reading statistics need a token with the read-insights permission."))
         return
     end
-    local api = api_or_info(plugin)
-    if not api then return end
     online(function()
         local data, err = api:get("/v1/insights/summary")
         if not data then
@@ -384,6 +389,7 @@ function UI.showStatus(plugin)
     local base = plugin:base()
     lines[#lines + 1] = T(_("Server: %1"), base and base.url or _("not set"))
     lines[#lines + 1] = T(_("Device token: %1"), plugin:cfg("token") and _("set") or _("not set"))
+    if plugin.probe_error then lines[#lines + 1] = plugin.probe_error end
     if probe then
         lines[#lines + 1] = T(_("Account: %1"), probe.account_id)
         lines[#lines + 1] = T(_("Device: %1 (%2)"), probe.name or "?", probe.device_id)
