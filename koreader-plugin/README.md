@@ -43,8 +43,10 @@ below covers that.
    `read-insights` for the reading summary. A token with fewer
    permissions still works for the rest.
 3. In KOReader: *Tools → Liseur Sync → Settings*. Set the server URL
-   (`https://…`, including any path prefix), paste the token, then
-   *Check connection*. Pick a download folder.
+   (`https://…`, including any path prefix), paste the token and pick a
+   download folder. The first action that needs your account asks the
+   server who the token is, so *Check connection* is only for seeing that
+   identity and its permissions, or for trying again after a change.
 
 HTTPS is required, except for `http://localhost`. The plugin verifies
 the server's certificate and host name itself and refuses to connect

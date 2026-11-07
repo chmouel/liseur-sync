@@ -160,8 +160,11 @@ end
 
 -- checkToken asks the server who this token is and remembers it. A
 -- different account opens a different state namespace.
-function Liseur:checkToken()
-    local api, err = self:api()
+-- checkToken asks the server who this token is and remembers it. short
+-- uses the brief timeouts for a probe on the way to something else. A
+-- different account opens a different state namespace.
+function Liseur:checkToken(short)
+    local api, err = self:api(short)
     if not api then return nil, { message = err } end
     local data, rerr = api:get("/v1/token")
     if not data then return nil, rerr end
@@ -204,12 +207,34 @@ end
 
 -- engine returns the position engine for the current server, account
 -- and device, or nil and a reason.
+local function probeFailure(err)
+    if err and err.kind == "transport" then return _("the device could not reach the server") end
+    if err and err.kind == "auth" then return _("the server refused this token") end
+    return (err and err.message) or _("no answer from the server")
+end
+
+-- ensureProbe returns who this token is, asking the server once if it has
+-- never been asked. The reader should not have to press Check connection
+-- before anything works.
+function Liseur:ensureProbe()
+    local base, berr = self:base()
+    if not base then return nil, berr end
+    local probe = self:probe()
+    if probe and probe.server == base.url then return probe end
+    local fresh, err = self:checkToken(true)
+    if not fresh then
+        local why = T(_("Could not use this device token: %1. Liseur Sync → Settings → Check connection tries again."), probeFailure(err))
+        self.probe_error = why
+        return nil, why
+    end
+    self.probe_error = nil
+    return fresh
+end
+
 function Liseur:engine()
     local base = self:base()
-    local probe = self:probe()
-    if not base or not probe or probe.server ~= base.url then
-        return nil, _("Check the connection first (Liseur Sync → Settings → Check connection).")
-    end
+    local probe, perr = self:ensureProbe()
+    if not probe then return nil, perr end
     local ns = Api.namespace(base, probe.account_id)
     if self.engine_cache and self.engine_cache.ns == ns and self.engine_cache.device_id == probe.device_id then
         return self.engine_cache.engine
@@ -276,18 +301,26 @@ function Liseur:stockSyncAutomatic()
     return type(s) == "table" and s.auto_sync == true
 end
 
+-- positionsActive answers without asking the server, so it can be called
+-- from event handlers and menu items. An unasked token does not block: the
+-- first job probes and reports what is wrong. A token known to lack sync
+-- does block, and so does another plugin that already owns positions.
 function Liseur:positionsActive()
-    return self:cfg("positions_enabled") == true
-        and self:cfg("handover_process") ~= PROCESS.token
-        and self:hasScope("sync")
-        and not self:stockSyncAutomatic()
+    if self:cfg("positions_enabled") ~= true then return false end
+    if self:cfg("handover_process") == PROCESS.token then return false end
+    if self:stockSyncAutomatic() then return false end
+    if not self:base() or not self:cfg("token") then return false end
+    local probe = self:probe()
+    if probe and not self:hasScope("sync") then return false end
+    return true
 end
 
 function Liseur:positionsState()
     if self:cfg("positions_enabled") ~= true then return _("off") end
     if self:cfg("handover_process") == PROCESS.token then return _("on after KOReader restarts") end
-    if not self:hasScope("sync") then return _("paused: the token lacks the sync permission") end
     if self:stockSyncAutomatic() then return _("paused: Progress sync is set to sync automatically") end
+    if not self:probe() then return _("on, not yet checked with the server") end
+    if not self:hasScope("sync") then return _("paused: the token lacks the sync permission") end
     return _("on")
 end
 
@@ -338,8 +371,11 @@ function Liseur:onReaderReady()
     -- again here. The sidecar is left alone.
     local md5 = util.partialMD5(self.ui.document.file)
     if not md5 then return end
-    local engine = self:engine()
-    if not engine then return end
+    local engine, eerr = self:engine()
+    if not engine then
+        logger.warn("Liseur: no session for this book:", eerr)
+        return
+    end
     local book, err = engine:book(md5)
     if not book then
         logger.warn("Liseur: book state unreadable:", err)
