@@ -598,10 +598,28 @@ the history merges in. A KOReader-first book is not lost.
 
 ### 7.2 KOReader statistics plugin (`/adapter/koplugin/*`)
 
-Accepts the KoInsight-shape request. Page-based rows are converted:
-`progression = page / total_pages`, `origin: koplugin`. Rows the legacy
-protocol would silently drop are rejected loudly with a 422 listing the
-reason.
+Accepts what the KoInsight KOReader plugin sends. Every released version
+of that plugin posts to `POST /adapter/koplugin/{capability}/api/plugin/import`
+and registers itself at `.../api/plugin/device`; those are the two routes
+mounted. The body is `{"stats": [...], "books": [...], "annotations": {...},
+"version": "..."}`. Page-based rows in `stats` are converted:
+`progression = page / total_pages`, `origin: koplugin`. `books` and
+`annotations` are not stored; a request that carries only those is
+accepted and the response lists what was ignored. `rows` and `sessions`
+are still read as older names for the stats list. A request is at most
+32 MiB and 500,000 rows (the plugin re-sends its whole table each sync, so a
+request only grows); more is `413`.
+
+Rows the legacy protocol would silently drop, or that a backend cannot
+store or read back (a non-hex or overlong `book_md5`, a time past year 9999,
+a `start_time + duration` that overflows, a duration over a day), are
+refused and named in the response's `rejected` list (the first 100;
+`rejected_total` is exact); the log records how many, not which. The plugin re-sends its whole
+statistics table on every sync, so a row refused once is refused on every
+later sync: the status therefore reflects the request, not one row. A
+request in which nothing was accepted is `422`; one in which some rows were
+stored and some refused is `200` with `rejected` set. `device_id` is
+derived from the capability credential and one in the payload is ignored.
 
 ### 7.3 Adapter rules
 

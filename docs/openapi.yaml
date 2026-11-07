@@ -95,6 +95,156 @@ paths:
         "409": { $ref: "#/components/responses/Error", description: "Measured statistics not enabled, or event ID payload mismatch" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
+  /adapter/koplugin/{capability}/api/plugin/import:
+    post:
+      tags: [sessions]
+      summary: Receive reading statistics from the KoInsight KOReader plugin
+      operationId: postKopluginImport
+      security: []
+      description: |
+        The route the KoInsight KOReader plugin posts its statistics to. The
+        plugin cannot set headers, so the credential is the `capability`
+        segment of the path: a secret printed once by `koplugin-device` or the
+        administration page, stored hashed, bound to one account and device.
+        Treat the whole URL as a secret; the server redacts it from its logs.
+        A device id in the body is ignored, because the credential already
+        names the device.
+
+        The body is `{"stats": [...], "books": [...], "annotations": {...},
+        "version": "..."}`, at most 32 MiB and 500000 rows; more is `413`. Each `stats`
+        row is `{book_md5, page, total_pages, start_time, duration}` with
+        times in unix seconds. `book_md5` is a hex digest of at most 64
+        characters, `1 <= page <= total_pages <= 10000000`, `duration` is
+        1..86400 seconds, and `start_time + duration` is no later than year
+        9999. Rows become native sessions with origin `koplugin`;
+        `progression = page / total_pages`. `books` and `annotations` are not
+        stored. A request that carries only those, or an empty `stats`
+        (`[]`, `{}` or `null`), is accepted and stores nothing. `rows` and
+        `sessions` are read as older names for `stats`. Trailing input after
+        the JSON value is refused.
+
+        The plugin re-sends its whole statistics table on every sync, so
+        replays are expected: a row already stored is counted as `duplicate`,
+        and a changed row supersedes the earlier one. A row the server
+        refuses is listed in `rejected` (the first 100; `rejected_total` is
+        exact) and logged by count. When at least one
+        row was accepted the status is `200`, so that one bad row cannot make
+        every later sync fail; when rows were refused and none accepted it is
+        `422`.
+      parameters:
+        - name: capability
+          in: path
+          required: true
+          schema: { type: string }
+          description: Capability secret from `koplugin-device`
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string }
+                stats:
+                  description: |
+                    Page-stat rows. An empty list may arrive as `[]`, `{}` (how
+                    the plugin's encoder writes an empty Lua table) or `null`;
+                    all mean no rows. At most 500000 rows per request, else `413`.
+                  oneOf:
+                    - type: array
+                      maxItems: 500000
+                      items:
+                        type: object
+                        required: [book_md5, page, total_pages, start_time, duration]
+                        properties:
+                          book_md5: { type: string, maxLength: 64, pattern: "^[0-9a-fA-F]+$" }
+                          page: { type: integer, minimum: 1 }
+                          total_pages: { type: integer, minimum: 1, maximum: 10000000 }
+                          start_time: { type: integer, format: int64, description: Unix seconds }
+                          duration: { type: integer, minimum: 1, maximum: 86400, description: Seconds }
+                    - type: object
+                      maxProperties: 0
+                    - type: "null"
+                rows: { type: array, items: { type: object }, description: "Older name for stats, read when stats is empty" }
+                sessions: { type: array, items: { type: object }, description: "Older name for stats, read when stats and rows are empty" }
+                books: { type: array, items: { type: object }, description: "Accepted, not stored" }
+                annotations: { type: object, description: "Accepted, not stored" }
+      responses:
+        "200":
+          description: Processed. Some rows may still have been refused; see `rejected`
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [inserted, superseded, duplicate]
+                properties:
+                  inserted: { type: integer }
+                  superseded: { type: integer }
+                  duplicate: { type: integer }
+                  rejected:
+                    type: array
+                    maxItems: 100
+                    items: { type: string }
+                    description: One line per refused row, naming the row and the reason. Capped at 100 lines
+                  rejected_total:
+                    type: integer
+                    description: Exact number of refused rows, present when any were refused
+                  ignored:
+                    type: array
+                    items: { type: string }
+                    description: Fields of an annotation-only request that were not stored
+        "401": { $ref: "#/components/responses/Error", description: "Unknown or revoked capability, disabled account or disabled koplugin adapter" }
+        "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
+        "413": { $ref: "#/components/responses/Error", description: "Request body over 32 MiB, or more than 500000 rows" }
+        "422":
+          description: No row was accepted, or the body is not a valid statistics request. `rejected` says why
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rejected: { type: array, maxItems: 100, items: { type: string } }
+                  rejected_total: { type: integer }
+                  inserted: { type: integer }
+                  superseded: { type: integer }
+                  duplicate: { type: integer }
+
+  /adapter/koplugin/{capability}/api/plugin/device:
+    post:
+      tags: [sessions]
+      summary: Device registration call from the KoInsight KOReader plugin
+      operationId: postKopluginDevice
+      security: []
+      description: |
+        The plugin calls this before each upload. The device already exists,
+        named by the capability credential, so nothing is stored and a device
+        id in the body is ignored; the call only confirms that the credential
+        works. The body is at most 64 KiB.
+      parameters:
+        - name: capability
+          in: path
+          required: true
+          schema: { type: string }
+          description: Capability secret from `koplugin-device`
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: The credential is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registered]
+                properties:
+                  registered: { type: boolean }
+        "401": { $ref: "#/components/responses/Error", description: "Unknown or revoked capability, disabled account or disabled koplugin adapter" }
+        "403": { $ref: "#/components/responses/Error", description: "HTTPS required" }
+        "413": { $ref: "#/components/responses/Error", description: "Request body over 64 KiB" }
+
   /v1/events:
     get:
       tags: [sync]

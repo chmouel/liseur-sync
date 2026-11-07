@@ -288,6 +288,23 @@ the server. The server detects the kind: a root with `metadata.db` is a
 Calibre folder, anything else is a plain folder. The running server
 reconciles the folder immediately and watches it without a restart.
 
+### Reading statistics from KOReader
+
+`koplugin-device` prints a capability URL, once:
+`https://<host>/adapter/koplugin/<secret>`. Install the KoInsight plugin
+(`koinsight.koplugin`, from the KoInsight project's `plugins/` directory)
+into KOReader's `plugins/` folder and set its server URL to that URL,
+without a trailing slash. The plugin appends `/api/plugin/import` and
+`/api/plugin/device` itself. It uploads when KOReader suspends, or on
+demand from its menu.
+
+The URL is the credential: treat it like a password. nginx must redact
+it from logs as shown above. Revoke it from the admin panel.
+
+KoInsight's repository is archived, so the plugin receives no further
+fixes. Statistics only: reading *position* syncs through kosync, and
+annotations are not synced.
+
 ## The Administration section
 
 The Administration section of `/ui/settings` is where an administrator runs
