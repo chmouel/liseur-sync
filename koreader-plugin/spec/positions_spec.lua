@@ -1,0 +1,440 @@
+local Api = require("liseur_api")
+local Fake = require("fake_http")
+local Positions = require("liseur_positions")
+local Store = require("liseur_store")
+local json = require("json")
+
+local function fakemd5(s)
+    local h = 2166136261
+    local out = {}
+    for round = 1, 4 do
+        for i = 1, #s do h = (h * 16777619 + s:byte(i) + round) % 4294967296 end
+        out[#out + 1] = string.format("%08x", h)
+    end
+    return table.concat(out)
+end
+
+local function tmpdir()
+    local p = os.tmpname()
+    os.remove(p)
+    os.execute("mkdir -p '" .. p .. "'")
+    return p
+end
+
+local fs = {
+    mkdir = function(path) os.execute("mkdir -p '" .. path .. "'") end,
+    list = function(dir)
+        local out = {}
+        local p = io.popen("ls -a '" .. dir .. "' 2>/dev/null")
+        for line in p:lines() do out[#out + 1] = line end
+        p:close()
+        return out
+    end,
+}
+
+local function setup(device)
+    local fake = Fake.new()
+    local clock = { t = 1700000000 }
+    local dir = tmpdir()
+    local function engine(dev)
+        return Positions.new{
+            api = Api.new{ base = Api.parseBase("https://h.example"), token = "t", transport = fake.transport },
+            store = Store.new(dir, fs),
+            now = function() return clock.t end,
+            md5 = fakemd5,
+            random = function() return 0.5 end,
+            device_id = dev or device or "dev-1",
+            account_id = "acc",
+        }
+    end
+    return fake, engine(), clock, engine
+end
+
+local function resolved(engine, md5)
+    local b = engine:book(md5 or "m1")
+    b.identity = "resolved"
+    b.work_id = "w1"
+    b.sha256 = "sha-a"
+    engine:account()
+    engine:track("w1")
+    return b
+end
+
+describe("liseur_positions observations", function()
+    it("the position found at open is not owed, a later move is", function()
+        local _, e = setup()
+        local b = resolved(e)
+        assert.is_true(e:observe(b, { progression = 0, xpointer = "/body/p[1]" }, true))
+        assert.is_false(Positions.dirty(b))
+        assert.is_false(e:observe(b, { progression = 0, xpointer = "/body/p[1]" }))
+        assert.is_true(e:observe(b, { progression = 0.1, xpointer = "/body/p[9]" }))
+        assert.is_true(Positions.dirty(b))
+    end)
+
+    it("an open position that differs from the last one seen is owed", function()
+        local _, e = setup()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.2, xpointer = "/a" }, true)
+        e:observe(b, { progression = 0.5, xpointer = "/b" }, true)
+        assert.is_true(Positions.dirty(b))
+    end)
+
+    it("position zero is a real position", function()
+        local _, e = setup()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.3, xpointer = "/a" }, true)
+        e:observe(b, { progression = 0, xpointer = "/start" })
+        e:prepare(b)
+        assert.are.equal(0, json.decode(b.pending.raw).progression)
+    end)
+end)
+
+describe("liseur_positions uploads", function()
+    local fake, e, clock, engine
+    before_each(function()
+        fake, e, clock, engine = setup()
+    end)
+
+    local function moved(book, p)
+        e:observe(book, { progression = p, xpointer = "/x" .. p })
+    end
+
+    it("sends the frozen bytes and records the agreement", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        local p = e:prepare(b)
+        local sent = json.decode(p.raw)
+        assert.are.equal("w1", sent.work_id)
+        assert.are.equal(0.4, sent.progression)
+        assert.are.equal("/x0.4", sent.foreign_pos)
+        assert.are.equal("sha-a", sent.edition_sha)
+        assert.are.equal("2023-11-14T22:13:20.000Z", sent.client_ts)
+        assert.is_nil(sent.locator)
+        fake:respond(200, { results = { { op_id = p.op_id, status = "applied", seq = 12 } } })
+        assert.are.equal("acked", e:send(b))
+        assert.are.equal('{"ops":[' .. p.raw .. ']}', fake:last().body)
+        assert.is_false(Positions.dirty(b))
+        assert.is_nil(b.pending)
+        assert.are.equal(12, b.baseline.seq)
+        assert.are.equal(12, e:remote(b).seq)
+    end)
+
+    it("retries an unknown outcome with the same bytes, even after a restart", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        local p = e:prepare(b)
+        assert.is_true(e:saveBook(b))
+        fake:respond(nil, "timeout")
+        assert.are.equal("retry", e:send(b))
+        e:saveBook(b)
+        local e2 = engine()
+        local again = e2:book("m1")
+        e2:account()
+        clock.t = clock.t + 3600
+        moved(again, 0.6) -- later reading does not change what is in flight
+        assert.are.equal(p.raw, again.pending.raw)
+        fake:respond(200, { results = { { op_id = p.op_id, status = "duplicate", seq = 5 } } })
+        assert.are.equal("acked", e2:send(again))
+        assert.are.equal('{"ops":[' .. p.raw .. ']}', fake:last().body)
+        assert.is_true(Positions.dirty(again), "the newer move is still owed")
+    end)
+
+    it("honours Retry-After before sending again", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        e:prepare(b)
+        fake:respond(429, { error = "slow down" }, { ["retry-after"] = "120" })
+        assert.are.equal("retry", e:send(b))
+        assert.are.equal(clock.t + 120, b.pending.not_before)
+        assert.are.equal("retry", e:send(b))
+        assert.are.equal(1, #fake.requests)
+    end)
+
+    it("an op id reused with another payload gets a fresh id next time", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        local first = e:prepare(b).op_id
+        fake:respond(200, { results = { { op_id = first, status = "conflict", reason = "op_id reused" } } })
+        assert.are.equal("renamed", e:send(b))
+        assert.is_true(Positions.dirty(b))
+        assert.truthy(e:prepare(b).op_id ~= first)
+    end)
+
+    it("an unknown work drops the mapping and keeps the reading", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        e:prepare(b)
+        fake:respond(400, { error = "op x: unknown work", code = "unknown_work" })
+        assert.are.equal("unknown_work", e:send(b))
+        assert.are.equal("unresolved", b.identity)
+        assert.is_nil(b.work_id)
+        assert.is_true(Positions.dirty(b))
+    end)
+
+    it("a refused op is not resent until the reader moves again", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        e:prepare(b)
+        fake:respond(400, { error = "op x: time in future", code = "time_in_future" })
+        assert.are.equal("refused", e:send(b))
+        assert.is_false(Positions.dirty(b))
+        moved(b, 0.5)
+        assert.is_true(Positions.dirty(b))
+    end)
+
+    it("nothing is sent while the account state cannot be read", function()
+        local b = resolved(e)
+        e:saveAccount()
+        moved(b, 0.4)
+        e:prepare(b)
+        e:saveBook(b)
+        local file = e.store:path("account", "state")
+        os.execute("chmod 000 '" .. file .. "'")
+        local fresh = engine()
+        local again = fresh:book("m1")
+        local status, err = fresh:send(again)
+        os.execute("chmod 600 '" .. file .. "'")
+        assert.is_nil(status)
+        assert.are.equal("storage", err.kind)
+        assert.are.equal(0, #fake.requests)
+    end)
+
+    it("an upload frozen under another device is paused, not replayed", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        e:prepare(b)
+        e:saveBook(b)
+        local other = engine("dev-2")
+        local again = other:book("m1")
+        assert.are.equal("paused_device", other:send(again))
+        assert.are.equal(0, #fake.requests)
+        assert.is_true(other:discardPaused(again))
+        local p = other:prepare(again)
+        assert.are.equal("dev-2", p.device_id)
+    end)
+end)
+
+describe("liseur_positions retired uploads", function()
+    it("are delivered without touching the new bytes' agreement", function()
+        local fake, e = setup()
+        local b = resolved(e)
+        b.retired = {
+            { raw = '{"op_id":"old"}', device_id = "dev-1" },
+            { raw = '{"op_id":"other"}', device_id = "dev-9" },
+            { raw = '{"op_id":"later"}', device_id = "dev-1" },
+        }
+        fake:respond(200, { results = { { op_id = "old", status = "applied", seq = 3 } } })
+        fake:respond(nil, "timeout")
+        assert.is_true(e:sendRetired(b))
+        assert.are.equal('{"ops":[{"op_id":"old"}]}', fake.requests[1].body)
+        assert.are.equal(2, #b.retired, "the other device's and the unanswered one stay")
+        assert.is_not_nil(b.retired[2].not_before)
+        assert.is_nil(b.baseline)
+        assert.are.equal(0, b.acked)
+    end)
+
+    it("are kept on any answer that does not settle them", function()
+        local fake, e, clock = setup()
+        local b = resolved(e)
+        b.retired = { { raw = '{"op_id":"a"}', device_id = "dev-1" } }
+        fake:respond(200, {})
+        e:sendRetired(b)
+        assert.are.equal(1, #b.retired)
+        clock.t = clock.t + 100000
+        fake:respond(200, "not json")
+        e:sendRetired(b)
+        assert.are.equal(1, #b.retired)
+        clock.t = clock.t + 100000
+        fake:respond(400, { error = "op a: time in future", code = "time_in_future" })
+        e:sendRetired(b)
+        assert.is_nil(b.retired)
+    end)
+end)
+
+describe("liseur_positions feed", function()
+    local fake, e
+    before_each(function()
+        fake, e = setup()
+    end)
+
+    it("follows pages, keeps only tracked works and commits the cursor", function()
+        resolved(e)
+        fake:respond(200, { ops = {
+            { op_id = "a", work_id = "w1", seq = 3, progression = 0.2, device_id = "d2" },
+            { op_id = "b", work_id = "w9", seq = 4, progression = 0.9, device_id = "d2" },
+        }, high_water = 9, has_more = true, furthest_floors = { w1 = 2 } })
+        fake:respond(200, { ops = {
+            { op_id = "c", work_id = "w1", seq = 7, progression = 0.3, device_id = "d2" },
+        }, high_water = 9, has_more = false, furthest_floors = {} })
+        assert.is_true(e:pull())
+        local acc = e:account()
+        assert.are.equal(7, acc.cursor)
+        assert.are.equal("c", acc.works.w1.remote.op_id)
+        assert.are.equal(2, acc.works.w1.floor)
+        assert.is_nil(acc.works.w9)
+        assert.matches("since=4", fake.requests[2].url)
+        assert.are.equal(7, e.store:read("account", "state").cursor)
+    end)
+
+    it("an empty page advances to the high-water mark", function()
+        e:account()
+        e.store:write("account", "state", { cursor = 4, works = {} })
+        e._account = nil
+        fake:respond(200, { ops = {}, high_water = 11, has_more = false, furthest_floors = {} })
+        assert.is_true(e:pull())
+        assert.are.equal(11, e:account().cursor)
+    end)
+
+    it("an expired cursor reseeds from heads without touching local reading", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.4, xpointer = "/p" })
+        e:prepare(b)
+        e:saveBook(b)
+        fake:respond(410, { error = "resync_required", high_water = 50 })
+        fake:respond(200, {
+            ops = {
+                { op_id = "x", work_id = "w1", seq = 40, progression = 0.5, device_id = "d2" },
+                { op_id = "y", work_id = "w1", seq = 44, progression = 0.6, device_id = "d3" },
+            },
+            furthest = {}, furthest_floors = { w1 = 10 }, snapshot_seq = 50,
+        })
+        assert.is_true(e:pull())
+        local acc = e:account()
+        assert.are.equal(50, acc.cursor)
+        assert.are.equal("y", acc.works.w1.remote.op_id)
+        assert.are.equal(10, acc.works.w1.floor)
+        local again = e:book("m1")
+        assert.is_not_nil(again.pending)
+        assert.matches("/v1/heads", fake:last().url)
+    end)
+
+    it("drops ops it cannot read but still moves past them", function()
+        resolved(e)
+        fake:respond(200, { ops = {
+            { op_id = "a", work_id = "w1", seq = 3, progression = json.null },
+        }, high_water = 3, has_more = false })
+        assert.is_true(e:pull())
+        assert.are.equal(3, e:account().cursor)
+        assert.is_nil(e:account().works.w1.remote)
+    end)
+end)
+
+describe("liseur_positions decisions", function()
+    local fake, e
+    before_each(function()
+        fake, e = setup()
+    end)
+
+    local function remote(op)
+        e:account().works.w1.remote = Positions.trim(op)
+    end
+
+    it("opening at the cover does not overwrite a remote chapter", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0, xpointer = "/cover" }, true)
+        remote({ op_id = "r", seq = 5, progression = 0.4, device_id = "d2" })
+        local d = e:decide(b)
+        assert.are.equal("pull", d.kind)
+        assert.are.equal("r", d.op.op_id)
+    end)
+
+    it("reading backwards is sent", function()
+        local b = resolved(e)
+        b.baseline = { progression = 0.9, op_id = "r", seq = 5 }
+        remote({ op_id = "r", seq = 5, progression = 0.9, device_id = "d2" })
+        e:observe(b, { progression = 0.9, xpointer = "/end" }, true)
+        e:observe(b, { progression = 0.02, xpointer = "/start" })
+        assert.are.equal("push", e:decide(b).kind)
+    end)
+
+    it("this device's own echo is the agreement", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.3, xpointer = "/a" }, true)
+        b.baseline = { progression = 0.3, op_id = "mine", seq = 8 }
+        remote({ op_id = "mine", seq = 8, progression = 0.3, device_id = "dev-1" })
+        assert.are.equal("in_sync", e:decide(b).kind)
+    end)
+
+    it("exact positions on the same rendered page settle a near difference", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.071, xpointer = "/here" }, true)
+        remote({ op_id = "r", seq = 5, progression = 0.078, device_id = "d2", foreign_pos = "/there", edition_sha = "sha-a" })
+        local d = e:decide(b, function(there, here)
+            assert.are.equal("/there", there)
+            assert.are.equal("/here", here)
+            return true
+        end)
+        assert.are.equal("in_sync", d.kind)
+    end)
+
+    it("only trusts a remote KOReader position bound to these bytes", function()
+        local b = resolved(e)
+        b.md5 = "m1"
+        assert.is_nil(Positions.remoteLocation(b, { foreign_pos = "/x", edition_sha = "other" }))
+        assert.is_nil(Positions.remoteLocation(b, { foreign_pos = "/x" }))
+        assert.are.equal("/x", Positions.remoteLocation(b, { foreign_pos = "/x", edition_sha = "sha-a" }))
+        assert.are.equal("/x", Positions.remoteLocation(b, { foreign_pos = "/x", origin_alias = "partial-md5:m1" }))
+    end)
+
+    it("a choice made against a stale prompt is refused", function()
+        local b = resolved(e)
+        remote({ op_id = "r1", seq = 5, progression = 0.4, device_id = "d2" })
+        local shown = e:remote(b)
+        remote({ op_id = "r2", seq = 6, progression = 0.7, device_id = "d3" })
+        assert.is_false(e:accept(b, shown))
+        assert.is_false(e:keep(b, shown))
+        assert.is_true(e:accept(b, e:remote(b)))
+    end)
+
+    it("reading on from an agreed exact position is sent, not a conflict", function()
+        local b = resolved(e)
+        remote({ op_id = "r", seq = 5, progression = 0.3, device_id = "d2", foreign_pos = "/r", edition_sha = "sha-a" })
+        e:observe(b, { progression = 0, xpointer = "/cover" }, true)
+        assert.is_true(e:accept(b, e:remote(b)))
+        e:settle(b, { progression = 0.3, xpointer = "/r" })
+        e:observe(b, { progression = 0.32, xpointer = "/later" })
+        assert.are.equal("push", e:decide(b, function() return false end).kind)
+    end)
+
+    it("keeping this position makes it the one to send", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.2, xpointer = "/a" }, true)
+        remote({ op_id = "r", seq = 5, progression = 0.6, device_id = "d2" })
+        assert.are.equal("pull", e:decide(b).kind)
+        assert.is_true(e:keep(b, e:remote(b)))
+        assert.are.equal("push", e:decide(b).kind)
+    end)
+
+    it("accepting then settling leaves nothing owed", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.2, xpointer = "/a" }, true)
+        e:observe(b, { progression = 0.25, xpointer = "/b" })
+        remote({ op_id = "r", seq = 5, progression = 0.6, device_id = "d2" })
+        assert.is_true(e:accept(b, e:remote(b)))
+        e:settle(b, { progression = 0.6, xpointer = "/c" })
+        assert.is_false(Positions.dirty(b))
+        assert.are.equal("in_sync", e:decide(b).kind)
+    end)
+end)
+
+describe("liseur_positions history", function()
+    it("hides furthest candidates at or below the forgotten floor", function()
+        local fake, e = setup()
+        fake:respond(200, {
+            ops = { { op_id = "a", seq = 9, progression = 0.3, device_id = "d" } },
+            furthest = {
+                { op_id = "f1", seq = 4, progression = 0.99, device_id = "d" },
+                { op_id = "f2", seq = 9, progression = 0.3, device_id = "d" },
+            },
+            furthest_floor = 4,
+        })
+        local h = e:history("w1")
+        assert.are.equal(1, #h.furthest)
+        assert.are.equal("f2", h.furthest[1].op_id)
+        resolved(e)
+        fake:respond(200, { furthest_floor = 9 })
+        assert.are.equal(9, e:forgetFurthest("w1", 9))
+        assert.are.same({ upto_seq = 9 }, json.decode(fake:last().body))
+        assert.are.equal(9, e:floor("w1"))
+    end)
+end)
