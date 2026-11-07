@@ -50,7 +50,7 @@ function Identity.writable(book)
 end
 
 local function identifier(identifiers, kind)
-    for _, id in ipairs(type(identifiers) == "table" and identifiers or {}) do
+    for _i, id in ipairs(type(identifiers) == "table" and identifiers or {}) do
         if Api.present(id.kind) == kind then return Api.present(id.value) end
     end
 end

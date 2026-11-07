@@ -22,13 +22,13 @@ end
 -- book normalises one catalogue book object to the fields the UI uses.
 function Catalog.book(b)
     local authors, series = {}, {}
-    for _, c in ipairs(list(b.contributors)) do
+    for _i, c in ipairs(list(b.contributors)) do
         local role = str(c.role)
         if role == nil or role == "" or role == "author" or role == "aut" then
             authors[#authors + 1] = str(c.name)
         end
     end
-    for _, s in ipairs(list(b.series)) do
+    for _i, s in ipairs(list(b.series)) do
         series[#series + 1] = { id = str(s.id), name = str(s.name), position = tonumber(present(s.position)) }
     end
     return {
@@ -52,7 +52,7 @@ end
 
 local function books(raw)
     local out = {}
-    for _, b in ipairs(list(raw)) do out[#out + 1] = Catalog.book(b) end
+    for _i, b in ipairs(list(raw)) do out[#out + 1] = Catalog.book(b) end
     return out
 end
 
@@ -60,7 +60,7 @@ function Catalog.folders(api, after)
     local data, err = api:get("/v1/folders", { limit = Catalog.PAGE, after = after })
     if not data then return nil, err end
     local out = {}
-    for _, f in ipairs(list(data.folders)) do
+    for _i, f in ipairs(list(data.folders)) do
         out[#out + 1] = { folder_id = str(f.folder_id), name = str(f.name) or "?", kind = str(f.kind), accepts_uploads = f.accepts_uploads == true }
     end
     return out, str(data.next_after)
@@ -83,7 +83,7 @@ function Catalog.entities(api, kind, after)
     local data, err = api:get("/v1/entities/" .. Api.escape(kind), { limit = Catalog.PAGE, after = after })
     if not data then return nil, err end
     local out = {}
-    for _, e in ipairs(list(data.entities)) do
+    for _i, e in ipairs(list(data.entities)) do
         out[#out + 1] = { id = str(e.id), name = str(e.name) or "?", book_count = tonumber(present(e.book_count)) or 0 }
     end
     return out, str(data.next_after)
@@ -94,7 +94,7 @@ end
 -- (it is small) and ordered here.
 function Catalog.sortSeries(list_, entity_id)
     local function pos(b)
-        for _, s in ipairs(b.series) do
+        for _i, s in ipairs(b.series) do
             if s.id == entity_id then return s.position end
         end
     end
@@ -120,7 +120,7 @@ function Catalog.seriesBooks(api, entity_id, max_pages)
     for _ = 1, max_pages or 10 do
         local page, next_or_err = Catalog.entityBooks(api, "series", entity_id, cursor)
         if not page then return nil, next_or_err end
-        for _, b in ipairs(page) do all[#all + 1] = b end
+        for _i, b in ipairs(page) do all[#all + 1] = b end
         cursor = next_or_err
         if not cursor then return Catalog.sortSeries(all, entity_id), false end
     end

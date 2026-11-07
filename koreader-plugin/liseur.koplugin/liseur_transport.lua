@@ -28,7 +28,7 @@ function Transport.findCA(custom)
     if custom and custom ~= "" then
         return readable(custom) and custom or nil
     end
-    for _, p in ipairs(Transport.CA_PATHS) do
+    for _i, p in ipairs(Transport.CA_PATHS) do
         if readable(p) then return p end
     end
 end
@@ -49,7 +49,7 @@ end
 -- name only when the certificate has no DNS names.
 function Transport.certificateMatches(names, common_name, host)
     if names and #names > 0 then
-        for _, n in ipairs(names) do
+        for _i, n in ipairs(names) do
             if Transport.nameMatches(n, host) then return true end
         end
         return false
@@ -62,11 +62,11 @@ local function cert_names(cert)
     local ok, ext = pcall(function() return cert:extensions() end)
     local san = ok and ext and ext["2.5.29.17"]
     if san and san.dNSName then
-        for _, n in ipairs(san.dNSName) do names[#names + 1] = n end
+        for _i, n in ipairs(san.dNSName) do names[#names + 1] = n end
     end
     local sok, subject = pcall(function() return cert:subject() end)
     if sok and subject then
-        for _, entry in ipairs(subject) do
+        for _i, entry in ipairs(subject) do
             if entry.name == "commonName" or entry.oid == "2.5.4.3" then cn = entry.value end
         end
     end

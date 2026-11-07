@@ -152,7 +152,7 @@ end
 function Liseur:hasScope(scope)
     local p = self:probe()
     if not p then return false end
-    for _, s in ipairs(p.scopes or {}) do
+    for _i, s in ipairs(p.scopes or {}) do
         if s == scope then return true end
     end
     return false
@@ -169,7 +169,7 @@ function Liseur:checkToken(short)
     local data, rerr = api:get("/v1/token")
     if not data then return nil, rerr end
     local scopes = {}
-    for _, s in ipairs(type(data.scopes) == "table" and data.scopes or {}) do
+    for _i, s in ipairs(type(data.scopes) == "table" and data.scopes or {}) do
         if type(s) == "string" then scopes[#scopes + 1] = s end
     end
     local probe = {
@@ -490,7 +490,7 @@ function Liseur:runTopics()
     while guard < 10 do
         guard = guard + 1
         local topic
-        for _, t in ipairs(ORDER) do
+        for _i, t in ipairs(ORDER) do
             if self.topics[t] then topic = t break end
         end
         if not topic then break end
@@ -651,7 +651,7 @@ end
 function Liseur:flushWith(engine, closing)
     local s = self.session
     if not closing then
-        for _, md5 in ipairs(engine.store:list("books")) do
+        for _i, md5 in ipairs(engine.store:list("books")) do
             if not s or md5 ~= s.md5 then
                 local book = engine:book(md5)
                 if book then
