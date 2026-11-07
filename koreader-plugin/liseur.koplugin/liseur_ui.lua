@@ -16,6 +16,7 @@ local T = ffiUtil.template
 
 local Network = require("liseur_network")
 local Api = require("liseur_api")
+local BookInfo = require("liseur_bookinfo")
 local Catalog = require("liseur_catalog")
 local Positions = require("liseur_positions")
 
@@ -82,7 +83,7 @@ local function paged(browser, title, fetch, to_item)
             return false
         end
         if items[#items] and items[#items].more then table.remove(items) end
-        for _, v in ipairs(page) do items[#items + 1] = to_item(v) end
+        for _i, v in ipairs(page) do items[#items + 1] = to_item(v) end
         if next_or_err then
             items[#items + 1] = {
                 text = _("More…"),
@@ -106,17 +107,8 @@ local function online(fn)
 end
 
 function UI.bookDetails(plugin, book)
-    local lines = { book.title }
-    if #book.authors > 0 then lines[#lines + 1] = table.concat(book.authors, ", ") end
-    for _, s in ipairs(book.series) do
-        lines[#lines + 1] = s.position and T(_("%1 #%2"), s.name or "?", s.position) or (s.name or "?")
-    end
-    if book.publisher then lines[#lines + 1] = book.publisher end
-    if book.size_bytes then lines[#lines + 1] = string.format("%.1f MB", book.size_bytes / 1048576) end
     local local_path = book.book_id and plugin:localPathFor(book.book_id)
-    lines[#lines + 1] = local_path and _("On this device") or _("Not on this device")
-    if book.status and book.status ~= "active" then lines[#lines + 1] = _("The server cannot serve this file right now.") end
-    if book.description then lines[#lines + 1] = "\n" .. book.description:gsub("<[^>]+>", "") end
+    local lines = BookInfo.lines(book, local_path)
     local dialog
     local open = function(path)
         if plugin.browser then UIManager:close(plugin.browser) plugin.browser = nil end
@@ -167,7 +159,7 @@ local function book_item(plugin, book, prefix)
 end
 
 local function series_prefix(book, series_id)
-    for _, s in ipairs(book.series) do
+    for _i, s in ipairs(book.series) do
         if s.id == series_id and s.position then return tostring(s.position) .. ". " end
     end
     return ""
@@ -180,7 +172,7 @@ function UI.continueReading(plugin, browser)
         return
     end
     local rows = {}
-    for _, md5 in ipairs(engine.store:list("books")) do
+    for _i, md5 in ipairs(engine.store:list("books")) do
         local b = engine:book(md5)
         if b and b.path and b["local"] and lfs.attributes(b.path, "mode") == "file" then rows[#rows + 1] = b end
     end
@@ -216,7 +208,7 @@ function UI.downloaded(plugin, browser)
     end
     table.sort(rows, function(a, b) return (a.e.at or 0) > (b.e.at or 0) end)
     local items = {}
-    for _, r in ipairs(rows) do
+    for _i, r in ipairs(rows) do
         items[#items + 1] = {
             text = r.e.title or basename(r.e.path),
             callback = function()
@@ -281,7 +273,7 @@ function UI.search(plugin, browser, folder)
                                 return
                             end
                             local items = {}
-                            for _, b in ipairs(books) do items[#items + 1] = book_item(plugin, b) end
+                            for _i, b in ipairs(books) do items[#items + 1] = book_item(plugin, b) end
                             if truncated then items[#items + 1] = { text = _("More results exist; refine the search."), select_enabled = false } end
                             if #items == 0 then items[1] = { text = _("No books found."), select_enabled = false } end
                             browser:push(T(_("Search: %1"), q), items)
@@ -312,7 +304,7 @@ function UI.entities(plugin, browser, kind, title)
                                 return
                             end
                             local items = {}
-                            for _, b in ipairs(books) do items[#items + 1] = book_item(plugin, b, series_prefix(b, e.id)) end
+                            for _i, b in ipairs(books) do items[#items + 1] = book_item(plugin, b, series_prefix(b, e.id)) end
                             if more then items[#items + 1] = { text = _("This series is too long to show whole."), select_enabled = false } end
                             browser:push(e.name, items)
                         else
@@ -403,7 +395,7 @@ function UI.showStatus(plugin)
         local acc = engine:account()
         if acc then lines[#lines + 1] = T(_("Changes cursor: %1"), tostring(acc.cursor)) end
         local waiting, paused, blocked, unsent = {}, {}, {}, {}
-        for _, md5 in ipairs(engine.store:list("books")) do
+        for _i, md5 in ipairs(engine.store:list("books")) do
             local b = engine:book(md5)
             if b then
                 local name = basename(b.path) or md5
@@ -417,7 +409,7 @@ function UI.showStatus(plugin)
             if #list == 0 then return end
             lines[#lines + 1] = ""
             lines[#lines + 1] = title
-            for _, n in ipairs(list) do lines[#lines + 1] = "  • " .. n end
+            for _i, n in ipairs(list) do lines[#lines + 1] = "  • " .. n end
         end
         section(_("Uploads waiting for confirmation:"), waiting)
         section(_("Uploads paused (made under another device):"), paused)
@@ -430,7 +422,7 @@ end
 function UI.showHistory(plugin, session, history)
     local items = {}
     local engine = session.engine
-    for _, op in ipairs(history.ops) do
+    for _i, op in ipairs(history.ops) do
         local who = op.device_id == engine.device_id and _("this device") or (op.origin == "kosync" and _("Progress sync device") or _("another device"))
         items[#items + 1] = {
             text = T("%1 — %2", percent(op.progression), ((op.client_ts or ""):sub(1, 16):gsub("T", " "))),
@@ -447,7 +439,7 @@ function UI.showHistory(plugin, session, history)
         }
     end
     local furthest
-    for _, op in ipairs(history.furthest) do
+    for _i, op in ipairs(history.furthest) do
         if not furthest or op.progression > furthest.progression then furthest = op end
     end
     if furthest then
@@ -466,7 +458,7 @@ function UI.showHistory(plugin, session, history)
                         { { text = _("Forget this furthest position"), callback = function()
                             UIManager:close(dialog)
                             local upto = 0
-                            for _, op in ipairs(history.furthest) do upto = math.max(upto, op.seq or 0) end
+                            for _i, op in ipairs(history.furthest) do upto = math.max(upto, op.seq or 0) end
                             online(function() plugin:forgetFurthest(session.book.work_id, upto) end)
                         end } },
                         { { text = _("Close"), callback = function() UIManager:close(dialog) end } },

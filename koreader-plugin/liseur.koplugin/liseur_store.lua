@@ -93,7 +93,7 @@ function Store:write(kind, name, doc)
                 dirs[#dirs + 1] = d
             end
         end
-        for _, d in ipairs(dirs) do
+        for _i, d in ipairs(dirs) do
             local dok, derr = self.fs.fsync_dir(d)
             if dok == false then
                 self.published[kind] = nil
@@ -113,7 +113,7 @@ end
 function Store:list(kind)
     local names = {}
     if self.fs.list then
-        for _, file in ipairs(self.fs.list(self.dir .. "/" .. kind) or {}) do
+        for _i, file in ipairs(self.fs.list(self.dir .. "/" .. kind) or {}) do
             local name = file:match("^([%w_%-]+)%.json$")
             if name then names[#names + 1] = name end
         end

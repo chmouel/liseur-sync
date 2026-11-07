@@ -164,7 +164,7 @@ function Positions:seed(work_id)
     local acc = assert(self:account())
     local work = acc.works[work_id] or { floor = 0 }
     acc.works[work_id] = work
-    for _, op in ipairs(type(data.ops) == "table" and data.ops or {}) do take(work, op) end
+    for _i, op in ipairs(type(data.ops) == "table" and data.ops or {}) do take(work, op) end
     work.floor = math.max(work.floor or 0, tonumber(present(data.furthest_floor)) or 0)
     work.seeded = true
     local ok, werr = self:saveAccount()
@@ -189,7 +189,7 @@ function Positions:resync()
     if not data then return nil, err end
     local acc = assert(self:account())
     local newest = {}
-    for _, op in ipairs(type(data.ops) == "table" and data.ops or {}) do
+    for _i, op in ipairs(type(data.ops) == "table" and data.ops or {}) do
         local w = present(op.work_id)
         if w and acc.works[w] then
             newest[w] = newest[w] or { floor = acc.works[w].floor }
@@ -220,7 +220,7 @@ function Positions:pull(max_pages)
         end
         local next_cursor = acc.cursor
         local ops = type(data.ops) == "table" and data.ops or {}
-        for _, op in ipairs(ops) do
+        for _i, op in ipairs(ops) do
             local seq = tonumber(present(op.seq)) or 0
             if seq > next_cursor then next_cursor = seq end
             local w = present(op.work_id)
@@ -432,8 +432,8 @@ function Positions:history(work_id, limit)
     local data, err = self.api:get("/v1/works/" .. Api.escape(work_id) .. "/positions", { limit = limit or 50 })
     if not data then return nil, err end
     local out = { ops = {}, furthest = {}, floor = tonumber(present(data.furthest_floor)) or 0 }
-    for _, op in ipairs(type(data.ops) == "table" and data.ops or {}) do out.ops[#out.ops + 1] = trim(op) end
-    for _, op in ipairs(type(data.furthest) == "table" and data.furthest or {}) do
+    for _i, op in ipairs(type(data.ops) == "table" and data.ops or {}) do out.ops[#out.ops + 1] = trim(op) end
+    for _i, op in ipairs(type(data.furthest) == "table" and data.furthest or {}) do
         local t = trim(op)
         if t.seq > out.floor then out.furthest[#out.furthest + 1] = t end
     end

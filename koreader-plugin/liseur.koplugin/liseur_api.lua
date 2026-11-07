@@ -90,10 +90,10 @@ local function query_string(query)
     for k in pairs(query) do keys[#keys + 1] = k end
     table.sort(keys)
     local parts = {}
-    for _, k in ipairs(keys) do
+    for _i, k in ipairs(keys) do
         local v = query[k]
         if type(v) == "table" then
-            for _, item in ipairs(v) do parts[#parts + 1] = Api.escape(k) .. "=" .. Api.escape(item) end
+            for _i, item in ipairs(v) do parts[#parts + 1] = Api.escape(k) .. "=" .. Api.escape(item) end
         elseif v ~= nil and v ~= "" then
             parts[#parts + 1] = Api.escape(k) .. "=" .. Api.escape(v)
         end
