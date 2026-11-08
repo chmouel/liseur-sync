@@ -344,13 +344,17 @@ end
 
 -- localPathFor returns the downloaded copy of a catalogue book that is
 -- still on this device with the same bytes, if any. It reads local state
--- only, so a book detail dialog can be built without a request.
+-- only, so a book detail dialog can be built without a request. A file
+-- whose bytes changed is not that book any more, whatever its name, so
+-- the recorded digest is read, not only the size.
 function Liseur:localPathFor(book_id)
     local index = self:downloadIndex(nil, true)
     local entry = index.books and index.books[book_id]
-    if entry and entry.path and lfs.attributes(entry.path, "size") == entry.size then
-        return entry.path
-    end
+    local intact = Downloads.intact(entry, {
+        size = function(path) return lfs.attributes(path, "size") end,
+        sha256 = function(path) return self:hashFile(path) end,
+    })
+    if intact then return entry.path end
 end
 
 -- Handover ------------------------------------------------------------
