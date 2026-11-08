@@ -1,5 +1,6 @@
 local Api = require("liseur_api")
 local Fake = require("fake_http")
+local Identity = require("liseur_identity")
 local Positions = require("liseur_positions")
 local Store = require("liseur_store")
 local json = require("json")
@@ -50,13 +51,14 @@ local function setup(device)
     return fake, engine(), clock, engine
 end
 
-local function resolved(engine, md5)
-    local b = engine:book(md5 or "m1")
+local function resolved(engine, md5, sha)
+    sha = sha or "sha-a"
+    local b = assert(engine:edition(sha, md5 or "m1"))
     b.identity = "resolved"
     b.work_id = "w1"
-    b.sha256 = "sha-a"
     engine:account()
     engine:track("w1")
+    assert(engine:saveBook(b))
     return b
 end
 
@@ -128,7 +130,7 @@ describe("liseur_positions uploads", function()
         assert.are.equal("retry", e:send(b))
         e:saveBook(b)
         local e2 = engine()
-        local again = e2:book("m1")
+        local again = e2:edition("sha-a","m1")
         e2:account()
         clock.t = clock.t + 3600
         moved(again, 0.6) -- later reading does not change what is in flight
@@ -158,6 +160,27 @@ describe("liseur_positions uploads", function()
         assert.are.equal("renamed", e:send(b))
         assert.is_true(Positions.dirty(b))
         assert.truthy(e:prepare(b).op_id ~= first)
+    end)
+
+    it("a refused permission keeps the exact bytes and adds no deadline", function()
+        local b = resolved(e)
+        moved(b, 0.4)
+        local frozen_raw = e:prepare(b).raw
+        fake:respond(429, { error = "slow down" }, { ["retry-after"] = "60" })
+        assert.are.equal("retry", e:send(b))
+        local waited = b.pending.not_before
+        assert.are.equal(clock.t + 60, waited)
+        -- The deadline passes, and the scope is gone by the time it does.
+        clock.t = clock.t + 60
+        fake:respond(403, { error = "token lacks required scope: sync" })
+        local status, err = e:send(b)
+        assert.is_nil(status)
+        assert.are.equal("forbidden", err.kind)
+        -- frozen_raw is a string, so this compares against the payload as it
+        -- was sent rather than against whatever table b.pending is now.
+        assert.are.equal(frozen_raw, b.pending.raw, "the pending bytes changed")
+        assert.are.equal(waited, b.pending.not_before, "the refusal wrote a new deadline")
+        assert.is_true(Positions.dirty(b))
     end)
 
     it("an unknown work drops the mapping and keeps the reading", function()
@@ -191,7 +214,7 @@ describe("liseur_positions uploads", function()
         local file = e.store:path("account", "state")
         os.execute("chmod 000 '" .. file .. "'")
         local fresh = engine()
-        local again = fresh:book("m1")
+        local again = fresh:edition("sha-a","m1")
         local status, err = fresh:send(again)
         os.execute("chmod 600 '" .. file .. "'")
         assert.is_nil(status)
@@ -205,7 +228,7 @@ describe("liseur_positions uploads", function()
         e:prepare(b)
         e:saveBook(b)
         local other = engine("dev-2")
-        local again = other:book("m1")
+        local again = other:edition("sha-a","m1")
         assert.are.equal("paused_device", other:send(again))
         assert.are.equal(0, #fake.requests)
         assert.is_true(other:discardPaused(again))
@@ -303,7 +326,7 @@ describe("liseur_positions feed", function()
         assert.are.equal(50, acc.cursor)
         assert.are.equal("y", acc.works.w1.remote.op_id)
         assert.are.equal(10, acc.works.w1.floor)
-        local again = e:book("m1")
+        local again = e:edition("sha-a","m1")
         assert.is_not_nil(again.pending)
         assert.matches("/v1/heads", fake:last().url)
     end)
@@ -459,5 +482,320 @@ describe("liseur_positions history", function()
         assert.are.equal(9, e:forgetFurthest("w1", 9))
         assert.are.same({ upto_seq = 9 }, json.decode(fake:last().body))
         assert.are.equal(9, e:floor("w1"))
+    end)
+end)
+
+-- Two files can carry the same KOReader partial MD5, so a document named
+-- by it cannot be either of them: each file's state belongs to its full
+-- SHA-256, and one file's unsent reading is never the other's to clear.
+describe("liseur_positions editions", function()
+    local fake, e, clock, engine
+    before_each(function()
+        fake, e, clock, engine = setup()
+    end)
+
+    local function note(fp, path, sha)
+        assert.is_true(e:noteFile(fp, path, sha, { size = 10, mtime = 1 }))
+    end
+
+    it("two digests under one partial MD5 keep separate revisions and positions", function()
+        local fp = assert(e:fingerprint("m1"))
+        note(fp, "/a.epub", "sha-a")
+        local a = resolved(e, "m1", "sha-a")
+        e:observe(a, { progression = 0.2, xpointer = "/a" }, true)
+        e:observe(a, { progression = 0.4, xpointer = "/a2" })
+        a.path = "/a.epub"
+        assert.is_true(e:saveBook(a))
+        -- The other file, same partial MD5 and the same stat.
+        note(fp, "/b.epub", "sha-b")
+        assert.is_true(e:saveFingerprint("m1", fp))
+        local b = assert(e:edition("sha-b", "m1", fp))
+        assert.are.equal("unresolved", b.identity)
+        assert.are.equal(0, b.revision)
+        b.path = "/b.epub"
+        e:observe(b, { progression = 0.9, xpointer = "/b" }, true)
+        e:observe(b, { progression = 0.95, xpointer = "/b2" })
+        assert.is_true(e:saveBook(b))
+        -- A is exactly as it was left: its unsent move is still unsent.
+        local again = assert(e:edition("sha-a", "m1", fp))
+        assert.are.equal("resolved", again.identity)
+        assert.are.equal("w1", again.work_id)
+        assert.are.equal(a.revision, again.revision)
+        assert.are.equal(0.4, again["local"].progression)
+        assert.is_true(Positions.dirty(again))
+        assert.is_nil(again.pending, "the unsent move was turned into an upload")
+        -- And B owes what B read, not what A read.
+        assert.are.equal(0.95, b["local"].progression)
+        assert.is_true(Positions.dirty(b))
+    end)
+
+    it("a partial MD5 seen under two digests stops naming either file", function()
+        local fp = assert(e:fingerprint("m1"))
+        note(fp, "/a.epub", "sha-a")
+        assert.is_false(Positions.shared(fp))
+        note(fp, "/b.epub", "sha-b")
+        assert.is_true(Positions.shared(fp))
+        assert.is_true(fp.shared, "the collision was not recorded")
+        local a = assert(e:edition("sha-a", "m1", fp))
+        local b = assert(e:edition("sha-b", "m1", fp))
+        assert.is_true(a.md5_untrusted)
+        assert.is_true(b.md5_untrusted)
+        assert.is_nil(Positions.remoteLocation(a, { foreign_pos = "/x", origin_alias = "partial-md5:m1" }))
+        assert.are.equal("/x", Positions.remoteLocation(a, { foreign_pos = "/x", edition_sha = "sha-a" }))
+    end)
+
+    -- F6: the backlog reads documents() straight off disk, where a
+    -- document saved before a collision does not yet say its partial MD5
+    -- is shared. The authoritative fingerprint record has the last word.
+    it("a document saved before a collision resolves by SHA alone from the backlog", function()
+        local SHA_A, SHA_B = string.rep("a", 64), string.rep("b", 64)
+        local a = assert(e:edition(SHA_A, "m1"))
+        a.identity = "unresolved"
+        assert(e:observe(a, { progression = 0.3, xpointer = "/a" }))
+        assert(e:saveBook(a))
+        local fp = assert(e:fingerprint("m1"))
+        note(fp, "/a.epub", SHA_A)
+        note(fp, "/b.epub", SHA_B)
+        assert(e:saveFingerprint("m1", fp))
+        local doc
+        for _i, b in ipairs(e:documents()) do
+            if b.sha256 == SHA_A then doc = b end
+        end
+        doc = assert(doc, "the backlog lost the earlier document")
+        assert.is_true(doc.md5_untrusted, "the shared partial MD5 was still trusted")
+        fake:respond(201, { work_id = "work-a", confidence = "high", created = true })
+        assert.is_true(Identity.resolve(e.api, doc))
+        assert.are.same({ { kind = "sha256", value = SHA_A } }, json.decode(fake:last().body).identifiers)
+        assert.are.equal("work-a", doc.work_id)
+    end)
+
+    it("an unreadable fingerprint record fails closed and sends no alias", function()
+        local SHA_A = string.rep("a", 64)
+        local a = assert(e:edition(SHA_A, "m1"))
+        a.identity = "unresolved"
+        assert(e:saveBook(a))
+        local real = e.store.read
+        e.store.read = function(store, kind, name)
+            if kind == "fingerprints" and name == "m1" then return nil, "unreadable" end
+            return real(store, kind, name)
+        end
+        local doc
+        for _i, b in ipairs(e:documents()) do
+            if b.sha256 == SHA_A then doc = b end
+        end
+        e.store.read = real
+        doc = assert(doc)
+        assert.is_true(doc.md5_untrusted, "an unreadable fingerprint record was trusted")
+        fake:respond(201, { work_id = "work-a", confidence = "high", created = true })
+        assert.is_true(Identity.resolve(e.api, doc))
+        assert.are.same({ { kind = "sha256", value = SHA_A } }, json.decode(fake:last().body).identifiers)
+    end)
+
+    it("a resolved work under its own SHA keeps it when the alias goes stale", function()
+        local SHA_A = string.rep("a", 64)
+        local a = resolved(e, "m1", SHA_A)
+        local fp = assert(e:fingerprint("m1"))
+        note(fp, "/a.epub", SHA_A)
+        note(fp, "/b.epub", string.rep("b", 64))
+        assert(e:saveFingerprint("m1", fp))
+        local doc
+        for _i, b in ipairs(e:documents()) do
+            if b.sha256 == SHA_A then doc = b end
+        end
+        doc = assert(doc)
+        assert.is_true(doc.md5_untrusted)
+        assert.are.equal("w1", doc.work_id, "the existing work mapping was dropped")
+        assert.is_true(Identity.writable(doc))
+    end)
+
+    it("the cache is written before the document it leads to", function()
+        local fp = assert(e:fingerprint("m1"))
+        note(fp, "/a.epub", "sha-a")
+        assert.is_true(e:saveFingerprint("m1", fp))
+        local stored = assert(e.store:read("fingerprints", "m1"))
+        assert.is_true(stored.shas["sha-a"])
+        assert.are.equal("sha-a", stored.files["/a.epub"].sha256)
+        -- A crash here leaves a cache entry and no edition: the next open
+        -- rehashes the bytes (a stat is not proof) and creates the document.
+        assert.is_nil(e.store:read("editions", "sha-a"))
+        assert.are.equal("sha-a", Identity.locate("/a.epub", function() return "sha-a" end))
+    end)
+end)
+
+describe("liseur_positions migration", function()
+    local SHA_A = string.rep("a", 64)
+    local fake, e, clock, engine
+    before_each(function()
+        fake, e, clock, engine = setup()
+    end)
+
+    local function legacy(md5, doc)
+        doc.md5 = doc.md5 or md5
+        assert.is_true(e.store:write("books", md5, doc))
+        return doc
+    end
+
+    it("retains the legacy source until a visible destination is durable", function()
+        legacy("m1", { sha256 = SHA_A, epoch = "epoch-1", revision = 7,
+            pending = { raw = '{"op_id":"pending"}' } })
+        local failing_fs = {}
+        for k, v in pairs(fs) do failing_fs[k] = v end
+        failing_fs.fsync_dir = function() return false, "sync failed" end
+        e.store.fs = failing_fs
+        e:migrateLegacy()
+        assert.is_not_nil(e.store:read("books", "m1"))
+        e.store.fs = fs
+        local source = e.store:read("books", "m1")
+        assert.is_true(e:saveBook(source))
+        e.store.fs = failing_fs
+        local ok = e:migrateLegacy()
+        assert.is_nil(ok)
+        assert.is_not_nil(e.store:read("books", "m1"))
+        e.store.fs = fs
+        assert.is_true(e:migrateLegacy())
+        assert.is_nil(e.store:read("books", "m1"))
+        assert.are.equal(source.pending.raw, e.store:read("editions", SHA_A).pending.raw)
+    end)
+
+    it("moves a document to the edition its digest names, bytes and all", function()
+        legacy("m1", {
+            sha256 = SHA_A, identity = "resolved", work_id = "w1", epoch = "epoch-1",
+            revision = 7, acked = 4, md5_untrusted = true,
+            ["local"] = { progression = 0.5, xpointer = "/here" },
+            pending = { revision = 7, raw = '{"op_id":"p"}', device_id = "dev-1" },
+            retired = { { raw = '{"op_id":"r"}', device_id = "dev-1" } },
+            last_error = "timed out",
+        })
+        e:migrateLegacy()
+        assert.is_nil(e.store:read("books", "m1"), "the old document was not removed")
+        local moved = assert(e.store:read("editions", SHA_A))
+        assert.are.equal("epoch-1", moved.epoch)
+        assert.are.equal(7, moved.revision)
+        assert.are.equal(4, moved.acked)
+        assert.are.equal(0.5, moved["local"].progression)
+        assert.are.equal('{"op_id":"p"}', moved.pending.raw)
+        assert.are.equal('{"op_id":"r"}', moved.retired[1].raw)
+        assert.are.equal("timed out", moved.last_error)
+        assert.is_nil(moved.legacy_key)
+        local fp = assert(e.store:read("fingerprints", "m1"))
+        assert.is_true(fp.shas[SHA_A])
+        assert.is_true(fp.shared, "the collision mark was lost")
+        assert.is_nil(next(fp.files), "migration seeded a stat nobody checked")
+    end)
+
+    it("stops migration when fingerprint or edition writes fail", function()
+        for _, kind in ipairs({ "fingerprints", "editions" }) do
+            local _, test_engine = setup()
+            assert.is_true(test_engine.store:write("books", "m1", { md5 = "m1", sha256 = SHA_A, epoch = "one" }))
+            local write = test_engine.store.write
+            test_engine.store.write = function(store, target, name, doc)
+                if target == kind then return nil, "write failed" end
+                return write(store, target, name, doc)
+            end
+            local ok, err = test_engine:migrateLegacy()
+            assert.is_nil(ok)
+            assert.are.equal("write failed", err)
+            assert.is_not_nil(test_engine.store:read("books", "m1"))
+        end
+    end)
+
+    it("a rerun after a crash leaves the edition alone and drops the old copy", function()
+        legacy("m1", { sha256 = SHA_A, identity = "resolved", work_id = "w1", epoch = "epoch-1", revision = 1 })
+        -- The copy was written before the crash; the edition has moved on.
+        assert.is_true(e.store:write("editions", SHA_A,
+            { sha256 = SHA_A, epoch = "epoch-1", revision = 99, ["local"] = { progression = 0.9 } }))
+        e:migrateLegacy()
+        assert.is_nil(e.store:read("books", "m1"))
+        assert.are.equal(99, assert(e.store:read("editions", SHA_A)).revision, "the edition was overwritten")
+    end)
+
+    it("an edition from another epoch is kept beside the old document", function()
+        legacy("m1", { sha256 = SHA_A, identity = "resolved", work_id = "w1", epoch = "epoch-1", revision = 1 })
+        assert.is_true(e.store:write("editions", SHA_A, { sha256 = SHA_A, epoch = "epoch-2", revision = 99 }))
+        e:migrateLegacy()
+        assert.is_not_nil(e.store:read("books", "m1"), "an ambiguous leftover was deleted")
+        assert.are.equal(99, assert(e.store:read("editions", SHA_A)).revision)
+    end)
+
+    -- F7: a destination that cannot be read is not an absent one. Treating
+    -- the error as absence used to overwrite a newer edition and drop the
+    -- legacy source; it must instead report and leave both exactly as they
+    -- were.
+    it("an unreadable destination is reported, never overwritten", function()
+        legacy("m1", {
+            sha256 = SHA_A, identity = "resolved", work_id = "w1", epoch = "epoch-1",
+            revision = 3, acked = 1, pending = { revision = 3, raw = '{"op_id":"p"}' },
+        })
+        assert.is_true(e.store:write("editions", SHA_A, { sha256 = SHA_A, epoch = "epoch-2", revision = 99 }))
+        local real = e.store.read
+        e.store.read = function(store, kind, name)
+            if kind == "editions" and name == SHA_A then return nil, "unreadable" end
+            return real(store, kind, name)
+        end
+        local ok, err = e:migrateLegacy()
+        e.store.read = real
+        assert.is_nil(ok, "a failed migration reported success")
+        assert.is_not_nil(err)
+        assert.are.equal(99, assert(e.store:read("editions", SHA_A)).revision, "the destination was overwritten")
+        local kept = assert(e.store:read("books", "m1"), "the legacy source was removed")
+        assert.are.equal('{"op_id":"p"}', kept.pending.raw, "the frozen bytes were lost")
+        assert.are.equal(3, kept.revision)
+    end)
+
+    it("a destination read error never creates a second copy", function()
+        legacy("m1", { sha256 = SHA_A, identity = "unresolved", epoch = "epoch-1", revision = 2 })
+        local real = e.store.read
+        e.store.read = function(store, kind, name)
+            if kind == "editions" and name == SHA_A then return nil, "unreadable" end
+            return real(store, kind, name)
+        end
+        local ok, err = e:migrateLegacy()
+        e.store.read = real
+        assert.is_nil(ok)
+        assert.is_not_nil(err)
+        assert.is_nil(e.store:read("editions", SHA_A), "a copy was written on an unread destination")
+        assert.is_not_nil(e.store:read("books", "m1"))
+    end)
+
+    it("a document with no trustworthy digest stays put, and its frozen bytes still go out", function()
+        legacy("m9", {
+            revision = 3, acked = 0, identity = "unresolved",
+            ["local"] = { progression = 0.7, xpointer = "/unsent" },
+            pending = { revision = 3, raw = '{"op_id":"left"}', device_id = "dev-1", work_id = "w1" },
+        })
+        e:migrateLegacy()
+        local found
+        for _i, b in ipairs(e:documents()) do
+            if b.md5 == "m9" then found = b end
+        end
+        assert(found, "the leftover is not read back")
+        assert.are.equal("m9", found.legacy_key)
+        assert.is_not_nil(e.store:read("books", "m9"), "a document it could not trust was moved or deleted")
+        -- The exact bytes are delivered, and the position that was never
+        -- frozen is not turned into one.
+        e:account()
+        fake:respond(200, { results = { { op_id = "left", status = "applied", seq = 1 } } })
+        assert.are.equal("acked", e:send(found))
+        assert.are.equal('{"ops":[{"op_id":"left"}]}', fake:last().body)
+        assert.is_true(e:saveBook(found))
+        assert.is_nil(assert(e.store:read("books", "m9")).pending)
+        assert.are.equal(0.7, found["local"].progression)
+    end)
+
+    it("a shaky digest is not trusted to name a document", function()
+        legacy("m8", { sha256 = "sha-a", identity = "resolved", work_id = "w1", epoch = "epoch-1", revision = 2 })
+        e:migrateLegacy()
+        assert.is_not_nil(e.store:read("books", "m8"), "a name that is not a digest was adopted")
+        assert.is_nil(e.store:read("editions", "sha-a"))
+    end)
+
+    it("documents reads editions and leftovers in one list", function()
+        local a = resolved(e, "m1", SHA_A)
+        assert.is_true(e:saveBook(a))
+        legacy("m9", { revision = 0, acked = 0 })
+        local seen = {}
+        for _i, b in ipairs(e:documents()) do seen[b.legacy_key or b.sha256] = true end
+        assert.is_true(seen[SHA_A])
+        assert.is_true(seen["m9"])
     end)
 end)

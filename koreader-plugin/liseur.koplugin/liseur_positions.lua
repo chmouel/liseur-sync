@@ -55,23 +55,187 @@ end
 
 -- Book documents ----------------------------------------------------
 
-function Positions:book(md5)
-    local doc, err = self.store:read("books", md5)
+-- A book's state is named by the full SHA-256 of the bytes it describes,
+-- and that digest never changes: two files KOReader's partial MD5 cannot
+-- tell apart keep separate positions, revisions and uploads. The partial
+-- MD5 only names the fingerprint cache that leads to an edition.
+
+Positions.EDITION = "editions"
+Positions.FINGERPRINT = "fingerprints"
+Positions.LEGACY = "books"
+
+-- nameable reports whether sha may name a document: the store refuses
+-- anything else, and a crash while naming state is not a failure mode a
+-- reader should ever meet. Digests from the server are checked strictly
+-- in Identity.verified before they reach here.
+function Positions.nameable(sha)
+    return type(sha) == "string" and sha:match("^[%w_%-]+$") ~= nil
+end
+
+-- digest reports whether sha is a full SHA-256. Only those describe bytes
+-- here, so only those are adopted from a legacy document: anything else
+-- could name any file the old partial MD5 happened to reach.
+function Positions.digest(sha)
+    return type(sha) == "string" and #sha == 64 and sha:match("^%x+$") ~= nil
+end
+
+function Positions:newEpoch()
+    return string.format("%08x%08x", math.floor(self.random() * 0xffffffff), math.floor(self.now() * 1000) % 0xffffffff)
+end
+
+-- fingerprint reads the cache behind one partial MD5: which digests have
+-- been seen under it, and which file last held which. It never decides
+-- identity, only saves a hash.
+function Positions:fingerprint(md5)
+    local doc, err = self.store:read(self.FINGERPRINT, md5)
     if err then return nil, err end
-    if not doc then
-        doc = {
-            md5 = md5,
-            identity = "unresolved",
-            revision = 0,
-            acked = 0,
-            epoch = string.format("%08x%08x", math.floor(self.random() * 0xffffffff), math.floor(self.now() * 1000) % 0xffffffff),
-        }
-    end
+    doc = doc or { md5 = md5 }
+    doc.shas = doc.shas or {}
+    doc.files = doc.files or {}
     return doc
 end
 
+function Positions:saveFingerprint(md5, fp)
+    return self.store:write(self.FINGERPRINT, md5, fp)
+end
+
+local function sha_count(fp)
+    local n = 0
+    for _k in pairs(fp.shas or {}) do n = n + 1 end
+    return n
+end
+
+-- shared says the partial MD5 now names more than one file, so it can no
+-- longer say which work a path belongs to: only the SHA-256 may. It is
+-- recorded once and never taken back.
+function Positions.shared(fp)
+    return fp.shared == true or sha_count(fp) > 1
+end
+
+-- noteFile records that path holds sha. It only ever grows: a crash after
+-- it leaves a digest that resolves to a document nobody wrote yet.
+function Positions:noteFile(fp, path, sha, stat)
+    if not Positions.nameable(sha) then return false end
+    fp.shas[sha] = true
+    if path and stat then fp.files[path] = { sha256 = sha, size = stat.size, mtime = stat.mtime } end
+    if Positions.shared(fp) then fp.shared = true end
+    return true
+end
+
+-- edition returns the document for these exact bytes, creating it when
+-- the file has never been seen. A partial MD5 seen under two digests
+-- makes every sibling untrusted for alias resolution.
+function Positions:edition(sha, md5, fp)
+    if not Positions.nameable(sha) then return nil, "this file has no digest to name its state by" end
+    local doc, err = self.store:read(self.EDITION, sha)
+    if err then return nil, err end
+    if not doc then
+        doc = { identity = "unresolved", revision = 0, acked = 0, epoch = self:newEpoch() }
+    end
+    doc.md5 = md5
+    doc.sha256 = sha
+    if fp and Positions.shared(fp) then doc.md5_untrusted = true end
+    return doc
+end
+
+-- saveBook writes a document under its own digest. A legacy leftover
+-- carries the key it was found under and goes back where it came from.
 function Positions:saveBook(book)
-    return self.store:write("books", book.md5, book)
+    if book.legacy_key then
+        local key = book.legacy_key
+        book.legacy_key = nil
+        local ok, err = self.store:write(self.LEGACY, key, book)
+        book.legacy_key = key
+        return ok, err
+    end
+    if not Positions.nameable(book.sha256) then
+        return nil, "this book has no digest to name its state by"
+    end
+    return self.store:write(self.EDITION, book.sha256, book)
+end
+
+-- markUntrusted keeps a document's partial-MD5 alias honest. A partial
+-- MD5 that now names more than one digest must never be sent as identity,
+-- and a fingerprint record that cannot be read leaves the alias equally
+-- unusable: the document resolves by its SHA-256 alone. The existing work
+-- mapping is left untouched; only the alias is demoted.
+function Positions:markUntrusted(doc)
+    if not doc.md5 then return end
+    local fp, err = self:fingerprint(doc.md5)
+    if err or (fp and Positions.shared(fp)) then
+        doc.md5_untrusted = true
+    end
+end
+
+-- documents returns every book document on disk, editions followed by
+-- legacy leftovers (marked legacy_key). The backlog, the retry timer and
+-- the status screen all work from this.
+function Positions:documents()
+    local out = {}
+    for _i, sha in ipairs(self.store:list(self.EDITION)) do
+        local doc = self.store:read(self.EDITION, sha)
+        if doc then
+            doc.sha256 = doc.sha256 or sha
+            -- State saved before a collision was known is read back through
+            -- the authoritative fingerprint record, so a shared partial MD5
+            -- never names a work from the backlog.
+            self:markUntrusted(doc)
+            out[#out + 1] = doc
+        end
+    end
+    for _i, md5 in ipairs(self.store:list(self.LEGACY)) do
+        local doc = self.store:read(self.LEGACY, md5)
+        if doc then
+            doc.legacy_key = md5
+            out[#out + 1] = doc
+        end
+    end
+    return out
+end
+
+-- migrateLegacy moves an old partial-MD5-keyed document to the edition
+-- its recorded digest names. It is idempotent, and a document it cannot
+-- trust is left where it is: it is still read back as a legacy leftover,
+-- whose frozen uploads keep their exact bytes and are still delivered.
+-- It returns true, or nil and err when state cannot be read: the caller
+-- must not write on the strength of a migration that did not finish.
+function Positions:migrateLegacy()
+    for _i, md5 in ipairs(self.store:list(self.LEGACY)) do
+        local doc, derr = self.store:read(self.LEGACY, md5)
+        if derr then return nil, derr end
+        local sha = doc and doc.sha256
+        if doc and Positions.digest(sha) then
+            local existing, rerr = self.store:read(self.EDITION, sha)
+            if rerr then
+                -- An unreadable destination is not an absent one. Keep the
+                -- legacy copy and report, so nothing overwrites a document
+                -- that may be there and no write proceeds on a guess.
+                return nil, rerr
+            elseif not existing then
+                local fp, ferr = self:fingerprint(md5)
+                if ferr then return nil, ferr end
+                if fp then
+                    fp.shas[sha] = true
+                    if doc.md5_untrusted then fp.shared = true end
+                    -- No file entry: the first open after migrating rehashes
+                    -- once, rather than trusting a stat nobody checked.
+                    local saved, serr = self:saveFingerprint(md5, fp)
+                    if not saved then return nil, serr end
+                    doc.legacy_key = nil
+                    saved, serr = self:saveBook(doc)
+                    if not saved then return nil, serr end
+                    self.store:remove(self.LEGACY, md5)
+                end
+            elseif existing.epoch == doc.epoch then
+                -- An earlier run already copied it, and the edition may have
+                -- moved on since: never overwrite it.
+                local saved, serr = self:saveBook(existing)
+                if not saved then return nil, serr end
+                self.store:remove(self.LEGACY, md5)
+            end
+        end
+    end
+    return true
 end
 
 function Positions.dirty(book)

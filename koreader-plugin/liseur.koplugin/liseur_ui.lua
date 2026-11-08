@@ -196,9 +196,10 @@ end
 function UI.continueReading(plugin, browser)
     with_engine(plugin, function(engine)
         local rows = {}
-        for _i, md5 in ipairs(engine.store:list("books")) do
-            local b = engine:book(md5)
-            if b and b.path and b["local"] and lfs.attributes(b.path, "mode") == "file" then rows[#rows + 1] = b end
+        for _i, b in ipairs(engine:documents()) do
+            if not b.legacy_key and b.path and b["local"] and lfs.attributes(b.path, "mode") == "file" then
+                rows[#rows + 1] = b
+            end
         end
         table.sort(rows, function(a, b) return (a["local"].at or 0) > (b["local"].at or 0) end)
         local items = {}
@@ -410,6 +411,7 @@ function UI.showStatus(plugin)
         lines[#lines + 1] = T(_("Server: %1"), base and base.url or _("not set"))
         lines[#lines + 1] = T(_("Device token: %1"), plugin:cfg("token") and _("set") or _("not set"))
         if plugin.probe_error then lines[#lines + 1] = plugin.probe_error end
+        if plugin.denied then lines[#lines + 1] = _("Syncing is paused:") .. " " .. plugin.denied end
         if probe then
             lines[#lines + 1] = T(_("Account: %1"), probe.account_id)
             lines[#lines + 1] = T(_("Device: %1 (%2)"), probe.name or "?", probe.device_id)
@@ -422,15 +424,13 @@ function UI.showStatus(plugin)
             local acc = engine:account()
             if acc then lines[#lines + 1] = T(_("Changes cursor: %1"), tostring(acc.cursor)) end
             local waiting, paused, blocked, unsent = {}, {}, {}, {}
-            for _i, md5 in ipairs(engine.store:list("books")) do
-                local b = engine:book(md5)
-                if b then
-                    local name = basename(b.path) or md5
-                    if b.pending and b.pending.device_id ~= engine.device_id then paused[#paused + 1] = name
-                    elseif b.pending then waiting[#waiting + 1] = name
-                    elseif b.identity == "ambiguous" or b.identity == "mismatch" then blocked[#blocked + 1] = name
-                    elseif Positions.dirty(b) then unsent[#unsent + 1] = name end
-                end
+            for _i, b in ipairs(engine:documents()) do
+                local name = basename(b.path) or b.sha256 or b.legacy_key
+                if b.pending and b.pending.device_id ~= engine.device_id then paused[#paused + 1] = name
+                elseif b.pending then waiting[#waiting + 1] = name
+                elseif b.legacy_key then blocked[#blocked + 1] = name
+                elseif b.identity == "ambiguous" or b.identity == "mismatch" then blocked[#blocked + 1] = name
+                elseif Positions.dirty(b) then unsent[#unsent + 1] = name end
             end
             local function section(title, list)
                 if #list == 0 then return end
