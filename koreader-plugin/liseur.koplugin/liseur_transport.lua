@@ -60,9 +60,67 @@ function Transport.nameMatches(pattern, host)
     return first ~= nil and tail == rest
 end
 
+local function ipv4(s)
+    local parts = { s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$") }
+    if #parts ~= 4 then return nil end
+    for i, p in ipairs(parts) do
+        parts[i] = tonumber(p)
+        if parts[i] > 255 then return nil end
+    end
+    return parts
+end
+
+-- normalizeIP returns a canonical form of an IPv4 or IPv6 literal (with or
+-- without brackets), or nil for anything else, so "::1" and
+-- "0:0:0:0:0:0:0:1" compare equal.
+function Transport.normalizeIP(s)
+    if type(s) ~= "string" then return nil end
+    local v4 = ipv4(s)
+    if v4 then return table.concat(v4, ".") end
+    s = (s:match("^%[(.*)%]$") or s):lower()
+    if not s:find(":", 1, true) or not s:match("^[%x:%.]+$") then return nil end
+    local head, tail = s:match("^(.*:)(%d+%.%d+%.%d+%.%d+)$")
+    if head then
+        local q = ipv4(tail)
+        if not q then return nil end
+        s = head .. string.format("%x:%x", q[1] * 256 + q[2], q[3] * 256 + q[4])
+    end
+    local function groups(part)
+        local out = {}
+        if part == "" then return out end
+        for g in (part .. ":"):gmatch("([^:]*):") do
+            if not g:match("^%x%x?%x?%x?$") then return nil end
+            out[#out + 1] = tonumber(g, 16)
+        end
+        return out
+    end
+    local left, right = s:match("^(.-)::(.*)$")
+    local g
+    if left then
+        local l, r = groups(left), groups(right)
+        if not l or not r or #l + #r > 7 then return nil end
+        g = l
+        for _i = 1, 8 - #l - #r do g[#g + 1] = 0 end
+        for _i, v in ipairs(r) do g[#g + 1] = v end
+    else
+        g = groups(s)
+        if not g or #g ~= 8 then return nil end
+    end
+    for i, v in ipairs(g) do g[i] = string.format("%x", v) end
+    return table.concat(g, ":")
+end
+
 -- certificateMatches checks subjectAltName DNS names, and the common
--- name only when the certificate has no DNS names.
-function Transport.certificateMatches(names, common_name, host)
+-- name only when the certificate has no DNS names. An IP address host
+-- matches only an iPAddress entry, never a name.
+function Transport.certificateMatches(names, common_name, host, ips)
+    local ip = Transport.normalizeIP(host)
+    if ip then
+        for _i, a in ipairs(ips or {}) do
+            if Transport.normalizeIP(a) == ip then return true end
+        end
+        return false
+    end
     if names and #names > 0 then
         for _i, n in ipairs(names) do
             if Transport.nameMatches(n, host) then return true end
@@ -73,11 +131,14 @@ function Transport.certificateMatches(names, common_name, host)
 end
 
 local function cert_names(cert)
-    local names, cn = {}, nil
+    local names, ips, cn = {}, {}, nil
     local ok, ext = pcall(function() return cert:extensions() end)
     local san = ok and ext and ext["2.5.29.17"]
     if san and san.dNSName then
         for _i, n in ipairs(san.dNSName) do names[#names + 1] = n end
+    end
+    if san and san.iPAddress then
+        for _i, a in ipairs(san.iPAddress) do ips[#ips + 1] = a end
     end
     local sok, subject = pcall(function() return cert:subject() end)
     if sok and subject then
@@ -85,7 +146,7 @@ local function cert_names(cert)
             if entry.name == "commonName" or entry.oid == "2.5.4.3" then cn = entry.value end
         end
     end
-    return names, cn
+    return names, cn, ips
 end
 
 local function tls_create(socket, ssl, http, params, max_chunk)
@@ -111,9 +172,9 @@ local function tls_create(socket, ssl, http, params, max_chunk)
             self.sock:settimeout(http.TIMEOUT)
             socket.try(self.sock:dohandshake())
             local cert = self.sock:getpeercertificate()
-            local names, cn
-            if cert then names, cn = cert_names(cert) end
-            if not cert or not Transport.certificateMatches(names, cn, host) then
+            local names, cn, ips
+            if cert then names, cn, ips = cert_names(cert) end
+            if not cert or not Transport.certificateMatches(names, cn, host, ips) then
                 self.sock:close()
                 socket.try(nil, "the server certificate does not match " .. host)
             end

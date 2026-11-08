@@ -50,6 +50,8 @@ describe("liseur_store", function()
         local doc, err = store:read("books", "bad")
         assert.is_nil(doc)
         assert.are.equal("corrupt", err)
+        assert.is_nil((store:write("books", "bad", { revision = 1 })))
+        assert.are.equal("{nope", io.open(dir .. "/books/bad.json", "rb"):read("*a"))
     end)
 
     it("never overwrites state from a newer plugin", function()
