@@ -61,9 +61,12 @@ end
 -- size. An entry with no recorded digest, or a file that cannot be read,
 -- is not intact: downloading again is the safe answer.
 -- deps: size(path) -> bytes|nil, sha256(path) -> hex|nil
+-- Without deps.sha256 only the size is compared: cheap enough for a list
+-- badge, never enough to open or reuse the file.
 function Downloads.intact(entry, deps)
     if type(entry) ~= "table" or not entry.path or not entry.sha256 then return false end
     if deps.size(entry.path) ~= entry.size then return false end
+    if not deps.sha256 then return true end
     local sha = deps.sha256(entry.path)
     return type(sha) == "string" and sha:lower() == tostring(entry.sha256):lower()
 end
@@ -116,7 +119,7 @@ function Downloads.download(api, book, dir, deps)
             expect_json = false,
         })
         local fok = f:flush()
-        if fok and deps.fsync then deps.fsync(f) end
+        if fok and deps.fsync and deps.fsync(f) == false then fok = nil end
         f:close()
         if not ok or failure or not fok then
             os.remove(tmp)

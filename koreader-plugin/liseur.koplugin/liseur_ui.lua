@@ -197,7 +197,7 @@ local function book_item(plugin, book, prefix)
     if #book.authors > 0 then text = text .. " — " .. book.authors[1] end
     return {
         text = text,
-        mandatory = book.book_id and plugin:localPathFor(book.book_id) and _("on device") or nil,
+        mandatory = book.book_id and plugin:localPathFor(book.book_id, true) and _("on device") or nil,
         callback = function() UI.bookDetails(plugin, book) end,
     }
 end

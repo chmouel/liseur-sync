@@ -355,13 +355,25 @@ end
 -- still on this device with the same bytes, if any. It reads local state
 -- only, so a book detail dialog can be built without a request. A file
 -- whose bytes changed is not that book any more, whatever its name, so
--- the recorded digest is read, not only the size.
-function Liseur:localPathFor(book_id)
+-- the recorded digest is read, not only the size. A digest read in this
+-- run is reused while the file keeps its size and modification time.
+-- quick compares the size alone, for a list badge that must not read
+-- every book on the page.
+function Liseur:localPathFor(book_id, quick)
     local index = self:downloadIndex(nil, true)
     local entry = index.books and index.books[book_id]
     local intact = Downloads.intact(entry, {
         size = function(path) return lfs.attributes(path, "size") end,
-        sha256 = function(path) return self:hashFile(path) end,
+        sha256 = not quick and function(path)
+            local attr = lfs.attributes(path)
+            if not attr then return nil end
+            self.file_digests = self.file_digests or {}
+            local seen = self.file_digests[path]
+            if seen and seen.size == attr.size and seen.mtime == attr.modification then return seen.sha256 end
+            local sha = self:hashFile(path)
+            self.file_digests[path] = sha and { size = attr.size, mtime = attr.modification, sha256 = sha } or nil
+            return sha
+        end or nil,
     })
     if intact then return entry.path end
 end
@@ -926,6 +938,7 @@ function Liseur:push(engine, book)
     if not engine:prepare(book) then return end
     local ok, err = engine:saveBook(book)
     if not ok then
+        Positions.restorePeak(book, book.pending)
         book.pending = nil
         book.last_error = err
         return
@@ -1357,7 +1370,8 @@ function Liseur:download(book, callback)
         local index = self:downloadIndex()
         index.books = index.books or {}
         index.books[book.book_id] = { path = path, sha256 = book.sha256, size = book.size_bytes, title = book.title, at = os.time() }
-        self:saveDownloadIndex(index)
+        local indexed, ierr = self:saveDownloadIndex(index)
+        if not indexed then logger.warn("Liseur: download index not saved:", ierr) end
         local engine = self:engine()
         local md5 = util.partialMD5(path)
         if engine and md5 then

@@ -262,6 +262,9 @@ function Positions:observe(book, pos, initial)
     book["local"] = new
     if not initial or had then
         book.revision = (book.revision or 0) + 1
+        -- The furthest owed point since the last frozen upload: reading
+        -- back before it is sent must not lose it.
+        if not book.peak or p > book.peak.progression then book.peak = new end
     end
     return true
 end
@@ -271,6 +274,29 @@ end
 function Positions:settle(book, pos)
     book["local"] = { progression = pos.progression, xpointer = pos.xpointer, at = self.now() }
     book.acked = book.revision
+    book.peak = nil
+end
+
+-- restore_peak keeps the peak of an upload dropped before delivery, so
+-- the next one carries it again.
+local function restore_peak(book, p)
+    local peak = p and p.peak
+    if peak and (not book.peak or peak.progression > book.peak.progression) then book.peak = peak end
+end
+Positions.restorePeak = restore_peak
+
+-- batch_status folds the per-op results of one upload: "conflict" when
+-- any op id was reused, "applied" when every op was stored, else nil.
+local function batch_status(data, count)
+    local results = type(data) == "table" and type(data.results) == "table" and data.results or {}
+    if #results < count then return nil end
+    local all = true
+    for i = 1, count do
+        local status = type(results[i]) == "table" and present(results[i].status)
+        if status == "conflict" then return "conflict" end
+        if status ~= "applied" and status ~= "duplicate" then all = false end
+    end
+    return all and "applied" or nil
 end
 
 -- Remote state ------------------------------------------------------
@@ -473,20 +499,38 @@ function Positions:prepare(book)
     if book.pending then return book.pending end
     local l = book["local"]
     if not l or not book.work_id then return nil end
-    local op_id = uuid_from_hex(self.md5(table.concat({ self.device_id, book.work_id, book.epoch or "", tostring(book.revision) }, "|")))
-    local op = {
-        op_id = op_id,
-        work_id = book.work_id,
-        client_ts = Positions.timestamp(l.at or self.now()),
-        progression = l.progression,
-        foreign_pos = l.xpointer,
-        edition_sha = book.sha256,
-    }
     local json = require("json")
+    local function frozen(pos, tag)
+        local key = { self.device_id, book.work_id, book.epoch or "", tostring(book.revision) }
+        if tag then key[#key + 1] = tag end
+        local id = uuid_from_hex(self.md5(table.concat(key, "|")))
+        return id, json.encode({
+            op_id = id,
+            work_id = book.work_id,
+            client_ts = Positions.timestamp(pos.at or self.now()),
+            progression = pos.progression,
+            foreign_pos = pos.xpointer,
+            edition_sha = book.sha256,
+        })
+    end
+    local op_id, raw = frozen(l)
+    -- A peak the reader went back from goes first, under its own id, so
+    -- the server ranks it as the furthest point and still ends on the
+    -- current position.
+    local peak = book.peak
+    if peak and peak.progression > l.progression then
+        local _id, peak_raw = frozen(peak, "peak")
+        raw = peak_raw .. "," .. raw
+    else
+        peak = nil
+    end
+    book.peak = nil
     book.pending = {
         revision = book.revision,
         op_id = op_id,
-        raw = json.encode(op),
+        raw = raw,
+        count = peak and 2 or 1,
+        peak = peak,
         device_id = self.device_id,
         work_id = book.work_id,
         progression = l.progression,
@@ -509,6 +553,7 @@ function Positions:send(book)
     local data, err = self.api:postRaw("/v1/ops", '{"ops":[' .. p.raw .. ']}')
     if not data then
         if err.kind == "refused" and err.code == "unknown_work" then
+            restore_peak(book, p)
             book.pending = nil
             book.work_id = nil
             book.identity = "unresolved"
@@ -520,17 +565,19 @@ function Positions:send(book)
             book.last_error = err.message
             return "refused"
         end
-        if Api.retryable(err) then
+        -- An answer that could not be read may follow a stored op: the
+        -- same bytes are sent again and come back as duplicates.
+        if Api.retryable(err) or err.kind == "malformed" then
             p.attempts = (p.attempts or 0) + 1
             p.not_before = self.now() + (err.retry_after or Api.backoff(p.attempts, self.random))
             return "retry"
         end
         return nil, err
     end
-    local result = type(data.results) == "table" and data.results[1] or {}
-    local status = present(result.status)
-    if status == "applied" or status == "duplicate" then
-        local seq = tonumber(present(result.seq)) or 0
+    local count = p.count or 1
+    local status = batch_status(data, count)
+    if status == "applied" then
+        local seq = tonumber(present(data.results[count].seq)) or 0
         book.acked = math.max(book.acked or 0, p.revision)
         book.baseline = { progression = p.progression, xpointer = p.xpointer, op_id = p.op_id, seq = seq }
         book.pending = nil
@@ -547,6 +594,7 @@ function Positions:send(book)
         return "acked"
     end
     if status == "conflict" then
+        restore_peak(book, p)
         book.pending = nil
         book.revision = (book.revision or 0) + 1
         return "renamed"
@@ -567,7 +615,7 @@ function Positions:sendRetired(book)
             kept[#kept + 1] = p
         else
             local data, err = self.api:postRaw("/v1/ops", '{"ops":[' .. p.raw .. ']}')
-            local status = data and type(data.results) == "table" and data.results[1] and present(data.results[1].status)
+            local status = data and batch_status(data, p.count or 1)
             if not data and (err.kind == "auth" or err.kind == "forbidden") then
                 for j = i, #retired do kept[#kept + 1] = retired[j] end
                 book.retired = kept
@@ -576,7 +624,7 @@ function Positions:sendRetired(book)
             -- Delivered, or refused for good (a reused id, or a 400 the
             -- same bytes would get again): done. Anything else is an
             -- unknown outcome and the frozen bytes stay.
-            local settled = status == "applied" or status == "duplicate" or status == "conflict"
+            local settled = status == "applied" or status == "conflict"
                 or (not data and err.kind == "refused" and err.code ~= nil)
             if not settled then
                 p.attempts = (p.attempts or 0) + 1
@@ -593,6 +641,7 @@ end
 -- the local position is re-sent from this device as a new revision.
 function Positions:discardPaused(book)
     if book.pending and book.pending.device_id ~= self.device_id then
+        restore_peak(book, book.pending)
         book.pending = nil
         book.revision = (book.revision or 0) + 1
         return true

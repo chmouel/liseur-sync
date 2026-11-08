@@ -53,6 +53,8 @@ function Store:write(kind, name, doc)
     local _doc, werr = self:read(kind, name)
     if werr == "newer" then
         return nil, "state was written by a newer plugin version; refusing to overwrite it"
+    elseif werr then
+        return nil, "existing state is " .. werr .. "; refusing to overwrite it"
     end
     doc.v = Store.SCHEMA
     local ok, encoded = pcall(json.encode, doc)
