@@ -115,6 +115,9 @@ verbatim, so a device still on Progress sync lands on the same paragraph.
   through the existing statistics plugin and its capability URL. Moving
   that upload into this plugin needs the same device identity to avoid
   counting history twice, and is not done yet.
+- **KOReader's HTTP proxy.** A proxied request would hand this device's
+  token to the proxy, so the plugin refuses to send anything while one is
+  configured and says so; there is no CONNECT tunnelling.
 - Uploading books, deleting server books, personal series edits,
   translation caches and settings backup.
 
@@ -122,8 +125,15 @@ verbatim, so a device still on Progress sync lands on the same paragraph.
 
 Checked against KOReader v2026.07.2 source (commit `9192014d`,
 koreader-base `6e4bc81a`) and run against the published v2026.07.1
-Linux build; v2026.07.2 has no published Linux build. Nothing here has
-run on a Kindle yet.
+Linux build; v2026.07.2 has no published Linux build.
+
+It has also run on a Kindle Paperwhite 5 with KOReader v2026.07.2. That
+run found a crash: opening a book's detail dialog died with "attempt to
+call local '_'", because a book-detail line shadowed the gettext
+function `_` with a loop variable. The shadow is fixed and a spec now
+refuses every binding of `_` other than `local _ = require("gettext")`,
+but **the fixed build has not been deployed to the Kindle again** — the
+install was rolled back, so the device is not running this code.
 
 KOReader v2026.07.2 bundles stock LuaSec 1.3.2, whose `https` defaults
 to `verify = "none"` and checks no host name. Later koreader-base adds

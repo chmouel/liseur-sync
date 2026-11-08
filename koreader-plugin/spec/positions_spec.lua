@@ -376,6 +376,29 @@ describe("liseur_positions decisions", function()
         assert.are.equal("/x", Positions.remoteLocation(b, { foreign_pos = "/x", origin_alias = "partial-md5:m1" }))
     end)
 
+    it("an op naming another edition is never rescued by the alias branch", function()
+        local b = resolved(e)
+        b.md5 = "m1"
+        -- An explicit edition that is not this file's bytes is a different
+        -- edition, whatever alias the op also carries.
+        assert.is_nil(Positions.remoteLocation(b,
+            { foreign_pos = "/x", edition_sha = "sha-b", origin_alias = "partial-md5:m1" }))
+        -- An edition the server named, and we cannot compare: still nil.
+        assert.is_nil(Positions.remoteLocation({ md5 = "m1", md5_untrusted = true },
+            { foreign_pos = "/x", edition_sha = "sha-b", origin_alias = "partial-md5:m1" }))
+    end)
+
+    it("an untrusted partial MD5 vetoes the alias branch", function()
+        local b = resolved(e)
+        b.md5 = "m1"
+        b.md5_untrusted = true
+        assert.is_nil(Positions.remoteLocation(b, { foreign_pos = "/x", origin_alias = "partial-md5:m1" }))
+        -- The SHA-256 still speaks for the bytes.
+        assert.are.equal("/x", Positions.remoteLocation(b, { foreign_pos = "/x", edition_sha = "sha-a" }))
+        -- No foreign position at all is never a location either.
+        assert.is_nil(Positions.remoteLocation(b, { foreign_pos = "", origin_alias = "partial-md5:m1" }))
+    end)
+
     it("a choice made against a stale prompt is refused", function()
         local b = resolved(e)
         remote({ op_id = "r1", seq = 5, progression = 0.4, device_id = "d2" })

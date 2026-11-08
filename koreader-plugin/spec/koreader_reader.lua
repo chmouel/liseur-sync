@@ -84,14 +84,12 @@ end)
 
 check("position sync waits for a restart after the handover", function()
     shell.info = function() end
-    local ConfirmBox = require("ui/widget/confirmbox")
     local orig = UIManager.show
     UIManager.show = function(_, w) if w.ok_callback then w.ok_callback() end end
     shell:enablePositions()
     UIManager.show = orig
     eq(true, shell:cfg("positions_enabled"))
     eq(false, shell:positionsActive(), "not in the process that confirmed it")
-    local _ = ConfirmBox
     -- Simulate the restart.
     shell:setCfg("handover_process", "an-earlier-process")
     eq(true, shell:positionsActive())
@@ -248,6 +246,37 @@ check("closing saves the session and leaves nothing pending", function()
     eq(nil, b.pending)
 end)
 
+-- The bug this pins: an upload that timed out records a `not_before` and
+-- nothing ever looks at it again, so a book closed after a 429 or a
+-- timeout stays pending until the reader moves in it once more.
+check("a timed-out upload on a closed book is retried without new reading", function()
+    local engine = assert(shell:engine())
+    local b = assert(engine:book(util.partialMD5(path)))
+    assert(b.work_id, "the book has no work to upload to")
+    engine:observe(b, { progression = 0.4242, xpointer = "/retry-marker" })
+    assert(engine:prepare(b))
+    assert(engine:saveBook(b))
+    local real = engine.api.postRaw
+    engine.api.postRaw = function() return nil, { kind = "transport", message = "timed out" } end
+    eq("retry", engine:send(b))
+    engine.api.postRaw = real
+    assert(b.pending and b.pending.not_before and b.pending.not_before > engine.now(), "no backoff recorded")
+    b.pending.not_before = engine.now() + 1
+    assert(engine:saveBook(b))
+    plug:unscheduleAll()
+    plug:schedule("flush")
+    run_tasks()
+    assert(plug.retry_task, "the coordinator scheduled no retry")
+    local deadline = socket.gettime() + 8
+    while engine:book(b.md5).pending and socket.gettime() < deadline do
+        UIManager:_checkTasks()
+        socket.sleep(0.02)
+    end
+    eq(nil, assert(engine:book(b.md5)).pending, "the upload was never retried")
+    local h = assert(other:get("/v1/works/" .. b.work_id .. "/positions", { limit = 1 }))
+    eq("/retry-marker", h.ops[1].foreign_pos)
+end)
+
 check("a token that was never checked is learned on first use", function()
     shell:setCfg("probe", nil)
     shell.engine_cache = nil
@@ -278,6 +307,89 @@ check("a stock Progress sync switched to automatic in memory is seen at once", f
     local fake_ui = { kosync = { settings = { auto_sync = true } }, menu = { registerToMainMenu = function() end } }
     local p = Liseur:new{ ui = fake_ui }
     eq(false, p:positionsActive())
+end)
+
+-- A book with a series is what crashed on a Kindle: a book-detail line
+-- shadowed gettext with a loop variable and the dialog died.
+check("a book detail dialog for a book with a series builds", function()
+    local LiseurUI = require("liseur_ui")
+    local shown
+    local orig = UIManager.show
+    UIManager.show = function(_, widget) shown = widget return true end
+    local ok, err = pcall(LiseurUI.bookDetails, shell, {
+        book_id = "no-such-book", title = "Les ombres du Temps", authors = { "Christopher Ruohio" },
+        series = { { name = "Sun Eater", position = 3 } }, status = "active",
+    })
+    UIManager.show = orig
+    assert(ok, err)
+    assert(shown and type(shown.title) == "string", "no dialog")
+    assert(shown.title:find("Sun Eater #3", 1, true), "no series line: " .. tostring(shown.title))
+end)
+
+-- Neither the Kindle crash nor the `_` shadow behind it was reachable from
+-- the module specs, so walk the whole menu: build every entry and run every
+-- callback body once. Screens are captured instead of painted, and the
+-- network wrapper runs its work inline so no request is left in flight.
+check("every main-menu entry builds and runs", function()
+    local LiseurUI = require("liseur_ui")
+    local NetworkMgr = require("ui/network/manager")
+    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    local shown = {}
+    local orig_show, orig_run = UIManager.show, Network.run
+    local orig_connected, orig_online = NetworkMgr.runWhenConnected, NetworkMgr.runWhenOnline
+    local orig_choose = filemanagerutil.showChooseDialog
+    UIManager.show = function(_, widget) shown[#shown + 1] = widget return true end
+    Network.run = function(fn) return fn() end
+    NetworkMgr.runWhenConnected = function(_, fn) return fn() end
+    NetworkMgr.runWhenOnline = function(_, fn) return fn() end
+    filemanagerutil.showChooseDialog = function(title) shown[#shown + 1] = { text = title } end
+    local ok, err = pcall(function()
+        local touched = 0
+        local function walk(list)
+            for _, item in ipairs(list) do
+                if item.text_func then
+                    assert(type(item.text_func()) == "string", "a menu label is not text")
+                    touched = touched + 1
+                end
+                if item.checked_func then item.checked_func() end
+                if item.enabled_func then item.enabled_func() end
+                if item.callback then
+                    item.callback({ updateItems = function() end })
+                    touched = touched + 1
+                end
+                if item.sub_item_table then walk(item.sub_item_table) end
+            end
+        end
+        walk(LiseurUI.mainMenu(plug))
+        assert(touched >= 12, "only " .. touched .. " entries were exercised")
+    end)
+    UIManager.show = orig_show
+    Network.run = orig_run
+    NetworkMgr.runWhenConnected, NetworkMgr.runWhenOnline = orig_connected, orig_online
+    filemanagerutil.showChooseDialog = orig_choose
+    assert(ok, err)
+    assert(#shown > 0, "no screen or dialog was produced")
+    UIManager:close(plug.browser)
+    plug.browser = nil
+    plug.engine_cache = nil
+end)
+
+-- A corrupt account document used to crash the whole reader path, because
+-- engine() shadowed gettext with the value it discarded.
+check("engine() refuses a corrupt account document instead of crashing", function()
+    local probe = assert(shell:probe())
+    local dir = DataStorage:getSettingsDir() .. "/liseur/" .. Api.namespace(Api.parseBase(URL), probe.account_id) .. "/account"
+    util.makePath(dir)
+    local f = assert(io.open(dir .. "/state.json", "wb"))
+    f:write("{this is not json")
+    f:close()
+    shell.engine_cache = nil
+    local ok, engine, err = pcall(function() return shell:engine() end)
+    os.remove(dir .. "/state.json")
+    shell.engine_cache = nil
+    assert(ok, engine)
+    assert(engine == nil, "a corrupt account document was accepted")
+    assert(type(err) == "string" and err:find("unreadable"), tostring(err))
 end)
 
 print(failures == 0 and "all reader checks passed" or (failures .. " reader check(s) failed"))
