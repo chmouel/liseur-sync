@@ -243,6 +243,18 @@ function Positions.dirty(book)
     return rev > (book.acked or 0) and rev ~= book.refused_revision
 end
 
+-- owesPeak reports a furthest point this device reached, went back from
+-- and has not sent yet.
+function Positions.owesPeak(book)
+    local peak, l = book.peak, book["local"]
+    return peak ~= nil and l ~= nil and peak.progression > l.progression
+end
+
+-- owed reports whether the book has anything to upload.
+function Positions.owed(book)
+    return Positions.dirty(book) or Positions.owesPeak(book)
+end
+
 local function same_position(a, b)
     if a == nil or b == nil then return false end
     if a.xpointer and b.xpointer then return a.xpointer == b.xpointer end
@@ -270,11 +282,11 @@ function Positions:observe(book, pos, initial)
 end
 
 -- settle records a position reached by applying an agreed remote
--- position: it becomes the local position without being owed.
+-- position: it becomes the local position without being owed. A peak
+-- above it is still owed.
 function Positions:settle(book, pos)
     book["local"] = { progression = pos.progression, xpointer = pos.xpointer, at = self.now() }
     book.acked = book.revision
-    book.peak = nil
 end
 
 -- restore_peak keeps the peak of an upload dropped before delivery, so
@@ -469,6 +481,8 @@ function Positions:decide(book, exact)
         agreement = exact(where, book["local"].xpointer)
     end
     local d = Merge.reconcile(l, r, base, Positions.dirty(book), agreement)
+    -- Agreeing on where the reader is now does not send where they got to.
+    if d.kind == "in_sync" and Positions.owesPeak(book) then d = { kind = "push", state = l } end
     d.op = remote_op
     return d
 end
@@ -499,6 +513,9 @@ function Positions:prepare(book)
     if book.pending then return book.pending end
     local l = book["local"]
     if not l or not book.work_id then return nil end
+    -- An acknowledged revision's op id is spent; an owed peak alone needs
+    -- a fresh one.
+    if (book.revision or 0) <= (book.acked or 0) then book.revision = (book.acked or 0) + 1 end
     local json = require("json")
     local function frozen(pos, tag)
         local key = { self.device_id, book.work_id, book.epoch or "", tostring(book.revision) }

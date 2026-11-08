@@ -133,7 +133,18 @@ check("a catalogue book downloads through the plugin", function()
     shell:download(book, function(p) path = p end)
     run_tasks()
     assert(path, "no path")
-    eq(path, shell:localPathFor(book.book_id))
+    eq(path, shell:localPathFor(book))
+end)
+
+-- A Calibre book keeps its id when its file is replaced, so the copy on
+-- the device is that book only while the catalogue still names its bytes.
+check("a download is not reused once the catalogue names other bytes", function()
+    local replaced = {}
+    for k, v in pairs(book) do replaced[k] = v end
+    replaced.sha256 = string.rep("0", 64)
+    eq(nil, shell:localPathFor(replaced))
+    eq(nil, shell:localPathFor(replaced, true))
+    eq(path, shell:localPathFor(book))
 end)
 
 local A_MD5, A_SHA = util.partialMD5(path), book.sha256
@@ -869,6 +880,18 @@ check("the local screens open with the network down", function()
             eq(0, probes, "a local screen sent a request (probe " .. probe .. ")")
             assert(ran >= 3, "the local screen did not run inline (probe " .. probe .. ")")
         end
+        -- With neither a probe nor an engine, Sync status still opens.
+        plug:setCfg("probe", nil)
+        local saved_cache, orig_is = plug.engine_cache, NetworkMgr.isConnected
+        plug.engine_cache = nil
+        NetworkMgr.isConnected = function() return false end
+        asked = 0
+        local before = #shown
+        LiseurUI.showStatus(plug)
+        NetworkMgr.isConnected = orig_is
+        plug.engine_cache = saved_cache
+        assert(#shown > before and shown[#shown].title == "Liseur sync status", "no status screen with nothing cached")
+        eq(0, asked, "Sync status asked for a connection with nothing cached")
     end)
     plug.checkToken = orig_check
     plug:setCfg("probe", saved_probe)

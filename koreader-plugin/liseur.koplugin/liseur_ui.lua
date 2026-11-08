@@ -134,7 +134,7 @@ local function with_engine(plugin, fn)
 end
 
 function UI.bookDetails(plugin, book)
-    local local_path = book.book_id and plugin:localPathFor(book.book_id)
+    local local_path = plugin:localPathFor(book)
     local lines = BookInfo.lines(book, local_path)
     local desc = BookInfo.description(book, util.htmlToPlainTextIfHtml)
     local dialog
@@ -197,7 +197,7 @@ local function book_item(plugin, book, prefix)
     if #book.authors > 0 then text = text .. " — " .. book.authors[1] end
     return {
         text = text,
-        mandatory = book.book_id and plugin:localPathFor(book.book_id, true) and _("on device") or nil,
+        mandatory = plugin:localPathFor(book, true) and _("on device") or nil,
         callback = function() UI.bookDetails(plugin, book) end,
     }
 end
@@ -448,7 +448,7 @@ function UI.showStatus(plugin)
                 elseif b.pending then waiting[#waiting + 1] = name
                 elseif b.legacy_key then blocked[#blocked + 1] = name
                 elseif b.identity == "ambiguous" or b.identity == "mismatch" then blocked[#blocked + 1] = name
-                elseif Positions.dirty(b) then unsent[#unsent + 1] = name end
+                elseif Positions.owed(b) then unsent[#unsent + 1] = name end
             end
             local function section(title, list)
                 if #list == 0 then return end
@@ -467,6 +467,7 @@ function UI.showStatus(plugin)
     -- a line left out, not a reason to refuse the screen.
     local engine = plugin:offlineEngine()
     if engine then return Network.run(function() show(engine) end) end
+    if not NetworkMgr:isConnected() then return show(nil) end
     connected(function() show(plugin:engine()) end)
 end
 
