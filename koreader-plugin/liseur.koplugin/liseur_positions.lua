@@ -334,9 +334,19 @@ function Positions:remote(book)
     return w and w.remote
 end
 
+-- known is the newest seq this device has seen for a work: the feed
+-- cursor, or a seeded op beyond it.
+local function known(acc, work_id)
+    local w = acc and acc.works[work_id]
+    local seen = acc and acc.cursor or 0
+    if w and w.remote and (w.remote.seq or 0) > seen then seen = w.remote.seq end
+    if w and w.other and (w.other.seq or 0) > seen then seen = w.other.seq end
+    return seen
+end
+
 -- news reports whether a remote op is a change against the baseline:
--- a different op, stored after the feed position the baseline was agreed
--- at (seen).
+-- a different op, stored after what this device knew when the baseline
+-- was agreed (seen).
 local function news(book, op)
     local b = book.baseline
     if not b then return true end
@@ -353,7 +363,7 @@ function Positions:candidate(book)
     if not w then return nil end
     local b = book.baseline
     if w.other and w.remote and w.remote.device_id == self.device_id
-        and b and (b.seen or 0) > 0 and news(book, w.other) then
+        and b and b.seen ~= nil and news(book, w.other) then
         return w.other
     end
     return w.remote
@@ -522,7 +532,7 @@ end
 function Positions:accept(book, op)
     local current = self:candidate(book)
     if not current or current.op_id ~= op.op_id then return false end
-    book.baseline = { progression = op.progression, xpointer = Positions.remoteLocation(book, op), op_id = op.op_id, seq = op.seq, seen = self:account().cursor }
+    book.baseline = { progression = op.progression, xpointer = Positions.remoteLocation(book, op), op_id = op.op_id, seq = op.seq, seen = known(self:account(), book.work_id) }
     return true
 end
 
@@ -530,7 +540,7 @@ end
 function Positions:keep(book, op)
     local current = self:candidate(book)
     if not current or current.op_id ~= op.op_id then return false end
-    book.baseline = { progression = op.progression, op_id = op.op_id, seq = op.seq, seen = self:account().cursor }
+    book.baseline = { progression = op.progression, op_id = op.op_id, seq = op.seq, seen = known(self:account(), book.work_id) }
     if not Positions.dirty(book) then book.revision = (book.revision or 0) + 1 end
     return true
 end
@@ -584,7 +594,7 @@ function Positions:prepare(book)
         work_id = book.work_id,
         progression = l.progression,
         xpointer = l.xpointer,
-        seen = (self:account() or {}).cursor,
+        seen = known(self:account(), book.work_id),
         attempts = 0,
     }
     return book.pending

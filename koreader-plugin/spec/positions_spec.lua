@@ -563,6 +563,35 @@ describe("liseur_positions decisions", function()
         assert.are.equal("in_sync", e:decide(b).kind, "this device's own older op came back as news")
     end)
 
+    it("a first upload made before any feed page still leaves another device's move offered", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.3, xpointer = "/a" }, true)
+        e:observe(b, { progression = 0.4, xpointer = "/b" })
+        local p = e:prepare(b)
+        fake:respond(200, { results = { { op_id = p.op_id, status = "applied", seq = 12 } } })
+        assert.are.equal("acked", e:send(b))
+        fake:respond(200, { ops = {
+            { op_id = "elsewhere", work_id = "w1", seq = 9, progression = 0.7, device_id = "d2" },
+            { op_id = p.op_id, work_id = "w1", seq = 12, progression = 0.4, device_id = "dev-1" },
+        }, high_water = 12, has_more = false })
+        assert.is_true(e:pull())
+        assert.are.equal("elsewhere", e:decide(b).op.op_id)
+    end)
+
+    it("a seeded op counts as seen even before the feed is read", function()
+        local b = resolved(e)
+        fake:respond(200, { ops = { { op_id = "mine", work_id = "w1", seq = 12, progression = 0.4, device_id = "dev-1" } } })
+        assert.is_true(e:seed("w1"))
+        e:observe(b, { progression = 0.4, xpointer = "/b" }, true)
+        assert.is_true(e:accept(b, e:remote(b)))
+        fake:respond(200, { ops = {
+            { op_id = "old", work_id = "w1", seq = 9, progression = 0.7, device_id = "d2" },
+            { op_id = "mine", work_id = "w1", seq = 12, progression = 0.4, device_id = "dev-1" },
+        }, high_water = 12, has_more = false })
+        assert.is_true(e:pull())
+        assert.are.equal("in_sync", e:decide(b).kind)
+    end)
+
     it("accepting then settling leaves nothing owed", function()
         local b = resolved(e)
         e:observe(b, { progression = 0.2, xpointer = "/a" }, true)
