@@ -62,8 +62,11 @@ function Merge.reconcile(l, r, baseline, dirty, exact)
         return { kind = "in_sync" }
     end
     if exact == false then
-        if dirty then return { kind = "conflict", ["local"] = l, remote = r } end
-        return { kind = "pull", state = r }
+        if not dirty then return { kind = "pull", state = r } end
+        -- A new op exactly at the agreed place is no move: only this side
+        -- read on.
+        if baseline and not moved_from(baseline, r, Merge.LOCAL_MOVE_EPSILON) then return { kind = "push", state = l } end
+        return { kind = "conflict", ["local"] = l, remote = r }
     end
     local local_moved = dirty and moved_from(baseline, l, Merge.LOCAL_MOVE_EPSILON)
     local remote_moved = moved_from(baseline, r, Merge.EPSILON)

@@ -334,17 +334,45 @@ function Positions:remote(book)
     return w and w.remote
 end
 
+-- news reports whether a remote op is a change against the baseline:
+-- a different op, stored after the feed position the baseline was agreed
+-- at (seen).
+local function news(book, op)
+    local b = book.baseline
+    if not b then return true end
+    return op.op_id ~= b.op_id and op.seq > (b.seen or 0)
+end
+
+-- candidate is the remote op a decision is made against: the newest op,
+-- unless that is this device's own and another device's op is news. An
+-- upload retried and acknowledged late lands above that op in the feed,
+-- and would otherwise hide it.
+function Positions:candidate(book)
+    local acc = self:account()
+    local w = acc and book.work_id and acc.works[book.work_id]
+    if not w then return nil end
+    local b = book.baseline
+    if w.other and w.remote and w.remote.device_id == self.device_id
+        and b and (b.seen or 0) > 0 and news(book, w.other) then
+        return w.other
+    end
+    return w.remote
+end
+
 function Positions:floor(work_id)
     local acc = self:account()
     local w = acc and acc.works[work_id]
     return w and w.floor or 0
 end
 
-local function take(work, op)
+local function take(work, op, me)
     local t = trim(op)
     if t.op_id == nil or t.progression == nil then return end
     if work.remote == nil or t.seq > (work.remote.seq or 0) then
         work.remote = t
+    end
+    if t.device_id ~= me and (work.other == nil or t.seq > (work.other.seq or 0)) then
+        work.other = t
     end
 end
 
@@ -366,7 +394,7 @@ function Positions:seed(work_id)
     local acc = assert(self:account())
     local work = acc.works[work_id] or { floor = 0 }
     acc.works[work_id] = work
-    for _i, op in ipairs(type(data.ops) == "table" and data.ops or {}) do take(work, op) end
+    for _i, op in ipairs(type(data.ops) == "table" and data.ops or {}) do take(work, op, self.device_id) end
     work.floor = math.max(work.floor or 0, tonumber(present(data.furthest_floor)) or 0)
     work.seeded = true
     local ok, werr = self:saveAccount()
@@ -395,11 +423,12 @@ function Positions:resync()
         local w = present(op.work_id)
         if w and acc.works[w] then
             newest[w] = newest[w] or { floor = acc.works[w].floor }
-            take(newest[w], op)
+            take(newest[w], op, self.device_id)
         end
     end
     for w, work in pairs(acc.works) do
         work.remote = newest[w] and newest[w].remote or nil
+        work.other = newest[w] and newest[w].other or nil
     end
     learn_floors(acc, data.furthest_floors)
     acc.cursor = tonumber(present(data.snapshot_seq)) or acc.cursor
@@ -426,7 +455,7 @@ function Positions:pull(max_pages)
             local seq = tonumber(present(op.seq)) or 0
             if seq > next_cursor then next_cursor = seq end
             local w = present(op.work_id)
-            if w and acc.works[w] then take(acc.works[w], op) end
+            if w and acc.works[w] then take(acc.works[w], op, self.device_id) end
         end
         if #ops == 0 then
             local hw = tonumber(present(data.high_water))
@@ -466,13 +495,14 @@ end
 -- was made against. exact(remote_location, local_location) may report
 -- whether both land on the same rendered page.
 function Positions:decide(book, exact)
-    local remote_op = self:remote(book)
+    local remote_op = self:candidate(book)
     local l = book["local"] and Merge.state(book["local"].progression) or nil
     local base = book.baseline and Merge.state(book.baseline.progression) or nil
     local r
     -- The op the baseline was agreed on (including this device's own
-    -- echo) is nothing new: only a different op is a remote change.
-    if remote_op and not (book.baseline and remote_op.op_id == book.baseline.op_id) then
+    -- echo), and anything the feed held when it was agreed, is nothing
+    -- new.
+    if remote_op and news(book, remote_op) then
         r = Merge.state(remote_op.progression)
     end
     local agreement
@@ -490,17 +520,17 @@ end
 -- accept makes a shown remote candidate the agreed baseline. It refuses
 -- when a newer remote position arrived after the prompt was shown.
 function Positions:accept(book, op)
-    local current = self:remote(book)
+    local current = self:candidate(book)
     if not current or current.op_id ~= op.op_id then return false end
-    book.baseline = { progression = op.progression, xpointer = Positions.remoteLocation(book, op), op_id = op.op_id, seq = op.seq }
+    book.baseline = { progression = op.progression, xpointer = Positions.remoteLocation(book, op), op_id = op.op_id, seq = op.seq, seen = self:account().cursor }
     return true
 end
 
 -- keep makes the local position win over a shown remote candidate.
 function Positions:keep(book, op)
-    local current = self:remote(book)
+    local current = self:candidate(book)
     if not current or current.op_id ~= op.op_id then return false end
-    book.baseline = { progression = op.progression, op_id = op.op_id, seq = op.seq }
+    book.baseline = { progression = op.progression, op_id = op.op_id, seq = op.seq, seen = self:account().cursor }
     if not Positions.dirty(book) then book.revision = (book.revision or 0) + 1 end
     return true
 end
@@ -534,9 +564,10 @@ function Positions:prepare(book)
     -- A peak the reader went back from goes first, under its own id, so
     -- the server ranks it as the furthest point and still ends on the
     -- current position.
-    local peak = book.peak
+    local peak, parts = book.peak, nil
     if peak and peak.progression > l.progression then
         local _id, peak_raw = frozen(peak, "peak")
+        parts = { peak_raw, raw }
         raw = peak_raw .. "," .. raw
     else
         peak = nil
@@ -547,14 +578,35 @@ function Positions:prepare(book)
         op_id = op_id,
         raw = raw,
         count = peak and 2 or 1,
+        parts = parts,
         peak = peak,
         device_id = self.device_id,
         work_id = book.work_id,
         progression = l.progression,
         xpointer = l.xpointer,
+        seen = (self:account() or {}).cursor,
         attempts = 0,
     }
     return book.pending
+end
+
+-- deliver posts a frozen upload. A server whose batch limit is below its
+-- ops takes them one at a time, in order; p.sent counts the ones already
+-- stored. Returns the answer to the last request and how many results it
+-- should hold.
+local function deliver(api, p)
+    while true do
+        local body, count = p.raw, p.count or 1
+        if p.split then body, count = p.parts[(p.sent or 0) + 1], 1 end
+        local data, err = api:postRaw("/v1/ops", '{"ops":[' .. body .. ']}')
+        if not data and err.kind == "refused" and err.code == "batch_too_large" and p.parts and not p.split then
+            p.split = true
+        elseif data and p.split and (p.sent or 0) + 1 < #p.parts and batch_status(data, 1) == "applied" then
+            p.sent = (p.sent or 0) + 1
+        else
+            return data, err, count
+        end
+    end
 end
 
 -- send delivers the pending op with its exact stored bytes. Returns a
@@ -567,7 +619,7 @@ function Positions:send(book)
     if not acc then return nil, { kind = "storage", message = "account state: " .. tostring(aerr) } end
     if p.device_id ~= self.device_id then return "paused_device" end
     if p.not_before and self.now() < p.not_before then return "retry" end
-    local data, err = self.api:postRaw("/v1/ops", '{"ops":[' .. p.raw .. ']}')
+    local data, err, count = deliver(self.api, p)
     if not data then
         if err.kind == "refused" and err.code == "unknown_work" then
             restore_peak(book, p)
@@ -591,12 +643,11 @@ function Positions:send(book)
         end
         return nil, err
     end
-    local count = p.count or 1
     local status = batch_status(data, count)
     if status == "applied" then
         local seq = tonumber(present(data.results[count].seq)) or 0
         book.acked = math.max(book.acked or 0, p.revision)
-        book.baseline = { progression = p.progression, xpointer = p.xpointer, op_id = p.op_id, seq = seq }
+        book.baseline = { progression = p.progression, xpointer = p.xpointer, op_id = p.op_id, seq = seq, seen = p.seen }
         book.pending = nil
         book.last_sync = self.now()
         book.last_error = nil
@@ -631,8 +682,8 @@ function Positions:sendRetired(book)
         if waiting then
             kept[#kept + 1] = p
         else
-            local data, err = self.api:postRaw("/v1/ops", '{"ops":[' .. p.raw .. ']}')
-            local status = data and batch_status(data, p.count or 1)
+            local data, err, count = deliver(self.api, p)
+            local status = data and batch_status(data, count)
             if not data and (err.kind == "auth" or err.kind == "forbidden") then
                 for j = i, #retired do kept[#kept + 1] = retired[j] end
                 book.retired = kept

@@ -32,6 +32,10 @@ describe("liseur_merge", function()
         assert.are.equal("conflict", Merge.reconcile(S(0.072), S(0.074), base(0.071), true, false).kind)
     end)
 
+    it("a new remote op still at the agreed place leaves the local change to send", function()
+        assert.are.equal("push", Merge.reconcile(S(0.072), S(0.071), base(0.071), true, false).kind)
+    end)
+
     it("the same exact place agrees despite layout differences", function()
         assert.are.equal("in_sync", Merge.reconcile(S(0.071), S(0.078), nil, true, true).kind)
     end)
