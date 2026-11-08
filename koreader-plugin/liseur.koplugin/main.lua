@@ -78,13 +78,20 @@ local function now()
     return ffiUtil.getTimestamp and ffiUtil.getTimestamp() or os.time()
 end
 
+-- sha256_file returns the digest of the whole file, or nil when the file
+-- can be opened but not read to the end. A failed read is not EOF: a digest
+-- of the bytes that happened to arrive would name a file that was never
+-- seen, so it is refused like an unreadable file.
 local function sha256_file(path)
     local f = io.open(path, "rb")
     if not f then return nil end
     local update = sha2.sha256()
     while true do
-        local chunk = f:read(64 * 1024)
-        if not chunk then break end
+        local chunk, err = f:read(64 * 1024)
+        if not chunk then
+            if err then f:close() return nil end
+            break
+        end
         update(chunk)
     end
     f:close()
@@ -93,8 +100,10 @@ end
 
 -- hashFile is the one place the whole-file digest is read, so a test can
 -- make it fail the way a file being replaced under the reader does.
+Liseur.hash_file = sha256_file
+
 function Liseur:hashFile(path)
-    return (self.hash_file or Liseur.hash_file or sha256_file)(path)
+    return (self.hash_file or Liseur.hash_file)(path)
 end
 
 function Liseur:init()
@@ -486,6 +495,20 @@ function Liseur:currentPosition()
     return { progression = self.ui.rolling:getLastPercent(), xpointer = self.ui.rolling:getLastProgress() }
 end
 
+function Liseur:failOpen(reason)
+    self.session_error = reason
+    self:info(T(_("This book cannot be synced: %1"), reason))
+end
+
+function Liseur:warnDisabled(s)
+    if not s or s.warned_disabled then return end
+    local b = s.book
+    if s.stale or b.identity == "ambiguous" or b.identity == "mismatch" then
+        s.warned_disabled = true
+        self:info(T(_("This book cannot be synced: %1"), self:identityText(b, s.stale)))
+    end
+end
+
 function Liseur:onReaderReady()
     self.session = nil
     if not self.ui.document or not self:positionsActive() then return end
@@ -494,19 +517,27 @@ function Liseur:onReaderReady()
     -- here. The sidecar is left alone.
     local file = self.ui.document.file
     local md5 = util.partialMD5(file)
-    if not md5 then return end
+    if not md5 then
+        self:failOpen(_("this file has no KOReader fingerprint yet; reopen it"))
+        return
+    end
     local engine, eerr = self:engine()
     if not engine then
         logger.warn("Liseur: no session for this book:", eerr)
+        self:failOpen(eerr or _("could not prepare position sync"))
         return
     end
     local fp, fperr = engine:fingerprint(md5)
     if not fp then
         logger.warn("Liseur: fingerprint state unreadable:", fperr)
+        self:failOpen(_("Liseur state on this device is unreadable"))
         return
     end
     local attr = lfs.attributes(file)
-    if not attr then return end
+    if not attr then
+        self:failOpen(_("the bytes of this file could not be read"))
+        return
+    end
     local stat = { size = attr.size, mtime = attr.modification }
     -- No verified digest means no session and nothing written: attaching
     -- this file to whatever document the partial MD5 used to name would
@@ -516,7 +547,7 @@ function Liseur:onReaderReady()
     local sha = Identity.locate(file, function(p) return self:hashFile(p) end)
     if not sha then
         logger.warn("Liseur: this file's bytes could not be read; not syncing it")
-        self.session_error = _("the bytes of this file could not be read")
+        self:failOpen(_("the bytes of this file could not be read"))
         return
     end
     self.session_error = nil
@@ -525,12 +556,13 @@ function Liseur:onReaderReady()
     local saved, serr = engine:saveFingerprint(md5, fp)
     if not saved then
         logger.warn("Liseur: fingerprint state could not be saved:", serr)
-        self.session_error = _("fingerprint state could not be saved")
+        self:failOpen(_("fingerprint state could not be saved"))
         return
     end
     local book, err = engine:edition(sha, md5, fp)
     if not book then
         logger.warn("Liseur: book state unreadable:", err)
+        self:failOpen(_("Liseur state on this device is unreadable"))
         return
     end
     book.path, book.size, book.mtime = file, stat.size, stat.mtime
@@ -538,6 +570,10 @@ function Liseur:onReaderReady()
     if pos then engine:observe(book, pos, true) end
     engine:saveBook(book)
     self.session = { md5 = md5, sha = sha, file = file, book = book, engine = engine }
+    if book.identity == "ambiguous" or book.identity == "mismatch" then
+        self:warnDisabled(self.session)
+        return
+    end
     if NetworkMgr:isConnected() then self:schedule("open") end
 end
 
@@ -934,11 +970,19 @@ function Liseur:jobOpen(interactive, quiet)
         return
     end
     if not self:verifySession(s) then
-        if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book, s.stale))) end
+        if interactive then
+            self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book, s.stale)))
+        else
+            self:warnDisabled(s)
+        end
         return
     end
     if not self:ensureIdentity(s) then
-        if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book))) end
+        if interactive then
+            self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book)))
+        else
+            self:warnDisabled(s)
+        end
         return
     end
     if book.pending and not self:settleBook(engine, book) then
@@ -949,7 +993,11 @@ function Liseur:jobOpen(interactive, quiet)
         -- Settling the upload can retire the mapping (the server answered
         -- that it does not know that work). Resolve and seed again, or the
         -- session would stay ready but unable to write anything.
-        if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book))) end
+        if interactive then
+            self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book)))
+        else
+            self:warnDisabled(s)
+        end
         return
     end
     local ok, err = engine:pull()
@@ -1027,7 +1075,10 @@ function Liseur:flushWith(engine, closing)
         if closing then return end
         return self:jobOpen(false, true)
     end
-    if not self:verifySession(s) then return end
+    if not self:verifySession(s) then
+        self:warnDisabled(s)
+        return
+    end
     if Identity.writable(s.book) and Positions.dirty(s.book) then
         if s.book.pending and not self:settleBook(engine, s.book) then return end
         if not Identity.writable(s.book) then return self:afterSettle(s) end
@@ -1342,8 +1393,12 @@ function Liseur:download(book, callback)
 end
 
 function Liseur:openFile(path)
-    local FileManager = require("apps/filemanager/filemanager")
-    FileManager.openFile(self.ui, path)
+    if self.browser then
+        UIManager:close(self.browser)
+        self.browser = nil
+    end
+    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    filemanagerutil.openFile(self.ui, path, nil, true)
 end
 
 -- Menu ----------------------------------------------------------------
@@ -1356,13 +1411,15 @@ function Liseur:addToMainMenu(menu_items)
     }
 end
 
-function Liseur:editSetting(title, key, hint, on_save, menu)
+function Liseur:editSetting(title, key, hint, on_save, menu, opts)
+    opts = opts or {}
     local dialog
     local previous = self:cfg(key)
     dialog = InputDialog:new{
         title = title,
         input = previous or "",
         input_hint = hint,
+        text_type = opts.text_type,
         buttons = {
             {
                 { text = _("Cancel"), id = "close", callback = function() UIManager:close(dialog) end },

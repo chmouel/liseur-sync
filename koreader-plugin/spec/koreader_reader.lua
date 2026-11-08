@@ -1289,12 +1289,16 @@ check("colliding files keep separate editions and a failed digest reads nothing"
         document = { file = revised_path, info = { has_pages = true } },
         paging = { getLastProgress = function() return 1 end, getLastPercent = function() return 0.1 end },
     } }
+    local blind_infos = {}
+    blind.info = function(_, text) blind_infos[#blind_infos + 1] = text end
     blind.hash_file = function() return nil end
     blind:onReaderReady()
     eq(nil, blind.session, "a file whose bytes could not be read opened a session")
     blind:observeNow()
     eq(nil, blind.session, "a failed digest read left work to observe")
     assert(blind.session_error, "the reader was not told why the book is not synced")
+    eq(1, #blind_infos, "opening an unreadable file did not notify the reader once")
+    assert(blind_infos[1]:find("bytes", 1, true), "the warning did not give the reason: " .. tostring(blind_infos[1]))
     eq(editions, #engine.store:list("editions"), "a failed digest read wrote an edition")
     eq(nil, assert(engine:fingerprint(md5)).files[revised_path], "a failed digest read seeded the cache")
     blind:unscheduleAll()
@@ -1375,6 +1379,161 @@ check("colliding files keep separate editions and a failed digest reads nothing"
     plug = saved_plug
     UIManager:close(back)
     engine.store:remove("editions", revised.sha256)
+end)
+
+check("a read that fails after the open yields no digest", function()
+    -- Opening a directory succeeds on Linux and reading it fails, which is
+    -- the shape of a broken read: a digest of the bytes that did arrive
+    -- would name a file nobody read.
+    eq(nil, Liseur.hash_file("/"), "a failed read was digested as a short file")
+    local read_back = Liseur.hash_file(WORK .. "/books/small.epub")
+    assert(read_back and #read_back == 64, "a readable file has no digest")
+end)
+
+check("book details keep descriptions in a scrollable viewer and mask the token in settings", function()
+    local LiseurUI = require("liseur_ui")
+    local shown = {}
+    local orig_show = UIManager.show
+    UIManager.show = function(_, widget) shown[#shown + 1] = widget return true end
+    local blurb = "<p>First paragraph &amp; more.</p><p>" .. string.rep("Long synopsis text. ", 80) .. "</p>"
+    local ok, err = pcall(function()
+        LiseurUI.bookDetails(shell, {
+            book_id = "no-such-book",
+            title = "A Long Book",
+            authors = { "Ann Author" },
+            description = blurb,
+            status = "active",
+        })
+        local dialog = assert(shown[#shown], "no detail dialog shown")
+        assert(not dialog.title:find("First paragraph", 1, true),
+            "the description was crammed into the ButtonDialog header")
+        local desc_btn
+        for _i, row in ipairs(dialog.buttons or {}) do
+            for _j, b in ipairs(row) do
+                if b.text == "Description" then desc_btn = b end
+            end
+        end
+        assert(desc_btn and desc_btn.callback, "no Description button on a book with a description")
+        desc_btn.callback()
+        local viewer = assert(shown[#shown], "Description button opened no viewer")
+        eq("A Long Book", viewer.title)
+        eq("book_info", viewer.text_type)
+        assert(viewer.text:find("First paragraph & more.", 1, true), "HTML entities were not decoded in Description viewer")
+
+        -- Token editing masks the existing token with text_type = "password".
+        local menu = LiseurUI.mainMenu(shell)
+        local settings = menu[#menu].sub_item_table
+        local token_item = settings[2]
+        token_item.callback()
+        local input = assert(shown[#shown], "token setting opened no InputDialog")
+        eq("password", input.text_type, "the existing token was not masked in Settings")
+        UIManager:close(input)
+        UIManager:close(viewer)
+        UIManager:close(dialog)
+    end)
+    UIManager.show = orig_show
+    assert(ok, err)
+end)
+
+check("an ambiguous or mismatched book notifies the reader once and does not nag", function()
+    local engine = assert(shell:engine())
+    local md5 = util.partialMD5(path)
+    local doc = assert(engine:edition(A_SHA, md5))
+    local saved_identity, saved_work = doc.identity, doc.work_id
+    doc.identity = "ambiguous"
+    doc.work_id = nil
+    assert(engine:saveBook(doc))
+
+    local infos = {}
+    local r = Liseur:new{ ui = {
+        menu = { registerToMainMenu = function() end },
+        document = { file = path, info = { has_pages = true } },
+        paging = { getLastProgress = function() return 1 end, getLastPercent = function() return 0.1 end },
+    } }
+    r.info = function(_, text) infos[#infos + 1] = text end
+    r:onReaderReady()
+    eq(1, #infos, "the reader was not told on open that syncing is disabled for this book")
+    assert(infos[1]:find("more than one work", 1, true), "the warning gave no reason: " .. tostring(infos[1]))
+    -- Background jobs and page turns must not repeat the same modal warning.
+    r:jobOpen(false, false)
+    r:jobFlush()
+    eq(1, #infos, "the warning was repeated during background sync")
+    r:unscheduleAll()
+
+    -- When ambiguity is discovered asynchronously during jobOpen, it also
+    -- notifies once and no more.
+    doc.identity = "unresolved"
+    doc.work_id = nil
+    assert(engine:saveBook(doc))
+    infos = {}
+    local r2 = Liseur:new{ ui = {
+        menu = { registerToMainMenu = function() end },
+        document = { file = path, info = { has_pages = true } },
+        paging = { getLastProgress = function() return 1 end, getLastPercent = function() return 0.1 end },
+    } }
+    r2.info = function(_, text) infos[#infos + 1] = text end
+    r2:onReaderReady()
+    r2:unscheduleAll()
+    eq(0, #infos, "an unresolved book warned before asking the server")
+    local Identity = require("liseur_identity")
+    local orig_resolve = Identity.resolve
+    Identity.resolve = function(_api, b)
+        b.identity = "mismatch"
+        b.work_id = nil
+        return nil, { kind = "mismatch", message = "this file's bytes differ from the catalogue copy" }
+    end
+    r2:jobOpen(false, false)
+    r2:jobOpen(false, false)
+    Identity.resolve = orig_resolve
+    eq(1, #infos, "asynchronous mismatch did not warn exactly once")
+    assert(infos[1]:find("differs from the catalogue copy", 1, true), "wrong reason: " .. tostring(infos[1]))
+    r2:unscheduleAll()
+
+    doc.identity = saved_identity
+    doc.work_id = saved_work
+    assert(engine:saveBook(doc))
+end)
+
+check("opening another book from inside the reader switches documents and saves the current book", function()
+    local Catalog = require("liseur_catalog")
+    local Positions = require("liseur_positions")
+    local api = assert(shell:api())
+    local folders = assert(Catalog.folders(api))
+    local second
+    for _i, b in ipairs(assert(Catalog.folderBooks(api, folders[1].folder_id))) do
+        if b.book_id ~= book.book_id then second = b end
+    end
+    assert(second, "no second book in catalogue")
+    local second_path
+    shell:download(second, function(p) second_path = p end)
+    run_tasks()
+    assert(second_path and second_path ~= path, "second book path missing")
+
+    local reader = ReaderUI:new{ dimen = Device.screen:getSize(), document = DocumentRegistry:openDocument(path) }
+    local p = assert(reader.liseur, "plugin not loaded by ReaderUI")
+    p.offer = function() end
+    p.info = function() end
+    local saved_plug = plug
+    plug = p
+    run_tasks()
+    local s = assert(p.session, "the reader opened no session")
+    local engine = s.engine
+    reader:handleEvent(Event:new("GotoPage", 3))
+    local switched_to
+    local orig_switch = reader.switchDocument
+    reader.switchDocument = function(self_ui, new_file)
+        switched_to = new_file
+        self_ui:onClose(false)
+    end
+    p:openFile(second_path)
+    reader.switchDocument = orig_switch
+    eq(second_path, switched_to, "openFile from ReaderUI did not switchDocument")
+    eq(nil, p.session, "switching documents did not close the current session")
+    local saved = assert(engine:edition(A_SHA, s.md5))
+    assert(Positions.dirty(saved), "switching documents lost the unsent page turn")
+    plug = saved_plug
+    p:unscheduleAll()
+    UIManager:close(reader)
 end)
 
 print(failures == 0 and "all reader checks passed" or (failures .. " reader check(s) failed"))

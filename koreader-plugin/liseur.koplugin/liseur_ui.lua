@@ -11,6 +11,7 @@ local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local ffiUtil = require("ffi/util")
 local lfs = require("libs/libkoreader-lfs")
+local util = require("util")
 local _ = require("gettext")
 local T = ffiUtil.template
 
@@ -135,41 +136,58 @@ end
 function UI.bookDetails(plugin, book)
     local local_path = book.book_id and plugin:localPathFor(book.book_id)
     local lines = BookInfo.lines(book, local_path)
+    local desc = BookInfo.description(book, util.htmlToPlainTextIfHtml)
     local dialog
     local open = function(path)
         if plugin.browser then UIManager:close(plugin.browser) plugin.browser = nil end
         plugin:openFile(path)
     end
+    local buttons = {
+        {
+            {
+                text = local_path and _("Open") or _("Download and open"),
+                enabled = local_path ~= nil or book.status == nil or book.status == "active",
+                callback = function()
+                    UIManager:close(dialog)
+                    if local_path then
+                        open(local_path)
+                    else
+                        plugin:download(book, open)
+                    end
+                end,
+            },
+            {
+                text = _("Download"),
+                enabled = local_path == nil and (book.status == nil or book.status == "active"),
+                callback = function()
+                    UIManager:close(dialog)
+                    plugin:download(book, function(path)
+                        plugin:info(T(_("Saved to %1"), path))
+                    end)
+                end,
+            },
+        },
+    }
+    if desc then
+        buttons[#buttons + 1] = {
+            {
+                text = _("Description"),
+                callback = function()
+                    UIManager:show(TextViewer:new{
+                        title = book.title,
+                        title_multilines = true,
+                        text = desc,
+                        text_type = "book_info",
+                    })
+                end,
+            },
+        }
+    end
+    buttons[#buttons + 1] = { { text = _("Close"), callback = function() UIManager:close(dialog) end } }
     dialog = ButtonDialog:new{
         title = table.concat(lines, "\n"),
         title_align = "left",
-        buttons = {
-            {
-                {
-                    text = local_path and _("Open") or _("Download and open"),
-                    enabled = local_path ~= nil or book.status == nil or book.status == "active",
-                    callback = function()
-                        UIManager:close(dialog)
-                        if local_path then
-                            open(local_path)
-                        else
-                            plugin:download(book, open)
-                        end
-                    end,
-                },
-                {
-                    text = _("Download"),
-                    enabled = local_path == nil and (book.status == nil or book.status == "active"),
-                    callback = function()
-                        UIManager:close(dialog)
-                        plugin:download(book, function(path)
-                            plugin:info(T(_("Saved to %1"), path))
-                        end)
-                    end,
-                },
-            },
-            { { text = _("Close"), callback = function() UIManager:close(dialog) end } },
-        },
+        buttons = buttons,
     }
     UIManager:show(dialog)
 end
@@ -566,7 +584,7 @@ function UI.mainMenu(plugin)
                         plugin:editSetting(_("Device token (from the server's Devices page)"), "token", "", function(v)
                             if v:find("%s") then return false, _("A token has no spaces.") end
                             return true
-                        end, touchmenu_instance)
+                        end, touchmenu_instance, { text_type = "password" })
                     end,
                 },
                 {
