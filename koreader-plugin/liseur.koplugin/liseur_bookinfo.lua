@@ -17,8 +17,15 @@ function BookInfo.lines(book, local_path)
     if book.size_bytes then lines[#lines + 1] = string.format("%.1f MB", book.size_bytes / 1048576) end
     lines[#lines + 1] = local_path and _("On this device") or _("Not on this device")
     if book.status and book.status ~= "active" then lines[#lines + 1] = _("The server cannot serve this file right now.") end
-    if book.description then lines[#lines + 1] = "\n" .. book.description:gsub("<[^>]+>", "") end
     return lines
+end
+
+function BookInfo.description(book, to_plain)
+    if type(book.description) ~= "string" then return nil end
+    local text = to_plain and to_plain(book.description) or book.description:gsub("<[^>]+>", "")
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+    if text == "" then return nil end
+    return text
 end
 
 return BookInfo

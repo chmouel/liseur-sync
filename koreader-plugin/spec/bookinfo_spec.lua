@@ -35,9 +35,15 @@ describe("liseur_bookinfo", function()
         assert.are.equal("The server cannot serve this file right now.", lines[3])
     end)
 
-    it("strips markup from a description", function()
-        local lines = BookInfo.lines({ title = "T", description = "<p>Hello <b>there</b></p>" })
-        assert.are.equal("\nHello there", lines[#lines])
+    it("keeps a description out of the dialog header and strips its markup separately", function()
+        local book = { title = "T", description = "<p>Hello <b>there</b></p>" }
+        local lines = BookInfo.lines(book)
+        assert.are.equal("T", lines[1])
+        assert.are.equal("Not on this device", lines[2])
+        assert.are.equal(2, #lines)
+        assert.are.equal("Hello there", BookInfo.description(book))
+        assert.is_nil(BookInfo.description({ title = "T", description = "<p>   </p>" }))
+        assert.is_nil(BookInfo.description({ title = "T" }))
     end)
 end)
 
