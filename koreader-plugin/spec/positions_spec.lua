@@ -182,6 +182,30 @@ describe("liseur_positions uploads", function()
         assert.are.equal(0.9, sent[1].progression)
     end)
 
+    it("a server that takes one op at a time gets the peak, then the current position", function()
+        local b = resolved(e)
+        moved(b, 0.9)
+        moved(b, 0.3)
+        local p = e:prepare(b)
+        local frozen = json.decode('{"ops":[' .. p.raw .. ']}').ops
+        fake:respond(400, { error = "too many ops", code = "batch_too_large" })
+        fake:respond(200, { results = { { status = "applied", seq = 7 } } })
+        fake:respond(nil, "timeout")
+        assert.are.equal("retry", e:send(b))
+        assert.are.equal(p, b.pending)
+        clock.t = clock.t + 3600
+        fake:respond(200, { results = { { status = "applied", seq = 8 } } })
+        assert.are.equal("acked", e:send(b))
+        local bodies = {}
+        for i = 2, 4 do bodies[#bodies + 1] = json.decode(fake.requests[i].body).ops end
+        assert.are.equal(1, #bodies[1])
+        assert.are.equal(frozen[1].op_id, bodies[1][1].op_id)
+        assert.are.equal(frozen[2].op_id, bodies[2][1].op_id)
+        assert.are.equal(frozen[2].op_id, bodies[3][1].op_id)
+        assert.are.equal(8, b.baseline.seq)
+        assert.is_false(Positions.owed(b))
+    end)
+
     it("honours Retry-After before sending again", function()
         local b = resolved(e)
         moved(b, 0.4)
@@ -515,6 +539,28 @@ describe("liseur_positions decisions", function()
         assert.is_true(b.revision > acked, "the op reused a spent revision")
         assert.are.equal(0.9, sent[1].progression)
         assert.are.equal(0.3, sent[2].progression)
+    end)
+
+    it("another device's move is still offered after a late acknowledgement covers it", function()
+        local b = resolved(e)
+        e:observe(b, { progression = 0.3, xpointer = "/a" }, true)
+        b.baseline = { progression = 0.3, op_id = "r", seq = 5, seen = 5 }
+        e:account().cursor = 5
+        e:observe(b, { progression = 0.4, xpointer = "/b" })
+        local p = e:prepare(b)
+        fake:respond(200, { results = { { op_id = p.op_id, status = "applied", seq = 12 } } })
+        assert.are.equal("acked", e:send(b))
+        fake:respond(200, { ops = {
+            { op_id = "elsewhere", work_id = "w1", seq = 9, progression = 0.7, device_id = "d2" },
+            { op_id = p.op_id, work_id = "w1", seq = 12, progression = 0.4, device_id = "dev-1" },
+        }, high_water = 12, has_more = false })
+        assert.is_true(e:pull())
+        local d = e:decide(b)
+        assert.are.equal("pull", d.kind)
+        assert.are.equal("elsewhere", d.op.op_id)
+        assert.is_true(e:accept(b, d.op))
+        e:settle(b, { progression = 0.7, xpointer = "/c" })
+        assert.are.equal("in_sync", e:decide(b).kind, "this device's own older op came back as news")
     end)
 
     it("accepting then settling leaves nothing owed", function()
