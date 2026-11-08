@@ -114,6 +114,24 @@ local function connected(fn)
     NetworkMgr:runWhenConnected(function() Network.run(fn) end)
 end
 
+-- with_engine runs fn(engine) inline when the engine is already local, and
+-- behind the connectivity wrapper only when building one has to ask
+-- /v1/token. A screen that reads local state must not need Wi-Fi: with it
+-- off, runWhenConnected asks to connect and drops the work if the reader
+-- declines.
+local function with_engine(plugin, fn)
+    local engine = plugin:offlineEngine()
+    if engine then return Network.run(function() fn(engine) end) end
+    connected(function()
+        local online, err = plugin:engine()
+        if not online then
+            plugin:info(err or _("Check the connection first."))
+            return
+        end
+        fn(online)
+    end)
+end
+
 function UI.bookDetails(plugin, book)
     local local_path = book.book_id and plugin:localPathFor(book.book_id)
     local lines = BookInfo.lines(book, local_path)
@@ -176,12 +194,7 @@ end
 -- The engine, and a first-use /v1/token behind it, are asked for inside
 -- the network wrapper: asking before it blocks the UI on a request.
 function UI.continueReading(plugin, browser)
-    connected(function()
-        local engine = plugin:engine()
-        if not engine then
-            plugin:info(_("Check the connection first."))
-            return
-        end
+    with_engine(plugin, function(engine)
         local rows = {}
         for _i, md5 in ipairs(engine.store:list("books")) do
             local b = engine:book(md5)
@@ -211,8 +224,8 @@ function UI.continueReading(plugin, browser)
 end
 
 function UI.downloaded(plugin, browser)
-    connected(function()
-        local index = plugin:downloadIndex()
+    with_engine(plugin, function(engine)
+        local index = plugin:downloadIndex(engine)
         local rows = {}
         for book_id, e in pairs(index.books or {}) do
             if e.path and lfs.attributes(e.path, "mode") == "file" then
@@ -390,7 +403,7 @@ function UI.showLibrary(plugin)
 end
 
 function UI.showStatus(plugin)
-    connected(function()
+    local function show(engine)
         local lines = {}
         local probe = plugin:probe()
         local base = plugin:base()
@@ -405,7 +418,6 @@ function UI.showStatus(plugin)
         end
         lines[#lines + 1] = T(_("Position sync: %1"), plugin:positionsState())
         lines[#lines + 1] = T(_("Download folder: %1"), plugin:downloadDir() or _("not set"))
-        local engine = plugin:engine()
         if engine then
             local acc = engine:account()
             if acc then lines[#lines + 1] = T(_("Changes cursor: %1"), tostring(acc.cursor)) end
@@ -432,7 +444,12 @@ function UI.showStatus(plugin)
             section(_("Read here, not sent yet:"), unsent)
         end
         UIManager:show(TextViewer:new{ title = _("Liseur sync status"), text = table.concat(lines, "\n") })
-    end)
+    end
+    -- Status is worth showing with the network down, so a missing engine is
+    -- a line left out, not a reason to refuse the screen.
+    local engine = plugin:offlineEngine()
+    if engine then return Network.run(function() show(engine) end) end
+    connected(function() show(plugin:engine()) end)
 end
 
 function UI.showHistory(plugin, session, history)
