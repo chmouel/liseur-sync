@@ -91,6 +91,12 @@ local function sha256_file(path)
     return update()
 end
 
+-- hashFile is the one place the whole-file digest is read, so a test can
+-- make it fail the way a file being replaced under the reader does.
+function Liseur:hashFile(path)
+    return (self.hash_file or Liseur.hash_file or sha256_file)(path)
+end
+
 function Liseur:init()
     self.settings = LuaSettings:open(SETTINGS_FILE)
     self.topics = {}
@@ -102,6 +108,8 @@ function Liseur:init()
     end
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+    self:loadRefusal()
+    self:adoptBacklog()
 end
 
 function Liseur:onDispatcherRegisterActions()
@@ -195,6 +203,14 @@ function Liseur:checkToken(short)
         self:detachSession()
     end
     self.auth_failed = nil
+    if not short then
+        -- A permission the server took away is only known to be back once
+        -- the token has been checked again, and only an explicit check is
+        -- that: the pause is written to disk for the next instance, and a
+        -- probe on the way to something else must not lift it.
+        self.denied = nil
+        self:setCfg("refusal", nil)
+    end
     return probe
 end
 
@@ -205,6 +221,11 @@ end
 function Liseur:detachSession()
     self:unscheduleAll()
     self.topics = {}
+    -- A refusal belongs to the identity that was refused, not to the one
+    -- that replaces it.
+    self.auth_failed = nil
+    self.denied = nil
+    self:setCfg("refusal", nil)
     local s = self.session
     if s then
         s.engine:saveBook(s.book)
@@ -265,6 +286,15 @@ local function engineFor(plugin, probe)
         return nil, aerr == "newer" and _("Liseur state on this device was written by a newer plugin version. Update the plugin.")
             or _("Liseur state on this device is unreadable.")
     end
+    -- Reading local state only: a document left under the old partial-MD5
+    -- key is moved to the edition its digest names, once. A migration that
+    -- could not finish leaves the engine unavailable: no write may run on
+    -- state whose destination was never proven.
+    local migrated, merr = engine:migrateLegacy()
+    if not migrated then
+        return nil, merr == "newer" and _("Liseur state on this device was written by a newer plugin version. Update the plugin.")
+            or _("Liseur state on this device is unreadable.")
+    end
     plugin.engine_cache = { ns = ns, device_id = probe.device_id, server = base.url, engine = engine }
     return engine
 end
@@ -291,8 +321,13 @@ function Liseur:offlineEngine()
     if cache and cache.server == base.url then return cache.engine end
 end
 
-function Liseur:downloadIndex(engine)
-    engine = engine or self:offlineEngine() or self:engine()
+-- downloadIndex reads the download index for engine. offline keeps the
+-- lookup to state already on this device: building an engine can ask
+-- /v1/token, and a menu callback runs outside any coroutine, so it must
+-- never wait on a request.
+function Liseur:downloadIndex(engine, offline)
+    engine = engine or self:offlineEngine()
+    if not engine and not offline then engine = self:engine() end
     if not engine then return { books = {} } end
     if not self.download_index or self.download_index.engine ~= engine then
         self.download_index = { engine = engine, doc = engine.store:read("downloads", "index") or { books = {} } }
@@ -308,9 +343,10 @@ function Liseur:saveDownloadIndex(index)
 end
 
 -- localPathFor returns the downloaded copy of a catalogue book that is
--- still on this device with the same bytes, if any.
+-- still on this device with the same bytes, if any. It reads local state
+-- only, so a book detail dialog can be built without a request.
 function Liseur:localPathFor(book_id)
-    local index = self:downloadIndex()
+    local index = self:downloadIndex(nil, true)
     local entry = index.books and index.books[book_id]
     if entry and entry.path and lfs.attributes(entry.path, "size") == entry.size then
         return entry.path
@@ -332,6 +368,43 @@ function Liseur:stockSyncAutomatic()
     return type(s) == "table" and s.auto_sync == true
 end
 
+-- rememberRefusal writes a pause to disk. KOReader builds a fresh plugin
+-- for the file manager, so an in-memory flag would end the pause at the
+-- reader's door, and the documented promise is that it lasts until Check
+-- connection. The record names the identity that was refused: a token,
+-- account or device it was not about never inherits it.
+function Liseur:rememberRefusal(kind, message)
+    local probe = self:probe()
+    if not probe then return end
+    self:setCfg("refusal", {
+        kind = kind,
+        message = message,
+        server = probe.server,
+        account_id = probe.account_id,
+        device_id = probe.device_id,
+    })
+end
+
+-- loadRefusal restores that pause, if what was written down is still
+-- about the identity this instance works as.
+function Liseur:loadRefusal()
+    local stored = self:cfg("refusal")
+    if type(stored) ~= "table" then return end
+    local base, probe = self:base(), self:probe()
+    local current = base and probe and base.url == probe.server
+        and stored.server == base.url and stored.account_id == probe.account_id
+        and stored.device_id == probe.device_id
+    if not current then
+        self:setCfg("refusal", nil)
+        return
+    end
+    if stored.kind == "auth" then
+        self.auth_failed = true
+    else
+        self.denied = stored.message or _("the server refused this permission")
+    end
+end
+
 -- positionsActive answers without asking the server, so it can be called
 -- from event handlers and menu items. An unasked token does not block: the
 -- first job probes and reports what is wrong. A token known to lack sync
@@ -350,6 +423,8 @@ function Liseur:positionsState()
     if self:cfg("positions_enabled") ~= true then return _("off") end
     if self:cfg("handover_process") == PROCESS.token then return _("on after KOReader restarts") end
     if self:stockSyncAutomatic() then return _("paused: Progress sync is set to sync automatically") end
+    if self.denied then return _("paused: the server refused a permission; run Check connection") end
+    if self.auth_failed then return _("paused: the server refused the token; run Check connection") end
     if not self:probe() then return _("on, not yet checked with the server") end
     if not self:hasScope("sync") then return _("paused: the token lacks the sync permission") end
     return _("on")
@@ -411,30 +486,54 @@ function Liseur:onReaderReady()
     self.session = nil
     if not self.ui.document or not self:positionsActive() then return end
     -- KOReader keeps the first fingerprint it computed for a file in the
-    -- sidecar, even after the file is replaced, so the bytes are hashed
-    -- again here. The sidecar is left alone.
-    local md5 = util.partialMD5(self.ui.document.file)
+    -- sidecar, even after the file is replaced, so the bytes are read again
+    -- here. The sidecar is left alone.
+    local file = self.ui.document.file
+    local md5 = util.partialMD5(file)
     if not md5 then return end
     local engine, eerr = self:engine()
     if not engine then
         logger.warn("Liseur: no session for this book:", eerr)
         return
     end
-    local book, err = engine:book(md5)
+    local fp, fperr = engine:fingerprint(md5)
+    if not fp then
+        logger.warn("Liseur: fingerprint state unreadable:", fperr)
+        return
+    end
+    local attr = lfs.attributes(file)
+    if not attr then return end
+    local stat = { size = attr.size, mtime = attr.modification }
+    -- No verified digest means no session and nothing written: attaching
+    -- this file to whatever document the partial MD5 used to name would
+    -- hand its reading to another file's work. The bytes are read here,
+    -- never taken from the cache: a replacement with the same size and
+    -- mtime is still different bytes.
+    local sha = Identity.locate(file, function(p) return self:hashFile(p) end)
+    if not sha then
+        logger.warn("Liseur: this file's bytes could not be read; not syncing it")
+        self.session_error = _("the bytes of this file could not be read")
+        return
+    end
+    self.session_error = nil
+    -- The cache is written before the document it leads to: it only grows.
+    engine:noteFile(fp, file, sha, stat)
+    local saved, serr = engine:saveFingerprint(md5, fp)
+    if not saved then
+        logger.warn("Liseur: fingerprint state could not be saved:", serr)
+        self.session_error = _("fingerprint state could not be saved")
+        return
+    end
+    local book, err = engine:edition(sha, md5, fp)
     if not book then
         logger.warn("Liseur: book state unreadable:", err)
         return
     end
-    -- Learn whether these are new bytes before recording where the
-    -- reader opened, so nothing agreed about old bytes carries over.
-    local attr = lfs.attributes(self.ui.document.file)
-    if attr then
-        Identity.refresh(book, self.ui.document.file, { size = attr.size, mtime = attr.modification }, sha256_file)
-    end
+    book.path, book.size, book.mtime = file, stat.size, stat.mtime
     local pos = self:currentPosition()
     if pos then engine:observe(book, pos, true) end
     engine:saveBook(book)
-    self.session = { md5 = md5, file = self.ui.document.file, book = book, engine = engine }
+    self.session = { md5 = md5, sha = sha, file = file, book = book, engine = engine }
     if NetworkMgr:isConnected() then self:schedule("open") end
 end
 
@@ -479,19 +578,69 @@ function Liseur:unscheduleAll()
     self:cancelRetry()
 end
 
+-- adoptBacklog hands this instance the work left behind on disk. KOReader
+-- builds a fresh plugin for the file manager rather than carrying the
+-- reader's over, so a flush queued by a closing reader dies with it, and so
+-- does a deadline it armed; init is the last moment anything can notice
+-- either. The deadline itself is honoured, so nothing is asked early, and a
+-- device that is offline wakes nothing: the connection event drains it.
+function Liseur:adoptBacklog()
+    if self.closed or not self:positionsActive() or not NetworkMgr:isConnected() then return end
+    local engine = self:offlineEngine()
+    if not engine or self:suspended() then return end
+    self:scheduleRetry(engine)
+    if self:backlogDue(engine) then self:schedule("flush") end
+end
+
+-- backlogDue reports whether this instance owes work that no timer would
+-- ever fire for: an upload frozen without a deadline, or reading this device
+-- recorded and never prepared. It is asked once, when an instance starts, so
+-- a book that can never be resolved costs one job and not a loop.
+function Liseur:backlogDue(engine)
+    if not engine then return false end
+    local function due(p)
+        return type(p) == "table" and p.device_id == engine.device_id
+            and (type(p.not_before) ~= "number" or p.not_before <= now())
+    end
+    for _i, book in ipairs(engine:documents()) do
+        if due(book.pending) then return true end
+        for _j, p in ipairs(book.retired or {}) do
+            if due(p) then return true end
+        end
+        -- Reading this device never uploaded is the other thing no deadline
+        -- describes. A book whose identity is unclear has nothing to send it
+        -- to, so it is not a reason to wake up.
+        if not book.legacy_key and book.identity ~= "ambiguous" and book.identity ~= "mismatch"
+            and Positions.dirty(book) then
+            return true
+        end
+    end
+    return false
+end
+
+-- suspended reports whether this instance must write nothing more: the
+-- reader that owned it is gone, or the server refused its token or a
+-- permission. It is the cheap half of the coordinator's gate, so it can be
+-- asked between two jobs.
+function Liseur:suspended()
+    return self.closed == true or self.auth_failed ~= nil or self.denied ~= nil
+end
+
 -- cancelRetry drops the timer set for a frozen upload's backoff.
 function Liseur:cancelRetry()
     if self.retry_task then
         UIManager:unschedule(self.retry_task)
         self.retry_task = nil
     end
+    self.retry_at = nil
 end
 
 -- nextRetryAt returns the earliest moment an upload frozen on this device
 -- may be tried again. An upload paused under another device identity is
--- not ours to retry, and a refused token suspends all background work.
+-- not ours to retry, and a refused token or a refused permission
+-- suspends all background work.
 function Liseur:nextRetryAt(engine)
-    if not engine or self.auth_failed then return nil end
+    if not engine or self.auth_failed or self.denied then return nil end
     local at
     local function consider(p)
         if type(p) ~= "table" or p.device_id ~= engine.device_id then return end
@@ -499,12 +648,9 @@ function Liseur:nextRetryAt(engine)
         if type(nb) ~= "number" then return end
         if not at or nb < at then at = nb end
     end
-    for _i, md5 in ipairs(engine.store:list("books")) do
-        local book = engine:book(md5)
-        if book then
-            consider(book.pending)
-            for _i, p in ipairs(book.retired or {}) do consider(p) end
-        end
+    for _i, book in ipairs(engine:documents()) do
+        consider(book.pending)
+        for _j, p in ipairs(book.retired or {}) do consider(p) end
     end
     return at
 end
@@ -512,15 +658,28 @@ end
 -- scheduleRetry arranges the one retry a timed-out or rate-limited upload
 -- needs. Without it a book closed after such an answer stays pending until
 -- the reader moves again. The coordinator arms it once per backoff and the
--- retry re-arms it only if the next attempt fails too.
-function Liseur:scheduleRetry()
-    if self.retry_task or not self:positionsActive() then return end
-    local engine = self.engine_cache and self.engine_cache.engine
+-- retry re-arms it only if the next attempt fails too. A reader that has
+-- been torn down arms nothing: its timer would outlive it. engine defaults
+-- to the one this instance already built; a plugin that has not served a
+-- request yet passes the one it can read from local state.
+function Liseur:scheduleRetry(engine)
+    if self.closed or not self:positionsActive() then return end
+    engine = engine or (self.engine_cache and self.engine_cache.engine)
     local at = self:nextRetryAt(engine)
-    if not at then return end
+    if not at then
+        -- Nothing may be asked again while a refusal is in force.
+        self:cancelRetry()
+        return
+    end
+    -- An armed timer is not the same deadline: an upload frozen a moment
+    -- later with a shorter backoff must not wait behind the one already
+    -- waiting, so an earlier deadline replaces the timer.
+    if self.retry_task and self.retry_at and self.retry_at <= at then return end
+    self:cancelRetry()
     local delay = math.max(1, at - now())
+    self.retry_at = at
     self.retry_task = function()
-        self.retry_task = nil
+        self.retry_task, self.retry_at = nil, nil
         if NetworkMgr:isConnected() then self:schedule("flush") end
     end
     UIManager:scheduleIn(delay, self.retry_task)
@@ -555,6 +714,11 @@ function Liseur:onNetworkConnected()
 end
 
 function Liseur:onCloseWidget()
+    -- The reader that owned this instance is gone. Its already queued job
+    -- still runs once, but nothing new may be queued for it and no timer
+    -- may be left behind, or a dead instance would keep talking to the
+    -- server. Unsent work stays on disk for the file manager's instance.
+    self.closed = true
     self:unscheduleAll()
 end
 
@@ -563,6 +727,7 @@ end
 local ORDER = { "open", "flush" }
 
 function Liseur:schedule(topic)
+    if self.closed then return end
     self.topics[topic] = true
     if self.running then return end
     UIManager:nextTick(function() Network.run(function() self:runTopics() end) end)
@@ -570,9 +735,10 @@ end
 
 function Liseur:runTopics()
     if self.running then return end
-    if self.auth_failed or not self:positionsActive() then
-        -- A refused token pauses background work until the connection is
-        -- checked again; position work runs only while this plugin owns
+    if self:suspended() or not self:positionsActive() then
+        -- A torn-down reader writes nothing, and a refused token or a
+        -- refused permission pauses background work until the connection
+        -- is checked again; position work runs only while this plugin owns
         -- positions.
         self.topics = {}
         return
@@ -587,6 +753,13 @@ function Liseur:runTopics()
         end
         if not topic then break end
         self.topics[topic] = nil
+        if self:suspended() then
+            -- Asking again inside the same drain is exactly what the pause
+            -- promises not to do: the job that just ran was refused, and
+            -- the next one would be refused too.
+            self.topics = {}
+            break
+        end
         local ok, err = pcall(topic == "open" and self.jobOpen or self.jobFlush, self)
         if not ok then logger.warn("Liseur: sync job failed:", err) end
     end
@@ -599,25 +772,55 @@ function Liseur:noteError(book, err)
     book.last_error = err.message
     if err.kind == "auth" then
         self.auth_failed = true
+        self:rememberRefusal("auth", err.message)
+    elseif err.kind == "forbidden" then
+        -- A permission the server takes away does not come back by asking
+        -- again, and the retry deadline stored for an earlier timeout has
+        -- already passed: retrying would only ask, and be refused, once a
+        -- second. Wait for an explicit check of the connection instead.
+        self.denied = err.message or _("the server refused this permission")
+        self:rememberRefusal("forbidden", self.denied)
     end
+end
+
+-- verifySession re-reads the bytes of the open book. A digest that cannot
+-- be read, or that is no longer this edition's, leaves the session unable to
+-- write: the old work and its position must never be offered to other bytes.
+function Liseur:verifySession(s)
+    local file = s.file
+    local attr = file and lfs.attributes(file)
+    if not attr then return false end
+    local stat = { size = attr.size, mtime = attr.modification }
+    local fp = s.engine:fingerprint(s.book.md5)
+    -- Re-read the bytes: a file replaced under the same size and mtime is
+    -- new content, and its reading must not reach the old work.
+    local sha = Identity.locate(file, function(p) return self:hashFile(p) end)
+    if not sha or sha ~= s.sha or s.book.sha256 ~= sha then
+        s.stale = true
+        s.ready = false
+        return false
+    end
+    local cached = fp and fp.files and fp.files[file]
+    if fp and (not cached or cached.size ~= stat.size or cached.mtime ~= stat.mtime) then
+        s.engine:noteFile(fp, file, sha, stat)
+        s.engine:saveFingerprint(s.book.md5, fp)
+    end
+    return true
 end
 
 -- ensureIdentity resolves the open book to a work, once, and starts
 -- following that work's positions.
 function Liseur:ensureIdentity(s)
     local book, engine = s.book, s.engine
-    local attr = lfs.attributes(s.file)
-    if attr then
-        Identity.refresh(book, s.file, { size = attr.size, mtime = attr.modification }, sha256_file)
-    end
     if not book.book_id then
         local index = self:downloadIndex()
         for book_id, entry in pairs(index.books or {}) do
-            if entry.path == s.file and entry.sha256 == book.sha256 then book.book_id = book_id end
+            if entry.sha256 == book.sha256 then book.book_id = book_id end
         end
     end
     if not Identity.writable(book) then
         if book.identity == "ambiguous" or book.identity == "mismatch" then return false end
+        engine:markUntrusted(book)
         local ok, err = Identity.resolve(engine.api, book)
         engine:saveBook(book)
         if not ok then
@@ -665,6 +868,18 @@ function Liseur:settleBook(engine, book)
     return status == "acked" or status == "renamed" or status == "refused" or status == "unknown_work"
 end
 
+-- afterSettle keeps a session honest after an upload was settled. The
+-- server answering that it does not know the work drops the mapping, and
+-- a session left ready would never resolve that book again: nothing could
+-- be sent, and every later flush would run into the same wall. Readiness
+-- goes, the local observation stays, and the open job resolves and seeds
+-- the book before anything else is uploaded.
+function Liseur:afterSettle(s)
+    if not s or Identity.writable(s.book) then return end
+    s.ready = false
+    self.topics["open"] = true
+end
+
 -- push sends the current book's local position when the decision says
 -- this device owes it. The op is persisted before it is sent.
 function Liseur:push(engine, book)
@@ -700,8 +915,24 @@ end
 function Liseur:jobOpen(interactive, quiet)
     local s = self.session
     if not s or not self:positionsActive() or s.engine ~= self:engine() then return end
+    -- The request boundary, not only the coordinator: an explicit sync asks
+    -- this job directly, and a refusal recorded while it waited for the
+    -- network is still in force here.
+    if self:suspended() then
+        if interactive then self:info(T(_("Position sync is %1."), self:positionsState())) end
+        return
+    end
     local book, engine = s.book, s.engine
-    if book.retired then self:settleBook(engine, book) end
+    if book.retired and not self:settleBook(engine, book) then
+        -- The frozen bytes could not be delivered; whatever the reason,
+        -- the book's new state must not be sent ahead of them.
+        if interactive then self:info(T(_("A previous upload is still waiting: %1"), book.last_error or _("network"))) end
+        return
+    end
+    if not self:verifySession(s) then
+        if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book, s.stale))) end
+        return
+    end
     if not self:ensureIdentity(s) then
         if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book))) end
         return
@@ -726,6 +957,9 @@ function Liseur:jobOpen(interactive, quiet)
     if err == "partial" or self.session ~= s or not self:positionsActive() then return end
     s.ready = true
     self:act(engine, book, engine:decide(book, self:exactFor()), not quiet, interactive)
+    if not Identity.writable(book) then
+        self:afterSettle(s)
+    end
     engine:saveBook(book)
 end
 
@@ -751,21 +985,27 @@ end
 function Liseur:flushWith(engine, closing)
     local s = self.session
     if not closing then
-        for _i, md5 in ipairs(engine.store:list("books")) do
-            if not s or md5 ~= s.md5 then
-                local book = engine:book(md5)
-                if book then
-                    local settled = self:settleBook(engine, book)
-                    if settled and Positions.dirty(book) and book.path then
-                        local closed = { book = book, engine = engine, file = book.path }
-                        if self:ensureIdentity(closed) then
-                            local ok, err = engine:pull()
-                            if ok and err ~= "partial" then
-                                self:act(engine, book, engine:decide(book), false, false)
-                                engine:saveBook(book)
-                            elseif not ok then
-                                self:noteError(book, err)
-                            end
+        for _i, book in ipairs(engine:documents()) do
+            -- The backlog is a second way to write a lot at once, so a
+            -- refusal stops it as promptly as it stops the topic loop.
+            if self:suspended() then return end
+            -- A disk copy of the open book must never be loaded and saved
+            -- over the copy in memory, so the edition it is open as is
+            -- skipped by its digest.
+            if not s or book.sha256 ~= s.sha then
+                local settled = self:settleBook(engine, book)
+                if settled and Positions.dirty(book) then
+                    -- An edition's identity is its digest. The file it last
+                    -- named may be gone, and that is not this document's
+                    -- business; a legacy leftover has no digest to resolve.
+                    local closed = { book = book, engine = engine, file = book.path, sha = book.sha256 }
+                    if not book.legacy_key and self:ensureIdentity(closed) then
+                        local ok, err = engine:pull()
+                        if ok and err ~= "partial" then
+                            self:act(engine, book, engine:decide(book), false, false)
+                            engine:saveBook(book)
+                        elseif not ok then
+                            self:noteError(book, err)
                         end
                     end
                 end
@@ -773,15 +1013,20 @@ function Liseur:flushWith(engine, closing)
         end
     end
     if not s then return end
-    if s.book.retired then self:settleBook(engine, s.book) end
+    -- The backlog stopped as soon as a refusal was recorded, and the open
+    -- book's own upload is the very next request: it is gated the same way.
+    if self:suspended() then return end
+    if s.book.retired and not self:settleBook(engine, s.book) then return end
     if not s.ready then
         -- Never upload a book's first position before reading the
         -- server's.
         if closing then return end
         return self:jobOpen(false, true)
     end
+    if not self:verifySession(s) then return end
     if Identity.writable(s.book) and Positions.dirty(s.book) then
         if s.book.pending and not self:settleBook(engine, s.book) then return end
+        if not Identity.writable(s.book) then return self:afterSettle(s) end
         local ok, err = engine:pull(closing and 1 or nil)
         if not ok then
             self:noteError(s.book, err)
@@ -792,6 +1037,7 @@ function Liseur:flushWith(engine, closing)
         if err == "partial" or self.session ~= s or not self:positionsActive() then return end
         self:act(engine, s.book, engine:decide(s.book, self:exactFor()), false, false)
         engine:saveBook(s.book)
+        if not Identity.writable(s.book) then self:afterSettle(s) end
     end
 end
 
@@ -911,7 +1157,8 @@ function Liseur:info(text)
     UIManager:show(InfoMessage:new{ text = text })
 end
 
-function Liseur:identityText(book)
+function Liseur:identityText(book, stale)
+    if stale then return _("this file changed on disk; reopen it to sync it") end
     if book.identity == "resolved" then return _("matched to a work on the server") end
     if book.identity == "ambiguous" then return _("this file matches more than one work; it is not synced") end
     if book.identity == "mismatch" then return _("this file differs from the catalogue copy; it is not synced") end
@@ -924,11 +1171,24 @@ function Liseur:onLiseurSyncNow()
         self:info(T(_("Position sync is %1."), self:positionsState()))
         return
     end
-    if not self.session then
-        self:info(_("This book has no KOReader fingerprint yet; reopen it."))
+    -- An explicit sync is not a way around a pause: the pause is exactly
+    -- what the reader must resolve with Check connection first.
+    if self:suspended() then
+        self:info(T(_("Position sync is %1."), self:positionsState()))
         return
     end
-    self:whenConnected(function() self:jobOpen(true) end)
+    if not self.session then
+        self:info(self.session_error and T(_("This book cannot be synced: %1"), self.session_error)
+            or _("This book has no KOReader fingerprint yet; reopen it."))
+        return
+    end
+    self:whenConnected(function()
+        if self:suspended() then
+            self:info(T(_("Position sync is %1."), self:positionsState()))
+            return
+        end
+        self:jobOpen(true)
+    end)
 end
 
 function Liseur:onLiseurLibrary()
@@ -1046,19 +1306,31 @@ function Liseur:download(book, callback)
         local engine = self:engine()
         local md5 = util.partialMD5(path)
         if engine and md5 then
-            local doc = engine:book(md5)
+            -- The bytes were just verified against the catalogue, so that
+            -- digest is recorded as the file's own: it leads to this file's
+            -- edition and never to another file's, whatever the partial MD5
+            -- they share.
+            local sha = Identity.verified(book.sha256)
             local attr = lfs.attributes(path)
-            if doc and attr then
-                -- The bytes were just verified against the catalogue, so
-                -- hand that digest to refresh() instead of writing the
-                -- file facts by hand: it retires an upload frozen for the
-                -- bytes this file had before and clears the agreement, so
-                -- a re-download over different content cannot keep the old
-                -- work, baseline or pending upload.
-                Identity.refresh(doc, path, { size = attr.size, mtime = attr.modification },
-                    function() return book.sha256 end)
-                doc.book_id = book.book_id
-                engine:saveBook(doc)
+            local fp = engine:fingerprint(md5)
+            if not fp then sha = nil end
+            if sha then
+                if attr then engine:noteFile(fp, path, sha, { size = attr.size, mtime = attr.modification }) end
+                engine:saveFingerprint(md5, fp)
+                local s = self.session
+                if s and s.engine == engine and s.sha == sha then
+                    s.book.path = path
+                    if attr then s.book.size, s.book.mtime = attr.size, attr.modification end
+                    s.book.book_id = book.book_id
+                    engine:saveBook(s.book)
+                else
+                    local doc = engine:edition(sha, md5, fp)
+                    if doc then
+                        doc.path = path
+                        doc.book_id = book.book_id
+                        engine:saveBook(doc)
+                    end
+                end
             end
         end
         callback(path)
@@ -1141,6 +1413,10 @@ function Liseur:checkConnection(menu)
             self:info(T(_("Connection failed: %1"), (err and err.message) or "") .. hint)
             return
         end
+        -- The check is also the recovery action the pause message names,
+        -- and KOReader's runWhenConnected sends no event on a device that
+        -- is already online: the backlog has to be woken here or not at all.
+        if self:positionsActive() and NetworkMgr:isConnected() then self:schedule("flush") end
         local text = T(_("Connected to %1\nDevice: %2 (%3)\nPermissions: %4"), probe.server, probe.name or "?", probe.device_id, table.concat(probe.scopes, ", "))
         if previous and previous.account_id ~= probe.account_id then
             text = text .. "\n\n" .. _("This is a different account from before. Its reading state is kept separately; nothing from the previous account will be sent to it.")

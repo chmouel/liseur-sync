@@ -115,10 +115,15 @@ end
 local e1, b1
 check("a downloaded book resolves to a work and its fingerprint agrees", function()
     e1 = engine(api, probe, "1")
-    b1 = assert(e1:book(util.partialMD5(path)))
+    local md5 = util.partialMD5(path)
+    local attr = assert(lfs.attributes(path))
+    local fp = assert(e1:fingerprint(md5))
+    local sha = assert(Identity.locate(path, sha256_file))
+    assert(e1:noteFile(fp, path, sha, { size = attr.size, mtime = attr.modification }))
+    assert(e1:saveFingerprint(md5, fp))
+    b1 = assert(e1:edition(sha, md5, fp))
+    b1.path, b1.size, b1.mtime = path, attr.size, attr.modification
     b1.book_id = book.book_id
-    local attr = lfs.attributes(path)
-    Identity.refresh(b1, path, { size = attr.size, mtime = attr.modification }, sha256_file)
     local raw = assert(api:postRaw("/v1/books/" .. book.book_id .. "/resolve", "{}"))
     local server_md5
     for _, id in ipairs(raw.identifiers) do
@@ -166,8 +171,10 @@ end)
 local e2, b2
 check("another device sees the position bound to the same bytes", function()
     e2 = engine(api2, probe2, "2")
-    b2 = assert(e2:book(util.partialMD5(path)))
-    b2.sha256 = sha256_file(path)
+    local md5 = util.partialMD5(path)
+    local attr = assert(lfs.attributes(path))
+    b2 = assert(e2:edition(sha256_file(path), md5))
+    b2.path, b2.size, b2.mtime = path, attr.size, attr.modification
     assert(Identity.resolve(api2, b2))
     eq(b1.work_id, b2.work_id)
     e2:account()
@@ -200,7 +207,7 @@ check("an upload frozen under another device is paused", function()
     e1:prepare(b1)
     assert(e1:saveBook(b1))
     local other = engine(api2, probe2, "1")
-    local again = assert(other:book(b1.md5))
+    local again = assert(other:edition(b1.sha256, b1.md5))
     eq("paused_device", other:send(again))
 end)
 

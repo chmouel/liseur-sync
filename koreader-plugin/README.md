@@ -83,16 +83,39 @@ verbatim, so a device still on Progress sync lands on the same paragraph.
 - State lives in `settings/liseur/<server>__<account>/`, one directory
   per server, path prefix and account. A different account never sees or
   sends another account's state.
-- A book is identified by KOReader's partial MD5 and the file's SHA-256,
-  never by its path or title. If the bytes of a file change, its link to
-  the server's work and everything agreed about the old bytes are
-  dropped, and the file is resolved again by its SHA-256 alone. A file the server
-  matches to more than one work is shown as unclear and not synced.
+- A book is identified by the file's SHA-256, never by its path, its
+  title, or KOReader's partial MD5. State is kept per file, so two files
+  that share a partial MD5 (KOReader's fingerprint only samples parts of
+  a file) keep separate positions, revisions and uploads: reading one
+  never clears what the other still owes. The partial MD5 only names a
+  cache that leads to a file's own state; once it has been seen for two
+  different files it is no longer used to match anything. A file the
+  server matches to more than one work is shown as unclear and not
+  synced.
+- The SHA-256 is read from the whole file when a book is opened and again
+  before each position upload, not taken from a cached size and mtime:
+  a replacement that keeps both still holds different bytes, and its
+  reading must not reach the old work. Opening a large book therefore
+  costs one full read, the same one a download already pays to verify
+  its bytes.
+- A file whose bytes cannot be read is not synced at all: no state is
+  written for it and the reader is told why. Reading the file again is
+  what settles it, and an attempt that failed is never kept as if it had
+  answered.
 - Every upload is written to disk before it is sent and resent with the
   same bytes and id until the server answers, so a timeout cannot produce
   a second position. An upload prepared under a different device token is
   paused, not replayed; *This book → Resend paused upload* sends the
-  position again as this device.
+  position again as this device. A token the server refuses for lack of a
+  permission pauses uploads, with their bytes kept, until *Check
+  connection* succeeds again — a refusal is not retried, *Sync now* does
+  not override the pause, and the check sends what was waiting.
+- Position work outlives the reader that made it. A retry deadline, an
+  upload frozen without one, and reading that was never uploaded are all
+  found on disk by the plugin the file manager builds at startup, which
+  then drains them; a device that is offline wakes nothing and waits for
+  the connection. A book that can never be resolved is tried once, not
+  once a second.
 - The decision between this device and the server follows Liseur
   Android's three-way merge: whoever moved away from the last agreed
   position wins, both moving is a question for you, and neither the

@@ -8,43 +8,75 @@ local function api(fake)
 end
 
 describe("liseur_identity", function()
-    it("changed bytes never keep the previous work", function()
-        local book = { md5 = "m", sha256 = "old", size = 10, mtime = 1, work_id = "w", book_id = "b", identity = "resolved" }
-        assert.is_false(Identity.refresh(book, "/f.epub", { size = 10, mtime = 1 }, function() error("not rehashed") end))
-        Identity.refresh(book, "/f.epub", { size = 11, mtime = 2 }, function() return "new" end)
-        assert.are.equal("new", book.sha256)
-        assert.is_nil(book.work_id)
-        assert.is_nil(book.book_id)
-        assert.is_false(Identity.writable(book))
+    local SHA_A = string.rep("a", 64)
+    local SHA_B = string.rep("b", 64)
+
+    describe("locate", function()
+        it("hashes the file when nothing cached it", function()
+            local asked = 0
+            local sha = Identity.locate("/a.epub", function(path)
+                asked = asked + 1
+                assert.are.equal("/a.epub", path)
+                return SHA_A
+            end)
+            assert.are.equal(SHA_A, sha)
+            assert.are.equal(1, asked)
+        end)
+
+        -- F5: a warm cache entry is not proof of content. A file replaced
+        -- under an unchanged size and mtime is different bytes, so an
+        -- identity boundary always reads the file.
+        it("a warm cache entry never replaces a read, even on an unchanged stat", function()
+            local asked = 0
+            local sha = Identity.locate("/a.epub", function()
+                asked = asked + 1
+                return SHA_B
+            end)
+            assert.are.equal(SHA_B, sha, "the cached digest was trusted over the bytes")
+            assert.are.equal(1, asked)
+        end)
+
+        -- F1: a hash that could not be read leaves no trace, so the next
+        -- look at the same path and the same stat is a real read again.
+        it("a failed read returns nothing and is retried, not cached", function()
+            local calls = 0
+            local function failing()
+                calls = calls + 1
+                return nil
+            end
+            assert.is_nil(Identity.locate("/a.epub", failing))
+            assert.are.equal(1, calls)
+            assert.is_nil(Identity.locate("/a.epub", failing))
+            assert.are.equal(2, calls, "the failed read was taken as an answer")
+            assert.are.equal(SHA_A, Identity.locate("/a.epub", function() return SHA_A end))
+        end)
+
+        it("a verified digest needs no read", function()
+            local sha = Identity.locate("/a.epub",
+                function() error("a verified digest must not be recomputed") end, SHA_B:upper())
+            assert.are.equal(SHA_B, sha, "the verified digest was not normalised")
+        end)
+
+        it("a malformed verified digest is not a verified digest", function()
+            local asked = 0
+            local sha = Identity.locate("/a.epub", function()
+                asked = asked + 1
+                return SHA_A
+            end, "not-a-digest")
+            assert.are.equal(SHA_A, sha)
+            assert.are.equal(1, asked, "a malformed digest was taken as proof")
+            assert.is_nil(Identity.verified("sha-a"))
+            assert.is_nil(Identity.verified(string.rep("a", 63)))
+            assert.are.equal(SHA_A, Identity.verified(string.rep("A", 64)))
+        end)
     end)
 
     it("changed bytes under the same partial MD5 resolve by SHA-256 alone", function()
         local fake = Fake.new()
-        local book = { md5 = "m", sha256 = "old", size = 10, mtime = 1, work_id = "w", identity = "resolved" }
-        Identity.refresh(book, "/f.epub", { size = 12, mtime = 2 }, function() return "new" end)
+        local book = { md5 = "m", sha256 = "new", md5_untrusted = true }
         fake:respond(201, { work_id = "w2", confidence = "high", created = true })
         assert.is_true(Identity.resolve(api(fake), book))
         assert.are.same({ { kind = "sha256", value = "new" } }, json.decode(fake:last().body).identifiers)
-    end)
-
-    it("new bytes forget every agreement about the old ones", function()
-        local book = {
-            md5 = "m", sha256 = "old", size = 10, mtime = 1, work_id = "w", identity = "resolved",
-            ["local"] = { progression = 0.9 }, baseline = { progression = 0.9, op_id = "o" },
-            revision = 4, acked = 3, pending = { revision = 4, raw = "{}" },
-        }
-        Identity.refresh(book, "/f.epub", { size = 12, mtime = 2 }, function() return "new" end)
-        assert.is_nil(book["local"])
-        assert.is_nil(book.baseline)
-        assert.is_nil(book.pending)
-        assert.are.equal(1, #book.retired)
-        assert.are.equal(book.revision, book.acked)
-    end)
-
-    it("a touched file with the same bytes keeps its work", function()
-        local book = { md5 = "m", sha256 = "same", size = 10, mtime = 1, work_id = "w", identity = "resolved" }
-        Identity.refresh(book, "/f.epub", { size = 10, mtime = 5 }, function() return "same" end)
-        assert.are.equal("w", book.work_id)
     end)
 
     it("resolves a sideloaded file by its fingerprints", function()
@@ -76,6 +108,16 @@ describe("liseur_identity", function()
         local book = { md5 = "abc" }
         assert.is_nil((Identity.resolve(api(fake), book)))
         assert.is_false(Identity.writable(book))
+    end)
+
+    it("changed bytes never resolve through the catalogue book they came from", function()
+        local fake = Fake.new()
+        fake:respond(201, { work_id = "w2", confidence = "high", created = true })
+        local book = { md5 = "m", sha256 = "new", book_id = "b1", md5_untrusted = true }
+        assert.is_true(Identity.resolve(api(fake), book))
+        assert.matches("/v1/works/resolve$", fake:last().url)
+        assert.are.same({ { kind = "sha256", value = "new" } }, json.decode(fake:last().body).identifiers)
+        assert.are.equal("w2", book.work_id)
     end)
 
     it("a downloaded book resolves through the catalogue and checks the fingerprint", function()

@@ -7,41 +7,38 @@ local Api = require("liseur_api")
 
 local Identity = {}
 
--- refresh updates the file facts on a book document. stat = {size,
--- mtime}; sha256_file(path) hashes the whole file. When the bytes
--- changed since the last look, the work mapping and every agreement
--- made about the old bytes are dropped; an upload already frozen for
--- the old work is kept aside and still delivered, but can no longer
--- touch the new bytes' state.
-function Identity.refresh(book, path, stat, sha256_file)
-    local changed = book.size ~= stat.size or book.mtime ~= stat.mtime
-    book.path = path
-    if not changed and book.sha256 then return false end
-    local sha = sha256_file(path)
-    if not sha then return false end
-    if book.sha256 and book.sha256 ~= sha then
-        -- Same partial MD5, different bytes: the MD5 no longer says
-        -- which work this is, so only the new SHA-256 may.
-        book.work_id = nil
-        book.book_id = nil
-        book.identity = "unresolved"
-        book.works = nil
-        book.md5_untrusted = true
-        if book.pending then
-            book.retired = book.retired or {}
-            table.insert(book.retired, book.pending)
-            book.pending = nil
-        end
-        book["local"] = nil
-        book.baseline = nil
-        book.refused_revision = nil
-        book.acked = book.revision
-        book.offer = nil
-    end
-    book.sha256 = sha
-    book.size = stat.size
-    book.mtime = stat.mtime
-    return true
+local function digest(v)
+    return type(v) == "string" and v:match("^%x+$") ~= nil
+end
+
+-- state_name mirrors what the store accepts as a document name.
+local function state_name(v)
+    return type(v) == "string" and v:match("^[%w_%-]+$") ~= nil
+end
+
+-- verified normalises a digest the caller checked against the catalogue.
+-- A value that is not a full SHA-256 is not a verified digest.
+function Identity.verified(sha)
+    if not digest(sha) then return nil end
+    sha = sha:lower()
+    if #sha == 64 then return sha end
+end
+
+-- locate returns the SHA-256 of the bytes at path, or nil when they
+-- cannot be read. It reads the whole file at every identity boundary:
+-- two files with the same partial MD5, size and mtime can hold different
+-- bytes, so a cached stat is never proof of content, even for a path
+-- this device hashed before. verified_sha is a digest the caller checked
+-- against the catalogue for these exact bytes (a download just verified
+-- on the wire) and is taken as it is. A failed read returns nothing, so
+-- the caller opens no session and the next attempt hashes again instead
+-- of trusting a look that never succeeded.
+function Identity.locate(path, sha256_file, verified_sha)
+    local sha = Identity.verified(verified_sha)
+    if sha then return sha end
+    local hashed = sha256_file and sha256_file(path)
+    if not state_name(hashed) then return nil end
+    return hashed:lower()
 end
 
 -- writable reports whether reading state may be attached to this book.
@@ -70,7 +67,12 @@ end
 
 function Identity.resolve(api, book)
     local data, err
-    if book.book_id then
+    -- The catalogue joins on every digest the server holds for the book,
+    -- including the partial MD5, so it is only asked while that MD5 still
+    -- names these bytes. Otherwise unchanged sample windows would hand
+    -- the file to whatever work owns the book it used to be, and its
+    -- reading would follow the old positions.
+    if book.book_id and not book.md5_untrusted then
         data, err = api:postRaw("/v1/books/" .. Api.escape(book.book_id) .. "/resolve", "{}")
         if data then
             local remote_md5 = identifier(data.identifiers, "partial-md5")
