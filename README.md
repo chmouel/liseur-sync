@@ -20,12 +20,15 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * reading-position synchronization using full locators
 * a native REST API
 * a kosync-compatible API for KOReader and [CrossPoint](docs/crosspoint.md), with paragraph-precise positions shared with Liseur
+* a [KOReader plugin](koreader-plugin/README.md) that browses and downloads the library and syncs positions through the native API
 * OPDS 1.2
 * EPUB library indexing and search
-* EPUB upload and deletion for writable folders
+* audiobooks found in watched folders, played inside the web reader
+* EPUB and audiobook upload, and deletion, for writable folders
 * a browser based EPUB reader that supports offline reading.
 * per-user reading statistics and sessions
 * optional [Audiobookshelf chapter and listening sync](docs/deployment.md#following-an-audiobook-on-audiobookshelf)
+* optional mirroring of an account's positions to another server
 * per-user series claims
 * a per-account sentence translation cache.
 
@@ -43,14 +46,30 @@ Book identity is independent of its filesystem path. Clients can resolve books u
 
 Reader preferences synchronize as well per device.
 
+### Clients
+
+Every device writes positions its own way, and the server keeps them together:
+
+* **KOReader** has two options. Its own *Progress sync* can point at the kosync API, or you can install the [Liseur Sync plugin](koreader-plugin/README.md), which browses and downloads the catalogue, syncs positions through the native API, and shows the reading summary. The plugin is in KOReader's App Store, and every change to it is published as a release with a ready-to-unzip `liseur.koplugin.zip`. Pick one of the two: only one thing should write positions.
+* **CrossPoint** pairs through kosync; see [docs/crosspoint.md](docs/crosspoint.md).
+* **Liseur**, on a phone or a desktop, uses the native API.
+
+Pairing and setup for each client is in [docs/deployment.md](docs/deployment.md).
+
+### Mirroring
+
+If reading positions are also kept somewhere else, such as BookOrbit, a second `liseur-sync` or a plain KOReader sync server, a mirror can keep one account in step with it. It is off until an administrator configures it, each mirror covers exactly one account, and several peers can be named at once. See [docs/deployment.md](docs/deployment.md#mirroring-reading-to-another-server).
+
 ## Library
 
 `liseur-sync` can index either:
 
-* a directory containing EPUB files
+* a directory containing EPUB files, with `.m4b` audiobooks beside them
 * a Calibre library using `metadata.db`
 
 Plain directories derive series information from their directory structure. Calibre libraries use `metadata.db` as the catalog source.
+
+A book can also carry an audiobook: `.m4b` files are picked up from the same folders and paired with their EPUB, by directory, ISBN, ASIN or title and author. See [Audiobooks](#audiobooks).
 
 Catalogs are exposed through the web UI, REST API, and OPDS.
 
@@ -90,7 +109,7 @@ liseur-sync admin folder-uploads <folder-id> on
 
 For API clients:
 
-* `library-upload` permits adding books to writable folders
+* `library-upload` permits adding books, and audiobooks, to writable folders
 * `library-delete` permits removing books from writable folders
 
 These are separate token scopes.
@@ -126,6 +145,20 @@ the site via your browser's "Add to Home Screen" option (Safari, Chrome, etc.).
 The installed app opens downloaded books without a network connection and keeps
 positions, reading sessions, highlights and notes locally until it can
 reconnect.
+
+### Audiobooks
+
+A book whose audiobook the server can find opens with a player in the reader: chapters, playback speed, and skip back and forward.
+
+Listening is reading here, so the audiobook moves the same position a page turn does, and the page follows the narration while it plays. A single button turns following and the sentence highlight on and off, and the highlighting steps aside if you scroll away.
+
+Following lands on the right chapter from the audiobook's own chapters. To highlight the sentence actually being spoken, the server asks a speech-to-text service to listen a few seconds ahead. That part is optional, configured under `Settings > Administration > Speech-to-text`, and nothing about reading positions depends on it.
+
+Audiobooks that live on an [Audiobookshelf](docs/deployment.md#following-an-audiobook-on-audiobookshelf) server can be followed from there instead of from a watched folder.
+
+To add one, the book's details page accepts an `.m4b` in a folder that accepts uploads. It writes a new file next to the book and never replaces an audiobook already there.
+
+See [ADR-0057](docs/adr/0057-native-watched-folder-audiobooks.md) and [ADR-0058](docs/adr/0058-uploading-an-audiobook-onto-a-book.md).
 
 ## Installation
 
@@ -196,7 +229,7 @@ Deployment details, including TLS, KOReader pairing, Calibre integration, watche
 
 ## Client integration
 
-[Liseur](https://github.com/chmouel/liseur) uses the native API.
+[Liseur](https://github.com/chmouel/liseur) uses the native API, as does the [KOReader plugin](koreader-plugin/README.md).
 
 Protocol and synchronization details:
 
