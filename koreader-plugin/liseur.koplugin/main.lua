@@ -352,16 +352,20 @@ function Liseur:saveDownloadIndex(index)
 end
 
 -- localPathFor returns the downloaded copy of a catalogue book that is
--- still on this device with the same bytes, if any. It reads local state
+-- still on this device with the bytes the catalogue describes now, if
+-- any: a Calibre book keeps its id when its file is replaced. It reads local state
 -- only, so a book detail dialog can be built without a request. A file
 -- whose bytes changed is not that book any more, whatever its name, so
 -- the recorded digest is read, not only the size. A digest read in this
 -- run is reused while the file keeps its size and modification time.
 -- quick compares the size alone, for a list badge that must not read
 -- every book on the page.
-function Liseur:localPathFor(book_id, quick)
+function Liseur:localPathFor(book, quick)
     local index = self:downloadIndex(nil, true)
-    local entry = index.books and index.books[book_id]
+    local entry = book.book_id and index.books and index.books[book.book_id]
+    if not entry or tostring(entry.sha256):lower() ~= tostring(book.sha256):lower() or entry.size ~= book.size_bytes then
+        return nil
+    end
     local intact = Downloads.intact(entry, {
         size = function(path) return lfs.attributes(path, "size") end,
         sha256 = not quick and function(path)
@@ -663,7 +667,7 @@ function Liseur:backlogDue(engine)
         -- describes. A book whose identity is unclear has nothing to send it
         -- to, so it is not a reason to wake up.
         if not book.legacy_key and book.identity ~= "ambiguous" and book.identity ~= "mismatch"
-            and Positions.dirty(book) then
+            and Positions.owed(book) then
             return true
         end
     end
@@ -1059,7 +1063,7 @@ function Liseur:flushWith(engine, closing)
             -- skipped by its digest.
             if not s or book.sha256 ~= s.sha then
                 local settled = self:settleBook(engine, book)
-                if settled and Positions.dirty(book) then
+                if settled and Positions.owed(book) then
                     -- An edition's identity is its digest. The file it last
                     -- named may be gone, and that is not this document's
                     -- business; a legacy leftover has no digest to resolve.
@@ -1092,7 +1096,7 @@ function Liseur:flushWith(engine, closing)
         self:warnDisabled(s)
         return
     end
-    if Identity.writable(s.book) and Positions.dirty(s.book) then
+    if Identity.writable(s.book) and Positions.owed(s.book) then
         if s.book.pending and not self:settleBook(engine, s.book) then return end
         if not Identity.writable(s.book) then return self:afterSettle(s) end
         local ok, err = engine:pull(closing and 1 or nil)
@@ -1206,6 +1210,7 @@ function Liseur:goTo(engine, book, op)
             engine:settle(book, pos)
             book.offer = nil
             engine:saveBook(book)
+            if Positions.owesPeak(book) then self:schedule("flush") end
         end
         self.applying = false
     end)
@@ -1281,7 +1286,7 @@ function Liseur:showBookPanel()
             lines[#lines + 1] = T(_("Newest on server: %1 (%2)%3"), percent(remote.progression), when(remote.client_ts),
                 remote.device_id == s.engine.device_id and (" " .. _("from this device")) or "")
         end
-        lines[#lines + 1] = T(_("Unsent change: %1"), Positions.dirty(b) and _("yes") or _("no"))
+        lines[#lines + 1] = T(_("Unsent change: %1"), Positions.owed(b) and _("yes") or _("no"))
         if b.pending then
             lines[#lines + 1] = b.pending.device_id ~= s.engine.device_id
                 and _("An upload made under another device identity is paused.")
@@ -1342,7 +1347,7 @@ function Liseur:download(book, callback)
         self:info(_("Choose a download folder first (Liseur Sync → Settings → Download folder)."))
         return
     end
-    local existing = self:localPathFor(book.book_id)
+    local existing = self:localPathFor(book)
     if existing then
         callback(existing)
         return
@@ -1360,6 +1365,7 @@ function Liseur:download(book, callback)
             exists = exists,
             sha256 = sha2.sha256,
             fsync = fs.fsync,
+            fsync_dir = fs.fsync_dir,
             worker = Network.worker,
         })
         UIManager:close(msg)

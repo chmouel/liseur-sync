@@ -73,7 +73,8 @@ end
 
 -- download fetches one catalogue book into dir.
 -- deps: exists(path) (must not follow symlinks), sha256() ->
---       updater(chunk)/updater() -> hex, fsync(file)?, random()?
+--       updater(chunk)/updater() -> hex, fsync(file)?, fsync_dir(dir)?,
+--       random()?
 -- Returns path or nil, err.
 function Downloads.download(api, book, dir, deps)
     if book.status and book.status ~= "active" then
@@ -150,6 +151,15 @@ function Downloads.download(api, book, dir, deps)
     if not ok then
         os.remove(tmp)
         return nil, { kind = "storage", message = "cannot move the download into place: " .. tostring(rerr) }
+    end
+    -- The new name must survive a power cut too, or a download reported
+    -- as finished could vanish.
+    if deps.fsync_dir then
+        local sok, serr = deps.fsync_dir(dir)
+        if sok == false then
+            os.remove(path)
+            return nil, { kind = "storage", message = "cannot finish writing the download: " .. tostring(serr) }
+        end
     end
     return path
 end
