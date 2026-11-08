@@ -62,6 +62,18 @@ real KOReader `ReaderUI`. Run both after touching the plugin or any route
 it calls (listed in `koreader-plugin/README.md`). Its module names keep the
 `liseur_` prefix: KOReader shares one `package.path` across plugins.
 
+A push to `main` that touches `koreader-plugin` publishes the plugin: CI
+runs `koreader-plugin/spec/run.lua`, packages the ZIP with a version
+stamped into `_meta.lua`, and cuts a `plugin-0.<commits touching the
+plugin>` release whose asset is what KOReader's App Store installs and
+compares against. The repository topic `koreader-plugin` is what makes it
+searchable there; removing it hides the plugin from the store. The tag
+prefix is load-bearing too: the store parses a version after stripping
+`v`, `release-`, `version-` and `plugin-`, so the prefix must stay
+recognisable. One limit to remember: the store installs assets from the
+repository's *latest* release, so a future server release must not take
+that pointer while the plugin lives in this repository.
+
 ## Architecture in one paragraph
 
 One binary, two subcommands (`serve`, `admin`). Storage goes through the

@@ -69,7 +69,7 @@ koplugin-integration: ## KOReader plugin against a throwaway server (needs KOREA
 	koreader-plugin/spec/integration.sh
 
 .PHONY: koplugin-package
-koplugin-package: ## Build a reproducible liseur.koplugin ZIP into dist/
+koplugin-package: ## Build a reproducible liseur.koplugin ZIP into dist/ (VERSION=x stamps _meta.lua)
 	@mkdir -p dist
 	koreader-plugin/package.sh dist/liseur.koplugin.zip
 

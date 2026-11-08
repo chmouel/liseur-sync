@@ -1,0 +1,113 @@
+name: koplugin-release
+
+# Every change to the KOReader plugin becomes a release with the ZIP
+# attached. The in-KOReader App Store (topic:koreader-plugin) lists a
+# repository's releases and installs one of their assets, so a release is
+# what makes an update visible on a device.
+#
+# Two things about that store shape this file, both read from its source
+# (github.com/omer-faruq/appstore.koplugin):
+#
+#   - Its install dialog asks for /releases/latest and only offers assets
+#     from what that returns, with no fallback to the release list. A
+#     plugin release must therefore be the repository's latest release.
+#     That is fine while the server publishes binaries as artefacts and
+#     images as container tags, and it is the reason a future server
+#     release must not claim "latest" from the same repository.
+#   - It parses a version out of the tag by stripping a leading v,
+#     release, version or plugin, then reading leading digits. The tag is
+#     plugin-<version> for that: koplugin-v0.12 parses to nothing and the
+#     store falls back to commit timestamps.
+#
+# The version is 0.<commits touching koreader-plugin>: monotonic, no
+# manual bump, and never colliding with the server's vX.Y.Z tags.
+
+on:
+  push:
+    branches: [main]
+    paths: ["koreader-plugin/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Publishing is main's business. A manual run from another branch
+    # counts its own commits, so it can land on a tag main already owns.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install luajit and zip
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq luajit zip
+
+      - name: Run the plugin specs
+        run: make koplugin-test
+
+      - name: Work out the version
+        id: version
+        run: |
+          count=$(git rev-list --count HEAD -- koreader-plugin)
+          echo "value=0.$count" >> "$GITHUB_OUTPUT"
+          echo "tag=plugin-0.$count" >> "$GITHUB_OUTPUT"
+
+      - name: Build the plugin ZIP
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: koreader-plugin/package.sh dist/liseur.koplugin.zip
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Packaging is reproducible, so an identical ZIP means this
+            # release really is published. A different ZIP under the same
+            # version means the tag and this commit disagree: say so
+            # rather than ship two different plugins as one version.
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx liseur.koplugin.zip; then
+              mkdir -p existing
+              gh release download "$TAG" --pattern liseur.koplugin.zip --dir existing
+              if cmp -s existing/liseur.koplugin.zip dist/liseur.koplugin.zip; then
+                echo "$TAG is already published and byte-identical"
+                exit 0
+              fi
+              echo "::error::$TAG already holds a different liseur.koplugin.zip; refusing to replace it"
+              exit 1
+            fi
+            # No asset at all: an upload was interrupted. Repair it.
+            gh release upload "$TAG" dist/liseur.koplugin.zip
+            echo "$TAG already existed; missing asset uploaded"
+            exit 0
+          fi
+
+          previous=$(git tag --list 'plugin-*' --sort=-v:refname | head -n1)
+          range=${previous:+$previous..HEAD}
+          {
+            echo "The KOReader plugin, packaged for KOReader's App Store or a manual install."
+            echo
+            echo "Unzip into KOReader's \`plugins/\` directory and restart KOReader."
+            echo "See [koreader-plugin/README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/koreader-plugin/README.md) for setup and token permissions."
+            echo
+            echo "## Changes"
+            echo
+            git log --no-merges --format='- %s (%h)' $range -- koreader-plugin
+          } > notes.md
+
+          # --target pins the tag to the commit this ZIP was built from,
+          # rather than to whatever main holds when the run reaches this
+          # step. No concurrency group is set: each push has its own commit
+          # and therefore its own tag, and GitHub cancels a queued run when
+          # a newer one arrives, which would drop a release.
+          gh release create "$TAG" dist/liseur.koplugin.zip \
+            --title "KOReader plugin $VERSION" \
+            --notes-file notes.md \
+            --target "$(git rev-parse HEAD)"

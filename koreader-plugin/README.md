@@ -39,8 +39,12 @@ again. Removing a download
 
 ## Setup
 
-1. Copy the `liseur.koplugin` directory (or unzip the release ZIP) into
-   KOReader's `plugins/` directory and restart KOReader.
+1. Install the plugin. It is in [KOReader's App Store](https://github.com/omer-faruq/appstore.koplugin)
+   under *Liseur Sync*; otherwise take
+   `liseur.koplugin.zip` from the
+   [latest plugin release](https://github.com/chmouel/liseur-sync/releases?q=plugin-)
+   and unzip it into KOReader's `plugins/` directory, or copy this
+   directory there. Restart KOReader.
 2. Create a device token on the server, with the permissions you want:
    `library-read` to browse and download, `sync` for positions,
    `read-insights` for the reading summary. A token with fewer
@@ -180,6 +184,15 @@ out with `progression`, KOReader's location in `foreign_pos` and the
 file's SHA-256 in `edition_sha`, never a `locator`.
 
 ## Development
+
+A release is published by CI on every push to `main` that touches
+`koreader-plugin`: the specs run, `package.sh` builds the ZIP with a
+stamped version, and the tag `plugin-0.<commits touching the plugin>`
+carries it. That tag is what the App Store compares against, so no
+version is bumped by hand. The tag's shape is not cosmetic: the store
+strips `v`, `release-`, `version-` and `plugin-` from a tag and reads
+the digits that follow, so `plugin-0.12` is understood and
+`koplugin-v0.12` is not.
 
 ```
 make koplugin-test                                  # pure-Lua specs, luajit only
