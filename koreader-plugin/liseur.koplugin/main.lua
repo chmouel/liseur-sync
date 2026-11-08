@@ -240,18 +240,18 @@ function Liseur:ensureProbe()
     return fresh
 end
 
-function Liseur:engine()
-    local base = self:base()
-    local probe, perr = self:ensureProbe()
-    if not probe then return nil, perr end
+-- engineFor builds the engine for a probe already known. It reads local
+-- state and sends nothing, so it is safe with the network down.
+local function engineFor(plugin, probe)
+    local base = plugin:base()
     local ns = Api.namespace(base, probe.account_id)
-    if self.engine_cache and self.engine_cache.ns == ns and self.engine_cache.device_id == probe.device_id then
-        return self.engine_cache.engine
+    local cache = plugin.engine_cache
+    if cache and cache.ns == ns and cache.device_id == probe.device_id then
+        return cache.engine
     end
-    local api, err = self:api()
+    local api, err = plugin:api()
     if not api then return nil, err end
-    local engine
-    engine = Positions.new{
+    local engine = Positions.new{
         api = api,
         store = Store.new(STATE_DIR .. "/" .. ns, fs),
         now = now,
@@ -265,12 +265,34 @@ function Liseur:engine()
         return nil, aerr == "newer" and _("Liseur state on this device was written by a newer plugin version. Update the plugin.")
             or _("Liseur state on this device is unreadable.")
     end
-    self.engine_cache = { ns = ns, device_id = probe.device_id, engine = engine }
+    plugin.engine_cache = { ns = ns, device_id = probe.device_id, server = base.url, engine = engine }
     return engine
 end
 
-function Liseur:downloadIndex()
-    local engine = self:engine()
+function Liseur:engine()
+    local probe, perr = self:ensureProbe()
+    if not probe then return nil, perr end
+    return engineFor(self, probe)
+end
+
+-- offlineEngine returns the engine when having it needs no request: a probe
+-- already known for this server, or an engine already built. The cache is
+-- dropped whenever the server, token or account may change, so it still
+-- names this reader. The local screens read it with the network down.
+function Liseur:offlineEngine()
+    local base = self:base()
+    if not base then return nil end
+    local probe = self:probe()
+    if probe then
+        if probe.server ~= base.url then return nil end
+        return engineFor(self, probe)
+    end
+    local cache = self.engine_cache
+    if cache and cache.server == base.url then return cache.engine end
+end
+
+function Liseur:downloadIndex(engine)
+    engine = engine or self:offlineEngine() or self:engine()
     if not engine then return { books = {} } end
     if not self.download_index or self.download_index.engine ~= engine then
         self.download_index = { engine = engine, doc = engine.store:read("downloads", "index") or { books = {} } }

@@ -330,23 +330,33 @@ end)
 -- the module specs, so walk the whole menu: build every entry and run every
 -- callback body once. Screens are captured instead of painted, and the
 -- network wrapper runs its work inline so no request is left in flight.
+-- A settings entry is walked to its Save button, because a save that does
+-- not refresh the labels it was opened from is the bug this class hides.
 check("every main-menu entry builds and runs", function()
     local LiseurUI = require("liseur_ui")
     local NetworkMgr = require("ui/network/manager")
     local filemanagerutil = require("apps/filemanager/filemanagerutil")
-    local shown = {}
+    local shown, dialogs = {}, {}
+    local updates = 0
+    local menu = { updateItems = function() updates = updates + 1 end }
     local orig_show, orig_run = UIManager.show, Network.run
     local orig_connected, orig_online = NetworkMgr.runWhenConnected, NetworkMgr.runWhenOnline
     local orig_choose = filemanagerutil.showChooseDialog
-    UIManager.show = function(_, widget) shown[#shown + 1] = widget return true end
+    UIManager.show = function(_, widget)
+        shown[#shown + 1] = widget
+        if widget.getInputText then dialogs[#dialogs + 1] = widget end
+        return true
+    end
     Network.run = function(fn) return fn() end
     NetworkMgr.runWhenConnected = function(_, fn) return fn() end
     NetworkMgr.runWhenOnline = function(_, fn) return fn() end
-    filemanagerutil.showChooseDialog = function(title) shown[#shown + 1] = { text = title } end
+    filemanagerutil.showChooseDialog = function(title)
+        shown[#shown + 1] = { text = title }
+    end
     local ok, err = pcall(function()
         local touched = 0
         local function walk(list)
-            for _, item in ipairs(list) do
+            for _i, item in ipairs(list) do
                 if item.text_func then
                     assert(type(item.text_func()) == "string", "a menu label is not text")
                     touched = touched + 1
@@ -354,7 +364,7 @@ check("every main-menu entry builds and runs", function()
                 if item.checked_func then item.checked_func() end
                 if item.enabled_func then item.enabled_func() end
                 if item.callback then
-                    item.callback({ updateItems = function() end })
+                    item.callback(menu)
                     touched = touched + 1
                 end
                 if item.sub_item_table then walk(item.sub_item_table) end
@@ -362,16 +372,174 @@ check("every main-menu entry builds and runs", function()
         end
         walk(LiseurUI.mainMenu(plug))
         assert(touched >= 12, "only " .. touched .. " entries were exercised")
+
+        local ca
+        for _i, d in ipairs(dialogs) do
+            if d.title == "CA certificate bundle (leave empty to search the usual places)" then ca = d end
+        end
+        assert(ca, "the certificate setting opened no dialog")
+        ca.getInputText = function() return "/tmp/liseur-test-ca.pem" end
+        local before = updates
+        ca.buttons[1][2].callback()
+        eq(before + 1, updates, "a settings save did not refresh the menu")
+        eq("/tmp/liseur-test-ca.pem", plug:cfg("ca_file"), "the saved value was not stored")
     end)
     UIManager.show = orig_show
     Network.run = orig_run
     NetworkMgr.runWhenConnected, NetworkMgr.runWhenOnline = orig_connected, orig_online
     filemanagerutil.showChooseDialog = orig_choose
+    plug:setCfg("ca_file", nil)
     assert(ok, err)
     assert(#shown > 0, "no screen or dialog was produced")
     UIManager:close(plug.browser)
     plug.browser = nil
     plug.engine_cache = nil
+end)
+
+-- The browser pushes a title and an item table per level and Back gives the
+-- previous pair back. A walk that only asks whether something happened
+-- cannot see a wrong title or a stale table, so check both, with the
+-- catalogue answered from tables instead of the server.
+check("the library browser pushes and returns the expected screens", function()
+    local LiseurUI = require("liseur_ui")
+    local Catalog = require("liseur_catalog")
+    local NetworkMgr = require("ui/network/manager")
+    local shown = {}
+    local orig_show, orig_run = UIManager.show, Network.run
+    local orig_connected = NetworkMgr.runWhenConnected
+    local real = {}
+    UIManager.show = function(_, widget) shown[#shown + 1] = widget return true end
+    Network.run = function(fn) return fn() end
+    NetworkMgr.runWhenConnected = function(_, fn) return fn() end
+    for _i, name in ipairs({ "folders", "folderBooks", "search", "entities", "seriesBooks", "entityBooks" }) do
+        real[name] = Catalog[name]
+    end
+    local folder = { folder_id = "f1", name = "Shelves" }
+    local book = {
+        book_id = "b1", title = "A book", authors = { "An author" }, status = "active",
+        series = { { id = "s1", name = "Sun Eater", position = 3 } },
+    }
+    Catalog.folders = function() return { folder }, nil end
+    Catalog.folderBooks = function() return { book }, nil end
+    Catalog.entities = function() return { { id = "s1", name = "Sun Eater", book_count = 1 } }, nil end
+    Catalog.seriesBooks = function() return { book }, nil end
+    Catalog.entityBooks = function() return { book }, nil end
+    local ok, err = pcall(function()
+        local function texts(items)
+            local out = {}
+            for _i, item in ipairs(items) do out[#out + 1] = item.text end
+            return table.concat(out, "|")
+        end
+        local function tap(browser, label)
+            for _i, item in ipairs(browser.item_table) do
+                if item.text == label then
+                    assert(item.callback, "no callback on " .. label)
+                    return item.callback()
+                end
+            end
+            error("no browser entry " .. label, 2)
+        end
+        LiseurUI.showLibrary(plug)
+        local browser = assert(plug.browser, "no library browser")
+        eq("Liseur library", browser.title)
+        local root = browser.item_table
+        eq("Continue reading", root[1].text)
+        tap(browser, "Folders")
+        eq("Folders", browser.title)
+        eq("Shelves", texts(browser.item_table))
+        tap(browser, "Shelves")
+        eq("Shelves", browser.title)
+        eq("A book — An author", texts(browser.item_table))
+        local before = #shown
+        tap(browser, "A book — An author")
+        assert(#shown == before + 1, "a book entry opened nothing")
+        assert(shown[#shown].title:find("Sun Eater #3", 1, true), "the book dialog lost its series")
+        assert(browser:onReturn())
+        eq("Folders", browser.title)
+        eq("Shelves", texts(browser.item_table))
+        assert(browser:onReturn())
+        eq("Liseur library", browser.title)
+        assert(browser.item_table == root, "Back did not restore the root table")
+        tap(browser, "Series")
+        eq("Series", browser.title)
+        eq("Sun Eater", texts(browser.item_table))
+        tap(browser, "Sun Eater")
+        eq("Sun Eater", browser.title)
+        eq("3. A book — An author", texts(browser.item_table))
+        assert(browser:onReturn())
+        assert(browser:onReturn())
+        eq("Liseur library", browser.title)
+        assert(browser.item_table == root, "Back did not restore the root table")
+    end)
+    for _i, name in ipairs({ "folders", "folderBooks", "search", "entities", "seriesBooks", "entityBooks" }) do
+        Catalog[name] = real[name]
+    end
+    UIManager.show = orig_show
+    Network.run = orig_run
+    NetworkMgr.runWhenConnected = orig_connected
+    assert(ok, err)
+    UIManager:close(plug.browser)
+    plug.browser = nil
+end)
+
+-- Continue reading, Downloaded and Sync status read local state only, so
+-- they must open with Wi-Fi off: runWhenConnected asks to connect and drops
+-- the work when the reader declines, which left a purely local list
+-- impossible to open. Neither variant may ask for a connection or send a
+-- request (the engine and its first-use /v1/token are what would).
+check("the local screens open with the network down", function()
+    local LiseurUI = require("liseur_ui")
+    local NetworkMgr = require("ui/network/manager")
+    local shown = {}
+    local asked, ran, probes = 0, 0, 0
+    local orig_show, orig_run = UIManager.show, Network.run
+    local orig_connected = NetworkMgr.runWhenConnected
+    local orig_check = plug.checkToken
+    UIManager.show = function(_, widget) shown[#shown + 1] = widget return true end
+    Network.run = function(fn) ran = ran + 1 return fn() end
+    NetworkMgr.runWhenConnected = function(_, _fn) asked = asked + 1 end
+    plug.checkToken = function(...) probes = probes + 1 return orig_check(...) end
+    local engine, no_engine = plug:engine()
+    assert(engine, no_engine)
+    local saved_probe = plug:probe()
+    local ok, err = pcall(function()
+        local function tap(browser, label)
+            for _i, item in ipairs(browser.item_table) do
+                if item.text == label then return item.callback() end
+            end
+            error("no browser entry " .. label, 2)
+        end
+        -- Once with the probe known, once with the probe gone and only the
+        -- engine cache left.
+        for _i, probe in ipairs({ "known", "absent" }) do
+            if probe == "absent" then plug:setCfg("probe", nil) else plug:setCfg("probe", saved_probe) end
+            asked, ran, probes = 0, 0, 0
+            LiseurUI.showLibrary(plug)
+            local browser = assert(plug.browser, "no library browser")
+            tap(browser, "Continue reading")
+            eq("Continue reading", browser.title, "Continue reading, probe " .. probe)
+            assert(#browser.item_table > 0, "Continue reading built no list with the probe " .. probe)
+            assert(browser:onReturn())
+            tap(browser, "Downloaded")
+            eq("Downloaded", browser.title, "Downloaded, probe " .. probe)
+            assert(#browser.item_table > 0, "Downloaded built no list with the probe " .. probe)
+            assert(browser:onReturn())
+            LiseurUI.showStatus(plug)
+            local status = shown[#shown]
+            assert(status and status.title == "Liseur sync status", "no status screen with the probe " .. probe)
+            eq(0, asked, "a local screen asked for a connection (probe " .. probe .. ")")
+            eq(0, probes, "a local screen sent a request (probe " .. probe .. ")")
+            assert(ran >= 3, "the local screen did not run inline (probe " .. probe .. ")")
+        end
+    end)
+    plug.checkToken = orig_check
+    plug:setCfg("probe", saved_probe)
+    UIManager.show = orig_show
+    Network.run = orig_run
+    NetworkMgr.runWhenConnected = orig_connected
+    assert(ok, err)
+    UIManager:close(plug.browser)
+    plug.browser = nil
 end)
 
 -- A corrupt account document used to crash the whole reader path, because
