@@ -55,6 +55,19 @@ function Downloads.freePath(dir, name, exists)
     return candidate
 end
 
+-- intact reports whether the file at an index entry's path is still the
+-- catalogue book downloaded there. Size is the cheap refusal; the digest
+-- is what decides, because a replaced file can keep both the name and the
+-- size. An entry with no recorded digest, or a file that cannot be read,
+-- is not intact: downloading again is the safe answer.
+-- deps: size(path) -> bytes|nil, sha256(path) -> hex|nil
+function Downloads.intact(entry, deps)
+    if type(entry) ~= "table" or not entry.path or not entry.sha256 then return false end
+    if deps.size(entry.path) ~= entry.size then return false end
+    local sha = deps.sha256(entry.path)
+    return type(sha) == "string" and sha:lower() == tostring(entry.sha256):lower()
+end
+
 -- download fetches one catalogue book into dir.
 -- deps: exists(path) (must not follow symlinks), sha256() ->
 --       updater(chunk)/updater() -> hex, fsync(file)?, random()?

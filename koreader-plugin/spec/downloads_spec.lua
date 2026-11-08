@@ -68,6 +68,50 @@ describe("liseur_downloads names", function()
     end)
 end)
 
+describe("liseur_downloads cached copies", function()
+    local dir, path
+    local function content(p)
+        local f = io.open(p, "rb")
+        if not f then return nil end
+        local s = f:read("*a")
+        f:close()
+        return s
+    end
+    local function write(s)
+        local f = assert(io.open(path, "wb"))
+        f:write(s)
+        f:close()
+    end
+    -- The content stands in for the digest, as in the download tests.
+    local cached = {
+        size = function(p) local s = content(p) return s and #s or nil end,
+        sha256 = content,
+    }
+    before_each(function()
+        dir = tmpdir()
+        path = dir .. "/A - T.epub"
+    end)
+
+    it("reuses a copy whose bytes are still the catalogue book", function()
+        write("hello world")
+        assert.is_true(Downloads.intact({ path = path, sha256 = "hello world", size = 11 }, cached))
+    end)
+
+    it("refuses a copy replaced by different bytes of the same size", function()
+        write("world hello")
+        assert.is_false(Downloads.intact({ path = path, sha256 = "hello world", size = 11 }, cached))
+    end)
+
+    it("refuses a copy that is gone, changed size, or has no recorded digest", function()
+        assert.is_false(Downloads.intact({ path = path, sha256 = "hello world", size = 11 }, cached))
+        write("hello")
+        assert.is_false(Downloads.intact({ path = path, sha256 = "hello world", size = 11 }, cached))
+        write("hello world")
+        assert.is_false(Downloads.intact({ path = path, size = 11 }, cached))
+        assert.is_false(Downloads.intact(nil, cached))
+    end)
+end)
+
 describe("liseur_downloads", function()
     local dir, fake
     local book

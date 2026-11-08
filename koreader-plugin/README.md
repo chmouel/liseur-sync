@@ -18,7 +18,10 @@ below covers that.
   only then renamed into place. A name that is taken gets ` (2)`, ` (3)`
   and so on. The check happens just before the rename; e-reader FAT
   filesystems have no rename that refuses to replace, so a file created
-  in that instant by something else could still be replaced. Removing a download
+  in that instant by something else could still be replaced. A copy
+already on the device is reused only while its size and SHA-256 still
+match the catalogue book: a file replaced by other bytes is downloaded
+again. Removing a download
   is a plain file deletion in KOReader and never touches the server.
 - **Continue reading**: books on this device that the plugin has synced,
   newest first, with the other devices' place when it differs.
