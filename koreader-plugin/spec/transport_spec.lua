@@ -24,3 +24,39 @@ describe("liseur_transport host names", function()
         assert.is_nil(Transport.findCA("/nonexistent/ca.pem"))
     end)
 end)
+
+-- A configured HTTP proxy makes LuaSocket rewrite the host and port of
+-- every request to the proxy while keeping our TLS `create`: the
+-- certificate checked would be the proxy's and the bearer token would be
+-- sent to it. The transport refuses before opening anything.
+describe("liseur_transport proxy", function()
+    local http = require("socket.http")
+
+    before_each(function() http.reset() end)
+
+    it("refuses an HTTPS request, before it reaches the socket", function()
+        local transport = require("liseur_transport").new{ block = 1, total = 1 }
+        http.PROXY = "http://127.0.0.1:3128"
+        local resp, err = transport({ method = "GET", url = "https://books.example.org/v1/token",
+            headers = { ["Authorization"] = "Bearer canary" } })
+        assert.is_nil(resp)
+        assert.matches("proxy", err)
+        assert.are.equal(0, #http.requests, "a request was handed to LuaSocket")
+    end)
+
+    it("refuses the loopback http exception too", function()
+        local transport = require("liseur_transport").new{ block = 1, total = 1 }
+        http.PROXY = "http://127.0.0.1:3128"
+        local resp, err = transport({ method = "GET", url = "http://localhost:8080/v1/token" })
+        assert.is_nil(resp)
+        assert.matches("proxy", err)
+        assert.are.equal(0, #http.requests, "a request was handed to LuaSocket")
+    end)
+
+    it("sends normally once the proxy is off", function()
+        local transport = require("liseur_transport").new{ block = 1, total = 1 }
+        local resp = transport({ method = "GET", url = "http://localhost:8080/healthz" })
+        assert.is_not_nil(resp)
+        assert.are.equal(1, #http.requests)
+    end)
+end)

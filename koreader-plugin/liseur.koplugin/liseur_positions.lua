@@ -212,7 +212,7 @@ end
 function Positions:pull(max_pages)
     local acc, aerr = self:account()
     if not acc then return nil, { kind = "storage", message = aerr } end
-    for _ = 1, max_pages or Positions.MAX_PAGES do
+    for _i = 1, max_pages or Positions.MAX_PAGES do
         local data, err = self.api:get("/v1/changes", { since = acc.cursor, limit = Positions.PAGE })
         if not data then
             if err.kind == "gone" then return self:resync() end
@@ -242,11 +242,21 @@ end
 -- Decisions ---------------------------------------------------------
 
 -- remoteLocation returns the remote op's KOReader position when it is
--- bound to these exact bytes, else nil (percentage only).
+-- bound to these exact bytes, else nil (percentage only). An op that names
+-- an edition is bound to that edition alone: a different digest is a
+-- different file, never a pass to the alias branch. A partial MD5 this
+-- device no longer trusts (the bytes behind it changed) may not bind an op
+-- either.
 function Positions.remoteLocation(book, op)
     if not op or type(op.foreign_pos) ~= "string" or op.foreign_pos == "" then return nil end
-    if op.edition_sha and book.sha256 and op.edition_sha == book.sha256 then return op.foreign_pos end
-    if op.origin_alias and op.origin_alias == "partial-md5:" .. tostring(book.md5) then return op.foreign_pos end
+    if op.edition_sha then
+        if book.sha256 and op.edition_sha == book.sha256 then return op.foreign_pos end
+        return nil
+    end
+    if op.origin_alias and not book.md5_untrusted
+        and op.origin_alias == "partial-md5:" .. tostring(book.md5) then
+        return op.foreign_pos
+    end
     return nil
 end
 

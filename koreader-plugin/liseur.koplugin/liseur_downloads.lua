@@ -1,7 +1,10 @@
 -- Catalogue downloads: stream into a temporary file beside the target,
 -- verify length and SHA-256 against the catalogue, then rename into
--- place. An existing file is never overwritten and a partial download
--- is never left under a book's name.
+-- place. A partial download is never left under a book's name, and a name
+-- already taken in the folder is passed over for a free one. The check
+-- for that free name and the rename are two steps, so another process
+-- writing the same name in between is the one acknowledged race (see the
+-- plugin README): Lua has no no-replace rename.
 
 local Api = require("liseur_api")
 

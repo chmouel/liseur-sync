@@ -41,12 +41,14 @@ describe("liseur_bookinfo", function()
     end)
 end)
 
--- A cheap guard against the whole class of bug: no plugin module may put
--- gettext's `_` in the way of a loop variable.
+-- A cheap guard against the whole class of bug. `_` is the gettext
+-- function; anything else bound to that name (a loop variable, a discarded
+-- first return value) turns the next `_("...")` into a call on a number or
+-- a nil. `local _ = require("gettext")` is the only allowed binding.
 describe("plugin sources", function()
     local dir = (debug.getinfo(1, "S").source:sub(2):match("(.*)/") or ".") .. "/../liseur.koplugin/"
 
-    it("never name a loop variable `_`", function()
+    it("never bind `_` to anything but gettext", function()
         local p = io.popen("ls '" .. dir .. "'*.lua")
         local checked = 0
         for path in p:lines() do
@@ -57,28 +59,20 @@ describe("plugin sources", function()
             local line = 0
             for text in source:gmatch("[^\n]*") do
                 line = line + 1
-                if text:find("for _, ") then
-                    error(string.format("%s:%d shadows gettext with a loop variable: %s", path, line, text:gsub("^%s+", "")))
+                local where = string.format("%s:%d", path, line)
+                local trimmed = text:gsub("^%s+", "")
+                if text:find("for%s+_%s*[,=]") then
+                    error(where .. " shadows gettext with a loop variable: " .. trimmed)
+                end
+                if text:find("local%s+_%s*,") then
+                    error(where .. " discards into `_` and shadows gettext: " .. trimmed)
+                end
+                if text:find("local%s+_%s*=") and not text:find('require%("gettext"%)') then
+                    error(where .. " binds `_` to something other than gettext: " .. trimmed)
                 end
             end
         end
         p:close()
         assert.is_true(checked > 8, "only " .. checked .. " modules were read")
-    end)
-
-    it("only ever binds `_` to gettext", function()
-        local p = io.popen("ls '" .. dir .. "'*.lua")
-        for path in p:lines() do
-            local f = assert(io.open(path, "rb"))
-            local source = f:read("*a")
-            f:close()
-            for text in source:gmatch("[^\n]*") do
-                local assigned = text:match("local%s+_%s*=")
-                if assigned and not text:find('require%("gettext"%)') then
-                    error(path .. " binds `_` to something other than gettext: " .. text)
-                end
-            end
-        end
-        p:close()
     end)
 end)

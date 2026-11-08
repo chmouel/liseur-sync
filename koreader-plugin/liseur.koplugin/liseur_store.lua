@@ -50,8 +50,8 @@ function Store:read(kind, name)
 end
 
 function Store:write(kind, name, doc)
-    local _, err = self:read(kind, name)
-    if err == "newer" then
+    local _doc, werr = self:read(kind, name)
+    if werr == "newer" then
         return nil, "state was written by a newer plugin version; refusing to overwrite it"
     end
     doc.v = Store.SCHEMA
@@ -87,7 +87,7 @@ function Store:write(kind, name, doc)
         local dirs = { dir }
         if not self.published[kind] then
             local d = dir
-            for _ = 1, 3 do
+            for _i = 1, 3 do
                 d = d:match("^(.*)/[^/]+$")
                 if not d or d == "" then break end
                 dirs[#dirs + 1] = d

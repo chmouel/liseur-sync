@@ -73,6 +73,11 @@ local function exists(path)
     return lfs.symlinkattributes(path, "mode") ~= nil
 end
 
+-- now is the wall clock the state is written with.
+local function now()
+    return ffiUtil.getTimestamp and ffiUtil.getTimestamp() or os.time()
+end
+
 local function sha256_file(path)
     local f = io.open(path, "rb")
     if not f then return nil end
@@ -105,8 +110,8 @@ function Liseur:onDispatcherRegisterActions()
     Dispatcher:registerAction("liseur_status", { category = "none", event = "LiseurStatus", title = _("Liseur sync status"), general = true })
 end
 
-function Liseur:whenOnline(fn)
-    NetworkMgr:runWhenOnline(function() Network.run(fn) end)
+function Liseur:whenConnected(fn)
+    NetworkMgr:runWhenConnected(function() Network.run(fn) end)
 end
 
 -- Settings ------------------------------------------------------------
@@ -158,11 +163,11 @@ function Liseur:hasScope(scope)
     return false
 end
 
--- checkToken asks the server who this token is and remembers it. A
--- different account opens a different state namespace.
 -- checkToken asks the server who this token is and remembers it. short
 -- uses the brief timeouts for a probe on the way to something else. A
--- different account opens a different state namespace.
+-- different account or device opens a different state namespace, so only
+-- then is the open session detached; checking the same identity keeps the
+-- session, and the queued work in it, alive.
 function Liseur:checkToken(short)
     local api, err = self:api(short)
     if not api then return nil, { message = err } end
@@ -183,8 +188,12 @@ function Liseur:checkToken(short)
     if type(probe.account_id) ~= "string" or type(probe.device_id) ~= "string" then
         return nil, { message = _("The server did not identify the account and device for this token.") }
     end
+    local previous = self:probe()
     self:setCfg("probe", probe)
-    self:detachSession()
+    if not previous or previous.server ~= probe.server or previous.account_id ~= probe.account_id
+        or previous.device_id ~= probe.device_id then
+        self:detachSession()
+    end
     self.auth_failed = nil
     return probe
 end
@@ -245,13 +254,13 @@ function Liseur:engine()
     engine = Positions.new{
         api = api,
         store = Store.new(STATE_DIR .. "/" .. ns, fs),
-        now = function() return ffiUtil.getTimestamp and ffiUtil.getTimestamp() or os.time() end,
+        now = now,
         md5 = sha2.md5,
         device_id = probe.device_id,
         account_id = probe.account_id,
     }
-    local _, aerr = engine:account()
-    if aerr then
+    local acc, aerr = engine:account()
+    if not acc then
         -- A newer or unreadable account state pauses this namespace.
         return nil, aerr == "newer" and _("Liseur state on this device was written by a newer plugin version. Update the plugin.")
             or _("Liseur state on this device is unreadable.")
@@ -324,24 +333,37 @@ function Liseur:positionsState()
     return _("on")
 end
 
-function Liseur:enablePositions()
-    if not self:hasScope("sync") then
-        self:info(_("This device token does not have the sync permission. Create a token with sync, then check the connection again."))
-        return
-    end
+-- enablePositions asks the server what this token may do before it
+-- offers to turn position sync on: a token pasted a moment ago has never
+-- been checked, and the documented order (paste, then enable) must not
+-- report a permission the token may well have. The probe runs inside the
+-- network wrapper so the first /v1/token never blocks the reader.
+function Liseur:enablePositions(menu)
     if self:stockSyncAutomatic() then
         self:info(_("Progress sync is set to sync automatically. Turn that off first (Progress sync → Automatically keep documents in sync), restart KOReader, then come back here.\n\nIts server settings stay as they are, so you can switch back later."))
         return
     end
-    UIManager:show(ConfirmBox:new{
-        text = _("Liseur will write this device's reading positions to the server and offer positions from your other devices.\n\nKeep Progress sync's automatic sync off while this is on, so only one of them writes. Position sync starts after KOReader restarts."),
-        ok_text = _("Turn on"),
-        ok_callback = function()
-            self:setCfg("positions_enabled", true)
-            self:setCfg("handover_process", PROCESS.token)
-            self:info(_("Restart KOReader to start position sync."))
-        end,
-    })
+    self:whenConnected(function()
+        local probe, why = self:ensureProbe()
+        if not probe then
+            self:info(why)
+            return
+        end
+        if not self:hasScope("sync") then
+            self:info(_("This device token does not have the sync permission. Create a token with sync, then check the connection again."))
+            return
+        end
+        UIManager:show(ConfirmBox:new{
+            text = _("Liseur will write this device's reading positions to the server and offer positions from your other devices.\n\nKeep Progress sync's automatic sync off while this is on, so only one of them writes. Position sync starts after KOReader restarts."),
+            ok_text = _("Turn on"),
+            ok_callback = function()
+                self:setCfg("positions_enabled", true)
+                self:setCfg("handover_process", PROCESS.token)
+                if menu then menu:updateItems() end
+                self:info(_("Restart KOReader to start position sync."))
+            end,
+        })
+    end)
 end
 
 function Liseur:disablePositions()
@@ -432,6 +454,54 @@ function Liseur:unscheduleAll()
     UIManager:unschedule(self.observe_task)
     UIManager:unschedule(self.save_task)
     UIManager:unschedule(self.flush_task)
+    self:cancelRetry()
+end
+
+-- cancelRetry drops the timer set for a frozen upload's backoff.
+function Liseur:cancelRetry()
+    if self.retry_task then
+        UIManager:unschedule(self.retry_task)
+        self.retry_task = nil
+    end
+end
+
+-- nextRetryAt returns the earliest moment an upload frozen on this device
+-- may be tried again. An upload paused under another device identity is
+-- not ours to retry, and a refused token suspends all background work.
+function Liseur:nextRetryAt(engine)
+    if not engine or self.auth_failed then return nil end
+    local at
+    local function consider(p)
+        if type(p) ~= "table" or p.device_id ~= engine.device_id then return end
+        local nb = p.not_before
+        if type(nb) ~= "number" then return end
+        if not at or nb < at then at = nb end
+    end
+    for _i, md5 in ipairs(engine.store:list("books")) do
+        local book = engine:book(md5)
+        if book then
+            consider(book.pending)
+            for _i, p in ipairs(book.retired or {}) do consider(p) end
+        end
+    end
+    return at
+end
+
+-- scheduleRetry arranges the one retry a timed-out or rate-limited upload
+-- needs. Without it a book closed after such an answer stays pending until
+-- the reader moves again. The coordinator arms it once per backoff and the
+-- retry re-arms it only if the next attempt fails too.
+function Liseur:scheduleRetry()
+    if self.retry_task or not self:positionsActive() then return end
+    local engine = self.engine_cache and self.engine_cache.engine
+    local at = self:nextRetryAt(engine)
+    if not at then return end
+    local delay = math.max(1, at - now())
+    self.retry_task = function()
+        self.retry_task = nil
+        if NetworkMgr:isConnected() then self:schedule("flush") end
+    end
+    UIManager:scheduleIn(delay, self.retry_task)
 end
 
 function Liseur:onCloseDocument()
@@ -499,6 +569,7 @@ function Liseur:runTopics()
         if not ok then logger.warn("Liseur: sync job failed:", err) end
     end
     self.running = false
+    self:scheduleRetry()
 end
 
 function Liseur:noteError(book, err)
@@ -615,6 +686,13 @@ function Liseur:jobOpen(interactive, quiet)
     end
     if book.pending and not self:settleBook(engine, book) then
         if interactive then self:info(T(_("A previous upload is still waiting: %1"), book.last_error or _("network"))) end
+        return
+    end
+    if not Identity.writable(book) and not self:ensureIdentity(s) then
+        -- Settling the upload can retire the mapping (the server answered
+        -- that it does not know that work). Resolve and seed again, or the
+        -- session would stay ready but unable to write anything.
+        if interactive then self:info(T(_("This book cannot be synced yet: %1"), self:identityText(book))) end
         return
     end
     local ok, err = engine:pull()
@@ -828,7 +906,7 @@ function Liseur:onLiseurSyncNow()
         self:info(_("This book has no KOReader fingerprint yet; reopen it."))
         return
     end
-    self:whenOnline(function() self:jobOpen(true) end)
+    self:whenConnected(function() self:jobOpen(true) end)
 end
 
 function Liseur:onLiseurLibrary()
@@ -871,7 +949,7 @@ function Liseur:showHistory()
         self:info(_("This book is not matched to a work on the server yet."))
         return
     end
-    self:whenOnline(function()
+    self:whenConnected(function()
         local h, err = s.engine:history(s.book.work_id)
         if not h then
             self:info(T(_("Could not read the position history: %1"), err.message or ""))
@@ -919,7 +997,7 @@ function Liseur:download(book, callback)
         callback(existing)
         return
     end
-    self:whenOnline(function()
+    self:whenConnected(function()
         local api, aerr = self:api()
         if not api then
             self:info(aerr)
@@ -947,11 +1025,17 @@ function Liseur:download(book, callback)
         local md5 = util.partialMD5(path)
         if engine and md5 then
             local doc = engine:book(md5)
-            if doc then
+            local attr = lfs.attributes(path)
+            if doc and attr then
+                -- The bytes were just verified against the catalogue, so
+                -- hand that digest to refresh() instead of writing the
+                -- file facts by hand: it retires an upload frozen for the
+                -- bytes this file had before and clears the agreement, so
+                -- a re-download over different content cannot keep the old
+                -- work, baseline or pending upload.
+                Identity.refresh(doc, path, { size = attr.size, mtime = attr.modification },
+                    function() return book.sha256 end)
                 doc.book_id = book.book_id
-                doc.sha256 = book.sha256
-                local attr = lfs.attributes(path)
-                doc.size, doc.mtime, doc.path = attr and attr.size, attr and attr.modification, path
                 engine:saveBook(doc)
             end
         end
@@ -974,11 +1058,12 @@ function Liseur:addToMainMenu(menu_items)
     }
 end
 
-function Liseur:editSetting(title, key, hint, on_save)
+function Liseur:editSetting(title, key, hint, on_save, menu)
     local dialog
+    local previous = self:cfg(key)
     dialog = InputDialog:new{
         title = title,
-        input = self:cfg(key) or "",
+        input = previous or "",
         input_hint = hint,
         buttons = {
             {
@@ -996,14 +1081,25 @@ function Liseur:editSetting(title, key, hint, on_save)
                                 return
                             end
                         end
-                        self:detachSession()
+                        self:setCfg(key, v ~= "" and v or nil)
                         if key == "server_url" or key == "token" then
                             -- A new server or token may be another account
-                            -- or device: nothing continues until it is checked.
-                            self:setCfg("probe", nil)
+                            -- or device: nothing continues until it is
+                            -- checked. An unchanged value changes nothing,
+                            -- so the open session and its queued work stay.
+                            if (previous or "") ~= v then
+                                self:setCfg("probe", nil)
+                                self:detachSession()
+                            end
+                        elseif key == "ca_file" then
+                            -- A bundle change is not an identity change, so
+                            -- the session keeps running; only the next
+                            -- request has to use the new bundle.
+                            local engine = self.engine_cache and self.engine_cache.engine
+                            local api = engine and self:api()
+                            if api then engine.api = api end
                         end
-                        self:setCfg(key, v ~= "" and v or nil)
-                        self.engine_cache = nil
+                        if menu then menu:updateItems() end
                     end,
                 },
             },
@@ -1013,8 +1109,8 @@ function Liseur:editSetting(title, key, hint, on_save)
     dialog:onShowKeyboard()
 end
 
-function Liseur:checkConnection()
-    self:whenOnline(function()
+function Liseur:checkConnection(menu)
+    self:whenConnected(function()
         local previous = self:probe()
         local probe, err = self:checkToken()
         if not probe then
@@ -1029,6 +1125,7 @@ function Liseur:checkConnection()
         elseif previous and previous.device_id ~= probe.device_id then
             text = text .. "\n\n" .. _("This token belongs to a different device than before. Uploads prepared under the old device are paused until you resend them from this book's Liseur menu.")
         end
+        if menu then menu:updateItems() end
         self:info(text)
     end)
 end

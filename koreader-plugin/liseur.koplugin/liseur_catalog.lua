@@ -117,7 +117,7 @@ end
 -- seriesBooks reads up to max_pages of a series and orders it.
 function Catalog.seriesBooks(api, entity_id, max_pages)
     local all, cursor = {}, nil
-    for _ = 1, max_pages or 10 do
+    for _i = 1, max_pages or 10 do
         local page, next_or_err = Catalog.entityBooks(api, "series", entity_id, cursor)
         if not page then return nil, next_or_err end
         for _i, b in ipairs(page) do all[#all + 1] = b end

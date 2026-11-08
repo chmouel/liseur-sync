@@ -56,14 +56,20 @@ function Browser:init()
     Menu.init(self)
 end
 
+-- Menu:switchItemTable does not assign self.title, so every move sets it
+-- here; the title bar, Back and the next page all read it.
 function Browser:push(title, items)
     table.insert(self.paths, { title = self.title, items = self.item_table })
+    self.title = title
     self:switchItemTable(title, items)
 end
 
 function Browser:onReturn()
     local prev = table.remove(self.paths)
-    if prev then self:switchItemTable(prev.title, prev.items) end
+    if prev then
+        self.title = prev.title
+        self:switchItemTable(prev.title, prev.items)
+    end
     return true
 end
 
@@ -102,8 +108,10 @@ local function paged(browser, title, fetch, to_item)
     if load(nil) then browser:push(title, items) end
 end
 
-local function online(fn)
-    NetworkMgr:runWhenOnline(function() Network.run(fn) end)
+-- connected, not online: runWhenOnline means "can resolve
+-- dns.msftncsi.com", which a server on the local network never needs.
+local function connected(fn)
+    NetworkMgr:runWhenConnected(function() Network.run(fn) end)
 end
 
 function UI.bookDetails(plugin, book)
@@ -165,61 +173,67 @@ local function series_prefix(book, series_id)
     return ""
 end
 
+-- The engine, and a first-use /v1/token behind it, are asked for inside
+-- the network wrapper: asking before it blocks the UI on a request.
 function UI.continueReading(plugin, browser)
-    local engine = plugin:engine()
-    if not engine then
-        plugin:info(_("Check the connection first."))
-        return
-    end
-    local rows = {}
-    for _i, md5 in ipairs(engine.store:list("books")) do
-        local b = engine:book(md5)
-        if b and b.path and b["local"] and lfs.attributes(b.path, "mode") == "file" then rows[#rows + 1] = b end
-    end
-    table.sort(rows, function(a, b) return (a["local"].at or 0) > (b["local"].at or 0) end)
-    local items = {}
-    for i = 1, math.min(#rows, 40) do
-        local b = rows[i]
-        local remote = engine:remote(b)
-        local text = basename(b.path) .. " — " .. percent(b["local"].progression)
-        if remote and remote.device_id ~= engine.device_id and math.abs((remote.progression or 0) - (b["local"].progression or 0)) >= 0.005 then
-            text = text .. T(_(" (elsewhere %1)"), percent(remote.progression))
+    connected(function()
+        local engine = plugin:engine()
+        if not engine then
+            plugin:info(_("Check the connection first."))
+            return
         end
-        items[#items + 1] = {
-            text = text,
-            callback = function()
-                UIManager:close(browser)
-                plugin.browser = nil
-                plugin:openFile(b.path)
-            end,
-        }
-    end
-    if #items == 0 then items[1] = { text = _("No synced books on this device yet."), select_enabled = false } end
-    browser:push(_("Continue reading"), items)
+        local rows = {}
+        for _i, md5 in ipairs(engine.store:list("books")) do
+            local b = engine:book(md5)
+            if b and b.path and b["local"] and lfs.attributes(b.path, "mode") == "file" then rows[#rows + 1] = b end
+        end
+        table.sort(rows, function(a, b) return (a["local"].at or 0) > (b["local"].at or 0) end)
+        local items = {}
+        for i = 1, math.min(#rows, 40) do
+            local b = rows[i]
+            local remote = engine:remote(b)
+            local text = basename(b.path) .. " — " .. percent(b["local"].progression)
+            if remote and remote.device_id ~= engine.device_id and math.abs((remote.progression or 0) - (b["local"].progression or 0)) >= 0.005 then
+                text = text .. T(_(" (elsewhere %1)"), percent(remote.progression))
+            end
+            items[#items + 1] = {
+                text = text,
+                callback = function()
+                    UIManager:close(browser)
+                    plugin.browser = nil
+                    plugin:openFile(b.path)
+                end,
+            }
+        end
+        if #items == 0 then items[1] = { text = _("No synced books on this device yet."), select_enabled = false } end
+        browser:push(_("Continue reading"), items)
+    end)
 end
 
 function UI.downloaded(plugin, browser)
-    local index = plugin:downloadIndex()
-    local rows = {}
-    for book_id, e in pairs(index.books or {}) do
-        if e.path and lfs.attributes(e.path, "mode") == "file" then
-            rows[#rows + 1] = { book_id = book_id, e = e }
+    connected(function()
+        local index = plugin:downloadIndex()
+        local rows = {}
+        for book_id, e in pairs(index.books or {}) do
+            if e.path and lfs.attributes(e.path, "mode") == "file" then
+                rows[#rows + 1] = { book_id = book_id, e = e }
+            end
         end
-    end
-    table.sort(rows, function(a, b) return (a.e.at or 0) > (b.e.at or 0) end)
-    local items = {}
-    for _i, r in ipairs(rows) do
-        items[#items + 1] = {
-            text = r.e.title or basename(r.e.path),
-            callback = function()
-                UIManager:close(browser)
-                plugin.browser = nil
-                plugin:openFile(r.e.path)
-            end,
-        }
-    end
-    if #items == 0 then items[1] = { text = _("Nothing downloaded with Liseur yet."), select_enabled = false } end
-    browser:push(_("Downloaded"), items)
+        table.sort(rows, function(a, b) return (a.e.at or 0) > (b.e.at or 0) end)
+        local items = {}
+        for _i, r in ipairs(rows) do
+            items[#items + 1] = {
+                text = r.e.title or basename(r.e.path),
+                callback = function()
+                    UIManager:close(browser)
+                    plugin.browser = nil
+                    plugin:openFile(r.e.path)
+                end,
+            }
+        end
+        if #items == 0 then items[1] = { text = _("Nothing downloaded with Liseur yet."), select_enabled = false } end
+        browser:push(_("Downloaded"), items)
+    end)
 end
 
 local function api_or_info(plugin)
@@ -231,7 +245,7 @@ end
 function UI.folders(plugin, browser, on_folder)
     local api = api_or_info(plugin)
     if not api then return end
-    online(function()
+    connected(function()
         paged(browser, _("Folders"), function(after) return Catalog.folders(api, after) end, function(f)
             return {
                 text = f.name,
@@ -244,7 +258,7 @@ end
 function UI.folderBooks(plugin, browser, folder)
     local api = api_or_info(plugin)
     if not api then return end
-    online(function()
+    connected(function()
         paged(browser, folder.name, function(cursor) return Catalog.folderBooks(api, folder.folder_id, cursor, "recent") end,
             function(b) return book_item(plugin, b) end)
     end)
@@ -266,7 +280,7 @@ function UI.search(plugin, browser, folder)
                         local q = dialog:getInputText()
                         UIManager:close(dialog)
                         if q == "" then return end
-                        online(function()
+                        connected(function()
                             local books, truncated = Catalog.search(api, folder.folder_id, q)
                             if not books then
                                 plugin:info(T(_("Search failed: %1"), errtext(truncated)))
@@ -290,13 +304,13 @@ end
 function UI.entities(plugin, browser, kind, title)
     local api = api_or_info(plugin)
     if not api then return end
-    online(function()
+    connected(function()
         paged(browser, title, function(after) return Catalog.entities(api, kind, after) end, function(e)
             return {
                 text = e.name,
                 mandatory = tostring(e.book_count),
                 callback = function()
-                    online(function()
+                    connected(function()
                         if kind == "series" then
                             local books, more = Catalog.seriesBooks(api, e.id, 10)
                             if not books then
@@ -321,16 +335,16 @@ end
 function UI.summary(plugin)
     local api = api_or_info(plugin)
     if not api then return end
-    local probe, perr = plugin:ensureProbe()
-    if not probe then
-        plugin:info(perr)
-        return
-    end
-    if not plugin:hasScope("read-insights") then
-        plugin:info(_("Reading statistics need a token with the read-insights permission."))
-        return
-    end
-    online(function()
+    connected(function()
+        local probe, perr = plugin:ensureProbe()
+        if not probe then
+            plugin:info(perr)
+            return
+        end
+        if not plugin:hasScope("read-insights") then
+            plugin:info(_("Reading statistics need a token with the read-insights permission."))
+            return
+        end
         local data, err = api:get("/v1/insights/summary")
         if not data then
             plugin:info(T(_("Could not load reading statistics: %1"), errtext(err)))
@@ -341,7 +355,7 @@ function UI.summary(plugin)
             T(_("Period: %1 days"), tostring(p(data.range_days) or "?")),
             T(_("Reading time: %1 h %2 min"), math.floor((tonumber(p(data.total_active_minutes)) or 0) / 60), math.floor((tonumber(p(data.total_active_minutes)) or 0) % 60)),
             T(_("Sessions: %1"), tostring(p(data.sessions) or 0)),
-            T(_("Pages reported by reading apps: %1"), tostring(p(data.total_pages) or 0)),
+            T(_("Pages read (reported or from edition page counts): %1"), tostring(p(data.total_pages) or 0)),
             T(_("Current streak: %1 days"), tostring(p(data.streak_days) or 0)),
         }
         if p(data.first_activity_day) then lines[#lines + 1] = T(_("Reading since: %1"), p(data.first_activity_day)) end
@@ -364,7 +378,7 @@ function UI.showLibrary(plugin)
         { text = _("Downloaded"), callback = function() UI.downloaded(plugin, browser) end },
         { text = _("Folders"), callback = folder_then(function(f) UI.folderBooks(plugin, browser, f) end) },
         { text = _("Series"), callback = function() UI.entities(plugin, browser, "series", _("Series")) end },
-        { text = _("Authors"), callback = function() UI.entities(plugin, browser, "contributors", _("Authors")) end },
+        { text = _("Contributors"), callback = function() UI.entities(plugin, browser, "contributors", _("Contributors")) end },
         { text = _("Tags"), callback = function() UI.entities(plugin, browser, "tags", _("Tags")) end },
         { text = _("Search…"), callback = folder_then(function(f) UI.search(plugin, browser, f) end) },
         { text = _("Reading summary"), callback = function() UI.summary(plugin) end },
@@ -376,47 +390,49 @@ function UI.showLibrary(plugin)
 end
 
 function UI.showStatus(plugin)
-    local lines = {}
-    local probe = plugin:probe()
-    local base = plugin:base()
-    lines[#lines + 1] = T(_("Server: %1"), base and base.url or _("not set"))
-    lines[#lines + 1] = T(_("Device token: %1"), plugin:cfg("token") and _("set") or _("not set"))
-    if plugin.probe_error then lines[#lines + 1] = plugin.probe_error end
-    if probe then
-        lines[#lines + 1] = T(_("Account: %1"), probe.account_id)
-        lines[#lines + 1] = T(_("Device: %1 (%2)"), probe.name or "?", probe.device_id)
-        lines[#lines + 1] = T(_("Permissions: %1"), table.concat(probe.scopes or {}, ", "))
-        lines[#lines + 1] = T(_("Last checked: %1"), os.date("%Y-%m-%d %H:%M", probe.checked_at or 0))
-    end
-    lines[#lines + 1] = T(_("Position sync: %1"), plugin:positionsState())
-    lines[#lines + 1] = T(_("Download folder: %1"), plugin:downloadDir() or _("not set"))
-    local engine = plugin:engine()
-    if engine then
-        local acc = engine:account()
-        if acc then lines[#lines + 1] = T(_("Changes cursor: %1"), tostring(acc.cursor)) end
-        local waiting, paused, blocked, unsent = {}, {}, {}, {}
-        for _i, md5 in ipairs(engine.store:list("books")) do
-            local b = engine:book(md5)
-            if b then
-                local name = basename(b.path) or md5
-                if b.pending and b.pending.device_id ~= engine.device_id then paused[#paused + 1] = name
-                elseif b.pending then waiting[#waiting + 1] = name
-                elseif b.identity == "ambiguous" or b.identity == "mismatch" then blocked[#blocked + 1] = name
-                elseif Positions.dirty(b) then unsent[#unsent + 1] = name end
+    connected(function()
+        local lines = {}
+        local probe = plugin:probe()
+        local base = plugin:base()
+        lines[#lines + 1] = T(_("Server: %1"), base and base.url or _("not set"))
+        lines[#lines + 1] = T(_("Device token: %1"), plugin:cfg("token") and _("set") or _("not set"))
+        if plugin.probe_error then lines[#lines + 1] = plugin.probe_error end
+        if probe then
+            lines[#lines + 1] = T(_("Account: %1"), probe.account_id)
+            lines[#lines + 1] = T(_("Device: %1 (%2)"), probe.name or "?", probe.device_id)
+            lines[#lines + 1] = T(_("Permissions: %1"), table.concat(probe.scopes or {}, ", "))
+            lines[#lines + 1] = T(_("Last checked: %1"), os.date("%Y-%m-%d %H:%M", probe.checked_at or 0))
+        end
+        lines[#lines + 1] = T(_("Position sync: %1"), plugin:positionsState())
+        lines[#lines + 1] = T(_("Download folder: %1"), plugin:downloadDir() or _("not set"))
+        local engine = plugin:engine()
+        if engine then
+            local acc = engine:account()
+            if acc then lines[#lines + 1] = T(_("Changes cursor: %1"), tostring(acc.cursor)) end
+            local waiting, paused, blocked, unsent = {}, {}, {}, {}
+            for _i, md5 in ipairs(engine.store:list("books")) do
+                local b = engine:book(md5)
+                if b then
+                    local name = basename(b.path) or md5
+                    if b.pending and b.pending.device_id ~= engine.device_id then paused[#paused + 1] = name
+                    elseif b.pending then waiting[#waiting + 1] = name
+                    elseif b.identity == "ambiguous" or b.identity == "mismatch" then blocked[#blocked + 1] = name
+                    elseif Positions.dirty(b) then unsent[#unsent + 1] = name end
+                end
             end
+            local function section(title, list)
+                if #list == 0 then return end
+                lines[#lines + 1] = ""
+                lines[#lines + 1] = title
+                for _i, n in ipairs(list) do lines[#lines + 1] = "  • " .. n end
+            end
+            section(_("Uploads waiting for confirmation:"), waiting)
+            section(_("Uploads paused (made under another device):"), paused)
+            section(_("Not synced (identity unclear):"), blocked)
+            section(_("Read here, not sent yet:"), unsent)
         end
-        local function section(title, list)
-            if #list == 0 then return end
-            lines[#lines + 1] = ""
-            lines[#lines + 1] = title
-            for _i, n in ipairs(list) do lines[#lines + 1] = "  • " .. n end
-        end
-        section(_("Uploads waiting for confirmation:"), waiting)
-        section(_("Uploads paused (made under another device):"), paused)
-        section(_("Not synced (identity unclear):"), blocked)
-        section(_("Read here, not sent yet:"), unsent)
-    end
-    UIManager:show(TextViewer:new{ title = _("Liseur sync status"), text = table.concat(lines, "\n") })
+        UIManager:show(TextViewer:new{ title = _("Liseur sync status"), text = table.concat(lines, "\n") })
+    end)
 end
 
 function UI.showHistory(plugin, session, history)
@@ -459,7 +475,7 @@ function UI.showHistory(plugin, session, history)
                             UIManager:close(dialog)
                             local upto = 0
                             for _i, op in ipairs(history.furthest) do upto = math.max(upto, op.seq or 0) end
-                            online(function() plugin:forgetFurthest(session.book.work_id, upto) end)
+                            connected(function() plugin:forgetFurthest(session.book.work_id, upto) end)
                         end } },
                         { { text = _("Close"), callback = function() UIManager:close(dialog) end } },
                     },
@@ -518,27 +534,27 @@ function UI.mainMenu(plugin)
                 {
                     text_func = function() return T(_("Server: %1"), plugin:cfg("server_url") or _("not set")) end,
                     keep_menu_open = true,
-                    callback = function()
+                    callback = function(touchmenu_instance)
                         plugin:editSetting(_("Liseur Sync server URL"), "server_url", "https://books.example.org", function(v)
                             local base, err = Api.parseBase(v)
                             if not base then return false, err end
                             return true
-                        end)
+                        end, touchmenu_instance)
                     end,
                 },
                 {
                     text_func = function() return T(_("Device token: %1"), plugin:cfg("token") and _("set") or _("not set")) end,
                     keep_menu_open = true,
-                    callback = function()
+                    callback = function(touchmenu_instance)
                         plugin:editSetting(_("Device token (from the server's Devices page)"), "token", "", function(v)
                             if v:find("%s") then return false, _("A token has no spaces.") end
                             return true
-                        end)
+                        end, touchmenu_instance)
                     end,
                 },
                 {
                     text = _("Check connection"),
-                    callback = function() plugin:checkConnection() end,
+                    callback = function(touchmenu_instance) plugin:checkConnection(touchmenu_instance) end,
                 },
                 {
                     text_func = function() return T(_("Download folder: %1"), plugin:downloadDir() or _("not set")) end,
@@ -554,18 +570,19 @@ function UI.mainMenu(plugin)
                 {
                     text_func = function() return T(_("Certificate bundle: %1"), plugin:cfg("ca_file") or _("automatic")) end,
                     keep_menu_open = true,
-                    callback = function()
-                        plugin:editSetting(_("CA certificate bundle (leave empty to search the usual places)"), "ca_file", "/etc/ssl/certs/ca-certificates.crt")
+                    callback = function(touchmenu_instance)
+                        plugin:editSetting(_("CA certificate bundle (leave empty to search the usual places)"), "ca_file", "/etc/ssl/certs/ca-certificates.crt", nil, touchmenu_instance)
                     end,
                 },
                 {
                     text_func = function() return T(_("Position sync: %1"), plugin:positionsState()) end,
                     checked_func = function() return plugin:cfg("positions_enabled") == true end,
-                    callback = function()
+                    callback = function(touchmenu_instance)
                         if plugin:cfg("positions_enabled") == true then
                             plugin:disablePositions()
+                            if touchmenu_instance then touchmenu_instance:updateItems() end
                         else
-                            plugin:enablePositions()
+                            plugin:enablePositions(touchmenu_instance)
                         end
                     end,
                 },

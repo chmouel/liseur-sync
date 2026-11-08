@@ -1,6 +1,9 @@
 -- KOReader byte transport for liseur_api: LuaSocket over LuaSec with
 -- certificate and host-name verification, no redirects, bounded
--- response bodies and timeouts.
+-- response bodies and timeouts. It also refuses to run behind an HTTP
+-- proxy: LuaSocket rewrites the host and port of every request to the
+-- proxy but keeps our `create`, so the certificate checked would be the
+-- proxy's while the bearer token travelled on to it.
 --
 -- KOReader 2026.07.2 ships stock LuaSec 1.3.2, whose https defaults to
 -- verify = "none" and never checks the host name. This module therefore
@@ -17,6 +20,18 @@ Transport.CA_PATHS = {
     "/etc/pki/tls/cacert.pem",
     "/etc/ssl/cert.pem",
 }
+
+-- proxyError returns the reason a configured proxy makes a request
+-- unsafe, or nil. It is checked before any socket is opened.
+Transport.PROXY_ERROR = "an HTTP proxy is switched on for KOReader, so this device's token "
+    .. "would go to the proxy instead of to your server. Turn the proxy off in KOReader's network "
+    .. "settings, then try again"
+
+function Transport.proxyError(http)
+    local proxy = http and http.PROXY
+    if proxy == nil or proxy == false or proxy == "" then return nil end
+    return Transport.PROXY_ERROR
+end
 
 local function readable(path)
     local f = io.open(path, "rb")
@@ -127,6 +142,8 @@ function Transport.new(opts)
     local socket = require("socket")
     local socketutil = require("socketutil")
     local function request(req)
+        local perr = Transport.proxyError(http)
+        if perr then return nil, perr end
         local headers = {}
         for k, v in pairs(req.headers or {}) do headers[k] = v end
         headers["User-Agent"] = socketutil.USER_AGENT

@@ -95,7 +95,7 @@ check("UI widgets the plugin uses exist", function()
         assert(require(m), m)
     end
     local NetworkMgr = require("ui/network/manager")
-    assert(NetworkMgr.isConnected and NetworkMgr.runWhenOnline)
+    assert(NetworkMgr.isConnected and NetworkMgr.runWhenConnected)
     assert(require("apps/filemanager/filemanagerutil").showChooseDialog)
 end)
 
@@ -107,13 +107,24 @@ if tls_url then
         local _, err = api:get("/v1/token")
         assert(err == nil or err.kind ~= "transport", err and err.message)
     end)
-    -- badssl.com serves deliberately broken certificates.
-    for _, bad in ipairs({ "https://wrong.host.badssl.com", "https://self-signed.badssl.com", "https://expired.badssl.com" }) do
-        check("TLS refuses " .. bad, function()
-            local api = Api.new{ base = assert(Api.parseBase(bad)), transport = Transport.new{ block = 10, total = 20 } }
+    -- badssl.com serves deliberately broken certificates. Each must be
+    -- refused for the right reason: a DNS failure or a missing CA bundle
+    -- is also a transport error and would hide a certificate that was
+    -- accepted.
+    for _i, bad in ipairs({
+        { url = "https://wrong.host.badssl.com", want = "certificate does not match" },
+        { url = "https://self-signed.badssl.com", want = "certificate" },
+        { url = "https://expired.badssl.com", want = "certificate" },
+    }) do
+        check("TLS refuses " .. bad.url .. " for a certificate reason", function()
+            local api = Api.new{ base = assert(Api.parseBase(bad.url)), transport = Transport.new{ block = 10, total = 20 } }
             local _, err = api:get("/")
             assert(err and err.kind == "transport", "a broken certificate was accepted")
             print("     refused with: " .. tostring(err.message))
+            local message = tostring(err.message)
+            assert(not message:find("bundle"), "no CA bundle was found, so this proves nothing: " .. message)
+            assert(not message:find("resolve"), "the host name did not resolve, so this proves nothing: " .. message)
+            assert(message:find(bad.want, 1, true), "not refused for the expected reason (" .. bad.want .. "): " .. message)
         end)
     end
 end
