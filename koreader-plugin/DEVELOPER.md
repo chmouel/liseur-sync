@@ -151,3 +151,7 @@ back, so the device is not running this code.
 KOReader v2026.07.2 bundles stock LuaSec 1.3.2, whose `https` defaults to
 `verify = "none"` and checks no host name. Later koreader-base adds both.
 The plugin does its own TLS setup on either, which the smoke test checks.
+
+## Licence
+
+The plugin is MIT licensed like the server.

@@ -152,7 +152,7 @@ unchanged (no trailing slash on `proxy_pass`).
 out of scope. The KOReader plugin accepts `http://` for a local address or
 name for the same reason, and needs this setting to talk to such a
 server: see
-[koreader-plugin/README.md](https://github.com/chmouel/liseur-sync/blob/main/koreader-plugin/README.md#plain-http-on-your-own-network).
+[koreader-plugin/README.md](https://github.com/chmouel/liseur-sync/blob/main/koreader-plugin/README.md#a-server-on-your-own-network).
 It is a top-level key, so it must appear above
 the first `[table]` header in the config file; TOML binds a bare key to
 the table above it, and `insecure_http` written under `[content]`
