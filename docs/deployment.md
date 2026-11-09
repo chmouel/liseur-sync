@@ -149,7 +149,11 @@ upstream, ahead of the prefixed location, both passing the path through
 unchanged (no trailing slash on `proxy_pass`).
 
 `insecure_http = true` exists only for LAN-only setups where TLS is
-out of scope. It is a top-level key, so it must appear above
+out of scope. The KOReader plugin accepts `http://` for a local address or
+name for the same reason, and needs this setting to talk to such a
+server: see
+[koreader-plugin/README.md](https://github.com/chmouel/liseur-sync/blob/main/koreader-plugin/README.md#plain-http-on-your-own-network).
+It is a top-level key, so it must appear above
 the first `[table]` header in the config file; TOML binds a bare key to
 the table above it, and `insecure_http` written under `[content]`
 becomes `content.insecure_http`. The server refuses to start on an

@@ -9,10 +9,34 @@ describe("liseur_api base URL", function()
         assert.are.equal("https://books.example.org/liseur", b.url)
     end)
 
-    it("refuses plain http except for this device", function()
+    it("refuses plain http except on a local network", function()
         assert.is_nil((Api.parseBase("http://books.example.org")))
+        assert.is_nil((Api.parseBase("http://8.8.8.8")))
+        assert.is_nil((Api.parseBase("http://[2001:db8::1]")))
         assert.is_not_nil((Api.parseBase("http://localhost:8080")))
         assert.is_not_nil((Api.parseBase("http://127.0.0.1:8080/x")))
+        assert.is_not_nil((Api.parseBase("http://[::1]:8080")))
+        -- private ranges, link-local and the reserved local names
+        for _, base in ipairs{
+            "http://10.0.0.5:8585", "http://192.168.1.20:8585", "http://172.16.4.4:8585",
+            "http://172.31.255.1:8585", "http://169.254.10.1:8585",
+            "http://[fe80::1]:8585", "http://[fd00::1]:8585",
+            "http://shelf:8585", "http://shelf.lan:8585",
+            "http://shelf.local:8585", "http://shelf.home.arpa:8585",
+        } do
+            assert.is_not_nil((Api.parseBase(base)), base)
+        end
+        -- public shapes that merely look local
+        for _, base in ipairs{
+            "http://172.15.0.1", "http://172.32.0.1", "http://192.169.1.1",
+            "http://128.0.0.1", "http://shelf.example.local.evil.com",
+            "http://10.example.org", "http://172.16.example.org",
+            "http://192.168.example.org",
+        } do
+            assert.is_nil((Api.parseBase(base)), base)
+        end
+        -- https is never restricted
+        assert.is_not_nil((Api.parseBase("https://books.example.org")))
     end)
 
     it("refuses credentials, queries, fragments and odd paths", function()

@@ -10,6 +10,36 @@ Api.__index = Api
 local LOOPBACK = { ["localhost"] = true, ["127.0.0.1"] = true, ["[::1]"] = true }
 local DEFAULT_PORTS = { http = "80", https = "443" }
 
+-- lanHost answers whether a host can only be reached from the same network,
+-- which is where plain http is a reasonable trade: there is no certificate
+-- to get right for an address like 192.168.1.20, and a self-hosted server
+-- behind one is the common case this plugin runs in. The shape of the name
+-- is all that is judged, never a lookup: resolving would let a public name
+-- answer with a local address and pass itself off as one.
+local function lanHost(host)
+    if LOOPBACK[host] then return true end
+    -- Range checks run on a dotted quad only. `10.example.org` is a public
+    -- name that happens to start with the same digits as a private range.
+    local a, b = host:match("^(%d+)%.(%d+)%.%d+%.%d+$")
+    if a then
+        a, b = tonumber(a), tonumber(b)
+        if a > 255 or b > 255 then return false end
+        if a == 127 or a == 10 then return true end
+        if a == 192 and b == 168 then return true end
+        if a == 172 and b >= 16 and b <= 31 then return true end
+        if a == 169 and b == 254 then return true end
+        return false
+    end
+    if host:match("^%[fe[89ab]%x:") then return true end
+    if host:match("^%[f[cd]%x%x:") then return true end
+    -- A single label, .local, .lan or .home.arpa cannot be a public name:
+    -- the first needs a dot to be one, .local and .home.arpa are reserved
+    -- for local networks, and .lan is not in the root zone.
+    if not host:find("%.") and not host:find(":") then return true end
+    if host:match("%.local$") or host:match("%.lan$") or host:match("%.home%.arpa$") then return true end
+    return false
+end
+
 -- Values decoded from JSON null are functions under KOReader's luajson.
 local function present(v)
     if v == nil or type(v) == "function" or type(v) == "userdata" then return nil end
@@ -50,8 +80,8 @@ function Api.parseBase(input)
     else
         port = nil
     end
-    if scheme == "http" and not LOOPBACK[host] then
-        return nil, "plain http is only allowed for this device (localhost); use https"
+    if scheme == "http" and not lanHost(host) then
+        return nil, "plain http is only allowed for a local address or name; use https for a server that is reachable from the internet"
     end
     path = path:gsub("/+$", "")
     if path:find("%.%.") or path:find("//") then return nil, "invalid server path" end
