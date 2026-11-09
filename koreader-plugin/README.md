@@ -29,9 +29,12 @@ reader in a browser.
 2. On the server, create a device token and choose what it may do: browse and
    download, sync positions, or read your statistics. A token with fewer rights
    still handles the rest.
-3. In KOReader: *Tools → Liseur Sync → Settings*. Type the server address,
-   paste the token, and pick a folder for downloads. *Check connection* shows
-   which account the token belongs to.
+3. In KOReader: *Tools → Liseur Sync → Settings*. Type the server address and
+   pick a folder for downloads. For the token, either paste it into *Device
+   token*, or copy it into a file on the device and use *Import device token
+   from a file*, which is easier than typing on an e-reader. Choose the file by
+   long-pressing its name. *Check connection* shows which account the token
+   belongs to.
 
 ### A server on your own network
 

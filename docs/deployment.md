@@ -255,6 +255,11 @@ promotes and demotes accounts. The role lives on the account, so
 granting it hands nobody a secret, and the last enabled administrator
 cannot be demoted.
 
+`mint-token` prints a token once and never again. Typing 64 characters on
+an e-reader is miserable, so write it into a file, copy that file onto the
+device, and let the KOReader plugin read it from there: *Liseur Sync →
+Settings → Import device token from a file*.
+
 When the first administrator is created from the web setup page and the
 folder fields were filled in, the folder is created and watched as part
 of the same submission and you land in the library. Leave them blank and

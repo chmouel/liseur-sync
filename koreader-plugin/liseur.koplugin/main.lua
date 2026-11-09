@@ -1484,6 +1484,26 @@ function Liseur:editSetting(title, key, hint, on_save, menu, opts)
     dialog:onShowKeyboard()
 end
 
+-- importToken reads a token from a file the reader put on the device and
+-- adopts it the way the settings dialog does: a different token is another
+-- identity, so nothing from the old one continues.
+function Liseur:importToken(path, menu)
+    local f = io.open(path, "rb")
+    if not f then return nil, _("Could not open that file.") end
+    local body = f:read("*a")
+    f:close()
+    local token = Api.readToken(body)
+    if not token then return nil, _("That file holds no usable token. It should contain the token alone on its first line.") end
+    local previous = self:cfg("token")
+    self:setCfg("token", token)
+    if previous ~= token then
+        self:setCfg("probe", nil)
+        self:detachSession()
+    end
+    if menu then menu:updateItems() end
+    return token
+end
+
 function Liseur:checkConnection(menu)
     self:whenConnected(function()
         local previous = self:probe()

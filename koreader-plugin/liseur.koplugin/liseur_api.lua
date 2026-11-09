@@ -40,6 +40,25 @@ local function lanHost(host)
     return false
 end
 
+-- readToken pulls a device token out of a file copied onto the device,
+-- so a token can be moved to an e-reader without typing it. The first
+-- non-empty line that is not a comment is the token, which makes a
+-- trailing newline, or a note written above it, harmless. A minted token
+-- is 64 hex characters, so a line holding whitespace is never one.
+function Api.readToken(text)
+    if type(text) ~= "string" then return nil, "empty file" end
+    text = text:gsub("^\239\187\191", "")
+    for line in text:gmatch("[^\r\n]+") do
+        local token = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if token ~= "" and token:sub(1, 1) ~= "#" then
+            if token:find("%s") then return nil, "whitespace inside the token" end
+            if #token > 512 then return nil, "line too long to be a token" end
+            return token
+        end
+    end
+    return nil, "no token found"
+end
+
 -- Values decoded from JSON null are functions under KOReader's luajson.
 local function present(v)
     if v == nil or type(v) == "function" or type(v) == "userdata" then return nil end

@@ -589,6 +589,27 @@ function UI.mainMenu(plugin)
                     end,
                 },
                 {
+                    text = _("Import device token from a file"),
+                    keep_menu_open = true,
+                    callback = function(touchmenu_instance)
+                        local PathChooser = require("ui/widget/pathchooser")
+                        UIManager:show(PathChooser:new{
+                            select_file = true,
+                            select_directory = false,
+                            path = G_reader_settings:readSetting("home_dir"),
+                            onConfirm = function(file)
+                                local token, err = plugin:importToken(file, touchmenu_instance)
+                                if not token then
+                                    plugin:info(err)
+                                    return
+                                end
+                                plugin:info(_("Token imported. Checking it now."))
+                                plugin:checkConnection(touchmenu_instance)
+                            end,
+                        })
+                    end,
+                },
+                {
                     text = _("Check connection"),
                     callback = function(touchmenu_instance) plugin:checkConnection(touchmenu_instance) end,
                 },

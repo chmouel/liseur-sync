@@ -88,9 +88,37 @@ check("plugin instance builds its menus", function()
     assert(p:positionsActive() == false)
 end)
 
+check("a token can be imported from a file", function()
+    local p = Liseur:new{ ui = { menu = { registerToMainMenu = function() end } } }
+    local path = os.tmpname()
+    local f = assert(io.open(path, "wb"))
+    f:write("# minted on the server's Devices page\n0123456789abcdef\n")
+    f:close()
+    local token, err = p:importToken(path)
+    os.remove(path)
+    assert(token, err)
+    assert(token == "0123456789abcdef")
+    assert(p:cfg("token") == token)
+    assert(p:cfg("probe") == nil)
+end)
+
+check("a file with no token in it is refused", function()
+    local p = Liseur:new{ ui = { menu = { registerToMainMenu = function() end } } }
+    p:setCfg("token", nil)
+    local path = os.tmpname()
+    local f = assert(io.open(path, "wb"))
+    f:write("no token in here\n")
+    f:close()
+    local token, err = p:importToken(path)
+    os.remove(path)
+    assert(not token)
+    assert(type(err) == "string")
+    assert(p:cfg("token") == nil)
+end)
+
 check("UI widgets the plugin uses exist", function()
     for _, m in ipairs({ "ui/widget/menu", "ui/widget/buttondialog", "ui/widget/confirmbox", "ui/widget/inputdialog",
-        "ui/widget/textviewer", "ui/widget/infomessage", "ui/network/manager", "apps/filemanager/filemanagerutil",
+        "ui/widget/textviewer", "ui/widget/infomessage", "ui/widget/pathchooser", "ui/network/manager", "apps/filemanager/filemanagerutil",
         "apps/filemanager/filemanager", "dispatcher", "socketutil", "ssl", "socket.http", "ltn12" }) do
         assert(require(m), m)
     end

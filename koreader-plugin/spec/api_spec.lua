@@ -62,6 +62,20 @@ describe("liseur_api base URL", function()
         assert.truthy(Api.namespace(a, "u1-x") ~= Api.namespace(Api.parseBase("https://h.example/a--u1"), "x"))
     end)
 
+    it("reads a token out of a file", function()
+        assert.are.equal("abc123", (Api.readToken("abc123\n")))
+        assert.are.equal("abc123", (Api.readToken("\n\n  abc123  \n\n")))
+        assert.are.equal("abc123", (Api.readToken("abc123")))
+        assert.are.equal("abc123", (Api.readToken("\n# copied from the Devices page\nabc123\n")))
+        assert.are.equal("abc123", (Api.readToken("\239\187\191abc123\r\n")))
+        -- a file with nothing usable in it is refused, not guessed at
+        assert.is_nil((Api.readToken("")))
+        assert.is_nil((Api.readToken("   \n\t\n")))
+        assert.is_nil((Api.readToken("abc 123")))
+        assert.is_nil((Api.readToken(string.rep("a", 600))))
+        assert.is_nil((Api.readToken(nil)))
+    end)
+
     it("joins paths under the prefix and escapes ids and queries", function()
         local api = Api.new{ base = Api.parseBase("https://h.example/p"), transport = function() end }
         assert.are.equal("https://h.example/p/v1/books/a%2Fb", api:url("/v1/books/" .. Api.escape("a/b")))

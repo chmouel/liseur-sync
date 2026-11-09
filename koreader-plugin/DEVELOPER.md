@@ -10,6 +10,12 @@ file is for people editing it.
 prefix and account. A different account never sees or sends another
 account's state.
 
+The server address and the device token live one level up, in
+`settings/liseur.lua`, which is made readable only by KOReader where the
+filesystem allows it. A token typed in by hand is trimmed and refused if it
+holds whitespace; one imported from a file is the first non-empty line that
+is not a comment, refused for the same reasons.
+
 A book is identified by the file's SHA-256, never by its path, its title,
 or KOReader's partial MD5. State is kept per file, so two files that share
 a partial MD5 (KOReader's fingerprint only samples parts of a file) keep
