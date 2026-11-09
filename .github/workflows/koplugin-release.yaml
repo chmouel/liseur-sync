@@ -1,7 +1,7 @@
 name: koplugin-release
 
-# Every change to the KOReader plugin becomes a release with the ZIP
-# attached. The in-KOReader App Store (topic:koreader-plugin) lists a
+# Every change to what ships inside the KOReader plugin becomes a release
+# with the ZIP attached. The in-KOReader App Store (topic:koreader-plugin) lists a
 # repository's releases and installs one of their assets, so a release is
 # what makes an update visible on a device.
 #
@@ -25,7 +25,14 @@ name: koplugin-release
 on:
   push:
     branches: [main]
-    paths: ["koreader-plugin/**"]
+    # Only what ends up inside the ZIP counts. A README, a DEVELOPER.md or a
+    # spec edit publishes nothing: the packaged bytes would be the previous
+    # release's bytes with a new version stamp, which is a download for
+    # every device and an update prompt for nothing.
+    paths:
+      - "koreader-plugin/liseur.koplugin/**"
+      - "koreader-plugin/package.sh"
+      - "LICENSE"
   workflow_dispatch:
 
 permissions:
@@ -53,6 +60,10 @@ jobs:
       - name: Work out the version
         id: version
         run: |
+          # The count spans every commit touching koreader-plugin, including
+          # the ones that skipped a release, so it never goes backwards: a
+          # version that did would read as older than what devices already
+          # run and the store would stop offering updates.
           count=$(git rev-list --count HEAD -- koreader-plugin)
           echo "value=0.$count" >> "$GITHUB_OUTPUT"
           echo "tag=plugin-0.$count" >> "$GITHUB_OUTPUT"

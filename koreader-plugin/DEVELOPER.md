@@ -111,10 +111,12 @@ directory on one shared `package.path`.
 
 ## Releasing
 
-Every push to `main` that touches `koreader-plugin` runs the specs,
-packages the ZIP with a version stamped into `_meta.lua`, and publishes
-the tag `plugin-0.<commits touching the plugin>` with that ZIP attached.
-The version is never bumped by hand.
+Every push to `main` that touches the shipped plugin (`liseur.koplugin/*.lua`,
+`package.sh`, the licence) runs the specs, packages the ZIP with a version
+stamped into `_meta.lua`, and publishes the tag `plugin-0.<commits touching the
+plugin>` with that ZIP attached. A docs or spec edit publishes nothing: its ZIP
+would be the previous one with a new version stamp. The version is never bumped
+by hand.
 
 Three details come from KOReader's App Store rather than from preference.
 It finds a repository by the `koreader-plugin` topic or a name holding
@@ -129,7 +131,8 @@ repository.
 The workflow is idempotent. A rerun that finds an identical ZIP does
 nothing, a release left without its asset gets the ZIP uploaded, and a
 different ZIP under the same tag fails instead of replacing published
-code.
+code. A change to the workflow file itself publishes nothing, since it is
+not in the trigger paths; start it from Actions when you need to try one.
 
 ## Compatibility notes
 

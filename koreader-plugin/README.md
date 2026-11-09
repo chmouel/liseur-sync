@@ -130,8 +130,9 @@ KOREADER_DIR=/path/to/koreader make koplugin-integration
 make koplugin-package                               # dist/liseur.koplugin.zip
 ```
 
-Every push to `main` that touches `koreader-plugin` publishes a release
-with the ZIP attached, so nobody bumps a version by hand.
+Every push to `main` that touches the plugin's own Lua, its packaging or the
+licence publishes a release with the ZIP attached. Docs and specs publish
+nothing, and nobody bumps a version by hand.
 
 The plugin is MIT licensed like the server. It copies no KOReader or BookOrbit
 code.
