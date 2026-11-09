@@ -63,7 +63,7 @@ koplugin-integration`. Two rules that file states and this one repeats, because
 breaking them is silent: module names keep the `liseur_` prefix, since KOReader
 shares one `package.path` across plugins, and a push to `main` touching the
 shipped plugin files publishes the release the App Store reads, so the
-repository topic `koreader-plugin` and the `plugin-0.N` tag shape are not
+repository topic `koreader-plugin` and the `plugin-<YYYYMMDD>.<n>` tag shape are not
 decoration.
 
 ## Architecture in one paragraph

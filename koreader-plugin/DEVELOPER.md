@@ -119,16 +119,19 @@ directory on one shared `package.path`.
 
 Every push to `main` that touches the shipped plugin (`liseur.koplugin/*.lua`,
 `package.sh`, the licence) runs the specs, packages the ZIP with a version
-stamped into `_meta.lua`, and publishes the tag `plugin-0.<commits touching the
-plugin>` with that ZIP attached. A docs or spec edit publishes nothing: its ZIP
-would be the previous one with a new version stamp. The version is never bumped
-by hand.
+stamped into `_meta.lua`, and publishes the tag `plugin-<YYYYMMDD>.<n>` with
+that ZIP attached, where the date is the commit's and `n` is the number of
+commits that have touched the plugin. A docs or spec edit publishes nothing:
+its ZIP would be the previous one with a new version stamp. The version is
+never bumped by hand.
 
 Three details come from KOReader's App Store rather than from preference.
 It finds a repository by the `koreader-plugin` topic or a name holding
 `.koplugin`. It parses a version out of a tag by stripping a leading `v`,
-`release`, `version` or `plugin` and then reading digits, which is why the
-tag is `plugin-0.12` and not `koplugin-v0.12`. Its install dialog reads
+`release`, `version` or `plugin` and then reading digits, which is why the tag
+is `plugin-20261109.19` and not `koplugin-v0.12`. A version that reads as
+`YYYY.M.D` is discarded as a date-stamped scheme, so `2026.11.09` cannot be
+used and the date is written without dots. Its install dialog reads
 `/releases/latest` only, so a plugin release has to be the repository's
 latest one. The consequence: while the plugin lives in this repository, a
 server release must not claim that pointer, or the plugin needs its own

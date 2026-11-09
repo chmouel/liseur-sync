@@ -15,12 +15,14 @@ name: koplugin-release
 #     images as container tags, and it is the reason a future server
 #     release must not claim "latest" from the same repository.
 #   - It parses a version out of the tag by stripping a leading v,
-#     release, version or plugin, then reading leading digits. The tag is
-#     plugin-<version> for that: koplugin-v0.12 parses to nothing and the
-#     store falls back to commit timestamps.
+#     release, version or plugin, then reading leading digits. A tag whose
+#     version reads as YYYY.M.D is thrown away on purpose, so the date
+#     cannot be written with dots: 2026.11.09 parses to nothing, while
+#     20261109.19 is a version like any other.
 #
-# The version is 0.<commits touching koreader-plugin>: monotonic, no
-# manual bump, and never colliding with the server's vX.Y.Z tags.
+# The version is <YYYYMMDD of the commit>.<commits touching koreader-plugin>.
+# The date says when, and the number only ever grows, so a device always sees
+# the next release as newer and two releases can never share a tag.
 
 on:
   push:
@@ -63,10 +65,13 @@ jobs:
           # The count spans every commit touching koreader-plugin, including
           # the ones that skipped a release, so it never goes backwards: a
           # version that did would read as older than what devices already
-          # run and the store would stop offering updates.
+          # run and the store would stop offering updates. It also makes the
+          # tag reproducible from the commit, so a rerun republishes the same
+          # release instead of adding one.
           count=$(git rev-list --count HEAD -- koreader-plugin)
-          echo "value=0.$count" >> "$GITHUB_OUTPUT"
-          echo "tag=plugin-0.$count" >> "$GITHUB_OUTPUT"
+          day=$(git log -1 --format=%cd --date=format:%Y%m%d HEAD)
+          echo "value=$day.$count" >> "$GITHUB_OUTPUT"
+          echo "tag=plugin-$day.$count" >> "$GITHUB_OUTPUT"
 
       - name: Build the plugin ZIP
         env:
