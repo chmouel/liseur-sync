@@ -54,25 +54,16 @@ when a page in a shot changes shape.
 ## KOReader plugin
 
 `koreader-plugin/liseur.koplugin` is a Lua client of the native API
-(catalogue, downloads, positions). It has its own checks, outside the Go
-suite: `make koplugin-test` (pure-Lua specs, needs `luajit`) and
-`KOREADER_DIR=/path/to/koreader make koplugin-integration`, which builds
-this server, seeds a throwaway instance and drives the plugin through a
-real KOReader `ReaderUI`. Run both after touching the plugin or any route
-it calls (listed in `koreader-plugin/README.md`). Its module names keep the
-`liseur_` prefix: KOReader shares one `package.path` across plugins.
-
-A push to `main` that touches `koreader-plugin` publishes the plugin: CI
-runs `koreader-plugin/spec/run.lua`, packages the ZIP with a version
-stamped into `_meta.lua`, and cuts a `plugin-0.<commits touching the
-plugin>` release whose asset is what KOReader's App Store installs and
-compares against. The repository topic `koreader-plugin` is what makes it
-searchable there; removing it hides the plugin from the store. The tag
-prefix is load-bearing too: the store parses a version after stripping
-`v`, `release-`, `version-` and `plugin-`, so the prefix must stay
-recognisable. One limit to remember: the store installs assets from the
-repository's *latest* release, so a future server release must not take
-that pointer while the plugin lives in this repository.
+(catalogue, downloads, positions). Its internals, the routes it calls, its
+checks and its release rules live in
+[koreader-plugin/DEVELOPER.md](koreader-plugin/DEVELOPER.md). Read that before
+changing the plugin or a route it uses, then run `make koplugin-test` and, when
+a serve-side change is involved, `KOREADER_DIR=/path/to/koreader make
+koplugin-integration`. Two rules that file states and this one repeats, because
+breaking them is silent: module names keep the `liseur_` prefix, since KOReader
+shares one `package.path` across plugins, and a push to `main` touching
+`koreader-plugin` publishes the release the App Store reads, so the repository
+topic `koreader-plugin` and the `plugin-0.N` tag shape are not decoration.
 
 ## Architecture in one paragraph
 
