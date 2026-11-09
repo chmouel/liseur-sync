@@ -209,6 +209,7 @@ docker compose --profile external up -d
 ### Build from source
 
 ```sh
+go tool templ generate ./internal/webui/
 go build ./cmd/liseur-sync
 ./liseur-sync serve
 ```
