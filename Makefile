@@ -58,21 +58,6 @@ test: generate ## Full suite with the race detector (and PostgreSQL if .env has 
 test-fast: generate ## Same suite without the race detector, for a quick loop
 	@$(loadenv) go test ./...
 
-# The KOReader plugin's pure-Lua specs need only luajit. The integration
-# run also needs an unpacked KOReader: KOREADER_DIR=/path/to/koreader.
-.PHONY: koplugin-test
-koplugin-test: ## KOReader plugin specs (luajit)
-	luajit koreader-plugin/spec/run.lua
-
-.PHONY: koplugin-integration
-koplugin-integration: ## KOReader plugin against a throwaway server (needs KOREADER_DIR)
-	koreader-plugin/spec/integration.sh
-
-.PHONY: koplugin-package
-koplugin-package: ## Build a reproducible liseur.koplugin ZIP into dist/ (VERSION=x stamps _meta.lua)
-	@mkdir -p dist
-	koreader-plugin/package.sh dist/liseur.koplugin.zip
-
 # T is a -run pattern: make test-one T=TestReaderOpens
 .PHONY: test-one
 test-one: generate ## Run one test or package: make test-one T=TestName [P=./internal/api]

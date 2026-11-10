@@ -53,18 +53,19 @@ when a page in a shot changes shape.
 
 ## KOReader plugin
 
-`koreader-plugin/liseur.koplugin` is a Lua client of the native API
-(catalogue, downloads, positions). Its internals, the routes it calls, its
-checks and its release rules live in
-[koreader-plugin/DEVELOPER.md](koreader-plugin/DEVELOPER.md). Read that before
-changing the plugin or a route it uses, then run `make koplugin-test` and, when
-a serve-side change is involved, `KOREADER_DIR=/path/to/koreader make
-koplugin-integration`. Two rules that file states and this one repeats, because
-breaking them is silent: module names keep the `liseur_` prefix, since KOReader
-shares one `package.path` across plugins, and a push to `main` touching the
-shipped plugin files publishes the release the App Store reads, so the
-repository topic `koreader-plugin` and the `plugin-<YYYYMMDD>.<n>` tag shape are not
-decoration.
+The KOReader plugin lives in its own repository,
+[chmouel/liseur.koplugin](https://github.com/chmouel/liseur.koplugin), and is
+a client of the native API. It calls `GET /v1/token`; `POST /v1/works/resolve`,
+`POST /v1/books/{id}/resolve`; `POST /v1/ops`, `GET /v1/changes`,
+`GET /v1/heads`, `GET /v1/works/{id}/positions`,
+`POST /v1/works/{id}/furthest/forget`; `GET /v1/folders`,
+`GET /v1/folders/{folder}/books`, `GET /v1/books/{id}/download`,
+`GET /v1/books/{id}/cover`; `GET /v1/insights/summary`,
+`GET /v1/insights/calendar` and `GET /v1/insights/works`. Positions go out
+with `progression`, KOReader's location in `foreign_pos` and the file's
+SHA-256 in `edition_sha`. A change to any of those routes or fields breaks
+the plugin; run its integration test (`make integration` there, with
+`LISEUR_SYNC_DIR` pointing at this checkout) before shipping one.
 
 ## Architecture in one paragraph
 
