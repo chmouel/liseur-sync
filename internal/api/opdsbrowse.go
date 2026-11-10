@@ -123,7 +123,7 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
 			{Rel: "up", Href: opdsPrefix + "/folders/" + url.PathEscape(folderID),
 				Type: opdsAcquisitionType},
 		},
@@ -178,8 +178,8 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsNavigationType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
+			{Rel: "up", Href: opdsPrefix, Type: opdsAcquisitionType},
 		},
 	}
 	for _, e := range entities {
@@ -244,7 +244,7 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
 			{Rel: "up", Href: kindHref, Type: opdsNavigationType},
 		},
 	}
@@ -271,60 +271,4 @@ func plainPlural(n int, noun string) string {
 		return "1 " + noun
 	}
 	return strconv.Itoa(n) + " " + noun + "s"
-}
-
-// HandleOPDSRecent serves the folder's newest books, which is the feed a
-// reader opens to see what has arrived since last time. It is reached
-// from the folder's own feed rather than the root, because "recent" only
-// means anything inside one folder.
-func (s *Server) HandleOPDSRecent(w http.ResponseWriter, r *http.Request) {
-	tok, ok := auth.TokenFrom(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	folderID := r.PathValue("folder")
-	if folderID == "" || len(folderID) > maxFolderIDBytes {
-		writeError(w, http.StatusNotFound, "folder not found")
-		return
-	}
-	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	limit := opdsPageSize
-	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, folderID, before, limit)
-	if err != nil {
-		writeCatalogError(w, err, "folder not found")
-		return
-	}
-	folderHref := opdsPrefix + "/folders/" + url.PathEscape(folderID)
-	self := folderHref + "/recent"
-	feed := opdsFeed{
-		ID:      "urn:liseur:folder:" + folderID + ":recent",
-		Title:   "Recently added",
-		Updated: opdsTime(time.Now()),
-		Links: []opdsLink{
-			{Rel: "self", Href: self, Type: opdsAcquisitionType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: folderHref, Type: opdsAcquisitionType},
-		},
-	}
-	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
-	}
-	feed.Entries = entries
-	if len(books) == limit {
-		last := books[len(books)-1]
-		feed.Links = append(feed.Links, opdsLink{
-			Rel:  "next",
-			Type: opdsAcquisitionType,
-			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
-				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
-		})
-	}
-	writeOPDS(w, r, opdsAcquisitionType, feed)
 }

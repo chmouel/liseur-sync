@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,16 +100,20 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("root: %d %s", resp.StatusCode, raw)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "kind=navigation") {
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "kind=acquisition") {
 		t.Fatalf("root content-type = %q", ct)
 	}
 	root := parseFeed(t, raw)
-	if len(root.Entries) != 1 {
+	if len(root.Entries) != 2 {
 		t.Fatalf("root entries = %+v", root.Entries)
 	}
 	folderHref := linkHref(t, root.Entries[0].Links, "subsection")
 	if folderHref == "" {
 		t.Fatalf("no subsection link: %+v", root.Entries[0])
+	}
+	if root.Entries[1].Title != "Feed Walked Book" ||
+		linkHref(t, root.Entries[1].Links, opdsAcquisitionRel) == "" {
+		t.Fatalf("root does not carry the book: %+v", root.Entries[1])
 	}
 
 	resp, raw = f.opds(t, folderHref, "token", read)
@@ -299,6 +305,85 @@ func TestOPDSPagesWithoutLosingBooks(t *testing.T) {
 	}
 }
 
+// TestOPDSRootSyncsTheWholeLibraryNewestFirst walks the root the way
+// KOReader's catalog sync does: skip the leading entries that carry no
+// acquisition link, take the first book as the newest, follow `next`.
+// Every book of every granted folder must come out once, newest first,
+// and a folder the account was not granted must not leak into it.
+func TestOPDSRootSyncsTheWholeLibraryNewestFirst(t *testing.T) {
+	f := newFolderFixture(t)
+	var want []string
+	for i := range opdsPageSize + 2 {
+		id, _ := f.publish(t, fmt.Sprintf("root-%02d", i), []byte(fmt.Sprintf("root-body-%d", i)))
+		want = append([]string{"urn:liseur:book:" + id}, want...)
+	}
+	second := store.Folder{
+		ID: store.NewID(), Name: "Comics", RootPath: t.TempDir(), Kind: store.FolderPlain,
+	}
+	if err := f.st.CreateFolder(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(second.RootPath, "nested", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second.RootPath, "nested", "deeper", "newest.epub"),
+		makeEPUB(t, "Newest", "", []byte("newest-body")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcileFolder(t, second)
+	books, err := f.st.BooksInFolder(t.Context(), second.ID)
+	if err != nil || len(books) != 1 {
+		t.Fatalf("second folder books = %+v, %v", books, err)
+	}
+	want = append([]string{"urn:liseur:book:" + books[0].ID}, want...)
+	if err := f.st.UnassignUserFolder(t.Context(), f.other.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	walk := func(token string) (books []string, folders int) {
+		t.Helper()
+		path := "/opds/v1.2"
+		for pages := 1; path != ""; pages++ {
+			if pages > 10 {
+				t.Fatal("root feed never ends")
+			}
+			resp, raw := f.opds(t, path, "token", token)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("root page %d: %d %s", pages, resp.StatusCode, raw)
+			}
+			feed := parseFeed(t, raw)
+			for _, e := range feed.Entries {
+				if linkHref(t, e.Links, opdsAcquisitionRel) == "" {
+					if pages > 1 || len(books) > 0 {
+						t.Fatalf("navigation entry %q after the first book", e.ID)
+					}
+					folders++
+					continue
+				}
+				books = append(books, e.ID)
+			}
+			path = linkHref(t, feed.Links, "next")
+		}
+		return books, folders
+	}
+
+	got, folders := walk(f.mintToken(t, f.user.ID, store.ScopeLibraryRead))
+	if folders != 2 {
+		t.Fatalf("root listed %d folders, want 2", folders)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("root books:\n got %v\nwant %v", got, want)
+	}
+
+	got, folders = walk(f.mintToken(t, f.other.ID, store.ScopeLibraryRead))
+	if folders != 1 {
+		t.Fatalf("ungranted folder listed at the root: %d folders", folders)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want[1:]) {
+		t.Fatalf("ungranted folder's book leaked:\n got %v\nwant %v", got, want[1:])
+	}
+}
+
 // TestOPDSEscapesHostileMetadata: titles come from the folder's own
 // files, so they are attacker-controlled the moment somebody can write
 // into a watched directory. Many readers render feed text as HTML. The
@@ -350,11 +435,12 @@ func TestOPDSRejectsAMalformedCursor(t *testing.T) {
 	f := newFolderFixture(t)
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
-	for _, cursor := range []string{"!!!", "eyJ0Ijoibm90LWEtdGltZSJ9", "e30"} {
-		resp, _ := f.opds(t,
-			"/opds/v1.2/folders/"+f.folder.ID+"?cursor="+cursor, "token", read)
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("cursor %q = %d, want 400", cursor, resp.StatusCode)
+	for _, base := range []string{"/opds/v1.2", "/opds/v1.2/folders/" + f.folder.ID} {
+		for _, cursor := range []string{"!!!", "eyJ0Ijoibm90LWEtdGltZSJ9", "e30"} {
+			resp, _ := f.opds(t, base+"?cursor="+cursor, "token", read)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("%s cursor %q = %d, want 400", base, cursor, resp.StatusCode)
+			}
 		}
 	}
 }

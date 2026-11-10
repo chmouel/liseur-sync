@@ -3074,22 +3074,33 @@ paths:
   /opds/v1.2:
     get:
       tags: [opds]
-      summary: OPDS 1.2 navigation feed
+      summary: OPDS 1.2 catalog root
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
         The catalog root for e-reader clients, and the only entry point
-        they need: it lists the server's folders, each linking to its
-        acquisition feed. `/opds/v1.2/` is accepted too, because readers
+        they need. The first page lists the folders the credential is
+        granted, each linking to its acquisition feed, followed by the
+        newest books across all of those folders. A `next` link continues
+        with books only, newest first, 20 per page. A reader's catalog
+        sync can be pointed here: it skips the folder entries, takes the
+        first book as the newest and follows `next` until it reaches the
+        last one it took. `/opds/v1.2/` is accepted too, because readers
         differ on the trailing slash.
 
         OPDS is catalog-only by design. It exposes no reading positions,
         sessions or statistics even when the token also carries `sync`.
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
       responses:
         "200":
-          description: An Atom navigation feed
+          description: An Atom acquisition feed, newest first
           content:
-            application/atom+xml;profile=opds-catalog;kind=navigation:
+            application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
         "401": { description: "Missing or invalid credentials; carries WWW-Authenticate" }
         "403": { $ref: "#/components/responses/Error", description: "Valid credential without library-read" }
 
@@ -3099,9 +3110,9 @@ paths:
       summary: OPDS 1.2 acquisition feed for one folder
       security: [{ opdsBasic: [] }]  # requires library-read scope
       description: |
-        One page of books, each with an EPUB acquisition link. A `next`
-        link appears while more pages remain; readers follow it rather
-        than constructing cursors.
+        One page of books, newest first, each with an EPUB acquisition
+        link. A `next` link appears while more pages remain; readers
+        follow it rather than constructing cursors.
 
         A page carries at most 20 books. That is deliberately fewer than
         the native catalog: an embedded catalog client parses a feed as
@@ -3165,31 +3176,6 @@ paths:
             application/atom+xml;profile=opds-catalog;kind=acquisition:
               schema: { type: string }
         "400": { $ref: "#/components/responses/Error", description: "Over-long query" }
-        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
-
-  /opds/v1.2/folders/{folder}/recent:
-    get:
-      tags: [opds]
-      summary: OPDS acquisition feed of a folder's newest books
-      security: [{ opdsBasic: [] }]  # requires library-read scope
-      description: |
-        The feed a reader opens to see what has arrived since last time,
-        reached from the `http://opds-spec.org/sort/new` link on the
-        folder's own feed. It is `order=recent` on the native listing,
-        rendered as a feed.
-      parameters:
-        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
-        - name: cursor
-          in: query
-          schema: { type: string }
-          description: Opaque; only ever taken from a `next` link.
-      responses:
-        "200":
-          description: An Atom acquisition feed, newest first
-          content:
-            application/atom+xml;profile=opds-catalog;kind=acquisition:
-              schema: { type: string }
-        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
         "404": { $ref: "#/components/responses/Error", description: "No such folder" }
 
   /opds/v1.2/entities/{kind}:

@@ -100,18 +100,22 @@ type opdsText struct {
 	Body string `xml:",chardata"`
 }
 
-// HandleOPDSRoot serves the navigation feed at /opds/v1.2. It lists the
-// folders this server watches, which is all a reader needs to reach
-// every book: there is no other entry point.
+// HandleOPDSRoot serves the feed at /opds/v1.2: the folders this server
+// watches, then every book those folders hold, newest first. The books
+// are what makes the root the one URL a syncing reader needs: KOReader's
+// catalog sync takes the first book of the configured feed as the newest
+// and walks `next` until it meets the last one it downloaded, and it
+// skips the folder entries because they carry no acquisition link. The
+// folders appear on the first page only; later pages are books.
 func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 	tok, ok := auth.TokenFrom(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
+	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "folder lookup failed")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	feed := opdsFeed{
@@ -119,28 +123,57 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 		Title:   "Liseur",
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
-			{Rel: "self", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "self", Href: opdsPrefix, Type: opdsAcquisitionType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
 		},
 	}
-	for _, f := range folders {
-		href := opdsPrefix + "/folders/" + url.PathEscape(f.ID)
-		feed.Entries = append(feed.Entries, opdsEntry{
-			Title:   opdsTitle(f.Name, "Folder"),
-			ID:      "urn:liseur:folder:" + f.ID,
-			Updated: opdsTime(f.UpdatedAt),
-			Content: &opdsText{Type: "text", Body: "Books in this folder"},
-			Links: []opdsLink{
-				{Rel: "subsection", Href: href, Type: opdsAcquisitionType},
-			},
+	if before == nil {
+		folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "folder lookup failed")
+			return
+		}
+		for _, f := range folders {
+			href := opdsPrefix + "/folders/" + url.PathEscape(f.ID)
+			feed.Entries = append(feed.Entries, opdsEntry{
+				Title:   opdsTitle(f.Name, "Folder"),
+				ID:      "urn:liseur:folder:" + f.ID,
+				Updated: opdsTime(f.UpdatedAt),
+				Content: &opdsText{Type: "text", Body: "Books in this folder"},
+				Links: []opdsLink{
+					{Rel: "subsection", Href: href, Type: opdsAcquisitionType},
+				},
+			})
+		}
+	}
+	limit := opdsPageSize
+	books, err := s.St.ListRecentLibraryBooks(r.Context(), tok.UserID, before, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	feed.Entries = append(feed.Entries, entries...)
+	if len(books) == limit {
+		last := books[len(books)-1]
+		feed.Links = append(feed.Links, opdsLink{
+			Rel:  "next",
+			Type: opdsAcquisitionType,
+			Href: opdsPrefix + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
+				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
 		})
 	}
-	writeOPDS(w, r, opdsNavigationType, feed)
+	writeOPDS(w, r, opdsAcquisitionType, feed)
 }
 
-// HandleOPDSFolder serves the acquisition feed for one folder. It is
-// paginated with the same cursor as the native catalog, exposed to the
-// reader only as an opaque `next` link.
+// HandleOPDSFolder serves the acquisition feed for one folder, newest
+// first like the root, so a folder URL is a catalog a reader can sync
+// too. It is paginated with the same cursor as the native catalog,
+// exposed to the reader only as an opaque `next` link.
 func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 	tok, ok := auth.TokenFrom(r)
 	if !ok {
@@ -152,7 +185,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "folder not found")
 		return
 	}
-	after, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -166,7 +199,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := opdsPageSize
-	books, err := s.St.ListCatalogBooks(r.Context(), tok.UserID, folderID, after, limit)
+	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, folderID, before, limit)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "folder not found")
@@ -183,8 +216,8 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
 			{Rel: "self", Href: self, Type: opdsAcquisitionType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsNavigationType},
-			{Rel: "up", Href: opdsPrefix, Type: opdsNavigationType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
+			{Rel: "up", Href: opdsPrefix, Type: opdsAcquisitionType},
 			// Discovery, not decoration: a reader learns how to search
 			// and how to browse from the feed it already has, so neither
 			// URL has to be configured anywhere.
@@ -192,12 +225,6 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 				Title: "Search this folder"},
 		},
 	}
-	feed.Links = append(feed.Links, opdsLink{
-		// `new` is the OPDS relation for it, so a reader that knows the
-		// spec finds this without being told the path.
-		Rel: "http://opds-spec.org/sort/new", Href: self + "/recent",
-		Type: opdsAcquisitionType, Title: "Recently added",
-	})
 	for _, segment := range []string{"series", "contributors", "tags"} {
 		// These browse the whole library rather than this folder
 		// (ADR-0019), which is why they hang off the root prefix.

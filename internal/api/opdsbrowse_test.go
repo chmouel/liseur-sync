@@ -166,20 +166,11 @@ func TestRecentlyAddedIsTheCatalogFromTheOtherEnd(t *testing.T) {
 		t.Fatalf("unknown order: %d, want 400", code)
 	}
 
-	// The same order is a feed a reader finds from the folder's own.
-	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	folderHref := linkHref(t, parseFeed(t, raw).Entries[0].Links, "subsection")
-	_, raw = f.opds(t, folderHref, "token", read)
-	recent := linkHref(t, parseFeed(t, raw).Links, "http://opds-spec.org/sort/new")
-	if recent == "" {
-		t.Fatalf("no recently-added link:\n%s", raw)
-	}
-	resp, raw := f.opds(t, recent, "token", read)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("recent: %d %s", resp.StatusCode, raw)
-	}
+	// The OPDS folder feed lists in the same order, so a reader syncing
+	// it takes the newest book first.
+	_, raw := f.opds(t, "/opds/v1.2/folders/"+f.folder.ID, "token", read)
 	feed := parseFeed(t, raw)
 	if len(feed.Entries) != 2 || feed.Entries[0].Title != "The Newer One" {
-		t.Fatalf("recent feed = %+v", feed.Entries)
+		t.Fatalf("folder feed = %+v", feed.Entries)
 	}
 }

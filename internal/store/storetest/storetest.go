@@ -94,6 +94,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("CatalogListingsPageAndIsolate", func(t *testing.T) {
 		testCatalogListingsPageAndIsolate(t, open)
 	})
+	t.Run("RecentLibraryBooks", func(t *testing.T) { testRecentLibraryBooks(t, open) })
 	t.Run("AvailableBookMediaTypes", func(t *testing.T) {
 		testAvailableBookMediaTypes(t, open)
 	})

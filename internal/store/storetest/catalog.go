@@ -217,6 +217,85 @@ func testCatalogListingsPageAndIsolate(t *testing.T, open OpenFunc) {
 	}
 }
 
+// testRecentLibraryBooks covers the library-wide newest-first listing:
+// books of every granted folder interleave by creation time, an
+// ungranted folder and a missing book never appear, and the cursor pages
+// without gaps or repeats.
+func testRecentLibraryBooks(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	// Folders first: MkFolder grants every existing user, and this test
+	// needs one folder the reader was never given.
+	first := MkFolder(t, s, "library-recent-a", store.FolderPlain)
+	second := MkFolder(t, s, "library-recent-b", store.FolderPlain)
+	hidden := MkFolder(t, s, "library-recent-hidden", store.FolderPlain)
+	reader := store.User{
+		ID: "library-recent-reader", Name: "library-recent-reader", Argon2Hash: "x",
+		Timezone: "UTC", CreatedAt: now,
+	}
+	if err := s.CreateUser(ctx, reader); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []store.Folder{first, second} {
+		if err := s.AssignUserFolder(ctx, reader.ID, folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Date(2026, time.November, 1, 9, 0, 0, 0, time.UTC)
+	book := func(title string) store.ObservedBook {
+		return store.ObservedBook{
+			RelativePath: title + ".epub", SizeBytes: 1, MTime: base,
+			ContentSHA256: "sha-library-recent-" + title, Title: title,
+		}
+	}
+	// Each folder's pass observes everything it already holds, so
+	// earlier books stay active while later ones get later times.
+	seen := map[string][]store.ObservedBook{}
+	add := func(folder store.Folder, title string, at int) {
+		seen[folder.ID] = append(seen[folder.ID], book(title))
+		doReconcile(t, s, folder.ID, seen[folder.ID], true, base.Add(time.Duration(at)*time.Second))
+	}
+	add(first, "a1", 1)
+	add(second, "b1", 2)
+	add(hidden, "h1", 3)
+	add(first, "a2", 4)
+	add(second, "b2", 5)
+	add(first, "away", 6)
+	// A pass without "away" marks it missing.
+	seen[first.ID] = seen[first.ID][:len(seen[first.ID])-1]
+	doReconcile(t, s, first.ID, seen[first.ID], true, base.Add(7*time.Second))
+
+	var got []string
+	var cursor *store.CatalogBookCursor
+	for {
+		page, err := s.ListRecentLibraryBooks(ctx, reader.ID, cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range page {
+			got = append(got, b.Title)
+		}
+		if len(page) < 2 {
+			break
+		}
+		last := page[len(page)-1]
+		cursor = &store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+	want := []string{"b2", "a2", "b1", "a1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("library recent: got %v want %v", got, want)
+	}
+
+	all, err := s.ListRecentLibraryBooks(ctx, "", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 || all[0].Title != "b2" || all[2].Title != "h1" {
+		t.Fatalf("trusted library recent: %+v", all)
+	}
+}
+
 // testAvailableBookMediaTypes covers the batch read a feed uses to
 // advertise what it actually holds: distinct types, active books only,
 // scoped to the one folder asked about.

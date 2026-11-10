@@ -157,6 +157,42 @@ func (s *Store) ListRecentCatalogBooks(
 	return s.listCatalogBooks(ctx, viewerID, folderID, before, limit, false, false)
 }
 
+func (s *Store) ListRecentLibraryBooks(
+	ctx context.Context, viewerID string, before *store.CatalogBookCursor, limit int,
+) ([]store.CatalogBook, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `SELECT ` + bookColumns + ` FROM books b WHERE b.status = 'active'`
+	var args []any
+	if viewerID != "" {
+		query += ` AND EXISTS (SELECT 1 FROM user_folders uf
+			WHERE uf.folder_id = b.folder_id AND uf.user_id = ?)`
+		args = append(args, viewerID)
+	}
+	if before != nil {
+		query += ` AND (b.created_at, b.id) < (?, ?)`
+		args = append(args, formatTime(before.CreatedAt), before.ID)
+	}
+	query += ` ORDER BY b.created_at DESC, b.id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	books := []store.CatalogBook{}
+	for rows.Next() {
+		book, err := scanCatalogBook(rows)
+		if err != nil {
+			return nil, err
+		}
+		books = append(books, book)
+	}
+	return books, rows.Err()
+}
+
 // ListAudiobookCatalogBooks pages the same books, keeping only those with
 // a playable audiobook (see playableAudiobookClause).
 func (s *Store) ListAudiobookCatalogBooks(

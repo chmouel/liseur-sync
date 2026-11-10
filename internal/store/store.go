@@ -1774,6 +1774,10 @@ type Store interface {
 	// ListRecentCatalogBooks pages the same books newest first, for the
 	// "recently added" shelf and the OPDS feed of the same name.
 	ListRecentCatalogBooks(ctx context.Context, viewerID, folderID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
+	// ListRecentLibraryBooks pages the active books of every folder the
+	// viewer is granted, newest first, for the OPDS root feed a syncing
+	// reader walks until it meets the last book it took.
+	ListRecentLibraryBooks(ctx context.Context, viewerID string, before *CatalogBookCursor, limit int) ([]CatalogBook, error)
 	// CatalogBookRelationsForBooks reads the contributors and series of a
 	// whole page of books at once, so that rendering a shelf costs one
 	// query rather than one per book (ADR-0015).

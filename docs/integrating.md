@@ -1635,15 +1635,22 @@ keeps its catalog credential in plain text on the device, so it gets a
 credential that can only read books and that can be revoked on its own.
 Create one per device.
 
-The root feed lists the folders that credential can read; each links to
-an acquisition feed of books, and each book to its EPUB. Feeds are
-catalog-only; they never expose positions, sessions or statistics, even
-if the same token also carries `sync`. Pair OPDS with the kosync adapter
-to get downloads and position sync on a stock device.
+The root feed lists the folders that credential can read, then every
+book in those folders, newest first; each folder links to an acquisition
+feed of its own books, also newest first, and each book to its EPUB.
+Feeds are catalog-only; they never expose positions, sessions or
+statistics, even if the same token also carries `sync`. Pair OPDS with
+the kosync adapter to get downloads and position sync on a stock device.
 
-A folder feed also carries a `http://opds-spec.org/sort/new` link to its
-newest books, a `search` link to an OpenSearch description, and
-`http://opds-spec.org/facet` links to its series, contributors and tags.
+KOReader's catalog sync (and the OPDS Plus plugin) works from the root
+URL: it skips the folder entries, takes the first book as the newest and
+follows `next` until it reaches the book it downloaded last. Point it at
+a folder URL instead to sync one folder. The client downloads at most
+its "maximum sync size" per run (50 by default), so raise it, or sync
+more than once, for the first pass over a large library.
+
+A folder feed also carries a `search` link to an OpenSearch description,
+and `http://opds-spec.org/facet` links to its series, contributors and tags.
 A reader discovers them from the feed it already has; neither URL needs
 configuring. The search template offers `searchTerms` and nothing else,
 which is how reading state stays off this surface even for a token that
