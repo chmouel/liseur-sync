@@ -705,8 +705,8 @@ func (s *Server) handleAdminCreateKoplugin(
 			}); err != nil {
 				return "", "", err
 			}
-			return capability, "Capability for " + target.Name +
-				": put it in the plugin's server URL, /adapter/koplugin/<capability>", nil
+			return kopluginURL(s.serverBaseURL(r), capability),
+				"KoInsight server URL for " + target.Name + " (" + label + "). " + kopluginHint, nil
 		})
 }
 

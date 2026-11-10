@@ -21,6 +21,9 @@ templ adminFlash(flash Flash) {
 				<code class="big" id="flash-secret-value">{ flash.Secret }</code>
 				<button type="button" class="copy-btn" data-copy-for="flash-secret-value">Copy</button>
 			</p>
+			if flash.SecretHint != "" {
+				<p class="muted">{ flash.SecretHint }</p>
+			}
 		</div>
 	}
 }
@@ -331,9 +334,9 @@ templ adminUserBody(prefix string, csrf string, v adminUserView, flash Flash) {
 		<details class="setup-guide">
 			<summary>Add a statistics plugin device</summary>
 			<p class="muted">
-				A capability URL for KOReader's statistics plugin, shown once.
-				The plugin's server is
-				<code>{ v.Base + "/adapter/koplugin/<capability>" }</code>.
+				Generates a secret server URL for KOReader's KoInsight plugin,
+				<code>{ v.Base + "/adapter/koplugin/" }</code> followed by a long
+				random string. It is shown once; hand the whole URL to the reader.
 			</p>
 			<form method="post" action={ prefix + "admin/users/" + v.User.ID + "/koplugin" }>
 				<input type="hidden" name="csrf" value={ csrf }/>

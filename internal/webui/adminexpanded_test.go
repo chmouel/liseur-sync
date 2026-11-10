@@ -392,7 +392,7 @@ func TestAdminMintsCredentialsForAnotherAccount(t *testing.T) {
 	_, body = postForm(t, ts, cookie, "/ui/admin/users/"+bob.ID+"/koplugin", url.Values{
 		"csrf": {csrf}, "name": {"clara"}, "admin_password": {"hunter2hunter"},
 	})
-	if !strings.Contains(body, "Capability for bob") {
+	if !strings.Contains(body, "KoInsight server URL for bob") || !strings.Contains(body, "/adapter/koplugin/") {
 		t.Fatalf("koplugin: %s", body)
 	}
 	devs, err := st.ListKopluginDevices(ctx, bob.ID)

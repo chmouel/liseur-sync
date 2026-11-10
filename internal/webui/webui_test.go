@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -325,8 +326,13 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 	code, body = postForm(t, ts, cookie, "/ui/koplugin", url.Values{
 		"name": {"Kobo"}, "csrf": {csrf},
 	})
-	if code != 200 || !strings.Contains(body, "capability") {
+	if code != 200 || !strings.Contains(body, "KoInsight server URL for Kobo") {
 		t.Fatalf("koplugin create: %d", code)
+	}
+	// The flash carries the whole URL, so nobody has to assemble it from
+	// a placeholder by hand.
+	if !regexp.MustCompile(`id="flash-secret-value">https?://[^<]+/adapter/koplugin/[A-Za-z0-9_-]{20,}<`).MatchString(body) {
+		t.Fatalf("koplugin flash does not show the full server URL: %s", body)
 	}
 	devs, _ := st.ListKopluginDevices(t.Context(), "u1")
 	if len(devs) != 1 {

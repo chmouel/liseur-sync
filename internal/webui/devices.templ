@@ -7,7 +7,9 @@ import "net/url"
 type Flash struct {
 	Secret      string
 	SecretLabel string
-	Notice      string
+	// SecretHint says where the secret goes, under the copy button.
+	SecretHint string
+	Notice     string
 	// Error is a refusal the reader has to read: a wrong password, a
 	// name already taken, a guard that fired. It renders in the danger
 	// colour above the page's forms.
@@ -32,6 +34,9 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 				<code class="big" id="flash-secret-value">{ flash.Secret }</code>
 				<button type="button" class="copy-btn" data-copy-for="flash-secret-value">Copy</button>
 			</p>
+			if flash.SecretHint != "" {
+				<p class="muted">{ flash.SecretHint }</p>
+			}
 		</div>
 	}
 	if flash.Error != "" {
@@ -261,10 +266,12 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 			<h2>KOReader statistics plugin</h2>
 			<details class="setup-guide" open?={ len(kopluginDevs) == 0 }>
 				<summary>Setup instructions</summary>
-				<p class="muted">
-					Point the plugin's server at
-					<code>{ base + "/adapter/koplugin/<capability>" }</code>.
-				</p>
+				<ol class="muted">
+					<li>Install the KoInsight plugin (<code>koinsight.koplugin</code>) in KOReader's <code>plugins/</code> folder.</li>
+					<li>Name the device below and press <b>New capability</b>. The server generates a secret URL of the form <code>{ base + "/adapter/koplugin/" }</code> followed by a long random string, and shows it once.</li>
+					<li>Copy that whole URL into KoInsight's <b>Server URL</b>, with no trailing slash. The device name is not part of it.</li>
+				</ol>
+				<p class="muted">The URL is the credential: anyone holding it can upload statistics to your account. Lost it? Revoke the device and create a new one.</p>
 			</details>
 			<form method="post" action={ prefix + "koplugin" } class="inline">
 				<input type="hidden" name="csrf" value={ csrf }/>

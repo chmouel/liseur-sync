@@ -535,7 +535,11 @@ func (s *Server) handleCreateKoplugin(w http.ResponseWriter, r *http.Request, a 
 		ID: id, UserID: u.ID, TokenSHA256: auth.HashSecret(capability),
 		Label: name, DeviceID: "koplugin:" + name, CreatedAt: time.Now(),
 	})
-	s.renderDevices(w, r, a, u, Flash{Secret: capability, SecretLabel: "koplugin capability URL token"})
+	s.renderDevices(w, r, a, u, Flash{
+		Secret:      kopluginURL(s.serverBaseURL(r), capability),
+		SecretLabel: "KoInsight server URL for " + name,
+		SecretHint:  kopluginHint,
+	})
 }
 
 func (s *Server) handleRevokeKoplugin(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -718,4 +722,10 @@ func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request, a st
 	}
 	_ = s.St.RevokeInvite(r.Context(), u.ID, r.PathValue("id"))
 	s.renderAdminUsers(w, r, a, u, Flash{Notice: "Invite revoked."})
+}
+
+const kopluginHint = "Paste this whole URL into KoInsight's Server URL setting, without a trailing slash."
+
+func kopluginURL(base, capability string) string {
+	return base + "/adapter/koplugin/" + capability
 }

@@ -299,8 +299,10 @@ reconciles the folder immediately and watches it without a restart.
 
 ### Reading statistics from KOReader
 
-`koplugin-device` prints a capability URL, once:
-`https://<host>/adapter/koplugin/<secret>`. Install the KoInsight plugin
+*Settings → Devices → KOReader statistics plugin → New capability* (or
+`koplugin-device` from the shell) prints a capability URL, once:
+`https://<host>/adapter/koplugin/<secret>`, where `<secret>` is a long
+random string the server generates, not the device name. Install the KoInsight plugin
 (`koinsight.koplugin`, from the KoInsight project's `plugins/` directory)
 into KOReader's `plugins/` folder and set its server URL to that URL,
 without a trailing slash. The plugin appends `/api/plugin/import` and
