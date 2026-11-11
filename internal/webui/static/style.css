@@ -3157,6 +3157,13 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 .reader-offline-sync-retry[hidden] { display: none; }
 @media (max-width: 48em) {
 	.reader-offline-sync-state { display: none; }
+	/* With its text hidden the wrapper is a capsule around a bordered
+	   button, so the two edges read as a double outline. */
+	.reader-offline-sync {
+		padding: 0;
+		border: 0;
+		background: none;
+	}
 }
 /* Below the narrowest bar the queue's control stands in for the sync
    button, whose errand it duplicates here: two controls for one action
