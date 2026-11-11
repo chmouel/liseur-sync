@@ -193,6 +193,20 @@ pre.cmd .c { color: #9a92ad; }
   background: radial-gradient(circle at 35% 32%, #30384a, #05060a 62%); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.4); }
 .phone .screen::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(112deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0) 30%); }
 
+/* tablet frame */
+.tablet { position: relative; margin: 0; width: 100%; padding: 4.2%; background: #0f1013; border-radius: 32px;
+  box-shadow: 0 0 0 1.5px #44464c, 0 0 0 3px #17181b, inset 0 0 0 1.5px #25272b,
+    0 40px 54px -30px rgba(43, 33, 64, 0.6), 0 12px 20px -12px rgba(43, 33, 64, 0.45); }
+.tablet .screen { position: relative; overflow: hidden; border-radius: 12px; background: #fff; line-height: 0; }
+.tablet .screen img { display: block; width: 100%; height: auto; }
+.tablet::before { content: ""; position: absolute; top: 1.6%; left: 50%; width: 1.4%; aspect-ratio: 1; transform: translateX(-50%); border-radius: 50%; background: #23262e; }
+.pad { margin: 0; justify-self: center; width: min(100%, 420px); }
+.pad figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); text-align: center; }
+.step .shot.pad { width: min(100%, 380px); justify-self: start; }
+.seen .pad { width: 100%; }
+.seen .pad .tablet { border-radius: 24px; }
+.step .shot.pad img { border: 0; border-radius: 0; }
+
 /* a lavender stage the phones stand in, cropped by its bottom edge */
 .stage { position: relative; background: #ddd3ee; border-radius: 28px; overflow: hidden; }
 .stage.sm { height: 470px; padding-top: 38px; display: flex; justify-content: center; align-items: flex-start; }

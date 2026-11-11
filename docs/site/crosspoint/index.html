@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Set up CrossPoint with liseur-sync</title>
+<title>Set up CrossPoint with LiseurSync</title>
 <link rel="icon" href="../img/icon.svg" type="image/svg+xml">
-<meta name="description" content="Connect an Xteink running CrossPoint to your liseur-sync server: sync your reading position, download books from your library and record reading time.">
+<meta name="description" content="Connect an Xteink running CrossPoint to your LiseurSync server: sync your reading position, download books from your library and record reading time.">
 <link rel="stylesheet" href="../site.css">
 </head>
 <body>
@@ -15,9 +15,10 @@
   <div class="wrap">
     <a class="brand" href="../"><img src="../img/icon.svg" width="28" height="28" alt="">Liseur<small>sync</small></a>
     <nav aria-label="Page sections">
-      <a href="../">liseur-sync</a>
+      <a href="../">LiseurSync</a>
       <a href="../liseur/">Android</a>
       <a href="../koreader/">KOReader</a>
+      <a href="../ipad/">iPad</a>
       <a href="#steps">The steps</a>
       <a href="#check">What you'll see</a>
       <a href="#help">If it doesn't work</a>
@@ -35,7 +36,7 @@
       <p class="hero-note">Position sync takes a few minutes. The library and the statistics are optional and can be added later.</p>
     </div>
     <figure class="device">
-      <div class="bezel"><img src="../img/cp-5-library.png" width="528" height="792" alt="CrossPoint's OPDS browser on an Xteink showing the books on the liseur-sync server, with Treasure Island selected."></div>
+      <div class="bezel"><img src="../img/cp-5-library.png" width="528" height="792" alt="CrossPoint's OPDS browser on an Xteink showing the books on the LiseurSync server, with Treasure Island selected."></div>
       <figcaption>Your library, browsed from the Xteink.</figcaption>
     </figure>
   </div>
@@ -45,7 +46,7 @@
   <div class="wrap">
     <h2 id="before">Before you start</h2>
     <ul>
-      <li>An account on your liseur-sync server, the one you sign into with a username and password.</li>
+      <li>An account on your LiseurSync server, the one you sign into with a username and password.</li>
       <li>An Xteink X3 or X4 running CrossPoint, connected to Wi-Fi.</li>
       <li>A computer to read the codes from the website and to copy the statistics plugin onto the reader.</li>
     </ul>
@@ -60,11 +61,11 @@
       <div class="n" aria-hidden="true">1</div>
       <div class="text">
         <h3>Get a pairing code</h3>
-        <p>On your computer, sign into liseur-sync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>KOReader (kosync)</b> box, press <b>Generate pairing code</b>. CrossPoint syncs the same way KOReader does, so it uses the same box.</p>
+        <p>On your computer, sign into LiseurSync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>KOReader (kosync)</b> box, press <b>Generate pairing code</b>. CrossPoint syncs the same way KOReader does, so it uses the same box.</p>
         <p>The code is shown once. Save it in your password manager under the name you will give the reader, because it becomes the reader's sync password and you need it again in step 4.</p>
       </div>
       <figure class="shot">
-        <img src="../img/web-cp-code.png" width="1784" height="383" alt="The pairing code box on the liseur-sync Devices page, showing a one-time code with a Copy button.">
+        <img src="../img/web-cp-code.png" width="1784" height="383" alt="The pairing code box on the LiseurSync Devices page, showing a one-time code with a Copy button.">
         <figcaption>The pairing code is shown once and works for 15 minutes.</figcaption>
       </figure>
     </div>
@@ -154,9 +155,9 @@
     <div class="seen">
       <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-2-signup.png" width="528" height="792" alt="CrossPoint saying Account created, CrossPoint sync is ready to use."></div>
         <figcaption><strong>Signed up</strong>The reader is paired with your account.</figcaption></figure>
-      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-3-opds-servers.png" width="528" height="792" alt="The OPDS Servers list with liseur-sync in it."></div>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-3-opds-servers.png" width="528" height="792" alt="The OPDS Servers list with LiseurSync in it."></div>
         <figcaption><strong>OPDS Servers</strong>Your server, added under Connectivity.</figcaption></figure>
-      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-4-opds-server.png" width="528" height="792" alt="The OPDS server settings with the server name liseur-sync, the address ending in /opds/v1.2 and the username token."></div>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-4-opds-server.png" width="528" height="792" alt="The OPDS server settings with the server name LiseurSync, the address ending in /opds/v1.2 and the username token."></div>
         <figcaption><strong>Its settings</strong>The address ends in /opds/v1.2 and the username is token.</figcaption></figure>
       <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-6-book.png" width="528" height="792" alt="Treasure Island in the OPDS browser with its cover and Details and Download buttons."></div>
         <figcaption><strong>A book from the server</strong>Download puts it on the reader.</figcaption></figure>

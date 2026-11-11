@@ -154,12 +154,16 @@ The reader design and security model are documented in [ADR-0007](docs/adr/0007-
 
 ### Offline PWA
 
-Liseur-sync's web UI ships as a PWA that lets you read books offline. From the
-library, choose **Save offline** for each book you want to carry, then install
-the site via your browser's "Add to Home Screen" option (Safari, Chrome, etc.).
+Liseur-sync's web UI ships as a PWA that lets you read books offline. Install
+the site with your browser's "Add to Home Screen" option (Safari, Chrome, etc.),
+open the installed app and sign in there, then choose **Save offline** for each
+book you want to carry. Books saved in the browser beforehand do not carry over
+to the installed app on iOS.
 The installed app opens downloaded books without a network connection and keeps
 positions, reading sessions, highlights and notes locally until it can
 reconnect.
+
+**[Install it on an iPad, step by step](https://chmouel.github.io/liseur-sync/ipad/)**
 
 ### Audiobooks
 
