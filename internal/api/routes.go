@@ -593,6 +593,8 @@ func (s *Server) Routes() *http.ServeMux {
 		opdsH("GET /opds/v1.2/folders/{folder}/search.xml", s.HandleOPDSSearchDescription))
 	mux.Handle("GET /opds/v1.2/folders/{folder}/search",
 		opdsH("GET /opds/v1.2/folders/{folder}/search", s.HandleOPDSSearch))
+	mux.Handle("GET /opds/v1.2/shelves/{shelf}",
+		opdsH("GET /opds/v1.2/shelves/{shelf}", s.HandleOPDSShelf))
 	mux.Handle("GET /opds/v1.2/entities/{kind}",
 		opdsH("GET /opds/v1.2/entities/{kind}", s.HandleOPDSEntities))
 	mux.Handle("GET /opds/v1.2/entities/{kind}/{entity}",

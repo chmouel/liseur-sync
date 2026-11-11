@@ -39,6 +39,7 @@ const opdsPageSize = 20
 const opdsSummaryLimit = 400
 
 const (
+	opdsFacetRel        = "http://opds-spec.org/facet"
 	opdsNavigationType  = "application/atom+xml;profile=opds-catalog;kind=navigation"
 	opdsAcquisitionType = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 	opdsAcquisitionRel  = "http://opds-spec.org/acquisition"
@@ -138,27 +139,30 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
 		return
 	}
-	feed.Entries = append(feed.Entries, entries...)
-	// Folders follow the books: KOReader's OPDS sync reads the first entry
-	// as the newest book and crashes on a navigation entry there.
-	if before == nil {
-		folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "folder lookup failed")
-			return
-		}
-		for _, f := range folders {
-			href := opdsPrefix + "/folders/" + url.PathEscape(f.ID)
-			feed.Entries = append(feed.Entries, opdsEntry{
-				Title:   opdsTitle(f.Name, "Folder"),
-				ID:      "urn:liseur:folder:" + f.ID,
-				Updated: opdsTime(f.UpdatedAt),
-				Content: &opdsText{Type: "text", Body: "Books in this folder"},
-				Links: []opdsLink{
-					{Rel: "subsection", Href: href, Type: opdsAcquisitionType},
-				},
-			})
-		}
+	// Every entry is a book. KOReader's OPDS sync reads acquisitions[1] on
+	// every entry it walks and crashes on a navigation entry anywhere in
+	// the feed, so the shelves, folders and browse-by pages are facet
+	// links in the header, which a reader offers as a menu.
+	feed.Entries = entries
+	feed.Links = append(feed.Links, opdsShelfFacets()...)
+	folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "folder lookup failed")
+		return
+	}
+	for _, f := range folders {
+		feed.Links = append(feed.Links, opdsLink{
+			Rel:  opdsFacetRel,
+			Href: opdsPrefix + "/folders/" + url.PathEscape(f.ID),
+			Type: opdsAcquisitionType, Title: opdsTitle(f.Name, "Folder"),
+		})
+	}
+	for _, segment := range []string{"series", "contributors", "tags"} {
+		feed.Links = append(feed.Links, opdsLink{
+			Rel:  opdsFacetRel,
+			Href: opdsPrefix + "/entities/" + segment,
+			Type: opdsNavigationType, Title: opdsKindTitles[segment],
+		})
 	}
 	if len(books) == limit {
 		last := books[len(books)-1]
@@ -231,7 +235,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		// These browse the whole library rather than this folder
 		// (ADR-0019), which is why they hang off the root prefix.
 		feed.Links = append(feed.Links, opdsLink{
-			Rel:  "http://opds-spec.org/facet",
+			Rel:  opdsFacetRel,
 			Href: opdsPrefix + "/entities/" + segment,
 			Type: opdsNavigationType, Title: opdsKindTitles[segment],
 		})

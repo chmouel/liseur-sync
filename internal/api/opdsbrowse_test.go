@@ -33,7 +33,7 @@ func TestOPDSReaderDiscoversSearchAndUsesIt(t *testing.T) {
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	folderHref := linkHref(t, parseFeed(t, raw).Entries[len(parseFeed(t, raw).Entries)-1].Links, "subsection")
+	folderHref := rootFolderHref(t, parseFeed(t, raw))
 	_, raw = f.opds(t, folderHref, "token", read)
 	descHref := linkHref(t, parseFeed(t, raw).Links, "search")
 	if descHref == "" {
@@ -87,7 +87,7 @@ func TestOPDSBrowsesBySeriesAndContributor(t *testing.T) {
 	read := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 
 	_, raw := f.opds(t, "/opds/v1.2", "token", read)
-	folderHref := linkHref(t, parseFeed(t, raw).Entries[len(parseFeed(t, raw).Entries)-1].Links, "subsection")
+	folderHref := rootFolderHref(t, parseFeed(t, raw))
 	_, raw = f.opds(t, folderHref, "token", read)
 	facet := ""
 	for _, l := range parseFeed(t, raw).Links {

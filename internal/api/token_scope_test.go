@@ -243,6 +243,7 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /opds/v1.2/folders/{folder}":            gateOPDS,
 	"GET /opds/v1.2/folders/{folder}/search.xml": gateOPDS,
 	"GET /opds/v1.2/folders/{folder}/search":     gateOPDS,
+	"GET /opds/v1.2/shelves/{shelf}":             gateOPDS,
 	"GET /opds/v1.2/entities/{kind}":             gateOPDS,
 	"GET /opds/v1.2/entities/{kind}/{entity}":    gateOPDS,
 	"GET /opds/v1.2/books/{id}/download":         gateOPDS,

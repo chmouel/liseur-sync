@@ -1638,16 +1638,22 @@ Create one per device.
 The root feed lists the folders that credential can read, then every
 book in those folders, newest first; each folder links to an acquisition
 feed of its own books, also newest first, and each book to its EPUB.
-Feeds are catalog-only; they never expose positions, sessions or
-statistics, even if the same token also carries `sync`. Pair OPDS with
+Feeds never expose positions, sessions or statistics, even if the same
+token also carries `sync`. The one use of reading state is the shelves
+described below, which only choose and order the caller's own books. Pair OPDS with
 the kosync adapter to get downloads and position sync on a stock device.
 
 KOReader's catalog sync (and the OPDS Plus plugin) works from the root
-URL: it skips the folder entries, takes the first book as the newest and
+URL, which lists books only (every entry must carry a download link or
+the client crashes): it takes the first book as the newest and
 follows `next` until it reaches the book it downloaded last. Point it at
 a folder URL instead to sync one folder. The client downloads at most
 its "maximum sync size" per run (50 by default), so raise it, or sync
 more than once, for the first pass over a large library.
+
+The root header carries `http://opds-spec.org/facet` links to the folders,
+to series, contributors and tags, and to four shelves under
+`/opds/v1.2/shelves/`: `reading`, `unread`, `last-read` and `alphabetical`.
 
 A folder feed also carries a `search` link to an OpenSearch description,
 and `http://opds-spec.org/facet` links to its series, contributors and tags.

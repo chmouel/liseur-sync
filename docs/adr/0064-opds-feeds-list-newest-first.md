@@ -23,13 +23,15 @@ at `/folders/{folder}/recent`, which nobody configures.
 
 ## Decision
 
-**The root is an acquisition feed: its first page lists the newest books across
-all granted folders, then the folders. Folder feeds list newest first.**
+**The root is an acquisition feed: it lists the newest books across all granted
+folders and nothing else; folders, shelves and browse-by pages are facet
+links in its header. Folder feeds list newest first.**
 
-- Root page one carries up to 20 books from the granted folders, newest
-  first, followed by one navigation entry per folder. Books come first
-  because KOReader's OPDS sync reads the first entry as the newest book and
-  crashes on a navigation entry there. A `next` link continues with books only. The cursor is the
+- Every root page carries up to 20 books from the granted folders, newest
+  first, and no navigation entries: KOReader's OPDS sync reads
+  `acquisitions[1]` of every entry it walks and crashes on any entry
+  without one. Folders, shelves and series/contributors/tags are
+  `http://opds-spec.org/facet` links in the header instead. A `next` link continues with books only. The cursor is the
   catalog's own `(created_at, id)` keyset, so the walk neither skips nor
   repeats a book.
 - `/opds/v1.2/folders/{folder}` lists newest first. The separate
@@ -53,3 +55,17 @@ twice at the root, as it already did across two folder feeds.
 The root changes media type from navigation to acquisition. OPDS 1.2 gives
 a feed that contains acquisition entries that type, and readers that render
 both kinds of entry (KOReader, CrossPoint) need nothing new.
+
+## Shelves
+
+The root header also carries facet links to four personal shelves at `/opds/v1.2/shelves/{shelf}`:
+`reading` (started, not finished, last read first), `unread`,
+`last-read` (everything opened, last read first) and `alphabetical`.
+
+- They depend on the caller's own reading position, which is why they are
+  per user and never show another reader's state. A `library-read` token
+  therefore reveals which books its owner has started; that is the
+  owner's own data, offered on the owner's own credential.
+- Titles cannot be cut by the catalog cursor, so a shelf loads the viewer's
+  granted books, orders them in memory and pages with an `offset` the
+  `next` link carries. A book added mid-walk can shift a page by one.

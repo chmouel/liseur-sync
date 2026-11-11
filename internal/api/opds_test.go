@@ -104,12 +104,12 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 		t.Fatalf("root content-type = %q", ct)
 	}
 	root := parseFeed(t, raw)
-	if len(root.Entries) != 2 {
+	if len(root.Entries) != 1 {
 		t.Fatalf("root entries = %+v", root.Entries)
 	}
-	folderHref := linkHref(t, root.Entries[1].Links, "subsection")
+	folderHref := rootFolderHref(t, root)
 	if folderHref == "" {
-		t.Fatalf("no subsection link: %+v", root.Entries[1])
+		t.Fatalf("no folder facet: %+v", root.Links)
 	}
 	if root.Entries[0].Title != "Feed Walked Book" ||
 		linkHref(t, root.Entries[0].Links, opdsAcquisitionRel) == "" {
@@ -354,13 +354,16 @@ func TestOPDSRootSyncsTheWholeLibraryNewestFirst(t *testing.T) {
 			feed := parseFeed(t, raw)
 			for _, e := range feed.Entries {
 				if linkHref(t, e.Links, opdsAcquisitionRel) == "" {
-					if pages > 1 || len(books) == 0 {
-						t.Fatalf("navigation entry %q before the first book or past page 1", e.ID)
-					}
-					folders++
-					continue
+					t.Fatalf("navigation entry %q in the sync feed", e.ID)
 				}
 				books = append(books, e.ID)
+			}
+			if pages == 1 {
+				for _, l := range feed.Links {
+					if l.Rel == opdsFacetRel && strings.Contains(l.Href, "/folders/") {
+						folders++
+					}
+				}
 			}
 			path = linkHref(t, feed.Links, "next")
 		}
@@ -872,4 +875,16 @@ func TestOPDSLogsRefusedRequests(t *testing.T) {
 	if strings.Contains(buf.String(), "opds request failed") {
 		t.Fatalf("a successful catalog read was logged as a failure:\n%s", buf.String())
 	}
+}
+
+// rootFolderHref finds the folder link in the root feed's header: the
+// root lists only books, so a reader reaches a folder through a facet.
+func rootFolderHref(t *testing.T, feed parsedFeed) string {
+	t.Helper()
+	for _, l := range feed.Links {
+		if l.Rel == opdsFacetRel && strings.Contains(l.Href, "/folders/") {
+			return l.Href
+		}
+	}
+	return ""
 }
