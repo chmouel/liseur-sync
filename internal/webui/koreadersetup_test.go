@@ -139,6 +139,11 @@ func TestKOReaderSetupDownload(t *testing.T) {
 		t.Fatal("patch and credentials disagree on the OPDS token")
 	}
 
+	if !strings.Contains(patch, `.. "/opds/v2"`) || !strings.Contains(patch, "/opdsplus.lua") ||
+		!strings.Contains(creds, ts.URL+"/opds/v2") {
+		t.Fatal("setup must offer the OPDS 2.0 catalog to OPDS Plus")
+	}
+
 	pins := regexp.MustCompile(`\{ "[a-z_]+\.lua", "[0-9a-f]{64}" \}`).FindAllString(patch, -1)
 	if len(pins) != 8 || !strings.Contains(patch, "https://raw.githubusercontent.com/Ko-Insight/KoInsight/") {
 		t.Fatalf("patch must pin the KoInsight plugin files by checksum: %d entries", len(pins))

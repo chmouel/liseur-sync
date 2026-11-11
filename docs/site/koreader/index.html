@@ -176,7 +176,7 @@
       </details>
       <details>
         <summary>Can I see book covers while browsing?</summary>
-        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. OPDS Plus can also read the JSON catalog at the address ending in <code>/opds/v2</code>, which shows series in reading order and puts your folders, shelves and newest books on separate rows. To sync new books through it, use the address ending in <code>/opds/v2/new</code>.</p>
+        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. OPDS Plus reads the newer OPDS 2.0 catalog at the address ending in <code>/opds/v2</code>, which shows series in reading order and puts your folders, shelves and newest books on separate rows. If OPDS Plus is installed when the setup file runs, it adds that catalog to OPDS Plus as <b>Liseur Sync</b> for you. Install the plugin before you delete the setup file, or add the address yourself with the same login. To sync new books through it, use the address ending in <code>/opds/v2/new</code>.</p>
       </details>
       <details>
         <summary>My device can't use patches</summary>
@@ -184,7 +184,7 @@
       </details>
       <details>
         <summary>What does the file change?</summary>
-        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete it after KoInsight is installed.</p>
+        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs, and to OPDS Plus when that plugin is installed, and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete it after KoInsight is installed.</p>
       </details>
     </div>
   </div>

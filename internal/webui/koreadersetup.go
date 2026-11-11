@@ -160,6 +160,7 @@ func (s koreaderSetup) archive() ([]byte, error) {
 OPDS catalog: %s/opds/v1.2
   username: token
   password: %s
+OPDS 2.0 catalog for the OPDS Plus plugin, same login: %s/opds/v2
 
 Progress sync (KOReader's built-in module)
   custom sync server: %s
@@ -167,7 +168,7 @@ Progress sync (KOReader's built-in module)
   password: %s
 
 KoInsight server URL: %s
-`, s.Base, s.Base, s.APIToken, s.SyncURL, s.SyncSlot, s.SyncPassword, s.StatisticsURL)
+`, s.Base, s.Base, s.APIToken, s.Base, s.SyncURL, s.SyncSlot, s.SyncPassword, s.StatisticsURL)
 	readme := fmt.Sprintf(`KOReader setup for %s
 
 Automatic setup (KOReader with user patches enabled):
@@ -180,11 +181,16 @@ Automatic setup (KOReader with user patches enabled):
 4. Delete patches/1-liseur-setup.lua once the KoInsight plugin is in
    KOReader's plugins/ folder.
 
+If the OPDS Plus plugin (github.com/greywolf1499/opds_plus.koplugin) is
+installed, the setup also adds the OPDS 2.0 catalog to it. Install the
+plugin before deleting the setup file and it is added on the next start.
+
 Manual setup (for example KOReader from F-Droid on Android, which disables
 user patches): enter the values in credentials.txt.
 - Progress sync: Tools > Progress sync > Custom sync server, then
   Register / Login with the username and password.
 - OPDS: Search > OPDS catalog, add the catalog URL with the username and password.
+  With OPDS Plus, add the OPDS 2.0 catalog URL there with the same login.
 - KoInsight: install koinsight.koplugin from github.com/Ko-Insight/KoInsight
   (plugins/ folder), then Tools > KoInsight > Set server URL.
 

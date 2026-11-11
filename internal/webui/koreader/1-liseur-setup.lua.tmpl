@@ -61,8 +61,54 @@ if not installed then
     require("logger").warn("KoInsight plugin not installed, will retry on the next start:", why)
 end
 
+local function add_catalog(servers, entry)
+    for i, server in ipairs(servers) do
+        if server.url == entry.url then
+            servers[i] = entry
+            return
+        end
+    end
+    table.insert(servers, entry)
+end
+
+-- The OPDS Plus plugin keeps a catalog list of its own and reads OPDS 2.0,
+-- so it gets the JSON catalog. A list the plugin never saved is started
+-- from its own defaults rather than emptied. Like KoInsight, this is
+-- retried on each start, so a plugin installed after the setup still gets
+-- the catalog while this file is in patches/.
+local OPDS_PLUS_DIR = "plugins/opds_plus.koplugin"
+
+local function add_opds_plus()
+    local lfs = require("libs/libkoreader-lfs")
+    if lfs.attributes(OPDS_PLUS_DIR .. "/main.lua", "mode") ~= "file" then return false end
+    local plus = LuaSettings:open(DataStorage:getSettingsDir() .. "/opdsplus.lua")
+    local servers = plus:readSetting("servers")
+    if type(servers) ~= "table" then
+        local ok, constants = pcall(dofile, OPDS_PLUS_DIR .. "/models/constants.lua")
+        servers = {}
+        if ok and type(constants) == "table" and type(constants.DEFAULT_SERVERS) == "table" then
+            for _, server in ipairs(constants.DEFAULT_SERVERS) do table.insert(servers, server) end
+        end
+    end
+    add_catalog(servers, { title = "Liseur Sync", url = {{lua .Base}} .. "/opds/v2", username = "token", password = {{lua .APIToken}} })
+    plus:saveSetting("servers", servers)
+    plus:flush()
+    return true
+end
+
 local reader = LuaSettings:open(DataStorage:getDataDir() .. "/settings.reader.lua")
 local setup_id = {{lua .ID}}
+
+if reader:readSetting("liseur_opds_plus_id") ~= setup_id then
+    local ok, added = pcall(add_opds_plus)
+    if not ok then
+        require("logger").warn("OPDS Plus catalog not added, will retry on the next start:", added)
+    elseif added then
+        reader:saveSetting("liseur_opds_plus_id", setup_id)
+        reader:flush()
+    end
+end
+
 if reader:readSetting("liseur_setup_id") == setup_id then return end
 
 local kosync = LuaSettings:open(DataStorage:getSettingsDir() .. "/kosync.lua")
@@ -76,16 +122,7 @@ kosync:flush()
 
 local opds = LuaSettings:open(DataStorage:getSettingsDir() .. "/opds.lua")
 local servers = opds:readSetting("servers", {})
-local entry = { title = "Liseur Sync", url = {{lua .Base}} .. "/opds/v1.2", username = "token", password = {{lua .APIToken}} }
-local replaced = false
-for i, server in ipairs(servers) do
-    if server.url == entry.url then
-        servers[i] = entry
-        replaced = true
-        break
-    end
-end
-if not replaced then table.insert(servers, entry) end
+add_catalog(servers, { title = "Liseur Sync", url = {{lua .Base}} .. "/opds/v1.2", username = "token", password = {{lua .APIToken}} })
 opds:saveSetting("servers", servers)
 opds:flush()
 

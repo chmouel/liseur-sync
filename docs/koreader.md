@@ -37,7 +37,8 @@ Devices page tells you when one of them is off.
 The patch keeps unrelated settings. It replaces any Progress sync account
 already on the reader, adds a *Liseur Sync* entry to the OPDS catalogs
 (replacing an older one for the same server), turns on automatic Progress
-sync and sets KoInsight to sync on suspend.
+sync and sets KoInsight to sync on suspend. When the OPDS Plus plugin is
+installed it also adds the OPDS 2.0 catalog to that plugin's own list.
 
 KoInsight comes from its archived repository at one fixed commit, and each
 file is checked against a known checksum before it is installed. A file that
@@ -99,8 +100,11 @@ The built-in OPDS catalog is a plain list of titles. The optional
 replaces that browser with one that shows covers, a grid view and series
 details. Nothing in this guide needs it. OPDS Plus also reads the JSON
 catalog at the URL ending in `/opds/v2`, which carries series positions and
-shows the folders, shelves and newest books as separate rows. To sync new
-books through it, use the URL ending in `/opds/v2/new`.
+shows the folders, shelves and newest books as separate rows. If OPDS Plus
+is installed, the setup file adds that catalog to it as **Liseur Sync**,
+with the same login; install the plugin before deleting the setup file, or
+add the URL by hand. To sync new books through it, use the URL ending in
+`/opds/v2/new`.
 
 ## Progress sync without a setup file
 
