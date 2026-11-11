@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up KOReader with liseur-sync</title>
+<meta name="description" content="Connect KOReader to your liseur-sync server: download one file, copy it to the e-reader and start KOReader.">
+<style>
+:root {
+  --paper: #eceee9;
+  --paper-deep: #e1e4de;
+  --ink: #14181d;
+  --ink-soft: #4a525b;
+  --rule: #c5cac2;
+  --accent: #5f35a8;
+  --accent-soft: #e6dff3;
+  --bezel: #1c1e21;
+  --serif: Charter, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 18px/1.6 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); text-underline-offset: 0.18em; }
+a:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+code, kbd { font: 0.88em/1 var(--mono); background: var(--paper-deep); padding: 0.14em 0.4em; border-radius: 4px; overflow-wrap: anywhere; }
+.wrap { width: min(1080px, 100% - 48px); margin-inline: auto; }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 12px; top: 12px; background: var(--ink); color: #fff; padding: 8px 12px; z-index: 9; }
+
+header.top { padding: 22px 0; }
+header.top .wrap { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.brand { font: 600 1.25rem var(--serif); color: var(--ink); text-decoration: none; }
+.brand small { font: 400 0.8rem var(--sans); color: var(--ink-soft); margin-left: 6px; }
+header.top nav { display: flex; gap: 22px; font-size: 0.95rem; }
+header.top nav a { color: var(--ink-soft); }
+
+/* hero */
+.hero { padding: 40px 0 88px; }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 56px; align-items: center; }
+h1 { font: 600 clamp(2.4rem, 5.4vw, 4.1rem)/1.04 var(--serif); letter-spacing: -0.015em; margin: 0 0 22px; }
+.lede { font-size: 1.28rem; color: var(--ink-soft); max-width: 34em; margin: 0 0 30px; }
+.button { display: inline-block; background: var(--ink); color: #fff; padding: 13px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; }
+.button:hover { background: var(--accent); }
+.hero-note { margin: 18px 0 0; font-size: 0.95rem; color: var(--ink-soft); }
+
+/* e-reader frame */
+.device { margin: 0; justify-self: center; width: min(100%, 360px); }
+.device .bezel { background: var(--bezel); padding: 16px 16px 40px; border-radius: 22px; box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 18px 34px -18px rgba(20,24,29,.55); }
+.device img { display: block; width: 100%; height: auto; background: #fff; border-radius: 4px; }
+.device figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); text-align: center; }
+
+section.block { padding: 72px 0; border-top: 1px solid var(--rule); }
+h2 { font: 600 clamp(1.7rem, 3.4vw, 2.4rem)/1.12 var(--serif); letter-spacing: -0.01em; margin: 0 0 18px; }
+h3 { font: 600 1.15rem/1.3 var(--sans); margin: 0 0 6px; }
+.prose { max-width: 38em; }
+.prose p { margin: 0 0 1em; }
+
+.before ul { list-style: none; margin: 26px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+.before li { border-top: 3px solid var(--ink); padding-top: 14px; }
+
+/* steps */
+.step { display: grid; grid-template-columns: 84px minmax(0, 1fr) minmax(0, 1fr); gap: 0 36px; align-items: start; }
+.step + .step { margin-top: 88px; }
+.step .n { font: 600 4.6rem/0.9 var(--serif); color: var(--accent); }
+.step .text > :last-child { margin-bottom: 0; }
+.step .shot img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 8px; background: #fff; }
+.step .shot.device img { border: 0; }
+.step .shot figcaption { font-size: 0.92rem; color: var(--ink-soft); margin-top: 10px; }
+.step .shot { margin: 0; }
+.warn { background: var(--accent-soft); border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 0 6px 6px 0; font-size: 0.98rem; margin: 18px 0 0; }
+
+table.where { width: 100%; border-collapse: collapse; margin: 18px 0 4px; font-size: 0.98rem; }
+table.where th, table.where td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.where th { font-weight: 600; width: 7.5em; }
+
+/* gallery of what you will see */
+.seen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 44px 32px; margin-top: 36px; }
+.seen .device { width: 100%; }
+.seen .device .bezel { padding: 12px 12px 30px; border-radius: 18px; }
+.seen figcaption strong { color: var(--ink); display: block; }
+
+/* the three logins */
+.logins { margin-top: 34px; }
+.logins article { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 40px; align-items: center; padding: 28px 0; border-top: 1px solid var(--rule); }
+.logins article:last-child { border-bottom: 1px solid var(--rule); }
+.logins img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 8px; background: #fff; grid-column: 2; grid-row: 1; }
+.logins article > div { grid-column: 1; grid-row: 1; }
+.logins p { margin: 0; color: var(--ink-soft); }
+
+details { border-top: 1px solid var(--rule); padding: 14px 0; }
+details:last-of-type { border-bottom: 1px solid var(--rule); }
+summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+details p, details ol, details ul { margin: 10px 0 4px; max-width: 40em; color: var(--ink-soft); }
+details > :last-child { margin-bottom: 4px; }
+
+footer { padding: 48px 0 64px; border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 0.95rem; }
+
+@media (max-width: 900px) {
+  body { font-size: 17px; }
+  .hero .wrap { grid-template-columns: 1fr; gap: 40px; }
+  .step { grid-template-columns: 1fr; }
+  .step .n { font-size: 3.4rem; margin-bottom: 10px; }
+  .step .shot { margin-top: 24px; }
+  .before ul { grid-template-columns: 1fr; }
+  .logins article { grid-template-columns: 1fr; gap: 16px; }
+  .logins img, .logins article > div { grid-column: 1; grid-row: auto; }
+  .seen { grid-template-columns: repeat(2, 1fr); gap: 32px 20px; }
+}
+@media (max-width: 520px) {
+  .wrap { width: calc(100% - 32px); }
+  .seen { grid-template-columns: 1fr; }
+  header.top nav { display: none; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#steps">Skip to the steps</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">Liseur<small>sync</small></a>
+    <nav aria-label="Page sections">
+      <a href="#steps">The steps</a>
+      <a href="#check">What you'll see</a>
+      <a href="#logins">Your logins</a>
+      <a href="#help">If it doesn't work</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1>Read your liseur-sync books in KOReader</h1>
+      <p class="lede">Download one file from your server, copy it onto the e-reader and start KOReader. It then lists your books, remembers where you stopped and sends your reading time to the server.</p>
+      <a class="button" href="#steps">Start</a>
+      <p class="hero-note">It takes about five minutes, and you never type a password on the e-reader.</p>
+    </div>
+    <figure class="device">
+      <div class="bezel"><img src="img/ko-3-library.png" width="758" height="1024" alt="KOReader showing a list of books from the liseur-sync server: Frankenstein, Pride and Prejudice, Treasure Island and more."></div>
+      <figcaption>The server's books, listed in KOReader.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="block before" aria-labelledby="before">
+  <div class="wrap">
+    <h2 id="before">Before you start</h2>
+    <ul>
+      <li>An account on your liseur-sync server, the one you sign into with a username and password.</li>
+      <li>KOReader running on your e-reader, such as a Kobo, Kindle or PocketBook.</li>
+      <li>Wi-Fi on the e-reader for its first start after the setup.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="block" id="steps" aria-labelledby="steps-title">
+  <div class="wrap">
+    <h2 id="steps-title" class="prose">Three steps</h2>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">1</div>
+      <div class="text">
+        <h3>Download your setup file</h3>
+        <p>On your computer, sign into liseur-sync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>Set up KOReader</b> box, type a name for the e-reader, such as <code>Kobo Libra</code>, and press <b>Download KOReader setup</b>.</p>
+        <p>You get a ZIP. The file you need is <code>patches/1-liseur-setup.lua</code> inside it.</p>
+        <p class="warn">The ZIP contains logins for your library, so keep it private and delete it once the setup works.</p>
+      </div>
+      <figure class="shot">
+        <img src="img/web-setup-card.png" width="1738" height="631" alt="The Set up KOReader box on the liseur-sync Devices page, with the name Kobo Libra typed in and a Download KOReader setup button.">
+        <figcaption>The Set up KOReader box on the Devices page.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">2</div>
+      <div class="text">
+        <h3>Copy the file onto your e-reader</h3>
+        <p>Quit KOReader if it is running and plug the e-reader into your computer. In KOReader's folder, create a folder called <code>patches</code> if it is missing and copy <code>1-liseur-setup.lua</code> into it. Then eject the e-reader.</p>
+        <table class="where">
+          <tr><th>Kobo</th><td><code>.adds/koreader/</code> (the <code>.adds</code> folder is hidden, so show hidden files)</td></tr>
+          <tr><th>Kindle</th><td><code>koreader/</code> at the top level</td></tr>
+          <tr><th>PocketBook</th><td><code>applications/koreader/</code></td></tr>
+        </table>
+        <p class="warn">KOReader from F-Droid on Android ignores patches. Use the <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> there.</p>
+      </div>
+      <figure class="shot">
+        <div class="where-tree" role="img" aria-label="Folder layout: koreader contains patches, which contains 1-liseur-setup.lua.">
+          <pre style="margin:0;padding:22px 24px;background:#fff;border:1px solid var(--rule);border-radius:8px;font:0.95rem/1.7 var(--mono);overflow-x:auto">koreader/
+├── plugins/
+├── settings/
+└── <b>patches/</b>
+    └── <b>1-liseur-setup.lua</b></pre>
+        </div>
+        <figcaption>Where the file goes.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">3</div>
+      <div class="text">
+        <h3>Turn on Wi-Fi and open KOReader</h3>
+        <p>The first start takes longer than usual. KOReader applies the file and downloads the KoInsight plugin, which sends your reading time to the server. If the e-reader is offline, the setup runs again at the next start.</p>
+        <p>To check, open the top menu, tap the magnifier and choose <b>OPDS catalog</b>. <b>Liseur Sync</b> is in the list.</p>
+      </div>
+      <figure class="shot device" style="width:min(100%,340px);justify-self:start">
+        <div class="bezel"><img src="img/ko-1-menu.png" width="758" height="1024" alt="KOReader's search menu with OPDS catalog at the bottom of the list."></div>
+        <figcaption>Search tab, then OPDS catalog.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="check" aria-labelledby="check-title">
+  <div class="wrap">
+    <h2 id="check-title">What you'll see</h2>
+    <p class="prose">These are screenshots from a real KOReader set up with this file. Your books will differ.</p>
+    <div class="seen">
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-2-catalogs.png" width="758" height="1024" alt="KOReader's OPDS catalog list with Liseur Sync in it."></div>
+        <figcaption><strong>Liseur Sync in the catalog list</strong>The padlock shows it has a login.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-3-library.png" width="758" height="1024" alt="The list of books on the server."></div>
+        <figcaption><strong>The server's books</strong>Tap a book for its details.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-4-download.png" width="758" height="1024" alt="The download dialog for Frankenstein with an EPUB button."></div>
+        <figcaption><strong>Downloading</strong>Tap EPUB. KOReader then offers to open the book.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-6-tools.png" width="758" height="1024" alt="KOReader's Tools menu listing KoInsight and Progress sync."></div>
+        <figcaption><strong>Tools menu</strong>With a book open, KoInsight and Progress sync are listed.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-8-progress-sync.png" width="758" height="1024" alt="The Progress sync menu showing Logout, which means it is signed in, and automatic sync ticked."></div>
+        <figcaption><strong>Progress sync</strong>Logout means it is signed in. Automatic sync is ticked.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="img/ko-7-koinsight.png" width="758" height="1024" alt="The KoInsight menu with Sync on suspend ticked."></div>
+        <figcaption><strong>KoInsight</strong>Reading time is sent when the e-reader goes to sleep.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="logins" aria-labelledby="logins-title">
+  <div class="wrap">
+    <h2 id="logins-title">What is in the download</h2>
+    <p class="prose">The download holds three logins named after your e-reader. None of them is your account password, and each can be revoked on its own.</p>
+    <div class="logins">
+      <article>
+        <img loading="lazy" src="img/web-cred-token.png" alt="The API tokens list with Kobo Libra in it.">
+        <div><h3>Library access</h3><p>Lets KOReader list and download your books. It has no other access.</p></div>
+      </article>
+      <article>
+        <img loading="lazy" src="img/web-cred-sync.png" alt="The KOReader sync devices list with Kobo Libra in it.">
+        <div><h3>Reading position</h3><p>Used by KOReader's Progress sync to save where you stopped.</p></div>
+      </article>
+      <article>
+        <img loading="lazy" src="img/web-cred-stats.png" alt="The KOReader statistics list with Kobo Libra in it.">
+        <div><h3>Reading time</h3><p>A private address that only the KoInsight plugin uses to send how long you read.</p></div>
+      </article>
+    </div>
+    <div class="prose" style="margin-top:36px">
+      <h3>More than one e-reader, or a lost one</h3>
+      <p>Download a separate setup for each e-reader and give each its own name. To remove one, press <b>Revoke</b> on the three entries with its name in Devices. Revoking one entry leaves the other two working.</p>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="help" aria-labelledby="help-title">
+  <div class="wrap">
+    <h2 id="help-title" class="prose">If something doesn't work</h2>
+    <div class="prose">
+      <details>
+        <summary>Nothing changed after I started KOReader</summary>
+        <p>Check that the file is at <code>koreader/patches/1-liseur-setup.lua</code>. Quit KOReader completely (menu, then Exit) before starting it again, because putting it to sleep is not enough. If the <code>patches</code> folder holds a file named <code>.patches_disabled</code>, delete it.</p>
+      </details>
+      <details>
+        <summary>There is no KoInsight entry in Tools</summary>
+        <p>The e-reader was offline at the first start. Turn on Wi-Fi and restart KOReader. The plugin comes from its public project at one fixed version, and each file is checked against a known checksum before it is installed, so a changed file is refused.</p>
+      </details>
+      <details>
+        <summary>Liseur Sync asks for a login</summary>
+        <p>The login in the file was revoked, or the file came from another server. Download a new setup from Devices and copy it over the old one.</p>
+      </details>
+      <details>
+        <summary>My reading position isn't saved</summary>
+        <p>Open a book and go to <b>Tools</b>, then <b>Progress sync</b>. It should say <b>Logout</b>, which means it is signed in, with <b>Automatically keep documents in sync</b> ticked. <b>Push progress from this device now</b> sends it immediately. Your server must use <code>https</code> unless its owner allowed plain <code>http</code>.</p>
+      </details>
+      <details>
+        <summary>My device can't use patches</summary>
+        <p>The <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> lists the same settings to enter by hand. The ZIP's <code>credentials.txt</code> has every value.</p>
+      </details>
+      <details>
+        <summary>What does the file change?</summary>
+        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete it after KoInsight is installed.</p>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>The full reference is <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md">docs/koreader.md</a>. The code is on <a href="https://github.com/chmouel/liseur-sync">GitHub</a>. KoInsight is a separate project: <a href="https://github.com/Ko-Insight/KoInsight">Ko-Insight/KoInsight</a>.</p>
+  </div>
+</footer>
+</body>
+</html>

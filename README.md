@@ -13,6 +13,14 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 
 ![Insights](docs/screenshots/insights.png)
 
+## Set up KOReader
+
+Download one file from the Devices page, copy it into KOReader's `patches/` folder and start KOReader. The library appears in its OPDS catalog, reading positions sync through its built-in Progress sync and reading time goes to the server through KoInsight.
+
+**[Step-by-step guide with screenshots](https://chmouel.github.io/liseur-sync/)**
+
+![The Set up KOReader box on the Devices page](docs/site/img/web-setup-card.png)
+
 ## Interfaces
 
 `liseur-sync` provides:
@@ -20,7 +28,6 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 * reading-position synchronization using full locators
 * a native REST API
 * a kosync-compatible API for KOReader and [CrossPoint](docs/crosspoint.md), with paragraph-precise positions shared with Liseur
-* a [KOReader plugin](https://github.com/chmouel/liseur.koplugin) that browses and downloads the library and syncs positions through the native API
 * OPDS 1.2
 * EPUB library indexing and search
 * audiobooks found in watched folders, played inside the web reader
@@ -50,7 +57,7 @@ Reader preferences synchronize as well per device.
 
 Every device writes positions its own way, and the server keeps them together:
 
-* **KOReader** has two options. Its own *Progress sync* can point at the kosync API, or you can install the [Liseur Sync plugin](https://github.com/chmouel/liseur.koplugin), which lives in its own repository. It gives KOReader a home screen and a library that mix the server's books with the ones on the device, downloads a book when you open it, syncs positions through the native API and shows your reading statistics. Install it from KOReader's App Store or from that repository's releases. Pick one of the two: only one thing should write positions.
+* **KOReader** syncs positions through its built-in *Progress sync*, browses the library over OPDS and uploads reading time with the KoInsight plugin. One download from the Devices page sets all three up: see the [setup guide](https://chmouel.github.io/liseur-sync/) or the [reference](docs/koreader.md).
 * **CrossPoint** pairs through kosync; see [docs/crosspoint.md](docs/crosspoint.md).
 * **Liseur**, on a phone or a desktop, uses the native API.
 
@@ -230,7 +237,7 @@ Deployment details, including TLS, KOReader pairing, Calibre integration, watche
 
 ## Client integration
 
-[Liseur](https://github.com/chmouel/liseur) uses the native API, as does the [KOReader plugin](https://github.com/chmouel/liseur.koplugin).
+[Liseur](https://github.com/chmouel/liseur) uses the native API.
 
 Protocol and synchronization details:
 

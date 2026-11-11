@@ -159,3 +159,9 @@ admin: $(CONFIG) ## Run an admin subcommand: make admin ARGS="create-user alice"
 .PHONY: screenshots
 screenshots: generate ## Retake the README screenshots (needs chromium, node, jq)
 	scripts/screenshots.sh
+
+# The setup guide's images (docs/site). It runs a real KOReader, so it needs
+# KOREADER_DIR (an unpacked desktop release), Xvfb and python-xlib as well.
+.PHONY: guide-shots
+guide-shots: generate ## Retake the setup guide screenshots (see scripts/guide-shots.sh)
+	scripts/guide-shots.sh
