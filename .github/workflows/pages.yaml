@@ -28,6 +28,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Add the app screenshots
         run: cp -r docs/screenshots docs/site/img/app
+      - name: Version the stylesheet link
+        run: |
+          # Pages lets browsers cache files for ten minutes, so a new page
+          # must not be paired with an old stylesheet.
+          sed -i "s#site\.css\"#site.css?v=${GITHUB_SHA::8}\"#" docs/site/index.html docs/site/*/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
