@@ -227,3 +227,23 @@ pre.cmd .c { color: #9a92ad; }
   .row.flip .text { order: 0; }
   .trio { padding-inline: 12px; }
 }
+
+/* author, at the bottom of the landing page */
+.author { padding: 24px 0 88px; }
+.author-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 36px; align-items: center; background: #ddd3ee; border-radius: 28px; padding: 40px 44px; }
+.avatar { display: block; width: 120px; height: 120px; border-radius: 50%; object-fit: cover; box-shadow: 0 0 0 5px #fff, 8px 8px 0 5px var(--aubergine); }
+.author-text h2 { margin: 0 0 10px; }
+.author-text p { margin: 0; max-width: 34em; color: var(--ink-soft); }
+.author-actions { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.author-actions .button { text-align: center; padding: 11px 26px; }
+.button svg.solid { fill: currentColor; stroke: none; }
+.button.sponsor { background: #bf3989; color: #fff; }
+.button.sponsor:hover { background: #a02d72; }
+.button.sponsor svg { transition: transform 0.18s ease; }
+.button.sponsor:hover svg { transform: scale(1.25); }
+.button.ghost svg.solid { stroke: none; }
+@media (prefers-reduced-motion: reduce) { .button.sponsor svg { transition: none; } .button.sponsor:hover svg { transform: none; } }
+@media (max-width: 900px) {
+  .author-card { grid-template-columns: 1fr; gap: 24px; padding: 32px 26px; justify-items: start; }
+  .author-actions { flex-direction: row; flex-wrap: wrap; }
+}
