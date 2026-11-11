@@ -447,6 +447,8 @@ export class ReaderEngine extends HTMLElement {
     // inline user preference so the setting remains effective for books
     // that pin their root size.
     const size = Number(this.settings.size);
+    doc.documentElement.style.setProperty("touch-action", "pan-y pinch-zoom");
+    doc.body?.style.setProperty("touch-action", "pan-y pinch-zoom");
     if (size && size !== 100) {
       doc.documentElement.style.setProperty("font-size", `${size}%`, "important");
       // Keep the measured body size stable even when the publication or

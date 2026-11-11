@@ -147,18 +147,24 @@ test("keyboard movement, resize, docking, and reset stay in bounds", () => {
   assert.equal(f.stored().edge, "top");
   assert.equal(f.docks[0].attributes.get("aria-pressed"), "true");
   assert.equal(f.docks[4].attributes.get("aria-pressed"), "false");
+  assert.equal(f.stage.properties.size, 0);
+  assert.equal(f.panel.dataset.audioReserve, undefined);
   f.win.innerWidth = 390;
   f.win.dispatchEvent(new Event("resize")); f.flush();
   assert.equal(f.panel.dataset.audioLayout, "dock");
   assert.equal(f.handle.hidden, true);
   assert.ok(f.stage.properties.has("--reader-audio-inset"));
+  assert.equal(f.panel.dataset.audioReserve, "bottom");
   f.win.innerWidth = 1000;
   f.win.dispatchEvent(new Event("resize")); f.flush();
   assert.equal(f.panel.dataset.audioLayout, "floating");
   assert.equal(f.stored().edge, "top");
+  assert.equal(f.stage.properties.size, 0);
+  assert.equal(f.panel.dataset.audioReserve, undefined);
   f.docks[4].fire("click");
   assert.equal(f.stored().edge, "bottom-right");
-  assert.equal(f.stage.properties.size, 0);
+  assert.ok(f.stage.properties.has("--reader-audio-inset"));
+  assert.equal(f.panel.dataset.audioReserve, "bottom");
 });
 test("restoration, denied storage, close and teardown are safe", () => {
   const f = fixture(JSON.stringify({ size: "expanded", edge: "left", x: 0, y: .5 }));

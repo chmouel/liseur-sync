@@ -252,6 +252,39 @@ export function relativeAge(at, now = Date.now()) {
   return years === 1 ? "a year ago" : `${years} years ago`;
 }
 
+export const SWIPE_MIN_X = 44;
+export const SWIPE_MAX_MS = 550;
+export const SWIPE_DIRECTION_RATIO = 1.8;
+export const SWIPE_MIN_VELOCITY = 0.12;
+
+/**
+ * classifySwipe decides whether a pointer gesture is a horizontal page-turn swipe.
+ *
+ * Returns `1` for next visual page (right-to-left drag, `dx < 0`), `-1` for
+ * previous visual page (left-to-right drag, `dx > 0`), or `0` when the gesture
+ * is not a valid swipe.
+ */
+export function classifySwipe({
+  pointerType,
+  dx,
+  dy,
+  dt,
+  cancelled = false,
+  multiTouch = false,
+  hadSelection = false,
+  exempt = false,
+} = {}) {
+  if (pointerType !== "touch") return 0;
+  if (cancelled || multiTouch || hadSelection || exempt) return 0;
+  if (!finite(dx) || !finite(dy) || !finite(dt) || dt <= 0 || dt > SWIPE_MAX_MS) return 0;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (absX < SWIPE_MIN_X) return 0;
+  if (absX < absY * SWIPE_DIRECTION_RATIO) return 0;
+  if (absX < 72 && absX / dt < SWIPE_MIN_VELOCITY) return 0;
+  return dx < 0 ? 1 : -1;
+}
+
 /** The place and how long ago it was, in one line. */
 export function placeSentence(place, now = Date.now()) {
   const label = placeLabel(place);

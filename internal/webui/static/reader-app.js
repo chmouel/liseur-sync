@@ -17,7 +17,7 @@ import { liveStream } from "./reader-live.js";
 import { catchupState, topicRefresh, latestReadablePosition, positionAcknowledged, mergeFurthest } from "./reader-sync.js";
 import { reconcileReadingState } from "./reader-reconcile.js";
 import { agreedEdition, sectionHrefIn, startCandidates as restoreCandidates } from "./reader-restore.js";
-import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage } from "./reader-place.js";
+import { placeOf, placeHere, placeLabel, placeSentence, relativeAge, samePage, classifySwipe } from "./reader-place.js";
 import { decideBookSync, furthestChoice } from "./reader-sync-choice.js";
 import { markLocator } from "./reader-anchor.js";
 import {
@@ -3160,7 +3160,7 @@ const FONTS = {
   serif: 'Georgia, "Times New Roman", "Liberation Serif", serif',
   sans: 'system-ui, -apple-system, "Segoe UI", Roboto, "Liberation Sans", sans-serif',
 };
-const MARGINS = { none: "8px", narrow: "16px", normal: "48px", wide: "72px" };
+const MARGINS = { none: "8px", narrow: "16px", normal: "32px", wide: "48px" };
 // The column gap follows the margin choice: "narrow" should mean the
 // text gets the window, not just that the outer edge moved.
 const GAPS = { none: "1%", narrow: "3%", normal: "7%", wide: "11%" };
@@ -3638,13 +3638,33 @@ function overText(doc, x, y) {
 // finger, a cancelled pointer or a stolen capture ends it: what happens
 // next is a pinch, a scroll or the browser's business, never a tap.
 function newGesture() {
-  return { id: null, x: 0, y: 0, startedAt: 0, spoiled: true, hadSelection: false };
+  return {
+    id: null,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    startedAt: 0,
+    spoiled: true,
+    cancelled: false,
+    multiTouch: false,
+    hadSelection: false,
+    exempt: false,
+  };
 }
 
-function trackGesture(gesture, e) {
+function trackGesture(gesture, e, selected, viewport = null) {
   if (gesture.id !== e.pointerId) return;
+  if (viewport) {
+    gesture.lastVx = viewport[0];
+    gesture.lastVy = viewport[1];
+  } else {
+    gesture.lastVx = e.clientX;
+    gesture.lastVy = e.clientY;
+  }
   if (Math.abs(e.clientX - gesture.x) > TAP_SLOP_PX ||
       Math.abs(e.clientY - gesture.y) > TAP_SLOP_PX) gesture.spoiled = true;
+  if (selected && selected()) gesture.hadSelection = true;
 }
 
 function wireChapterPointer(doc) {
@@ -3660,6 +3680,17 @@ function wireChapterPointer(doc) {
     const sel = doc.getSelection && doc.getSelection();
     return !!(sel && sel.rangeCount && !sel.isCollapsed);
   };
+  const swipeExemptTarget = (target) => {
+    if (!target) return false;
+    if (target.closest && target.closest(TAP_EXEMPT)) return true;
+    for (let el = target.nodeType === 1 ? target : target.parentElement; el && el !== doc.body && el !== doc.documentElement; el = el.parentElement) {
+      if (el.scrollWidth > el.clientWidth + 2) {
+        const ox = doc.defaultView?.getComputedStyle(el).overflowX;
+        if (ox === "auto" || ox === "scroll") return true;
+      }
+    }
+    return false;
+  };
   // Everything a tap has to not be, in one place: a drag, a gesture
   // that was never ours to finish, a second click, a control — or a
   // click that is putting a selection away rather than making one,
@@ -3673,11 +3704,13 @@ function wireChapterPointer(doc) {
     if (gesture.hadSelection || selected()) return false;
     return !(e.target && e.target.closest && e.target.closest(TAP_EXEMPT));
   };
+  doc.body?.style.setProperty("touch-action", "pan-y pinch-zoom");
   doc.addEventListener(
     "pointermove",
     (e) => {
-      trackGesture(gesture, e);
-      pointerMoved(...toViewport(doc, e.clientX, e.clientY), e.pointerType);
+      const vp = toViewport(doc, e.clientX, e.clientY);
+      trackGesture(gesture, e, selected, vp);
+      pointerMoved(...vp, e.pointerType);
     },
     { passive: true },
   );
@@ -3689,28 +3722,115 @@ function wireChapterPointer(doc) {
     (e) => {
       noteActivity();
       if (settingsPanel && settingsPanel.open) settingsPanel.open = false;
-      if (gesture.id !== null && gesture.id !== e.pointerId) {
+      if (gesture.id !== null && gesture.id !== "touch" && gesture.id !== e.pointerId) {
         gesture.spoiled = true; // a second finger: not a tap any more
+        gesture.multiTouch = true;
         return;
       }
       mouse = e.pointerType !== "touch" && e.pointerType !== "pen";
+      const [vx, vy] = toViewport(doc, e.clientX, e.clientY);
       gesture = {
         id: e.pointerId,
         x: e.clientX,
         y: e.clientY,
+        vx,
+        vy,
+        lastVx: vx,
+        lastVy: vy,
         startedAt: performance.now(),
         spoiled: false,
+        cancelled: false,
+        multiTouch: false,
         hadSelection: selected(),
+        exempt: swipeExemptTarget(e.target),
       };
     },
     { passive: true },
   );
   const spoil = (e) => {
-    if (gesture.id === null || gesture.id === e.pointerId) gesture.spoiled = true;
+    if (gesture.id !== null && gesture.id === e.pointerId) {
+      gesture.spoiled = true;
+      gesture.cancelled = true;
+    }
   };
+  function finishSwipe(ended, target, pointerType, vx, vy, cancelled) {
+    const dt = Math.max(1, performance.now() - ended.startedAt);
+    const swipeDir = classifySwipe({
+      pointerType,
+      dx: vx - ended.vx,
+      dy: vy - ended.vy,
+      dt,
+      cancelled,
+      multiTouch: ended.multiTouch,
+      hadSelection: ended.hadSelection || selected(),
+      exempt: ended.exempt || swipeExemptTarget(target),
+    });
+    if (swipeDir === 0) return false;
+    touchAt = Date.now();
+    turn(swipeDir);
+    if (chromeVisible()) armChrome(CHROME_IDLE_MS);
+    return true;
+  }
+  doc.addEventListener("touchstart", (e) => {
+    if (!e.touches || e.touches.length > 1) {
+      gesture.spoiled = true;
+      gesture.multiTouch = true;
+      return;
+    }
+    if (gesture.id === null) {
+      const [vx, vy] = toViewport(doc, e.touches[0].clientX, e.touches[0].clientY);
+      gesture = {
+        id: "touch",
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+        vx,
+        vy,
+        lastVx: vx,
+        lastVy: vy,
+        startedAt: performance.now(),
+        spoiled: false,
+        cancelled: false,
+        multiTouch: false,
+        hadSelection: selected(),
+        exempt: swipeExemptTarget(e.target),
+      };
+    }
+  }, { passive: true });
+  doc.addEventListener("touchmove", (e) => {
+    if (gesture.id === null || !e.touches || e.touches.length !== 1) return;
+    const [vx, vy] = toViewport(doc, e.touches[0].clientX, e.touches[0].clientY);
+    gesture.lastVx = vx;
+    gesture.lastVy = vy;
+    if (
+      Math.abs(vx - gesture.vx) > TAP_SLOP_PX ||
+      Math.abs(vy - gesture.vy) > TAP_SLOP_PX
+    )
+      gesture.spoiled = true;
+    if (selected()) gesture.hadSelection = true;
+  }, { passive: true });
+  doc.addEventListener("touchend", (e) => {
+    if (gesture.id === null || gesture.multiTouch) return;
+    if (e.touches && e.touches.length > 0) return;
+    const ended = gesture;
+    const t = e.changedTouches && e.changedTouches[0];
+    const [vx, vy] = t ? toViewport(doc, t.clientX, t.clientY) : [ended.lastVx, ended.lastVy];
+    if (tocPanel && !tocPanel.hidden) return;
+    if (finishSwipe(ended, e.target, "touch", vx, vy, false)) {
+      gesture.id = null;
+      gesture.spoiled = true;
+    }
+  }, { passive: true });
+  doc.addEventListener("touchcancel", () => {
+    gesture.spoiled = true;
+    gesture.cancelled = true;
+    gesture.id = null;
+  }, { passive: true });
   doc.addEventListener("pointercancel", spoil, { passive: true });
   doc.addEventListener("lostpointercapture", spoil, { passive: true });
-  doc.addEventListener("contextmenu", () => { gesture.spoiled = true; }, { passive: true });
+  doc.addEventListener("contextmenu", () => {
+    gesture.spoiled = true;
+    gesture.cancelled = true;
+  }, { passive: true });
   // A finger is answered here rather than on the click that should
   // follow it: the engine snaps the page on every touchend, and a
   // scroll between touchend and the synthesized click cancels that
@@ -3721,6 +3841,10 @@ function wireChapterPointer(doc) {
     (e) => {
       if (gesture.id !== null && gesture.id !== e.pointerId) {
         gesture.spoiled = true;
+        gesture.multiTouch = true;
+        return;
+      }
+      if (gesture.id === null) {
         return;
       }
       if (
@@ -3731,14 +3855,32 @@ function wireChapterPointer(doc) {
       gesture.id = null;
       if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
       touchAt = Date.now();
-      if (performance.now() - gesture.startedAt > TAP_MAX_MS) gesture.spoiled = true;
+      const dt = Math.max(1, performance.now() - gesture.startedAt);
+      if (dt > TAP_MAX_MS) gesture.spoiled = true;
       if (tocPanel && !tocPanel.hidden) {
         toggleTOC(false); // the drawer cannot hear a tap inside the book
         gesture.spoiled = true;
         return;
       }
+      const [vx, vy] = toViewport(doc, e.clientX, e.clientY);
+      const swipeDir = classifySwipe({
+        pointerType: e.pointerType,
+        dx: vx - gesture.vx,
+        dy: vy - gesture.vy,
+        dt,
+        cancelled: gesture.cancelled,
+        multiTouch: gesture.multiTouch,
+        hadSelection: gesture.hadSelection || selected(),
+        exempt: gesture.exempt || swipeExemptTarget(e.target),
+      });
+      if (swipeDir !== 0) {
+        gesture.spoiled = true;
+        turn(swipeDir);
+        if (chromeVisible()) armChrome(CHROME_IDLE_MS);
+        return;
+      }
       if (!isTap(e)) return;
-      tapAt(...toViewport(doc, e.clientX, e.clientY));
+      tapAt(vx, vy);
     },
     { passive: true },
   );
@@ -4219,40 +4361,126 @@ const stageSurface = (target) =>
 stageArea.addEventListener(
   "pointerdown",
   (e) => {
-    if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
+    if (stageGesture.id !== null && stageGesture.id !== "touch" && stageGesture.id !== e.pointerId) {
       stageGesture.spoiled = true;
+      stageGesture.multiTouch = true;
       return;
     }
     stageGesture = {
       id: e.pointerId,
       x: e.clientX,
       y: e.clientY,
+      vx: e.clientX,
+      vy: e.clientY,
+      lastVx: e.clientX,
+      lastVy: e.clientY,
       startedAt: performance.now(),
       spoiled: false,
+      cancelled: false,
+      multiTouch: false,
       hadSelection: bookHasSelection(),
+      exempt: !stageSurface(e.target),
     };
   },
   { passive: true },
 );
 const spoilStage = (e) => {
-  if (stageGesture.id === null || stageGesture.id === e.pointerId)
+  if (stageGesture.id !== null && stageGesture.id === e.pointerId) {
     stageGesture.spoiled = true;
+    stageGesture.cancelled = true;
+  }
 };
+stageArea.addEventListener("touchstart", (e) => {
+  if (!e.touches || e.touches.length > 1) {
+    stageGesture.spoiled = true;
+    stageGesture.multiTouch = true;
+    return;
+  }
+  if (stageGesture.id === null) {
+    const vx = e.touches[0].clientX, vy = e.touches[0].clientY;
+    stageGesture = {
+      id: "touch",
+      x: vx,
+      y: vy,
+      vx,
+      vy,
+      lastVx: vx,
+      lastVy: vy,
+      startedAt: performance.now(),
+      spoiled: false,
+      cancelled: false,
+      multiTouch: false,
+      hadSelection: bookHasSelection(),
+      exempt: !stageSurface(e.target),
+    };
+  }
+}, { passive: true });
+stageArea.addEventListener("touchmove", (e) => {
+  if (stageGesture.id === null || !e.touches || e.touches.length !== 1) return;
+  const vx = e.touches[0].clientX, vy = e.touches[0].clientY;
+  stageGesture.lastVx = vx;
+  stageGesture.lastVy = vy;
+  if (
+    Math.abs(vx - stageGesture.vx) > TAP_SLOP_PX ||
+    Math.abs(vy - stageGesture.vy) > TAP_SLOP_PX
+  )
+    stageGesture.spoiled = true;
+  if (bookHasSelection()) stageGesture.hadSelection = true;
+}, { passive: true });
+stageArea.addEventListener("touchend", (e) => {
+  if (!view || stageGesture.id === null || stageGesture.multiTouch) return;
+  if (e.touches && e.touches.length > 0) return;
+  if (tocPanel && !tocPanel.hidden) return;
+  const ended = stageGesture;
+  const t = e.changedTouches && e.changedTouches[0];
+  const vx = t ? t.clientX : ended.lastVx;
+  const vy = t ? t.clientY : ended.lastVy;
+  const dt = Math.max(1, performance.now() - ended.startedAt);
+  const swipeDir = classifySwipe({
+    pointerType: "touch",
+    dx: vx - ended.vx,
+    dy: vy - ended.vy,
+    dt,
+    cancelled: false,
+    multiTouch: ended.multiTouch,
+    hadSelection: ended.hadSelection || bookHasSelection(),
+    exempt: ended.exempt || !stageSurface(e.target),
+  });
+  if (swipeDir !== 0) {
+    stageGesture.id = null;
+    stageGesture.spoiled = true;
+    stageTouchAt = Date.now();
+    turn(swipeDir);
+    if (chromeVisible()) armChrome(CHROME_IDLE_MS);
+  }
+}, { passive: true });
+stageArea.addEventListener("touchcancel", () => {
+  stageGesture.spoiled = true;
+  stageGesture.cancelled = true;
+  stageGesture.id = null;
+}, { passive: true });
 stageArea.addEventListener("pointercancel", spoilStage, { passive: true });
 stageArea.addEventListener("lostpointercapture", spoilStage, { passive: true });
-stageArea.addEventListener("pointermove", (e) => trackGesture(stageGesture, e), { passive: true });
-stageArea.addEventListener("contextmenu", () => { stageGesture.spoiled = true; }, { passive: true });
+stageArea.addEventListener("pointermove", (e) => trackGesture(stageGesture, e, bookHasSelection), { passive: true });
+stageArea.addEventListener("contextmenu", () => {
+  stageGesture.spoiled = true;
+  stageGesture.cancelled = true;
+}, { passive: true });
 stageArea.addEventListener("pointerup", (e) => {
   noteActivity();
   if (stageGesture.id !== null && stageGesture.id !== e.pointerId) {
     stageGesture.spoiled = true;
+    stageGesture.multiTouch = true;
+    return;
+  }
+  if (stageGesture.id === null) {
     return;
   }
   if (
     Math.abs(e.clientX - stageGesture.x) > TAP_SLOP_PX ||
     Math.abs(e.clientY - stageGesture.y) > TAP_SLOP_PX
   )
-    stageGesture.spoiled = true; // a swipe: the engine's business
+    stageGesture.spoiled = true;
   const clean = !stageGesture.spoiled;
   stageGesture.id = null;
   if (!view) return;
@@ -4260,10 +4488,28 @@ stageArea.addEventListener("pointerup", (e) => {
   stageTouchAt = Date.now();
   if (tocPanel && !tocPanel.hidden) {
     toggleTOC(false);
+    stageGesture.spoiled = true;
+    return;
+  }
+  const dt = Math.max(1, performance.now() - stageGesture.startedAt);
+  const swipeDir = classifySwipe({
+    pointerType: e.pointerType,
+    dx: e.clientX - stageGesture.vx,
+    dy: e.clientY - stageGesture.vy,
+    dt,
+    cancelled: stageGesture.cancelled,
+    multiTouch: stageGesture.multiTouch,
+    hadSelection: stageGesture.hadSelection || bookHasSelection(),
+    exempt: stageGesture.exempt || !stageSurface(e.target),
+  });
+  if (swipeDir !== 0) {
+    stageGesture.spoiled = true;
+    turn(swipeDir);
+    if (chromeVisible()) armChrome(CHROME_IDLE_MS);
     return;
   }
   if (!clean) return;
-  if (performance.now() - stageGesture.startedAt > TAP_MAX_MS) return;
+  if (dt > TAP_MAX_MS) return;
   if (stageGesture.hadSelection || bookHasSelection()) return;
   if (!stageSurface(e.target)) return;
   tapAt(e.clientX, e.clientY);

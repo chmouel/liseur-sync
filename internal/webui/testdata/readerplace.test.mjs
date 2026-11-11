@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   EXCERPT_CHARS, excerptOf, placeHere, placeLabel, placeOf, placeSentence, relativeAge,
-  samePage,
+  samePage, classifySwipe, SWIPE_MIN_X, SWIPE_MAX_MS,
 } from "../static/reader-place.js";
 import { positionTable } from "../static/reader-positions.js";
 
@@ -323,3 +323,19 @@ test("the sentence carries the age when there is one", () => {
   assert.equal(placeSentence(placeHere({ fraction: 0.5 }, {}), now), "50%");
   assert.equal(placeSentence(null, now), null);
 });
+
+test("horizontal touch swipes classify visual page direction and reject non-swipes", () => {
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 8, dt: 140 }), 1);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: 120, dy: -12, dt: 140 }), -1);
+  assert.equal(classifySwipe({ pointerType: "mouse", dx: -120, dy: 0, dt: 140 }), 0);
+  assert.equal(classifySwipe({ pointerType: "pen", dx: -120, dy: 0, dt: 140 }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -(SWIPE_MIN_X - 1), dy: 0, dt: 100 }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -80, dy: 60, dt: 140 }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: SWIPE_MAX_MS + 10 }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -50, dy: 0, dt: 500 }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, hadSelection: true }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, multiTouch: true }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, cancelled: true }), 0);
+  assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, exempt: true }), 0);
+});
+

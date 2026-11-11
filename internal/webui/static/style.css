@@ -1939,8 +1939,8 @@ details.danger-zone > summary::before { color: var(--danger); }
   display:flex;flex-direction:column;overflow:hidden}
 .reader-body[data-reader-margin="none"]{--reader-margin:8px}
 .reader-body[data-reader-margin="narrow"]{--reader-margin:16px}
-.reader-body[data-reader-margin="normal"]{--reader-margin:48px}
-.reader-body[data-reader-margin="wide"]{--reader-margin:72px}
+.reader-body[data-reader-margin="normal"]{--reader-margin:32px}
+.reader-body[data-reader-margin="wide"]{--reader-margin:48px}
 .reader-bar{position:fixed;top:3px;left:0;right:0;z-index:50;
   display:grid;grid-template-columns:minmax(max-content,1fr) minmax(0,1fr) minmax(max-content,1fr);
   align-items:center;gap:.6rem;
@@ -1997,10 +1997,10 @@ details.danger-zone > summary::before { color: var(--danger); }
    here changes the middle slot and turns nothing.
    It is the one thing left on screen once the bars have gone. */
 .reader-footer{position:absolute;left:0;right:0;bottom:0;z-index:5;
-  height:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));box-sizing:border-box;
-  padding:0 max(var(--reader-margin,48px), env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(var(--reader-margin,48px), env(safe-area-inset-left, 0px));
+  height:calc(var(--reader-margin,32px) + env(safe-area-inset-bottom, 0px));box-sizing:border-box;
+  padding:0 max(var(--reader-margin,32px), env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(var(--reader-margin,32px), env(safe-area-inset-left, 0px));
   display:flex;align-items:center;justify-content:space-between;gap:.9rem;
-  font-size:min(.78rem,calc(var(--reader-margin,48px) * .7));
+  font-size:min(.78rem,calc(var(--reader-margin,32px) * .7));
   letter-spacing:.01em;line-height:1;
   font-variant-numeric:tabular-nums;color:var(--reader-footer-fg,var(--ink));
   opacity:.62;user-select:none;-webkit-user-select:none;
@@ -2298,14 +2298,20 @@ details.danger-zone > summary::before { color: var(--danger); }
 .reader-stage{flex:1;display:flex;min-height:0;position:relative;
   box-sizing:border-box;padding-top:var(--reader-bar-height,calc(3rem + env(safe-area-inset-top, 0px)))}
 .reader-body[data-reader-autohide="true"] .reader-stage{padding-top:env(safe-area-inset-top, 0px)}
-#reader-view{flex:1;min-width:0;height:100%;background:var(--surface);overflow:hidden;position:relative}
+#reader-view{flex:1;min-width:0;height:100%;background:var(--surface);overflow:hidden;position:relative;touch-action:pan-y pinch-zoom}
 readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:block}
-.reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));z-index:6;width:2.75rem;
+.reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,32px) + env(safe-area-inset-bottom, 0px));z-index:6;width:min(2.75rem,var(--reader-margin,32px));
   border:0;background:transparent;cursor:pointer;font-size:2rem;
-  padding:0;opacity:.35;color:inherit;transition:opacity .18s ease}
+  padding:0;opacity:.35;color:inherit;overflow:hidden;transition:opacity .18s ease}
 #reader-prev{left:0}
 #reader-next{right:0}
-.reader-turn:hover{opacity:.9}
+.reader-turn:hover,.reader-turn:active,.reader-turn:focus-visible{background:transparent;color:inherit}
+@media (hover:hover){
+  .reader-turn:hover{opacity:.9}
+}
+.reader-turn:focus-visible{opacity:.9}
+.reader-body[data-reader-margin="none"] .reader-turn,
+.reader-body[data-reader-margin="narrow"] .reader-turn{color:transparent}
 
 /* Reader appearance settings (ADR-0012): a details popover, no script
    needed to open it and none to style it. The stage colour tracks the
@@ -2317,12 +2323,21 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
 .reader-settings>summary::-webkit-details-marker{display:none}
 .reader-settings[open]>summary{background:var(--surface-3)}
 .reader-settings>form{position:absolute;right:0;top:calc(100% + .55rem);z-index:40;
-  box-sizing:border-box;width:21rem;
-  max-width:calc(100vw - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
-  max-height:min(75vh,34rem);
-  max-height:min(34rem,calc(100dvh - var(--reader-bar-height,3rem) - 1.5rem - env(safe-area-inset-bottom, 0px)));
+  box-sizing:border-box;width:min(23.5rem,calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+  max-width:calc(100vw - 1.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  max-height:calc(100vh - var(--reader-bar-height,3.5rem) - 1.5rem - env(safe-area-inset-bottom, 0px));
+  max-height:calc(100dvh - var(--reader-bar-height,3.5rem) - 1.5rem - env(safe-area-inset-bottom, 0px));
   overflow:auto;overscroll-behavior:contain;
-  background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  background:
+    linear-gradient(var(--surface) 30%,transparent) center top,
+    linear-gradient(transparent,var(--surface) 70%) center bottom,
+    radial-gradient(farthest-side at 50% 0,rgb(0 0 0 / .18),transparent) center top,
+    radial-gradient(farthest-side at 50% 100%,rgb(0 0 0 / .22),transparent) center bottom,
+    var(--surface);
+  background-repeat:no-repeat;
+  background-size:100% 28px,100% 28px,100% 10px,100% 12px;
+  background-attachment:local,local,scroll,scroll;
+  border:1px solid var(--line);border-radius:10px;
   box-shadow:0 12px 32px rgba(0,0,0,.45);padding:.9rem;
   display:grid;gap:.7rem;font-size:.85rem;white-space:normal}
 .reader-settings fieldset{border:0;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:.35rem}
@@ -2337,7 +2352,7 @@ readium-view .readium-navigator-iframe{width:100%;height:100%;border:0;display:b
   align-items:center;gap:.6rem}
 .reader-settings .row-size{align-items:center}
 .reader-settings .row select{justify-self:end}
-.reader-settings .row2{display:flex;gap:.35rem}
+.reader-settings .row2{display:flex;flex-wrap:wrap;gap:.35rem}
 .reader-size-control{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
   align-items:center;gap:.45rem}
 .reader-size-step{border:1px solid var(--line);border-radius:999px;
@@ -2657,7 +2672,8 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 .reader-stage { padding-bottom: var(--reader-audio-inset, 0px); }
-.reader-body:has(.reader-audio-bar[data-audio-layout="dock"]:not([hidden])) .reader-footer {
+.reader-body:has(.reader-audio-bar[data-audio-layout="dock"]:not([hidden])) .reader-footer,
+.reader-body:has(.reader-audio-bar[data-audio-reserve="bottom"]:not([hidden])) .reader-footer {
 	position: fixed;
 }
 .reader-audio-bar {
@@ -2676,7 +2692,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	padding: 8px;
 	border: 1px solid var(--line);
 	border-radius: 16px;
-	background: color-mix(in srgb, var(--surface) 96%, transparent);
+	background: color-mix(in srgb, var(--surface) 98%, transparent);
 	-webkit-backdrop-filter: blur(12px);
 	backdrop-filter: blur(12px);
 	box-shadow: var(--shadow);

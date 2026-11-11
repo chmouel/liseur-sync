@@ -1489,9 +1489,23 @@ if (touchable) {
   await settle();
   const afterSwipe = JSON.parse(await evalIn(probe));
   const moved = afterSwipe.fraction - beforeSwipe.fraction;
-  check('a swipe never turns more than one page',
-    pageStep > 0 && moved <= pageStep * 1.6 + 1e-9,
+  check('a swipe turns forward and never turns more than one page',
+    pageStep > 0 && moved > 0 && moved <= pageStep * 1.6 + 1e-9,
     `${beforeSwipe.fraction} -> ${afterSwipe.fraction} (one page is ${pageStep.toFixed(4)})`);
+  const backFrom = Math.round(innerWidthGuess * 0.25);
+  await S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: backFrom, y }] });
+  for (const step of [0.2, 0.4, 0.6, 0.8, 1]) {
+    await S('Input.dispatchTouchEvent', {
+      type: 'touchMove', touchPoints: [{ x: Math.round(backFrom + 300 * step), y }],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await settle();
+  const afterBackSwipe = JSON.parse(await evalIn(probe));
+  check('a left-to-right swipe turns back',
+    afterBackSwipe.fraction < afterSwipe.fraction,
+    `${afterSwipe.fraction} -> ${afterBackSwipe.fraction}`);
 
   // A tap has no gesture to disambiguate from, so it must not wait.
   const beforeTouchTap = JSON.parse(await evalIn(probe));

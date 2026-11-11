@@ -149,6 +149,14 @@ export async function checkAudioPanel({ S, evalIn, waitFor, check, url }) {
     check('dock ' + edge + ' stays in viewport', await bounded());
   }
   await click('[data-audio-dock="bottom-right"]');
+  await click('button[data-audio-size]');
+  check('floating bottom-right reserves reading space above player and pins footer', await evalIn(`(() => {
+    const p = ${panel}.getBoundingClientRect();
+    const f = document.getElementById('reader-footer').getBoundingClientRect();
+    const v = document.getElementById('reader-view').getBoundingClientRect();
+    return p.bottom <= f.top && v.bottom <= p.top + 1 && getComputedStyle(document.getElementById('reader-footer')).position === 'fixed';
+  })()`));
+  await click('button[data-audio-size]');
   const handle = await rect('[data-audio-handle]');
   await S('Input.dispatchMouseEvent', { type: 'mousePressed', x: handle.x + 20, y: handle.y + 20, button: 'left', clickCount: 1 });
   for (let i = 1; i <= 8; i++) {

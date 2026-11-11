@@ -169,6 +169,7 @@ templ readerPage(v ReaderView, csrf string) {
 							<div class="row2">
 								<label class="chip"><input type="checkbox" name="justify"/> Justify</label>
 								<label class="chip"><input type="checkbox" name="hyphenate"/> Hyphenate</label>
+								<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
 							</div>
 							<label class="row">
 								Columns
@@ -187,9 +188,6 @@ templ readerPage(v ReaderView, csrf string) {
 									<option value="wide">Wide</option>
 								</select>
 							</label>
-							<div class="row2">
-								<label class="chip"><input type="checkbox" name="autohide"/> Auto-hide bars</label>
-							</div>
 							<div class="row">
 								<label for="reader-footer-mode">Footer</label>
 								<select id="reader-footer-mode" name="footer">

@@ -75,10 +75,14 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
       button.setAttribute("aria-pressed", String(button.dataset.audioDock === prefs.edge));
     }
   }
+  function clearReserve() {
+    delete panel.dataset.audioReserve;
+    stage?.style.removeProperty("--reader-audio-inset");
+  }
   function layout() {
     frame = 0;
     if (destroyed || panel.hidden) {
-      stage?.style.removeProperty("--reader-audio-inset");
+      clearReserve();
       return;
     }
     const vp = win.visualViewport;
@@ -106,9 +110,16 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
     panel.style.maxHeight = `${Math.max(0, docked ? Math.min(320, height * 0.45, endY - minY) : endY - minY)}px`;
     const rect = panel.getBoundingClientRect();
     bounds = { left: minX, top: minY, right: Math.max(minX, endX - rect.width), bottom: Math.max(minY, endY - rect.height) };
-    place(docked ? { x: left + (width - rect.width) / 2, y: bounds.bottom } : panelPosition(prefs, bounds));
-    if (docked) stage?.style.setProperty("--reader-audio-inset", `${compactHeight + footerHeight + 12}px`);
-    else stage?.style.removeProperty("--reader-audio-inset");
+    const pos = docked ? { x: left + (width - rect.width) / 2, y: bounds.bottom } : panelPosition(prefs, bounds);
+    place(pos);
+    const reserveBottom = docked || ["bottom", "bottom-right"].includes(prefs.edge) ||
+      (["left", "right", "free"].includes(prefs.edge) && pos.y + compactHeight > endY - 24);
+    if (reserveBottom) {
+      panel.dataset.audioReserve = "bottom";
+      stage?.style.setProperty("--reader-audio-inset", `${compactHeight + footerHeight + 12}px`);
+    } else {
+      clearReserve();
+    }
     renderDock();
   }
   function schedule() {
@@ -206,7 +217,7 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
       finishDrag(true);
       if (open) layout();
       else {
-        stage?.style.removeProperty("--reader-audio-inset");
+        clearReserve();
         toggle?.focus();
       }
     },
@@ -216,7 +227,7 @@ export function audioPanel(panel, { toolbar, footer, stage, toggle, win = window
       win.cancelAnimationFrame(frame);
       observer.disconnect();
       listeners.forEach(remove => remove());
-      stage?.style.removeProperty("--reader-audio-inset");
+      clearReserve();
     },
   };
 }

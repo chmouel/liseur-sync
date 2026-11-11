@@ -374,7 +374,9 @@ func TestReaderUsesTheDynamicMobileViewportAndPaginates(t *testing.T) {
 	}
 	for _, want := range []string{
 		".reader-stage{flex:1;display:flex;min-height:0;position:relative;\n  box-sizing:border-box;padding-top:var(--reader-bar-height,calc(3rem + env(safe-area-inset-top, 0px)))}",
-		".reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,48px) + env(safe-area-inset-bottom, 0px));z-index:6;width:2.75rem;",
+		".reader-turn{position:absolute;top:0;bottom:calc(var(--reader-margin,32px) + env(safe-area-inset-bottom, 0px));z-index:6;width:min(2.75rem,var(--reader-margin,32px));",
+		".reader-turn:hover,.reader-turn:active,.reader-turn:focus-visible{background:transparent;color:inherit}",
+		".reader-body:has(.reader-audio-bar[data-audio-reserve=\"bottom\"]:not([hidden])) .reader-footer",
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("reader page controls are not overlaid: missing %q", want)
