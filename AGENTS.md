@@ -51,22 +51,6 @@ the same CDP walk the UI tests use
 browser, node and jq, so it is never part of a test run. Retake them
 when a page in a shot changes shape.
 
-## KOReader plugin
-
-The KOReader plugin lives in its own repository,
-[chmouel/liseur.koplugin](https://github.com/chmouel/liseur.koplugin), and is
-a client of the native API. It calls `GET /v1/token`; `POST /v1/works/resolve`,
-`POST /v1/books/{id}/resolve`; `POST /v1/ops`, `GET /v1/changes`,
-`GET /v1/heads`, `GET /v1/works/{id}/positions`,
-`POST /v1/works/{id}/furthest/forget`; `GET /v1/folders`,
-`GET /v1/folders/{folder}/books`, `GET /v1/books/{id}/download`,
-`GET /v1/books/{id}/cover`; `GET /v1/insights/summary`,
-`GET /v1/insights/calendar` and `GET /v1/insights/works`. Positions go out
-with `progression`, KOReader's location in `foreign_pos` and the file's
-SHA-256 in `edition_sha`. A change to any of those routes or fields breaks
-the plugin; run its integration test (`make integration` there, with
-`LISEUR_SYNC_DIR` pointing at this checkout) before shipping one.
-
 ## Architecture in one paragraph
 
 One binary, two subcommands (`serve`, `admin`). Storage goes through the

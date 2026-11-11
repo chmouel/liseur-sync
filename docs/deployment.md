@@ -149,11 +149,7 @@ upstream, ahead of the prefixed location, both passing the path through
 unchanged (no trailing slash on `proxy_pass`).
 
 `insecure_http = true` exists only for LAN-only setups where TLS is
-out of scope. The KOReader plugin accepts `http://` for a local address or
-name for the same reason, and needs this setting to talk to such a
-server: see
-[the plugin's README](https://github.com/chmouel/liseur.koplugin#a-server-on-your-home-network).
-It is a top-level key, so it must appear above
+out of scope. It is a top-level key, so it must appear above
 the first `[table]` header in the config file; TOML binds a bare key to
 the table above it, and `insecure_http` written under `[content]`
 becomes `content.insecure_http`. The server refuses to start on an
@@ -256,9 +252,8 @@ granting it hands nobody a secret, and the last enabled administrator
 cannot be demoted.
 
 `mint-token` prints a token once and never again. Typing 64 characters on
-an e-reader is miserable, so write it into a file, copy that file onto the
-device, and let the KOReader plugin read it from there: *Liseur Sync →
-Settings → Import device token from a file*.
+an e-reader is miserable, so write it into a file and copy that file onto
+the device instead.
 
 When the first administrator is created from the web setup page and the
 folder fields were filled in, the folder is created and watched as part

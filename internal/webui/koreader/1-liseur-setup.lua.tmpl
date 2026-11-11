@@ -1,0 +1,100 @@
+local DataStorage = require("datastorage")
+local LuaSettings = require("luasettings")
+
+-- KoInsight, which uploads the reading statistics, is a separate plugin. It
+-- is fetched from its archived repository, pinned to one commit and checked
+-- file by file, so a changed or truncated download is refused. It is retried
+-- on each start until it succeeds, so a reader that was offline the first
+-- time still gets it.
+local KOINSIGHT_DIR = "plugins/koinsight.koplugin"
+local KOINSIGHT_URL = "https://raw.githubusercontent.com/Ko-Insight/KoInsight/dda224061deb697741e0bd41750d444fb1ceaa9f/plugins/koinsight.koplugin/"
+local KOINSIGHT_FILES = {
+    { "_meta.lua", "29dfb03b108e4f6c5f3cba31e1bfe657d99d3bfbac90f284ba9e89080511ef6c" },
+    { "annotation_reader.lua", "c4b41d9ca6ca5d78173b13f30ee0264b724d675392544a40db8cafad4e2fe2b5" },
+    { "call_api.lua", "2e15874603fffde62870a4dae9258cd9caa81b40d866975c567b970e59987cbb" },
+    { "const.lua", "8d4eee8b35acb37a03a7cfc6a1b601394846fa66ab28346778e111f418f55556" },
+    { "db_reader.lua", "f74eb4410a512255c535e4012f89b85c3d7cb720890f1f729d6df66926a40b53" },
+    { "main.lua", "e3407a67b3ff0c21e2919140464c3841ca186b9da06c1bbaf2c9d853cca1c8a5" },
+    { "settings.lua", "8ba645e15d84f6b38e56ee1d4b22e5930311e3e28ad3a2ba201b7b69ec906e03" },
+    { "upload.lua", "7b0de26615115cc0dc90b63c4dc61dbfbd286b4a3bbe09e5d766c7d81de28c6d" },
+}
+
+local function install_koinsight()
+    local lfs = require("libs/libkoreader-lfs")
+    if lfs.attributes(KOINSIGHT_DIR .. "/main.lua", "mode") == "file" then return end
+    local http = require("socket.http")
+    local https = require("ssl.https")
+    local ltn12 = require("ltn12")
+    local sha2 = require("ffi/sha2")
+    local util = require("util")
+    local timeout = http.TIMEOUT
+    http.TIMEOUT = 8
+    local bodies = {}
+    local failure
+    for _, file in ipairs(KOINSIGHT_FILES) do
+        local chunks = {}
+        local _, code = https.request{ url = KOINSIGHT_URL .. file[1], sink = ltn12.sink.table(chunks) }
+        local body = table.concat(chunks)
+        if code ~= 200 then
+            failure = file[1] .. ": " .. tostring(code)
+        elseif sha2.sha256(body) ~= file[2] then
+            failure = file[1] .. ": checksum mismatch"
+        end
+        if failure then break end
+        bodies[file[1]] = body
+    end
+    http.TIMEOUT = timeout
+    if failure then error(failure) end
+    local staging = KOINSIGHT_DIR .. ".part"
+    require("ffi/util").purgeDir(staging)
+    util.makePath(staging)
+    for name, body in pairs(bodies) do
+        local f = assert(io.open(staging .. "/" .. name, "wb"))
+        assert(f:write(body))
+        f:close()
+    end
+    assert(os.rename(staging, KOINSIGHT_DIR))
+end
+
+local installed, why = pcall(install_koinsight)
+if not installed then
+    require("logger").warn("KoInsight plugin not installed, will retry on the next start:", why)
+end
+
+local reader = LuaSettings:open(DataStorage:getDataDir() .. "/settings.reader.lua")
+local setup_id = {{lua .ID}}
+if reader:readSetting("liseur_setup_id") == setup_id then return end
+
+local kosync = LuaSettings:open(DataStorage:getSettingsDir() .. "/kosync.lua")
+local progress = kosync:readSetting("settings", {})
+progress.custom_server = {{lua .SyncURL}}
+progress.username = {{lua .SyncSlot}}
+progress.userkey = {{lua .SyncKey}}
+progress.auto_sync = true
+kosync:saveSetting("settings", progress)
+kosync:flush()
+
+local opds = LuaSettings:open(DataStorage:getSettingsDir() .. "/opds.lua")
+local servers = opds:readSetting("servers", {})
+local entry = { title = "Liseur Sync", url = {{lua .Base}} .. "/opds/v1.2", username = "token", password = {{lua .APIToken}} }
+local replaced = false
+for i, server in ipairs(servers) do
+    if server.url == entry.url then
+        servers[i] = entry
+        replaced = true
+        break
+    end
+end
+if not replaced then table.insert(servers, entry) end
+opds:saveSetting("servers", servers)
+opds:flush()
+
+local koinsight = LuaSettings:open(DataStorage:getSettingsDir() .. "/koinsight.lua")
+local stats = koinsight:readSetting("koinsight", {})
+stats.server_url = {{lua .StatisticsURL}}
+stats.sync_on_suspend = true
+koinsight:saveSetting("koinsight", stats)
+koinsight:flush()
+
+reader:saveSetting("liseur_setup_id", setup_id)
+reader:flush()

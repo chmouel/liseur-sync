@@ -47,6 +47,22 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 	}
 
 	<section class="card">
+		<h2>Set up KOReader</h2>
+		<p>Configure KOReader's built-in Progress sync, the OPDS catalog and KoInsight with one download. Quit KOReader, copy <code>patches/1-liseur-setup.lua</code> from the ZIP into KOReader's <code>patches/</code> folder, then start KOReader with Wi-Fi on. The KoInsight plugin is downloaded for you if it is missing.</p>
+		<p><a href="https://chmouel.github.io/liseur-sync/" target="_blank" rel="noopener">Easy setup guide with screenshots</a></p>
+		<p class="muted">The download holds three separate credentials: an API token for OPDS, a Progress sync login and a KoInsight upload URL. Revoke each one on this page. Use a separate download for each reader. Keep the ZIP private.</p>
+		if u.User.KosyncEnabled && u.User.KopluginEnabled {
+			<form method="post" action={ prefix + "koreader/setup" } class="inline">
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input name="name" placeholder="Kobo Libra" maxlength="100" required/>
+				<button type="submit" class="primary">Download KOReader setup</button>
+			</form>
+		} else {
+			<p class="muted">Turn on Progress sync and statistics in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> before downloading the setup.</p>
+		}
+	</section>
+
+	<section class="card">
 		<div class="cardhead">
 			<h2>API tokens</h2>
 			if len(toks) > 0 {
