@@ -36,6 +36,7 @@ const libraryLink = document.getElementById("offline-open-library");
 const networkNote = document.getElementById("offline-network-note");
 const brandHref = brand?.getAttribute("href") || "";
 let coordinators = [];
+let guards = [];
 let renderGeneration = 0;
 let shelfRedrawGeneration = 0;
 
@@ -73,6 +74,7 @@ const retry = document.createElement("button");
 retry.type = "button";
 retry.className = "button secondary";
 retry.textContent = "Retry sync";
+retry.hidden = true;
 retry.addEventListener("click", () => runner.ask());
 status?.after(retry);
 armPull({ scroller: document.scrollingElement, indicator, runner });
@@ -81,6 +83,14 @@ function message(text, error = false) {
   if (!status) return;
   status.textContent = text;
   status.classList.toggle("problem", error);
+}
+
+// A retry button with nothing to retry is an invitation to press it and
+// learn nothing, so it exists only while this device owes something.
+async function syncRetryVisibility() {
+  let waiting = !!trouble;
+  if (!waiting) waiting = await queueWaiting();
+  retry.hidden = !waiting;
 }
 
 function announce(text) {
@@ -227,11 +237,16 @@ function actionsFor(snapshot, { partition, account, context, generation, redraw 
       question.hidden = true;
       quiet.hidden = false;
       announce(`“${title}” stays on this device.`);
-      quiet.focus();
+      // The question went away on its own. Focus goes back to the
+      // button that asked only if it was still in this card: a reader
+      // who moved on to another book must not be pulled back.
+      const focus = document.activeElement;
+      if (focus && (question.contains(focus) || focus === quiet)) quiet.focus();
     },
     confirm: () => { void remove(); },
   });
 
+  guards.push(guard);
   quiet.addEventListener("click", () => guard.press());
   confirm.addEventListener("click", () => guard.press());
   keep.addEventListener("click", () => guard.cancel());
@@ -241,9 +256,15 @@ function actionsFor(snapshot, { partition, account, context, generation, redraw 
 
 function drawBooks(snapshots, { partition, account, context, generation, redraw }) {
   if (!books || generation !== renderGeneration || redraw !== shelfRedrawGeneration) return;
+  // The cards are about to go: whatever question one of them was still
+  // asking has nobody left to answer it, and its timer would fire
+  // against a button no longer on the page.
+  for (const guard of guards) guard.dispose();
+  guards = [];
   books.textContent = "";
+  void syncRetryVisibility();
   if (!snapshots.length) {
-    message("Nothing saved yet — save a book from its page and it will be here without a connection.");
+    message("No books saved yet. Save a book from its page and it will be here offline.");
     return;
   }
   message(`${snapshots.length === 1 ? "One book is" : `${snapshots.length} books are`} saved for offline.`);
@@ -354,6 +375,7 @@ async function render({ syncFirst = false } = {}) {
     // refresh that succeeded, whatever the coordinators managed.
     trouble = error.message || "Offline storage is unavailable.";
     message(trouble, true);
+    void syncRetryVisibility();
   }
 }
 

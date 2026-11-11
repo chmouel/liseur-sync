@@ -21,13 +21,17 @@ for (const choice of (appearance || "").split(".")) {
 
 // The status bar has to match the shelf, and the shelf's palette is the
 // cookie's, which the server never saw: the shell is cached while the
-// cookie is per browser. A named theme settles on its own colour; the
-// "system" pair in shell.html is already media-queried and is left alone.
-if (theme && theme !== "system") {
+// cookie is per browser. A named theme settles on its own colour; only
+// an explicit "system" is left to the media-queried pair in
+// shell.html. A missing or unrecognised choice is the light shelf —
+// the stylesheet's default — so it must resolve to light here too,
+// rather than to a dark system bar over a light page.
+if (theme !== "system") {
+  const named = theme || "light";
   const meta = document.getElementById("offline-theme-color");
   if (meta) {
     meta.removeAttribute("media");
-    meta.setAttribute("content", THEME_COLORS[theme]);
+    meta.setAttribute("content", THEME_COLORS[named] || THEME_COLORS.light);
   }
   document.getElementById("offline-theme-color-dark")?.remove();
 }

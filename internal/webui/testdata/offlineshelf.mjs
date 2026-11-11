@@ -156,6 +156,45 @@ try {
   assert.match(kept.focus, /offline-book-remove/, 'focus returns to the button that asked');
   console.log('PASS a removal is a question, and keeping the copy costs one tap');
 
+  // An unanswered question goes quiet on its own, and it must not take
+  // the focus with it: a reader who moved on to another control while
+  // the question expired is not asking to be sent back to this card.
+  await online.evaluate('document.querySelector(".offline-book-remove").click()');
+  await wait(online, `${state}.armed`, 'the question that will expire');
+  await online.evaluate('document.getElementById("offline-open-library").focus()');
+  const expiredElsewhere = await wait(online, `(() => {
+    const now = ${state};
+    return now.armed ? null : now;
+  })()`, 'the question expiring while focus was elsewhere');
+  assert.match(expiredElsewhere.focus, /offline-needs-network/,
+    `expiry stole focus: ${expiredElsewhere.focus}`);
+
+  // A reader still on the question — the Keep button is where arming
+  // puts them — gets the button that asked back.
+  await online.evaluate('document.querySelector(".offline-book-remove").click()');
+  await wait(online, `${state}.armed`, 'the question that will expire under focus');
+  const expiredHere = await wait(online, `(() => {
+    const now = ${state};
+    return now.armed ? null : now;
+  })()`, 'the question expiring under focus');
+  assert.match(expiredHere.focus, /offline-book-remove/,
+    `focus stayed nowhere after the question went: ${expiredHere.focus}`);
+
+  // The cards are redrawn under an armed question: the timer must go
+  // with the card it belonged to rather than firing into a dead button.
+  await online.evaluate('document.querySelector(".offline-book-remove").click()');
+  await wait(online, `${state}.armed`, 'a question a redraw will replace');
+  await online.evaluate(`dispatchEvent(new CustomEvent('offline-change',
+    { detail: { type: 'write', partition: ${JSON.stringify(base)} } }))`);
+  const redrawn = await wait(online, `(() => {
+    const item = document.querySelector('.offline-book');
+    const confirm = item?.querySelector('.offline-book-confirm');
+    const remove = item?.querySelector('.offline-book-remove');
+    return item && confirm?.hidden && remove && !remove.disabled
+      ? { books: document.querySelectorAll('.offline-book').length } : null;
+  })()`, 'the card redrawn unarmed');
+  assert.equal(redrawn.books, 1);
+
   await online.evaluate('document.querySelector(".offline-book-remove").click()');
   await wait(online, `${state}.armed`, 'the second question');
   await online.evaluate('document.querySelector(".offline-book-confirmed").click()');
@@ -163,7 +202,15 @@ try {
     const now = ${state};
     return now.books === 0 ? now : null;
   })()`, 'the removed copy');
-  assert.match(removed.status, /Nothing saved yet/, removed.status);
+  assert.equal(removed.status,
+    'No books saved yet. Save a book from its page and it will be here offline.', removed.status);
+  const retry = await online.evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')]
+      .find(node => node.textContent.trim() === 'Retry sync');
+    return button && { hidden: button.hidden, shown: getComputedStyle(button).display !== 'none' };
+  })()`);
+  assert(retry, 'the shelf still offers a retry somewhere');
+  assert.equal(retry.shown, false, 'a shelf with nothing to send offers no retry');
   assert.match(removed.notice, /removed from this device/);
   console.log('PASS the second press removes the copy and says so');
 

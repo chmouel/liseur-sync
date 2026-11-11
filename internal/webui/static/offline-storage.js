@@ -1319,6 +1319,22 @@ async function sha256(bytes) {
   return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
 }
 
+// contributorName reads a Readium manifest's author, which is a bare
+// string for a book with one plain creator and an array of objects for
+// anything richer — the shelf wants the name either way.
+export function contributorName(author) {
+  const first = Array.isArray(author) ? author[0] : author;
+  if (typeof first === "string") return first.trim();
+  const name = first?.name;
+  if (typeof name === "string") return name.trim();
+  // A name in several scripts is an object of translations.
+  if (name && typeof name === "object") {
+    const value = Object.values(name).find(entry => typeof entry === "string" && entry.trim());
+    if (value) return value.trim();
+  }
+  return "";
+}
+
 // A thumbnail is a few kilobytes; anything that says otherwise is not a
 // cover this shelf wants to carry twice.
 const COVER_LIMIT = 512 * 1024;
@@ -1633,7 +1649,7 @@ export async function downloadPublication({
     digest: plan.digest, generation,
     state: "staging", resourceHrefs: [], manifest, positions,
     packageHref: plan.packageHref, title: manifest.metadata?.title || bookID,
-    author: (manifest.metadata?.author || {}).name || "",
+    author: contributorName(manifest.metadata?.author),
     cover: await bookCoverDataURL({ request, bookID, signal, current }),
     bytes: 0,
     createdAt: Date.now(),

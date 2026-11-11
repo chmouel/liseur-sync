@@ -124,6 +124,24 @@ test("keeping a copy cancels the question and re-arms nothing", () => {
   assert.equal(guard.cancel(), false);
 });
 
+test("a card redrawn mid-question leaves no timer behind", () => {
+  const events = [];
+  let cleared = 0;
+  const guard = removalGuard({
+    arm: () => events.push("arm"),
+    disarm: () => events.push("disarm"),
+    confirm: () => events.push("remove"),
+    setTimer: () => 9,
+    clearTimer: () => { cleared++; },
+  });
+  guard.press();
+  guard.dispose();
+  assert.equal(cleared, 1, "the expiry goes with the card it belonged to");
+  assert.equal(guard.armed(), false);
+  assert.deepEqual(events, ["arm"], "a redraw is not a reader answering the question");
+  assert.equal(guard.press(), "armed", "the disposed guard still works for a new card");
+});
+
 function response(bytes, type = "image/png", extra = {}) {
   return {
     ok: true,

@@ -257,6 +257,126 @@ try {
   assert.equal(syncPill.retry, 'Try again');
   assert.equal(syncPill.retryHidden, false);
   console.log('PASS the sync control sits in the top bar, not behind it');
+
+  // #106 at the narrow end: 320px and a finger, which is where the bar
+  // has the least room and every control asks for 44px.
+  await offline.call('Emulation.setDeviceMetricsOverride', {
+    width: 320, height: 568, deviceScaleFactor: 1, mobile: true,
+  });
+  await offline.call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  const narrowBar = `(() => {
+    const bar = document.querySelector('.reader-bar');
+    const box = bar.getBoundingClientRect();
+    const controls = [...bar.querySelectorAll('a, button, .reader-offline-sync')]
+      .filter(node => node.getBoundingClientRect().width > 0 && !node.closest('#reader-settings'))
+      .map(node => ({ id: node.id || node.className, box: node.getBoundingClientRect() }));
+    return {
+      coarse: matchMedia('(any-pointer: coarse)').matches,
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth,
+      bar: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+      overflow: controls.filter(({ box: c }) => c.right > box.right + 0.5 || c.left < box.left - 0.5)
+        .map(({ id }) => id),
+      below: controls.filter(({ box: c }) => c.bottom > box.bottom + 0.5).map(({ id }) => id),
+    };
+  })()`;
+  let narrow = await offline.evaluate(narrowBar);
+  assert.equal(narrow.coarse, true, 'the emulated phone reports a coarse pointer');
+  assert.equal(narrow.scrollWidth <= narrow.innerWidth, true,
+    `the reader toolbar overflows at 320px: ${JSON.stringify(narrow)}`);
+  assert.deepEqual(narrow.overflow, [], 'no reader control is drawn outside the bar at 320px');
+  assert.deepEqual(narrow.below, [], 'no reader control drops out of the bar at 320px');
+  const pillBox = await offline.evaluate(`(() => {
+    const pill = document.getElementById('reader-offline-sync');
+    const retry = pill?.querySelector('.reader-offline-sync-retry');
+    const box = pill?.getBoundingClientRect();
+    return pill && {
+      visible: !pill.hidden && box.width > 0,
+      width: box.width,
+      text: pill.textContent.trim(),
+      retry: retry?.textContent.trim() || '',
+      retryBox: retry?.getBoundingClientRect().width || 0,
+    };
+  })()`);
+  assert.equal(pillBox.visible, true, 'a queued change still shows at 320px');
+  assert.equal(pillBox.retry, 'Try again');
+  assert(pillBox.retryBox >= 44, `the retry target is ${pillBox.retryBox}px, not 44px`);
+  console.log('PASS the 320px toolbar holds its controls and the retry stays tappable');
+
+  // Photos of the reader with the queue waiting, opt-in: LISEUR_SHOTS
+  // names the directory. Nothing here asserts; a picture is for the
+  // review, not for the suite.
+  if (process.env.SMOKE_SHOTS) {
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dir = process.env.SMOKE_SHOTS;
+    mkdirSync(dir, { recursive: true });
+    // What the picture has to show: a bar whose controls are inside it,
+    // and footer buttons whose hit areas are the 44px a finger needs
+    // even when the text on them is two characters long.
+    const readerLayout = () => offline.evaluate(`(() => {
+      const bar = document.querySelector('.reader-bar');
+      const barBox = bar.getBoundingClientRect();
+      const controls = [...bar.querySelectorAll('a, button, .reader-offline-sync')]
+        .filter(node => !node.closest('#reader-settings') &&
+          node.getBoundingClientRect().width > 0);
+      const footer = document.getElementById('reader-footer');
+      const pill = document.getElementById('reader-offline-sync');
+      const pillBox = pill.getBoundingClientRect();
+      return {
+        viewport: [innerWidth, innerHeight],
+        coarse: matchMedia('(any-pointer: coarse)').matches,
+        scroll: [document.documentElement.scrollWidth, document.documentElement.scrollHeight],
+        bar: [Math.round(barBox.right), Math.round(barBox.bottom)],
+        overflow: controls
+          .filter(node => node.getBoundingClientRect().right > barBox.right + 0.5)
+          .map(node => node.id || node.className),
+        pill: {
+          shown: !pill.hidden, w: Math.round(pillBox.width), h: Math.round(pillBox.height),
+          state: pill.dataset.state, text: pill.textContent.trim(),
+        },
+        footer: [...footer.querySelectorAll('button')].map(button => {
+          const box = button.getBoundingClientRect();
+          const hit = getComputedStyle(button, '::after');
+          return {
+            id: button.id, w: Math.round(box.width), h: Math.round(box.height),
+            hitW: hit.width, hitH: hit.height,
+          };
+        }),
+      };
+    })()`);
+    const shoot = async (name, width, height) => {
+      await offline.call('Emulation.setDeviceMetricsOverride', {
+        width, height, deviceScaleFactor: 2, mobile: true,
+      });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const { data } = await offline.call('Page.captureScreenshot', { format: 'png' });
+      writeFileSync(join(dir, name), Buffer.from(data, 'base64'));
+      console.log('SHOT', join(dir, name));
+    };
+    for (const theme of ['light', 'dark']) {
+      await offline.call('Network.setCookie', {
+        name: 'liseur_ui', value: theme, url: base, path: '/',
+      });
+      await offline.call('Page.reload', { ignoreCache: true });
+      await wait(offline, probe, `the reader after switching to ${theme}`);
+      await wait(offline, `document.body.dataset.readerTheme === ${JSON.stringify(theme)}`,
+        `the reader's ${theme} palette`);
+      await wait(offline, `(() => {
+        const pill = document.getElementById('reader-offline-sync');
+        return pill && !pill.hidden && pill.dataset.state === 'waiting';
+      })()`, 'the waiting queue on the shot');
+      await shoot(`reader-${theme}-ipad.png`, 834, 1112);
+      console.log('SHOTREPORT', theme, 'ipad', JSON.stringify(await readerLayout()));
+      await shoot(`reader-${theme}-phone.png`, 390, 844);
+      console.log('SHOTREPORT', theme, 'phone', JSON.stringify(await readerLayout()));
+    }
+    await offline.call('Emulation.clearDeviceMetricsOverride');
+    await offline.call('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await offline.call('Network.setCookie', { name: 'liseur_ui', value: 'light', url: base, path: '/' });
+    await offline.call('Page.reload', { ignoreCache: true });
+    await wait(offline, probe, 'the reader back at its own size');
+  }
   await offline.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
   let saved = await wait(offline, `(async () => {
     const s = await import('../assets/offline-storage.js');
@@ -315,6 +435,37 @@ try {
   assert.equal(remote.progression, saved.progression, 'server receives the page saved before reload');
   assert.deepEqual(remote.locator, saved.locator, 'exact locator survives offline reload and upload');
   console.log('PASS offline page turn survives reload and reconnect uploads the identical operation');
+
+  // A synced queue has nothing to say: the control goes, rather than
+  // sitting on the bar as an empty capsule.
+  const syncedPill = await wait(offline, `(() => {
+    const pill = document.getElementById('reader-offline-sync');
+    if (!pill) return null;
+    const box = pill.getBoundingClientRect();
+    return (pill.hidden && getComputedStyle(pill).display === 'none') ? { width: box.width } : null;
+  })()`, 'the sync control retires once the queue is empty');
+  assert.equal(syncedPill.width, 0, 'a hidden control takes no room on the bar');
+  const syncedNarrow = await offline.evaluate(narrowBar);
+  assert.equal(syncedNarrow.scrollWidth <= syncedNarrow.innerWidth, true,
+    `the synced reader toolbar overflows at 320px: ${JSON.stringify(syncedNarrow)}`);
+  assert.deepEqual(syncedNarrow.overflow, []);
+  console.log('PASS a synced queue leaves no empty capsule on a narrow bar');
+  await offline.call('Emulation.clearDeviceMetricsOverride');
+  await offline.call('Emulation.setTouchEmulationEnabled', { enabled: false });
+
+  // A control that retired must come back the moment this device owes
+  // something, and offline the coordinator is not the one to say so.
+  await offline.call('Network.emulateNetworkConditions', {
+    offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0,
+  });
+  await wait(offline, 'navigator.onLine === false', 'the emulated network going away');
+  await offline.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))`);
+  await wait(offline, `(() => {
+    const pill = document.getElementById('reader-offline-sync');
+    return pill && !pill.hidden && pill.dataset.state === 'waiting'
+      && !pill.querySelector('.reader-offline-sync-retry').hidden;
+  })()`, 'the sync control returning for a queued change');
+  console.log('PASS a retired sync control comes back when the queue is not empty');
 } catch (error) {
   console.error(error, JSON.stringify(diagnostics));
   process.exitCode = 1;

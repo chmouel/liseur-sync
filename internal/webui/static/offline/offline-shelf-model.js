@@ -114,6 +114,12 @@ export function removalGuard({
   };
   return {
     armed: () => armed,
+    // A card that is redrawn has no question left to answer, and a
+    // timer that outlives it would disarm a button nobody is looking
+    // at any more.
+    dispose() {
+      reset();
+    },
     /** Returns "armed" while the question is up and "remove" when answered. */
     press() {
       if (armed) {

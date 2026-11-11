@@ -60,6 +60,12 @@ func TestReadingPlaceDescription(t *testing.T) {
 	runNodeTests(t, "readerplace.test.mjs")
 }
 
+// A cancelled gesture is not a swipe, and it is the handler that has to
+// say so: the classifier cannot see which literal its caller passed.
+func TestReaderSwipeHandlers(t *testing.T) {
+	runNodeTests(t, "readerswipe.test.mjs")
+}
+
 // Syncing one book by hand is a decision made on two doubles and a
 // flag, so it is pinned without a navigator, a database or a server.
 func TestBookSyncChoice(t *testing.T) {

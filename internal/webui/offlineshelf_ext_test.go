@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,5 +58,58 @@ func TestOfflineShelfInBrowser(t *testing.T) {
 	t.Logf("%s", output)
 	if err != nil {
 		t.Fatalf("offline shelf browser check: %v", err)
+	}
+}
+
+// TestOfflineShelfScreenshots photographs a shelf with books on it:
+// real covers, a card with progress, a card asking whether to remove,
+// and the header with the network gone, in both themes. It is opt-in —
+// LISEUR_SHOTS names the directory — because a picture of a page
+// belongs in a review, not in the suite.
+func TestOfflineShelfScreenshots(t *testing.T) {
+	shots := os.Getenv("LISEUR_SHOTS")
+	if shots == "" {
+		t.Skip("set LISEUR_SHOTS=<dir> to take shots of the offline shelf")
+	}
+	chrome := findChrome()
+	if chrome == "" {
+		t.Skip("no chromium; set LISEUR_CHROME to take shots")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to drive the browser with")
+	}
+	parallelBrowser(t)
+	f := newBooksFixture(t)
+	var ids []string
+	for _, book := range []struct{ name, title, author string }{
+		{"shelf-le-guin", "The Left Hand of Darkness", "Ursula K. Le Guin"},
+		{"shelf-wells", "The Time Machine", "H. G. Wells"},
+		{"shelf-shelley", "Frankenstein", "Mary Shelley"},
+	} {
+		ids = append(ids, f.addBook(t, book.name, coverEPUBTitled(t, book.title, book.author, 600, 900)))
+	}
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+	prefixed := httptest.NewServer(http.StripPrefix("/sync", ts.Config.Handler))
+	t.Cleanup(prefixed.Close)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, node, filepath.Join("testdata", "offlineshelfshots.mjs"))
+	cmd.Env = append(os.Environ(),
+		"DISPLAY=", "WAYLAND_DISPLAY=",
+		"SMOKE_CHROME="+chrome,
+		"SMOKE_PROFILE="+t.TempDir(),
+		"SMOKE_BASE="+prefixed.URL+"/sync/",
+		"SMOKE_BOOKS="+strings.Join(ids, ","),
+		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		"SMOKE_SHOTS="+shots,
+	)
+	output, err := cmd.CombinedOutput()
+	t.Logf("%s", output)
+	if err != nil {
+		t.Fatalf("offline shelf shots: %v", err)
 	}
 }

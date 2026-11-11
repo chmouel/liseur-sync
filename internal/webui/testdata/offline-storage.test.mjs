@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildPublicationPlan,
+  contributorName,
   localPublicationRequest,
   snapshotKey,
   storagePartition,
@@ -77,4 +78,16 @@ test("private snapshot identity includes deployment, account, book, digest and g
   assert.match(key, /abc123/);
   assert.match(key, /generation-1/);
   assert.equal(storagePartition(new URL("https://reader.example/sync/ui/offline/")), "https://reader.example/sync/");
+});
+
+test("an author is read whichever shape the manifest wrote it in", () => {
+  // Readium writes one plain creator as a bare string and anything
+  // richer as an object or an array of them.
+  assert.equal(contributorName("Mary Shelley"), "Mary Shelley");
+  assert.equal(contributorName({ name: "Ursula K. Le Guin" }), "Ursula K. Le Guin");
+  assert.equal(contributorName([{ name: "H. G. Wells" }, { name: "Another" }]), "H. G. Wells");
+  assert.equal(contributorName({ name: { en: "Molière", fr: "Molière" } }), "Molière");
+  assert.equal(contributorName(undefined), "");
+  assert.equal(contributorName({}), "");
+  assert.equal(contributorName([]), "");
 });

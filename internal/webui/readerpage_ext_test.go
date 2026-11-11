@@ -1,7 +1,9 @@
 package webui_test
 
 import (
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -167,15 +169,39 @@ func TestReaderPageNeedsASessionAndARealBook(t *testing.T) {
 // TestReaderPageLinksTheCoverAsItsIcon: the reading tab carries the
 // book's own cover at the icon size, served by the same cover route
 // that falls back to a placeholder for a coverless book, so the link
-// is always one a browser can fetch.
+// is always one a browser can fetch. The Lock Screen artwork is built
+// from this link rather than from the API base, which is why the page
+// under a stripped prefix has to carry it too.
 func TestReaderPageLinksTheCoverAsItsIcon(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
 
-	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
 	want := `<link rel="icon" href="../../books/` + bookID + `/cover?size=icon">`
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
 	if !strings.Contains(page, want) {
 		t.Errorf("the reader page does not link the cover icon:\n%s", page)
+	}
+
+	// Behind a reverse proxy that strips its own prefix the page still
+	// reaches the same relative route, and no absolute one.
+	ts := httptest.NewUnstartedServer(nil)
+	wholeServer(t, f, ts, "")
+	cookie := f.loginTo(t, ts, "alice")
+	prefixed := httptest.NewServer(http.StripPrefix("/sync", ts.Config.Handler))
+	t.Cleanup(prefixed.Close)
+	req, err := http.NewRequest(http.MethodGet, prefixed.URL+"/sync/ui/books/"+bookID+"/read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(cookie)
+	resp, err := prefixed.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), want) {
+		t.Errorf("the reader page loses the cover icon under a subpath:\n%s", body)
 	}
 }
 

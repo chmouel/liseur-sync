@@ -2028,9 +2028,11 @@ details.danger-zone > summary::before { color: var(--danger); }
 .reader-footer button:hover{text-decoration:underline}
 .reader-footer button[disabled]{opacity:.5;cursor:default;text-decoration:none}
 .reader-footer-edge{flex:none;white-space:nowrap}
-.reader-footer-mid{flex:1;min-width:0;text-align:center;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.reader-footer-mid:empty{visibility:hidden}
+.reader-footer-mid{flex:1;min-width:0;text-align:center}
+/* The label clips, not the button: overflow on the button would clip
+   the hit area a coarse pointer grows outside it. */
+.reader-footer-mid-label{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-footer-mid:has(> .reader-footer-mid-label:empty){visibility:hidden}
 /* The footer sits over the stage, so its ink follows the stage's
    theme rather than the app's. */
 .reader-body[data-reader-theme="original"] .reader-footer{--reader-footer-fg:#1b1b1f}
@@ -3013,12 +3015,12 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
    track, it just gains a taller hit area. any-pointer catches an iPad
    with a trackpad attached, whose primary pointer reads as fine. */
 @media (any-pointer: coarse) {
-	.reader-audio-bar .reader-audio-handle { width: 24px; height: 44px; }
+	.reader-audio-bar .reader-audio-handle { width: 44px; height: 44px; }
 	.reader-audio-bar .reader-audio-size-btn { width: 44px; height: 44px; }
 	#reader-audio-close { width: 44px; height: 44px; }
-	.reader-audio-summary { grid-template-columns: 24px minmax(0, 1fr) 132px 44px 44px; }
+	.reader-audio-summary { grid-template-columns: 44px minmax(0, 1fr) 132px 44px 44px; }
 	.reader-audio-bar[data-audio-size="expanded"] .reader-audio-summary {
-		grid-template-columns: 24px minmax(0, 1fr) 44px 44px;
+		grid-template-columns: 44px minmax(0, 1fr) 44px 44px;
 	}
 	.reader-audio-seek { height: 44px; }
 	.reader-audio-seek::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8.5px; }
@@ -3130,6 +3132,9 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
 	color: var(--ink);
 }
+/* A flex box beats the browser's own rule for the hidden attribute,
+   which would leave an empty capsule on a synced bar. */
+.reader-offline-sync[hidden] { display: none; }
 .reader-offline-sync-state { font-variant-numeric: tabular-nums; }
 .reader-offline-sync-retry {
 	display: inline-flex;
@@ -3152,6 +3157,12 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 .reader-offline-sync-retry[hidden] { display: none; }
 @media (max-width: 48em) {
 	.reader-offline-sync-state { display: none; }
+}
+/* Below the narrowest bar the queue's control stands in for the sync
+   button, whose errand it duplicates here: two controls for one action
+   is what made 320px overflow. */
+@media (max-width: 40em) {
+	.reader-actions:has(.reader-offline-sync:not([hidden])) #reader-sync { display: none; }
 }
 @media (any-pointer: coarse) {
 	.reader-offline-sync-retry { min-height: 44px; min-width: 44px; }
@@ -3204,10 +3215,14 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	/* The footer lives in the margin under the text, and its height is
 	   that margin (#1a2fe33 kept it from covering a line). Growing the
 	   buttons instead would grow the bar, so the hit area grows past
-	   the box without the box moving: the text edge is unchanged. */
+	   the box without the box moving: the text edge is unchanged. A
+	   short label ("4%") still gets the full 44px across, centred on
+	   itself, which is why the pseudo-element carries the width rather
+	   than the button. */
 	.reader-footer button { position: relative; }
 	.reader-footer button::after {
-		content: ""; position: absolute; left: -.25rem; right: -.25rem;
-		top: 50%; height: 44px; transform: translateY(-50%);
+		content: ""; position: absolute; left: 50%; top: 50%;
+		width: max(calc(100% + .5rem), 44px); height: 44px;
+		transform: translate(-50%, -50%);
 	}
 }

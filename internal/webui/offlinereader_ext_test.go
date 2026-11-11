@@ -43,6 +43,8 @@ func TestOfflineReaderColdNavigationInBrowser(t *testing.T) {
 		"SMOKE_BOOK="+bookID,
 		"SMOKE_PAGES="+strconv.Itoa(browserTestPages(t, epub)),
 		"SMOKE_COOKIE="+cookie.Name+"="+cookie.Value,
+		// Opt-in pictures of the reader with the queue waiting.
+		"SMOKE_SHOTS="+os.Getenv("LISEUR_SHOTS"),
 	)
 	output, err := cmd.CombinedOutput()
 	t.Logf("%s", output)

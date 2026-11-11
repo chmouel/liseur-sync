@@ -48,7 +48,7 @@ class Element {
   }
 }
 
-function player() {
+function player({ wakeLock } = {}) {
   const audio = new Element();
   Object.assign(audio, {
     currentTime: 200, duration: 1000, paused: true, ended: false, seeking: false,
@@ -62,6 +62,10 @@ function player() {
     set(value) { src = value; audio.currentTime = 0; audio.readyState = 0; },
   });
   const clock = { now: 0 };
+  const mediaSession = new Element();
+  mediaSession.playbackState = "none";
+  mediaSession.setActionHandler = function () {};
+  mediaSession.setPositionState = function () {};
   const navigations = [];
   const errors = [];
   let scheduledPushes = 0;
@@ -71,13 +75,18 @@ function player() {
     openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction,
     planAudioTicketRefresh, AbortController, URL, console,
     ...narrationModule, sectionHrefIn,
-    seekScrubber, screenWakeLock,
+    // screenWakeLock() is called by the reader itself, so a test that
+    // wants to watch the lock pass a factory that hands back one lock.
+    seekScrubber, screenWakeLock: wakeLock || screenWakeLock,
     installMediaSession, updateMediaPosition, setMediaPlaybackState, clearMediaSession,
+    // The page's Media Session, which the reader reports playback on.
+    navigator: { mediaSession: mediaSession },
     setTimeout(fn, ms) { const id = ++timerID; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
     performance: { now: () => clock.now },
     document: { hidden: false },
     window: { location: { href: "https://books.test/ui/reader/b" } },
+    location: { href: "https://books.test/ui/reader/b" },
     cfg: { bookID: "b", apiBase: "https://books.test/", offline: false },
     workID: "w", ready: true, restoring: false, offlineInvalidated: false,
     offlineContext: null, sessionOwner: false, offlineCheckpoint: null,
@@ -99,6 +108,7 @@ function player() {
     startCandidates: op => [op.locator],
     withAnchor: locator => locator,
     bookTitle: () => "Book",
+    bookAuthor: () => "Author",
     sectionProgression: location => location.sectionFraction || 0,
     view: {
       book: { sections: [{ id: "page.xhtml" }] },
@@ -128,7 +138,10 @@ function player() {
       full_narrative: true
     }
   };`);
-  return { audio, clock, context, navigations, errors, timers, run, get scheduledPushes() { return scheduledPushes; } };
+  return {
+    audio, clock, context, navigations, errors, timers, run, mediaSession,
+    get scheduledPushes() { return scheduledPushes; },
+  };
 }
 
 test("a manual page turn cancels an audio navigation still resolving", async () => {
@@ -1023,4 +1036,81 @@ test("a cancelled touch on the reader seek bar never freezes the clock", async (
   await p.context.audioSeekInput.emit("touchcancel");
   assert.equal(p.audio.currentTime, 200, "a cancelled gesture must not seek");
   assert.equal(p.run("audioScrubbing"), false);
+});
+
+test("Lock Screen artwork is the cover route the page already links", () => {
+  const p = player();
+  // The tab icon carries the deployment subpath the server computed, so
+  // the artwork is that same route at the full size — not a URL rebuilt
+  // from the API base, which knows nothing about /ui/.
+  assert.deepEqual(
+    JSON.parse(p.run('JSON.stringify(audioMediaArtwork("https://books.test/ui/books/b/cover?size=icon"))')),
+    [{ src: "https://books.test/ui/books/b/cover?size=full" }],
+  );
+  assert.deepEqual(
+    JSON.parse(p.run('JSON.stringify(audioMediaArtwork("https://books.test/sync/ui/books/b/cover?size=icon"))')),
+    [{ src: "https://books.test/sync/ui/books/b/cover?size=full" }],
+  );
+  assert.deepEqual(JSON.parse(p.run("JSON.stringify(audioMediaArtwork(undefined))")), []);
+  // The detached reader's icon is a blob it fetched with its own token.
+  p.run("cfg.detached = true");
+  assert.deepEqual(
+    JSON.parse(p.run('JSON.stringify(audioMediaArtwork("blob:https://reader.test/1"))')),
+    [{ src: "blob:https://reader.test/1" }],
+  );
+});
+
+function wakeLockSpy() {
+  const state = { requests: 0, sentinels: [] };
+  const nav = {
+    wakeLock: {
+      async request() {
+        state.requests++;
+        const sentinel = {
+          released: 0,
+          addEventListener() {},
+          async release() { this.released++; },
+        };
+        state.sentinels.push(sentinel);
+        return sentinel;
+      },
+    },
+  };
+  state.lock = screenWakeLock({ nav, doc: { hidden: false } });
+  return state;
+}
+
+test("an audio error that cannot recover releases the screen and stops claiming playback", async () => {
+  const wake = wakeLockSpy();
+  const p = player({ wakeLock: () => wake.lock });
+  p.audio.paused = false;
+  await p.audio.emit("play");
+  await p.audio.emit("playing");
+  await flush();
+  assert.equal(wake.lock.held(), true, "playing audio holds the screen");
+  assert.equal(p.mediaSession.playbackState, "playing");
+
+  // Losing the network fails the ticket refresh as well: nothing is
+  // coming to play, and no pause event follows a broken element.
+  p.context.api = async () => { throw new Error("offline"); };
+  p.audio.error = { code: 2 };
+  await p.audio.emit("error");
+  await flush();
+  assert.equal(wake.lock.held(), false, "the screen must not stay awake for audio that stopped");
+  assert.equal(p.mediaSession.playbackState, "none");
+  assert.equal(p.run("audioActivelyPlaying"), false);
+});
+
+test("a pause event arriving after the player closed leaves the session empty", async () => {
+  const p = player();
+  p.audio.paused = false;
+  await p.audio.emit("play");
+  await p.audio.emit("playing");
+  await flush();
+  assert.equal(p.mediaSession.playbackState, "playing");
+  await p.context.audioCloseBtn.emit("click");
+  assert.equal(p.mediaSession.playbackState, "none", "the close empties the session");
+  // pause() on the element schedules this event; it lands afterwards.
+  await p.audio.emit("pause");
+  assert.equal(p.mediaSession.playbackState, "none", "a closed player has no state to report");
 });

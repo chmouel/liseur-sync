@@ -41,6 +41,13 @@ func (f *booksFixture) fetchCover(
 // coverEPUB builds a publication with a real cover image.
 func coverEPUB(t *testing.T, width, height int) []byte {
 	t.Helper()
+	return coverEPUBTitled(t, "Illustrated", "", width, height)
+}
+
+// coverEPUBTitled is the same publication under a title of its own, for
+// the shots that need a shelf of books rather than one book twice.
+func coverEPUBTitled(t *testing.T, title, author string, width, height int) []byte {
+	t.Helper()
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	add := func(name string, body []byte, method uint16) {
@@ -60,10 +67,14 @@ func coverEPUB(t *testing.T, width, height int) []byte {
 			`<rootfiles><rootfile full-path="OPS/package.opf"`+
 			` media-type="application/oebps-package+xml"/></rootfiles></container>`),
 		zip.Deflate)
+	creator := ""
+	if author != "" {
+		creator = "<dc:creator>" + author + "</dc:creator>"
+	}
 	add("OPS/package.opf", []byte(`<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf"
  xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0">
- <metadata><dc:title>Illustrated</dc:title></metadata>
+ <metadata><dc:title>`+title+`</dc:title>`+creator+`</metadata>
  <manifest>
   <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"
     properties="nav"/>

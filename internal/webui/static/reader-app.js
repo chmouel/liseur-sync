@@ -102,7 +102,11 @@ const progressRail = progressBar ? progressBar.closest(".reader-progress") : nul
 const progressText = document.getElementById("reader-progress-text");
 const chapterLoader = document.getElementById("reader-chapter-loader");
 const chapterLoaderText = document.getElementById("reader-chapter-loader-text");
-const chapterText = document.getElementById("reader-chapter");
+// The middle slot clips its own label, so the label is the element that
+// carries the chapter name and the button stays a plain, unclipped box.
+// A cached page from before the span still names the button itself.
+const chapterText = document.getElementById("reader-chapter-label") ||
+  document.getElementById("reader-chapter");
 const pageText = document.getElementById("reader-page");
 const footer = document.getElementById("reader-footer");
 const gotoDialog = document.getElementById("reader-goto");
@@ -566,9 +570,26 @@ function readerSyncState(trigger) {
     text.textContent = synced ? "Synced" : "Waiting to sync";
     retry.hidden = synced;
     retry.setAttribute("aria-label", synced ? "Synced" : "Try again: waiting to sync");
+    // A queue with nothing in it is not news, and a control that says so
+    // forever costs the top bar its width on a phone. It is back the
+    // moment this device owes something.
+    wrap.hidden = synced;
+  };
+  // The coordinator declines to run in a tab that is offline, so a
+  // change queued there never reaches onStatus. The queue itself is
+  // what the control speaks for, so ask it whenever it may have moved.
+  const refresh = async () => {
+    if (!offlineContext) return;
+    let queued = 1;
+    try {
+      queued = (await listOfflineOutbox({ ...offlineContext, state: null })).length;
+    } catch {
+      // Storage that cannot answer is not evidence of an empty queue.
+    }
+    set(queued ? "waiting" : "synced");
   };
   set("waiting");
-  return { set };
+  return { set, refresh };
 }
 
 function prepareOfflineSync() {
@@ -588,10 +609,15 @@ function prepareOfflineSync() {
     },
     onStatus: message => {
       say(message, !!message);
-      syncState.set(message ? "waiting" : "synced");
+      if (message) syncState.set("waiting");
+      else void syncState.refresh();
     },
     onStuck: showStuck,
   });
+  const recheck = () => { void syncState.refresh(); };
+  addEventListener("offline-change", recheck);
+  addEventListener("online", recheck);
+  document.addEventListener("visibilitychange", recheck);
   offlineCoordinator.trigger();
 }
 
@@ -3877,7 +3903,10 @@ function wireChapterPointer(doc) {
     const t = e.changedTouches && e.changedTouches[0];
     const [vx, vy] = t ? toViewport(doc, t.clientX, t.clientY) : [ended.lastVx, ended.lastVy];
     if (tocPanel && !tocPanel.hidden) return;
-    if (finishSwipe(ended, e.target, "touch", vx, vy, false)) {
+    // A gesture the browser took back (pointercancel, a stolen capture,
+    // a context menu) has no end of its own left to classify, whatever
+    // the finger did before it was cancelled.
+    if (ended.cancelled || finishSwipe(ended, e.target, "touch", vx, vy, ended.cancelled)) {
       gesture.id = null;
       gesture.spoiled = true;
     }
@@ -4497,13 +4526,18 @@ stageArea.addEventListener("touchend", (e) => {
   const t = e.changedTouches && e.changedTouches[0];
   const vx = t ? t.clientX : ended.lastVx;
   const vy = t ? t.clientY : ended.lastVy;
+  // A cancelled gesture has no end of its own to classify.
+  if (ended.cancelled) {
+    stageGesture.id = null;
+    stageGesture.spoiled = true;
+    return;
+  }
   const dt = Math.max(1, performance.now() - ended.startedAt);
   const swipeDir = classifySwipe({
     pointerType: "touch",
     dx: vx - ended.vx,
     dy: vy - ended.vy,
     dt,
-    cancelled: false,
     multiTouch: ended.multiTouch,
     hadSelection: ended.hadSelection || bookHasSelection(),
     exempt: ended.exempt || !stageSurface(e.target),
@@ -4995,17 +5029,19 @@ function syncWakeLock() {
 const audioMediaSession = typeof navigator !== "undefined" ? navigator.mediaSession : null;
 let audioMediaChapterKey = null;
 
-// The cover is a same-origin cookie route on a normal page; on the
-// detached origin it needs a bearer token, so the blob the reader
-// already fetched for the tab icon stands in.
-function audioMediaArtwork() {
+// The tab icon is the book's cover route at the icon size, and it is
+// the one cover URL this page holds: the server computed it, so it
+// already carries the deployment's subpath. The Lock Screen wants the
+// same route, so only the size changes. On the detached origin the icon
+// is a blob the reader fetched with its bearer token, and that stands
+// in as it is.
+function audioMediaArtwork(iconHref) {
   try {
-    if (cfg.detached || cfg.offline) {
-      const icon = document.querySelector?.("link[rel=icon]")?.href;
-      return icon ? [{ src: icon }] : [];
-    }
-    const base = new URL(cfg.apiBase || "../", location.href);
-    return [{ src: new URL("books/" + encodeURIComponent(cfg.bookID) + "/cover?size=full", base).href }];
+    if (!iconHref) return [];
+    if (cfg.detached || cfg.offline) return [{ src: iconHref }];
+    const cover = new URL(iconHref, location.href);
+    cover.searchParams.set("size", "full");
+    return [{ src: cover.href }];
   } catch {
     return [];
   }
@@ -5021,7 +5057,10 @@ function syncAudioMediaMetadata(force = false) {
   audioMediaChapterKey = key;
   installMediaSession(audioMediaSession, {
     Metadata: globalThis.MediaMetadata,
-    metadata: { title, artist: bookAuthor(), album: chapter, artwork: audioMediaArtwork() },
+    metadata: {
+      title, artist: bookAuthor(), album: chapter,
+      artwork: audioMediaArtwork(document.querySelector?.("link[rel=icon]")?.href),
+    },
   });
 }
 
@@ -5883,7 +5922,10 @@ if (audioToggleBtn && audioBar && audioEl) {
       audioPlayBtn.setAttribute("aria-label", "Play audiobook");
     }
     pauseListeningInterval();
-    setMediaPlaybackState(audioMediaSession, "paused");
+    // The close pauses the element first and empties the panel, and the
+    // pause event arrives afterwards. Reporting "paused" then would
+    // contradict the "none" the close just wrote.
+    setMediaPlaybackState(audioMediaSession, audioBar?.hidden ? "none" : "paused");
     syncWakeLock();
     if (document.hidden && !audioSwappingSrc && !audioEl.error) {
       void endSession();
@@ -5914,6 +5956,12 @@ if (audioToggleBtn && audioBar && audioEl) {
 
   audioEl.addEventListener("error", () => {
     pauseListeningInterval();
+    // #113/#114: a failed playback is a stopped one. The recovery below
+    // may fail too — losing the network is one way to get here — so the
+    // wake lock goes back and the Lock Screen stops saying "playing"
+    // without waiting for a pause event a broken element may never send.
+    setMediaPlaybackState(audioMediaSession, "none");
+    syncWakeLock();
     if (!audioTicketRefreshing && audioBar && !audioBar.hidden) {
       void mintAudioTicket(true, true);
     }
