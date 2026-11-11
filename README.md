@@ -61,7 +61,7 @@ Every device writes positions its own way, and the server keeps them together:
 
 * **KOReader** syncs positions through its built-in *Progress sync*, browses the library over OPDS and uploads reading time with the KoInsight plugin. One download from the Devices page sets all three up: see the [setup guide](https://chmouel.github.io/liseur-sync/koreader/) or the [reference](docs/koreader.md).
 * **CrossPoint** pairs through kosync; see [docs/crosspoint.md](docs/crosspoint.md).
-* **Liseur**, on a phone or a desktop, uses the native API.
+* **Liseur**, the Android app and the main client, uses the native API. See [how it connects](https://chmouel.github.io/liseur-sync/liseur/).
 
 Pairing and setup for each client is in [docs/deployment.md](docs/deployment.md).
 

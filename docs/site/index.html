@@ -17,6 +17,7 @@
     <nav aria-label="Page sections">
       <a href="#what">What it does</a>
       <a href="#clients">Where you can read</a>
+      <a href="liseur/">Liseur app</a>
       <a href="koreader/">KOReader setup</a>
       <a href="#install">Install</a>
     </nav>
@@ -33,7 +34,7 @@
         <a class="button" href="#install">Install it</a>
         <a class="button ghost" href="koreader/">Set up KOReader</a>
       </div>
-      <p class="hero-note">Self-hosted and MIT licensed. It is the companion server for the <a href="https://github.com/chmouel/liseur">Liseur</a> app.</p>
+      <p class="hero-note">Self-hosted and MIT licensed. It is the server behind <a href="liseur/">Liseur</a>, an Android reading app.</p>
     </div>
     <figure class="browser crop">
       <span class="bar">your-server/ui/library</span>
@@ -80,16 +81,16 @@
     <p class="prose">Every device sends its position in its own way. The server keeps them together.</p>
     <table class="clients">
       <tr>
+        <th scope="row">Liseur for Android</th>
+        <td>The main app liseur-sync supports. It syncs positions, highlights, statistics and uploads, and connects with your username and password. <a href="liseur/">See how it connects</a>.</td>
+      </tr>
+      <tr>
         <th scope="row">KOReader</th>
         <td>Progress sync for your position, OPDS for the library and KoInsight for reading time. One download from the server sets up all three. <a href="koreader/">See the setup guide</a>.</td>
       </tr>
       <tr>
         <th scope="row">CrossPoint on an Xteink</th>
         <td>Syncs positions through the kosync API and can send reading statistics. <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/crosspoint.md">Read the guide</a>.</td>
-      </tr>
-      <tr>
-        <th scope="row">Liseur</th>
-        <td>The companion app for phones and desktops, built on the server's native API.</td>
       </tr>
       <tr>
         <th scope="row">Your browser</th>
