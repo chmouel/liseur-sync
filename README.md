@@ -30,7 +30,7 @@ Download one file from the Devices page, copy it into KOReader's `patches/` fold
 * reading-position synchronization using full locators
 * a native REST API
 * a kosync-compatible API for KOReader and [CrossPoint](docs/crosspoint.md), with paragraph-precise positions shared with Liseur
-* OPDS 1.2
+* OPDS 1.2 and OPDS 2.0 catalogs
 * EPUB library indexing and search
 * audiobooks found in watched folders, played inside the web reader
 * EPUB and audiobook upload, and deletion, for writable folders

@@ -95,24 +95,8 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID := r.PathValue("folder")
-	if folderID == "" || len(folderID) > maxFolderIDBytes {
-		writeError(w, http.StatusNotFound, "folder not found")
-		return
-	}
-	text := r.URL.Query().Get("q")
-	if len(text) > maxSearchTextBytes {
-		writeError(w, http.StatusBadRequest, "search text is too long")
-		return
-	}
-	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
-		FolderID: folderID,
-		UserID:   tok.UserID,
-		Text:     text,
-		Limit:    opdsPageSize,
-	})
-	if err != nil {
-		writeCatalogError(w, err, "folder not found")
+	folderID, text, books, ok := s.opdsSearchResults(w, r, tok.UserID, "q")
+	if !ok {
 		return
 	}
 	self := opdsPrefix + "/folders/" + url.PathEscape(folderID) +
@@ -128,13 +112,43 @@ func (s *Server) HandleOPDSSearch(w http.ResponseWriter, r *http.Request) {
 				Type: opdsAcquisitionType},
 		},
 	}
-	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, result.Books)
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog search failed")
 		return
 	}
 	feed.Entries = entries
 	writeOPDS(w, r, opdsAcquisitionType, feed)
+}
+
+// opdsSearchResults runs the search a feed asked for. The query parameter
+// is named by the caller because the two OPDS versions spell it
+// differently: OpenSearch templates carry `q`, an OPDS 2.0 URI template
+// `query`. On failure it has already answered.
+func (s *Server) opdsSearchResults(
+	w http.ResponseWriter, r *http.Request, userID, param string,
+) (folderID, text string, books []store.CatalogBook, ok bool) {
+	folderID = r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
+		return "", "", nil, false
+	}
+	text = r.URL.Query().Get(param)
+	if len(text) > maxSearchTextBytes {
+		writeError(w, http.StatusBadRequest, "search text is too long")
+		return "", "", nil, false
+	}
+	result, err := s.St.SearchCatalogBooks(r.Context(), store.SearchQuery{
+		FolderID: folderID,
+		UserID:   userID,
+		Text:     text,
+		Limit:    opdsPageSize,
+	})
+	if err != nil {
+		writeCatalogError(w, err, "folder not found")
+		return "", "", nil, false
+	}
+	return folderID, text, result.Books, true
 }
 
 // opdsKindTitles name the browse feeds. The segments are the same ones
@@ -145,6 +159,9 @@ var opdsKindTitles = map[string]string{
 	"tags":         "Tags",
 }
 
+// opdsEntitySegments is the order the browse links are offered in.
+var opdsEntitySegments = []string{"series", "contributors", "tags"}
+
 // HandleOPDSEntities serves the library's series, contributors or tags
 // as a navigation feed: each entry leads to the books claiming it.
 // Entities are library-wide (ADR-0019), so the feed hangs off the root
@@ -154,21 +171,8 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	kind, ok := entityRequest(w, r)
+	segment, entities, nextAfter, ok := s.opdsEntitiesPage(w, r)
 	if !ok {
-		return
-	}
-	segment := r.PathValue("kind")
-	after := r.URL.Query().Get("after")
-	if len(after) > 512 {
-		writeError(w, http.StatusBadRequest, "cursor is too long")
-		return
-	}
-	limit := opdsPageSize
-	entities, err := s.St.ListCatalogEntities(
-		r.Context(), readerID(r), kind, after, limit)
-	if err != nil {
-		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	self := opdsPrefix + "/entities/" + segment
@@ -195,14 +199,39 @@ func (s *Server) HandleOPDSEntities(w http.ResponseWriter, r *http.Request) {
 			}},
 		})
 	}
-	if len(entities) == limit {
+	if nextAfter != "" {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel: "next", Type: opdsNavigationType,
-			Href: self + "?after=" +
-				url.QueryEscape(entities[len(entities)-1].NormalizedName),
+			Href: self + "?after=" + url.QueryEscape(nextAfter),
 		})
 	}
 	writeOPDS(w, r, opdsNavigationType, feed)
+}
+
+// opdsEntitiesPage reads one page of the kind named in the path, and the
+// key the next page starts after. On failure it has already answered.
+func (s *Server) opdsEntitiesPage(
+	w http.ResponseWriter, r *http.Request,
+) (segment string, entities []store.CatalogEntity, nextAfter string, ok bool) {
+	kind, ok := entityRequest(w, r)
+	if !ok {
+		return "", nil, "", false
+	}
+	after := r.URL.Query().Get("after")
+	if len(after) > 512 {
+		writeError(w, http.StatusBadRequest, "cursor is too long")
+		return "", nil, "", false
+	}
+	entities, err := s.St.ListCatalogEntities(
+		r.Context(), readerID(r), kind, after, opdsPageSize)
+	if err != nil {
+		writeCatalogError(w, err, "entity not found")
+		return "", nil, "", false
+	}
+	if len(entities) == opdsPageSize {
+		nextAfter = entities[len(entities)-1].NormalizedName
+	}
+	return r.PathValue("kind"), entities, nextAfter, true
 }
 
 // HandleOPDSEntityBooks serves the books claiming one entity. A series
@@ -213,27 +242,8 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	kind, ok := entityRequest(w, r)
+	segment, entity, books, next, ok := s.opdsEntityBooksPage(w, r)
 	if !ok {
-		return
-	}
-	segment := r.PathValue("kind")
-	after, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	entity, err := s.St.CatalogEntityByID(
-		r.Context(), readerID(r), r.PathValue("entity"), kind)
-	if err != nil {
-		writeCatalogError(w, err, "entity not found")
-		return
-	}
-	limit := opdsPageSize
-	books, next, err := s.St.ListBooksByEntity(
-		r.Context(), readerID(r), entity.ID, kind, after, limit)
-	if err != nil {
-		writeCatalogError(w, err, "entity not found")
 		return
 	}
 	kindHref := opdsPrefix + "/entities/" + segment
@@ -254,14 +264,46 @@ func (s *Server) HandleOPDSEntityBooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	feed.Entries = entries
-	if next != nil {
+	if next != "" {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel:  "next",
 			Type: opdsAcquisitionType,
-			Href: self + "?cursor=" + url.QueryEscape(encodeCatalogCursor(*next)),
+			Href: self + "?cursor=" + url.QueryEscape(next),
 		})
 	}
 	writeOPDS(w, r, opdsAcquisitionType, feed)
+}
+
+// opdsEntityBooksPage reads the entity named in the path and one page of
+// the books claiming it. On failure it has already answered.
+func (s *Server) opdsEntityBooksPage(
+	w http.ResponseWriter, r *http.Request,
+) (segment string, entity store.CatalogEntity, books []store.CatalogBook, next string, ok bool) {
+	kind, ok := entityRequest(w, r)
+	if !ok {
+		return "", store.CatalogEntity{}, nil, "", false
+	}
+	after, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return "", store.CatalogEntity{}, nil, "", false
+	}
+	entity, err = s.St.CatalogEntityByID(
+		r.Context(), readerID(r), r.PathValue("entity"), kind)
+	if err != nil {
+		writeCatalogError(w, err, "entity not found")
+		return "", store.CatalogEntity{}, nil, "", false
+	}
+	books, nextCursor, err := s.St.ListBooksByEntity(
+		r.Context(), readerID(r), entity.ID, kind, after, opdsPageSize)
+	if err != nil {
+		writeCatalogError(w, err, "entity not found")
+		return "", store.CatalogEntity{}, nil, "", false
+	}
+	if nextCursor != nil {
+		next = encodeCatalogCursor(*nextCursor)
+	}
+	return r.PathValue("kind"), entity, books, next, true
 }
 
 // plainPlural counts without the web UI's markup, since a feed's content

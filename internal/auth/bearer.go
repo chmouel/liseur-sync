@@ -99,19 +99,31 @@ const BasicRealm = "Liseur catalog"
 // token existed anywhere a caller could read, and the one line that says
 // "insufficient scope" would not say which credential to widen.
 func RequireBasicToken(svc *Service, next http.Handler) http.Handler {
+	return RequireBasicTokenChallenge(svc, challengeBasic, next)
+}
+
+// BasicChallenge answers a request whose Basic credential was absent or
+// refused. It must leave a 401 with a Basic challenge behind:
+// SetBasicChallenge is the header, and the body is the caller's choice.
+type BasicChallenge func(w http.ResponseWriter, r *http.Request, msg string)
+
+// RequireBasicTokenChallenge is RequireBasicToken with the refusal
+// written by challenge, for a protocol that describes how to
+// authenticate in the body of the 401 itself.
+func RequireBasicTokenChallenge(svc *Service, challenge BasicChallenge, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		username, secret, ok := r.BasicAuth()
 		if !ok || secret == "" {
-			challengeBasic(w, "authentication required")
+			challenge(w, r, "authentication required")
 			return
 		}
 		tok, err := svc.AuthenticateToken(r.Context(), secret)
 		if err != nil {
-			challengeBasic(w, "invalid credentials")
+			challenge(w, r, "invalid credentials")
 			return
 		}
 		if username != "" && username != "token" && username != tok.Name {
-			challengeBasic(w, "invalid credentials")
+			challenge(w, r, "invalid credentials")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxToken, tok)))
@@ -137,7 +149,12 @@ func RequireAttachedScope(scope store.Scope, next http.Handler) http.Handler {
 	})
 }
 
-func challengeBasic(w http.ResponseWriter, msg string) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="`+BasicRealm+`", charset="UTF-8"`)
+func challengeBasic(w http.ResponseWriter, _ *http.Request, msg string) {
+	SetBasicChallenge(w)
 	http.Error(w, `{"error":"`+msg+`"}`, http.StatusUnauthorized)
+}
+
+// SetBasicChallenge sets the header that makes a 401 a Basic challenge.
+func SetBasicChallenge(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="`+BasicRealm+`", charset="UTF-8"`)
 }

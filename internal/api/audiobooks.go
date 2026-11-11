@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -364,6 +365,16 @@ func (s *Server) isAudioTicketAuthActive(ctx context.Context, p audioTicketPaylo
 func (s *Server) ServeBookAudio(
 	w http.ResponseWriter, r *http.Request, viewerID, bookID, expectedAudiobookID, expectedSHA string,
 ) {
+	s.serveBookAudio(w, r, viewerID, bookID, expectedAudiobookID, expectedSHA, false)
+}
+
+// serveBookAudio is ServeBookAudio, optionally as a download: a catalog
+// reader saves the file rather than playing it, and names it after the
+// file on disk rather than after the URL.
+func (s *Server) serveBookAudio(
+	w http.ResponseWriter, r *http.Request, viewerID, bookID, expectedAudiobookID, expectedSHA string,
+	attachment bool,
+) {
 	af, ok := s.Files.(AudiobookFiles)
 	if !ok || s.Files == nil {
 		writeError(w, http.StatusServiceUnavailable, "content storage is unavailable")
@@ -392,6 +403,13 @@ func (s *Server) ServeBookAudio(
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Accept-Ranges", "bytes")
+	if attachment {
+		name := sanitizeFilename(path.Base(ab.RelativePath))
+		if name == "" {
+			name = "audiobook.m4b"
+		}
+		w.Header().Set("Content-Disposition", contentDisposition(name))
+	}
 	http.ServeContent(&catalogErrorWriter{ResponseWriter: w}, r, "",
 		ab.UpdatedAt.UTC(), file)
 }

@@ -89,7 +89,7 @@ reader.example.com {
 ### Serving below a path prefix
 
 The UI can be served below a stripped prefix, but OPDS acquisition and
-cover links are rooted at `/opds/v1.2`. If a reverse proxy exposes the
+cover links are rooted at `/opds/v1.2` and `/opds/v2`. If a reverse proxy exposes the
 server below `/sync` with a path-stripping rule, also route the emitted
 `/opds*` links without stripping that prefix:
 
@@ -112,7 +112,7 @@ reader.example.com {
 ```
 
 Use `handle`, rather than `handle_path`, for `/opds*`: liseur-sync
-expects the upstream request to retain `/opds/v1.2`. The root OPDS route
+expects the upstream request to retain `/opds/v1.2` or `/opds/v2`. The root OPDS route
 is protected by liseur-sync's own HTTP Basic authentication, just like
 the prefixed route.
 

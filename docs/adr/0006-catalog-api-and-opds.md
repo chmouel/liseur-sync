@@ -112,10 +112,11 @@ than a second route because it is one collection either way; only which
 end changes. An unrecognized order is refused rather than defaulted,
 because a typo that silently reverses a listing is worse than an error.
 
-OPDS 2.0 and OPDS-PSE are deferred entirely.
+OPDS-PSE is deferred. OPDS 2.0 is served beside 1.2 under `/opds/v2`
+([ADR-0065](0065-opds-2.md)).
 
 XML is generated through an encoder, never string interpolation, and has
-escaping and pagination tests. OPDS 2.0 and OPDS-PSE are deferred.
+escaping and pagination tests.
 
 OPDS authenticates with HTTP Basic for broad client compatibility:
 
@@ -155,8 +156,8 @@ metadata edits, work resolution, and rich sync remain native operations.
    HTTP Basic, with covers, an OpenSearch description and search results
    feed, and navigation feeds for series, contributors, tags and genres,
    plus a recently-added feed, all discovered through links rather than
-   configuration. **Nothing outstanding** short of OPDS 2.0, which is
-   deferred.
+   configuration. **Nothing outstanding.** OPDS 2.0 followed in
+   [ADR-0065](0065-opds-2.md).
 4. Mutation API and ingestion job resources. Done: the ADR-0005 upload
    endpoint, the job resource, `DELETE`/`POST .../restore` for reversible
    deletion, and the metadata edit and entity routes from ADR-0004 phase

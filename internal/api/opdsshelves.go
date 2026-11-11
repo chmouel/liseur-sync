@@ -155,29 +155,66 @@ func (s *Server) HandleOPDSShelf(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	shelf, page, next, ok := s.opdsShelfPage(w, r, tok.UserID)
+	if !ok {
+		return
+	}
+	self := opdsPrefix + "/shelves/" + shelf.slug
+	feed := opdsFeed{
+		ID:      "urn:liseur:shelf:" + shelf.slug,
+		Title:   shelf.title,
+		Updated: opdsTime(time.Now()),
+		Links: []opdsLink{
+			{Rel: "self", Href: self, Type: opdsAcquisitionType},
+			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
+			{Rel: "up", Href: opdsPrefix, Type: opdsAcquisitionType},
+		},
+	}
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, page)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	feed.Entries = entries
+	if next != "" {
+		feed.Links = append(feed.Links, opdsLink{
+			Rel:  "next",
+			Type: opdsAcquisitionType,
+			Href: self + "?offset=" + url.QueryEscape(next),
+		})
+	}
+	writeOPDS(w, r, opdsAcquisitionType, feed)
+}
+
+// opdsShelfPage reads the shelf named in the path and the page of it the
+// `offset` parameter asks for, with the offset of the next page when
+// there is one. On failure it has already answered.
+func (s *Server) opdsShelfPage(
+	w http.ResponseWriter, r *http.Request, userID string,
+) (opdsShelf, []store.CatalogBook, string, bool) {
 	shelf, ok := opdsShelfBySlug(r.PathValue("shelf"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "shelf not found")
-		return
+		return opdsShelf{}, nil, "", false
 	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 {
 			writeError(w, http.StatusBadRequest, "invalid offset")
-			return
+			return opdsShelf{}, nil, "", false
 		}
 		offset = n
 	}
-	books, err := s.allLibraryBooks(r, tok.UserID)
+	books, err := s.allLibraryBooks(r, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
+		return opdsShelf{}, nil, "", false
 	}
-	states, err := s.readerBookStates(r, tok.UserID)
+	states, err := s.readerBookStates(r, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "reading state lookup failed")
-		return
+		return opdsShelf{}, nil, "", false
 	}
 	kept := make([]shelfBook, 0, len(books))
 	for _, b := range books {
@@ -197,29 +234,9 @@ func (s *Server) HandleOPDSShelf(w http.ResponseWriter, r *http.Request) {
 			page = append(page, k.book)
 		}
 	}
-	self := opdsPrefix + "/shelves/" + shelf.slug
-	feed := opdsFeed{
-		ID:      "urn:liseur:shelf:" + shelf.slug,
-		Title:   shelf.title,
-		Updated: opdsTime(time.Now()),
-		Links: []opdsLink{
-			{Rel: "self", Href: self, Type: opdsAcquisitionType},
-			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
-			{Rel: "up", Href: opdsPrefix, Type: opdsAcquisitionType},
-		},
-	}
-	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, page)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
-	}
-	feed.Entries = entries
+	next := ""
 	if end < len(kept) {
-		feed.Links = append(feed.Links, opdsLink{
-			Rel:  "next",
-			Type: opdsAcquisitionType,
-			Href: self + "?offset=" + url.QueryEscape(strconv.Itoa(end)),
-		})
+		next = strconv.Itoa(end)
 	}
-	writeOPDS(w, r, opdsAcquisitionType, feed)
+	return shelf, page, next, true
 }

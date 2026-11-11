@@ -79,7 +79,7 @@ already have.**
    folders explicitly granted to it; only administrators manage folders
    and grants, because that is the only place filesystem paths appear.
 8. **Broad reader integration**: a native catalog API for Liseur clients,
-   OPDS 1.2 for existing readers, and an isolated web reader using the
+   OPDS 1.2 and 2.0 for existing readers, and an isolated web reader using the
    same sync protocol.
 9. **Installable offline web reading**: one bounded same-origin PWA can
    retain explicitly selected EPUBs and queue the same reading state and
@@ -92,7 +92,7 @@ already have.**
                     │                 liseur-sync                  │
                     │                     (Go)                     │
  Liseur (native) ──▶│  /v1/*              native sync/catalog API │
- OPDS readers ─────▶│  /opds/v1.2/*        catalog adapter        │
+ OPDS readers ─────▶│  /opds/{v1.2,v2}/*   catalog adapter        │
                     │                                              │
  KOReader kosync ──▶│  /adapter/kosync/*   translation layer      │
  KOReader stats  ──▶│  /adapter/koplugin/* translation layer      │
@@ -1087,8 +1087,9 @@ mutates the watched tree.
 - **calibre-web / Komga bridging**: the server pulling positions from a
   remote catalog on the user's behalf. Liseur already handles this
   client-side.
-- **OPDS 2.0 and OPDS-PSE.** OPDS 1.2 acquisition feeds land first for
-  existing-reader compatibility.
+- **OPDS-PSE and Readium progression over OPDS.** OPDS 2.0 feeds
+  shipped in [ADR-0065](adr/0065-opds-2.md); page streaming and syncing
+  positions through the catalog credential did not.
 - **Additional content formats.** PDF, CBZ/CBR, audiobook, and
   fixed-layout support require format-specific parsing, metadata,
   serving, and reader decisions.

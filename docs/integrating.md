@@ -1675,6 +1675,45 @@ as `author/name` and a summary cut to 400 bytes, and the two cover links
 point at the thumbnail and icon variants rather than the page-sized
 image. Readers page through the rest with `next`.
 
+Each 1.2 feed carries a `rel="alternate"` link of type
+`application/opds+json` to the same feed in OPDS 2.0.
+
+## OPDS 2.0
+
+The same catalog is served as OPDS 2.0 JSON (`application/opds+json`)
+under `https://<host>/opds/v2`, with the same credential and the same
+rules as 1.2 ([ADR-0065](adr/0065-opds-2.md)). A request without a valid
+credential gets a 401 with `WWW-Authenticate: Basic` and, as the body, an
+Authentication for OPDS document (`application/opds-authentication+json`)
+of type `http://opds-spec.org/auth/basic`.
+
+The root is a navigation feed: `navigation` links to each granted folder,
+the four shelves under `/opds/v2/shelves/`, and the series, contributors
+and tags lists under `/opds/v2/entities/`. A "Newest" group follows with
+the first page of books; its `self` link, `/opds/v2/new`, is the full
+newest-first listing with `next` links. Point a client that syncs by
+walking `next` at `/opds/v2/new`, because the root's group is one page.
+
+A folder feed lists its books newest first and carries a templated search
+link, `/opds/v2/folders/{folder}/search{?query}`. Entity lists put each
+entry's book count in `properties.numberOfItems`.
+
+Each publication carries `metadata` with `@type`
+`http://schema.org/Book`, an `identifier` (`urn:isbn:`, `urn:uuid:`, or
+`urn:liseur:book:{id}` when the book has neither), title, subtitle,
+language, publisher, `published`, `modified`, a description cut to 400
+bytes, contributors by role (`author`, `translator`, `editor`,
+`illustrator`, otherwise `contributor`) each linking to their book list,
+tags as `subject`, and `belongsTo.series` with the `position`. Its
+`links` start with the EPUB acquisition. When the caller can play a
+linked audiobook, a second acquisition of type `audio/mp4` points at
+`/opds/v2/books/{id}/audiobook`, which serves the `.m4b` with ranges and a
+strong `ETag`. That needs a grant on the audiobook's folder as well as the
+book's. `images` lists the thumbnail first and the full cover second.
+
+Pages hold 20 items, `metadata.itemsPerPage` says so, and an empty page
+still writes its collection as `[]`.
+
 ## KOReader without a liseur-sync plugin
 
 Stock KOReader devices can join through the kosync adapter instead of

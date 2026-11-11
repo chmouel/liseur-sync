@@ -611,6 +611,47 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("HEAD /opds/v1.2/books/{id}/cover",
 		opdsH("HEAD /opds/v1.2/books/{id}/cover", s.HandleBookCover))
 
+	// OPDS 2.0 (ADR-0065): the same catalog as JSON, behind the same
+	// chain. Only the refusal differs — a 401 here carries the OPDS
+	// Authentication Document as its body, beside the Basic challenge
+	// that Basic-only readers rely on.
+	opds2H := func(pattern string, h http.HandlerFunc) http.Handler {
+		return s.opdsLogging(pattern,
+			auth.RequireSecureTransport(s.Cfg,
+				auth.RateLimitIP(s.OPDSLimiter, s.Cfg,
+					auth.RequireBasicTokenChallenge(s.Auth, opds2Challenge,
+						opdsTokenCapture(
+							auth.RequireAttachedScope(store.ScopeLibraryRead, h))))))
+	}
+	mux.Handle("GET /opds/v2",
+		opds2H("GET /opds/v2", s.HandleOPDS2Root))
+	mux.Handle("GET /opds/v2/{$}",
+		opds2H("GET /opds/v2/{$}", s.HandleOPDS2Root))
+	mux.Handle("GET /opds/v2/new",
+		opds2H("GET /opds/v2/new", s.HandleOPDS2New))
+	mux.Handle("GET /opds/v2/folders/{folder}",
+		opds2H("GET /opds/v2/folders/{folder}", s.HandleOPDS2Folder))
+	mux.Handle("GET /opds/v2/folders/{folder}/search",
+		opds2H("GET /opds/v2/folders/{folder}/search", s.HandleOPDS2Search))
+	mux.Handle("GET /opds/v2/shelves/{shelf}",
+		opds2H("GET /opds/v2/shelves/{shelf}", s.HandleOPDS2Shelf))
+	mux.Handle("GET /opds/v2/entities/{kind}",
+		opds2H("GET /opds/v2/entities/{kind}", s.HandleOPDS2Entities))
+	mux.Handle("GET /opds/v2/entities/{kind}/{entity}",
+		opds2H("GET /opds/v2/entities/{kind}/{entity}", s.HandleOPDS2EntityBooks))
+	mux.Handle("GET /opds/v2/books/{id}/download",
+		opds2H("GET /opds/v2/books/{id}/download", s.HandleBookDownload))
+	mux.Handle("HEAD /opds/v2/books/{id}/download",
+		opds2H("HEAD /opds/v2/books/{id}/download", s.HandleBookDownload))
+	mux.Handle("GET /opds/v2/books/{id}/cover",
+		opds2H("GET /opds/v2/books/{id}/cover", s.HandleBookCover))
+	mux.Handle("HEAD /opds/v2/books/{id}/cover",
+		opds2H("HEAD /opds/v2/books/{id}/cover", s.HandleBookCover))
+	mux.Handle("GET /opds/v2/books/{id}/audiobook",
+		opds2H("GET /opds/v2/books/{id}/audiobook", s.HandleOPDS2BookAudiobook))
+	mux.Handle("HEAD /opds/v2/books/{id}/audiobook",
+		opds2H("HEAD /opds/v2/books/{id}/audiobook", s.HandleOPDS2BookAudiobook))
+
 	// Authenticated, no scope required. A token describing itself is the
 	// one route whose subject is the credential presenting it, so there
 	// is no capability left to check (ADR-0016). It is emphatically not

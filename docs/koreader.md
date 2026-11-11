@@ -97,7 +97,10 @@ Set server URL** and enter the KoInsight URL without a trailing slash.
 The built-in OPDS catalog is a plain list of titles. The optional
 [OPDS Plus](https://github.com/greywolf1499/opds_plus.koplugin) plugin
 replaces that browser with one that shows covers, a grid view and series
-details. Nothing in this guide needs it.
+details. Nothing in this guide needs it. OPDS Plus also reads the JSON
+catalog at the URL ending in `/opds/v2`, which carries series positions and
+shows the folders, shelves and newest books as separate rows. To sync new
+books through it, use the URL ending in `/opds/v2/new`.
 
 ## Progress sync without a setup file
 

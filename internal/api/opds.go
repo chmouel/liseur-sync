@@ -114,9 +114,8 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	books, next, ok := s.opdsRecentPage(w, r, tok.UserID)
+	if !ok {
 		return
 	}
 	feed := opdsFeed{
@@ -127,12 +126,6 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 			{Rel: "self", Href: opdsPrefix, Type: opdsAcquisitionType},
 			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
 		},
-	}
-	limit := opdsPageSize
-	books, err := s.St.ListRecentLibraryBooks(r.Context(), tok.UserID, before, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
 	}
 	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
 	if err != nil {
@@ -157,23 +150,51 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 			Type: opdsAcquisitionType, Title: opdsTitle(f.Name, "Folder"),
 		})
 	}
-	for _, segment := range []string{"series", "contributors", "tags"} {
+	for _, segment := range opdsEntitySegments {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel:  opdsFacetRel,
 			Href: opdsPrefix + "/entities/" + segment,
 			Type: opdsNavigationType, Title: opdsKindTitles[segment],
 		})
 	}
-	if len(books) == limit {
-		last := books[len(books)-1]
+	if next != "" {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel:  "next",
 			Type: opdsAcquisitionType,
-			Href: opdsPrefix + "?cursor=" + url.QueryEscape(encodeCatalogCursor(
-				store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})),
+			Href: opdsPrefix + "?cursor=" + url.QueryEscape(next),
 		})
 	}
 	writeOPDS(w, r, opdsAcquisitionType, feed)
+}
+
+// opdsRecentPage reads one page of the viewer's books across every
+// granted folder, newest first, and the opaque cursor that continues it.
+// It is the page both OPDS versions sync from, so they cannot disagree
+// about where a walk resumes. On failure it has already answered.
+func (s *Server) opdsRecentPage(
+	w http.ResponseWriter, r *http.Request, userID string,
+) ([]store.CatalogBook, string, bool) {
+	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return nil, "", false
+	}
+	books, err := s.St.ListRecentLibraryBooks(r.Context(), userID, before, opdsPageSize)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return nil, "", false
+	}
+	return books, opdsNextCursor(books, opdsPageSize), true
+}
+
+// opdsNextCursor is the cursor after a full page, and empty after a short
+// one: a short page is the end of the listing.
+func opdsNextCursor(books []store.CatalogBook, limit int) string {
+	if len(books) < limit || len(books) == 0 {
+		return ""
+	}
+	last := books[len(books)-1]
+	return encodeCatalogCursor(store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})
 }
 
 // HandleOPDSFolder serves the acquisition feed for one folder, newest
@@ -186,38 +207,13 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	folderID := r.PathValue("folder")
-	if folderID == "" || len(folderID) > maxFolderIDBytes {
-		writeError(w, http.StatusNotFound, "folder not found")
+	folder, books, next, ok := s.opdsFolderPage(w, r, tok.UserID)
+	if !ok {
 		return
 	}
-	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// The folder is read first so the feed can be named after it: a feed
-	// whose title is the word "Folder" is one a reader cannot tell apart
-	// from the next one.
-	folder, err := s.St.FolderByID(r.Context(), tok.UserID, folderID)
-	if err != nil {
-		writeCatalogError(w, err, "folder not found")
-		return
-	}
-	limit := opdsPageSize
-	books, err := s.St.ListRecentCatalogBooks(r.Context(), tok.UserID, folderID, before, limit)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "folder not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
-	}
-
-	self := opdsPrefix + "/folders/" + url.PathEscape(folderID)
+	self := opdsPrefix + "/folders/" + url.PathEscape(folder.ID)
 	feed := opdsFeed{
-		ID:      "urn:liseur:folder:" + folderID,
+		ID:      "urn:liseur:folder:" + folder.ID,
 		Title:   opdsTitle(folder.Name, "Folder"),
 		Updated: opdsTime(time.Now()),
 		Links: []opdsLink{
@@ -231,7 +227,7 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 				Title: "Search this folder"},
 		},
 	}
-	for _, segment := range []string{"series", "contributors", "tags"} {
+	for _, segment := range opdsEntitySegments {
 		// These browse the whole library rather than this folder
 		// (ADR-0019), which is why they hang off the root prefix.
 		feed.Links = append(feed.Links, opdsLink{
@@ -246,16 +242,49 @@ func (s *Server) HandleOPDSFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	feed.Entries = entries
-	if len(books) == limit {
-		last := books[len(books)-1]
-		cursor := encodeCatalogCursor(store.CatalogBookCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+	if next != "" {
 		feed.Links = append(feed.Links, opdsLink{
 			Rel:  "next",
-			Href: self + "?cursor=" + url.QueryEscape(cursor),
+			Href: self + "?cursor=" + url.QueryEscape(next),
 			Type: opdsAcquisitionType,
 		})
 	}
 	writeOPDS(w, r, opdsAcquisitionType, feed)
+}
+
+// opdsFolderPage reads the folder named in the path and one page of its
+// books, newest first. On failure it has already answered.
+func (s *Server) opdsFolderPage(
+	w http.ResponseWriter, r *http.Request, userID string,
+) (store.Folder, []store.CatalogBook, string, bool) {
+	folderID := r.PathValue("folder")
+	if folderID == "" || len(folderID) > maxFolderIDBytes {
+		writeError(w, http.StatusNotFound, "folder not found")
+		return store.Folder{}, nil, "", false
+	}
+	before, err := decodeCatalogCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return store.Folder{}, nil, "", false
+	}
+	// The folder is read first so the feed can be named after it: a feed
+	// whose title is the word "Folder" is one a reader cannot tell apart
+	// from the next one.
+	folder, err := s.St.FolderByID(r.Context(), userID, folderID)
+	if err != nil {
+		writeCatalogError(w, err, "folder not found")
+		return store.Folder{}, nil, "", false
+	}
+	books, err := s.St.ListRecentCatalogBooks(r.Context(), userID, folderID, before, opdsPageSize)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "folder not found")
+			return store.Folder{}, nil, "", false
+		}
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return store.Folder{}, nil, "", false
+	}
+	return folder, books, opdsNextCursor(books, opdsPageSize), true
 }
 
 // opdsBookEntries renders one feed page, reading the page's contributors
@@ -353,6 +382,9 @@ func writeOPDS(w http.ResponseWriter, r *http.Request, mediaType string, feed op
 	feed.Xmlns = atomNS
 	feed.XmlnsDC = dublinCoreNS
 	feed.XmlnsOP = opdsNS
+	feed.Links = append(feed.Links, opdsLink{
+		Rel: "alternate", Href: opds2Alternate(r), Type: opds2Type,
+	})
 	w.Header().Set("Content-Type", mediaType+"; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// Catalogs change whenever a book is added, and a reader refreshing

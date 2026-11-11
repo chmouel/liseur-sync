@@ -3283,6 +3283,251 @@ paths:
         "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
         "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
 
+  /opds/v2:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 catalog root
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The JSON catalog root (ADR-0065). `navigation` links to each
+        granted folder, the four shelves and the series, contributors and
+        tags lists. A "Newest" group follows with the first page of books
+        when there are any; its `self` link is `/opds/v2/new`. The root is
+        not paginated, so a `cursor` is refused. `/opds/v2/` is accepted
+        too.
+
+        Every 401 under `/opds/v2` carries `WWW-Authenticate: Basic` and an
+        Authentication for OPDS document as its body.
+      responses:
+        "200":
+          description: An OPDS 2.0 navigation feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "A cursor was given" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "403": { $ref: "#/components/responses/Error", description: "Valid credential without library-read" }
+
+  /opds/v2/new:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 feed of every granted book, newest first
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        20 publications per page with a `next` link while more remain. A
+        client that syncs by walking `next` is pointed here.
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An OPDS 2.0 publications feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+
+  /opds/v2/folders/{folder}:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 feed of one folder
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The folder's books newest first, 20 per page, with a templated
+        `search` link to `/opds/v2/folders/{folder}/search{?query}`.
+      parameters:
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An OPDS 2.0 publications feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
+
+  /opds/v2/folders/{folder}/search:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 search results for one folder
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The same search as the 1.2 feed, unpaged, with the term in `query`
+        as the folder feed's template names it.
+      parameters:
+        - { name: folder, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: query, in: query, schema: { type: string, maxLength: 512 } }
+      responses:
+        "200":
+          description: An OPDS 2.0 publications feed of the matches
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Over-long query" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "No such folder" }
+
+  /opds/v2/shelves/{shelf}:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 feed of one of the caller's shelves
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The caller's own books chosen and ordered by their reading state,
+        as in the 1.2 shelves (ADR-0064). The feed carries no positions.
+      parameters:
+        - name: shelf
+          in: path
+          required: true
+          schema: { type: string, enum: [reading, unread, last-read, alphabetical] }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: Only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An OPDS 2.0 publications feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Invalid offset" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "No such shelf" }
+
+  /opds/v2/entities/{kind}:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 navigation of the library's series, contributors or tags
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        Each navigation link leads to the books claiming the entity and
+        carries their count in `properties.numberOfItems`.
+      parameters:
+        - $ref: "#/components/parameters/EntityKind"
+        - name: after
+          in: query
+          schema: { type: string }
+          description: Only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An OPDS 2.0 navigation feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Over-long cursor" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind" }
+
+  /opds/v2/entities/{kind}/{entity}:
+    get:
+      tags: [opds]
+      summary: OPDS 2.0 feed of the books claiming one entity
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: A series comes back in reading order, with unplaced books last.
+      parameters:
+        - $ref: "#/components/parameters/EntityKind"
+        - { name: entity, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque; only ever taken from a `next` link.
+      responses:
+        "200":
+          description: An OPDS 2.0 publications feed
+          content:
+            application/opds+json:
+              schema: { $ref: "#/components/schemas/OPDS2Feed" }
+        "400": { $ref: "#/components/responses/Error", description: "Malformed cursor" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "No such kind or entity" }
+
+  /opds/v2/books/{id}/download:
+    get:
+      tags: [opds]
+      summary: Acquire a book over OPDS 2.0
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: The same download as `/opds/v1.2/books/{id}/download`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The file
+          content:
+            application/epub+zip:
+              schema: { type: string, format: binary }
+        "206": { description: The requested byte range }
+        "304": { description: The client's copy is current }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, or no access" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
+  /opds/v2/books/{id}/cover:
+    get:
+      tags: [opds]
+      summary: Fetch a book cover over OPDS 2.0
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: The same rendered JPEG as `/opds/v1.2/books/{id}/cover`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: size
+          in: query
+          required: false
+          schema: { type: string, enum: [thumbnail, full, icon], default: thumbnail }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The rendered cover
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "304": { description: The client's copy is current }
+        "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no access, or no cover this server can serve" }
+        "409": { $ref: "#/components/responses/Error", description: "The file behind this book changed on disk since it was catalogued" }
+        "410": { $ref: "#/components/responses/Error", description: "The book exists but its content is no longer stored" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
+  /opds/v2/books/{id}/audiobook:
+    get:
+      tags: [opds]
+      summary: Acquire a book's audiobook over OPDS 2.0
+      security: [{ opdsBasic: [] }]  # requires library-read scope
+      description: |
+        The `.m4b` linked to the book, as an attachment named after its
+        file. It is offered only while the link is active and its digests
+        hold, and only to a reader granted both the book's folder and the
+        audiobook's. Ranges, `HEAD` and `If-Range` work against a strong
+        `ETag`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: Range, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The audiobook
+          content:
+            audio/mp4:
+              schema: { type: string, format: binary }
+        "206": { description: The requested byte range }
+        "401": { $ref: "#/components/responses/OPDS2Unauthorized" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown book, no playable audiobook, or no access to one of the folders" }
+        "409": { $ref: "#/components/responses/Error", description: "The audiobook file changed on disk since it was catalogued" }
+        "416": { $ref: "#/components/responses/Error", description: "The requested byte range is not satisfiable" }
+        "503": { $ref: "#/components/responses/Error", description: "Content storage is not configured on this instance" }
+
 components:
   securitySchemes:
     kosyncUser:
@@ -3325,6 +3570,15 @@ components:
         enum: [series, contributors, tags]
 
   responses:
+    OPDS2Unauthorized:
+      description: |
+        Missing or invalid credentials. Carries `WWW-Authenticate: Basic`
+        and an Authentication for OPDS document.
+      headers:
+        WWW-Authenticate: { schema: { type: string } }
+      content:
+        application/opds-authentication+json:
+          schema: { $ref: "#/components/schemas/OPDS2AuthenticationDocument" }
     Error:
       description: |
         Error with a human-readable reason. Most failures carry only
@@ -3353,6 +3607,79 @@ components:
             properties: { status: { type: string } }
 
   schemas:
+    OPDS2Feed:
+      type: object
+      description: |
+        An OPDS 2.0 feed (https://drafts.opds.io/opds-2.0). A feed carries
+        `navigation`, `publications` or both, and the root may carry
+        `groups`. An empty page writes its collection as `[]`.
+      required: [metadata, links]
+      properties:
+        metadata:
+          type: object
+          required: [title]
+          properties:
+            title: { type: string }
+            itemsPerPage: { type: integer }
+        links: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
+        navigation: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
+        publications: { type: array, items: { $ref: "#/components/schemas/OPDS2Publication" } }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              metadata: { type: object }
+              links: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
+              publications: { type: array, items: { $ref: "#/components/schemas/OPDS2Publication" } }
+    OPDS2Link:
+      type: object
+      required: [href]
+      properties:
+        href: { type: string }
+        type: { type: string }
+        rel: { type: string }
+        title: { type: string }
+        templated: { type: boolean }
+        properties:
+          type: object
+          properties:
+            numberOfItems: { type: integer }
+    OPDS2Publication:
+      type: object
+      description: |
+        A Readium Web Publication Manifest subset. `metadata` holds
+        `@type`, `identifier`, title, subtitle, language, publisher,
+        `published`, `modified`, a description cut to 400 bytes,
+        contributors by role, `subject` and `belongsTo.series` with
+        `position`. `links` holds the EPUB acquisition and, when the
+        caller can play one, an `audio/mp4` acquisition of the audiobook.
+        `images` lists the thumbnail, then the full cover.
+      required: [metadata, links]
+      properties:
+        metadata: { type: object }
+        links: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
+        images: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
+    OPDS2AuthenticationDocument:
+      type: object
+      description: Authentication for OPDS 1.0, offering HTTP Basic with a token secret.
+      required: [id, title, authentication]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        authentication:
+          type: array
+          items:
+            type: object
+            required: [type]
+            properties:
+              type: { type: string, enum: ["http://opds-spec.org/auth/basic"] }
+              labels:
+                type: object
+                properties:
+                  login: { type: string }
+                  password: { type: string }
+        links: { type: array, items: { $ref: "#/components/schemas/OPDS2Link" } }
     CrossPointSession:
       type: object
       additionalProperties: false

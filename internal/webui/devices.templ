@@ -351,6 +351,12 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 				serves the same books as the Library page.
 			</p>
 			<p><code class="big">{ base + "/opds/v1.2" }</code></p>
+			<p class="muted">
+				Apps that read OPDS 2.0, such as Readest, Thorium or the OPDS Plus
+				plugin for KOReader, can use the JSON catalog instead. It takes
+				the same login.
+			</p>
+			<p><code class="big">{ base + "/opds/v2" }</code></p>
 			<details class="setup-guide" open?={ !hasOPDSToken(toks) }>
 				<summary>Setup instructions</summary>
 				<p class="muted">
