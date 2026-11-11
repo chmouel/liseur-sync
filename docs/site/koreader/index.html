@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up KOReader with liseur-sync</title>
+<link rel="icon" href="../img/icon.svg" type="image/svg+xml">
+<meta name="description" content="Connect KOReader to your liseur-sync server: download one file, copy it to the e-reader and start KOReader.">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#steps">Skip to the steps</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../img/icon.svg" width="28" height="28" alt="">Liseur<small>sync</small></a>
+    <nav aria-label="Page sections">
+      <a href="../">liseur-sync</a>
+      <a href="#steps">The steps</a>
+      <a href="#check">What you'll see</a>
+      <a href="#help">If it doesn't work</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1>Set up KOReader in three steps</h1>
+      <p class="lede">Download one file from your server, copy it onto the e-reader and start KOReader. It then lists your books, remembers where you stopped and sends your reading time to the server.</p>
+      <a class="button" href="#steps">Start</a>
+      <p class="hero-note">It takes about five minutes, and you never type a password on the e-reader.</p>
+    </div>
+    <figure class="device">
+      <div class="bezel"><img src="../img/ko-3-library.png" width="758" height="1024" alt="KOReader showing a list of books from the liseur-sync server: Frankenstein, Pride and Prejudice, Treasure Island and more."></div>
+      <figcaption>The server's books, listed in KOReader.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="block before" aria-labelledby="before">
+  <div class="wrap">
+    <h2 id="before">Before you start</h2>
+    <ul>
+      <li>An account on your liseur-sync server, the one you sign into with a username and password.</li>
+      <li>KOReader running on your e-reader, such as a Kobo, Kindle or PocketBook.</li>
+      <li>Wi-Fi on the e-reader for its first start after the setup.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="block" id="steps" aria-labelledby="steps-title">
+  <div class="wrap">
+    <h2 id="steps-title" class="prose">Three steps</h2>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">1</div>
+      <div class="text">
+        <h3>Download your setup file</h3>
+        <p>On your computer, sign into liseur-sync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>Set up KOReader</b> box, type a name for the e-reader, such as <code>Kobo Libra</code>, and press <b>Download KOReader setup</b>.</p>
+        <p>You get a ZIP. The file you need is <code>patches/1-liseur-setup.lua</code> inside it.</p>
+        <p class="warn">The ZIP contains logins for your library, so keep it private and delete it once the setup works.</p>
+      </div>
+      <figure class="shot">
+        <img src="../img/web-setup-card.png" width="1738" height="631" alt="The Set up KOReader box on the liseur-sync Devices page, with the name Kobo Libra typed in and a Download KOReader setup button.">
+        <figcaption>The Set up KOReader box on the Devices page.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">2</div>
+      <div class="text">
+        <h3>Copy the file onto your e-reader</h3>
+        <p>Quit KOReader if it is running and plug the e-reader into your computer. In KOReader's folder, create a folder called <code>patches</code> if it is missing and copy <code>1-liseur-setup.lua</code> into it. Then eject the e-reader.</p>
+        <table class="where">
+          <tr><th>Kobo</th><td><code>.adds/koreader/</code> (the <code>.adds</code> folder is hidden, so show hidden files)</td></tr>
+          <tr><th>Kindle</th><td><code>koreader/</code> at the top level</td></tr>
+          <tr><th>PocketBook</th><td><code>applications/koreader/</code></td></tr>
+        </table>
+        <p class="warn">KOReader from F-Droid on Android ignores patches. Use the <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> there.</p>
+      </div>
+      <figure class="shot">
+        <div class="where-tree" role="img" aria-label="Folder layout: koreader contains patches, which contains 1-liseur-setup.lua.">
+          <pre style="margin:0;padding:22px 24px;background:#fff;border:1px solid var(--rule);border-radius:8px;font:0.95rem/1.7 var(--mono);overflow-x:auto">koreader/
+├── plugins/
+├── settings/
+└── <b>patches/</b>
+    └── <b>1-liseur-setup.lua</b></pre>
+        </div>
+        <figcaption>Where the file goes.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">3</div>
+      <div class="text">
+        <h3>Turn on Wi-Fi and open KOReader</h3>
+        <p>The first start takes longer than usual. KOReader applies the file and downloads the KoInsight plugin, which sends your reading time to the server. If the e-reader is offline, the setup runs again at the next start.</p>
+        <p>To check, open the top menu, tap the magnifier and choose <b>OPDS catalog</b>. <b>Liseur Sync</b> is in the list.</p>
+      </div>
+      <figure class="shot device" style="width:min(100%,340px);justify-self:start">
+        <div class="bezel"><img src="../img/ko-1-menu.png" width="758" height="1024" alt="KOReader's search menu with OPDS catalog at the bottom of the list."></div>
+        <figcaption>Search tab, then OPDS catalog.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="check" aria-labelledby="check-title">
+  <div class="wrap">
+    <h2 id="check-title">What you'll see</h2>
+    <p class="prose">These are screenshots from a real KOReader set up with this file. Your books will differ.</p>
+    <div class="seen">
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-2-catalogs.png" width="758" height="1024" alt="KOReader's OPDS catalog list with Liseur Sync in it."></div>
+        <figcaption><strong>Liseur Sync in the catalog list</strong>The padlock shows it has a login.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-3-library.png" width="758" height="1024" alt="The list of books on the server."></div>
+        <figcaption><strong>The server's books</strong>Tap a book for its details.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-4-download.png" width="758" height="1024" alt="The download dialog for Frankenstein with an EPUB button."></div>
+        <figcaption><strong>Downloading</strong>Tap EPUB. KOReader then offers to open the book.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-6-tools.png" width="758" height="1024" alt="KOReader's Tools menu listing KoInsight and Progress sync."></div>
+        <figcaption><strong>Tools menu</strong>With a book open, KoInsight and Progress sync are listed.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-8-progress-sync.png" width="758" height="1024" alt="The Progress sync menu showing Logout, which means it is signed in, and automatic sync ticked."></div>
+        <figcaption><strong>Progress sync</strong>Logout means it is signed in. Automatic sync is ticked.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-7-koinsight.png" width="758" height="1024" alt="The KoInsight menu with Sync on suspend ticked."></div>
+        <figcaption><strong>KoInsight</strong>Reading time is sent when the e-reader goes to sleep.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="logins" aria-labelledby="logins-title">
+  <div class="wrap">
+    <h2 id="logins-title">What is in the download</h2>
+    <p class="prose">The download holds three logins named after your e-reader. None of them is your account password, and each can be revoked on its own.</p>
+    <div class="logins">
+      <article>
+        <img loading="lazy" src="../img/web-cred-token.png" alt="The API tokens list with Kobo Libra in it.">
+        <div><h3>Library access</h3><p>Lets KOReader list and download your books. It has no other access.</p></div>
+      </article>
+      <article>
+        <img loading="lazy" src="../img/web-cred-sync.png" alt="The KOReader sync devices list with Kobo Libra in it.">
+        <div><h3>Reading position</h3><p>Used by KOReader's Progress sync to save where you stopped.</p></div>
+      </article>
+      <article>
+        <img loading="lazy" src="../img/web-cred-stats.png" alt="The KOReader statistics list with Kobo Libra in it.">
+        <div><h3>Reading time</h3><p>A private address that only the KoInsight plugin uses to send how long you read.</p></div>
+      </article>
+    </div>
+    <div class="prose" style="margin-top:36px">
+      <h3>More than one e-reader, or a lost one</h3>
+      <p>Download a separate setup for each e-reader and give each its own name. To remove one, press <b>Revoke</b> on the three entries with its name in Devices. Revoking one entry leaves the other two working.</p>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="help" aria-labelledby="help-title">
+  <div class="wrap">
+    <h2 id="help-title" class="prose">If something doesn't work</h2>
+    <div class="prose">
+      <details>
+        <summary>Nothing changed after I started KOReader</summary>
+        <p>Check that the file is at <code>koreader/patches/1-liseur-setup.lua</code>. Quit KOReader completely (menu, then Exit) before starting it again, because putting it to sleep is not enough. If the <code>patches</code> folder holds a file named <code>.patches_disabled</code>, delete it.</p>
+      </details>
+      <details>
+        <summary>There is no KoInsight entry in Tools</summary>
+        <p>The e-reader was offline at the first start. Turn on Wi-Fi and restart KOReader. The plugin comes from its public project at one fixed version, and each file is checked against a known checksum before it is installed, so a changed file is refused.</p>
+      </details>
+      <details>
+        <summary>Liseur Sync asks for a login</summary>
+        <p>The login in the file was revoked, or the file came from another server. Download a new setup from Devices and copy it over the old one.</p>
+      </details>
+      <details>
+        <summary>My reading position isn't saved</summary>
+        <p>Open a book and go to <b>Tools</b>, then <b>Progress sync</b>. It should say <b>Logout</b>, which means it is signed in, with <b>Automatically keep documents in sync</b> ticked. <b>Push progress from this device now</b> sends it immediately. Your server must use <code>https</code> unless its owner allowed plain <code>http</code>.</p>
+      </details>
+      <details>
+        <summary>My device can't use patches</summary>
+        <p>The <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> lists the same settings to enter by hand. The ZIP's <code>credentials.txt</code> has every value.</p>
+      </details>
+      <details>
+        <summary>What does the file change?</summary>
+        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete it after KoInsight is installed.</p>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>The full reference is <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md">docs/koreader.md</a>. The code is on <a href="https://github.com/chmouel/liseur-sync">GitHub</a>. KoInsight is a separate project: <a href="https://github.com/Ko-Insight/KoInsight">Ko-Insight/KoInsight</a>.</p>
+  </div>
+</footer>
+</body>
+</html>

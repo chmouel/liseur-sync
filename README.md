@@ -9,6 +9,8 @@ Self-hosted server for book libraries and reading-position synchronization.
 
 The server is a single Go binary with SQLite by default, optional PostgreSQL, and multi-user support.
 
+Project site: <https://chmouel.github.io/liseur-sync/>
+
 ![Library](docs/screenshots/library.png)
 
 ![Insights](docs/screenshots/insights.png)
@@ -17,7 +19,7 @@ The server is a single Go binary with SQLite by default, optional PostgreSQL, an
 
 Download one file from the Devices page, copy it into KOReader's `patches/` folder and start KOReader. The library appears in its OPDS catalog, reading positions sync through its built-in Progress sync and reading time goes to the server through KoInsight.
 
-**[Step-by-step guide with screenshots](https://chmouel.github.io/liseur-sync/)**
+**[Step-by-step guide with screenshots](https://chmouel.github.io/liseur-sync/koreader/)**
 
 ![The Set up KOReader box on the Devices page](docs/site/img/web-setup-card.png)
 
@@ -57,7 +59,7 @@ Reader preferences synchronize as well per device.
 
 Every device writes positions its own way, and the server keeps them together:
 
-* **KOReader** syncs positions through its built-in *Progress sync*, browses the library over OPDS and uploads reading time with the KoInsight plugin. One download from the Devices page sets all three up: see the [setup guide](https://chmouel.github.io/liseur-sync/) or the [reference](docs/koreader.md).
+* **KOReader** syncs positions through its built-in *Progress sync*, browses the library over OPDS and uploads reading time with the KoInsight plugin. One download from the Devices page sets all three up: see the [setup guide](https://chmouel.github.io/liseur-sync/koreader/) or the [reference](docs/koreader.md).
 * **CrossPoint** pairs through kosync; see [docs/crosspoint.md](docs/crosspoint.md).
 * **Liseur**, on a phone or a desktop, uses the native API.
 

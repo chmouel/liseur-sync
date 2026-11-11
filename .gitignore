@@ -13,3 +13,6 @@ coverage.out
 node_modules/
 /liseur-sync
 /.github/instructions/*local*
+
+# copied from docs/screenshots by the Pages workflow
+docs/site/img/app/

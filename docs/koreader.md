@@ -3,7 +3,7 @@
 KOReader can browse and download your library over OPDS, save your reading
 position with its built-in *Progress sync*, and send reading time to the
 server through the KoInsight plugin. One download from the Devices page sets
-up all three on a reader. A [step-by-step page with screenshots](https://chmouel.github.io/liseur-sync/)
+up all three on a reader. A [step-by-step page with screenshots](https://chmouel.github.io/liseur-sync/koreader/)
 covers the same ground for a less technical reader.
 
 ## What you need

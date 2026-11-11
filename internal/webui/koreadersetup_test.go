@@ -73,7 +73,7 @@ func TestKOReaderSetupDownload(t *testing.T) {
 	if !strings.Contains(pageBody, `action="koreader/setup"`) {
 		t.Fatal("missing setup form")
 	}
-	if !strings.Contains(pageBody, `href="https://chmouel.github.io/liseur-sync/"`) {
+	if !strings.Contains(pageBody, `href="https://chmouel.github.io/liseur-sync/koreader/"`) {
 		t.Fatal("missing link to the setup guide")
 	}
 	for _, form := range []url.Values{
