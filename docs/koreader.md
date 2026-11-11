@@ -89,6 +89,13 @@ the password.
 folder) into KOReader's `plugins/` folder. Then open **Tools → KoInsight →
 Set server URL** and enter the KoInsight URL without a trailing slash.
 
+## Browsing with covers
+
+The built-in OPDS catalog is a plain list of titles. The optional
+[OPDS Plus](https://github.com/greywolf1499/opds_plus.koplugin) plugin
+replaces that browser with one that shows covers, a grid view and series
+details. Nothing in this guide needs it.
+
 ## Progress sync without a setup file
 
 Generate a pairing code under **KOReader (kosync)** on the Devices page. On
