@@ -350,6 +350,98 @@ func TestDevicesCRUDAndCSRF(t *testing.T) {
 	}
 }
 
+// devicesPages is the whole Devices section: the default page and the Apps
+// and OPDS pages, joined. It is for tests that look across the cards rather
+// than at one page.
+func devicesPages(t *testing.T, ts *httptest.Server, cookie *http.Cookie) (int, string) {
+	t.Helper()
+	var all strings.Builder
+	code := http.StatusOK
+	for _, path := range []string{
+		"/ui/settings?section=devices",
+		"/ui/settings?section=devices&view=apps",
+		"/ui/settings?section=devices&view=opds",
+	} {
+		c, body := page(t, ts, cookie, path)
+		if c != http.StatusOK {
+			code = c
+		}
+		all.WriteString(body)
+	}
+	return code, all.String()
+}
+
+// TestDevicesAreSeparatePages pins the split: each kind of credential has
+// one page, the others are not on it, and a mutation brings you back to
+// the page it belongs to.
+func TestDevicesAreSeparatePages(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+
+	pages := []struct {
+		name, path string
+		has, not   []string
+	}{
+		{"e-readers", "/ui/settings?section=devices",
+			[]string{"Set up KOReader", "KOReader (kosync)", "KOReader statistics plugin", "Pair an e-reader"},
+			[]string{"API tokens", "OPDS catalog</h2>", "<h2>Browsers</h2>"}},
+		{"apps", "/ui/settings?section=devices&view=apps",
+			[]string{"API tokens", "<h2>Browsers</h2>", "Apps such as Liseur"},
+			[]string{"Set up KOReader", "KOReader (kosync)", "OPDS catalog</h2>"}},
+		{"opds", "/ui/settings?section=devices&view=opds",
+			[]string{"OPDS catalog</h2>", ts.URL + "/opds/v1.2"},
+			[]string{"Set up KOReader", "API tokens", "<h2>Browsers</h2>"}},
+	}
+	for _, p := range pages {
+		code, body := page(t, ts, cookie, p.path)
+		if code != http.StatusOK {
+			t.Fatalf("%s: %d", p.name, code)
+		}
+		for _, want := range p.has {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s page is missing %q", p.name, want)
+			}
+		}
+		for _, gone := range p.not {
+			if strings.Contains(body, gone) {
+				t.Errorf("%s page still carries %q", p.name, gone)
+			}
+		}
+		for _, tab := range []string{"E-readers", "Apps", "OPDS"} {
+			if !strings.Contains(body, ">"+tab+"</a>") {
+				t.Errorf("%s page has no %q tab", p.name, tab)
+			}
+		}
+		if got := strings.Count(body, `aria-current="page">`+map[string]string{"e-readers": "E-readers", "apps": "Apps", "opds": "OPDS"}[p.name]+"</a>"); got != 1 {
+			t.Errorf("%s page marks its own tab current %d times, want 1", p.name, got)
+		}
+	}
+
+	// A view nobody defined is the default page, not an error.
+	code, body := page(t, ts, cookie, "/ui/settings?section=devices&view=nonsense")
+	if code != http.StatusOK || !strings.Contains(body, "Set up KOReader") {
+		t.Errorf("unknown view: %d", code)
+	}
+
+	// Creating a token shows its secret on the Apps page, where the list is.
+	_, pageBody := page(t, ts, cookie, "/ui/settings?section=devices&view=apps")
+	code, body = postForm(t, ts, cookie, "/ui/tokens", url.Values{
+		"csrf": {extractCSRF(t, pageBody)}, "name": {"Boox"}, "scope": {"sync", "library-read"},
+	})
+	if code != http.StatusOK || !strings.Contains(body, "New token secret") ||
+		!strings.Contains(body, `aria-current="page">Apps</a>`) {
+		t.Errorf("new token did not land on the Apps page: %d", code)
+	}
+
+	// A pairing code goes to the e-readers page.
+	_, pageBody = page(t, ts, cookie, "/ui/settings?section=devices")
+	code, body = postForm(t, ts, cookie, "/ui/pairing", url.Values{"csrf": {extractCSRF(t, pageBody)}})
+	if code != http.StatusOK || !strings.Contains(body, "kosync pairing code") ||
+		!strings.Contains(body, `aria-current="page">E-readers</a>`) {
+		t.Errorf("pairing code did not land on the E-readers page: %d", code)
+	}
+}
+
 // TestDevicesHideRevokedCredentials: the page lists what a reader can
 // use, so a revoked credential is not a row with a state cell — it is
 // not a device any more and does not appear at all.
@@ -393,7 +485,7 @@ func TestDevicesHideRevokedCredentials(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	code, body := devicesPages(t, ts, cookie)
 	if code != 200 {
 		t.Fatalf("devices page: %d", code)
 	}
@@ -429,7 +521,7 @@ func TestRevokeAllTokens(t *testing.T) {
 	}
 
 	cookie := loginCookie(t, ts)
-	code, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	code, body := page(t, ts, cookie, "/ui/settings?section=devices&view=apps")
 	if code != 200 || !strings.Contains(body, "Revoke all tokens") {
 		t.Fatalf("devices page offers no revoke-all: %d", code)
 	}
@@ -480,7 +572,7 @@ func TestRevokeAllTokens(t *testing.T) {
 func TestEveryGrantableScopeIsOfferedByTheUI(t *testing.T) {
 	ts, st := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body := page(t, ts, cookie, "/ui/settings?section=devices&view=apps")
 	csrf := extractCSRF(t, body)
 
 	for _, scope := range []store.Scope{
@@ -1039,7 +1131,7 @@ func TestCreditStopsAtThree(t *testing.T) {
 func TestDevicesShowsTheOPDSAddress(t *testing.T) {
 	ts, _ := testServer(t)
 	cookie := loginCookie(t, ts)
-	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body := devicesPages(t, ts, cookie)
 
 	want := ts.URL + "/opds/v1.2"
 	if !strings.Contains(body, want) {
@@ -1170,7 +1262,7 @@ func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
 
 	// With no paired devices and both adapters enabled, all three setup
 	// guides open by default so a new reader sees how to pair.
-	_, body := page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body := devicesPages(t, ts, cookie)
 	if got := strings.Count(body, `<details class="setup-guide" open>`); got != 3 {
 		t.Fatalf("open setup guides with 0 devices = %d, want 3", got)
 	}
@@ -1184,7 +1276,7 @@ func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body = devicesPages(t, ts, cookie)
 	if got := strings.Count(body, `<details class="setup-guide" open>`); got != 3 {
 		t.Fatalf("open setup guides with only a sync token = %d, want 3", got)
 	}
@@ -1207,7 +1299,7 @@ func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body = devicesPages(t, ts, cookie)
 	if strings.Contains(body, `<details class="setup-guide" open>`) {
 		t.Fatal("setup guide stayed open after devices were paired")
 	}
@@ -1219,7 +1311,7 @@ func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body = devicesPages(t, ts, cookie)
 	if strings.Contains(body, "adapter-disabled") {
 		t.Fatal("disabled adapter collapsed while an active device was still paired")
 	}
@@ -1232,7 +1324,7 @@ func TestDevicesSetupGuidesAndDisabledAdapters(t *testing.T) {
 	if err := st.RevokeKopluginDevice(ctx, "u1", "kop-1"); err != nil {
 		t.Fatal(err)
 	}
-	_, body = page(t, ts, cookie, "/ui/settings?section=devices")
+	_, body = devicesPages(t, ts, cookie)
 	if got := strings.Count(body, `class="card adapter-disabled"`); got != 2 {
 		t.Fatalf("collapsed disabled adapter cards = %d, want 2", got)
 	}

@@ -25,7 +25,7 @@ templ settingsBody(prefix string, u userCtx, csrf string, v settingsView) {
 		}
 	</nav>
 	if v.Section == settingsDevices {
-		@devicesBody(prefix, u, csrf, v.Devices.Tokens, v.Devices.Browsers,
+		@devicesBody(prefix, u, csrf, v.Devices.View, v.Devices.Tokens, v.Devices.Browsers,
 			v.Devices.Kosync, v.Devices.Koplugin, v.Devices.Base, v.Flash)
 	} else if v.Section == settingsAdmin {
 		@settingsAdminBody(prefix, csrf, v)

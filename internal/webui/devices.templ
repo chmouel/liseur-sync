@@ -17,7 +17,7 @@ type Flash struct {
 	// OpenFolderForm keeps a rejected folder form open after the settings
 	// redirect, rather than making the administrator start over.
 	OpenFolderForm bool
-	FolderUploads   *bool
+	FolderUploads  *bool
 	// CreateName and CreateSelection are what the create-account form had
 	// in it when a validation refused it: the typed name, and the folder
 	// ticks. They never carry a password.
@@ -25,8 +25,12 @@ type Flash struct {
 	CreateSelection *createSelection
 }
 
-templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
-	<h2>Devices & integrations</h2>
+templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []store.Token, browsers []browserSession, kosyncDevs []store.KosyncDevice, kopluginDevs []store.KopluginDevice, base string, flash Flash) {
+	<nav class="settings-subnav" aria-label="Devices sections">
+		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesEReaders), "E-readers", view == settingsDevicesEReaders)
+		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesApps), "Apps", view == settingsDevicesApps)
+		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesOPDS), "OPDS", view == settingsDevicesOPDS)
+	</nav>
 	if flash.Secret != "" {
 		<div class="card secret">
 			<p><b>{ flash.SecretLabel }</b> (shown once):</p>
@@ -45,274 +49,85 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 	if flash.Notice != "" {
 		<p class="ok">{ flash.Notice }</p>
 	}
-
-	<section class="card">
-		<h2>Set up KOReader</h2>
-		<p>Configure KOReader's built-in Progress sync, the OPDS catalog and KoInsight with one download. Quit KOReader, copy <code>patches/1-liseur-setup.lua</code> from the ZIP into KOReader's <code>patches/</code> folder, then start KOReader with Wi-Fi on. The KoInsight plugin is downloaded for you if it is missing.</p>
-		<p><a href="https://chmouel.github.io/liseur-sync/koreader/" target="_blank" rel="noopener">Easy setup guide with screenshots</a></p>
-		<p class="muted">The download holds three separate credentials: an API token for OPDS, a Progress sync login and a KoInsight upload URL. Revoke each one on this page. Use a separate download for each reader. Keep the ZIP private.</p>
-		if u.User.KosyncEnabled && u.User.KopluginEnabled {
-			<form method="post" action={ prefix + "koreader/setup" } class="inline">
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<input name="name" placeholder="Kobo Libra" maxlength="100" required/>
-				<button type="submit" class="primary">Download KOReader setup</button>
-			</form>
-		} else {
-			<p class="muted">Turn on Progress sync and statistics in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> before downloading the setup.</p>
-		}
-	</section>
-
-	<section class="card">
-		<div class="cardhead">
-			<h2>API tokens</h2>
-			if len(toks) > 0 {
-				<form method="post" action={ prefix + "tokens/revoke" }
-					hx-confirm="Revoke all API tokens? Every device using an API token will lose access until a new one is issued."
-				>
-					<input type="hidden" name="csrf" value={ csrf }/>
-					<button type="submit" class="danger">Revoke all tokens</button>
-				</form>
-			}
-		</div>
-		if len(toks) == 0 {
-			<p class="muted">No active API tokens.</p>
-		} else {
-			<table>
-				<thead>
-					<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Scopes</th><th scope="col">Device id</th><th scope="col"></th></tr>
-				</thead>
-				for _, t := range toks {
-					{{ devType := detectDeviceType(t.Name, t.DeviceID) }}
-					<tr>
-						<td>
-							<span class="dev-cell">
-								@deviceIcon(devType)
-								<span>{ t.Name }</span>
-							</span>
-						</td>
-						<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
-						<td>
-							<div class="token-scopes">
-								for _, scope := range t.Scopes {
-									<span class="tag">{ string(scope) }</span>
-								}
-								if !hasScope(t.Scopes, store.ScopeAdmin) {
-									<details class="scope-disclosure">
-										<summary>Edit</summary>
-										<form method="post" action={ prefix + "tokens/" + t.ID + "/scopes" }>
-											<input type="hidden" name="csrf" value={ csrf }/>
-											@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
-											@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
-											@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
-											@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
-											@scopeChoice(store.ScopeLibraryUpload, hasScope(t.Scopes, store.ScopeLibraryUpload))
-											@scopeChoice(store.ScopeLibraryDelete, hasScope(t.Scopes, store.ScopeLibraryDelete))
-											<button type="submit">Update</button>
-										</form>
-									</details>
-								}
-							</div>
-						</td>
-						<td><code>{ t.DeviceID }</code></td>
-						<td>
-							<form method="post" action={ prefix + "tokens/" + t.ID + "/revoke" }
-								hx-confirm="Revoke this API token? The device using it will lose access until a new one is issued."
-							>
-								<input type="hidden" name="csrf" value={ csrf }/>
-								<button type="submit" class="danger">Revoke</button>
-							</form>
-						</td>
-					</tr>
-				}
-			</table>
-		}
-		<form method="post" action={ prefix + "tokens" } class="inline token-create">
-			<input type="hidden" name="csrf" value={ csrf }/>
-			<input name="name" placeholder="Boox Palma" required/>
-			<div class="scope-pills">
-				@scopeChoice(store.ScopeSync, true)
-				@scopeChoice(store.ScopeReadInsights, false)
-				@scopeChoice(store.ScopeLibraryRead, true)
-				@scopeChoice(store.ScopeLibraryManage, false)
-				@scopeChoice(store.ScopeLibraryUpload, false)
-				@scopeChoice(store.ScopeLibraryDelete, false)
-			</div>
-			<button type="submit" class="primary">New token</button>
-		</form>
-	</section>
-
-	<section class="card">
-		<h2>Browsers</h2>
-		<p class="muted">
-			Reading in a browser needs a credential too, but the server
-			issues that one to itself and replaces it every hour, so
-			there is nothing here to name or hand out. One row per
-			browser, however many credentials it has been through.
-		</p>
-		if len(browsers) == 0 {
-			<p class="muted">You have not read in a browser on this account.</p>
-		} else {
-			<div class="browser-summary">
-				<span class="browser-summary-meta">
-					<strong>{ activeBrowsersLabel(len(browsers)) }</strong>
-					<span class="muted">· Last read <time datetime={ browsers[0].LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ browsers[0].LastUsed.Format("2006-01-02 15:04") }</time></span>
-				</span>
-				<form method="post" action={ prefix + "browsers/revoke" }
-					hx-confirm="Sign out of every browser? You will need to sign in again to read in a browser."
-				>
-					<input type="hidden" name="csrf" value={ csrf }/>
-					<button type="submit" class="danger">Sign out of browser reading</button>
-				</form>
-			</div>
-			<details class="setup-guide">
-				<summary>Device IDs</summary>
-				<table>
-					<thead>
-						<tr><th scope="col">Device id</th><th scope="col">Last read</th></tr>
-					</thead>
-					for _, b := range browsers {
-						<tr>
-							<td><code>{ b.DeviceID }</code></td>
-							<td><time datetime={ b.LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ b.LastUsed.Format("2006-01-02 15:04") }</time></td>
-						</tr>
-					}
-				</table>
-			</details>
-		}
-	</section>
-
-	if !u.User.KosyncEnabled && len(kosyncDevs) == 0 {
-		<section class="card adapter-disabled">
-			<div class="adapter-disabled-row">
-				<h2>KOReader (kosync)</h2>
-				<p class="muted">
-					Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
-				</p>
-			</div>
-		</section>
-	} else {
+	if view == settingsDevicesEReaders {
+		<p class="muted">Pair an e-reader with this server. KOReader can be set up with one download. CrossPoint pairs through the same sync login.</p>
 		<section class="card">
-			<h2>KOReader (kosync)</h2>
-			<details class="setup-guide" open?={ len(kosyncDevs) == 0 }>
-				<summary>Setup instructions</summary>
-				<p class="muted">
-					Generate a pairing code, then in KOReader's kosync settings:
-					username = device name, password = code, server =
-					<code>{ base + "/adapter/kosync" }</code>.
-				</p>
-				<p class="muted">
-					On a CrossPoint reader, open Settings → CrossPoint Sync: set
-					Sync Server URL to the address above, Server Type to KoSync,
-					Document Matching to Binary, Username to a new device name and
-					Password to the code, then press Sign Up. Leave Sync Clippings
-					off. "Username is already registered" means that device name
-					is paired already, and revoking a pairing does not free it:
-					pick another name.
-				</p>
-			</details>
-			<form method="post" action={ prefix + "pairing" } class="inline">
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<button type="submit">Generate pairing code</button>
-			</form>
-			if len(kosyncDevs) > 0 {
-				<table>
-					<thead>
-						<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col"></th></tr>
-					</thead>
-					for _, d := range kosyncDevs {
-						{{ devType := detectDeviceType(d.Label, d.DeviceSlot) }}
-						<tr>
-							<td><code>{ d.DeviceSlot }</code></td>
-							<td>
-								<span class="dev-cell">
-									@deviceIcon(devType)
-									<span>{ d.Label }</span>
-								</span>
-								if d.MeasuredSessionsFrom != nil {
-									<br/>
-									<span class="muted">Measured statistics enabled</span>
-								}
-							</td>
-							<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
-							<td>
-								<form method="post" action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }
-									hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
-								>
-									<input type="hidden" name="csrf" value={ csrf }/>
-									<button type="submit" class="danger">Revoke</button>
-								</form>
-							</td>
-						</tr>
-					}
-				</table>
+			<h2>Set up KOReader</h2>
+			<p>Configure KOReader's built-in Progress sync, the OPDS catalog and KoInsight with one download. Quit KOReader, copy <code>patches/1-liseur-setup.lua</code> from the ZIP into KOReader's <code>patches/</code> folder, then start KOReader with Wi-Fi on. The KoInsight plugin is downloaded for you if it is missing.</p>
+			<p><a href="https://chmouel.github.io/liseur-sync/koreader/" target="_blank" rel="noopener">Easy setup guide with screenshots</a></p>
+			<p class="muted">The download holds three separate credentials: an API token for OPDS, a Progress sync login and a KoInsight upload URL. Revoke each one from its own list: the API token under <a href={ settingsDevicesHref(prefix, settingsDevicesApps) }>Apps</a>, the other two further down this page. Use a separate download for each reader. Keep the ZIP private.</p>
+			if u.User.KosyncEnabled && u.User.KopluginEnabled {
+				<form method="post" action={ prefix + "koreader/setup" } class="inline">
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input name="name" placeholder="Kobo Libra" maxlength="100" required/>
+					<button type="submit" class="primary">Download KOReader setup</button>
+				</form>
+			} else {
+				<p class="muted">Turn on Progress sync and statistics in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> before downloading the setup.</p>
 			}
-			<details class="setup-guide">
-				<summary>CrossPoint reading statistics</summary>
-				<p>Requires firmware with the <code>reader.session</code> plugin event. Downloading enables measured statistics for this slot. Older estimates stay; future progress uploads stop producing estimates, even if the plugin is offline or disabled.</p>
-				<p>Copy the ZIP’s <code>liseur-stats</code> folder into <code>/plugins</code> on your SD card, enable plugins in Settings → Connectivity, refresh or restart, then close and reopen your book. Keep this ZIP private: it contains your device credential.</p>
-				for _, d := range kosyncDevs {
-					<form method="post" action={ prefix + "kosync/" + url.PathEscape(d.DeviceSlot) + "/crosspoint" }>
+		</section>
+	}
+	if view == settingsDevicesApps {
+		<p class="muted">Apps such as Liseur sign in with an API token. Browsers that have read here are listed below the tokens.</p>
+		<section class="card">
+			<div class="cardhead">
+				<h2>API tokens</h2>
+				if len(toks) > 0 {
+					<form
+						method="post"
+						action={ prefix + "tokens/revoke" }
+						hx-confirm="Revoke all API tokens? Every device using an API token will lose access until a new one is issued."
+					>
 						<input type="hidden" name="csrf" value={ csrf }/>
-						<label>
-							{ d.DeviceSlot } — existing KoSync pairing password
-							<input type="password" name="password" autocomplete="off" required/>
-						</label>
-						if d.MeasuredSessionsFrom == nil {
-							<button type="submit">Enable statistics &amp; download plugin</button>
-						} else {
-							<button type="submit">Download configured plugin again</button>
-						}
+						<button type="submit" class="danger">Revoke all tokens</button>
 					</form>
 				}
-			</details>
-		</section>
-	}
-
-	if !u.User.KopluginEnabled && len(kopluginDevs) == 0 {
-		<section class="card adapter-disabled">
-			<div class="adapter-disabled-row">
-				<h2>KOReader statistics plugin</h2>
-				<p class="muted">
-					Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
-				</p>
 			</div>
-		</section>
-	} else {
-		<section class="card">
-			<h2>KOReader statistics plugin</h2>
-			<details class="setup-guide" open?={ len(kopluginDevs) == 0 }>
-				<summary>Setup instructions</summary>
-				<ol class="muted">
-					<li>Install the KoInsight plugin (<code>koinsight.koplugin</code>) in KOReader's <code>plugins/</code> folder.</li>
-					<li>Name the device below and press <b>New capability</b>. The server generates a secret URL of the form <code>{ base + "/adapter/koplugin/" }</code> followed by a long random string, and shows it once.</li>
-					<li>Copy that whole URL into KoInsight's <b>Server URL</b>, with no trailing slash. The device name is not part of it.</li>
-				</ol>
-				<p class="muted">The URL is the credential: anyone holding it can upload statistics to your account. Lost it? Revoke the device and create a new one.</p>
-			</details>
-			<form method="post" action={ prefix + "koplugin" } class="inline">
-				<input type="hidden" name="csrf" value={ csrf }/>
-				<input name="name" placeholder="Kobo Clara" required/>
-				<button type="submit" class="primary">New capability</button>
-			</form>
-			if len(kopluginDevs) > 0 {
+			if len(toks) == 0 {
+				<p class="muted">No active API tokens.</p>
+			} else {
 				<table>
 					<thead>
-						<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Device id</th><th scope="col"></th></tr>
+						<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Scopes</th><th scope="col">Device id</th><th scope="col"></th></tr>
 					</thead>
-					for _, d := range kopluginDevs {
-						{{ devType := detectDeviceType(d.Label, d.DeviceID) }}
+					for _, t := range toks {
+						{{ devType := detectDeviceType(t.Name, t.DeviceID) }}
 						<tr>
 							<td>
 								<span class="dev-cell">
 									@deviceIcon(devType)
-									<span>{ d.Label }</span>
+									<span>{ t.Name }</span>
 								</span>
 							</td>
 							<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
-							<td><code>{ d.DeviceID }</code></td>
 							<td>
-								<form method="post" action={ prefix + "koplugin/" + d.ID + "/revoke" }
-									hx-confirm="Revoke this statistics device? It will stop sending reading data until re-paired."
+								<div class="token-scopes">
+									for _, scope := range t.Scopes {
+										<span class="tag">{ string(scope) }</span>
+									}
+									if !hasScope(t.Scopes, store.ScopeAdmin) {
+										<details class="scope-disclosure">
+											<summary>Edit</summary>
+											<form method="post" action={ prefix + "tokens/" + t.ID + "/scopes" }>
+												<input type="hidden" name="csrf" value={ csrf }/>
+												@scopeChoice(store.ScopeSync, hasScope(t.Scopes, store.ScopeSync))
+												@scopeChoice(store.ScopeReadInsights, hasScope(t.Scopes, store.ScopeReadInsights))
+												@scopeChoice(store.ScopeLibraryRead, hasScope(t.Scopes, store.ScopeLibraryRead))
+												@scopeChoice(store.ScopeLibraryManage, hasScope(t.Scopes, store.ScopeLibraryManage))
+												@scopeChoice(store.ScopeLibraryUpload, hasScope(t.Scopes, store.ScopeLibraryUpload))
+												@scopeChoice(store.ScopeLibraryDelete, hasScope(t.Scopes, store.ScopeLibraryDelete))
+												<button type="submit">Update</button>
+											</form>
+										</details>
+									}
+								</div>
+							</td>
+							<td><code>{ t.DeviceID }</code></td>
+							<td>
+								<form
+									method="post"
+									action={ prefix + "tokens/" + t.ID + "/revoke" }
+									hx-confirm="Revoke this API token? The device using it will lose access until a new one is issued."
 								>
 									<input type="hidden" name="csrf" value={ csrf }/>
 									<button type="submit" class="danger">Revoke</button>
@@ -322,48 +137,251 @@ templ devicesBody(prefix string, u userCtx, csrf string, toks []store.Token, bro
 					}
 				</table>
 			}
+			<form method="post" action={ prefix + "tokens" } class="inline token-create">
+				<input type="hidden" name="csrf" value={ csrf }/>
+				<input name="name" placeholder="Boox Palma" required/>
+				<div class="scope-pills">
+					@scopeChoice(store.ScopeSync, true)
+					@scopeChoice(store.ScopeReadInsights, false)
+					@scopeChoice(store.ScopeLibraryRead, true)
+					@scopeChoice(store.ScopeLibraryManage, false)
+					@scopeChoice(store.ScopeLibraryUpload, false)
+					@scopeChoice(store.ScopeLibraryDelete, false)
+				</div>
+				<button type="submit" class="primary">New token</button>
+			</form>
+		</section>
+		<section class="card">
+			<h2>Browsers</h2>
+			<p class="muted">
+				Reading in a browser needs a credential too, but the server
+				issues that one to itself and replaces it every hour, so
+				there is nothing here to name or hand out. One row per
+				browser, however many credentials it has been through.
+			</p>
+			if len(browsers) == 0 {
+				<p class="muted">You have not read in a browser on this account.</p>
+			} else {
+				<div class="browser-summary">
+					<span class="browser-summary-meta">
+						<strong>{ activeBrowsersLabel(len(browsers)) }</strong>
+						<span class="muted">· Last read <time datetime={ browsers[0].LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ browsers[0].LastUsed.Format("2006-01-02 15:04") }</time></span>
+					</span>
+					<form
+						method="post"
+						action={ prefix + "browsers/revoke" }
+						hx-confirm="Sign out of every browser? You will need to sign in again to read in a browser."
+					>
+						<input type="hidden" name="csrf" value={ csrf }/>
+						<button type="submit" class="danger">Sign out of browser reading</button>
+					</form>
+				</div>
+				<details class="setup-guide">
+					<summary>Device IDs</summary>
+					<table>
+						<thead>
+							<tr><th scope="col">Device id</th><th scope="col">Last read</th></tr>
+						</thead>
+						for _, b := range browsers {
+							<tr>
+								<td><code>{ b.DeviceID }</code></td>
+								<td><time datetime={ b.LastUsed.Format("2006-01-02T15:04:05Z07:00") }>{ b.LastUsed.Format("2006-01-02 15:04") }</time></td>
+							</tr>
+						}
+					</table>
+				</details>
+			}
 		</section>
 	}
-
-	<section class="card">
-		<h2>OPDS catalog</h2>
-		<p class="muted">
-			The address to give a reading app that browses catalogs —
-			KOReader, Moon+ Reader, KyBook, Thorium and most others. It
-			serves the same books as the Library page.
-		</p>
-		<p><code class="big">{ base + "/opds/v1.2" }</code></p>
-		<details class="setup-guide" open?={ !hasOPDSToken(toks) }>
-			<summary>Setup instructions</summary>
+	if view == settingsDevicesEReaders {
+		if !u.User.KosyncEnabled && len(kosyncDevs) == 0 {
+			<section class="card adapter-disabled">
+				<div class="adapter-disabled-row">
+					<h2>KOReader (kosync)</h2>
+					<p class="muted">
+						Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
+					</p>
+				</div>
+			</section>
+		} else {
+			<section class="card">
+				<h2>KOReader (kosync)</h2>
+				<details class="setup-guide" open?={ len(kosyncDevs) == 0 }>
+					<summary>Setup instructions</summary>
+					<p class="muted">
+						Generate a pairing code, then in KOReader's kosync settings:
+						username = device name, password = code, server =
+						<code>{ base + "/adapter/kosync" }</code>.
+					</p>
+					<p class="muted">
+						On a CrossPoint reader, open Settings → CrossPoint Sync: set
+						Sync Server URL to the address above, Server Type to KoSync,
+						Document Matching to Binary, Username to a new device name and
+						Password to the code, then press Sign Up. Leave Sync Clippings
+						off. "Username is already registered" means that device name
+						is paired already, and revoking a pairing does not free it:
+						pick another name.
+					</p>
+				</details>
+				<form method="post" action={ prefix + "pairing" } class="inline">
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<button type="submit">Generate pairing code</button>
+				</form>
+				if len(kosyncDevs) > 0 {
+					<table>
+						<thead>
+							<tr><th scope="col">Slot</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col"></th></tr>
+						</thead>
+						for _, d := range kosyncDevs {
+							{{ devType := detectDeviceType(d.Label, d.DeviceSlot) }}
+							<tr>
+								<td><code>{ d.DeviceSlot }</code></td>
+								<td>
+									<span class="dev-cell">
+										@deviceIcon(devType)
+										<span>{ d.Label }</span>
+									</span>
+									if d.MeasuredSessionsFrom != nil {
+										<br/>
+										<span class="muted">Measured statistics enabled</span>
+									}
+								</td>
+								<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
+								<td>
+									<form
+										method="post"
+										action={ prefix + "kosync/" + d.DeviceSlot + "/revoke" }
+										hx-confirm="Revoke this KOReader slot? The device will need a new pairing code."
+									>
+										<input type="hidden" name="csrf" value={ csrf }/>
+										<button type="submit" class="danger">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</table>
+				}
+				<details class="setup-guide">
+					<summary>CrossPoint reading statistics</summary>
+					<p>Requires firmware with the <code>reader.session</code> plugin event. Downloading enables measured statistics for this slot. Older estimates stay; future progress uploads stop producing estimates, even if the plugin is offline or disabled.</p>
+					<p>Copy the ZIP’s <code>liseur-stats</code> folder into <code>/plugins</code> on your SD card, enable plugins in Settings → Connectivity, refresh or restart, then close and reopen your book. Keep this ZIP private: it contains your device credential.</p>
+					for _, d := range kosyncDevs {
+						<form method="post" action={ prefix + "kosync/" + url.PathEscape(d.DeviceSlot) + "/crosspoint" }>
+							<input type="hidden" name="csrf" value={ csrf }/>
+							<label>
+								{ d.DeviceSlot } — existing KoSync pairing password
+								<input type="password" name="password" autocomplete="off" required/>
+							</label>
+							if d.MeasuredSessionsFrom == nil {
+								<button type="submit">Enable statistics &amp; download plugin</button>
+							} else {
+								<button type="submit">Download configured plugin again</button>
+							}
+						</form>
+					}
+				</details>
+			</section>
+		}
+		if !u.User.KopluginEnabled && len(kopluginDevs) == 0 {
+			<section class="card adapter-disabled">
+				<div class="adapter-disabled-row">
+					<h2>KOReader statistics plugin</h2>
+					<p class="muted">
+						Disabled — enable it in <a href={ settingsHref(prefix, settingsProfile) }>Profile &amp; security</a> to pair devices.
+					</p>
+				</div>
+			</section>
+		} else {
+			<section class="card">
+				<h2>KOReader statistics plugin</h2>
+				<details class="setup-guide" open?={ len(kopluginDevs) == 0 }>
+					<summary>Setup instructions</summary>
+					<ol class="muted">
+						<li>Install the KoInsight plugin (<code>koinsight.koplugin</code>) in KOReader's <code>plugins/</code> folder.</li>
+						<li>Name the device below and press <b>New capability</b>. The server generates a secret URL of the form <code>{ base + "/adapter/koplugin/" }</code> followed by a long random string, and shows it once.</li>
+						<li>Copy that whole URL into KoInsight's <b>Server URL</b>, with no trailing slash. The device name is not part of it.</li>
+					</ol>
+					<p class="muted">The URL is the credential: anyone holding it can upload statistics to your account. Lost it? Revoke the device and create a new one.</p>
+				</details>
+				<form method="post" action={ prefix + "koplugin" } class="inline">
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<input name="name" placeholder="Kobo Clara" required/>
+					<button type="submit" class="primary">New capability</button>
+				</form>
+				if len(kopluginDevs) > 0 {
+					<table>
+						<thead>
+							<tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Device id</th><th scope="col"></th></tr>
+						</thead>
+						for _, d := range kopluginDevs {
+							{{ devType := detectDeviceType(d.Label, d.DeviceID) }}
+							<tr>
+								<td>
+									<span class="dev-cell">
+										@deviceIcon(devType)
+										<span>{ d.Label }</span>
+									</span>
+								</td>
+								<td><span class="muted">{ deviceTypeLabel(devType) }</span></td>
+								<td><code>{ d.DeviceID }</code></td>
+								<td>
+									<form
+										method="post"
+										action={ prefix + "koplugin/" + d.ID + "/revoke" }
+										hx-confirm="Revoke this statistics device? It will stop sending reading data until re-paired."
+									>
+										<input type="hidden" name="csrf" value={ csrf }/>
+										<button type="submit" class="danger">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</table>
+				}
+			</section>
+		}
+	}
+	if view == settingsDevicesOPDS {
+		<section class="card">
+			<h2>OPDS catalog</h2>
 			<p class="muted">
-				When it asks for a login, the password is an API token secret
-				from above — not your account password, which the catalog does
-				not accept. The username is that token's name — or the word
-				<code>token</code>, for an app that insists on one it can
-				remember. The token needs the
-				<code>{ string(store.ScopeLibraryRead) }</code> scope; one
-				without it can sync positions but cannot see a book.
+				The address to give a reading app that browses catalogs —
+				KOReader, Moon+ Reader, KyBook, Thorium and most others. It
+				serves the same books as the Library page.
 			</p>
-			<p class="muted">
-				A CrossPoint reader shows "Failed to parse feed" for any
-				refusal other than a bad login, such as a revoked token or a
-				folder it is no longer granted. Check the token and its scope
-				first.
-			</p>
-		</details>
-	</section>
+			<p><code class="big">{ base + "/opds/v1.2" }</code></p>
+			<details class="setup-guide" open?={ !hasOPDSToken(toks) }>
+				<summary>Setup instructions</summary>
+				<p class="muted">
+					When it asks for a login, the password is an API token secret
+					from <a href={ settingsDevicesHref(prefix, settingsDevicesApps) }>Apps</a> — not your account password, which the catalog does
+					not accept. The username is that token's name — or the word
+					<code>token</code>, for an app that insists on one it can
+					remember. The token needs the
+					<code>{ string(store.ScopeLibraryRead) }</code> scope; one
+					without it can sync positions but cannot see a book.
+				</p>
+				<p class="muted">
+					A CrossPoint reader shows "Failed to parse feed" for any
+					refusal other than a bad login, such as a revoked token or a
+					folder it is no longer granted. Check the token and its scope
+					first.
+				</p>
+			</details>
+		</section>
+	}
 }
 
 templ deviceIcon(devType string) {
 	<span class={ "dev-icon", "dev-" + devType } title={ deviceTypeLabel(devType) } aria-label={ deviceTypeLabel(devType) }>
 		if devType == DeviceWeb {
-			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
 		} else if devType == DeviceMobile {
-			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
 		} else if devType == DeviceEReader {
-			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
 		} else {
-			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
 		}
 	</span>
 }

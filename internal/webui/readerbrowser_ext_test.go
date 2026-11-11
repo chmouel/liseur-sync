@@ -866,7 +866,8 @@ func TestUIScreenshots(t *testing.T) {
 		// span longer than a month, so the walk asks for one outright.
 		"SHOT_PATHS=/ui/insights,/ui/insights?span=365d&chart=chart-calendar,"+
 			"/ui/library,/ui/library?filter=reading,/ui/books/"+books[0]+","+
-			"/ui/entities/contributors,/ui/settings?section=devices,/ui/settings",
+			"/ui/entities/contributors,/ui/settings?section=devices,"+
+			"/ui/settings?section=devices&view=apps,/ui/settings?section=devices&view=opds,/ui/settings",
 		"SHOT_PREFS="+os.Getenv("LISEUR_UI_PREFS"),
 		"SHOT_TAG="+os.Getenv("LISEUR_UI_TAG"),
 	)

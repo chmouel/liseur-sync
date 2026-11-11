@@ -350,11 +350,11 @@ func readingSpanDays(first, last time.Time) string {
 
 // --- devices ---
 
-func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, flash Flash) {
-	if settingsRedirect(w, r, settingsDevices, "", "", flash) {
+func (s *Server) renderDevices(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User, view string, flash Flash) {
+	if settingsRedirect(w, r, settingsDevices, view, "", flash) {
 		return
 	}
-	s.renderSettings(w, r, a, u, settingsDevices, "", "", flash, false, "", false)
+	s.renderSettings(w, r, a, u, settingsDevices, view, "", flash, false, "", false)
 }
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -389,7 +389,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, a sto
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	s.renderDevices(w, r, a, u, Flash{Secret: secret, SecretLabel: "New token secret"})
+	s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Secret: secret, SecretLabel: "New token secret"})
 }
 
 func (s *Server) handleUpdateTokenScopes(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -429,7 +429,7 @@ func (s *Server) handleUpdateTokenScopes(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	s.renderDevices(w, r, a, u, Flash{Notice: "Token scopes updated."})
+	s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Notice: "Token scopes updated."})
 }
 
 func formScopes(r *http.Request) (store.ScopeSet, error) {
@@ -456,7 +456,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a sto
 		return
 	}
 	_ = s.St.RevokeToken(r.Context(), u.ID, r.PathValue("id"))
-	s.renderDevices(w, r, a, u, Flash{Notice: "Token revoked."})
+	s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Notice: "Token revoked."})
 }
 
 // handleRevokeAllTokens revokes every API token the account holds, for
@@ -471,7 +471,7 @@ func (s *Server) handleRevokeAllTokens(w http.ResponseWriter, r *http.Request, a
 	}
 	toks, err := s.St.ListTokens(r.Context(), u.ID)
 	if err != nil {
-		s.renderDevices(w, r, a, u, Flash{Error: "Could not revoke API tokens."})
+		s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Error: "Could not revoke API tokens."})
 		return
 	}
 	for _, t := range toks {
@@ -479,11 +479,11 @@ func (s *Server) handleRevokeAllTokens(w http.ResponseWriter, r *http.Request, a
 			continue
 		}
 		if err := s.St.RevokeToken(r.Context(), u.ID, t.ID); err != nil {
-			s.renderDevices(w, r, a, u, Flash{Error: "Could not revoke API tokens."})
+			s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Error: "Could not revoke API tokens."})
 			return
 		}
 	}
-	s.renderDevices(w, r, a, u, Flash{Notice: "All API tokens revoked."})
+	s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Notice: "All API tokens revoked."})
 }
 
 // handleRevokeBrowsers ends browser reading everywhere, for the case
@@ -500,10 +500,10 @@ func (s *Server) handleRevokeBrowsers(w http.ResponseWriter, r *http.Request, a 
 		return
 	}
 	if err := s.Auth.RevokeReaderTokens(r.Context(), u.ID); err != nil {
-		s.renderDevices(w, r, a, u, Flash{Error: "Could not sign browsers out."})
+		s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{Error: "Could not sign browsers out."})
 		return
 	}
-	s.renderDevices(w, r, a, u, Flash{
+	s.renderDevices(w, r, a, u, settingsDevicesApps, Flash{
 		Notice: "Browser reading signed out. Reopen a book to read here again.",
 	})
 }
@@ -520,7 +520,7 @@ func (s *Server) handlePairing(w http.ResponseWriter, r *http.Request, a store.A
 		ID: id, UserID: u.ID, CodeSHA256: auth.KosyncPairingHash(code),
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	})
-	s.renderDevices(w, r, a, u, Flash{Secret: code, SecretLabel: "kosync pairing code (15 min, single use)"})
+	s.renderDevices(w, r, a, u, settingsDevicesEReaders, Flash{Secret: code, SecretLabel: "kosync pairing code (15 min, single use)"})
 }
 
 func (s *Server) handleCreateKoplugin(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -535,7 +535,7 @@ func (s *Server) handleCreateKoplugin(w http.ResponseWriter, r *http.Request, a 
 		ID: id, UserID: u.ID, TokenSHA256: auth.HashSecret(capability),
 		Label: name, DeviceID: "koplugin:" + name, CreatedAt: time.Now(),
 	})
-	s.renderDevices(w, r, a, u, Flash{
+	s.renderDevices(w, r, a, u, settingsDevicesEReaders, Flash{
 		Secret:      kopluginURL(s.serverBaseURL(r), capability),
 		SecretLabel: "KoInsight server URL for " + name,
 		SecretHint:  kopluginHint,
@@ -548,7 +548,7 @@ func (s *Server) handleRevokeKoplugin(w http.ResponseWriter, r *http.Request, a 
 		return
 	}
 	_ = s.St.RevokeKopluginDevice(r.Context(), u.ID, r.PathValue("id"))
-	s.renderDevices(w, r, a, u, Flash{Notice: "Capability revoked."})
+	s.renderDevices(w, r, a, u, settingsDevicesEReaders, Flash{Notice: "Capability revoked."})
 }
 
 func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a store.AuthSession, u *store.User) {
@@ -557,7 +557,7 @@ func (s *Server) handleRevokeKosync(w http.ResponseWriter, r *http.Request, a st
 		return
 	}
 	_ = s.St.RevokeKosyncDevice(r.Context(), u.ID, r.PathValue("slot"))
-	s.renderDevices(w, r, a, u, Flash{Notice: "kosync device revoked."})
+	s.renderDevices(w, r, a, u, settingsDevicesEReaders, Flash{Notice: "kosync device revoked."})
 }
 
 // --- settings ---

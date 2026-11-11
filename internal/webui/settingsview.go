@@ -27,6 +27,15 @@ const (
 
 	settingsAdminAudiobookshelf = "audiobookshelf"
 	settingsAdminSpeechToText   = "speech-to-text"
+
+	// The Devices page is three pages, so each kind of credential has
+	// one place: the readers that pair with the server (KOReader,
+	// CrossPoint), the apps and browsers that hold API tokens, and the
+	// OPDS address. E-readers is the default, so ?section=devices alone
+	// still lands somewhere sensible.
+	settingsDevicesEReaders = "e-readers"
+	settingsDevicesApps     = "apps"
+	settingsDevicesOPDS     = "opds"
 )
 
 const (
@@ -87,6 +96,7 @@ func folderOnboardingRequested(r *http.Request) bool {
 }
 
 type settingsDevicesView struct {
+	View     string
 	Tokens   []store.Token
 	Browsers []browserSession
 	Kosync   []store.KosyncDevice
@@ -202,6 +212,25 @@ func settingsHref(prefix, section string) string {
 	return prefix + "settings?section=" + url.QueryEscape(section)
 }
 
+// settingsDevicesHref is a page of the Devices section. The default
+// view has no query of its own, which keeps the old address working.
+func settingsDevicesHref(prefix, view string) string {
+	href := settingsHref(prefix, settingsDevices)
+	if view = devicesView(view); view != settingsDevicesEReaders {
+		href += "&view=" + url.QueryEscape(view)
+	}
+	return href
+}
+
+// devicesView turns whatever the query held into a view that exists.
+func devicesView(view string) string {
+	switch view {
+	case settingsDevicesApps, settingsDevicesOPDS:
+		return view
+	}
+	return settingsDevicesEReaders
+}
+
 func settingsAdminHref(prefix, view string) string {
 	href := prefix + "settings?section=" + settingsAdmin
 	if view != "" && view != settingsAdminOverview {
@@ -216,6 +245,9 @@ func settingsAdminUserHref(prefix, userID string) string {
 }
 
 func settingsBack(section, view, userID string) string {
+	if section == settingsDevices {
+		return settingsDevicesHref("", view)
+	}
 	if section != settingsAdmin {
 		return settingsHref("", section)
 	}
@@ -229,6 +261,9 @@ func settingsBack(section, view, userID string) string {
 // the URL the browser posted to.
 func settingsTarget(r *http.Request, section, view, userID string) string {
 	prefix := relPrefix(r.URL.Path)
+	if section == settingsDevices {
+		return settingsDevicesHref(prefix, view)
+	}
 	if section != settingsAdmin {
 		return settingsHref(prefix, section)
 	}
@@ -348,6 +383,7 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 	section = r.URL.Query().Get("section")
 	switch section {
 	case settingsDevices:
+		view = devicesView(r.URL.Query().Get("view"))
 	case settingsAdmin:
 		view = r.URL.Query().Get("view")
 		switch view {
@@ -419,14 +455,18 @@ func (s *Server) renderSettings(
 		Flash:           flash,
 	}
 
+	currentView := adminView
 	switch section {
 	case settingsDevices:
+		currentView = devicesView(adminView)
 		view.Devices = s.settingsDevices(r, u)
+		view.Devices.View = currentView
 	case settingsAdmin:
 		if adminView == "" {
 			adminView = settingsAdminOverview
 		}
 		view.Admin.View = adminView
+		currentView = adminView
 		if err := s.settingsAdmin(r, u, &view.Admin, adminView, targetID, flash); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				http.Error(w, "no such user", http.StatusNotFound)
@@ -441,7 +481,7 @@ func (s *Server) renderSettings(
 
 	settingsPage(
 		relPrefix(r.URL.Path),
-		settingsContext(r, u, view.Section, view.Admin.View, targetID),
+		settingsContext(r, u, view.Section, currentView, targetID),
 		csrfFor(a),
 		view,
 	).Render(r.Context(), w)

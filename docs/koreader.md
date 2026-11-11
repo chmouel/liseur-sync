@@ -20,7 +20,8 @@ Devices page tells you when one of them is off.
 
 ## Set up a reader
 
-1. Sign into liseur-sync in a browser and open **Devices**.
+1. Sign into liseur-sync in a browser and open **Settings**, then **Devices &
+   integrations**. The **E-readers** tab opens first.
 2. In **Set up KOReader**, type the reader's name, such as `Kobo Libra`, and
    press **Download KOReader setup**. Save the ZIP somewhere private.
 3. Unzip it. Quit KOReader completely and copy
@@ -66,7 +67,9 @@ the ZIP can read your library and send reading data as you, so download a
 separate setup for each reader.
 
 To remove a reader, revoke all three entries with its name on the Devices
-page. Revoking one leaves the other two working.
+page: the API token on the **Apps** tab, the Progress sync device and the
+statistics device on the **E-readers** tab. Revoking one leaves the other two
+working.
 
 ## Manual setup
 

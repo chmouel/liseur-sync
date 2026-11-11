@@ -31,13 +31,16 @@ if (!zip) throw new Error('no ZIP arrived')
 renameSync(join(zipDir, zip), join(zipDir, 'setup.zip'))
 console.log('downloaded', zip)
 
-await b.goto('/ui/settings?section=devices')
-// The three credentials the download created, each where it is revoked.
-for (const [heading, file] of [
-  ['API tokens', 'web-cred-token.png'],
-  ['KOReader (kosync)', 'web-cred-sync.png'],
-  ['KOReader statistics plugin', 'web-cred-stats.png'],
+// The three credentials the download created, each on the page where it is
+// revoked: the API token under Apps, the other two under E-readers.
+for (const [heading, file, view] of [
+  ['API tokens', 'web-cred-token.png', '&view=apps'],
+  ['KOReader (kosync)', 'web-cred-sync.png', ''],
+  ['KOReader statistics plugin', 'web-cred-stats.png', ''],
 ]) {
+  await b.goto('/ui/settings?section=devices' + view)
+  await b.setWidth(820)
+  await sleep(400)
   const marked = await b.ev(`(() => { const h = [...document.querySelectorAll('h2')].find((e) => e.textContent.trim() === ${JSON.stringify(heading)}); const sec = h && h.closest('section'); if (!sec) return false; sec.id = 'cred-' + ${JSON.stringify(file)}.replace(/\\W/g, ''); return sec.id })()`)
   if (!marked) throw new Error('no section titled ' + heading)
   await b.shootElement('#' + marked, join(img, file))

@@ -294,7 +294,7 @@ reconciles the folder immediately and watches it without a restart.
 
 ### Reading statistics from KOReader
 
-*Settings → Devices → KOReader statistics plugin → New capability* (or
+*Settings → Devices & integrations → E-readers → KOReader statistics plugin → New capability* (or
 `koplugin-device` from the shell) prints a capability URL, once:
 `https://<host>/adapter/koplugin/<secret>`, where `<secret>` is a long
 random string the server generates, not the device name. Install the KoInsight plugin
