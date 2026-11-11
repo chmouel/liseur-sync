@@ -374,6 +374,46 @@ func TestOfflineShellDecidesItsLibraryLinkBeforePaint(t *testing.T) {
 	}
 }
 
+// TestOfflineShellKnowsItsThemeAndSafeAreas is #112 on the cached shell:
+// it needs viewport-fit=cover for the safe-area padding in offline.css
+// to mean anything, and the status bar's colour has to follow the
+// palette offline.js applies from the cookie.
+func TestOfflineShellKnowsItsThemeAndSafeAreas(t *testing.T) {
+	shell, err := fs.ReadFile(staticFS, "static/offline/shell.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`content="width=device-width, initial-scale=1, viewport-fit=cover"`,
+		`name="apple-mobile-web-app-capable"`,
+		`id="offline-theme-color"`,
+		`media="(prefers-color-scheme: light)" content="#ffffff"`,
+		`id="offline-theme-color-dark"`,
+		`media="(prefers-color-scheme: dark)" content="#18181a"`,
+	} {
+		if !strings.Contains(string(shell), want) {
+			t.Errorf("the offline shell is missing %q", want)
+		}
+	}
+
+	script, err := fs.ReadFile(staticFS, "static/offline/offline.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`THEME_COLORS = {`,
+		`"#18181a"`,
+		`"#16161e"`,
+		`"#1f1d2e"`,
+		`document.getElementById("offline-theme-color")`,
+		`document.getElementById("offline-theme-color-dark")?.remove()`,
+	} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("the offline script does not keep the theme-color in step: missing %q", want)
+		}
+	}
+}
+
 func TestSeparateReaderOriginDisablesOfflineSurface(t *testing.T) {
 	ts, _ := testServerCfg(t, func(cfg *config.Config) {
 		cfg.ReaderOrigin = "https://reader.example.com"

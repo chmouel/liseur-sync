@@ -29,6 +29,7 @@ import {
   chapterIndex, characterAt, locatorOf, narrationClock, offsetOfFraction, quoteOffset, rangeOf, sentenceAt,
 } from "./reader-narration.js";
 import { annotationCFI, annotationAnchor, annotationRenderer } from "./reader-annotations.js";
+import { READER_THEME_COLORS, readerThemeFromCookie } from "./reader-theme.js";
 import { fillPrompt } from "./reader-prompt.js";
 import { buildChapters, chapterForLocation, pagesLeftInChapter } from "./reader-chapters.js";
 import {
@@ -3136,16 +3137,26 @@ function placeView() {
 // palette is whatever that EPUB's stylesheet happens to declare, which
 // across a shelf means every book opening a different colour — and a
 // book that declares nothing inherits the page, which is not a decision
-// anybody made. So a fresh reader opens Light, matching the web UI's
-// own default, and Publisher stays one radio away for the books whose
+// anybody made. So a fresh reader opens in the app's own theme when one
+// is set (a dark app should not open a white page at night) and Light
+// otherwise, and Publisher stays one radio away for the books whose
 // design is the point.
 const SETTINGS_KEY = "liseur.reader.settings";
 // Compact screens use narrower margins by default, but they still open with
 // the reader bar visible. A saved reader preference wins when there is one.
 const COMPACT_READER = /Android/i.test(navigator.userAgent) ||
   window.matchMedia("(max-width: 700px)").matches;
+
+// The reader's own saved choice wins; with none, it follows the app.
+function defaultReaderTheme() {
+  return readerThemeFromCookie(
+    document.cookie,
+    !!window.matchMedia?.("(prefers-color-scheme: dark)").matches,
+  );
+}
+
 const SETTINGS_DEFAULTS = Object.freeze({
-  theme: "light",
+  theme: defaultReaderTheme(),
   font: "publisher",
   size: 120,
   spacing: "0",
@@ -3304,6 +3315,18 @@ function chapterCSS(s) {
   return rules.join("\n");
 }
 
+// syncThemeColor keeps the browser's status bar on the stage's colour
+// as the palette changes. The page ships a light/dark media pair for
+// the moment before this runs; the first call settles on what the
+// reader asked for and removes the other half.
+function syncThemeColor() {
+  const meta = document.getElementById("reader-theme-color");
+  if (!meta) return;
+  meta.removeAttribute("media");
+  meta.setAttribute("content", READER_THEME_COLORS[settings.theme] || "#ffffff");
+  document.getElementById("reader-theme-color-dark")?.remove();
+}
+
 function applySettings() {
   document.body.dataset.readerTheme = settings.theme;
   document.body.dataset.readerAutohide = String(!!settings.autohide);
@@ -3313,6 +3336,7 @@ function applySettings() {
   document.body.dataset.readerMargin = settings.margin in MARGINS
     ? settings.margin
     : SETTINGS_DEFAULTS.margin;
+  syncThemeColor();
   applyChrome();
   if (here) chapterText.textContent = footerMiddle(here);
   if (!view || !view.renderer) return;

@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +14,82 @@ import (
 // keep the revamp's two non-cosmetic claims honest: the theme survives a
 // reload without a script, and a preference toggle cannot be turned into
 // a redirector.
+
+// TestNarrowShellStartsUnderTheNavigationBar pins #105: the rail is a
+// row of its own on a narrow screen, so the grid needs a track for it.
+// Left at "auto 1fr" the free track was the rail's and main sat below a
+// screenful of empty space.
+func TestNarrowShellStartsUnderTheNavigationBar(t *testing.T) {
+	css, err := fs.ReadFile(staticFS, "static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sheet := string(css)
+	start := strings.Index(sheet, "@media (max-width: 60em) {")
+	if start < 0 {
+		t.Fatal("the narrow-screen media query is gone")
+	}
+	narrow := sheet[start:]
+	if end := strings.Index(narrow[1:], "@media"); end >= 0 {
+		narrow = narrow[:end+1]
+	}
+	for _, want := range []string{
+		`grid-template-areas: "top" "rail" "main"`,
+		"grid-template-rows: auto auto 1fr;",
+		"min-height: 100dvh;",
+	} {
+		if !strings.Contains(narrow, want) {
+			t.Errorf("the narrow shell is missing %q", want)
+		}
+	}
+}
+
+// TestShellShipsAThemeColorForItsPalette is #112's server half: the
+// status bar colour is written with the page, so it is right before any
+// script runs. "system" gets a media pair for the browser to choose
+// from; a named theme gets one value, and it is the top bar's surface.
+func TestShellShipsAThemeColorForItsPalette(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+
+	for _, tc := range []struct {
+		cookie string
+		want   []string
+	}{
+		{"", []string{`name="theme-color" content="#ffffff"`}},
+		{"light.grid", []string{`name="theme-color" content="#ffffff"`}},
+		{"dark.grid", []string{`name="theme-color" content="#18181a"`}},
+		{"tokyo-night.grid", []string{`name="theme-color" content="#16161e"`}},
+		{"rose-pine.grid", []string{`name="theme-color" content="#1f1d2e"`}},
+		{"system.grid", []string{
+			`name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff"`,
+			`name="theme-color" media="(prefers-color-scheme: dark)" content="#18181a"`,
+		}},
+	} {
+		t.Run(tc.cookie, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", ts.URL+"/ui/library", nil)
+			req.AddCookie(cookie)
+			if tc.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: prefsCookie, Value: tc.cookie})
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var buf strings.Builder
+			if _, err := io.Copy(&buf, resp.Body); err != nil {
+				t.Fatal(err)
+			}
+			body := buf.String()
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("the shell is missing theme-color %q", want)
+				}
+			}
+		})
+	}
+}
 
 func TestShellRendersRailAndTheme(t *testing.T) {
 	ts, _ := testServer(t)

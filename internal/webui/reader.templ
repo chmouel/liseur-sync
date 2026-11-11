@@ -53,6 +53,11 @@ templ readerPage(v ReaderView, csrf string) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			// The reader's palette lives in localStorage, so the server
+			// cannot name it. This pair is what the status bar gets until
+			// reader-app.js applies the saved theme and replaces it.
+			<meta name="theme-color" id="reader-theme-color" media="(prefers-color-scheme: light)" content="#ffffff"/>
+			<meta name="theme-color" id="reader-theme-color-dark" media="(prefers-color-scheme: dark)" content="#18181a"/>
 			<meta name="mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>

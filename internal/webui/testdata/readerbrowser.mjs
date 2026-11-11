@@ -1753,6 +1753,21 @@ if (unexpected.length) {
 }
 check('no console errors', unexpected.length === 0);
 
+// #112: with nothing saved for the reader, its palette follows the app's
+// theme, and the status bar follows the palette. The cookie is the only
+// thing the two surfaces share, so it is set here and the book reopened.
+await evalIn(`localStorage.removeItem('liseur.reader.settings');
+  document.cookie = 'liseur_ui=dark.grid;path=/'; true`);
+await S('Page.navigate', { url });
+await waitFor(`document.body.dataset.readerTheme === 'dark'`,
+  'the reader to open in the app\'s dark theme');
+const inheritedMeta = await evalIn(
+  `document.getElementById('reader-theme-color')?.content`);
+check('an unsaved reader follows the dark app theme',
+  inheritedMeta === '#18181a', String(inheritedMeta));
+await evalIn(`localStorage.removeItem('liseur.reader.settings');
+  document.cookie = 'liseur_ui=light.grid;path=/'; true`);
+
 ws.close();
 await finish(fail.length ? 1 : 0);
 

@@ -211,6 +211,24 @@ func nextTheme(current string) string {
 	}
 }
 
+// themeColor is the browser chrome colour for a theme. It is the top
+// bar's surface rather than the body's background, because that is what
+// sits under the status bar; the values are the --surface ones in
+// style.css, kept here because the meta tag is written before the
+// stylesheet applies.
+func themeColor(theme string) string {
+	switch theme {
+	case themeDark:
+		return "#18181a"
+	case themeTokyoNight:
+		return "#16161e"
+	case themeRosePine:
+		return "#1f1d2e"
+	default:
+		return "#ffffff"
+	}
+}
+
 // themeGlyph is what that button shows. Text rather than an icon font or
 // an SVG sprite, because a glyph costs nothing to serve and nothing to
 // cache.

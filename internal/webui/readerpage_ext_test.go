@@ -203,6 +203,40 @@ func TestReaderPageOffersTheChromeControls(t *testing.T) {
 	}
 }
 
+// TestReaderShipsAThemeColorAndFollowsTheAppTheme is #112's reader
+// half. The page cannot know a palette that lives in localStorage, so
+// it ships the light/dark pair and the script replaces it; and a reader
+// with nothing saved starts from the app's theme, so switching the app
+// to dark does not open a white page at night.
+func TestReaderShipsAThemeColorAndFollowsTheAppTheme(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))
+
+	_, page := f.get(t, "/ui/books/"+bookID+"/read", f.cookie)
+	for _, want := range []string{
+		`id="reader-theme-color"`,
+		`media="(prefers-color-scheme: light)" content="#ffffff"`,
+		`media="(prefers-color-scheme: dark)" content="#18181a"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the reader page is missing theme-color %q", want)
+		}
+	}
+
+	_, js := f.get(t, "/ui/static/reader-app.js", f.cookie)
+	for _, want := range []string{
+		`theme: defaultReaderTheme(),`,
+		`from "./reader-theme.js"`,
+		`readerThemeFromCookie(`,
+		`function syncThemeColor() {`,
+		`syncThemeColor();`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the reader script does not inherit the app theme: missing %q", want)
+		}
+	}
+}
+
 func TestReaderTitleIsCenteredInTheViewport(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "novel", []byte(strings.Repeat("web-epub", 50)))

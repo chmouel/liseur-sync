@@ -13,6 +13,12 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+			if u.Prefs.Theme == themeSystem {
+				<meta name="theme-color" media="(prefers-color-scheme: light)" content={ themeColor(themeLight) }/>
+				<meta name="theme-color" media="(prefers-color-scheme: dark)" content={ themeColor(themeDark) }/>
+			} else {
+				<meta name="theme-color" content={ themeColor(u.Prefs.Theme) }/>
+			}
 			<meta name="mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-capable" content="yes"/>
 			<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>

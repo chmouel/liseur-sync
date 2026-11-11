@@ -42,6 +42,7 @@ const ASSETS = [
   new URL('./assets/reader-session.js', self.location).href,
   new URL('./assets/reader-sync.js', self.location).href,
   new URL('./assets/reader-sync-choice.js', self.location).href,
+  new URL('./assets/reader-theme.js', self.location).href,
   new URL('./assets/pull-refresh.js', self.location).href,
   new URL('./assets/pull-refresh-dom.js', self.location).href,
   new URL('./assets/style.css', self.location).href,
