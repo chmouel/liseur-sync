@@ -23,6 +23,12 @@ Download one file from the Devices page, copy it into KOReader's `patches/` fold
 
 ![The Set up KOReader box on the Devices page](docs/site/img/web-setup-card.png)
 
+## Set up CrossPoint
+
+On an Xteink running CrossPoint, pair CrossPoint Sync with a code from the Devices page to sync your reading position. Add the OPDS catalog with a library token to download books, and install the statistics plugin the Devices page builds for the reader to record reading time.
+
+**[Step-by-step guide with screenshots](https://chmouel.github.io/liseur-sync/crosspoint/)**
+
 ## Interfaces
 
 `liseur-sync` provides:

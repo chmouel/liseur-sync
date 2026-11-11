@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up CrossPoint with liseur-sync</title>
+<link rel="icon" href="../img/icon.svg" type="image/svg+xml">
+<meta name="description" content="Connect an Xteink running CrossPoint to your liseur-sync server: sync your reading position, download books from your library and record reading time.">
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+<a class="skip" href="#steps">Skip to the steps</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="../"><img src="../img/icon.svg" width="28" height="28" alt="">Liseur<small>sync</small></a>
+    <nav aria-label="Page sections">
+      <a href="../">liseur-sync</a>
+      <a href="../liseur/">Android</a>
+      <a href="../koreader/">KOReader</a>
+      <a href="#steps">The steps</a>
+      <a href="#check">What you'll see</a>
+      <a href="#help">If it doesn't work</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1>Set up CrossPoint on your Xteink</h1>
+      <p class="lede">Pair the reader with your account and it keeps your place in step with your other devices. Add your library and you can download books straight onto it. Add the statistics plugin and your reading time shows up on the website.</p>
+      <a class="button" href="#steps">Start</a>
+      <p class="hero-note">Position sync takes a few minutes. The library and the statistics are optional and can be added later.</p>
+    </div>
+    <figure class="device">
+      <div class="bezel"><img src="../img/cp-5-library.png" width="528" height="792" alt="CrossPoint's OPDS browser on an Xteink showing the books on the liseur-sync server, with Treasure Island selected."></div>
+      <figcaption>Your library, browsed from the Xteink.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="block before" aria-labelledby="before">
+  <div class="wrap">
+    <h2 id="before">Before you start</h2>
+    <ul>
+      <li>An account on your liseur-sync server, the one you sign into with a username and password.</li>
+      <li>An Xteink X3 or X4 running CrossPoint, connected to Wi-Fi. The screenshots here come from CrossPoint 2.0.0, so menus on other versions may differ slightly.</li>
+      <li>A computer to read the codes from the website and to copy the statistics plugin onto the reader.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="block" id="steps" aria-labelledby="steps-title">
+  <div class="wrap">
+    <h2 id="steps-title" class="prose">The steps</h2>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">1</div>
+      <div class="text">
+        <h3>Get a pairing code</h3>
+        <p>On your computer, sign into liseur-sync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>KOReader (kosync)</b> box, press <b>Generate pairing code</b>. CrossPoint syncs the same way KOReader does, so it uses the same box.</p>
+        <p>The code is shown once. Save it in your password manager under the name you will give the reader, because it becomes the reader's sync password and you need it again in step 4.</p>
+      </div>
+      <figure class="shot">
+        <img src="../img/web-cp-code.png" width="1784" height="383" alt="The pairing code box on the liseur-sync Devices page, showing a one-time code with a Copy button.">
+        <figcaption>The pairing code is shown once and works for 15 minutes.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">2</div>
+      <div class="text">
+        <h3>Sign up from the Xteink</h3>
+        <p>On the reader, open <b>Settings</b>, go to the <b>Connectivity</b> tab and choose <b>CrossPoint Sync</b>. Fill in:</p>
+        <table class="where">
+          <tr><th>Username</th><td>A name for this reader, such as <code>my-xteink</code></td></tr>
+          <tr><th>Password</th><td>The pairing code</td></tr>
+          <tr><th>Sync Server URL</th><td>Your server's address followed by <code>/adapter/kosync</code>, for example <code>https://books.example.com/adapter/kosync</code></td></tr>
+          <tr><th>Server Type</th><td>KoSync</td></tr>
+          <tr><th>Document Matching</th><td>Binary</td></tr>
+        </table>
+        <p>Then choose <b>Sign Up</b>. The reader says <b>Account created</b>, which here means it is now attached to your existing account on the website.</p>
+        <p class="warn">Choose <b>Binary</b> even when <b>Filename</b> is the default. It lets the server recognise the same book on all your devices. Leave <b>Sync Clippings</b> off.</p>
+      </div>
+      <figure class="shot device" style="width:min(100%,340px);justify-self:start">
+        <div class="bezel"><img src="../img/cp-1-sync-settings.png" width="528" height="792" alt="CrossPoint Sync settings with the username my-xteink, the server address ending in /adapter/kosync, Server Type KoSync, Document Matching Binary and Sign Up selected."></div>
+        <figcaption>Settings, Connectivity, CrossPoint Sync.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">3</div>
+      <div class="text">
+        <h3>Add your library</h3>
+        <p>This step is optional. It lets you download books from your server onto the reader, and those copies match the books on the website for syncing and statistics.</p>
+        <p>On the website, open the <b>Apps</b> tab of <b>Devices &amp; integrations</b>. Under <b>API tokens</b>, type a name such as <code>Xteink library</code>, leave only <b>library-read</b> ticked and press <b>New token</b>. Copy the secret it shows.</p>
+        <p>On the reader, open <b>Settings</b>, then <b>Connectivity</b>, then <b>OPDS Servers</b>, and add a server:</p>
+        <table class="where">
+          <tr><th>OPDS Server URL</th><td>Your server's address followed by <code>/opds/v1.2</code></td></tr>
+          <tr><th>Username</th><td>The word <code>token</code></td></tr>
+          <tr><th>Password</th><td>The token secret</td></tr>
+        </table>
+        <p>Your books are then under <b>OPDS Browser</b> on the home screen. Once plugins are turned on in step 5, it moves into <b>Plugins</b>. Pick a book and choose <b>Download</b>.</p>
+        <p class="warn">Leave downloaded books as they are. Converting or optimising an EPUB can make the server treat it as a different book.</p>
+      </div>
+      <figure class="shot">
+        <img src="../img/web-cp-token.png" width="1784" height="543" alt="The API tokens box on the Apps tab, with Xteink library typed in, only library-read ticked and a New token button.">
+        <figcaption>A token that can only read the library.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">4</div>
+      <div class="text">
+        <h3>Download the statistics plugin</h3>
+        <p>The plugin sends how long you read to the <b>Insights</b> page. It needs CrossPoint firmware that reports reading sessions, which its documentation calls <code>reader.session</code>. A Plugins menu alone does not prove that, so check your firmware's release notes.</p>
+        <p>Back on the <b>E-readers</b> tab, open your reader's entry under <b>KOReader (kosync)</b> and expand <b>CrossPoint reading statistics</b>. Type the pairing code from step 1 and press <b>Enable statistics &amp; download plugin</b>. You get <code>liseur-stats.zip</code>.</p>
+        <p class="warn">From now on this reader's reading time comes only from the plugin, so install it straight away. The ZIP holds a login for your reader. Keep it private.</p>
+      </div>
+      <figure class="shot">
+        <img src="../img/web-cp-stats.png" width="1784" height="1301" alt="The KOReader (kosync) box listing my-xteink, with CrossPoint reading statistics expanded, a password field for the pairing code and an Enable statistics and download plugin button.">
+        <figcaption>The pairing code unlocks a plugin made for this reader.</figcaption>
+      </figure>
+    </div>
+
+    <div class="step">
+      <div class="n" aria-hidden="true">5</div>
+      <div class="text">
+        <h3>Install and turn on the plugin</h3>
+        <p>Unzip the file on your computer. Copy the <code>liseur-stats</code> folder into a folder called <code>plugins</code> at the top of the reader's storage, creating <code>plugins</code> if it is missing. Make sure <code>device.json</code> sits directly inside <code>plugins/liseur-stats</code>.</p>
+        <p>You can copy it over Wi-Fi: start <b>File Transfer</b> on the reader, open the address it shows in your computer's browser and use its file manager. Or switch the reader off, take out the SD card and copy the folder with a card reader.</p>
+        <p>Then, on the reader, open <b>Settings</b>, <b>Connectivity</b>, <b>Plugins</b> and choose <b>Enabled</b>. Restart the reader, check that <b>Liseur reading statistics</b> is listed under <b>Plugins</b> on the home screen, and reopen your book.</p>
+      </div>
+      <figure class="shot">
+        <div class="where-tree" role="img" aria-label="Folder layout: plugins contains liseur-stats, which contains device.json, config.json and README.txt.">
+          <pre style="margin:0;padding:22px 24px;background:#fff;border:1px solid var(--rule);border-radius:8px;font:0.95rem/1.7 var(--mono);overflow-x:auto">/
+└── <b>plugins/</b>
+    └── <b>liseur-stats/</b>
+        ├── device.json
+        ├── config.json
+        └── README.txt</pre>
+        </div>
+        <figcaption>Where the folder goes on the reader.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="check" aria-labelledby="check-title">
+  <div class="wrap">
+    <h2 id="check-title">What you'll see</h2>
+    <p class="prose">These screenshots come from the CrossPoint simulator running firmware 2.0.0, set up with the steps above against a real liseur-sync server. Your books will differ.</p>
+    <div class="seen">
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-2-signup.png" width="528" height="792" alt="CrossPoint saying Account created, CrossPoint sync is ready to use."></div>
+        <figcaption><strong>Signed up</strong>The reader is paired with your account.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-3-opds-servers.png" width="528" height="792" alt="The OPDS Servers list with liseur-sync in it."></div>
+        <figcaption><strong>OPDS Servers</strong>Your server, added under Connectivity.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-4-opds-server.png" width="528" height="792" alt="The OPDS server settings with the server name liseur-sync, the address ending in /opds/v1.2 and the username token."></div>
+        <figcaption><strong>Its settings</strong>The address ends in /opds/v1.2 and the username is token.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-6-book.png" width="528" height="792" alt="Treasure Island in the OPDS browser with its cover and Details and Download buttons."></div>
+        <figcaption><strong>A book from the server</strong>Download puts it on the reader.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-7-plugins-setting.png" width="528" height="792" alt="The Connectivity settings with Plugins set to Enabled."></div>
+        <figcaption><strong>Plugins enabled</strong>Settings, Connectivity, Plugins.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-8-plugins.png" width="528" height="792" alt="The Plugins list with OPDS Browser, Plugin Hub and Liseur reading statistics."></div>
+        <figcaption><strong>The statistics plugin</strong>Liseur reading statistics is listed under Plugins.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-9-reading.png" width="528" height="792" alt="A page of Treasure Island open on the reader."></div>
+        <figcaption><strong>Reading</strong>Turn pages forward as usual and the time is counted.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-10-reader-menu.png" width="528" height="792" alt="The reader menu with Sync Progress selected."></div>
+        <figcaption><strong>Sync Progress</strong>Press Confirm while reading to open this menu.</figcaption></figure>
+      <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-11-progress-uploaded.png" width="528" height="792" alt="CrossPoint saying Progress uploaded."></div>
+        <figcaption><strong>Position sent</strong>Your other devices can now pick up from here.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="logins" aria-labelledby="logins-title">
+  <div class="wrap">
+    <h2 id="logins-title">Which password goes where</h2>
+    <p class="prose">Your account password only signs you into the website. The reader uses two other logins, and each can be revoked on its own.</p>
+    <div class="logins">
+      <article>
+        <img loading="lazy" src="../img/web-cp-device.png" alt="The KOReader (kosync) box listing the reader my-xteink.">
+        <div><h3>The pairing code</h3><p>Typed as the password in CrossPoint Sync, and again to download the statistics plugin. After pairing it stays the reader's sync password, and the website cannot show it again.</p></div>
+      </article>
+      <article>
+        <img loading="lazy" src="../img/web-cp-token.png" alt="The API tokens box with a library-read token being created.">
+        <div><h3>The library token</h3><p>Typed as the password in OPDS Servers, with <code>token</code> as the username. It can list and download your books and nothing else.</p></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="help" aria-labelledby="help-title">
+  <div class="wrap">
+    <h2 id="help-title" class="prose">If something doesn't work</h2>
+    <div class="prose">
+      <details>
+        <summary>Sign Up says the username is already registered</summary>
+        <p>That name is already paired. Pick another name and use a fresh pairing code. A revoked name cannot be registered again.</p>
+      </details>
+      <details>
+        <summary>The plugin download says the password does not match</summary>
+        <p>Use the pairing code you typed on the reader for that same name, and check you expanded the right reader. Your account password and your library token do not work here. If the code is lost, follow the next answer.</p>
+      </details>
+      <details>
+        <summary>I lost the pairing code</summary>
+        <p>Generate a new code and save it. On the reader, open CrossPoint Sync, change <b>Username</b> to a new name such as <code>my-xteink-new</code>, put the new code in <b>Password</b> and choose <b>Sign Up</b>. Download the plugin for the new name with the same code and copy it over the old files. Once it works, revoke the old name on the website. Your books, positions and statistics stay with your account.</p>
+      </details>
+      <details>
+        <summary>The catalog says "Failed to parse feed"</summary>
+        <p>CrossPoint shows this for refused logins as well as broken catalogs. Check that the address ends in <code>/opds/v1.2</code>, the username is <code>token</code> and the token has <b>library-read</b> and has not been revoked. If it still fails, ask whoever runs the server whether your account can see the folder holding your books.</p>
+      </details>
+      <details>
+        <summary>Liseur reading statistics is not in the Plugins list</summary>
+        <p>Check that <code>device.json</code> is directly inside <code>plugins/liseur-stats/</code>. A ZIP left on the reader, or a second <code>liseur-stats</code> folder inside the first, will not load. Restart the reader after enabling plugins. If it is still missing, your firmware may not support plugins or <code>reader.session</code>.</p>
+      </details>
+      <details>
+        <summary>My position syncs but no reading time appears</summary>
+        <p>Close and reopen the book after installing the plugin, since a session that started earlier is ignored. Read for a few minutes turning pages forward, spending at least a couple of seconds on each, then close the book or put the reader to sleep with Wi-Fi in reach. Backward turns and chapter jumps don't count, and a session under ten seconds is not sent.</p>
+        <p>Offline reading is kept in a small queue and sent later. A very long time offline can fill it and lose the oldest records, and the server does not guess the missing time.</p>
+      </details>
+      <details>
+        <summary>The same book shows up twice or doesn't share its position</summary>
+        <p>Set <b>Document Matching</b> to <b>Binary</b> in CrossPoint Sync, and read the EPUB exactly as it came from the server. A converted or optimised copy looks like a different book.</p>
+      </details>
+      <details>
+        <summary>My server lives under a path, like example.com/books</summary>
+        <p>The sync address still starts at the top of the host: <code>https://example.com/adapter/kosync</code>. Whoever runs the server has to pass that path through the proxy as it is. The <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/deployment.md#serving-below-a-path-prefix">deployment guide</a> covers it.</p>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>The full reference is <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/crosspoint.md">docs/crosspoint.md</a>. The code is on <a href="https://github.com/chmouel/liseur-sync">GitHub</a>. CrossPoint is a separate project: <a href="https://github.com/crosspoint-reader/crosspoint-reader">crosspoint-reader/crosspoint-reader</a>.</p>
+  </div>
+</footer>
+</body>
+</html>

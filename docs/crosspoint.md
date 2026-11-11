@@ -1,5 +1,8 @@
 # Use CrossPoint on your Xteink with liseur-sync
 
+A step-by-step version with screenshots is on the
+[CrossPoint setup page](https://chmouel.github.io/liseur-sync/crosspoint/).
+
 You can connect an Xteink X3 or X4 running CrossPoint to liseur-sync to
 download books, share your reading position with other readers, and record
 reading time.
@@ -61,7 +64,7 @@ connection.
 
 ### Enter the settings on your Xteink
 
-On the reader, open **Settings > CrossPoint Sync** and enter:
+On the reader, open **Settings > Connectivity > CrossPoint Sync** and enter:
 
 | Setting | What to enter |
 | --- | --- |
@@ -95,10 +98,13 @@ position and statistics attach to the same books you see on the website.
 1. On liseur-sync's **Devices** page, create a token with **library-read**
    permission. Give it a name you will recognise, such as `Xteink library`.
 2. Copy the token secret when the website shows it, and keep it private.
-3. On the Xteink, open **OPDS Browser > OPDS Servers** and add a server.
+3. On the Xteink, open **Settings > Connectivity > OPDS Servers** and add a
+   server.
 4. Enter your website address followed by `/opds/v1.2` as the server URL.
 5. Enter the literal word `token` as the username.
-6. Enter the token secret as the password, then browse and download a book.
+6. Enter the token secret as the password.
+7. Open **OPDS Browser** from Home, then browse and download a book. Once
+   plugins are enabled, **OPDS Browser** moves into **Home > Plugins**.
 
 For the example website above, the catalog URL would be
 `https://reading.example.com/opds/v1.2`.
@@ -250,7 +256,7 @@ positions and existing statistics remain in your liseur-sync account.
 
 1. On liseur-sync's **Devices** page, click **Generate pairing code**.
 2. Save this new code in your password manager.
-3. On the Xteink, open **Settings > CrossPoint Sync**.
+3. On the Xteink, open **Settings > Connectivity > CrossPoint Sync**.
 4. Change **Username** to a new name, such as `my-xteink-new`.
 5. Change **Password** to the new pairing code.
 6. Keep your server address, **KoSync** and **Binary** settings, then press
