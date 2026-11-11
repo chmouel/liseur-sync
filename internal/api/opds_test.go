@@ -107,13 +107,13 @@ func TestOPDSWalksFromRootToBytes(t *testing.T) {
 	if len(root.Entries) != 2 {
 		t.Fatalf("root entries = %+v", root.Entries)
 	}
-	folderHref := linkHref(t, root.Entries[0].Links, "subsection")
+	folderHref := linkHref(t, root.Entries[1].Links, "subsection")
 	if folderHref == "" {
-		t.Fatalf("no subsection link: %+v", root.Entries[0])
+		t.Fatalf("no subsection link: %+v", root.Entries[1])
 	}
-	if root.Entries[1].Title != "Feed Walked Book" ||
-		linkHref(t, root.Entries[1].Links, opdsAcquisitionRel) == "" {
-		t.Fatalf("root does not carry the book: %+v", root.Entries[1])
+	if root.Entries[0].Title != "Feed Walked Book" ||
+		linkHref(t, root.Entries[0].Links, opdsAcquisitionRel) == "" {
+		t.Fatalf("root does not carry the book: %+v", root.Entries[0])
 	}
 
 	resp, raw = f.opds(t, folderHref, "token", read)
@@ -354,8 +354,8 @@ func TestOPDSRootSyncsTheWholeLibraryNewestFirst(t *testing.T) {
 			feed := parseFeed(t, raw)
 			for _, e := range feed.Entries {
 				if linkHref(t, e.Links, opdsAcquisitionRel) == "" {
-					if pages > 1 || len(books) > 0 {
-						t.Fatalf("navigation entry %q after the first book", e.ID)
+					if pages > 1 || len(books) == 0 {
+						t.Fatalf("navigation entry %q before the first book or past page 1", e.ID)
 					}
 					folders++
 					continue

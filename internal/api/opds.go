@@ -127,6 +127,20 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 			{Rel: "start", Href: opdsPrefix, Type: opdsAcquisitionType},
 		},
 	}
+	limit := opdsPageSize
+	books, err := s.St.ListRecentLibraryBooks(r.Context(), tok.UserID, before, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "catalog listing failed")
+		return
+	}
+	feed.Entries = append(feed.Entries, entries...)
+	// Folders follow the books: KOReader's OPDS sync reads the first entry
+	// as the newest book and crashes on a navigation entry there.
 	if before == nil {
 		folders, err := s.St.ListFolders(r.Context(), tok.UserID, "", maxCatalogPageSize)
 		if err != nil {
@@ -146,18 +160,6 @@ func (s *Server) HandleOPDSRoot(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	limit := opdsPageSize
-	books, err := s.St.ListRecentLibraryBooks(r.Context(), tok.UserID, before, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
-	}
-	entries, err := s.opdsBookEntries(r.Context(), tok.UserID, books)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog listing failed")
-		return
-	}
-	feed.Entries = append(feed.Entries, entries...)
 	if len(books) == limit {
 		last := books[len(books)-1]
 		feed.Links = append(feed.Links, opdsLink{

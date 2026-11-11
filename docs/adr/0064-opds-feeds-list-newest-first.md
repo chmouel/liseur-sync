@@ -23,12 +23,13 @@ at `/folders/{folder}/recent`, which nobody configures.
 
 ## Decision
 
-**The root is an acquisition feed: its first page lists the granted folders,
-then the newest books across all of them. Folder feeds list newest first.**
+**The root is an acquisition feed: its first page lists the newest books across
+all granted folders, then the folders. Folder feeds list newest first.**
 
-- Root page one carries one navigation entry per folder the credential is
-  granted, as before, followed by up to 20 books from those folders, newest
-  first. A `next` link continues with books only. The cursor is the
+- Root page one carries up to 20 books from the granted folders, newest
+  first, followed by one navigation entry per folder. Books come first
+  because KOReader's OPDS sync reads the first entry as the newest book and
+  crashes on a navigation entry there. A `next` link continues with books only. The cursor is the
   catalog's own `(created_at, id)` keyset, so the walk neither skips nor
   repeats a book.
 - `/opds/v1.2/folders/{folder}` lists newest first. The separate
