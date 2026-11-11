@@ -170,15 +170,71 @@ try {
     `expiry stole focus: ${expiredElsewhere.focus}`);
 
   // A reader still on the question — the Keep button is where arming
-  // puts them — gets the button that asked back.
+  // puts them — is still deciding, so the deadline waits for them: the
+  // question is still up well after the eight seconds, and Escape is
+  // the way out of it.
   await online.evaluate('document.querySelector(".offline-book-remove").click()');
-  await wait(online, `${state}.armed`, 'the question that will expire under focus');
-  const expiredHere = await wait(online, `(() => {
+  await wait(online, `${state}.armed`, 'the question a reader is still on');
+  await new Promise(resolve => setTimeout(resolve, 9000));
+  const heldOpen = await online.evaluate(`${state}`);
+  assert.equal(heldOpen.armed, true, 'the question expired under the reader');
+  assert.match(heldOpen.focus, /offline-book-keep/, 'focus was taken off the open question');
+  await online.evaluate(`(() => {
+    const keep = document.querySelector('.offline-book-keep');
+    keep.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  })()`);
+  const escaped = await wait(online, `(() => {
     const now = ${state};
     return now.armed ? null : now;
-  })()`, 'the question expiring under focus');
-  assert.match(expiredHere.focus, /offline-book-remove/,
-    `focus stayed nowhere after the question went: ${expiredHere.focus}`);
+  })()`, 'the question dismissed with Escape');
+  assert.equal(escaped.books, 1, 'Escape keeps the copy');
+  assert.match(escaped.focus, /offline-book-remove/, 'Escape leaves the reader on the button that asked');
+  assert.match(escaped.notice, /stays on this device/);
+
+  // A removal the storage refuses must not leave the card dead: the
+  // question stays up, "Keep" still answers it, and the message says
+  // the copy is still here.
+  await online.evaluate('document.querySelector(".offline-book-remove").click()');
+  await wait(online, `${state}.armed`, 'the question whose removal will fail');
+  await online.evaluate(`(() => {
+    const original = IDBDatabase.prototype.transaction;
+    window.__restoreTransaction = () => {
+      IDBDatabase.prototype.transaction = original;
+    };
+    IDBDatabase.prototype.transaction = function (...args) {
+      window.__restoreTransaction();
+      throw new Error('storage refused the delete');
+    };
+  })()`);
+  await online.evaluate('document.querySelector(".offline-book-confirmed").click()');
+  const refused = await wait(online, `(() => {
+    const now = ${state};
+    if (!/Couldn't remove that/.test(now.status)) return null;
+    const item = document.querySelector('.offline-book');
+    const confirmButton = item.querySelector('.offline-book-confirmed');
+    const keepButton = item.querySelector('.offline-book-keep');
+    return {
+      ...now,
+      questionShown: !item.querySelector('.offline-book-confirm').hidden,
+      removeShown: !item.querySelector('.offline-book-remove').hidden,
+      disabled: [confirmButton.disabled, keepButton.disabled, item.querySelector('.offline-book-remove').disabled],
+    };
+  })()`, 'the refused removal');
+  await online.evaluate('window.__restoreTransaction()');
+  assert.equal(refused.status, "Couldn't remove that. Try again.");
+  assert.equal(refused.books, 1, 'a refused removal deletes nothing');
+  assert.equal(refused.questionShown, true, 'the question stays on the card');
+  assert.equal(refused.removeShown, false, 'and so does the answered state that matches it');
+  assert.deepEqual(refused.disabled, [false, false, false], 'the failed removal left a control disabled');
+  assert.match(refused.focus, /offline-book-confirmed/, 'focus lands where the retry is');
+  await online.evaluate('document.querySelector(".offline-book-keep").click()');
+  const keptAfterFailure = await wait(online, `(() => {
+    const now = ${state};
+    return now.armed ? null : now;
+  })()`, 'the kept copy after a refused removal');
+  assert.equal(keptAfterFailure.books, 1);
+  assert.match(keptAfterFailure.focus, /offline-book-remove/, 'the unarmed controls match the guard again');
+  console.log('PASS a refused removal leaves a card that can still be answered');
 
   // The cards are redrawn under an armed question: the timer must go
   // with the card it belonged to rather than firing into a dead button.

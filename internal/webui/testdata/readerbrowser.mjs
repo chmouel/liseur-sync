@@ -1507,6 +1507,99 @@ if (touchable) {
     afterBackSwipe.fraction < afterSwipe.fraction,
     `${afterSwipe.fraction} -> ${afterBackSwipe.fraction}`);
 
+  // A short flick is where the two layers disagree. The reader accepts a
+  // 44px horizontal drag as a page turn; the engine's own pan snaps back
+  // unless the finger passed a third of the page. So a 60px flick that
+  // turns one page and stays turned is the case that says whether one
+  // layer or two are answering the same finger.
+  const flick = async (fromX, dx) => {
+    await S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: fromX, y }] });
+    for (const step of [0.25, 0.5, 0.75, 1]) {
+      await S('Input.dispatchTouchEvent', {
+        type: 'touchMove', touchPoints: [{ x: Math.round(fromX + dx * step), y }],
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await settle();
+  };
+  const onePage = (from, to) => Math.abs(Math.abs(to - from) - pageStep) < pageStep * 0.3;
+  const beforeShort = JSON.parse(await evalIn(probe));
+  await flick(Math.round(innerWidthGuess * 0.6), -60);
+  const afterShortForward = JSON.parse(await evalIn(probe));
+  check('a short forward flick turns exactly one page',
+    onePage(beforeShort.fraction, afterShortForward.fraction),
+    `${beforeShort.fraction} -> ${afterShortForward.fraction} (one page is ${pageStep.toFixed(4)})`);
+  await flick(Math.round(innerWidthGuess * 0.4), 60);
+  const afterShortBack = JSON.parse(await evalIn(probe));
+  check('a short backward flick turns exactly one page back',
+    onePage(afterShortForward.fraction, afterShortBack.fraction),
+    `${afterShortForward.fraction} -> ${afterShortBack.fraction} (one page is ${pageStep.toFixed(4)})`);
+
+  // At a chapter edge the engine has a second opinion of its own: its pan
+  // reports "no more" and it changes the resource itself. That is the
+  // other path a finger could take twice, so walk back to the last page
+  // of a chapter and flick across that edge, both ways.
+  const sectionIndex = () => evalIn("document.querySelector('readium-view').lastLocation.section.current");
+  const step = async (id) => {
+    await evalIn(`document.getElementById('${id}').click()`);
+    await settle();
+  };
+  // Where the rest of this walk expects to be when the edge is done
+  // with: the page the reader was on before it walked back.
+  const parked = JSON.parse(await evalIn(probe)).fraction;
+  let chapter = await sectionIndex();
+  let lastOfChapter = null;
+  for (let i = 0; i < 8 && lastOfChapter === null; i++) {
+    await step('reader-prev');
+    const now = await sectionIndex();
+    if (now !== chapter) lastOfChapter = now;
+    else chapter = now;
+  }
+  if (lastOfChapter === null) {
+    console.log('note: no chapter edge behind this page to flick across');
+  } else {
+    const edgePage = JSON.parse(await evalIn(probe));
+    await flick(Math.round(innerWidthGuess * 0.6), -60);
+    check('a short forward flick crosses one chapter edge, not two',
+      await sectionIndex() === lastOfChapter + 1,
+      `chapter ${lastOfChapter} -> ${await sectionIndex()} (expected ${lastOfChapter + 1})`);
+    const crossed = JSON.parse(await evalIn(probe));
+    check('the forward flick across the edge turned one page of the book',
+      crossed.fraction > edgePage.fraction,
+      `${edgePage.fraction} -> ${crossed.fraction}`);
+    await flick(Math.round(innerWidthGuess * 0.4), 60);
+    check('a short backward flick crosses one chapter edge, not two',
+      await sectionIndex() === lastOfChapter,
+      `chapter ${lastOfChapter + 1} -> ${await sectionIndex()} (expected ${lastOfChapter})`);
+    await evalIn(`(async () => {
+      await document.querySelector('readium-view').goTo({ fraction: ${parked} });
+      return true;
+    })()`);
+    await settle();
+  }
+
+  // A finger held on the text is a selection, not a page turn: the
+  // engine's pan is gone, and nothing else may read that drag as one.
+  if (spots.word) {
+    const beforePress = JSON.parse(await evalIn(probe));
+    await S('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: spots.word.x, y }] });
+    await new Promise((r) => setTimeout(r, 600));
+    for (const part of [0.5, 1]) {
+      await S('Input.dispatchTouchEvent', {
+        type: 'touchMove', touchPoints: [{ x: Math.round(spots.word.x - 40 * part), y }],
+      });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await S('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await settle();
+    const afterPress = JSON.parse(await evalIn(probe));
+    check('a long press and drag on the text turns no page',
+      afterPress.fraction === beforePress.fraction,
+      `${beforePress.fraction} -> ${afterPress.fraction}`);
+    await clearSelection();
+  }
+
   // A tap has no gesture to disambiguate from, so it must not wait.
   const beforeTouchTap = JSON.parse(await evalIn(probe));
   await S('Input.dispatchTouchEvent', {

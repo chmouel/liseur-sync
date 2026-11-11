@@ -218,15 +218,23 @@ function actionsFor(snapshot, { partition, account, context, generation, redraw 
       announce(`“${title}” was removed from this device.`);
       await refreshBooks(partition, account, context, generation, redraw);
       status?.focus();
-    } catch (error) {
+    } catch {
       quiet.disabled = false;
       confirm.disabled = false;
-      guard.cancel();
-      message(error.message || "The offline copy could not be removed.", true);
+      // The question is still on the card, so the guard goes back to
+      // armed with it: “Keep” answers it and “Remove” asks again. A
+      // guard left unarmed here would leave both controls dead.
+      guard.rearm();
+      message("Couldn't remove that. Try again.", true);
+      confirm.focus();
     }
   };
 
+  // A question somebody is reading or pointing at is still being
+  // answered, so its deadline waits for them to leave.
+  let pointerOver = false;
   const guard = removalGuard({
+    hold: () => pointerOver || question.contains(document.activeElement),
     arm() {
       quiet.hidden = true;
       question.hidden = false;
@@ -250,6 +258,21 @@ function actionsFor(snapshot, { partition, account, context, generation, redraw 
   quiet.addEventListener("click", () => guard.press());
   confirm.addEventListener("click", () => guard.press());
   keep.addEventListener("click", () => guard.cancel());
+  question.addEventListener("pointerenter", () => { pointerOver = true; });
+  question.addEventListener("pointerleave", () => {
+    pointerOver = false;
+    guard.refresh();
+  });
+  question.addEventListener("focusout", (event) => {
+    if (event.relatedTarget && question.contains(event.relatedTarget)) return;
+    guard.refresh();
+  });
+  // Escape is the way out of a question without answering it.
+  question.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    guard.cancel();
+  });
   actions.append(quiet, question);
   return actions;
 }

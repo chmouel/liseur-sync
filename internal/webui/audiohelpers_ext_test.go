@@ -21,3 +21,10 @@ func TestReaderScreenWakeLock(t *testing.T) {
 func TestAudiobookMediaSessionHelper(t *testing.T) {
 	runNodeTests(t, "audiomediasession.test.mjs")
 }
+
+// TestReaderWakeLockWantsIntent runs the node unit tests for the
+// reader's own wake-lock rule: a stall or a seek keeps the screen on,
+// and a pause, an end, a failed element or a hidden page drops it.
+func TestReaderWakeLockWantsIntent(t *testing.T) {
+	runNodeTests(t, "readerwakelock.test.mjs")
+}

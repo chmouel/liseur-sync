@@ -5010,13 +5010,20 @@ let audioSeekNeedsSTT = false;
 const LIVE_STT_INTERVAL_MS = 30000;
 const LIVE_STT_COOLDOWN_MS = 3500;
 
-// #113: the screen stays on only while this page is playing the
-// audiobook with follow-along on, which is the moment the reader is
-// meant to be watching it. A hidden page cannot hold the lock, and the
-// browser drops it when hidden, so visibilitychange re-syncs.
+// #113: the screen stays on only while this page means to be playing
+// the audiobook with follow-along on, which is the moment the reader is
+// meant to be watching it. Intent, not the momentary flag: buffering
+// and seeking take audioActivelyPlaying down for as long as the stall
+// lasts, and the element is still going to play, so the screen must not
+// go dark mid-chapter. A pause, an end, a failed element or a hidden
+// page is the element saying it stopped — and the browser drops the
+// lock when hidden, so visibilitychange re-syncs.
 let audioWakeLock = null;
+function audioPlaybackIntended() {
+  return !!(audioEl && audioWantsPlay && !audioEl.paused && !audioEl.ended && !audioEl.error);
+}
 function wantsScreenWakeLock() {
-  return !document.hidden && ready && !!audioBar && !audioBar.hidden && followAudio && audioPlaying();
+  return !document.hidden && ready && !!audioBar && !audioBar.hidden && followAudio && audioPlaybackIntended();
 }
 function syncWakeLock() {
   audioWakeLock ??= screenWakeLock();

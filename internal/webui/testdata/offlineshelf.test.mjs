@@ -124,6 +124,64 @@ test("keeping a copy cancels the question and re-arms nothing", () => {
   assert.equal(guard.cancel(), false);
 });
 
+function timedGuard({ held = () => false } = {}) {
+  const timers = [];
+  const events = [];
+  const guard = removalGuard({
+    arm: () => events.push("arm"),
+    disarm: () => events.push("disarm"),
+    confirm: () => events.push("remove"),
+    hold: held,
+    timeout: 8000,
+    setTimer: (fn, ms) => {
+      timers.push({ fn, ms });
+      return timers.length;
+    },
+    clearTimer: () => {},
+  });
+  return { guard, timers, events };
+}
+
+test("a question a reader is still on does not expire under them", () => {
+  let held = true;
+  const { guard, timers, events } = timedGuard({ held: () => held });
+  guard.press();
+  assert.equal(timers.length, 1);
+  timers[0].fn();
+  assert.deepEqual(events, ["arm"], "the deadline passed with focus inside the question");
+  assert.equal(guard.armed(), true, "the question is still there to answer");
+  assert.equal(guard.press(), "remove", "and it can still be answered");
+  assert.deepEqual(events, ["arm", "remove"]);
+});
+
+test("a deadline that ran out while held goes quiet when the reader leaves", () => {
+  let held = true;
+  const { guard, timers, events } = timedGuard({ held: () => held });
+  guard.press();
+  timers[0].fn();
+  assert.equal(guard.refresh(), false, "still under the pointer or the focus");
+  assert.equal(guard.armed(), true);
+  held = false;
+  assert.equal(guard.refresh(), true);
+  assert.deepEqual(events, ["arm", "disarm"]);
+  assert.equal(guard.armed(), false);
+  assert.equal(guard.refresh(), false, "nothing left to take away");
+});
+
+test("a removal that failed leaves the question answerable", () => {
+  const { guard, timers, events } = timedGuard();
+  guard.press();
+  assert.equal(guard.press(), "remove");
+  assert.deepEqual(events, ["arm", "remove"]);
+  assert.equal(guard.armed(), false, "the failing press cleared the guard");
+  guard.rearm();
+  assert.equal(guard.armed(), true, "the question on the card is armed again");
+  assert.deepEqual(events, ["arm", "remove"], "re-arming asks nothing new");
+  assert.equal(timers.length, 2, "and the deadline starts over");
+  assert.equal(guard.cancel(), true, "Keep still works");
+  assert.deepEqual(events, ["arm", "remove", "disarm"]);
+});
+
 test("a card redrawn mid-question leaves no timer behind", () => {
   const events = [];
   let cleared = 0;

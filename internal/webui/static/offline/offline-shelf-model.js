@@ -94,6 +94,11 @@ export function progressLabel(progress) {
  * press removes. Nothing is deleted on the way in, so a mistap costs a
  * tap to keep, and an armed button nobody answers goes quiet again.
  *
+ * The deadline is for a question nobody is attending to. A reader whose
+ * focus is inside it, or whose pointer is over it, is still deciding:
+ * `hold` says so, and the question then waits for an answer, Escape or
+ * them leaving instead of vanishing under their hands.
+ *
  * The timers are injected so the arming window is a rule with a test,
  * not three setTimeout calls scattered through a render pass.
  */
@@ -104,13 +109,28 @@ export function removalGuard({
   timeout = 8000,
   setTimer = (fn, ms) => setTimeout(fn, ms),
   clearTimer = id => clearTimeout(id),
+  hold = () => false,
 } = {}) {
   let armed = false;
   let timer = null;
+  let lapsed = false;
   const reset = () => {
     if (timer !== null) clearTimer(timer);
     timer = null;
     armed = false;
+    lapsed = false;
+  };
+  const start = () => {
+    armed = true;
+    timer = setTimer(() => {
+      timer = null;
+      if (hold()) {
+        lapsed = true;
+        return;
+      }
+      armed = false;
+      disarm();
+    }, timeout);
   };
   return {
     armed: () => armed,
@@ -128,14 +148,23 @@ export function removalGuard({
         return "remove";
       }
       reset();
-      armed = true;
       arm();
-      timer = setTimer(() => {
-        timer = null;
-        armed = false;
-        disarm();
-      }, timeout);
+      start();
       return "armed";
+    },
+    // A removal that failed leaves the question up and still owed an
+    // answer, so the deadline restarts without asking a second time.
+    rearm() {
+      reset();
+      start();
+    },
+    // Called when the pointer or the focus leaves: a question whose
+    // deadline ran out while it was held goes quiet now.
+    refresh() {
+      if (!lapsed || hold()) return false;
+      reset();
+      disarm();
+      return true;
     },
     cancel() {
       if (!armed) return false;

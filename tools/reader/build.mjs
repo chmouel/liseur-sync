@@ -32,12 +32,24 @@ await build({
         };
       });
       build.onLoad({ filter: /@readium\/navigator-html-injectables\/dist\/modules\/snapper\/ColumnSnapper\.js$/ }, async ({ path: filename }) => {
-        const source = await readFile(filename, "utf8");
+        let source = await readFile(filename, "utf8");
         // Readium's RTL text targets need distance from the document's right edge
         const needle = "this.snapNormOffset(a.getBoundingClientRect().left+t.scrollX)";
         if (source.split(needle).length !== 2) throw Error("Readium RTL text navigation patch needs review");
+        source = source.replace(needle, "this.snapNormOffset(t.innerWidth-a.getBoundingClientRect().right-t.scrollX)");
+        // Swipe navigation belongs to the reader, whose classifier already
+        // rejects a selection, a second finger, a cancelled pointer and a
+        // control under the finger. ColumnSnapper pans under the same finger
+        // and snaps on release, so it snaps back a short flick the reader
+        // accepted and gives a chapter edge a second navigation path. Its
+        // touch listeners go; taps arrive through another module and are
+        // unaffected.
+        const touches = 't.addEventListener("touchstart",this.onTouchStarter,{passive:!0}),' +
+          't.addEventListener("touchend",this.onTouchEnder,{passive:!0}),' +
+          't.addEventListener("touchmove",this.onTouchMover,{passive:!0}),';
+        if (source.split(touches).length !== 2) throw Error("Readium swipe ownership patch needs review");
         return {
-          contents: source.replace(needle, "this.snapNormOffset(t.innerWidth-a.getBoundingClientRect().right-t.scrollX)"),
+          contents: source.replace(touches, ""),
           loader: "js",
         };
       });
