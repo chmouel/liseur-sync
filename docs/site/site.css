@@ -38,7 +38,7 @@ header.top nav a { color: var(--ink-soft); }
 /* hero */
 .hero { padding: 40px 0 88px; }
 .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 56px; align-items: center; }
-h1 { font: 600 clamp(2.4rem, 5.4vw, 4.1rem)/1.04 var(--serif); letter-spacing: -0.015em; margin: 0 0 22px; }
+h1 { text-wrap: balance; font: 600 clamp(2.4rem, 5.4vw, 4.1rem)/1.04 var(--serif); letter-spacing: -0.015em; margin: 0 0 22px; }
 .lede { font-size: 1.28rem; color: var(--ink-soft); max-width: 34em; margin: 0 0 30px; }
 .button { display: inline-block; background: var(--ink); color: #fff; padding: 13px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; }
 .button:hover { background: var(--accent); }
