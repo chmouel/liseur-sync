@@ -8,6 +8,8 @@
 // is fetched until the player is used, so looking at a book does not
 // mint a credential.
 
+import { seekScrubber } from "./audio-seek.js";
+import { installMediaSession } from "./audio-media-session.js";
 import { readerAuth } from "./reader-auth.js";
 import { openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction } from "./reader-session.js";
 import { uploadSessions } from "./reader-session-upload.js";
@@ -430,10 +432,22 @@ function player(section) {
     renderSize(panel.dataset.audioSize || "mini");
   }
 
-  let scrubbing = false;
+  const scrubber = seekScrubber(seek, {
+    onScrub: (target) => {
+      if (currentLabel && Number.isFinite(target)) currentLabel.textContent = clock(target);
+    },
+    onCommit: (target) => {
+      if (!Number.isFinite(target)) return;
+      positioned = true;
+      audio.currentTime = target;
+      timeline();
+    },
+    onCancel: () => timeline(),
+  });
   const timeline = () => {
     const cur = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
     const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : knownDuration;
+    const scrubbing = scrubber.isScrubbing();
     if (currentLabel && !scrubbing) currentLabel.textContent = clock(cur);
     if (durationLabel && dur > 0) durationLabel.textContent = clock(dur);
     if (seek && !scrubbing && dur > 0) {
@@ -446,20 +460,6 @@ function player(section) {
   };
   for (const ev of ["timeupdate", "durationchange", "loadedmetadata", "seeked"]) audio.addEventListener(ev, timeline);
   timeline();
-
-  seek?.addEventListener("input", () => {
-    scrubbing = true;
-    const target = Number(seek.value);
-    if (currentLabel && Number.isFinite(target)) currentLabel.textContent = clock(target);
-  });
-  seek?.addEventListener("change", () => {
-    scrubbing = false;
-    const target = Number(seek.value);
-    if (!Number.isFinite(target)) return;
-    positioned = true;
-    audio.currentTime = target;
-    timeline();
-  });
 
   chapterSelect?.addEventListener("change", () => {
     positioned = true;
@@ -483,15 +483,18 @@ function player(section) {
     audio.addEventListener("loadedmetadata", apply);
   }
 
-  if ("mediaSession" in navigator) {
-    navigator.mediaSession.metadata = new MediaMetadata({
+  installMediaSession(globalThis.navigator?.mediaSession, {
+    Metadata: globalThis.MediaMetadata,
+    metadata: {
       title: section.dataset.title || document.title,
       artist: section.dataset.artist || "",
       artwork: section.dataset.cover ? [{ src: section.dataset.cover }] : [],
-    });
-    navigator.mediaSession.setActionHandler("seekbackward", () => skipBy(-15));
-    navigator.mediaSession.setActionHandler("seekforward", () => skipBy(30));
-  }
+    },
+    handlers: {
+      seekbackward: () => skipBy(-15),
+      seekforward: () => skipBy(30),
+    },
+  });
 
   if (location.hash === "#listen") playButton?.focus();
 }

@@ -2,6 +2,11 @@
 
 import "./reader-engine.js";
 import { audioPanel } from "./reader-audio-panel.js";
+import { seekScrubber } from "./audio-seek.js";
+import { screenWakeLock } from "./audio-wake-lock.js";
+import {
+  installMediaSession, updateMediaPosition, setMediaPlaybackState, clearMediaSession,
+} from "./audio-media-session.js";
 import {
   openSession,
   resolveListeningCheckpointFraction,
@@ -2995,6 +3000,7 @@ document.addEventListener("visibilitychange", () => {
     hideCatchup();
     cancelScheduledPush();
     push();
+    syncWakeLock();
     handleVisibilityHiddenSession({
       session,
       audioSessionOpen: audioSessionOpen(),
@@ -3016,10 +3022,12 @@ document.addEventListener("visibilitychange", () => {
     fractionRetryAttempt = 0;
     scheduleFractionRetry();
   }
+  syncWakeLock();
 });
 window.addEventListener("pageshow", () => {
   leaving = false;
   readingCoordinator?.resume();
+  syncWakeLock();
 });
 window.addEventListener("pagehide", () => {
   lifecycle++;
@@ -3031,6 +3039,7 @@ window.addEventListener("pagehide", () => {
   hideCatchup();
   cancelScheduledPush();
   push();
+  syncWakeLock();
   endSession();
 });
 window.addEventListener("online", () => {
@@ -4914,6 +4923,55 @@ let audioSeekNeedsSTT = false;
 const LIVE_STT_INTERVAL_MS = 30000;
 const LIVE_STT_COOLDOWN_MS = 3500;
 
+// #113: the screen stays on only while this page is playing the
+// audiobook with follow-along on, which is the moment the reader is
+// meant to be watching it. A hidden page cannot hold the lock, and the
+// browser drops it when hidden, so visibilitychange re-syncs.
+let audioWakeLock = null;
+function wantsScreenWakeLock() {
+  return !document.hidden && ready && !!audioBar && !audioBar.hidden && followAudio && audioPlaying();
+}
+function syncWakeLock() {
+  audioWakeLock ??= screenWakeLock();
+  void audioWakeLock.sync(wantsScreenWakeLock());
+}
+
+// #114: the Media Session lives for as long as the audio player is
+// open; metadata is rebuilt when the chapter changes, position state on
+// every timeline tick, and the whole thing is cleared on close.
+const audioMediaSession = typeof navigator !== "undefined" ? navigator.mediaSession : null;
+let audioMediaChapterKey = null;
+
+// The cover is a same-origin cookie route on a normal page; on the
+// detached origin it needs a bearer token, so the blob the reader
+// already fetched for the tab icon stands in.
+function audioMediaArtwork() {
+  try {
+    if (cfg.detached || cfg.offline) {
+      const icon = document.querySelector?.("link[rel=icon]")?.href;
+      return icon ? [{ src: icon }] : [];
+    }
+    const base = new URL(cfg.apiBase || "../", location.href);
+    return [{ src: new URL("books/" + encodeURIComponent(cfg.bookID) + "/cover?size=full", base).href }];
+  } catch {
+    return [];
+  }
+}
+
+function syncAudioMediaMetadata(force = false) {
+  if (!audioMediaSession || audioBar?.hidden) return;
+  const cur = Number.isFinite(audioEl?.currentTime) ? audioEl.currentTime : 0;
+  const chapter = audioChapterAt(cur) || "";
+  const title = bookTitle() || audioInfo?.audiobook?.title || "Audiobook";
+  const key = title + "\u0000" + chapter;
+  if (!force && key === audioMediaChapterKey) return;
+  audioMediaChapterKey = key;
+  installMediaSession(audioMediaSession, {
+    Metadata: globalThis.MediaMetadata,
+    metadata: { title, artist: bookAuthor(), album: chapter, artwork: audioMediaArtwork() },
+  });
+}
+
 // The sentence being read is highlighted, the way the Android read-aloud
 // does it, and following turns the page only once the narrator's words
 // have left it. With the highlight off, following goes by progression.
@@ -4974,6 +5032,7 @@ function setFollowAudio(next) {
   }
   if (audioFromPageBtn) audioFromPageBtn.hidden = followAudio;
   if (audioToAudioBtn) audioToAudioBtn.hidden = followAudio;
+  syncWakeLock();
 }
 
 function setAudioHighlight(next) {
@@ -5446,6 +5505,12 @@ function updateAudioTimelineUI() {
     const ch = audioChapterAt(cur);
     audioChapterLabel.textContent = ch || audioInfo?.audiobook?.title || "Audiobook";
   }
+  syncAudioMediaMetadata();
+  updateMediaPosition(audioMediaSession, {
+    duration: dur,
+    position: cur,
+    playbackRate: audioEl.playbackRate || 1,
+  });
 }
 
 async function syncAudioFromCurrentPage(autoPlay = false) {
@@ -5498,6 +5563,73 @@ async function probeAudiobook() {
 }
 
 if (audioToggleBtn && audioBar && audioEl) {
+  async function startAudioPlayback() {
+    if (!audioEl.paused) return;
+    abortAudioSTT();
+    if (!audioEl.src) {
+      const ok = await mintAudioTicket(false, true);
+      if (!ok) return;
+    }
+    audioWantsPlay = true;
+    await audioEl.play().catch(async () => {
+      if (await mintAudioTicket(true, true)) await audioEl.play().catch(() => {});
+    });
+  }
+
+  function pauseAudioPlayback() {
+    audioWantsPlay = false;
+    audioEl.pause();
+  }
+
+  async function toggleAudioPlayback() {
+    if (audioEl.paused) await startAudioPlayback();
+    else pauseAudioPlayback();
+  }
+
+  function skipAudioBy(by) {
+    abortAudioSTT();
+    const end = Number.isFinite(audioEl.duration) ? audioEl.duration : Infinity;
+    audioEl.currentTime = Math.max(0, Math.min(end, (audioEl.currentTime || 0) + by));
+    updateAudioTimelineUI();
+  }
+
+  function audioChapterStarts() {
+    const chs = audioInfo?.audiobook?.chapters;
+    return Array.isArray(chs) ? chs.map(ch => Number(ch.start)).filter(Number.isFinite) : [];
+  }
+
+  function skipAudioChapter(delta) {
+    const starts = audioChapterStarts();
+    if (!starts.length) return;
+    const t = audioEl.currentTime || 0;
+    let at = -1;
+    for (let i = 0; i < starts.length && t >= starts[i]; i++) at = i;
+    abortAudioSTT();
+    audioEl.currentTime = starts[Math.max(0, Math.min(starts.length - 1, at + delta))];
+    updateAudioTimelineUI();
+  }
+
+  function installAudioMediaHandlers() {
+    if (!audioMediaSession) return;
+    installMediaSession(audioMediaSession, {
+      handlers: {
+        play: () => { void startAudioPlayback(); },
+        pause: () => pauseAudioPlayback(),
+        seekbackward: (details) => skipAudioBy(-(details?.seekOffset || 15)),
+        seekforward: (details) => skipAudioBy(details?.seekOffset || 30),
+        seekto: (details) => {
+          if (!Number.isFinite(details?.seekTime)) return;
+          abortAudioSTT();
+          audioEl.currentTime = details.seekTime;
+          updateAudioTimelineUI();
+        },
+        previoustrack: () => skipAudioChapter(-1),
+        nexttrack: () => skipAudioChapter(1),
+      },
+    });
+    setMediaPlaybackState(audioMediaSession, audioEl.paused ? "paused" : "playing");
+  }
+
   function closeAudioPlayer() {
     audioWantsPlay = false;
     abortAudioSTT();
@@ -5508,6 +5640,9 @@ if (audioToggleBtn && audioBar && audioEl) {
     audioBar.hidden = true;
     audioPanelView.setOpen(false);
     audioToggleBtn.setAttribute("aria-expanded", "false");
+    clearMediaSession(audioMediaSession);
+    audioMediaChapterKey = null;
+    syncWakeLock();
     if (session && session.mode === "listening") {
       void endSession().then(() => {
         if (!session && !audioSessionOpen()) beginSession("reading");
@@ -5525,6 +5660,7 @@ if (audioToggleBtn && audioBar && audioEl) {
     }
     audioPanelView.setOpen(true);
     setFollowAudio(true);
+    installAudioMediaHandlers();
     if (!audioEl.src) {
       await mintAudioTicket(false);
       await syncAudioFromCurrentPage(false);
@@ -5534,59 +5670,40 @@ if (audioToggleBtn && audioBar && audioEl) {
 
   audioCloseBtn?.addEventListener("click", closeAudioPlayer);
 
-  audioPlayBtn?.addEventListener("click", async () => {
-    abortAudioSTT();
-    if (!audioEl.src) {
-      const ok = await mintAudioTicket(false, true);
-      if (!ok) return;
-    }
-    if (audioEl.paused) {
-      audioWantsPlay = true;
-      await audioEl.play().catch(async () => {
-        if (await mintAudioTicket(true, true)) await audioEl.play().catch(() => {});
-      });
-    } else {
-      audioWantsPlay = false;
-      audioEl.pause();
-    }
-  });
+  audioPlayBtn?.addEventListener("click", () => { void toggleAudioPlayback(); });
 
-  audioBackBtn?.addEventListener("click", () => {
-    abortAudioSTT();
-    audioEl.currentTime = Math.max(0, (audioEl.currentTime || 0) - 15);
-    updateAudioTimelineUI();
-  });
+  audioBackBtn?.addEventListener("click", () => skipAudioBy(-15));
 
-  audioFwdBtn?.addEventListener("click", () => {
-    abortAudioSTT();
-    const dur = Number.isFinite(audioEl.duration) ? audioEl.duration : Infinity;
-    audioEl.currentTime = Math.min(dur, (audioEl.currentTime || 0) + 30);
-    updateAudioTimelineUI();
-  });
+  audioFwdBtn?.addEventListener("click", () => skipAudioBy(30));
 
   audioRateSelect?.addEventListener("change", () => {
     const r = Number(audioRateSelect.value);
     if (Number.isFinite(r) && r > 0) audioEl.playbackRate = r;
+    updateAudioTimelineUI();
   });
 
-  audioSeekInput?.addEventListener("input", () => {
-    audioScrubbing = true;
-    abortAudioSTT();
-    const target = Number(audioSeekInput.value);
-    if (audioCurrentLabel && Number.isFinite(target)) {
-      audioCurrentLabel.textContent = formatAudioSeconds(target);
-    }
-  });
-
-  audioSeekInput?.addEventListener("change", () => {
-    const target = Number(audioSeekInput.value);
-    audioScrubbing = false;
-    if (Number.isFinite(target)) {
-      abortAudioSTT();
-      audioEl.currentTime = target;
-      updateAudioTimelineUI();
-    }
-  });
+  if (audioSeekInput) {
+    seekScrubber(audioSeekInput, {
+      onScrub: (target) => {
+        audioScrubbing = true;
+        abortAudioSTT();
+        if (audioCurrentLabel && Number.isFinite(target)) {
+          audioCurrentLabel.textContent = formatAudioSeconds(target);
+        }
+      },
+      onCommit: (target) => {
+        audioScrubbing = false;
+        if (!Number.isFinite(target)) return;
+        abortAudioSTT();
+        audioEl.currentTime = target;
+        updateAudioTimelineUI();
+      },
+      onCancel: () => {
+        audioScrubbing = false;
+        updateAudioTimelineUI();
+      },
+    });
+  }
 
   audioFollowBtn?.addEventListener("click", () => {
     const next = !followAudio;
@@ -5653,6 +5770,8 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioEl.addEventListener("play", () => {
     audioWantsPlay = true;
     abortAudioSTT();
+    setMediaPlaybackState(audioMediaSession, "playing");
+    syncWakeLock();
     if (audioPlayBtn) {
       audioPlayBtn.setAttribute("data-playing", "true");
       audioPlayBtn.setAttribute("aria-label", "Pause audiobook");
@@ -5662,6 +5781,7 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioEl.addEventListener("playing", async () => {
     audioWantsPlay = true;
     audioActivelyPlaying = true;
+    syncWakeLock();
     const playGen = ++audioPlayTransitionGen;
     cancelAudioSTTRequest();
     if (session && session.mode !== "listening") {
@@ -5710,6 +5830,8 @@ if (audioToggleBtn && audioBar && audioEl) {
       audioPlayBtn.setAttribute("aria-label", "Play audiobook");
     }
     pauseListeningInterval();
+    setMediaPlaybackState(audioMediaSession, "paused");
+    syncWakeLock();
     if (document.hidden && !audioSwappingSrc && !audioEl.error) {
       void endSession();
     }
@@ -5732,6 +5854,8 @@ if (audioToggleBtn && audioBar && audioEl) {
   audioEl.addEventListener("ended", () => {
     audioWantsPlay = false;
     pauseListeningInterval();
+    setMediaPlaybackState(audioMediaSession, "none");
+    syncWakeLock();
     void endSession();
   });
 

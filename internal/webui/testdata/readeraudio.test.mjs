@@ -8,6 +8,11 @@ import {
 } from "../static/reader-session.js";
 import * as narrationModule from "../static/reader-narration.js";
 import { sectionHrefIn } from "../static/reader-restore.js";
+import { seekScrubber } from "../static/audio-seek.js";
+import { screenWakeLock } from "../static/audio-wake-lock.js";
+import {
+  installMediaSession, updateMediaPosition, setMediaPlaybackState, clearMediaSession,
+} from "../static/audio-media-session.js";
 
 const source = readFileSync(new URL("../static/reader-app.js", import.meta.url), "utf8");
 const deferred = () => {
@@ -66,6 +71,8 @@ function player() {
     openSession, resolveListeningCheckpointFraction, resolveSessionEndFraction,
     planAudioTicketRefresh, AbortController, URL, console,
     ...narrationModule, sectionHrefIn,
+    seekScrubber, screenWakeLock,
+    installMediaSession, updateMediaPosition, setMediaPlaybackState, clearMediaSession,
     setTimeout(fn, ms) { const id = ++timerID; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
     performance: { now: () => clock.now },
@@ -997,4 +1004,23 @@ test("a speech match moves the highlight to the quoted words", async () => {
   p.audio.seeking = false;
   await tick(p, 150);
   assert.equal(spoken.at(-1), "Sentence number 1 is spoken here.", "a seek forgets the match");
+});
+
+test("a tap on the reader seek bar commits on pointerup without a change event", async () => {
+  const p = player();
+  p.context.audioSeekInput.value = "400";
+  await p.context.audioSeekInput.emit("input");
+  assert.equal(p.run("audioScrubbing"), true);
+  await p.context.audioSeekInput.emit("pointerup");
+  assert.equal(p.audio.currentTime, 400);
+  assert.equal(p.run("audioScrubbing"), false, "the clock must start following playback again");
+});
+
+test("a cancelled touch on the reader seek bar never freezes the clock", async () => {
+  const p = player();
+  p.context.audioSeekInput.value = "300";
+  await p.context.audioSeekInput.emit("input");
+  await p.context.audioSeekInput.emit("touchcancel");
+  assert.equal(p.audio.currentTime, 200, "a cancelled gesture must not seek");
+  assert.equal(p.run("audioScrubbing"), false);
 });

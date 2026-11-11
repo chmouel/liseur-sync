@@ -2993,6 +2993,23 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	.reader-audio-bar button { transition: none; }
 }
 
+/* Audiobook touch targets (#107). A finger gets a 44px target on every
+   small control without the chrome growing: the seek bar keeps its slim
+   track, it just gains a taller hit area. any-pointer catches an iPad
+   with a trackpad attached, whose primary pointer reads as fine. */
+@media (any-pointer: coarse) {
+	.reader-audio-bar .reader-audio-handle { width: 24px; height: 44px; }
+	.reader-audio-bar .reader-audio-size-btn { width: 44px; height: 44px; }
+	#reader-audio-close { width: 44px; height: 44px; }
+	.reader-audio-summary { grid-template-columns: 24px minmax(0, 1fr) 132px 44px 44px; }
+	.reader-audio-bar[data-audio-size="expanded"] .reader-audio-summary {
+		grid-template-columns: 24px minmax(0, 1fr) 44px 44px;
+	}
+	.reader-audio-seek { height: 44px; }
+	.reader-audio-seek::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: -8.5px; }
+	.reader-audio-seek::-moz-range-thumb { width: 20px; height: 20px; }
+}
+
 /* Paper has no rail, no chrome, no buttons and no dark theme: a printed
    page is the content, in black on white, at the full width. */
 @media print {

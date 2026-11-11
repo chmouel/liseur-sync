@@ -338,4 +338,3 @@ test("horizontal touch swipes classify visual page direction and reject non-swip
   assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, cancelled: true }), 0);
   assert.equal(classifySwipe({ pointerType: "touch", dx: -120, dy: 0, dt: 140, exempt: true }), 0);
 });
-

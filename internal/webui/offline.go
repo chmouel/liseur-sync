@@ -78,6 +78,9 @@ var offlineAssetTypes = map[string]string{
 }
 
 var offlineReaderAssets = map[string]string{
+	"audio-media-session.js":    "application/javascript; charset=utf-8",
+	"audio-seek.js":             "application/javascript; charset=utf-8",
+	"audio-wake-lock.js":        "application/javascript; charset=utf-8",
 	"offline-account.js":        "application/javascript; charset=utf-8",
 	"offline-storage.js":        "application/javascript; charset=utf-8",
 	"offline-sync.js":           "application/javascript; charset=utf-8",
