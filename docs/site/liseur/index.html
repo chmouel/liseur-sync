@@ -54,7 +54,7 @@
       <ol class="steps">
         <li><h3>Install Liseur</h3><p>From Google Play, F-Droid or the GitHub releases.</p></li>
         <li><h3>Open Settings, then Book server</h3><p>Choose liseur-sync as the kind of server.</p></li>
-        <li><h3>Enter the address, your username and password</h3><p>Tap Connect. Liseur uses the password once to ask the server for a device token with the permissions it needs, then drops it. Only the token stays on the phone.</p></li>
+        <li><h3>Enter the address, your username and password</h3><p>Tap Connect. Liseur doesn't keep your password on the phone.</p></li>
       </ol>
       <p class="prose">If you would rather not type a password, make a token on the Apps tab of the server's Devices page and paste it in instead. Either way you can revoke it there at any time.</p>
       <p class="prose">Use an <code>https</code> address. Plain <code>http</code> for a server on your home network works only if the server's owner has allowed it.</p>
@@ -82,7 +82,7 @@
     <div class="row flip">
       <div class="text">
         <h3>Your place, down to the sentence</h3>
-        <p>Positions use full reading locators, so a sentence on the phone is the same place in the web reader or on another device. The server keeps a log of positions, and a retry after a bad connection never creates a second copy.</p>
+        <p>Stop mid-paragraph on the phone and the web reader or your other devices open the book on that same sentence.</p>
 
       </div>
       <div class="stage sm"><figure class="phone"><div class="screen"><img src="../img/liseur/02-reading.webp" width="540" height="1212" alt="A page of Moby Dick in Liseur's reading view."></div></figure></div>
@@ -90,7 +90,7 @@
     <div class="row">
       <div class="text">
         <h3>Highlights, notes and bookmarks</h3>
-        <p>Recolour a highlight, add a note to it or delete it, and the change reaches your other devices as a change to that same highlight, not as another copy.</p>
+        <p>Recolour a highlight, add a note to it or delete it, and your other devices show the change.</p>
 
       </div>
       <div class="stage sm"><figure class="phone"><div class="screen"><img src="../img/liseur/06-highlights.webp" width="540" height="1212" alt="The Navigate sheet listing highlights from Moby Dick, each with its chapter and page."></div></figure></div>
@@ -99,7 +99,6 @@
       <div class="text">
         <h3>Reading statistics from every device</h3>
         <p>Time read, day streak, sittings and pace, added up across every device the server knows about, for the last 30 days or another range.</p>
-        <span class="tag">needs the read-insights permission</span>
       </div>
       <div class="stage sm"><figure class="phone"><div class="screen"><img src="../img/liseur/18-stats.webp" width="540" height="1212" alt="The Reading stats screen: 17 hours 28 minutes in the last 30 days, a day streak and a chart of each day."></div></figure></div>
     </div>
@@ -107,7 +106,6 @@
       <div class="text">
         <h3>Send books from the phone</h3>
         <p>A book that is only on the phone can be sent to a folder on the server that accepts uploads. Books in those folders can be deleted from the server too.</p>
-        <span class="tag">library-upload and library-delete</span>
       </div>
       <div class="stage sm"><figure class="phone"><div class="screen"><img src="../img/liseur/15-upload-offer.webp" width="540" height="1212" alt="A dialog asking whether to send books that are only on this device to the server."></div></figure></div>
     </div>
@@ -115,7 +113,7 @@
       <div class="text">
         <h3>Translations shared between devices</h3>
         <p>Sentences translated as you read are cached on the server for your account. A second device reading the same book pulls them instead of calling the translation service again.</p>
-        <p>The sentence itself never leaves the phone. The server gets a hash of it and the translation.</p>
+        <p>The sentence you translated is never sent to the server.</p>
 
       </div>
       <div class="stage sm"><figure class="phone"><div class="screen"><img src="../img/liseur/27-translation.webp" width="540" height="1212" alt="A page of Moby Dick translated into French, sentence by sentence."></div></figure></div>
@@ -128,13 +126,13 @@
   <div class="wrap">
     <h2 id="all-title" class="prose">Everything it supports</h2>
     <table class="clients">
-      <tr><th scope="row">Browse and search</th><td>The server's whole catalog, as far as your account's folders reach.</td></tr>
+      <tr><th scope="row">Browse and search</th><td>Every book on the server that your account can see.</td></tr>
       <tr><th scope="row">Download</th><td>One book at a time, or all of them.</td></tr>
-      <tr><th scope="row">Reading position</th><td>Full reading locators, exact to the sentence.</td></tr>
+      <tr><th scope="row">Reading position</th><td>Exact to the sentence.</td></tr>
       <tr><th scope="row">Highlights, notes and bookmarks</th><td>Kept in step across devices.</td></tr>
       <tr><th scope="row">Reading statistics</th><td>Added up across every device.</td></tr>
       <tr><th scope="row">Upload and delete</th><td>For folders on the server that accept uploads.</td></tr>
-      <tr><th scope="row">Series</th><td>Your own series names and order, kept on top of the library's without changing it.</td></tr>
+      <tr><th scope="row">Series</th><td>Rename a series or reorder it for yourself, without touching the library.</td></tr>
       <tr><th scope="row">Settings backup</th><td>Your appearance and reading settings, saved on the server for this phone.</td></tr>
       <tr><th scope="row">Translation cache</th><td>Shared between your devices.</td></tr>
       <tr><th scope="row">Book details</th><td>Subtitle, description, publisher, date, contributors, subjects, languages and identifiers.</td></tr>
@@ -146,7 +144,7 @@
   <div class="wrap">
     <h2 id="also-title" class="prose">And the app itself</h2>
     <div class="prose">
-      <p>Liseur draws books with the Readium engine and has light, sepia, dark and low-light themes, adjustable type and margins, a dictionary, read aloud with your device's voices, home-screen widgets and a reading companion that answers questions about characters from the pages you have already read.</p>
+      <p>Liseur has light, sepia, dark and low-light themes, adjustable type and margins, a dictionary, read aloud with your device's voices, home-screen widgets and a reading companion that answers questions about characters from the pages you have already read.</p>
       <p>Its own code has no ads, trackers or analytics. The <a href="https://github.com/chmouel/liseur">repository</a> has the full list, and the <a href="https://chmouel.github.io/liseur/PRIVACY">privacy policy</a> says which services it talks to.</p>
     </div>
   </div>

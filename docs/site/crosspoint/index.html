@@ -46,7 +46,7 @@
     <h2 id="before">Before you start</h2>
     <ul>
       <li>An account on your liseur-sync server, the one you sign into with a username and password.</li>
-      <li>An Xteink X3 or X4 running CrossPoint, connected to Wi-Fi. The screenshots here come from CrossPoint 2.0.0, so menus on other versions may differ slightly.</li>
+      <li>An Xteink X3 or X4 running CrossPoint, connected to Wi-Fi.</li>
       <li>A computer to read the codes from the website and to copy the statistics plugin onto the reader.</li>
     </ul>
   </div>
@@ -115,7 +115,7 @@
       <div class="n" aria-hidden="true">4</div>
       <div class="text">
         <h3>Download the statistics plugin</h3>
-        <p>The plugin sends how long you read to the <b>Insights</b> page. It needs CrossPoint firmware that reports reading sessions, which its documentation calls <code>reader.session</code>. A Plugins menu alone does not prove that, so check your firmware's release notes.</p>
+        <p>The plugin sends how long you read to the <b>Insights</b> page. It needs a recent CrossPoint, so update the reader first if you haven't for a while.</p>
         <p>Back on the <b>E-readers</b> tab, open your reader's entry under <b>KOReader (kosync)</b> and expand <b>CrossPoint reading statistics</b>. Type the pairing code from step 1 and press <b>Enable statistics &amp; download plugin</b>. You get <code>liseur-stats.zip</code>.</p>
         <p class="warn">From now on this reader's reading time comes only from the plugin, so install it straight away. The ZIP holds a login for your reader. Keep it private.</p>
       </div>
@@ -151,7 +151,6 @@
 <section class="block" id="check" aria-labelledby="check-title">
   <div class="wrap">
     <h2 id="check-title">What you'll see</h2>
-    <p class="prose">These screenshots come from the CrossPoint simulator running firmware 2.0.0, set up with the steps above against a real liseur-sync server. Your books will differ.</p>
     <div class="seen">
       <figure class="device"><div class="bezel"><img loading="lazy" src="../img/cp-2-signup.png" width="528" height="792" alt="CrossPoint saying Account created, CrossPoint sync is ready to use."></div>
         <figcaption><strong>Signed up</strong>The reader is paired with your account.</figcaption></figure>
@@ -214,20 +213,16 @@
       </details>
       <details>
         <summary>Liseur reading statistics is not in the Plugins list</summary>
-        <p>Check that <code>device.json</code> is directly inside <code>plugins/liseur-stats/</code>. A ZIP left on the reader, or a second <code>liseur-stats</code> folder inside the first, will not load. Restart the reader after enabling plugins. If it is still missing, your firmware may not support plugins or <code>reader.session</code>.</p>
+        <p>Check that <code>device.json</code> is directly inside <code>plugins/liseur-stats/</code>. A ZIP left on the reader, or a second <code>liseur-stats</code> folder inside the first, will not load. Restart the reader after enabling plugins. If it is still missing, update CrossPoint.</p>
       </details>
       <details>
         <summary>My position syncs but no reading time appears</summary>
-        <p>Close and reopen the book after installing the plugin, since a session that started earlier is ignored. Read for a few minutes turning pages forward, spending at least a couple of seconds on each, then close the book or put the reader to sleep with Wi-Fi in reach. Backward turns and chapter jumps don't count, and a session under ten seconds is not sent.</p>
-        <p>Offline reading is kept in a small queue and sent later. A very long time offline can fill it and lose the oldest records, and the server does not guess the missing time.</p>
+        <p>Close and reopen the book after installing the plugin, since a session that started earlier is ignored. Read for a few minutes, turning pages forward, then close the book or put the reader to sleep with Wi-Fi in reach. Only forward page turns count.</p>
+        <p>Reading done offline is sent the next time the reader connects. After a very long time offline some of it can be lost, so connect now and then.</p>
       </details>
       <details>
         <summary>The same book shows up twice or doesn't share its position</summary>
         <p>Set <b>Document Matching</b> to <b>Binary</b> in CrossPoint Sync, and read the EPUB exactly as it came from the server. A converted or optimised copy looks like a different book.</p>
-      </details>
-      <details>
-        <summary>My server lives under a path, like example.com/books</summary>
-        <p>The sync address still starts at the top of the host: <code>https://example.com/adapter/kosync</code>. Whoever runs the server has to pass that path through the proxy as it is. The <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/deployment.md#serving-below-a-path-prefix">deployment guide</a> covers it.</p>
       </details>
     </div>
   </div>

@@ -112,8 +112,7 @@
 <section class="block" id="check" aria-labelledby="check-title">
   <div class="wrap">
     <h2 id="check-title">What you'll see</h2>
-    <p class="prose">These are screenshots from a real KOReader set up with this file. Your books will differ.</p>
-    <div class="seen">
+        <div class="seen">
       <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-2-catalogs.png" width="758" height="1024" alt="KOReader's OPDS catalog list with Liseur Sync in it."></div>
         <figcaption><strong>Liseur Sync in the catalog list</strong>The padlock shows it has a login.</figcaption></figure>
       <figure class="device"><div class="bezel"><img loading="lazy" src="../img/ko-3-library.png" width="758" height="1024" alt="The list of books on the server."></div>
@@ -165,7 +164,7 @@
       </details>
       <details>
         <summary>There is no KoInsight entry in Tools</summary>
-        <p>The e-reader was offline at the first start. Turn on Wi-Fi and restart KOReader. The plugin comes from its public project at one fixed version, and each file is checked against a known checksum before it is installed, so a changed file is refused.</p>
+        <p>The e-reader was offline at the first start. Turn on Wi-Fi and restart KOReader.</p>
       </details>
       <details>
         <summary>Liseur Sync asks for a login</summary>
@@ -173,11 +172,11 @@
       </details>
       <details>
         <summary>My reading position isn't saved</summary>
-        <p>Open a book and go to <b>Tools</b>, then <b>Progress sync</b>. It should say <b>Logout</b>, which means it is signed in, with <b>Automatically keep documents in sync</b> ticked. <b>Push progress from this device now</b> sends it immediately. Your server must use <code>https</code> unless its owner allowed plain <code>http</code>.</p>
+        <p>Open a book and go to <b>Tools</b>, then <b>Progress sync</b>. It should say <b>Logout</b>, which means it is signed in, with <b>Automatically keep documents in sync</b> ticked. <b>Push progress from this device now</b> sends it immediately.</p>
       </details>
       <details>
         <summary>Can I see book covers while browsing?</summary>
-        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. OPDS Plus reads the newer OPDS 2.0 catalog at the address ending in <code>/opds/v2</code>, which shows series in reading order and puts your folders, shelves and newest books on separate rows. If OPDS Plus is installed when the setup file runs, it adds that catalog to OPDS Plus as <b>Liseur Sync</b> for you. Install the plugin before you delete the setup file, or add the address yourself with the same login. To sync new books through it, use the address ending in <code>/opds/v2/new</code>.</p>
+        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. With it your series appear in reading order, and your folders, shelves and newest books get their own rows. Install it before you delete the setup file and the setup adds your library to it as <b>Liseur Sync</b>. Otherwise add the address ending in <code>/opds/v2</code> yourself, with the same login.</p>
       </details>
       <details>
         <summary>My device can't use patches</summary>
