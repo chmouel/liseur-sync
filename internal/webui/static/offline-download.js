@@ -6,6 +6,7 @@ import {
   deploymentPrefix,
   downloadPublication,
   getReadySnapshot,
+  offlineShelfURL,
   removeBookSnapshots,
   storagePartition,
   notifyOfflineChange,
@@ -32,8 +33,25 @@ if (buttons.length) {
     const status = statusFor(button);
     if (status) {
       status.textContent = text;
+      status.dataset.saved = "";
       status.classList.toggle("problem", error);
     }
+  };
+  // A saved copy is something the reader can go and look at — and free
+  // space in — before the network is gone, so the confirmation is the
+  // way to the shelf rather than a dead label beside the button.
+  const saySaved = button => {
+    const status = statusFor(button);
+    if (!status || status.dataset.saved === "1") return;
+    const link = document.createElement("a");
+    link.className = "offline-status-link";
+    link.href = offlineShelfURL();
+    link.title = "Open the offline shelf";
+    link.textContent = "Saved offline";
+    status.textContent = "";
+    status.classList.remove("problem");
+    status.append(link);
+    status.dataset.saved = "1";
   };
 
   // Every caller passes a guard, re-checked after the read: a state read
@@ -49,7 +67,8 @@ if (buttons.length) {
     if (!guard()) return false;
     button.textContent = snapshot ? "Remove offline copy" : "Save offline";
     button.dataset.offlineReady = snapshot ? "1" : "";
-    say(button, snapshot ? "Saved offline" : "");
+    if (snapshot) saySaved(button);
+    else say(button, "");
     return true;
   };
   // No operation newer than the caller is using this button.

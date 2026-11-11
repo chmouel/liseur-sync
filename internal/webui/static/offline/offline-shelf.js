@@ -13,15 +13,31 @@ import {
 import { offlineSync } from "./assets/offline-sync.js";
 import { refreshRunner } from "./assets/pull-refresh.js";
 import { armPull, pullIndicator } from "./assets/pull-refresh-dom.js";
+import {
+  authorFor,
+  coverSource,
+  formatLabel,
+  initialFor,
+  networkPresentation,
+  progressClass,
+  progressFor,
+  progressLabel,
+  removalGuard,
+  savedLabel,
+  sizeLabel,
+  titleFor,
+} from "./offline-shelf-model.js";
 
 const status = document.getElementById("offline-status");
+const notice = document.getElementById("offline-notice");
 const books = document.getElementById("offline-books");
+const brand = document.getElementById("offline-brand");
+const libraryLink = document.getElementById("offline-open-library");
+const networkNote = document.getElementById("offline-network-note");
+const brandHref = brand?.getAttribute("href") || "";
 let coordinators = [];
 let renderGeneration = 0;
 let shelfRedrawGeneration = 0;
-const savedDateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short", day: "numeric", year: "numeric",
-});
 
 // Pulling the shelf down and pressing the button are the same errand:
 // send what this device owes, then draw what is actually saved here.
@@ -67,145 +83,176 @@ function message(text, error = false) {
   status.classList.toggle("problem", error);
 }
 
-function titleFor(snapshot) {
-  const title = typeof snapshot.title === "string" && snapshot.title.trim()
-    ? snapshot.title.trim()
-    : "Untitled book";
-  return title;
+function announce(text) {
+  if (notice) notice.textContent = text;
 }
 
-function authorFor(snapshot) {
-  return typeof snapshot.author === "string" ? snapshot.author.trim() : "";
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-function initialFor(snapshot) {
-  const first = titleFor(snapshot).match(/\p{L}|\p{N}/u)?.[0];
-  return (first || "•").toUpperCase();
+// The library is a network away and an installed app has no back
+// button, so while the network is gone the header stops offering it and
+// says why in its place. offline-net.js has already put the browser's
+// own answer on the document before the first paint; this only brings
+// the rest of the header — and the keyboard — into line with it.
+function applyNetwork() {
+  const state = networkPresentation(navigator.onLine !== false);
+  if (libraryLink) libraryLink.hidden = state.library === "hidden";
+  if (networkNote) {
+    networkNote.textContent = state.note;
+    networkNote.hidden = !state.note;
+  }
+  if (!brand) return;
+  if (state.brand === "link") {
+    brand.setAttribute("href", brandHref);
+    brand.removeAttribute("aria-disabled");
+    brand.removeAttribute("tabindex");
+  } else {
+    brand.removeAttribute("href");
+    brand.setAttribute("aria-disabled", "true");
+    brand.setAttribute("tabindex", "-1");
+  }
 }
 
-function positionsLabel(snapshot) {
-  const count = Array.isArray(snapshot?.positions?.positions)
-    ? snapshot.positions.positions.length
-    : 0;
-  return `${count} reading position${count === 1 ? "" : "s"} ready offline`;
+addEventListener("online", applyNetwork);
+addEventListener("offline", applyNetwork);
+applyNetwork();
+
+function artFor(snapshot) {
+  const art = element("span", "offline-book-art");
+  art.setAttribute("aria-hidden", "true");
+  const cover = coverSource(snapshot);
+  if (cover) {
+    const img = document.createElement("img");
+    img.className = "offline-book-cover";
+    img.src = cover;
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "lazy";
+    art.append(img);
+    art.classList.add("has-cover");
+  }
+  art.append(element("span", "offline-book-initial", initialFor(snapshot)));
+  return art;
 }
 
-function progressFor(snapshot) {
-  const total = snapshot?.localPosition?.locator?.locations?.totalProgression;
-  if (typeof total === "number" && Number.isFinite(total) && total >= 0 && total <= 1) return total;
-  const own = snapshot?.localPosition?.progression;
-  if (typeof own === "number" && Number.isFinite(own) && own >= 0 && own <= 1) return own;
-  return null;
+function copyFor(snapshot) {
+  const copy = element("div", "offline-book-copy");
+  copy.append(element("span", "offline-book-eyebrow", savedLabel(snapshot)));
+  const heading = element("h2", "offline-book-heading");
+  heading.append(element("span", "offline-book-title", titleFor(snapshot)));
+  copy.append(heading);
+  const author = authorFor(snapshot);
+  if (author) copy.append(element("span", "offline-book-author", author));
+  const facts = element("span", "offline-book-facts");
+  facts.append(element("span", "offline-book-badge", formatLabel(snapshot)));
+  const size = sizeLabel(snapshot.bytes);
+  if (size) facts.append(element("span", "offline-book-badge", size));
+  copy.append(facts);
+  const progress = progressFor(snapshot);
+  if (progress !== null) {
+    const label = element("span", "offline-book-progress-label", progressLabel(progress));
+    label.setAttribute("aria-hidden", "true");
+    copy.append(label);
+    const rail = element("span", "offline-book-progress");
+    rail.setAttribute("role", "progressbar");
+    rail.setAttribute("aria-label", `${titleFor(snapshot)} reading progress`);
+    rail.setAttribute("aria-valuemin", "0");
+    rail.setAttribute("aria-valuemax", "100");
+    rail.setAttribute("aria-valuenow", String(Math.round(progress * 100)));
+    rail.setAttribute("aria-valuetext", progressLabel(progress));
+    rail.append(element("span", progressClass(progress)));
+    copy.append(rail);
+  }
+  return copy;
 }
 
-function progressPercent(progress) {
-  return Math.max(0, Math.min(100, Math.round(progress * 20) * 5));
-}
+// actionsFor is the one part of a card that is a decision rather than a
+// description. A saved copy can be hundreds of megabytes and getting it
+// back needs the network that may be gone, so forgetting one takes two
+// presses and the question is asked in the card, with its cost beside it.
+function actionsFor(snapshot, { partition, account, context, generation, redraw }) {
+  const actions = element("div", "offline-book-actions");
+  const title = titleFor(snapshot);
+  const size = sizeLabel(snapshot.bytes);
 
-function progressClass(progress) {
-  return `p${progressPercent(progress)}`;
-}
+  const quiet = element("button", "button secondary offline-book-remove", "Remove");
+  quiet.type = "button";
+  quiet.setAttribute("aria-label", size
+    ? `Remove “${title}” from this device, ${size} saved`
+    : `Remove “${title}” from this device`);
 
-function progressLabel(progress) {
-  return progress >= 1 ? "Finished" : `${Math.round(progress * 100)}% read`;
-}
+  const question = element("div", "offline-book-confirm");
+  question.hidden = true;
+  question.append(element("p", "offline-book-ask", "Remove from this device?"));
+  question.append(element("p", "offline-book-hint",
+    size ? `${size} will be freed.` : "The saved copy will be deleted."));
+  const choices = element("div", "offline-book-choices");
+  const keep = element("button", "button secondary offline-book-keep", "Keep");
+  keep.type = "button";
+  const confirm = element("button", "button danger offline-book-confirmed", "Remove");
+  confirm.type = "button";
+  choices.append(keep, confirm);
+  question.append(choices);
 
-function savedLabel(snapshot) {
-  const stamp = Number(snapshot.readyAt || snapshot.createdAt || 0);
-  if (!stamp) return "Saved on this device";
-  return `Saved ${savedDateFormatter.format(new Date(stamp))}`;
+  const remove = async () => {
+    quiet.disabled = true;
+    confirm.disabled = true;
+    try {
+      await removeBookSnapshots({ partition, account, epoch: context.epoch, bookID: snapshot.bookID });
+      notifyOfflineChange();
+      announce(`“${title}” was removed from this device.`);
+      await refreshBooks(partition, account, context, generation, redraw);
+      status?.focus();
+    } catch (error) {
+      quiet.disabled = false;
+      confirm.disabled = false;
+      guard.cancel();
+      message(error.message || "The offline copy could not be removed.", true);
+    }
+  };
+
+  const guard = removalGuard({
+    arm() {
+      quiet.hidden = true;
+      question.hidden = false;
+      announce(`Remove “${title}” from this device?${size ? ` ${size} will be freed.` : ""}`);
+      keep.focus();
+    },
+    disarm() {
+      question.hidden = true;
+      quiet.hidden = false;
+      announce(`“${title}” stays on this device.`);
+      quiet.focus();
+    },
+    confirm: () => { void remove(); },
+  });
+
+  quiet.addEventListener("click", () => guard.press());
+  confirm.addEventListener("click", () => guard.press());
+  keep.addEventListener("click", () => guard.cancel());
+  actions.append(quiet, question);
+  return actions;
 }
 
 function drawBooks(snapshots, { partition, account, context, generation, redraw }) {
   if (!books || generation !== renderGeneration || redraw !== shelfRedrawGeneration) return;
   books.textContent = "";
   if (!snapshots.length) {
-    message("No books have been saved for offline reading yet.");
+    message("Nothing saved yet — save a book from its page and it will be here without a connection.");
     return;
   }
-  message(`${snapshots.length} book${snapshots.length === 1 ? "" : "s"} saved offline.`);
+  message(`${snapshots.length === 1 ? "One book is" : `${snapshots.length} books are`} saved for offline.`);
   for (const snapshot of snapshots) {
-    const item = document.createElement("article");
-    item.className = "offline-book";
-    const body = document.createElement("a");
-    body.className = "offline-book-main";
+    const item = element("article", "offline-book");
+    const body = element("a", "offline-book-main");
     body.href = `./read/?book=${encodeURIComponent(snapshot.bookID)}`;
-    const art = document.createElement("span");
-    art.className = "offline-book-art";
-    art.setAttribute("aria-hidden", "true");
-    const initial = document.createElement("span");
-    initial.className = "offline-book-initial";
-    initial.textContent = initialFor(snapshot);
-    art.append(initial);
-    body.append(art);
-    const copy = document.createElement("div");
-    copy.className = "offline-book-copy";
-    const eyebrow = document.createElement("span");
-    eyebrow.className = "offline-book-eyebrow";
-    eyebrow.textContent = savedLabel(snapshot);
-    copy.append(eyebrow);
-    const heading = document.createElement("h2");
-    heading.className = "offline-book-heading";
-    const link = document.createElement("span");
-    link.className = "offline-book-title";
-    link.textContent = titleFor(snapshot);
-    heading.append(link);
-    copy.append(heading);
-    const author = authorFor(snapshot);
-    if (author) {
-      const byline = document.createElement("span");
-      byline.className = "offline-book-author";
-      byline.textContent = author;
-      copy.append(byline);
-    }
-    const meta = document.createElement("span");
-    meta.className = "offline-book-meta";
-    meta.textContent = positionsLabel(snapshot);
-    copy.append(meta);
-    const progress = progressFor(snapshot);
-    if (progress !== null) {
-      const progressText = document.createElement("span");
-      progressText.className = "offline-book-progress-label";
-      progressText.setAttribute("aria-hidden", "true");
-      progressText.textContent = progressLabel(progress);
-      copy.append(progressText);
-      const rail = document.createElement("span");
-      rail.className = "offline-book-progress";
-      const percent = Math.round(progress * 100);
-      rail.setAttribute("role", "progressbar");
-      rail.setAttribute("aria-label", `${titleFor(snapshot)} reading progress`);
-      rail.setAttribute("aria-valuemin", "0");
-      rail.setAttribute("aria-valuemax", "100");
-      rail.setAttribute("aria-valuenow", String(percent));
-      rail.setAttribute("aria-valuetext", progressLabel(progress));
-      const fill = document.createElement("span");
-      fill.className = progressClass(progress);
-      rail.append(fill);
-      copy.append(rail);
-    }
-    body.append(copy);
-    item.append(body);
-    const actions = document.createElement("div");
-    actions.className = "offline-book-actions";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "button secondary";
-    remove.textContent = "Remove";
-    remove.addEventListener("click", async () => {
-      remove.disabled = true;
-      try {
-        await removeBookSnapshots({
-          partition, account, epoch: context.epoch, bookID: snapshot.bookID,
-        });
-        notifyOfflineChange();
-        await refreshBooks(partition, account, context, generation, shelfRedrawGeneration);
-      } catch (error) {
-        remove.disabled = false;
-        message(error.message || "The offline copy could not be removed.", true);
-      }
-    });
-    actions.append(remove);
-    item.append(actions);
+    body.append(artFor(snapshot), copyFor(snapshot));
+    item.append(body, actionsFor(snapshot, { partition, account, context, generation, redraw }));
     books.append(item);
   }
 }

@@ -230,6 +230,33 @@ try {
   assert.notEqual(inspect.title, 'pwned');
   assert.equal(inspect.hostile, false);
   assert(inspect.nonce, 'offline reader has a script nonce');
+  // #106: waiting on a network is the reader's business, so the control
+  // that answers it lives on the top bar with the rest of the controls
+  // and inside its bounds, never behind it.
+  const syncPill = await offline.evaluate(`(() => {
+    const pill = document.getElementById('reader-offline-sync');
+    const bar = document.querySelector('.reader-bar');
+    if (!pill || !bar) return null;
+    const box = pill.getBoundingClientRect();
+    const barBox = bar.getBoundingClientRect();
+    return {
+      inBar: bar.contains(pill),
+      visible: box.width > 0 && box.height > 0 &&
+        box.top >= barBox.top - 1 && box.bottom <= barBox.bottom + 1,
+      state: pill.dataset.state,
+      text: pill.textContent.trim(),
+      retry: pill.querySelector('.reader-offline-sync-retry')?.textContent.trim() || '',
+      retryHidden: !!pill.querySelector('.reader-offline-sync-retry')?.hidden,
+    };
+  })()`);
+  assert(syncPill, 'the offline reader offers a sync control');
+  assert.equal(syncPill.inBar, true, 'the sync control belongs in the reader top bar');
+  assert.equal(syncPill.visible, true, 'the sync control must not be drawn behind the top bar');
+  assert.equal(syncPill.state, 'waiting');
+  assert.match(syncPill.text, /Waiting to sync/);
+  assert.equal(syncPill.retry, 'Try again');
+  assert.equal(syncPill.retryHidden, false);
+  console.log('PASS the sync control sits in the top bar, not behind it');
   await offline.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))`);
   let saved = await wait(offline, `(async () => {
     const s = await import('../assets/offline-storage.js');

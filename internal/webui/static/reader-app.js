@@ -539,8 +539,40 @@ function current(stamp) {
     stamp.view === view && stamp.lifecycle === lifecycle;
 }
 
+// readerSyncState puts the offline reader's account of its own queue in
+// the top bar, beside the controls the reader already reaches for.
+// A queued change means a network, and the offline reader is the page
+// most likely to be waiting on one: it says so where it can be seen and
+// tapped, and a synced queue says that instead of offering a button.
+function readerSyncState(trigger) {
+  const wrap = document.createElement("div");
+  wrap.className = "reader-offline-sync";
+  wrap.id = "reader-offline-sync";
+  const text = document.createElement("span");
+  text.className = "reader-offline-sync-state";
+  text.setAttribute("role", "status");
+  text.setAttribute("aria-live", "polite");
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "reader-offline-sync-retry";
+  retry.textContent = "Try again";
+  retry.addEventListener("click", () => trigger());
+  wrap.append(text, retry);
+  document.querySelector(".reader-actions")?.prepend(wrap);
+  const set = state => {
+    const synced = state === "synced";
+    wrap.dataset.state = synced ? "synced" : "waiting";
+    text.textContent = synced ? "Synced" : "Waiting to sync";
+    retry.hidden = synced;
+    retry.setAttribute("aria-label", synced ? "Synced" : "Try again: waiting to sync");
+  };
+  set("waiting");
+  return { set };
+}
+
 function prepareOfflineSync() {
   if (!offlineContext) return;
+  const syncState = readerSyncState(() => offlineCoordinator?.trigger());
   offlineCoordinator = offlineSync({
     context: offlineContext, base: offlineBase,
     onChange: async () => {
@@ -553,15 +585,12 @@ function prepareOfflineSync() {
       await resolveAnnotationConflicts();
       await retryUnrestoredAnnotations();
     },
-    onStatus: message => say(message, !!message),
+    onStatus: message => {
+      say(message, !!message);
+      syncState.set(message ? "waiting" : "synced");
+    },
     onStuck: showStuck,
   });
-  const retry = document.createElement("button");
-  retry.type = "button";
-  retry.className = "button secondary";
-  retry.textContent = "Retry sync";
-  retry.addEventListener("click", () => offlineCoordinator.trigger());
-  status.after(retry);
   offlineCoordinator.trigger();
 }
 

@@ -306,6 +306,74 @@ func TestUILinksToRelativeOfflineInstallSurface(t *testing.T) {
 	}
 }
 
+// TestRailReachesTheOfflineShelfProgressively pins the entry that makes
+// the shelf findable before the network is gone. It ships hidden and a
+// script reveals it, because a browser without a service worker can
+// never keep the shelf reachable and must not be offered it.
+func TestRailReachesTheOfflineShelfProgressively(t *testing.T) {
+	ts, _ := testServer(t)
+	cookie := loginCookie(t, ts)
+	code, body := page(t, ts, cookie, "/ui/library")
+	if code != http.StatusOK {
+		t.Fatalf("library: got %d", code)
+	}
+	if !strings.Contains(body, `href="offline/" data-rail-offline hidden`) {
+		t.Fatalf("the rail does not carry a hidden Offline entry: %s", body)
+	}
+	if !strings.Contains(body, `src="static/offline-rail.js"`) {
+		t.Fatal("the page does not load the script that reveals the entry")
+	}
+	// Between the two places books live, not after the account pages.
+	library := strings.Index(body, `href="library"`)
+	offline := strings.Index(body, `data-rail-offline`)
+	insights := strings.Index(body, `href="insights"`)
+	if library < 0 || offline < library || insights < offline {
+		t.Fatalf("the Offline entry is not between Library and Insights: %d %d %d",
+			library, offline, insights)
+	}
+	// The shelf itself is a page of the online UI too, not only a
+	// fallback the service worker produces when the network is gone.
+	code, shell := page(t, ts, cookie, "/ui/offline/")
+	if code != http.StatusOK || !strings.Contains(shell, "Offline shelf") {
+		t.Fatalf("the shelf is not reachable online: %d", code)
+	}
+}
+
+// TestOfflineShellDecidesItsLibraryLinkBeforePaint: the installed app
+// has no back button, so the shelf must never paint a link the device
+// cannot follow. offline-net.js answers on <html> while the head is
+// parsed, and the stylesheet trusts that answer alone.
+func TestOfflineShellDecidesItsLibraryLinkBeforePaint(t *testing.T) {
+	assets := map[string][]byte{}
+	for _, name := range []string{"shell.html", "offline.css"} {
+		data, err := fs.ReadFile(staticFS, "static/offline/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assets[name] = data
+	}
+	shell := string(assets["shell.html"])
+	for _, want := range []string{
+		`<script src="./offline-net.js"></script>`,
+		`id="offline-open-library"`,
+		`class="btn offline-needs-network"`,
+		`id="offline-network-note"`,
+		`You're offline, your library will be back when you reconnect.`,
+		`id="offline-brand"`,
+	} {
+		if !strings.Contains(shell, want) {
+			t.Errorf("the offline shell is missing %q", want)
+		}
+	}
+	if strings.Index(shell, "offline-net.js") > strings.Index(shell, `<link rel="stylesheet"`) {
+		t.Fatal("the network script must run before the first paint, not after the stylesheets")
+	}
+	css := string(assets["offline.css"])
+	if !strings.Contains(css, `html[data-connection="online"] .offline-needs-network`) {
+		t.Fatal("the stylesheet does not hold the library link back until the network says so")
+	}
+}
+
 func TestSeparateReaderOriginDisablesOfflineSurface(t *testing.T) {
 	ts, _ := testServerCfg(t, func(cfg *config.Config) {
 		cfg.ReaderOrigin = "https://reader.example.com"

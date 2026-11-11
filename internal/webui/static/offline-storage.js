@@ -38,6 +38,12 @@ export function storagePartition(here = globalThis.location) {
   return url.origin + url.pathname;
 }
 
+// Absolute under the deployment prefix, so it reads the same from a book
+// page and from the library.
+export function offlineShelfURL(here = globalThis.location) {
+  return deploymentPrefix(here) + "ui/offline/";
+}
+
 export function snapshotKey({ partition, account, bookID, digest, generation }) {
   return [partition, account, bookID, digest, generation].join(separator);
 }
@@ -1313,6 +1319,45 @@ async function sha256(bytes) {
   return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
 }
 
+// A thumbnail is a few kilobytes; anything that says otherwise is not a
+// cover this shelf wants to carry twice.
+const COVER_LIMIT = 512 * 1024;
+
+function base64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk)
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  return btoa(binary);
+}
+
+/**
+ * bookCoverDataURL keeps the cover beside the book.
+ *
+ * The shelf is drawn with no network at all, so the image has to live in
+ * the snapshot rather than at a URL of its own; `data:` is also the one
+ * image source the page policy admits besides the origin itself. A book
+ * with no cover, or one too large to be worth carrying, is no cover
+ * rather than a failed download.
+ */
+export async function bookCoverDataURL({ request, bookID, signal, current = () => true } = {}) {
+  try {
+    const response = await request(
+      `v1/books/${encodeURIComponent(bookID)}/cover?size=thumbnail`, { signal });
+    if (!response.ok || !current(response)) return "";
+    const type = (response.headers?.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+    if (!type.startsWith("image/")) return "";
+    const declared = Number(response.headers?.get("Content-Length") || 0);
+    if (declared > COVER_LIMIT) return "";
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.byteLength || bytes.byteLength > COVER_LIMIT) return "";
+    return `data:${type};base64,${base64(bytes)}`;
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return "";
+  }
+}
+
 async function putStagingSnapshot(meta) {
   return withDB(async db => {
     try {
@@ -1338,6 +1383,8 @@ async function putStagedResource(context, snapshotKeyValue, resource) {
           }
           if (!snapshot.resourceHrefs.includes(resource.href))
             snapshot.resourceHrefs.push(resource.href);
+          if (resource.bytes?.byteLength)
+            snapshot.bytes = (Number(snapshot.bytes) || 0) + resource.bytes.byteLength;
           snapshots.put(snapshot);
           tx.objectStore(RESOURCES).put({
             snapshotKey: snapshotKeyValue,
@@ -1587,6 +1634,8 @@ export async function downloadPublication({
     state: "staging", resourceHrefs: [], manifest, positions,
     packageHref: plan.packageHref, title: manifest.metadata?.title || bookID,
     author: (manifest.metadata?.author || {}).name || "",
+    cover: await bookCoverDataURL({ request, bookID, signal, current }),
+    bytes: 0,
     createdAt: Date.now(),
   };
   await removeStagingSnapshots(context, bookID);

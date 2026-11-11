@@ -12,6 +12,53 @@
   background: var(--surface);
 }
 
+.offline-header-actions {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-width: 0;
+}
+
+/* With no network there is nowhere for this link to go, and an installed
+   app has no back button to come back from the browser's error page.
+   offline-net.js answers on the document before the first paint, so the
+   link is never painted on a device that cannot follow it. */
+.offline-needs-network {
+  display: none;
+}
+
+html[data-connection="online"] .offline-needs-network {
+  display: inline-flex;
+}
+
+.offline-header .btn[hidden],
+.offline-shell .button[hidden],
+.offline-book-confirm[hidden] {
+  display: none;
+}
+
+/* The brand keeps its place — the header still has to look like itself —
+   but stops being a way out of the page. */
+#offline-brand:not([href]) {
+  cursor: default;
+}
+
+#offline-brand:not([href]):hover {
+  color: var(--ink);
+}
+
+.offline-note {
+  margin: 0;
+  max-width: 22rem;
+  padding: .35rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.3;
+}
+
 .offline-shell {
   max-width: 68rem;
   margin: 0 auto;
@@ -22,60 +69,109 @@
 }
 
 .offline-shell .muted { font-size: .9rem; }
+#offline-status:focus { outline: none; }
 
 .offline-books {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
   gap: 1.15rem;
   margin: 2rem 0;
+  padding: 0;
+  list-style: none;
 }
 
 .offline-book {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 1rem;
-  padding: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+  padding: 1rem 1.15rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 55%, var(--surface)) 0%, var(--surface) 100%);
   box-shadow: var(--shadow-sm);
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.offline-book:hover,
+.offline-book:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--line));
+  box-shadow: var(--book-shadow-hover);
 }
 
 .offline-book-main {
-  min-width: 0;
   display: grid;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
-  gap: 1rem;
-  align-items: center;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  gap: 1.1rem;
+  align-items: start;
+  min-width: 0;
   color: var(--ink);
   text-decoration: none;
+  border-radius: calc(var(--radius) - .1rem);
+}
+
+.offline-book-main:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
 }
 
 .offline-book-main:hover .offline-book-title,
 .offline-book-main:focus-visible .offline-book-title { color: var(--primary); }
 
 .offline-book-art {
-  width: 4.5rem;
+  position: relative;
+  width: 5.25rem;
   aspect-ratio: var(--cover-ratio);
   display: grid;
   place-items: center;
-  border-radius: calc(var(--radius) - .35rem);
-  border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--line));
+  overflow: hidden;
+  border-radius: 2px;
   background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 16%, var(--surface-3)), var(--surface-2));
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--book-shadow);
   color: var(--primary);
-  font: 600 1.6rem/1 Georgia, serif;
+  font: 600 1.5rem/1 Georgia, serif;
 }
+
+/* The same spine and edge as a library card, so a monogram tile still
+   reads as a volume on a shelf. */
+.offline-book-art::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 8px;
+  pointer-events: none;
+  background: var(--book-spine);
+}
+
+.offline-book-art::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 6px;
+  pointer-events: none;
+  background: var(--book-edge);
+}
+
+.offline-book-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.offline-book-art.has-cover .offline-book-initial { display: none; }
 
 .offline-book-copy {
   min-width: 0;
   display: grid;
-  gap: .2rem;
+  gap: .22rem;
+  align-content: start;
 }
 
 .offline-book-eyebrow,
 .offline-book-author,
-.offline-book-meta {
+.offline-book-facts {
   display: block;
   overflow-wrap: anywhere;
 }
@@ -89,27 +185,127 @@
 }
 
 .offline-book-heading { margin: 0; }
+
 .offline-book-title {
-  font: 400 1.3rem/1.2 Georgia, serif;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font: 400 1.15rem/1.25 Georgia, serif;
   color: var(--ink);
   overflow-wrap: anywhere;
+  transition: color .16s ease;
 }
-.offline-book-author { color: var(--ink-dim); font-size: .92rem; }
-.offline-book-meta { color: var(--muted); font-size: .8rem; }
-.offline-book-progress-label { color: var(--ink-dim); font-size: .82rem; }
+
+.offline-book-author { color: var(--ink-dim); font-size: .85rem; }
+
+.offline-book-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin-top: .1rem;
+}
+
+.offline-book-badge {
+  padding: .12rem .45rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: .68rem;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.offline-book-progress-label {
+  color: var(--ink-dim);
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: .15rem;
+}
+
 .offline-book-progress {
-  width: min(14rem, 100%);
-  height: .35rem;
+  width: min(9rem, 100%);
+  height: 3px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--surface-3);
 }
+
 .offline-book-progress > span {
   display: block;
   height: 100%;
   background: var(--primary);
   border-radius: inherit;
+  transition: width .3s ease;
 }
+
+.offline-book-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: .5rem;
+  margin-left: calc(5.25rem + 1.1rem);
+}
+
+/* An open question deserves the whole card, not the narrow column the
+   quiet button sits in. */
+.offline-book:has(.offline-book-confirm:not([hidden])) .offline-book-actions {
+  margin-left: 0;
+}
+
+.offline-book-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .6rem;
+  width: 100%;
+  padding: .55rem .65rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.offline-book-ask { margin: 0; font-size: .85rem; color: var(--ink); }
+.offline-book-hint { margin: 0; font-size: .78rem; color: var(--muted); }
+
+.offline-book-choices {
+  display: flex;
+  gap: .5rem;
+  margin-left: auto;
+}
+
+.offline-shell .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: .55rem .9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: .82rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, color .16s ease;
+}
+
+.offline-shell .button:hover { background: var(--surface-2); }
+.offline-shell .button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.offline-shell .button[disabled] { opacity: .6; cursor: progress; }
+
+.offline-shell .button.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  color: var(--danger);
+}
+
+.offline-shell .button.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+}
+
+.offline-book-remove { color: var(--muted); }
+
 .offline-book-progress > .p0 { width: 0 }
 .offline-book-progress > .p5 { width: 5% }
 .offline-book-progress > .p10 { width: 10% }
@@ -132,39 +328,36 @@
 .offline-book-progress > .p95 { width: 95% }
 .offline-book-progress > .p100 { width: 100% }
 
-.offline-book-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: .55rem;
-  justify-content: center;
-}
-
-.offline-book-actions .button {
-  justify-content: center;
-  min-width: 7rem;
-}
-
-.offline-book button { flex: none; font-size: .82rem; }
-.offline-shell .button { display: inline-flex; padding: .6rem .9rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; text-decoration: none; cursor: pointer; }
-.offline-shell .button:hover { background: var(--surface-2); }
 .offline-shell .problem { color: var(--danger); }
 
 @media (max-width: 36em) {
   .offline-shell { padding-top: 2rem; }
-  .offline-book {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 1rem;
-    gap: .9rem;
-  }
+  .offline-book { padding: .9rem; }
   .offline-book-main {
     grid-template-columns: 3.8rem minmax(0, 1fr);
     gap: .8rem;
-    align-items: start;
   }
-  .offline-book-art { width: 3.8rem; font-size: 1.35rem; }
-  .offline-book-title { font-size: 1.1rem; }
-  .offline-book-actions { flex-direction: row; }
-  .offline-book-actions .button { flex: 1 1 0; min-width: 0; }
+  .offline-book-art { width: 3.8rem; font-size: 1.25rem; }
+  .offline-book-actions {
+    margin-left: 0;
+    justify-content: stretch;
+  }
+  .offline-book-actions .button { flex: 1 1 auto; min-height: 44px; }
+  .offline-book-choices { margin-left: 0; width: 100%; }
+  .offline-book-choices .button { flex: 1 1 0; }
   .offline-header .btn { font-size: .75rem; }
+  .offline-note { font-size: .72rem; }
+}
+
+@media (any-pointer: coarse) {
+  .offline-shell .button { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .offline-book,
+  .offline-book-title,
+  .offline-book-actions .button,
+  .offline-book-progress > span {
+    transition: none;
+  }
 }

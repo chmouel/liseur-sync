@@ -3070,3 +3070,77 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 .reader-audio-bar.reader-audio-inline[data-audio-size="expanded"] .reader-audio-summary { grid-template-columns: minmax(0, 1fr) 44px; }
 .audiobook-upload { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; }
 .audiobook-upload progress { flex: 1 1 12rem; }
+
+/* ------------------------------------------- offline shelf & navigation
+   The rail entry, the book page's "Saved offline" label and the offline
+   reader's own sync state (#54, #106, #108, #111). The shelf itself is
+   styled in static/offline/offline.css, which only the shell loads. */
+
+/* The rail draws its entries as flex links, which would otherwise
+   override the attribute offline-rail.js reveals it with. */
+.rail a[hidden] { display: none; }
+.rail-count {
+	padding: 0 .35rem;
+	border-radius: 999px;
+	background: var(--surface-3);
+	color: var(--ink-dim);
+	font-size: .7rem;
+	font-variant-numeric: tabular-nums;
+}
+.offline-status-link {
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.offline-status-link:hover { color: var(--primary-dim); }
+
+/* Waiting on a network is the one thing the reader cannot see for
+   itself, so it lives on the bar with the other controls rather than
+   under it: a queued page turn is not a reason to lose the page. */
+.reader-offline-sync {
+	display: inline-flex;
+	align-items: center;
+	gap: .4rem;
+	padding: .12rem .3rem .12rem .55rem;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+	color: var(--muted);
+	font-size: .72rem;
+	line-height: 1;
+	white-space: nowrap;
+	transition: border-color .18s ease, color .18s ease;
+}
+.reader-offline-sync[data-state="waiting"] {
+	border-color: color-mix(in srgb, var(--primary) 40%, var(--line));
+	color: var(--ink);
+}
+.reader-offline-sync-state { font-variant-numeric: tabular-nums; }
+.reader-offline-sync-retry {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 1.6rem;
+	min-width: 1.6rem;
+	padding: 0 .55rem;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	background: var(--surface);
+	color: var(--ink);
+	font: inherit;
+	font-size: .72rem;
+	font-weight: 600;
+	cursor: pointer;
+}
+.reader-offline-sync-retry:hover { background: var(--surface-3); }
+.reader-offline-sync-retry:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.reader-offline-sync-retry[hidden] { display: none; }
+@media (max-width: 48em) {
+	.reader-offline-sync-state { display: none; }
+}
+@media (any-pointer: coarse) {
+	.reader-offline-sync-retry { min-height: 44px; min-width: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.reader-offline-sync { transition: none; }
+}

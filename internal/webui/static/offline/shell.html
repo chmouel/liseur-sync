@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#ffffff">
+    <script src="./offline-net.js"></script>
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" href="./icon.svg">
     <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -16,12 +17,16 @@
   <body>
     <div id="pull-indicator" class="pullindicator" role="status" aria-live="polite" hidden></div>
     <header class="offline-header">
-      <a class="brand" href="../library"><img class="brand-icon" src="./icon.svg" width="40" height="40" alt=""><span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span></a>
-      <a class="btn" href="../library">Open library <span aria-hidden="true">→</span></a>
+      <a class="brand" id="offline-brand" href="../library"><img class="brand-icon" src="./icon.svg" width="40" height="40" alt=""><span class="brand-name"><span class="brandmark">Liseur</span><span class="suffix">sync</span></span></a>
+      <div class="offline-header-actions">
+        <a class="btn offline-needs-network" id="offline-open-library" href="../library">Open library <span aria-hidden="true">→</span></a>
+        <p class="offline-note" id="offline-network-note" role="status" hidden>You're offline, your library will be back when you reconnect.</p>
+      </div>
     </header>
     <main class="offline-shell">
       <h1>Offline shelf</h1>
-      <p class="muted" id="offline-status">Loading saved books…</p>
+      <p class="muted" id="offline-status" tabindex="-1">Loading saved books…</p>
+      <p id="offline-notice" class="visually-hidden" role="status" aria-live="polite"></p>
       <section id="offline-books" class="offline-books" aria-label="Books available offline"></section>
     </main>
   </body>
