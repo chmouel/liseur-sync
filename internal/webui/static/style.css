@@ -341,6 +341,12 @@ details.card > summary {
 details.card > summary::before { content: "+"; color: var(--muted); }
 details.card[open] > summary::before { content: "−"; }
 
+/* A card that starts folded and says what is inside it. The heading stays a
+   heading, and the count sits at the far end of the line. */
+details.fold > summary h2 { margin: 0; font-size: inherit; }
+details.fold > summary .fold-count { margin-left: auto; font-size: .85rem; font-weight: 400; }
+details.fold[open] > summary { margin-bottom: 1rem; }
+
 /* A disclosure inside a form (the root-library form's advanced axes):
    quieter than a card summary, since the action below it is the point. */
 details.advanced { margin: 0 0 .8rem; }

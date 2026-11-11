@@ -1,6 +1,7 @@
 package webui
 
 import "github.com/chmouel/liseur-sync/internal/store"
+import "fmt"
 import "net/url"
 
 // Flash carries one-time results (a shown-once secret).
@@ -204,8 +205,8 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 				</div>
 			</section>
 		} else {
-			<section class="card">
-				<h2>KOReader (kosync)</h2>
+			<details class="card fold" open?={ flash.Secret != "" || flash.Notice != "" || flash.Error != "" }>
+				<summary><h2>KOReader (kosync)</h2><span class="fold-count muted">{ deviceCount(len(kosyncDevs)) }</span></summary>
 				<details class="setup-guide" open?={ len(kosyncDevs) == 0 }>
 					<summary>Setup instructions</summary>
 					<p class="muted">
@@ -280,7 +281,7 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 						</form>
 					}
 				</details>
-			</section>
+			</details>
 		}
 		if !u.User.KopluginEnabled && len(kopluginDevs) == 0 {
 			<section class="card adapter-disabled">
@@ -292,8 +293,8 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 				</div>
 			</section>
 		} else {
-			<section class="card">
-				<h2>KOReader statistics plugin</h2>
+			<details class="card fold" open?={ flash.Secret != "" || flash.Notice != "" || flash.Error != "" }>
+				<summary><h2>KOReader statistics plugin</h2><span class="fold-count muted">{ deviceCount(len(kopluginDevs)) }</span></summary>
 				<details class="setup-guide" open?={ len(kopluginDevs) == 0 }>
 					<summary>Setup instructions</summary>
 					<ol class="muted">
@@ -338,7 +339,7 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 						}
 					</table>
 				}
-			</section>
+			</details>
 		}
 	}
 	if view == settingsDevicesOPDS {
@@ -370,6 +371,17 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 			</details>
 		</section>
 	}
+}
+
+// deviceCount is what a folded card says about its contents.
+func deviceCount(n int) string {
+	switch n {
+	case 0:
+		return "No devices yet"
+	case 1:
+		return "1 device"
+	}
+	return fmt.Sprintf("%d devices", n)
 }
 
 templ deviceIcon(devType string) {

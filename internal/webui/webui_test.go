@@ -417,6 +417,15 @@ func TestDevicesAreSeparatePages(t *testing.T) {
 		}
 	}
 
+	// The two device cards start folded and say how many devices they hold.
+	_, folded := page(t, ts, cookie, "/ui/settings?section=devices")
+	if got := strings.Count(folded, `<details class="card fold">`); got != 2 {
+		t.Errorf("folded device cards = %d, want 2", got)
+	}
+	if got := strings.Count(folded, "No devices yet"); got != 2 {
+		t.Errorf("device counts = %d, want 2", got)
+	}
+
 	// A view nobody defined is the default page, not an error.
 	code, body := page(t, ts, cookie, "/ui/settings?section=devices&view=nonsense")
 	if code != http.StatusOK || !strings.Contains(body, "Set up KOReader") {
@@ -439,6 +448,10 @@ func TestDevicesAreSeparatePages(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, "kosync pairing code") ||
 		!strings.Contains(body, `aria-current="page">E-readers</a>`) {
 		t.Errorf("pairing code did not land on the E-readers page: %d", code)
+	}
+	// After an action the cards are open, so the result is in view.
+	if !strings.Contains(body, `<details class="card fold" open>`) {
+		t.Error("device cards stayed folded after a pairing code")
 	}
 }
 

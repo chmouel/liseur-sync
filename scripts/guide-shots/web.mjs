@@ -41,7 +41,7 @@ for (const [heading, file, view] of [
   await b.goto('/ui/settings?section=devices' + view)
   await b.setWidth(820)
   await sleep(400)
-  const marked = await b.ev(`(() => { const h = [...document.querySelectorAll('h2')].find((e) => e.textContent.trim() === ${JSON.stringify(heading)}); const sec = h && h.closest('section'); if (!sec) return false; sec.id = 'cred-' + ${JSON.stringify(file)}.replace(/\\W/g, ''); return sec.id })()`)
+  const marked = await b.ev(`(() => { const h = [...document.querySelectorAll('h2')].find((e) => e.textContent.trim() === ${JSON.stringify(heading)}); const sec = h && h.closest('section, details'); if (!sec) return false; if (sec.tagName === 'DETAILS') sec.open = true; sec.id = 'cred-' + ${JSON.stringify(file)}.replace(/\\W/g, ''); return sec.id })()`)
   if (!marked) throw new Error('no section titled ' + heading)
   await b.shootElement('#' + marked, join(img, file))
 }
