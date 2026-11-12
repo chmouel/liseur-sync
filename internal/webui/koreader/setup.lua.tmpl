@@ -27,23 +27,27 @@ local function install_koinsight()
     local ltn12 = require("ltn12")
     local sha2 = require("ffi/sha2")
     local util = require("util")
-    local timeout = http.TIMEOUT
-    http.TIMEOUT = 8
-    local bodies = {}
-    local failure
-    for _, file in ipairs(KOINSIGHT_FILES) do
-        local chunks = {}
-        local _, code = https.request{ url = KOINSIGHT_URL .. file[1], sink = ltn12.sink.table(chunks) }
-        local body = table.concat(chunks)
-        if code ~= 200 then
-            failure = file[1] .. ": " .. tostring(code)
-        elseif sha2.sha256(body) ~= file[2] then
-            failure = file[1] .. ": checksum mismatch"
+    -- ssl.https keeps its own timeout, so both have to be lowered, and both
+    -- have to go back even when a download throws.
+    local http_timeout, https_timeout = http.TIMEOUT, https.TIMEOUT
+    http.TIMEOUT, https.TIMEOUT = 8, 8
+    local bodies, failure = {}, nil
+    local ok, err = pcall(function()
+        for _, file in ipairs(KOINSIGHT_FILES) do
+            local chunks = {}
+            local _, code = https.request{ url = KOINSIGHT_URL .. file[1], sink = ltn12.sink.table(chunks) }
+            local body = table.concat(chunks)
+            if code ~= 200 then
+                failure = file[1] .. ": " .. tostring(code)
+            elseif sha2.sha256(body) ~= file[2] then
+                failure = file[1] .. ": checksum mismatch"
+            end
+            if failure then return end
+            bodies[file[1]] = body
         end
-        if failure then break end
-        bodies[file[1]] = body
-    end
-    http.TIMEOUT = timeout
+    end)
+    http.TIMEOUT, https.TIMEOUT = http_timeout, https_timeout
+    if not ok then error(err) end
     if failure then error(failure) end
     local staging = KOINSIGHT_DIR .. ".part"
     require("ffi/util").purgeDir(staging)
@@ -119,8 +123,30 @@ progress.custom_server = {{lua .SyncURL}}
 progress.username = {{lua .SyncSlot}}
 progress.userkey = {{lua .SyncKey}}
 progress.auto_sync = true
+-- KOReader reads this table as written, without merging its defaults, so a
+-- missing sync_forward would silently mean "never apply a pulled position".
+local ok_kosync, KOSync = pcall(require, "apps/reader/modules/kosync")
+if ok_kosync and KOSync and KOSync.default_settings then
+    for key, value in pairs(KOSync.default_settings) do
+        if progress[key] == nil then progress[key] = value end
+    end
+else
+    progress.sync_forward = progress.sync_forward or 1 -- PROMPT
+    progress.sync_backward = progress.sync_backward or 3 -- DISABLE
+    progress.checksum_method = progress.checksum_method or 0 -- BINARY
+end
 kosync:saveSetting("settings", progress)
 kosync:flush()
+
+-- KOReader drops automatic progress sync on a device that can toggle Wi-Fi
+-- seamlessly (a Kobo) unless the network action is "turn on", because syncing
+-- then asks for a connection at every book open. Without this the setting
+-- above would be silently ignored there.
+local ok_device, device = pcall(require, "device")
+if ok_device and device:hasSeamlessWifiToggle() and reader:readSetting("wifi_enable_action") ~= "turn_on" then
+    reader:saveSetting("wifi_enable_action", "turn_on")
+    reader:flush()
+end
 
 local opds = LuaSettings:open(DataStorage:getSettingsDir() .. "/opds.lua")
 local servers = opds:readSetting("servers", {})

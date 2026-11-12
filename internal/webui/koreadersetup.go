@@ -155,44 +155,59 @@ func (s koreaderSetup) archive() ([]byte, error) {
 	if err := koreaderSetupTemplate.Execute(&setup, s); err != nil {
 		return nil, err
 	}
-	// A plugin loads on every KOReader build, unlike a patch (F-Droid's
-	// build never runs those). main.lua runs the setup at load, then returns
-	// disabled so the loader skips it.
+	// A plugin loads on every KOReader build, unlike a patch (F-Droid's build
+	// never runs those). It configures the reader once and then reports itself
+	// disabled, so the loader skips it from then on.
 	pluginMain := "local function liseur_setup()\n" + setup.String() +
 		"\nend\nlocal ok, err = pcall(liseur_setup)\nif not ok then\n" +
-		"    require(\"logger\").warn(\"Liseur setup failed:\", err)\nend\nreturn { disabled = true }\n"
-	pluginMeta := "return {\n    name = \"liseur_setup\",\n    fullname = \"Liseur setup\",\n" +
-		"    description = [[One-time Liseur Sync setup. Safe to delete after the first start.]],\n}\n"
-	credentials := fmt.Sprintf(`Server: %s
+		"    require(\"logger\").warn(\"Liseur Sync setup failed:\", err)\nend\n" +
+		"return { disabled = true }\n"
+	pluginMeta := "return {\n    fullname = \"Liseur Sync\",\n" +
+		"    description = [[One-time Liseur Sync setup. Delete it once KoInsight is installed.]],\n}\n"
+	credentials := fmt.Sprintf(`Liseur Sync setup for %s
 
-OPDS catalog: %s/opds/v1.2
-  username: token
-  password: %s
-OPDS 2.0 catalog for the OPDS Plus plugin, same login: %s/opds/v2
+Each # line names the setting on the next line. Long-press that value on the
+reader to select it on its own.
 
-Progress sync (KOReader's built-in module)
-  custom sync server: %s
-  username: %s
-  password: %s
+# OPDS catalog
+%s/opds/v1.2
 
-KoInsight server URL: %s
-`, s.Base, s.Base, s.APIToken, s.Base, s.SyncURL, s.SyncSlot, s.SyncPassword, s.StatisticsURL)
+# OPDS username
+token
+
+# OPDS password (the API token)
+%s
+
+# OPDS 2.0 catalog, for the OPDS Plus plugin
+%s/opds/v2
+
+# Progress sync server
+%s
+
+# Progress sync username
+%s
+
+# Progress sync password
+%s
+
+# KoInsight server URL
+%s
+`, s.Name, s.Base, s.APIToken, s.Base, s.SyncURL, s.SyncSlot, s.SyncPassword, s.StatisticsURL)
 	readme := fmt.Sprintf(`KOReader setup for %s
 
 Automatic setup:
 1. Quit KOReader completely.
-2. Copy the folder plugins/liseur-setup.koplugin into KOReader's plugins/
+2. Copy the plugins/liseur-sync.koplugin folder into KOReader's plugins/
    folder.
 3. Turn Wi-Fi on and start KOReader, then restart it once more. Progress
    sync, the OPDS catalog and KoInsight are set up, and the KoInsight
    plugin is downloaded if it is missing. If the reader was offline, it
    tries again on the next start.
-4. Delete plugins/liseur-setup.koplugin once plugins/koinsight.koplugin
-   exists.
+4. Delete plugins/liseur-sync.koplugin once plugins/koinsight.koplugin
+   exists. It has done its work by then.
 
 If the OPDS Plus plugin (github.com/greywolf1499/opds_plus.koplugin) is
-installed, the setup also adds the OPDS 2.0 catalog to it. Install that
-plugin before deleting the setup folder and it is added on the next start.
+installed, the setup also adds the OPDS 2.0 catalog to it on the next start.
 
 Manual setup: enter the values in credentials.txt.
 - Progress sync: Tools > Progress sync > Custom sync server, then
@@ -206,16 +221,17 @@ The setup runs once and keeps unrelated settings. It replaces any Progress
 sync account already configured on this reader.
 
 This archive contains private credentials. Keep it private and use it on one
-reader only. Download a separate setup for each reader. Delete this archive
-and the copies on the reader after setup. To cut this reader off, revoke all
+reader only. Download a separate setup for each reader. Once
+plugins/koinsight.koplugin exists, delete this archive, the
+plugins/liseur-sync.koplugin folder and any copy of credentials.txt. To cut this reader off, revoke all
 three on the server's Devices page: the API token, the Progress sync device
 %s and the statistics device named %s.
 `, s.Name, s.SyncSlot, s.Name)
 	var out bytes.Buffer
 	z := zip.NewWriter(&out)
 	for _, file := range []struct{ name, body string }{
-		{"plugins/liseur-setup.koplugin/_meta.lua", pluginMeta},
-		{"plugins/liseur-setup.koplugin/main.lua", pluginMain},
+		{"plugins/liseur-sync.koplugin/_meta.lua", pluginMeta},
+		{"plugins/liseur-sync.koplugin/main.lua", pluginMain},
 		{"credentials.txt", credentials},
 		{"README.txt", readme},
 	} {

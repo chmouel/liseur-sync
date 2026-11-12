@@ -3,7 +3,7 @@
 KOReader can browse and download your library over OPDS, save your reading
 position with its built-in *Progress sync*, and send reading time to the
 server through the KoInsight plugin. OPDS and Progress sync are built into
-KOReader, so only KoInsight is a plugin, and the setup downloads it for you.
+KOReader. KoInsight is a plugin, and the setup downloads it for you.
 One download from the Devices page sets up all three on a reader. A
 [step-by-step page with screenshots](https://chmouel.github.io/liseur-sync/koreader/)
 covers the same ground for a less technical reader.
@@ -25,20 +25,47 @@ Devices page tells you when one of them is off.
 2. In **Set up KOReader**, type the reader's name, such as `Kobo Libra`, and
    press **Download KOReader setup**. Save the ZIP somewhere private.
 3. Unzip it. Quit KOReader completely and copy the
-   `plugins/liseur-setup.koplugin` folder into the `plugins/` folder in
+   `plugins/liseur-sync.koplugin` folder into the `plugins/` folder in
    KOReader's directory. On a Kobo that is `.adds/koreader/plugins/`, and
    the hidden `.adds` folder may need "show hidden files" turned on. On
    Android it is `koreader/plugins/` in internal storage.
 4. Turn on Wi-Fi and start KOReader. The setup runs once. Restart KOReader
    once more so the new settings and the KoInsight plugin are picked up.
-5. Delete the ZIP from your computer. Delete the `liseur-setup.koplugin`
-   folder from the reader once `plugins/koinsight.koplugin` exists there.
+5. Delete the ZIP from your computer. Delete the `liseur-sync.koplugin`
+   folder from the reader once `plugins/koinsight.koplugin` exists there. The
+   setup has done its work by then.
 
 The setup keeps unrelated settings. It replaces any Progress sync account
 already on the reader, adds a *Liseur Sync* entry to the OPDS catalogs
 (replacing an older one for the same server), turns on automatic Progress
 sync and sets KoInsight to sync on suspend. When the OPDS Plus plugin is
 installed it also adds the OPDS 2.0 catalog to that plugin's own list.
+
+On a reader whose Wi-Fi can be switched on without asking (a Kobo), the setup
+also sets the network action to "turn on", because KOReader silently drops
+automatic Progress sync without it.
+
+## Reading positions arrive when a book opens
+
+Progress sync asks the server where you were when a book is opened, not
+before: KOReader's own plugin pulls in `KOSync:onReaderReady`, and there is no
+"sync everything now" action. Opening a book with Wi-Fi on therefore asks the
+server for the newest position from your other devices, and KOReader applies
+its own sync policy to it: by default it shows a *Sync to latest location?*
+prompt, which the reader can change to never ask, or to always apply. The setup
+turns automatic sync on by setting `auto_sync` in `settings/kosync.lua`, and
+fills in KOReader's own defaults for the keys it does not set, because KOReader
+takes that whole table as written and does not merge missing keys.
+
+A companion plugin that fetched positions ahead of time, by writing a position
+into a book's sidecar while the file browser showed the folder, was written and
+then dropped. It had to write another plugin's sidecar keys (KOReader 2026.07
+ignores the legacy `last_percent`, and `last_xpointer` needs a DOM version this
+side cannot know), it had to guess which folder your books live in (`download_dir`
+is unset on a fresh reader, whose home is the app data directory), and it would
+have sent the Progress sync key from an extra code path in a plugin. None of
+that is worth it for a jump KOReader already makes at open. If this comes up
+again, that is the trade-off to weigh, and the answer was no.
 
 KoInsight comes from its archived repository at one fixed commit, and each
 file is checked against a known checksum before it is installed. A file that
@@ -56,7 +83,8 @@ at the next start, so keep it until the plugin is in place.
 
 ## What the download contains
 
-- `plugins/liseur-setup.koplugin/`, the folder to copy across.
+- `plugins/liseur-sync.koplugin/`, the folder to copy across. It configures
+  the reader on its first start and does nothing afterwards.
 - `credentials.txt`, every value the setup writes, for a manual setup.
 - `README.txt`, the short version of these steps.
 
@@ -102,11 +130,10 @@ details. Nothing in this guide needs it. OPDS Plus also reads the JSON
 catalog at the URL ending in `/opds/v2`, which carries series positions and
 shows the folders, shelves and newest books as separate rows. If OPDS Plus
 is installed, the setup file adds that catalog to it as **Liseur Sync**,
-with the same login; install the plugin before deleting the setup file, or
-add the URL by hand. To sync new books through it, use the URL ending in
+with the same login on the next start; without it, add the URL by hand. To sync new books through it, use the URL ending in
 `/opds/v2/new`.
 
-## Progress sync without a setup file
+## Progress sync without the setup plugin
 
 Generate a pairing code under **KOReader (kosync)** on the Devices page. On
 the reader, set the custom sync server as above, choose **Register / Login**,
@@ -127,6 +154,6 @@ If there is no KoInsight menu, the reader was offline at the first start. Turn
 on Wi-Fi and restart KOReader, or install the plugin by hand as above.
 
 If the setup did not run, check that the folder is named
-`liseur-setup.koplugin` and sits directly in `plugins/`, and that the plugin
+`liseur-sync.koplugin` and sits directly in `plugins/`, and that the plugin
 is not switched off under **Tools → More tools → Plugin management**. Otherwise
 use the manual setup.

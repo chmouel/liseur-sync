@@ -54,7 +54,7 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 		<p class="muted">Pair an e-reader with this server. KOReader can be set up with one download. CrossPoint pairs through the same sync login.</p>
 		<section class="card">
 			<h2>Set up KOReader</h2>
-			<p>Configure KOReader's built-in Progress sync, the OPDS catalog and KoInsight with one download. Quit KOReader, copy the <code>plugins/liseur-setup.koplugin</code> folder from the ZIP into KOReader's <code>plugins/</code> folder, start KOReader with Wi-Fi on, then restart it once more. The KoInsight plugin is downloaded for you if it is missing.</p>
+			<p>Configure KOReader's built-in Progress sync, the OPDS catalog and KoInsight with one download. Quit KOReader, copy the <code>plugins/liseur-sync.koplugin</code> folder from the ZIP into KOReader's <code>plugins/</code> folder, start KOReader with Wi-Fi on, then restart it once more. The KoInsight plugin is downloaded for you if it is missing.</p>
 			<p><a href="https://chmouel.github.io/liseur-sync/koreader/" target="_blank" rel="noopener">Easy setup guide with screenshots</a></p>
 			<p class="muted">The download holds three separate credentials: an API token for OPDS, a Progress sync login and a KoInsight upload URL. Revoke each one from its own list: the API token under <a href={ settingsDevicesHref(prefix, settingsDevicesApps) }>Apps</a>, the other two further down this page. Use a separate download for each reader. Keep the ZIP private.</p>
 			if u.User.KosyncEnabled && u.User.KopluginEnabled {
