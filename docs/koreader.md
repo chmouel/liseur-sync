@@ -28,11 +28,15 @@ Devices page tells you when one of them is off.
    `patches/1-liseur-setup.lua` into the `patches/` folder in KOReader's
    directory, creating the folder if needed. On a Kobo that is
    `.adds/koreader/patches/`, and the hidden `.adds` folder may need "show
-   hidden files" turned on.
+   hidden files" turned on. KOReader from F-Droid on Android ignores
+   patches. There, copy the `plugins/liseur-setup.koplugin` folder into
+   `plugins/` instead.
 4. Turn on Wi-Fi and start KOReader. The patch runs once and configures
-   everything.
-5. Delete the ZIP from your computer. Delete `1-liseur-setup.lua` from the
-   reader once `plugins/koinsight.koplugin` exists there.
+   everything. With the plugin variant, restart KOReader once more so the
+   new settings and the KoInsight plugin are picked up.
+5. Delete the ZIP from your computer. Delete `1-liseur-setup.lua` (or the
+   `liseur-setup.koplugin` folder) from the reader once
+   `plugins/koinsight.koplugin` exists there.
 
 The patch keeps unrelated settings. It replaces any Progress sync account
 already on the reader, adds a *Liseur Sync* entry to the OPDS catalogs
@@ -57,6 +61,8 @@ at the next start, so keep it until the plugin is in place.
 ## What the download contains
 
 - `patches/1-liseur-setup.lua`, the file to copy across.
+- `plugins/liseur-setup.koplugin/`, the same setup as a plugin, for builds
+  that ignore patches such as KOReader from F-Droid on Android.
 - `credentials.txt`, every value the patch writes, for a manual setup.
 - `README.txt`, the short version of these steps.
 
@@ -74,8 +80,8 @@ working.
 
 ## Manual setup
 
-Use this when patches are not available, for example KOReader from F-Droid on
-Android. Download the setup as above and enter the values from
+Use this when neither the patch nor the plugin works. Download the setup as
+above and enter the values from
 `credentials.txt` on the reader.
 
 **Progress sync.** Open a book, then **Tools → Progress sync**. Choose
@@ -127,5 +133,6 @@ If there is no KoInsight menu, the reader was offline at the first start. Turn
 on Wi-Fi and restart KOReader, or install the plugin by hand as above.
 
 If the patch did not run, KOReader ignores `patches/` when the file
-`patches/.patches_disabled` exists, and some builds ship with patches off. Use
-the manual setup.
+`patches/.patches_disabled` exists, and some builds ship with patches off,
+such as KOReader from F-Droid. Use the plugin variant there, or the manual
+setup.

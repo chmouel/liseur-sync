@@ -155,6 +155,14 @@ func (s koreaderSetup) archive() ([]byte, error) {
 	if err := koreaderSetupTemplate.Execute(&patch, s); err != nil {
 		return nil, err
 	}
+	// F-Droid's KOReader never runs patches but does load plugins. The same
+	// script therefore ships as a plugin: main.lua runs it at load, then
+	// returns disabled so the loader skips it.
+	pluginMain := "local function liseur_setup()\n" + patch.String() +
+		"\nend\nlocal ok, err = pcall(liseur_setup)\nif not ok then\n" +
+		"    require(\"logger\").warn(\"Liseur setup failed:\", err)\nend\nreturn { disabled = true }\n"
+	pluginMeta := "return {\n    name = \"liseur_setup\",\n    fullname = \"Liseur setup\",\n" +
+		"    description = [[One-time Liseur Sync setup. Safe to delete after the first start.]],\n}\n"
 	credentials := fmt.Sprintf(`Server: %s
 
 OPDS catalog: %s/opds/v1.2
@@ -185,8 +193,13 @@ If the OPDS Plus plugin (github.com/greywolf1499/opds_plus.koplugin) is
 installed, the setup also adds the OPDS 2.0 catalog to it. Install the
 plugin before deleting the setup file and it is added on the next start.
 
-Manual setup (for example KOReader from F-Droid on Android, which disables
-user patches): enter the values in credentials.txt.
+KOReader from F-Droid on Android disables user patches. There, copy
+plugins/liseur-setup.koplugin (the whole folder) into KOReader's plugins/
+folder instead, with Wi-Fi on, then start KOReader and restart it once more
+so the new settings and the KoInsight plugin are picked up. Delete the
+folder afterwards.
+
+Manual setup: enter the values in credentials.txt.
 - Progress sync: Tools > Progress sync > Custom sync server, then
   Register / Login with the username and password.
 - OPDS: Search > OPDS catalog, add the catalog URL with the username and password.
@@ -207,6 +220,8 @@ three on the server's Devices page: the API token, the Progress sync device
 	z := zip.NewWriter(&out)
 	for _, file := range []struct{ name, body string }{
 		{"patches/1-liseur-setup.lua", patch.String()},
+		{"plugins/liseur-setup.koplugin/_meta.lua", pluginMeta},
+		{"plugins/liseur-setup.koplugin/main.lua", pluginMain},
 		{"credentials.txt", credentials},
 		{"README.txt", readme},
 	} {

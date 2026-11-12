@@ -6,7 +6,7 @@ local LuaSettings = require("luasettings")
 -- file by file, so a changed or truncated download is refused. It is retried
 -- on each start until it succeeds, so a reader that was offline the first
 -- time still gets it.
-local KOINSIGHT_DIR = "plugins/koinsight.koplugin"
+local KOINSIGHT_DIR = DataStorage:getDataDir() .. "/plugins/koinsight.koplugin"
 local KOINSIGHT_URL = "https://raw.githubusercontent.com/Ko-Insight/KoInsight/dda224061deb697741e0bd41750d444fb1ceaa9f/plugins/koinsight.koplugin/"
 local KOINSIGHT_FILES = {
     { "_meta.lua", "29dfb03b108e4f6c5f3cba31e1bfe657d99d3bfbac90f284ba9e89080511ef6c" },
@@ -76,7 +76,7 @@ end
 -- from its own defaults rather than emptied. Like KoInsight, this is
 -- retried on each start, so a plugin installed after the setup still gets
 -- the catalog while this file is in patches/.
-local OPDS_PLUS_DIR = "plugins/opds_plus.koplugin"
+local OPDS_PLUS_DIR = DataStorage:getDataDir() .. "/plugins/opds_plus.koplugin"
 
 local function add_opds_plus()
     local lfs = require("libs/libkoreader-lfs")
@@ -96,7 +96,9 @@ local function add_opds_plus()
     return true
 end
 
-local reader = LuaSettings:open(DataStorage:getDataDir() .. "/settings.reader.lua")
+-- A patch runs before KOReader opens its global settings; a plugin runs after,
+-- and a second handle on the same file would be overwritten at the next flush.
+local reader = G_reader_settings or LuaSettings:open(DataStorage:getDataDir() .. "/settings.reader.lua")
 local setup_id = {{lua .ID}}
 
 if reader:readSetting("liseur_opds_plus_id") ~= setup_id then
