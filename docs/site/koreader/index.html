@@ -60,9 +60,9 @@
     <div class="step">
       <div class="n" aria-hidden="true">1</div>
       <div class="text">
-        <h3>Download your setup file</h3>
+        <h3>Download your setup</h3>
         <p>On your computer, sign into LiseurSync and open <b>Settings</b>, then <b>Devices &amp; integrations</b>. In the <b>Set up KOReader</b> box, type a name for the e-reader, such as <code>Kobo Libra</code>, and press <b>Download KOReader setup</b>.</p>
-        <p>You get a ZIP. The file you need is <code>patches/1-liseur-setup.lua</code> inside it.</p>
+        <p>You get a ZIP. The folder you need is <code>plugins/liseur-setup.koplugin</code> inside it.</p>
         <p class="warn">The ZIP contains logins for your library, so keep it private and delete it once the setup works.</p>
       </div>
       <figure class="shot">
@@ -74,24 +74,25 @@
     <div class="step">
       <div class="n" aria-hidden="true">2</div>
       <div class="text">
-        <h3>Copy the file onto your e-reader</h3>
-        <p>Quit KOReader if it is running and plug the e-reader into your computer. In KOReader's folder, create a folder called <code>patches</code> if it is missing and copy <code>1-liseur-setup.lua</code> into it. Then eject the e-reader.</p>
+        <h3>Copy the folder onto your e-reader</h3>
+        <p>Quit KOReader if it is running and plug the e-reader into your computer. In KOReader's folder, copy the whole <code>liseur-setup.koplugin</code> folder into <code>plugins</code>. Then eject the e-reader.</p>
         <table class="where">
           <tr><th>Kobo</th><td><code>.adds/koreader/</code> (the <code>.adds</code> folder is hidden, so show hidden files)</td></tr>
           <tr><th>Kindle</th><td><code>koreader/</code> at the top level</td></tr>
           <tr><th>PocketBook</th><td><code>applications/koreader/</code></td></tr>
         </table>
-        <p class="warn">KOReader from F-Droid on Android ignores patches. Use the <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> there.</p>
+        <p>On Android, KOReader's folder is <code>koreader/</code> in internal storage. The F-Droid build works the same way, because the setup is a plugin and not a patch.</p>
       </div>
       <figure class="shot">
-        <div class="where-tree" role="img" aria-label="Folder layout: koreader contains patches, which contains 1-liseur-setup.lua.">
+        <div class="where-tree" role="img" aria-label="Folder layout: koreader contains plugins, which contains liseur-setup.koplugin with main.lua and _meta.lua.">
           <pre style="margin:0;padding:22px 24px;background:#fff;border:1px solid var(--rule);border-radius:8px;font:0.95rem/1.7 var(--mono);overflow-x:auto">koreader/
-├── plugins/
 ├── settings/
-└── <b>patches/</b>
-    └── <b>1-liseur-setup.lua</b></pre>
+└── <b>plugins/</b>
+    └── <b>liseur-setup.koplugin/</b>
+        ├── main.lua
+        └── _meta.lua</pre>
         </div>
-        <figcaption>Where the file goes.</figcaption>
+        <figcaption>Where the folder goes.</figcaption>
       </figure>
     </div>
 
@@ -99,7 +100,7 @@
       <div class="n" aria-hidden="true">3</div>
       <div class="text">
         <h3>Turn on Wi-Fi and open KOReader</h3>
-        <p>The OPDS catalog and Progress sync are built into KOReader. The only add-on is the KoInsight plugin, which sends your reading time to the server, and the file downloads it for you. The first start takes longer than usual while it does. If the e-reader is offline, the setup runs again at the next start.</p>
+        <p>The OPDS catalog and Progress sync are built into KOReader. The only add-on is the KoInsight plugin, which sends your reading time to the server, and the setup downloads it for you. The first start takes longer than usual while it does. If the e-reader is offline, the setup runs again at the next start. Restart KOReader once more so KoInsight is loaded.</p>
         <p>To check, open the top menu, tap the magnifier and choose <b>OPDS catalog</b>. <b>Liseur Sync</b> is in the list.</p>
       </div>
       <figure class="shot device" style="width:min(100%,340px);justify-self:start">
@@ -161,7 +162,7 @@
     <div class="prose">
       <details>
         <summary>Nothing changed after I started KOReader</summary>
-        <p>Check that the file is at <code>koreader/patches/1-liseur-setup.lua</code>. Quit KOReader completely (menu, then Exit) before starting it again, because putting it to sleep is not enough. If the <code>patches</code> folder holds a file named <code>.patches_disabled</code>, delete it.</p>
+        <p>Check that the folder is at <code>koreader/plugins/liseur-setup.koplugin/</code> and holds <code>main.lua</code>. Quit KOReader completely (menu, then Exit) before starting it again, because putting it to sleep is not enough. Also check that the setup is not switched off in <b>Tools</b>, <b>More tools</b>, <b>Plugin management</b>.</p>
       </details>
       <details>
         <summary>There is no KoInsight entry in Tools</summary>
@@ -169,7 +170,7 @@
       </details>
       <details>
         <summary>Liseur Sync asks for a login</summary>
-        <p>The login in the file was revoked, or the file came from another server. Download a new setup from Devices and copy it over the old one.</p>
+        <p>The login in the setup was revoked, or the setup came from another server. Download a new one from Devices and copy it over the old folder.</p>
       </details>
       <details>
         <summary>My reading position isn't saved</summary>
@@ -177,15 +178,15 @@
       </details>
       <details>
         <summary>Can I see book covers while browsing?</summary>
-        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. With it your series appear in reading order, and your folders, shelves and newest books get their own rows. Install it before you delete the setup file and the setup adds your library to it as <b>Liseur Sync</b>. Otherwise add the address ending in <code>/opds/v2</code> yourself, with the same login.</p>
+        <p>The built-in catalog is a plain list of titles. <a href="https://github.com/greywolf1499/opds_plus.koplugin">OPDS Plus</a> is an optional community plugin that replaces that browser with one showing covers, a grid view and series details. You don't need it for anything on this page. With it your series appear in reading order, and your folders, shelves and newest books get their own rows. Install it before you delete the setup folder and the setup adds your library to it as <b>Liseur Sync</b>. Otherwise add the address ending in <code>/opds/v2</code> yourself, with the same login.</p>
       </details>
       <details>
-        <summary>My device can't use patches</summary>
+        <summary>My device has no plugins folder</summary>
         <p>The <a href="https://github.com/chmouel/liseur-sync/blob/main/docs/koreader.md#manual-setup">manual setup</a> lists the same settings to enter by hand. The ZIP's <code>credentials.txt</code> has every value.</p>
       </details>
       <details>
-        <summary>What does the file change?</summary>
-        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs, and to OPDS Plus when that plugin is installed, and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete it after KoInsight is installed.</p>
+        <summary>What does the setup change?</summary>
+        <p>It points Progress sync at your server and signs it in, adds Liseur Sync to the OPDS catalogs, and to OPDS Plus when that plugin is installed, and sets the KoInsight address. Other settings stay as they are. It runs once, so you can delete the folder after KoInsight is installed.</p>
       </details>
     </div>
   </div>
