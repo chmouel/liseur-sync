@@ -123,18 +123,14 @@ progress.custom_server = {{lua .SyncURL}}
 progress.username = {{lua .SyncSlot}}
 progress.userkey = {{lua .SyncKey}}
 progress.auto_sync = true
--- KOReader reads this table as written, without merging its defaults, so a
--- missing sync_forward would silently mean "never apply a pulled position".
-local ok_kosync, KOSync = pcall(require, "apps/reader/modules/kosync")
-if ok_kosync and KOSync and KOSync.default_settings then
-    for key, value in pairs(KOSync.default_settings) do
-        if progress[key] == nil then progress[key] = value end
-    end
-else
-    progress.sync_forward = progress.sync_forward or 1 -- PROMPT
-    progress.sync_backward = progress.sync_backward or 3 -- DISABLE
-    progress.checksum_method = progress.checksum_method or 0 -- BINARY
-end
+-- KOReader reads this table as written and does not merge its defaults, so a
+-- missing sync_forward would mean a pulled position is never applied. These
+-- are KOSync.default_settings from plugins/kosync.koplugin/main.lua, filled
+-- only where the reader has no choice of its own yet.
+progress.sync_forward = progress.sync_forward or 1 -- PROMPT
+progress.sync_backward = progress.sync_backward or 3 -- DISABLE
+progress.checksum_method = progress.checksum_method or 0 -- BINARY
+progress.send_metadata = progress.send_metadata or false
 kosync:saveSetting("settings", progress)
 kosync:flush()
 

@@ -135,7 +135,7 @@ func TestKOReaderSetupDownload(t *testing.T) {
 		"local reader = G_reader_settings\n",
 		`saveSetting("wifi_enable_action", "turn_on")`,
 		"local function liseur_setup()\n",
-		"KOSync.default_settings",
+		"progress.sync_forward = progress.sync_forward or 1",
 		"local ok, err = pcall(liseur_setup)\n",
 		"https.TIMEOUT = 8",
 	} {
