@@ -24,21 +24,17 @@ Devices page tells you when one of them is off.
    integrations**. The **E-readers** tab opens first.
 2. In **Set up KOReader**, type the reader's name, such as `Kobo Libra`, and
    press **Download KOReader setup**. Save the ZIP somewhere private.
-3. Unzip it. Quit KOReader completely and copy
-   `patches/1-liseur-setup.lua` into the `patches/` folder in KOReader's
-   directory, creating the folder if needed. On a Kobo that is
-   `.adds/koreader/patches/`, and the hidden `.adds` folder may need "show
-   hidden files" turned on. KOReader from F-Droid on Android ignores
-   patches. There, copy the `plugins/liseur-setup.koplugin` folder into
-   `plugins/` instead.
-4. Turn on Wi-Fi and start KOReader. The patch runs once and configures
-   everything. With the plugin variant, restart KOReader once more so the
-   new settings and the KoInsight plugin are picked up.
-5. Delete the ZIP from your computer. Delete `1-liseur-setup.lua` (or the
-   `liseur-setup.koplugin` folder) from the reader once
-   `plugins/koinsight.koplugin` exists there.
+3. Unzip it. Quit KOReader completely and copy the
+   `plugins/liseur-setup.koplugin` folder into the `plugins/` folder in
+   KOReader's directory. On a Kobo that is `.adds/koreader/plugins/`, and
+   the hidden `.adds` folder may need "show hidden files" turned on. On
+   Android it is `koreader/plugins/` in internal storage.
+4. Turn on Wi-Fi and start KOReader. The setup runs once. Restart KOReader
+   once more so the new settings and the KoInsight plugin are picked up.
+5. Delete the ZIP from your computer. Delete the `liseur-setup.koplugin`
+   folder from the reader once `plugins/koinsight.koplugin` exists there.
 
-The patch keeps unrelated settings. It replaces any Progress sync account
+The setup keeps unrelated settings. It replaces any Progress sync account
 already on the reader, adds a *Liseur Sync* entry to the OPDS catalogs
 (replacing an older one for the same server), turns on automatic Progress
 sync and sets KoInsight to sync on suspend. When the OPDS Plus plugin is
@@ -46,7 +42,7 @@ installed it also adds the OPDS 2.0 catalog to that plugin's own list.
 
 KoInsight comes from its archived repository at one fixed commit, and each
 file is checked against a known checksum before it is installed. A file that
-does not match is refused. If the reader was offline, the patch tries again
+does not match is refused. If the reader was offline, the setup tries again
 at the next start, so keep it until the plugin is in place.
 
 ### Check it
@@ -60,10 +56,8 @@ at the next start, so keep it until the plugin is in place.
 
 ## What the download contains
 
-- `patches/1-liseur-setup.lua`, the file to copy across.
-- `plugins/liseur-setup.koplugin/`, the same setup as a plugin, for builds
-  that ignore patches such as KOReader from F-Droid on Android.
-- `credentials.txt`, every value the patch writes, for a manual setup.
+- `plugins/liseur-setup.koplugin/`, the folder to copy across.
+- `credentials.txt`, every value the setup writes, for a manual setup.
 - `README.txt`, the short version of these steps.
 
 It creates three logins named after the reader: an API token with the
@@ -80,7 +74,7 @@ working.
 
 ## Manual setup
 
-Use this when neither the patch nor the plugin works. Download the setup as
+Use this when the setup plugin does not work. Download the setup as
 above and enter the values from
 `credentials.txt` on the reader.
 
@@ -132,7 +126,7 @@ a book by the file's content, so both readers need the same file. Keep
 If there is no KoInsight menu, the reader was offline at the first start. Turn
 on Wi-Fi and restart KOReader, or install the plugin by hand as above.
 
-If the patch did not run, KOReader ignores `patches/` when the file
-`patches/.patches_disabled` exists, and some builds ship with patches off,
-such as KOReader from F-Droid. Use the plugin variant there, or the manual
-setup.
+If the setup did not run, check that the folder is named
+`liseur-setup.koplugin` and sits directly in `plugins/`, and that the plugin
+is not switched off under **Tools → More tools → Plugin management**. Otherwise
+use the manual setup.

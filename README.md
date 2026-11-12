@@ -17,7 +17,7 @@ Project site: <https://chmouel.github.io/liseur-sync/>
 
 ## Set up KOReader
 
-Download one file from the Devices page, copy it into KOReader's `patches/` folder and start KOReader. The library appears in KOReader's built-in OPDS catalog, reading positions sync through its built-in Progress sync, and reading time goes to the server through the KoInsight plugin, which the setup downloads for you.
+Download the setup from the Devices page, copy its plugin folder into KOReader's `plugins/` folder and start KOReader. The library appears in KOReader's built-in OPDS catalog, reading positions sync through its built-in Progress sync, and reading time goes to the server through the KoInsight plugin, which the setup downloads for you.
 
 **[Step-by-step guide with screenshots](https://chmouel.github.io/liseur-sync/koreader/)**
 

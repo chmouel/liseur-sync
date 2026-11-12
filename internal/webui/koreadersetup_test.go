@@ -108,17 +108,13 @@ func TestKOReaderSetupDownload(t *testing.T) {
 		t.Fatalf("download: status=%d error=%v", resp.StatusCode, err)
 	}
 	files := unzipSetup(t, data)
-	if len(files) != 5 {
-		t.Fatalf("archive holds %d files, want 5", len(files))
+	if len(files) != 4 {
+		t.Fatalf("archive holds %d files, want 4", len(files))
 	}
-	patch := files["patches/1-liseur-setup.lua"]
-	if !strings.Contains(patch, "G_reader_settings or LuaSettings:open(") {
-		t.Fatal("setup markers must go through KOReader's open global settings when a plugin runs")
-	}
-	pluginMain := files["plugins/liseur-setup.koplugin/main.lua"]
-	if !strings.Contains(pluginMain, patch) || !strings.HasSuffix(pluginMain, "return { disabled = true }\n") ||
+	patch := files["plugins/liseur-setup.koplugin/main.lua"]
+	if !strings.Contains(patch, "local reader = G_reader_settings\n") || !strings.HasSuffix(patch, "return { disabled = true }\n") ||
 		files["plugins/liseur-setup.koplugin/_meta.lua"] == "" {
-		t.Fatal("plugin variant must wrap the patch and report itself disabled")
+		t.Fatal("plugin must use KOReader's global settings and report itself disabled")
 	}
 	creds := files["credentials.txt"]
 

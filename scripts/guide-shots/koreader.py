@@ -35,15 +35,15 @@ def seed(unzipped):
     """Lay out a fresh KOReader data directory the way a new device has it."""
     data = os.path.join(STATE, "koreader")
     shutil.rmtree(data, ignore_errors=True)
-    os.makedirs(os.path.join(data, "patches"))
+    os.makedirs(os.path.join(data, "plugins"))
     os.makedirs(BOOKS, exist_ok=True)
     with open(os.path.join(data, "settings.reader.lua"), "w") as f:
         f.write('return {\n    ["quickstart_shown_version"] = 2099000000,\n'
                 '    ["home_dir"] = %s,\n    ["lastdir"] = %s,\n    ["language"] = "en",\n}\n'
                 % (lua(BOOKS), lua(BOOKS)))
     if unzipped:
-        shutil.copy(os.path.join(unzipped, "patches", "1-liseur-setup.lua"),
-                    os.path.join(data, "patches", "1-liseur-setup.lua"))
+        shutil.copytree(os.path.join(unzipped, "plugins", "liseur-setup.koplugin"),
+                        os.path.join(data, "plugins", "liseur-setup.koplugin"))
 
 
 def lua(s):

@@ -19,7 +19,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
-//go:embed koreader/1-liseur-setup.lua.tmpl
+//go:embed koreader/setup.lua.tmpl
 var koreaderSetupSource string
 
 var koreaderSetupTemplate = template.Must(template.New("setup").Funcs(template.FuncMap{"lua": luaString}).Parse(koreaderSetupSource))
@@ -151,14 +151,14 @@ func (s *Server) handleKOReaderSetup(w http.ResponseWriter, r *http.Request, a s
 }
 
 func (s koreaderSetup) archive() ([]byte, error) {
-	var patch bytes.Buffer
-	if err := koreaderSetupTemplate.Execute(&patch, s); err != nil {
+	var setup bytes.Buffer
+	if err := koreaderSetupTemplate.Execute(&setup, s); err != nil {
 		return nil, err
 	}
-	// F-Droid's KOReader never runs patches but does load plugins. The same
-	// script therefore ships as a plugin: main.lua runs it at load, then
-	// returns disabled so the loader skips it.
-	pluginMain := "local function liseur_setup()\n" + patch.String() +
+	// A plugin loads on every KOReader build, unlike a patch (F-Droid's
+	// build never runs those). main.lua runs the setup at load, then returns
+	// disabled so the loader skips it.
+	pluginMain := "local function liseur_setup()\n" + setup.String() +
 		"\nend\nlocal ok, err = pcall(liseur_setup)\nif not ok then\n" +
 		"    require(\"logger\").warn(\"Liseur setup failed:\", err)\nend\nreturn { disabled = true }\n"
 	pluginMeta := "return {\n    name = \"liseur_setup\",\n    fullname = \"Liseur setup\",\n" +
@@ -179,25 +179,20 @@ KoInsight server URL: %s
 `, s.Base, s.Base, s.APIToken, s.Base, s.SyncURL, s.SyncSlot, s.SyncPassword, s.StatisticsURL)
 	readme := fmt.Sprintf(`KOReader setup for %s
 
-Automatic setup (KOReader with user patches enabled):
+Automatic setup:
 1. Quit KOReader completely.
-2. Copy patches/1-liseur-setup.lua into KOReader's patches/ folder
-   (create the folder if it does not exist).
-3. Turn Wi-Fi on and start KOReader. Progress sync, the OPDS catalog and
-   KoInsight are set up, and the KoInsight plugin is downloaded if it is
-   missing. If the reader was offline, it tries again on the next start.
-4. Delete patches/1-liseur-setup.lua once the KoInsight plugin is in
-   KOReader's plugins/ folder.
+2. Copy the folder plugins/liseur-setup.koplugin into KOReader's plugins/
+   folder.
+3. Turn Wi-Fi on and start KOReader, then restart it once more. Progress
+   sync, the OPDS catalog and KoInsight are set up, and the KoInsight
+   plugin is downloaded if it is missing. If the reader was offline, it
+   tries again on the next start.
+4. Delete plugins/liseur-setup.koplugin once plugins/koinsight.koplugin
+   exists.
 
 If the OPDS Plus plugin (github.com/greywolf1499/opds_plus.koplugin) is
-installed, the setup also adds the OPDS 2.0 catalog to it. Install the
-plugin before deleting the setup file and it is added on the next start.
-
-KOReader from F-Droid on Android disables user patches. There, copy
-plugins/liseur-setup.koplugin (the whole folder) into KOReader's plugins/
-folder instead, with Wi-Fi on, then start KOReader and restart it once more
-so the new settings and the KoInsight plugin are picked up. Delete the
-folder afterwards.
+installed, the setup also adds the OPDS 2.0 catalog to it. Install that
+plugin before deleting the setup folder and it is added on the next start.
 
 Manual setup: enter the values in credentials.txt.
 - Progress sync: Tools > Progress sync > Custom sync server, then
@@ -219,7 +214,6 @@ three on the server's Devices page: the API token, the Progress sync device
 	var out bytes.Buffer
 	z := zip.NewWriter(&out)
 	for _, file := range []struct{ name, body string }{
-		{"patches/1-liseur-setup.lua", patch.String()},
 		{"plugins/liseur-setup.koplugin/_meta.lua", pluginMeta},
 		{"plugins/liseur-setup.koplugin/main.lua", pluginMain},
 		{"credentials.txt", credentials},

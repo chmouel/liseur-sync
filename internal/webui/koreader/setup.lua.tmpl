@@ -75,7 +75,7 @@ end
 -- so it gets the JSON catalog. A list the plugin never saved is started
 -- from its own defaults rather than emptied. Like KoInsight, this is
 -- retried on each start, so a plugin installed after the setup still gets
--- the catalog while this file is in patches/.
+-- the catalog while this plugin is installed.
 local OPDS_PLUS_DIR = DataStorage:getDataDir() .. "/plugins/opds_plus.koplugin"
 
 local function add_opds_plus()
@@ -96,9 +96,9 @@ local function add_opds_plus()
     return true
 end
 
--- A patch runs before KOReader opens its global settings; a plugin runs after,
--- and a second handle on the same file would be overwritten at the next flush.
-local reader = G_reader_settings or LuaSettings:open(DataStorage:getDataDir() .. "/settings.reader.lua")
+-- KOReader's open global settings: a second handle on the same file would be
+-- overwritten at its next flush.
+local reader = G_reader_settings
 local setup_id = {{lua .ID}}
 
 if reader:readSetting("liseur_opds_plus_id") ~= setup_id then
