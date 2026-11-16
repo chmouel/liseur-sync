@@ -108,6 +108,12 @@ func testStatusOpsSurviveSync(t *testing.T, open OpenFunc) {
 	if len(snap.Ops) != 2 {
 		t.Fatalf("snapshot ops = %d, want the two positions", len(snap.Ops))
 	}
+	// The same read carries the newest status act, so a reader seeding a
+	// book learns the choice without a second request.
+	if len(snap.Status) != 1 || snap.Status[0].OpID != "act" ||
+		snap.Status[0].ReadingStatus != store.ReadingStatusUnread {
+		t.Fatalf("snapshot status = %+v, want the unread act", snap.Status)
+	}
 	for _, op := range snap.Furthest {
 		if op.Kind != store.OpKindPosition {
 			t.Fatalf("furthest ranked a status act: %+v", op)

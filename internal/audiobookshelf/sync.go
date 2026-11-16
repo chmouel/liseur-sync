@@ -105,7 +105,8 @@ func coverageOf(m Mapping) store.Coverage {
 	return store.CoveragePartial
 }
 
-func (s *Service) exchange(ctx context.Context, userID string, l *store.AudiobookLink, item Item, m Mapping, local store.Op, remote Progress, have bool) (string, error) {
+func (s *Service) exchange(ctx context.Context, userID string, l *store.AudiobookLink, item Item, m Mapping, head workHead, remote Progress, have bool) (string, error) {
+	local, localSeq, localStatus := head.position, head.seq, head.status
 	if s.Cfg.ActiveDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -s.Cfg.ActiveDays)
 		if local.ClientTS.Before(cutoff) && (!have || remote.LastUpdate < cutoff.UnixMilli()) {
@@ -128,7 +129,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	}
 	if have && mapped && local.Seq > 0 && sameEdition {
 		tolerance := (seg.BookEnd - seg.BookStart) / (seg.AudioEnd - seg.AudioStart)
-		complete := remote.IsFinished == (local.Progression >= reading.FinishedProgression && m.CoversLast)
+		complete := remote.IsFinished == (localStatus == reading.StatusFinished && m.CoversLast)
 		if !m.FullNarrative && remote.IsFinished && nearProgress(local.Progression, 0.998) {
 			complete = true
 		}
@@ -137,7 +138,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 			samePos = math.Abs(localAudioTime-remoteTime) <= 1.0
 		}
 		if samePos && complete {
-			l.PushedSeq, l.RemoteUpdatedMs = local.Seq, remote.LastUpdate
+			l.PushedSeq, l.RemoteUpdatedMs = localSeq, remote.LastUpdate
 			return "skipped", nil
 		}
 	}
@@ -146,18 +147,18 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	if !echo {
 		l.PushedMark = ""
 	}
-	if echo && local.Seq <= l.PushedSeq {
+	if echo && localSeq <= l.PushedSeq {
 		return "skipped", nil
 	}
 	pull := have && !echo && (local.Seq == 0 || remote.LastUpdate > local.ClientTS.UnixMilli())
-	if pull && remote.LastUpdate <= l.RemoteUpdatedMs && local.Seq > l.PushedSeq {
+	if pull && remote.LastUpdate <= l.RemoteUpdatedMs && localSeq > l.PushedSeq {
 		pull = false
 	}
 	if pull {
 		if remote.LastUpdate <= l.RemoteUpdatedMs || !mapped || (remote.CurrentTime == 0 && local.Progression > 0) {
 			return "skipped", nil
 		}
-		if err := s.ready(ctx, userID, *l, local.Seq); err != nil {
+		if err := s.ready(ctx, userID, *l, localSeq); err != nil {
 			return "", err
 		}
 		if !remote.IsFinished && remoteTime > seg.AudioStart {
@@ -187,14 +188,14 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		return "skipped", nil
 	}
 	at, mapped := localAudioTime, localMapped
-	finished := local.Progression >= reading.FinishedProgression && m.CoversLast
+	finished := localStatus == reading.StatusFinished && m.CoversLast
 	if finished {
 		at, mapped = audioEnd, true
 	}
 	if !mapped {
 		return "skipped", nil
 	}
-	if err := s.ready(ctx, userID, *l, local.Seq); err != nil {
+	if err := s.ready(ctx, userID, *l, localSeq); err != nil {
 		return "", err
 	}
 	at = math.Min(at, m.Duration)
@@ -205,7 +206,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	}
 	slog.Info("audiobookshelf pushed progress", "work_id", l.WorkID, "item_id", l.ItemID, "seq", local.Seq, "book_prog", local.Progression, "audio_time", at, "used_locator", usedLocator, "closed_sessions", closedSessions)
 	// Persist the mark even if the readback fails so the next pass recognizes the echo
-	l.PushedSeq, l.PushedMark = local.Seq, progressMark(Progress{CurrentTime: at, IsFinished: finished})
+	l.PushedSeq, l.PushedMark = localSeq, progressMark(Progress{CurrentTime: at, IsFinished: finished})
 	readback, err := s.Client.Progress(ctx, l.ItemID)
 	if err != nil {
 		return "pushed", err

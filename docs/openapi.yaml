@@ -1073,6 +1073,11 @@ paths:
         `furthest` leaves out operations at or below `furthest_floor`, the
         sequence up to which the reader forgot this work's furthest
         position; `ops` still contains them.
+
+        `status` carries the work's newest reading-status act, from the same
+        snapshot, so a client seeding a book learns the reader's explicit
+        choice in the same read as the place it resumes from. `ops` never
+        contains a status act: a status act is not a move.
       security: [{ deviceToken: [] }]  # requires sync scope
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1084,13 +1089,19 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ops, furthest, furthest_floor]
+                required: [ops, furthest, furthest_floor, status]
                 properties:
                   ops:
                     type: array
                     items: { $ref: "#/components/schemas/Op" }
                   furthest:
                     type: array
+                    items: { $ref: "#/components/schemas/Op" }
+                  status:
+                    type: array
+                    description: |
+                      The newest reading-status act, or an empty array when
+                      the reader never made one.
                     items: { $ref: "#/components/schemas/Op" }
                   furthest_floor:
                     type: integer

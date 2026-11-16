@@ -456,6 +456,32 @@ export async function readingState({
 }
 
 /**
+ * rememberReadingChoice keeps the newest explicit reading-status act the
+ * server named for this book (ADR-0066). The offline and detached reader
+ * shells are served without it, so without this a book marked unread
+ * would stay unread after the reader resumes it offline: the positions
+ * travel, the withdrawal the server needs does not.
+ */
+export async function rememberReadingChoice({
+  partition = storagePartition(), account, epoch, deviceID, bookID, choice = "",
+} = {}) {
+  if (!partition || !account || !bookID) return;
+  return withDB(db => guardedWork(db, [READING], { partition, account, epoch }, tx => {
+    const store = tx.objectStore(READING);
+    const identity = { partition, account, deviceID, bookID };
+    const key = keyForReading(identity);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result || { key, ...identity, baseline: null, local: null };
+      if ((record.readingChoice || "") === choice) return;
+      record.readingChoice = choice;
+      store.put(record);
+    };
+  }));
+}
+
+
+/**
  * agreeReadingBaseline records the position this device and the server
  * agree on. It moves on exactly three events: the position read when the
  * book opens, an acknowledged local op, and a remote position the reader

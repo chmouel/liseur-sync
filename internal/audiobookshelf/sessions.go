@@ -135,7 +135,7 @@ func (s *Service) importSession(ctx context.Context, userID string, l store.Audi
 	if edition == "" {
 		ses.EditionSHA = nil
 	}
-	if err := s.readyBook(ctx, userID, l, local.Seq, false); err != nil {
+	if err := s.readyBook(ctx, userID, l, local.seq, false); err != nil {
 		return err
 	}
 	status, err := s.Store.AppendAudiobookSession(ctx, userID, ses, time.UnixMilli(remote.UpdatedAt), raw)
