@@ -35,6 +35,10 @@ func TestReaderPublicationCacheIsBounded(t *testing.T) {
 	runNodeTests(t, "readerpublication.test.mjs")
 }
 
+func TestReaderOverlappingFrameHides(t *testing.T) {
+	runNodeTests(t, "../../../tools/reader/framehide.test.js")
+}
+
 // runNodeTests runs one `node --test` file from testdata. These are the
 // reader checks that run in CI: the browser check needs a Chromium and
 // skips without one.
