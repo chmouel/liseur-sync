@@ -266,7 +266,8 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 		Ops           []opJSON `json:"ops"`
 		Furthest      []opJSON `json:"furthest"`
 		FurthestFloor int64    `json:"furthest_floor"`
-	}{Ops: []opJSON{}, Furthest: []opJSON{}, FurthestFloor: snapshot.FurthestFloor}
+		Status        []opJSON `json:"status"`
+	}{Ops: []opJSON{}, Furthest: []opJSON{}, FurthestFloor: snapshot.FurthestFloor, Status: []opJSON{}}
 	derive := s.newLocatorDeriver(r)
 	defer derive.close()
 	for _, o := range snapshot.Ops {
@@ -274,6 +275,9 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, o := range snapshot.Furthest {
 		out.Furthest = append(out.Furthest, derive.op(o))
+	}
+	for _, o := range snapshot.Status {
+		out.Status = append(out.Status, derive.op(o))
 	}
 	writeJSON(w, http.StatusOK, out)
 }

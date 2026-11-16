@@ -9,6 +9,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/epub"
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -137,8 +138,8 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 		}
 		if l, ok := links[item.ID]; ok {
 			row.Link = &l
-			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.Seq > 0 {
-				prog := local.Progression
+			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.position.Seq > 0 {
+				prog := local.position.Progression
 				row.LocalProgression = &prog
 			}
 			if book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID); err == nil {
@@ -177,8 +178,8 @@ func (s *Service) View(ctx context.Context, userID string) ([]ItemView, error) {
 		if !seen[id] {
 			l.State = store.AudiobookLinkSuspended
 			row := ItemView{Item: Item{ID: id, Title: "Unavailable audiobook"}, Link: &l}
-			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.Seq > 0 {
-				prog := local.Progression
+			if local, err := s.head(ctx, userID, l.WorkID); err == nil && local.position.Seq > 0 {
+				prog := local.position.Progression
 				row.LocalProgression = &prog
 			}
 			if book, err := s.Store.CatalogBookByID(ctx, userID, l.BookID); err == nil {
@@ -376,19 +377,49 @@ func (s *Service) readyBook(ctx context.Context, userID string, l store.Audioboo
 		if err != nil {
 			return err
 		}
-		if local.Seq != expectedSeq {
+		if local.seq != expectedSeq {
 			return store.ErrConflict
 		}
 	}
 	return nil
 }
 
-func (s *Service) head(ctx context.Context, userID, workID string) (store.Op, error) {
+// workHead is what an exchange compares: the work's newest position, the
+// status the reader resolved to, and the newest seq of either kind — a
+// status act's seq none of the position fields carry (ADR-0066).
+type workHead struct {
+	position store.Op
+	seq      int64
+	status   reading.Status
+}
+
+// head reads a work's newest position and newest status act. A work
+// whose only op is a status act has no position, and still gets its
+// status.
+func (s *Service) head(ctx context.Context, userID, workID string) (workHead, error) {
+	out := workHead{}
 	ops, err := s.Store.Positions(ctx, userID, workID, 1)
-	if err != nil || len(ops) == 0 {
-		return store.Op{}, err
+	if err != nil {
+		return out, err
 	}
-	return ops[0], nil
+	if len(ops) > 0 {
+		out.position = ops[0]
+		out.seq = ops[0].Seq
+	}
+	readings, err := s.Store.WorkReadings(ctx, userID, []string{workID})
+	if err != nil {
+		return out, err
+	}
+	r, ok := readings[workID]
+	if !ok {
+		return out, nil
+	}
+	switch newest := r.NewestSeq(); {
+	case newest > out.seq:
+		out.seq = newest
+	}
+	out.status = r.Resolve()
+	return out, nil
 }
 
 func (s *Service) revalidate(ctx context.Context, userID string, l store.AudiobookLink, item Item) (store.AudiobookLink, error) {

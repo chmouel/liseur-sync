@@ -9,11 +9,15 @@ import { createContext, runInContext } from "node:vm";
 
 const source = readFileSync(new URL("../static/reader-app.js", import.meta.url), "utf8");
 
-function reader({ readingChoice = "", mapping = null, fromAudio = null, lastSynced = -1 } = {}) {
+function reader({
+  readingChoice = "", mapping = null, fromAudio = null, lastSynced = -1,
+  audioDriven = false,
+} = {}) {
   const context = createContext({
-    cfg: { readingChoice },
+    readingChoice,
     audioInfo: mapping ? { mapping } : null,
     audioSyncLocator: fromAudio,
+    audioDrivenPage: audioDriven,
     audioLastSyncedProg: lastSynced,
     finite: Number.isFinite,
   });
@@ -39,11 +43,18 @@ test("a position worked out from the recording reports its span", () => {
 });
 
 test("the page narration moved the view to is still the recording's place", () => {
-  // Following along clears the audio locator, but the fraction it left
-  // behind is the mapped one and must keep its coverage.
-  const r = reader({ mapping: { full_narrative: false }, fromAudio: null, lastSynced: 0.998 });
+  // Following along clears the audio locator, and the engine recomputes
+  // the displayed fraction, which need not be the mapped one. The
+  // navigation itself is what keeps the coverage, not the fraction.
+  const r = reader({
+    mapping: { full_narrative: false }, fromAudio: null, lastSynced: 0.998, audioDriven: true,
+  });
   assert.equal(r.pendingCoverage(locator(0.998)), "partial");
-  assert.equal(r.pendingCoverage(locator(0.4)), null);
+  assert.equal(r.pendingCoverage(locator(0.4)), "partial");
+});
+test("a page the reader turned again carries no coverage", () => {
+  const r = reader({ mapping: { full_narrative: false }, audioDriven: false });
+  assert.equal(r.pendingCoverage(locator(0.998)), null);
 });
 
 test("resuming withdraws an unread choice, once, under a derived id", () => {

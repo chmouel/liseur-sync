@@ -60,6 +60,7 @@ import {
   deploymentPrefix,
   storagePartition,
   updateOfflineAnnotation,
+  rememberReadingChoice,
 } from "./offline-storage.js";
 import * as CFI from "./vendor/foliate/epubcfi.js";
 
@@ -83,6 +84,12 @@ const annotationsEnabled = false;
 if (cfg.offline) {
   cfg.bookID = new URL(location.href).searchParams.get("book") || "";
 }
+// readingChoice is the newest explicit choice the server named for this
+// book (ADR-0066). A shell served before the choice was known -- the
+// offline and detached ones -- learns it from the sync read and keeps
+// it, so resuming reading still withdraws an unread. A page that never
+// learned one withdraws nothing.
+let readingChoice = cfg.readingChoice || "";
 
 // On the separate reader origin (ADR-0007 phase 3) there is no session
 // and no CSRF token, because there is no cookie on this hostname at
@@ -778,6 +785,23 @@ async function lastPosition() {
   stamp.identity = auth.responseIdentity(resp);
   const data = await resp.json();
   const ops = data.ops || [];
+  // The same read carries the work's newest status act, so a shell served
+  // without the choice learns it here and keeps it (ADR-0066).
+  const newestAct = (Array.isArray(data.status) ? data.status : [])
+    .filter(op => op && op.kind === "status")
+    .sort((a, b) => Number(b.seq) - Number(a.seq))[0];
+  if (newestAct) {
+    const choice = String(newestAct.reading_status || "");
+    if (choice !== readingChoice) {
+      readingChoice = choice;
+      readingChoiceWithdrawn = false;
+    }
+    if (offlineContext) {
+      await rememberReadingChoice({
+        ...offlineContext, bookID: cfg.bookID, choice,
+      }).catch(() => {});
+    }
+  }
   const floor = Number(data.furthest_floor) > 0 ? Math.trunc(Number(data.furthest_floor)) : 0;
   const seen = [...ops, ...(data.furthest || [])].reduce(
     (max, op) => Math.max(max, Number(op?.seq) > 0 ? Math.trunc(Number(op.seq)) : 0),
@@ -2631,9 +2655,7 @@ function pendingCoverage(locator) {
   const mapping = audioInfo?.mapping;
   if (!mapping) return null;
   const progression = locator?.locations?.totalProgression;
-  const fromAudio = audioSyncLocator
-    ? true
-    : finite(audioLastSyncedProg) && finite(progression) && progression === audioLastSyncedProg;
+  const fromAudio = !!audioSyncLocator || audioDrivenPage;
   if (!fromAudio) return null;
   return mapping.full_narrative ? "full" : "partial";
 }
@@ -2649,7 +2671,7 @@ let readingChoiceWithdrawn = false;
 // Its id is derived from the position's, so a push replayed byte for
 // byte repeats the same act rather than adding a second one.
 function withdrawalAct(op) {
-  if (cfg.readingChoice !== "unread" || readingChoiceWithdrawn) return null;
+  if (readingChoice !== "unread" || readingChoiceWithdrawn) return null;
   return {
     op_id: "unread:" + op.op_id,
     work_id: op.work_id,
@@ -2721,17 +2743,13 @@ async function pushPosition() {
       await saving;
       // The withdrawal is a second op, so it is a second queue record,
       // written before anything drains and only once per page.
+      // The withdrawal is a second queue record, written before anything
+      // drains and only once per page. A refused write is not a
+      // withdrawal: the error reaches the handler below, which keeps the
+      // page owed and says storage failed, so the next write tries again.
       if (act) {
-        // Only a stored withdrawal counts. Claiming it after a refused
-        // write would leave the position queued without the act that
-        // withdraws the choice, and the flag would stop the next write
-        // from trying again.
-        try {
-          await queueOfflineAct({ ...context, bookID: cfg.bookID, op: act });
-          readingChoiceWithdrawn = true;
-        } catch {
-          // Kept owed: the next successful write carries it.
-        }
+        await queueOfflineAct({ ...context, bookID: cfg.bookID, op: act });
+        readingChoiceWithdrawn = true;
       }
       if (leaving && context === offlineContext) readingCoordinator?.leave();
       if (!current(stamp)) return;
@@ -4825,6 +4843,7 @@ window.addEventListener("beforeunload", () => {
           if (interactionPending) {
             interactionPending = false;
             audioSyncLocator = null;
+            audioDrivenPage = false;
             readingDirty = true;
             catchup.moved();
             hideCatchup();
@@ -4982,6 +5001,7 @@ window.addEventListener("beforeunload", () => {
         : [];
       const dirty = queued.some(record => record.deviceID === offlineContext?.deviceID &&
         record.bookID === cfg.bookID);
+      if (!readingChoice && stored?.readingChoice) readingChoice = stored.readingChoice;
       const result = await lastPosition();
       const remote = result.ok ? result.op : null;
       const baseline = stored ? stored.baseline : remote;
@@ -5059,6 +5079,11 @@ let audioLastSyncedChapProg = -1;
 let audioLastSyncedAudioTime = -Infinity;
 let audioLastSyncedHref = "";
 let audioSyncLocator = null;
+// audioDrivenPage says the page in front of the reader was moved by the
+// narration rather than by the reader. It outlives audioSyncLocator,
+// which the navigation itself clears, and is what tells a pushed
+// position that it came from the recording (ADR-0066).
+let audioDrivenPage = false;
 let audioSTTAnchor = null;
 let sttReqSeq = 0;
 let sttAbort = null;
@@ -5476,6 +5501,7 @@ async function navigateToAudioTarget(locator, progression) {
         await view.renderer.goTo(resolved);
         if (generation !== audioNavigationGeneration || !followAudio || !ready || audioBar?.hidden) return false;
         audioSyncLocator = null;
+        audioDrivenPage = true;
         if (finite(progression)) audioLastSyncedProg = progression;
         if (finite(locator?.locations?.progression)) {
           audioLastSyncedChapProg = locator.locations.progression;
@@ -5689,6 +5715,7 @@ async function syncAudioFromCurrentPage(autoPlay = false) {
     if (!ready || audioBar?.hidden || generation !== audioNavigationGeneration || !auth.responseCurrent(resp)) return;
     if (Number.isFinite(data?.audio_time)) {
       audioSyncLocator = null;
+      audioDrivenPage = false;
       audioEl.currentTime = data.audio_time;
       updateAudioTimelineUI();
       setFollowAudio(true);

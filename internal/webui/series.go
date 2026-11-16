@@ -287,7 +287,7 @@ func nextUpVolume(vols []SeriesVolume) *SeriesVolume {
 		if v.Started() {
 			return v
 		}
-		if unstarted == nil && v.Progression == nil && v.CanRead {
+		if unstarted == nil && (v.Status == "" || v.Status.UnreadShelf()) && v.CanRead {
 			unstarted = v
 		}
 	}

@@ -195,6 +195,30 @@ const furthestRank = `ROW_NUMBER() OVER (
 const aboveFurthestFloor = `seq > (SELECT w.furthest_floor FROM works w
 	WHERE w.user_id = ops.user_id AND w.id = ops.work_id)`
 
+// statusOpsTx returns a work's newest status acts, newest first, inside
+// the caller's snapshot (ADR-0066). They travel beside the positions so a
+// reader seeding a book learns the explicit choice in the same read as
+// the place it resumes from.
+func statusOpsTx(ctx context.Context, db querier, userID, workID string, limit int) ([]store.Op, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+opCols+` FROM ops
+		 WHERE user_id = ? AND work_id = ? AND kind = 'status'
+		 ORDER BY seq DESC LIMIT ?`, userID, workID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Op
+	for rows.Next() {
+		o, err := scanOp(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 func furthestOpsTx(ctx context.Context, tx *sql.Tx, userID, workID string) ([]store.Op, error) {
 	where := `user_id = ? AND kind = 'position'`
 	args := []any{userID}
@@ -331,6 +355,11 @@ func (s *Store) PositionSnapshot(ctx context.Context, userID, workID string, lim
 	if err != nil {
 		return snapshot, err
 	}
+	status, err := statusOpsTx(ctx, tx, userID, workID, 1)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.Status = status
 	err = tx.QueryRowContext(ctx,
 		`SELECT furthest_floor FROM works WHERE user_id = ? AND id = ?`,
 		userID, workID).Scan(&snapshot.FurthestFloor)

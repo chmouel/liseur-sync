@@ -186,7 +186,7 @@ func TestPositionExchange(t *testing.T) {
 				t.Fatalf("report: %+v", rep)
 			}
 			head, err := f.service.head(t.Context(), f.user.ID, l.WorkID)
-			if err != nil || !nearProgress(head.Progression, tc.want) {
+			if err != nil || !nearProgress(head.position.Progression, tc.want) {
 				t.Fatalf("head: %+v %v", head, err)
 			}
 			before := f.patches
@@ -212,7 +212,7 @@ func TestPositionExchange(t *testing.T) {
 			t.Fatalf("edition mismatch pull: %+v patches=%d", rep, f.patches)
 		}
 		head, err := f.service.head(t.Context(), f.user.ID, l.WorkID)
-		if err != nil || !nearProgress(head.Progression, .2) {
+		if err != nil || !nearProgress(head.position.Progression, .2) {
 			t.Fatalf("head: %+v %v", head, err)
 		}
 	})
@@ -233,8 +233,8 @@ func TestPartialRecordingNeverCompletesEbook(t *testing.T) {
 				t.Fatalf("pull: %+v", rep)
 			}
 			head, _ := f.service.head(t.Context(), f.user.ID, l.WorkID)
-			if head.Progression > .998 {
-				t.Fatalf("partial completion: %v", head.Progression)
+			if head.position.Progression > .998 {
+				t.Fatalf("partial completion: %v", head.position.Progression)
 			}
 			f.pass(t)
 			if f.patches != 0 {
@@ -475,7 +475,7 @@ func TestRemoteSeekBackIsNotAnEcho(t *testing.T) {
 		t.Fatalf("seek back: %+v patches=%d", rep, f.patches)
 	}
 	head, err := f.service.head(t.Context(), f.user.ID, l.WorkID)
-	if err != nil || !nearProgress(head.Progression, .5) {
+	if err != nil || !nearProgress(head.position.Progression, .5) {
 		t.Fatalf("head: %+v %v", head, err)
 	}
 }

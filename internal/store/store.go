@@ -1226,6 +1226,21 @@ type WorkReading struct {
 	HasPosition bool
 	Progression float64
 	Coverage    Coverage
+	// PositionSeq and ChoiceSeq are the seq of the newest op of each
+	// kind, zero when there is none. A writer that has to notice a
+	// status act (Audiobookshelf's change detection, ADR-0066) needs
+	// the newest seq of either kind, not just of the position.
+	PositionSeq int64
+	ChoiceSeq   int64
+}
+
+// NewestSeq is the seq of the newest op of either kind, which is what a
+// partner compares to tell whether anything moved.
+func (r WorkReading) NewestSeq() int64 {
+	if r.PositionSeq > r.ChoiceSeq {
+		return r.PositionSeq
+	}
+	return r.ChoiceSeq
 }
 
 // Resolve applies the one resolution rule (ADR-0066) to these facts.
@@ -1459,6 +1474,11 @@ type PositionSnapshot struct {
 	Ops           []Op
 	Furthest      []Op
 	FurthestFloor int64
+	// Status is the work's newest status act, empty when the reader
+	// never made one. A reader that seeds a book from this snapshot
+	// learns the explicit choice in the same read as the positions
+	// (ADR-0066), so it knows whether resuming withdraws one.
+	Status []Op
 }
 
 // Heads is the recovery snapshot: newest op per (work, device), plus
