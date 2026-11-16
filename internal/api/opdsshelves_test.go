@@ -133,7 +133,7 @@ func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
 	}
 	for shelf, want := range map[string]string{
 		"reading":        "Explicit reading Withdrawn",
-		"unread":         "Backonthepile",
+		"unread":         "Backonthepile Wanted",
 		"last-read":      "Explicit reading Read Withdrawn",
 		"want-to-read":   "Wanted",
 		"paused":         "Paused",
@@ -142,5 +142,14 @@ func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
 		if got := strings.Join(titles(shelf), " "); got != want {
 			t.Errorf("%s = %q, want %q", shelf, got, want)
 		}
+	}
+	// A paused book has been started but is not being read, and the
+	// reader is in the middle of it: it is on neither the unread nor the
+	// currently-reading shelf, and only its own shelf names it.
+	if got := strings.Join(titles("reading"), " "); strings.Contains(got, "Paused") {
+		t.Errorf("paused is on the reading shelf: %q", got)
+	}
+	if got := strings.Join(titles("unread"), " "); strings.Contains(got, "Abandoned") {
+		t.Errorf("an unfinished book is on the unread shelf: %q", got)
 	}
 }

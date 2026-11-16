@@ -206,6 +206,12 @@ templ libraryEmpty(v LibraryView) {
 			@emptyState("Nothing in progress", "Books you have started and not finished appear here.", "", "")
 		case filterFinished:
 			@emptyState("Nothing finished yet", "Books you have read to the end appear here.", "", "")
+		case filterWantToRead:
+			@emptyState("Nothing waiting to be read", "Books you marked to read later appear here.", "", "")
+		case filterPaused:
+			@emptyState("Nothing paused", "Books you put down for now appear here.", "", "")
+		case filterDidNotFinish:
+			@emptyState("Nothing put aside", "Books you marked as not finished appear here.", "", "")
 		case filterUnread:
 			@emptyState("Nothing unread", "Every book here has been opened at least once.", "", "")
 		case filterAudio:

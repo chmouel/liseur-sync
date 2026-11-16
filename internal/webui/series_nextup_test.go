@@ -50,6 +50,54 @@ func TestNextUpVolumeReadsTheResolvedStatus(t *testing.T) {
 			},
 			wanted: "",
 		},
+		{
+			// ADR-0067: a book waiting to be read is unstarted and on
+			// the unread shelf, so it is the natural thing to offer.
+			name: "a volume waiting to be read is next up",
+			vols: []SeriesVolume{
+				{BookID: "one", Status: reading.StatusFinished, Progression: &half, CanRead: true},
+				{BookID: "two", Status: reading.StatusWantToRead, CanRead: true},
+			},
+			wanted: "two",
+		},
+		{
+			// Explicit reading before any position: started, and it
+			// beats a volume merely waiting its turn.
+			name: "explicit reading with no position is next up",
+			vols: []SeriesVolume{
+				{BookID: "one", Status: reading.StatusWantToRead, CanRead: true},
+				{BookID: "two", Status: reading.StatusReading, CanRead: true},
+			},
+			wanted: "two",
+		},
+		{
+			// Put down for now is a deliberate "not now": offering it
+			// back would be arguing with the reader.
+			name: "a paused volume is not next up",
+			vols: []SeriesVolume{
+				{BookID: "one", Status: reading.StatusPaused, Progression: &half, CanRead: true},
+				{BookID: "two", Status: reading.StatusFinished, CanRead: true},
+			},
+			wanted: "",
+		},
+		{
+			name: "a volume the reader gave up on is not next up",
+			vols: []SeriesVolume{
+				{BookID: "one", Status: reading.StatusDidNotFinish, Progression: &half, CanRead: true},
+				{BookID: "two", Status: reading.StatusPaused, CanRead: true},
+			},
+			wanted: "",
+		},
+		{
+			// A pending decision is still a decision: a paused book does
+			// not get offered just because a later volume is unread.
+			name: "a paused volume does not hide the one waiting behind it",
+			vols: []SeriesVolume{
+				{BookID: "one", Status: reading.StatusPaused, Progression: &half, CanRead: true},
+				{BookID: "two", Status: reading.StatusUnread, CanRead: true},
+			},
+			wanted: "two",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := nextUpVolume(tc.vols)

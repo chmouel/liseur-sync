@@ -279,15 +279,22 @@ func (s *Server) readerProgress(
 
 // nextUpVolume picks what to open. A volume in progress beats an
 // unstarted one, because carrying on is what somebody opening a series
-// they are already reading means.
+// they are already reading means. Which states may be offered at all is
+// the reading package's decision, so the shelf, the library and the OPDS
+// feed cannot disagree about a paused volume.
 func nextUpVolume(vols []SeriesVolume) *SeriesVolume {
 	var unstarted *SeriesVolume
 	for i := range vols {
 		v := &vols[i]
-		if v.Started() {
+		status := v.Status
+		if status == "" {
+			// No work behind the volume, so nothing resolved it.
+			status = reading.StatusReadyToRead
+		}
+		if status == reading.StatusReading {
 			return v
 		}
-		if unstarted == nil && (v.Status == "" || v.Status.UnreadShelf()) && v.CanRead {
+		if unstarted == nil && status.NextUp() && v.CanRead {
 			unstarted = v
 		}
 	}

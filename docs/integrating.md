@@ -449,11 +449,38 @@ and a position that arrives after a newer act changes where the reader
 is, never what they decided. `client_ts` stays a claim and is never an
 ordering key.
 
-Deploy the server before clients that write the four additional values:
-older servers reject those writes. Upgrade all clients for an account
-before using the new choices; older clients may not understand them and
-can display or overwrite a different status. Clients must preserve an
-unknown choice and must not silently replace it with another value.
+#### Which shelf each value belongs to
+
+The surfaces this server renders resolve a book in one place, so a client
+that mirrors them cannot disagree with the browser:
+
+- `ready_to_read` (derived: no position), `unread` and `want_to_read` are
+  on the unread shelf. A book waiting to be read is unstarted, not
+  started, and a shelf that held only `unread` would lose it.
+- `reading` is on the reading shelf, and is the book to offer next — even
+  when the reader chose it before recording any position.
+- `paused` and `did_not_finish` have a shelf of their own and are on no
+  other. They are a deliberate "not now" and "never", so they are never
+  offered as the next thing to open.
+- `finished` is on the finished shelf only.
+
+#### Rollout
+
+Ship client support before using the four additional values. Today's
+released client cannot parse them: an unrecognised `reading_status` is
+dropped, and a client that substitutes a status of its own overwrites what
+the reader said on its next pull, because the substitute becomes the
+newest act and wins by `seq`. **A client must never write back a guessed
+status for one it cannot read.** Ignoring an op is recoverable; guessing
+is not. Emit the new values for an account only once every client that
+account syncs understands them.
+
+Deploy the server before the clients that write them, too: an older
+server refuses the whole batch with `400` and `code: bad_value`. That
+refusal appends nothing, so the reader's existing choice survives and the
+client can retry with one of `finished`, `unread` or `automatic`, or wait
+for the upgrade. The enum needs no migration in either direction:
+`reading_status` already stores whatever this edge accepted.
 
 #### Writing a locator another reader can use
 
@@ -532,12 +559,13 @@ retain distinct edition-less ownership groups rather than combining their
 maxima. This provenance is response-only; native writers do not assign it.
 `/v1/works/{id}/positions` also carries a `status` array holding the work's
 newest reading-status act, an empty array when the reader never made one.
-A status act decides whether a book is finished or unread regardless of the
-position its `progression` field carries, so a client seeding a book should
-read `status` in the same request and keep the choice: resuming an unread
-book means sending an `automatic` act beside the position, and a client that
-never learned the choice cannot withdraw it. `ops` never contains a status
-act, because a status act is not a move.
+A status act decides what the book is — read, unread, being read, waiting to
+be read, paused or given up on — regardless of the position its `progression`
+field carries, so a client seeding a book should read `status` in the same
+request and keep the choice: resuming an unread book means sending an
+`automatic` act beside the position, and a client that never learned the
+choice cannot withdraw it. `ops` never contains a status act, because a
+status act is not a move.
 Operations imported from Audiobookshelf have `origin: "audiobookshelf"`,
 the linked ebook edition, and a Readium locator. Clients should accept
 new origin values without rejecting the operation.

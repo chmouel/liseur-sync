@@ -270,7 +270,15 @@ Positions are an **append-only operation log per work per user**:
   and synced but is not a move: no position query reads it.
   The additional explicit choices `want_to_read`, `reading`, `paused`
   and `did_not_finish` persist until another status act changes them;
-  position updates do not clear them (ADR-0067).
+  position updates do not clear them (ADR-0067). Resolution reads the
+  choice first, and only then the position: `automatic` and "no choice"
+  derive, and a partial-coverage position can never finish a book, though
+  an explicit `finished` still can. Which shelf a resolved value belongs
+  on is decided once, with the rule: a book waiting to be read is
+  unstarted and shares the unread shelf with `unread` and
+  `ready_to_read`, `reading` is the book offered next even before it has
+  a position, and a `paused` or `did_not_finish` book is on its own
+  shelf and is never offered next.
 - `progression` (0..1) is the lingua franca; every client can produce
   and consume it. It is the only field the server itself reads.
 - `locator` is Liseur's exact position, opaque to the server, replayed
@@ -285,6 +293,14 @@ Positions are an **append-only operation log per work per user**:
   `conflict`; a client that wants its replays recognised after a
   credential lapse keeps its device identity
   ([ADR-0033](adr/0033-a-device-outlives-its-token.md)).
+
+The four choices widen the wire enum without a migration, but they are not
+backward compatible on the client side: a released client cannot parse
+them, so client support ships before the server emits them for a reader,
+and a client must never write back a substitute status for one it cannot
+read. An older server refuses such a write with `400` on the whole batch
+and appends nothing, so the refusal costs the reader a retry rather than
+their choice ([ADR-0067](adr/0067-richer-reading-status.md)).
 
 The server assigns each accepted op a **per-user monotonic `seq`**.
 
