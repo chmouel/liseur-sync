@@ -387,13 +387,16 @@ and a status act, which says what the reader decided about the book:
 
 - `kind` is absent for a position and `"status"` for an act. No other
   value is accepted (`400`, `code: bad_value`).
-- `reading_status` is `finished`, `unread` or `automatic`, and is
+- `reading_status` is `finished`, `unread`, `automatic`, `want_to_read`,
+  `reading`, `paused` or `did_not_finish`, and is
   present exactly when `kind` is `status` — a status act without one is
   `400`, `code: missing_field`. `finished` is "the book is read, at
   whatever position I am at"; `unread` is "back on the pile";
   `automatic` withdraws an earlier choice, so the position decides
-  again. Send `automatic` when you resume reading and clear a local
-  override, not when you merely have none.
+  again. The four additional values are explicit choices that persist
+  across position updates, including opening or reading a paused or
+  unfinished book. Send `automatic` only when the reader withdraws a
+  choice, not when the client merely has none.
 - A status act still carries your own current `progression`, and it is
   required and stored. **No position query reads it.** Furthest
   ranking, `/v1/works/{id}/positions`, the "newest position" in
@@ -413,13 +416,16 @@ different `kind`, `reading_status` or `coverage` is a `conflict`, not a
 `duplicate`. Derive a status act's `op_id` from the status revision it
 records, not from the position revision, or two acts collide.
 
-Resolve a book's status in this order — it is the same rule Liseur
-implements, and `0.97` is the same number on both sides:
+Resolve a book's status in this order; the automatic threshold is `0.97`:
 
 ```
 choice = reading_status of the newest status act (highest seq)
 position, coverage = newest position op (highest seq)
 
+want_to_read  -> want_to_read
+reading       -> reading
+paused        -> paused
+did_not_finish -> did_not_finish
 finished      -> finished          # the choice wins, wherever the position is
 unread        -> unread            # put back on the pile
 automatic     -> derive
@@ -442,6 +448,12 @@ newest act wins by `seq`, so an act queued offline and sent later wins,
 and a position that arrives after a newer act changes where the reader
 is, never what they decided. `client_ts` stays a claim and is never an
 ordering key.
+
+Deploy the server before clients that write the four additional values:
+older servers reject those writes. Upgrade all clients for an account
+before using the new choices; older clients may not understand them and
+can display or overwrite a different status. Clients must preserve an
+unknown choice and must not silently replace it with another value.
 
 #### Writing a locator another reader can use
 

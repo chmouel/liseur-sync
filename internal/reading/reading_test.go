@@ -107,3 +107,23 @@ func TestUnreadIsNotTheDerivedPile(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitExtendedStatusOverridesPosition(t *testing.T) {
+	for _, tc := range []struct {
+		choice Override
+		want   Status
+	}{
+		{OverrideWantToRead, StatusWantToRead},
+		{OverrideReading, StatusReading},
+		{OverridePaused, StatusPaused},
+		{OverrideDidNotFinish, StatusDidNotFinish},
+	} {
+		t.Run(string(tc.choice), func(t *testing.T) {
+			for _, progress := range []float64{0, 0.5, 1} {
+				if got := Resolve(tc.choice, &progress, false); got != tc.want {
+					t.Fatalf("progress %v: got %q, want %q", progress, got, tc.want)
+				}
+			}
+		})
+	}
+}

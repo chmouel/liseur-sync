@@ -268,6 +268,9 @@ Positions are an **append-only operation log per work per user**:
   act; `coverage` is optional on a position and says whether the
   recording it came from spans the whole book. A status act is stored
   and synced but is not a move: no position query reads it.
+  The additional explicit choices `want_to_read`, `reading`, `paused`
+  and `did_not_finish` persist until another status act changes them;
+  position updates do not clear them (ADR-0067).
 - `progression` (0..1) is the lingua franca; every client can produce
   and consume it. It is the only field the server itself reads.
 - `locator` is Liseur's exact position, opaque to the server, replayed

@@ -155,6 +155,7 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 			readings = nil
 		}
 		rd := readings[link.WorkID]
+		v.Choice = string(rd.Choice)
 		if rd.HasPosition {
 			v.Progression = &rd.Progression
 		}

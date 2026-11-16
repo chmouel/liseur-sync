@@ -125,9 +125,9 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.ReadingStatus != nil {
 			switch store.ReadingStatus(*in.ReadingStatus) {
-			case store.ReadingStatusFinished, store.ReadingStatusUnread, store.ReadingStatusAutomatic:
+			case store.ReadingStatusFinished, store.ReadingStatusUnread, store.ReadingStatusAutomatic, store.ReadingStatusWantToRead, store.ReadingStatusReading, store.ReadingStatusPaused, store.ReadingStatusDidNotFinish:
 			default:
-				refuse(errCodeBadValue, "reading_status must be finished, unread or automatic", 0)
+				refuse(errCodeBadValue, "reading_status must be finished, unread, automatic, want_to_read, reading, paused or did_not_finish", 0)
 				return
 			}
 			if op.Kind != store.OpKindStatus {

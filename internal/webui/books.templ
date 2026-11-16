@@ -62,6 +62,7 @@ type BookView struct {
 	// keeps the position it was at, and saying "Reading 99%" over that
 	// would contradict the shelf it is on.
 	Status reading.Status
+	Choice string
 	// Progression is the reader's newest known position for this book.
 	// Nil means the reader has not opened it on any synced device.
 	Progression *float64
@@ -145,6 +146,14 @@ templ bookBody(prefix, csrf string, b BookView) {
 			<div class="reading-state">
 				if b.Status == reading.StatusFinished {
 					<span class="tag done">Finished</span>
+				} else if b.Status == reading.StatusWantToRead {
+					<span class="tag">Want to read</span>
+				} else if b.Status == reading.StatusPaused {
+					<span class="tag">Paused</span>
+				} else if b.Status == reading.StatusDidNotFinish {
+					<span class="tag">Did not finish</span>
+				} else if b.Status == reading.StatusReading && b.Progression == nil {
+					<span class="tag">Reading</span>
 				} else if b.Status == reading.StatusReading && b.Progression != nil {
 					<span class="tag">Reading { pct(*b.Progression) }</span>
 					@progressBar("bar", *b.Progression)
@@ -166,6 +175,19 @@ templ bookBody(prefix, csrf string, b BookView) {
 					</a>
 				}
 				@markBookButton(prefix, csrf, b.ID, b.Status == reading.StatusFinished)
+				<form class="reading-status" method="post" action={ prefix + "books/" + b.ID + "/reading-status" }>
+					<input type="hidden" name="csrf" value={ csrf }/>
+					<label>Reading status <select name="status">
+						<option value="automatic" selected?={ b.Choice == "" || b.Choice == "automatic" }>Automatic</option>
+						<option value="want_to_read" selected?={ b.Choice == "want_to_read" }>Want to read</option>
+						<option value="reading" selected?={ b.Choice == "reading" }>Reading</option>
+						<option value="paused" selected?={ b.Choice == "paused" }>Paused</option>
+						<option value="did_not_finish" selected?={ b.Choice == "did_not_finish" }>Did not finish</option>
+						<option value="read" selected?={ b.Choice == "finished" }>Finished</option>
+						<option value="unread" selected?={ b.Choice == "unread" }>Unread (reset position)</option>
+					</select></label>
+					<button class="btn" type="submit">Set status</button>
+				</form>
 				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 					if b.Offline {
