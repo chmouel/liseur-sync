@@ -75,9 +75,18 @@ try {
   await online.call('Network.setCookie', {
     name: cookie.slice(0, split), value: cookie.slice(split + 1), url: base, path: '/',
   });
+  await online.call('Fetch.enable', { patterns: [{ urlPattern: '*/ui/offline/account', requestStage: 'Request' }] });
   await online.call('Page.navigate', { url: `${base}ui/books/${book}` });
   await wait(online, 'document.readyState === "complete" && !!document.querySelector("[data-offline-book]")', 'Save offline button');
+  for (let attempt = 0; attempt < 100 && paused.length < 1; attempt++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(paused.length, 1, 'account initialization must be held');
   await online.evaluate('document.querySelector("[data-offline-book]").click()');
+  for (let attempt = 0; attempt < 100 && !responses.some(response => response.url.endsWith('/ui/reader/token')); attempt++) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  assert(responses.some(response => response.url.endsWith('/ui/reader/token')), 'download must acquire its reader token');
+  await online.call('Fetch.continueRequest', { requestId: paused.shift().requestId });
+  await online.call('Fetch.disable');
   await wait(online, 'document.querySelector("[data-offline-book]")?.dataset.offlineReady === "1"', 'authenticated publication download');
   assert(responses.some(response => /\/publication\/[^/]+\/positions\.json$/.test(response.url) && response.status === 200),
     'download must fetch real publication positions');

@@ -11,8 +11,8 @@ import {
 
 const account = document.body?.dataset.offlineAccount;
 const partition = storagePartition();
-if (account) {
-  accountVersion(partition).then(async version => {
+export const offlineAccountReady = account
+  ? accountVersion(partition).then(async version => {
     const response = await fetch(deploymentPrefix() + "ui/offline/account", {
       cache: "no-store", credentials: "same-origin",
     });
@@ -29,8 +29,8 @@ if (account) {
       await clearActiveAccount(partition);
     }
   })
-    .catch(error => console.warn("offline account marker could not be updated", error));
-}
+    .catch(error => console.warn("offline account marker could not be updated", error))
+  : Promise.resolve();
 
 let signingOut = false;
 document.addEventListener("submit", async event => {
