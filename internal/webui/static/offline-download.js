@@ -1,4 +1,5 @@
 import { readerAuth } from "./reader-auth.js";
+import { offlineAccountReady } from "./offline-account.js";
 import {
   activeAccount,
   accountContext,
@@ -132,6 +133,8 @@ if (buttons.length) {
         signal.throwIfAborted();
         operationAccount = identity.account;
         const partition = storagePartition();
+        await offlineAccountReady;
+        signal.throwIfAborted();
         const context = await accountContext(partition, identity.account);
         signal.throwIfAborted();
         const authorize = async current => {

@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { update } from "./framepool.js";
+import { coalesceFrameHide } from "./framehide.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const output = path.resolve(root, "../../internal/webui/static/vendor/readium");
@@ -52,6 +53,12 @@ await build({
           contents: source.replace(touches, ""),
           loader: "js",
         };
+      });
+      build.onLoad({ filter: /@readium\/navigator\/dist\/epub\/frame\/FrameManager\.js$/ }, async ({ path: filename }) => {
+        const source = await readFile(filename, "utf8");
+        const needle = "export{y as FrameManager};";
+        if (source.split(needle).length !== 2) throw Error("Readium frame hide patch needs review");
+        return { contents: source.replace(needle, `(${coalesceFrameHide.toString()})(y);${needle}`), loader: "js" };
       });
       // Pinned Readium 2.8.2 patch. Neither pool manager frees a frame's own
       // blob (the built HTML document) once a chapter falls out of the
