@@ -1774,8 +1774,9 @@ its "maximum sync size" per run (50 by default), so raise it, or sync
 more than once, for the first pass over a large library.
 
 The root header carries `http://opds-spec.org/facet` links to the folders,
-to series, contributors and tags, and to four shelves under
-`/opds/v1.2/shelves/`: `reading`, `unread`, `last-read` and `alphabetical`.
+to series, contributors and tags, and to the shelves under
+`/opds/v1.2/shelves/`: `reading`, `want-to-read`, `paused`,
+`did-not-finish`, `unread`, `last-read` and `alphabetical`.
 
 A folder feed also carries a `search` link to an OpenSearch description,
 and `http://opds-spec.org/facet` links to its series, contributors and tags.
@@ -1810,7 +1811,7 @@ Authentication for OPDS document (`application/opds-authentication+json`)
 of type `http://opds-spec.org/auth/basic`.
 
 The root is a navigation feed: `navigation` links to each granted folder,
-the four shelves under `/opds/v2/shelves/`, and the series, contributors
+the same shelves under `/opds/v2/shelves/`, and the series, contributors
 and tags lists under `/opds/v2/entities/`. A "Newest" group follows with
 the first page of books; its `self` link, `/opds/v2/new`, is the full
 newest-first listing with `next` links. Point a client that syncs by
