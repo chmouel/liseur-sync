@@ -277,10 +277,16 @@ type opJSON struct {
 	ForeignPos  *string         `json:"foreign_pos,omitempty"`
 	Origin      string          `json:"origin,omitempty"`
 	OriginAlias *string         `json:"origin_alias,omitempty"`
-	Seq         int64           `json:"seq,omitempty"`
-	DeviceID    string          `json:"device_id,omitempty"`
-	ReceivedAt  string          `json:"received_at,omitempty"`
-	Derived     *derivedJSON    `json:"derived,omitempty"`
+	// Kind is rendered for a status act only: a position op keeps the
+	// shape it had before ADR-0066, and an unknown field is what an
+	// older client ignores.
+	Kind          string       `json:"kind,omitempty"`
+	ReadingStatus string       `json:"reading_status,omitempty"`
+	Coverage      string       `json:"coverage,omitempty"`
+	Seq           int64        `json:"seq,omitempty"`
+	DeviceID      string       `json:"device_id,omitempty"`
+	ReceivedAt    string       `json:"received_at,omitempty"`
+	Derived       *derivedJSON `json:"derived,omitempty"`
 }
 
 func opToJSON(o store.Op) opJSON {
@@ -293,9 +299,14 @@ func opToJSON(o store.Op) opJSON {
 		ForeignPos:  o.ForeignPos,
 		Origin:      string(o.Origin),
 		OriginAlias: o.OriginAlias,
+		Coverage:    string(o.Coverage),
 		Seq:         o.Seq,
 		DeviceID:    o.DeviceID,
 		ReceivedAt:  o.ReceivedAt.UTC().Format("2006-01-02T15:04:05.999999999Z"),
+	}
+	if o.Kind == store.OpKindStatus {
+		out.Kind = string(o.Kind)
+		out.ReadingStatus = string(o.ReadingStatus)
 	}
 	if len(o.LocatorJSON) > 0 {
 		out.Locator = json.RawMessage(o.LocatorJSON)

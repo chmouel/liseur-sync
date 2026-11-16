@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -31,6 +32,14 @@ type Work struct {
 	CurrentProgression float64    `json:"current_progression"`
 	ETASeconds         *float64   `json:"eta_seconds"`
 	LastReadAt         *time.Time `json:"last_read_at"`
+	// Status is the resolved reading state (ADR-0066): the reader's
+	// explicit choice if they made one, else the newest position and
+	// the recording coverage that came with it. CurrentProgression
+	// stays the newest position op, whatever the status says.
+	Status reading.Status `json:"status"`
+	// CoversNarrative is the coverage the resolution used: false for a
+	// partial recording, true for a full one or an ebook position.
+	CoversNarrative bool `json:"covers_narrative"`
 	// FirstReadDay is the account-local day the work was first read,
 	// over the whole record whatever window was asked for: a book begun
 	// last year was still begun last year when only this week is shown.
@@ -156,7 +165,7 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 		}
 	}
 	for _, w := range snap.Works {
-		out.ByWork[w.ID] = Work{WorkID: w.ID, Title: w.Title, Author: w.Author}
+		out.ByWork[w.ID] = Work{WorkID: w.ID, Title: w.Title, Author: w.Author, CoversNarrative: true}
 	}
 	recordActiveDay := func(day string, seconds float64) {
 		if seconds > 0 && day <= today {
@@ -258,13 +267,16 @@ func Build(snap store.StatsSnapshot, win Window, now time.Time) (Result, error) 
 			work.FirstReadDay = &day
 		}
 		p := paces[id]
-		if position, ok := snap.Positions[id]; ok {
-			work.CurrentProgression = position.Progression
-			if !p.unknown && p.seconds > 0 && p.progression > 0 && position.Progression < 1 {
-				eta := (1 - position.Progression) * p.seconds / p.progression
+		if pos, ok := snap.Positions[id]; ok {
+			work.CurrentProgression = pos.Progression
+			if !p.unknown && p.seconds > 0 && p.progression > 0 && pos.Progression < 1 {
+				eta := (1 - pos.Progression) * p.seconds / p.progression
 				work.ETASeconds = &eta
 			}
 		}
+		rd := snap.Readings[id]
+		work.CoversNarrative = rd.Coverage != store.CoveragePartial
+		work.Status = rd.Resolve()
 		out.ByWork[id] = work
 		if work.Sessions == 0 && work.TotalActiveMinutes == 0 && work.TotalPages == 0 {
 			continue

@@ -369,6 +369,80 @@ is your reader's exact position: a Readium locator, a CFI, whatever
 your engine uses. The server stores and replays it verbatim and never
 reads it.
 
+#### Reading status is an act, not a threshold
+
+An op is one of two kinds ([ADR-0066](adr/0066-explicit-reading-status.md)).
+A position, which is everything above:
+
+```json
+{ "op_id": "…", "work_id": "…", "client_ts": "…", "progression": 0.4137, "locator": { "…": "…" } }
+```
+
+and a status act, which says what the reader decided about the book:
+
+```json
+{ "op_id": "…", "work_id": "…", "client_ts": "…", "progression": 0.4137,
+  "kind": "status", "reading_status": "finished" }
+```
+
+- `kind` is absent for a position and `"status"` for an act. No other
+  value is accepted (`400`, `code: bad_value`).
+- `reading_status` is `finished`, `unread` or `automatic`, and is
+  present exactly when `kind` is `status` — a status act without one is
+  `400`, `code: missing_field`. `finished` is "the book is read, at
+  whatever position I am at"; `unread` is "back on the pile";
+  `automatic` withdraws an earlier choice, so the position decides
+  again. Send `automatic` when you resume reading and clear a local
+  override, not when you merely have none.
+- A status act still carries your own current `progression`, and it is
+  required and stored. **No position query reads it.** Furthest
+  ranking, `/v1/works/{id}/positions`, the "newest position" in
+  `/v1/heads`, the `current_progression` of the statistics and the
+  session inference look at position ops only. A status act is not a
+  move.
+- `coverage` is optional on a position op: `"full"` or `"partial"`.
+  It reports whether the recording the position came from covers the
+  whole narrative, so only an audiobook writer sets it. Absent means
+  unknown, which is every ebook position and every position recorded
+  before ADR-0066.
+
+Status acts travel in `changes` and `heads` like any other op, so a
+resync recovers a choice; only `/v1/works/{id}/positions` leaves them
+out. Idempotency covers the new fields: the same `op_id` with a
+different `kind`, `reading_status` or `coverage` is a `conflict`, not a
+`duplicate`. Derive a status act's `op_id` from the status revision it
+records, not from the position revision, or two acts collide.
+
+Resolve a book's status in this order — it is the same rule Liseur
+implements, and `0.97` is the same number on both sides:
+
+```
+choice = reading_status of the newest status act (highest seq)
+position, coverage = newest position op (highest seq)
+
+finished      -> finished          # the choice wins, wherever the position is
+unread        -> unread            # put back on the pile
+automatic     -> derive
+no choice     -> derive
+
+derive:  no position or <= 0 -> ready to read
+         partial coverage    -> reading   # a partial recording never finishes the book
+         position >= 0.97    -> finished
+         otherwise           -> reading
+```
+
+`0.97` replaced this server's old `0.999`, so a book at `0.98` is no
+longer finished in the browser and unfinished on the phone. The two
+unread outcomes are one shelf but two values: `unread` is what the
+reader said and `ready_to_read` what an absent or zero position says, so
+the insights snapshot and the OPDS "Unread" shelf put both there while
+reporting the one that actually applies. A position op never clears or
+overrides an act; only `automatic` does, and that is itself an act. The
+newest act wins by `seq`, so an act queued offline and sent later wins,
+and a position that arrives after a newer act changes where the reader
+is, never what they decided. `client_ts` stays a claim and is never an
+ordering key.
+
 #### Writing a locator another reader can use
 
 A whole-book `progression` is a poor address. Two engines compute it

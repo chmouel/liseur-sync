@@ -742,3 +742,76 @@ func TestLibraryFolderChooserHidesWhenOnlyOneFolder(t *testing.T) {
 		t.Errorf("folder chooser should be visible when user has multiple folders:\n%s", pageTwo)
 	}
 }
+
+// statusOn appends one explicit reading-status act for a work, with the
+// reader's own position as the act carries it (ADR-0066).
+func statusOn(t *testing.T, f *booksFixture, workID, opID string, status store.ReadingStatus, at float64, when time.Time) {
+	t.Helper()
+	if _, err := f.st.AppendOps(t.Context(), "u1", "d-test", []store.Op{{
+		OpID: opID, WorkID: workID, ClientTS: when, Progression: at,
+		Origin: store.OriginNative, Kind: store.OpKindStatus, ReadingStatus: status,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLibraryShelvesUseTheResolutionRule: a chip is a view of the
+// resolution rule, not of the newest fraction. A book marked read at 0.4
+// is finished, one marked unread at 0.99 is on the unread pile and off
+// the reading one, and its details page says Unread while still saying
+// where the reader was (ADR-0066).
+func TestLibraryShelvesUseTheResolutionRule(t *testing.T) {
+	f := newBooksFixture(t)
+	ids := map[string]string{}
+	for _, name := range []string{"low", "pile", "half"} {
+		ids[name] = f.addBook(t, name, bytes.Repeat([]byte(name+"-epub"), 50))
+	}
+	now := time.Now().UTC()
+	work := func(name string, progression float64) string {
+		t.Helper()
+		id := "w-" + name
+		if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", ids[name],
+			store.Work{ID: id, UserID: "u1", Title: name, CreatedAt: now},
+			nil, nil, true, now); err != nil {
+			t.Fatal(err)
+		}
+		if progression >= 0 {
+			progressOn(t, f, id, "pos-"+name, progression, now)
+		}
+		return id
+	}
+	// Marked read at 0.4: the position never reaches the threshold.
+	statusOn(t, f, work("low", 0.4), "act-low", store.ReadingStatusFinished, 0.4, now)
+	// Marked unread at 0.99: the position never comes back down.
+	statusOn(t, f, work("pile", 0.99), "act-pile", store.ReadingStatusUnread, 0.99, now)
+	work("half", 0.5)
+
+	shelf := func(filter string) string {
+		t.Helper()
+		_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter="+filter, f.cookie)
+		return grid(page)
+	}
+	finished, unread, reading := shelf("finished"), shelf("unread"), shelf("reading")
+	if !strings.Contains(finished, ">low<") {
+		t.Errorf("a book marked read at 0.4 is not on the finished shelf:\n%s", finished)
+	}
+	if !strings.Contains(unread, ">pile<") || strings.Contains(unread, ">low<") {
+		t.Errorf("the unread shelf does not follow the choice:\n%s", unread)
+	}
+	if strings.Contains(reading, ">pile<") {
+		t.Errorf("a book marked unread is still being read:\n%s", reading)
+	}
+
+	// The details page renders the same resolution: an unread book keeps
+	// its position without being called reading.
+	_, page := f.get(t, "/ui/books/"+ids["pile"], f.cookie)
+	if !strings.Contains(page, ">Unread<") || strings.Contains(page, "Reading 99%") {
+		t.Errorf("the details page contradicted the shelf:\n%s", page)
+	}
+	if !strings.Contains(page, "left at 99%") {
+		t.Errorf("the details page dropped the position the reader left:\n%s", page)
+	}
+	if _, page := f.get(t, "/ui/books/"+ids["low"], f.cookie); !strings.Contains(page, ">Finished<") {
+		t.Errorf("a book marked read at 0.4 is not shown as finished:\n%s", page)
+	}
+}

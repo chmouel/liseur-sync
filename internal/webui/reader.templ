@@ -39,6 +39,14 @@ type ReaderView struct {
 	// instead.
 	PromptTemplate string
 
+	// ReadingChoice is the newest reading-status act on the book at the
+	// time this page was served, empty when the reader never made one.
+	// The reader uses it to withdraw an explicit unread when they start
+	// reading again (ADR-0066); the detached origin has no user to ask
+	// and leaves it empty, so a choice is only ever withdrawn by a page
+	// that was told about it.
+	ReadingChoice string
+
 	// Detached says the page is being served from the separate reader
 	// origin (ADR-0007 phase 3), where there is no session and no CSRF
 	// token. Everything the reader needs then arrives in the URL
@@ -81,6 +89,7 @@ templ readerPage(v ReaderView, csrf string) {
 				data-detached={ boolAttr(v.Detached) }
 				data-offline={ boolAttr(v.Offline) }
 				data-prompt-template={ v.PromptTemplate }
+				data-reading-choice={ v.ReadingChoice }
 				hidden
 			></div>
 			<header class="reader-bar">

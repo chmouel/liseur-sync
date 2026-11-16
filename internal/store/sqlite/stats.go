@@ -101,12 +101,14 @@ func (s *Store) StatisticsSnapshot(ctx context.Context, userID string, candidate
 	snap.Positions = make(map[string]store.Op)
 	rows, err = tx.QueryContext(ctx,
 		`SELECT user_id, seq, op_id, work_id, edition_sha, device_id, client_ts,
-		        progression, locator_json, foreign_pos, origin, origin_alias, received_at
+		        progression, locator_json, foreign_pos, origin, origin_alias, received_at,
+		        kind, reading_status, coverage
 		   FROM (
 		     SELECT user_id, seq, op_id, work_id, edition_sha, device_id, client_ts,
 		            progression, locator_json, foreign_pos, origin, origin_alias, received_at,
+		            kind, reading_status, coverage,
 		            row_number() OVER (PARTITION BY work_id ORDER BY seq DESC) AS rn
-		       FROM ops WHERE user_id = ?
+		       FROM ops WHERE user_id = ? AND kind = 'position'
 		   ) WHERE rn = 1 ORDER BY work_id`, userID)
 	if err != nil {
 		return snap, err
@@ -124,6 +126,9 @@ func (s *Store) StatisticsSnapshot(ctx context.Context, userID string, candidate
 		return snap, err
 	}
 	if err := rows.Close(); err != nil {
+		return snap, err
+	}
+	if snap.Readings, err = workReadingsTx(ctx, tx, userID, nil); err != nil {
 		return snap, err
 	}
 

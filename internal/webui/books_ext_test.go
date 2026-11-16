@@ -328,11 +328,21 @@ func TestBooksUIServesABook(t *testing.T) {
 	}
 }
 
-// TestBookReadingStatusCanBeToggled verifies the manual control writes the
-// same per-user position stream that other clients sync.
+// TestBookReadingStatusCanBeToggled verifies the manual control writes an
+// explicit status act beside the position stream other clients sync, and
+// that marking unread still resets the position (ADR-0066).
 func TestBookReadingStatusCanBeToggled(t *testing.T) {
 	f := newBooksFixture(t)
 	bookID := f.addBook(t, "toggle", []byte(strings.Repeat("web-epub", 50)))
+
+	reading := func(workID string) store.WorkReading {
+		t.Helper()
+		reads, err := f.st.WorkReadings(t.Context(), "u1", []string{workID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reads[workID]
+	}
 
 	resp, page := f.get(t, "/ui/books/"+bookID, f.cookie)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(page, "Mark read") || !strings.Contains(page, ">Unread<") {
@@ -349,9 +359,11 @@ func TestBookReadingStatusCanBeToggled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops, err := f.st.Positions(t.Context(), "u1", link.WorkID, 1)
-	if err != nil || len(ops) != 1 || ops[0].Progression != 1 {
-		t.Fatalf("mark read position: ops=%+v err=%v", ops, err)
+	if got := reading(link.WorkID); got.Choice != store.ReadingStatusFinished || got.HasPosition {
+		t.Fatalf("mark read wrote %+v, want a finished act and no position", got)
+	}
+	if ops, err := f.st.Positions(t.Context(), "u1", link.WorkID, 1); err != nil || len(ops) != 0 {
+		t.Fatalf("mark read moved the position: ops=%+v err=%v", ops, err)
 	}
 	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
 	if !strings.Contains(page, "Mark unread") || !strings.Contains(page, ">Finished<") {
@@ -364,13 +376,68 @@ func TestBookReadingStatusCanBeToggled(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("mark unread: got %d", resp.StatusCode)
 	}
-	ops, err = f.st.Positions(t.Context(), "u1", link.WorkID, 1)
-	if err != nil || len(ops) != 1 || ops[0].Progression != 0 {
-		t.Fatalf("mark unread position: ops=%+v err=%v", ops, err)
+	if got := reading(link.WorkID); got.Choice != store.ReadingStatusUnread ||
+		!got.HasPosition || got.Progression != 0 {
+		t.Fatalf("mark unread wrote %+v, want an unread act and a reset position", got)
+	}
+	if ops, err := f.st.Positions(t.Context(), "u1", link.WorkID, 1); err != nil || len(ops) != 1 || ops[0].Progression != 0 {
+		t.Fatalf("mark unread reset: ops=%+v err=%v", ops, err)
 	}
 	_, page = f.get(t, "/ui/books/"+bookID, f.cookie)
 	if !strings.Contains(page, "Mark read") || !strings.Contains(page, ">Unread<") {
 		t.Fatalf("unread book should offer mark read: %s", page)
+	}
+}
+
+// TestResumingABookIsOfferedTheWithdrawal: the pages that can resume a
+// book are told when the newest act on it is an explicit unread, so the
+// reader resumes by sending an `automatic` act beside the position
+// (ADR-0066). A book the reader never chose anything about is told
+// nothing, and neither is one marked read.
+func TestResumingABookIsOfferedTheWithdrawal(t *testing.T) {
+	f := newBooksFixture(t)
+	bookID := f.addBook(t, "resume", []byte(strings.Repeat("web-epub", 50)))
+	seedAudiobook(t, f, bookID, true)
+
+	carried := func(path string) bool {
+		t.Helper()
+		resp, page := f.get(t, path, f.cookie)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+		return strings.Contains(page, `data-reading-choice="unread"`)
+	}
+	if carried("/ui/books/" + bookID + "/read") {
+		t.Fatal("a reader who chose nothing was told to withdraw a choice")
+	}
+	if carried("/ui/books/" + bookID) {
+		t.Fatal("an audiobook with no choice was told to withdraw one")
+	}
+
+	mark := func(status string) {
+		t.Helper()
+		_, page := f.get(t, "/ui/books/"+bookID, f.cookie)
+		resp := f.postForm(t, "/ui/books/"+bookID+"/reading-status", f.cookie, url.Values{
+			"csrf": {csrfFrom(t, page)}, "status": {status},
+		})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("mark %s: %d", status, resp.StatusCode)
+		}
+	}
+
+	mark("read")
+	for _, path := range []string{"/ui/books/" + bookID + "/read", "/ui/books/" + bookID} {
+		if carried(path) {
+			t.Fatalf("%s told a finished book to withdraw its choice", path)
+		}
+	}
+
+	mark("unread")
+	if !carried("/ui/books/" + bookID + "/read") {
+		t.Fatal("the reader was not told the book is unread")
+	}
+	if !carried("/ui/books/" + bookID) {
+		t.Fatal("the audiobook player was not told the book is unread")
 	}
 }
 

@@ -42,8 +42,10 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		     SELECT o.*
 		       FROM ops o
 		      WHERE o.user_id = ?
+		        AND o.kind = 'position'
 		        AND o.seq = (SELECT MAX(seq) FROM ops m
-		                       WHERE m.user_id = o.user_id AND m.work_id = o.work_id)
+		                       WHERE m.user_id = o.user_id AND m.work_id = o.work_id
+		                         AND m.kind = 'position')
 		        AND o.received_at >= ?
 		   ),
 		   candidates AS (
@@ -164,15 +166,19 @@ func (s *Store) PutMirrorCursor(ctx context.Context, userID, peer string, c stor
 // op, in the column order the query above produces.
 func scanCandidate(rows *sql.Rows, c *store.MirrorCandidate) (store.Op, error) {
 	var o store.Op
-	var editionSHA, foreignPos, originAlias sql.NullString
-	var clientTS, receivedAt string
+	var editionSHA, foreignPos, originAlias, status, coverage sql.NullString
+	var clientTS, receivedAt, kind string
 	err := rows.Scan(&c.Document, &c.Title, &c.RelativePath, &c.SizeBytes, &c.RootPath,
 		&o.UserID, &o.Seq, &o.OpID, &o.WorkID, &editionSHA,
 		&o.DeviceID, &clientTS, &o.Progression, &o.LocatorJSON,
-		&foreignPos, &o.Origin, &originAlias, &receivedAt)
+		&foreignPos, &o.Origin, &originAlias, &receivedAt,
+		&kind, &status, &coverage)
 	if err != nil {
 		return o, err
 	}
+	o.Kind = store.OpKind(kind)
+	o.ReadingStatus = store.ReadingStatus(status.String)
+	o.Coverage = store.Coverage(coverage.String)
 	if editionSHA.Valid {
 		o.EditionSHA = &editionSHA.String
 	}

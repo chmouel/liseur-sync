@@ -16,6 +16,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/epub"
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -94,6 +95,16 @@ func (s *Service) Pass(ctx context.Context) (Report, error) {
 func progressMark(p Progress) string { return fmt.Sprintf("%.0f:%t", p.CurrentTime, p.IsFinished) }
 func peerPrefix(peer string) string  { return "abs-" + peer[:8] + ":" }
 
+// coverageOf is what a pulled op reports about the recording it came
+// from (ADR-0066): a recording missing chapters cannot finish the ebook,
+// whoever reads the position later.
+func coverageOf(m Mapping) store.Coverage {
+	if m.FullNarrative {
+		return store.CoverageFull
+	}
+	return store.CoveragePartial
+}
+
 func (s *Service) exchange(ctx context.Context, userID string, l *store.AudiobookLink, item Item, m Mapping, local store.Op, remote Progress, have bool) (string, error) {
 	if s.Cfg.ActiveDays > 0 {
 		cutoff := time.Now().AddDate(0, 0, -s.Cfg.ActiveDays)
@@ -117,7 +128,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 	}
 	if have && mapped && local.Seq > 0 && sameEdition {
 		tolerance := (seg.BookEnd - seg.BookStart) / (seg.AudioEnd - seg.AudioStart)
-		complete := remote.IsFinished == (local.Progression >= 0.999 && m.CoversLast)
+		complete := remote.IsFinished == (local.Progression >= reading.FinishedProgression && m.CoversLast)
 		if !m.FullNarrative && remote.IsFinished && nearProgress(local.Progression, 0.998) {
 			complete = true
 		}
@@ -160,7 +171,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		sum := sha256.Sum256([]byte(raw))
 		op := store.Op{OpID: "abs:" + l.PeerIdentity + ":" + hex.EncodeToString(sum[:16]), WorkID: l.WorkID,
 			EditionSHA: &l.EditionSHA, ClientTS: time.UnixMilli(remote.LastUpdate), Progression: p,
-			LocatorJSON: loc, Origin: store.OriginAudiobookshelf}
+			LocatorJSON: loc, Origin: store.OriginAudiobookshelf, Coverage: coverageOf(m)}
 		results, err := s.Store.AppendOps(ctx, userID, peerPrefix(l.PeerIdentity)+"audiobookshelf", []store.Op{op})
 		if err != nil {
 			return "", err
@@ -176,7 +187,7 @@ func (s *Service) exchange(ctx context.Context, userID string, l *store.Audioboo
 		return "skipped", nil
 	}
 	at, mapped := localAudioTime, localMapped
-	finished := local.Progression >= 0.999 && m.CoversLast
+	finished := local.Progression >= reading.FinishedProgression && m.CoversLast
 	if finished {
 		at, mapped = audioEnd, true
 	}

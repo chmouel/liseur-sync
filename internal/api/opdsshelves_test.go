@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -55,5 +57,77 @@ func TestOPDSShelvesFollowTheReadersOwnPosition(t *testing.T) {
 	if resp, raw := f.opds(t, "/opds/v1.2/shelves/reading", "token", other); resp.StatusCode != http.StatusOK ||
 		len(parseFeed(t, raw).Entries) != 0 {
 		t.Errorf("another reader's reading shelf leaked: %d %s", resp.StatusCode, raw)
+	}
+}
+
+// TestOPDSShelvesReadTheExplicitChoice: a shelf is a view of the
+// resolution rule, not of the position. A book marked read at 0.4 is on
+// the shelf of books read, one marked unread at 0.99 is on the unread
+// shelf and off "currently reading", and a book whose choice was
+// withdrawn is back where its position says (ADR-0066).
+func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
+	f := newFolderFixture(t)
+	read, digest := f.publishAs(t, "r", "Read", []byte("read bytes"))
+	back, backDigest := f.publishAs(t, "u", "Backonthepile", []byte("pile bytes"))
+	withdrawn, withdrawnDigest := f.publishAs(t, "w", "Withdrawn", []byte("withdrawn bytes"))
+	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
+
+	push := func(opID, workID, sha string, progression float64, status string) {
+		t.Helper()
+		body := `{"ops":[{"op_id":"` + opID + `","work_id":"` + workID +
+			`","edition_sha":"` + sha + `","client_ts":"2024-01-01T00:00:00Z","progression":` +
+			strconv.FormatFloat(progression, 'f', -1, 64)
+		if status != "" {
+			body += `,"kind":"status","reading_status":"` + status + `"`
+		}
+		resp, raw := f.postRaw(t, "/v1/ops", tok, body+`}]}`)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", opID, status, resp.StatusCode, raw)
+		}
+	}
+	resolve := func(bookID string) string {
+		t.Helper()
+		resp, out := f.resolveBook(t, bookID, tok)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("resolve: %d", resp.StatusCode)
+		}
+		return out.WorkID
+	}
+
+	readWork := resolve(read)
+	push("read-pos", readWork, digest, 0.4, "")
+	push("read-act", readWork, digest, 0.4, "finished")
+
+	backWork := resolve(back)
+	push("back-pos", backWork, backDigest, 0.99, "")
+	push("back-act", backWork, backDigest, 0.99, "unread")
+
+	withdrawnWork := resolve(withdrawn)
+	push("with-pos", withdrawnWork, withdrawnDigest, 0.2, "")
+	push("with-act", withdrawnWork, withdrawnDigest, 0.2, "finished")
+	push("with-auto", withdrawnWork, withdrawnDigest, 0.2, "automatic")
+
+	readTok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
+	titles := func(shelf string) []string {
+		t.Helper()
+		resp, raw := f.opds(t, "/opds/v1.2/shelves/"+shelf, "token", readTok)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", shelf, resp.StatusCode, raw)
+		}
+		var got []string
+		for _, e := range parseFeed(t, raw).Entries {
+			got = append(got, e.Title)
+		}
+		sort.Strings(got)
+		return got
+	}
+	for shelf, want := range map[string]string{
+		"reading":   "Withdrawn",
+		"unread":    "Backonthepile",
+		"last-read": "Read Withdrawn",
+	} {
+		if got := strings.Join(titles(shelf), " "); got != want {
+			t.Errorf("%s = %q, want %q", shelf, got, want)
+		}
 	}
 }

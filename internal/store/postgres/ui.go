@@ -13,7 +13,7 @@ func (s *Store) ListWorks(ctx context.Context, userID string) ([]store.WorkSumma
 	rows, err := s.db.QueryContext(ctx, q(
 		`SELECT w.id, w.user_id, w.title, w.author, w.pending, w.created_at,
 		        (SELECT progression FROM ops o WHERE o.user_id = w.user_id AND o.work_id = w.id
-		         ORDER BY seq DESC LIMIT 1) AS head_prog,
+		         AND o.kind = 'position' ORDER BY seq DESC LIMIT 1) AS head_prog,
 		        (SELECT MAX(received_at) FROM ops o WHERE o.user_id = w.user_id AND o.work_id = w.id) AS last_active
 		 FROM works w WHERE w.user_id = ?
 		 ORDER BY last_active DESC NULLS LAST, w.created_at DESC`), userID)

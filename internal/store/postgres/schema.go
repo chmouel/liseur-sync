@@ -895,6 +895,17 @@ CREATE TABLE crosspoint_session_receipts (
 CREATE INDEX crosspoint_receipts_work ON crosspoint_session_receipts(user_id, work_id);
 `
 
+// opKinds is the SQLite copy's migration (ADR-0066): an explicit
+// reading status beside the position, and a furthest index that knows
+// the difference.
+const opKinds = `
+ALTER TABLE ops ADD COLUMN kind TEXT NOT NULL DEFAULT 'position';
+ALTER TABLE ops ADD COLUMN reading_status TEXT;
+ALTER TABLE ops ADD COLUMN coverage TEXT;
+DROP INDEX IF EXISTS ops_furthest;
+CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, kind, progression DESC, seq);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -912,6 +923,7 @@ var migrations = []string{
 	audiobookLinks,
 	watchedFolderAudiobooks,
 	crosspointSessions,
+	opKinds,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -940,6 +952,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"audiobookLinks":           audiobookLinks,
 		"watchedFolderAudiobooks":  watchedFolderAudiobooks,
 		"crosspointSessions":       crosspointSessions,
+		"opKinds":                  opKinds,
 	}
 	want, ok := named[name]
 	if !ok {

@@ -253,10 +253,21 @@ Positions are an **append-only operation log per work per user**:
   "progression":  0.4137,
   "locator":      { "…Readium Locator JSON, opaque to server…" },
   "foreign_pos":  "/body/DocFragment[11]/body/div/p[3]/text()[1].0",
-  "origin":       "native | kosync"
+  "origin":       "native | kosync",
+  "kind":         "status",
+  "reading_status": "finished",
+  "coverage":     "full | partial"
 }
 ```
 
+- `kind`, `reading_status` and `coverage` are the explicit reading
+  status beside the position ([ADR-0066](adr/0066-explicit-reading-status.md)):
+  an op is a position, or a status act that says the reader decided
+  something the position cannot carry. `kind` is absent for a position
+  and `"status"` for an act; `reading_status` is present exactly on an
+  act; `coverage` is optional on a position and says whether the
+  recording it came from spans the whole book. A status act is stored
+  and synced but is not a move: no position query reads it.
 - `progression` (0..1) is the lingua franca; every client can produce
   and consume it. It is the only field the server itself reads.
 - `locator` is Liseur's exact position, opaque to the server, replayed
@@ -320,14 +331,16 @@ and retain every incoming peak before choosing a latest operation for merge.
 They never apply a historical maximum as a fresh remote move.
 
 Retention: ops older than a configurable window (default 180 days) are
-compacted to daily last-op-per-device snapshots. The newest op per
-(work, device) and each ownership group's furthest op above the work's
-floor are kept whatever their age, and a kosync op not yet
-materialised into an inferred session (§6.3) is kept until it is. The
-horizon is the newest seq compaction removed; a cursor below it gets
-`410 resync_required` and rebuilds from `GET /v1/heads`. That response
-includes `furthest` in the same read transaction as the heads and
-`snapshot_seq`. Existing deployments can recover only positions still
+compacted to daily last-op-per-device snapshots. The newest op of each
+kind per (work, device) — a position and a status act are two facts, so
+neither may hide the other — and each ownership group's furthest op
+above the work's floor are kept whatever their age, and a kosync op not
+yet materialised into an inferred session (§6.3) is kept until it is.
+The horizon is the newest seq compaction removed; a cursor below it
+gets `410 resync_required` and rebuilds from `GET /v1/heads`, which
+returns that same newest-of-each-kind head per (work, device). That
+response includes `furthest` in the same read transaction as the heads
+and `snapshot_seq`. Existing deployments can recover only positions still
 retained at upgrade, not history already compacted away
 ([ADR-0051](adr/0051-furthest-position-survives-rereading.md)).
 

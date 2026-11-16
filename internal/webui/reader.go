@@ -42,6 +42,7 @@ func (s *Server) handleReaderPage(w http.ResponseWriter, r *http.Request, a stor
 		// the reader asks nobody for it. The detached origin cannot do
 		// that and fetches /v1/me instead.
 		PromptTemplate: u.ReaderPromptTemplate,
+		ReadingChoice:  s.readingChoice(r, u.ID, book.ID),
 		// The tab icon is the book's own cover, shrunk and squared by
 		// the icon variant; a coverless book gets the placeholder card
 		// from the same route, so this link never 404s.

@@ -576,6 +576,40 @@ export async function finishOfflineSession({
   });
 }
 
+// queueOfflineAct queues one status act — the reader taking back an
+// explicit unread by reading again (ADR-0066) — beside the position it
+// was taken with. The act is its own record because it is its own op: a
+// position never clears a choice, so the withdrawal can only travel as a
+// second op, and a queue that dropped it would leave the book unread.
+// Writing the same act twice is a no-op: the record is keyed by its id,
+// which the caller derives from the position it rides beside.
+export async function queueOfflineAct({
+  partition = storagePartition(), account, epoch, deviceID, bookID, op,
+} = {}) {
+  if (!partition || !account || !bookID || !op?.op_id || !op?.work_id)
+    throw new OfflineStorageError("A reading status act needs an account, book and operation.");
+  return withDB(async db => {
+    try {
+      await guardedWork(db, [OUTBOX], { partition, account, epoch }, (tx, _, fail) => {
+        const outbox = tx.objectStore(OUTBOX);
+        const request = outbox.get(keyForOutbox({ partition, account, kind: "status", id: op.op_id }));
+        request.onsuccess = () => {
+          if (request.result) return;
+          outbox.put({
+            key: keyForOutbox({ partition, account, kind: "status", id: op.op_id }),
+            partition, account, epoch, deviceID: deviceID || "", bookID, kind: "status",
+            id: op.op_id, payload: op, state: "pending", createdAt: Date.now(), attempts: 0,
+          });
+        };
+        request.onerror = () => fail(new OfflineStorageError("Could not queue a reading status act."));
+      });
+    } catch (error) {
+      if (quotaError(error)) throw new OfflineQuotaError();
+      throw error;
+    }
+  });
+}
+
 export async function listOfflineOutbox({
   partition = storagePartition(), account, kind = "", state = "pending",
 } = {}) {

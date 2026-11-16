@@ -1323,6 +1323,18 @@ CREATE TABLE crosspoint_session_receipts (
 CREATE INDEX crosspoint_receipts_work ON crosspoint_session_receipts(user_id, work_id);
 `
 
+// opKinds (ADR-0066): an explicit reading status beside the position.
+// Existing rows keep the position classification they had, and the
+// furthest index is rebuilt to carry the kind, since only position ops
+// may rank.
+const opKinds = `
+ALTER TABLE ops ADD COLUMN kind TEXT NOT NULL DEFAULT 'position';
+ALTER TABLE ops ADD COLUMN reading_status TEXT;
+ALTER TABLE ops ADD COLUMN coverage TEXT;
+DROP INDEX IF EXISTS ops_furthest;
+CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, kind, progression DESC, seq);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1342,6 +1354,7 @@ var migrations = []string{
 	audiobookLinks,
 	watchedFolderAudiobooks,
 	crosspointSessions,
+	opKinds,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1371,6 +1384,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"audiobookLinks":           audiobookLinks,
 		"watchedFolderAudiobooks":  watchedFolderAudiobooks,
 		"crosspointSessions":       crosspointSessions,
+		"opKinds":                  opKinds,
 	}
 	want, ok := named[name]
 	if !ok {
