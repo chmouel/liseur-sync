@@ -13,10 +13,13 @@ const FinishedProgression = 0.97
 type Status string
 
 const (
-	StatusFinished    Status = "finished"
-	StatusReading     Status = "reading"
-	StatusUnread      Status = "unread"
-	StatusReadyToRead Status = "ready_to_read"
+	StatusWantToRead   Status = "want_to_read"
+	StatusPaused       Status = "paused"
+	StatusDidNotFinish Status = "did_not_finish"
+	StatusFinished     Status = "finished"
+	StatusReading      Status = "reading"
+	StatusUnread       Status = "unread"
+	StatusReadyToRead  Status = "ready_to_read"
 )
 
 // UnreadShelf reports whether a status belongs on the shelf of books the
@@ -31,10 +34,14 @@ func (s Status) UnreadShelf() bool {
 type Override string
 
 const (
-	OverrideNone      Override = ""
-	OverrideFinished  Override = "finished"
-	OverrideUnread    Override = "unread"
-	OverrideAutomatic Override = "automatic"
+	OverrideWantToRead   Override = "want_to_read"
+	OverrideReading      Override = "reading"
+	OverridePaused       Override = "paused"
+	OverrideDidNotFinish Override = "did_not_finish"
+	OverrideNone         Override = ""
+	OverrideFinished     Override = "finished"
+	OverrideUnread       Override = "unread"
+	OverrideAutomatic    Override = "automatic"
 )
 
 // Resolve applies the reader's choice first: an explicit act outranks
@@ -48,6 +55,14 @@ const (
 // apart.
 func Resolve(choice Override, position *float64, partialCoverage bool) Status {
 	switch choice {
+	case OverrideWantToRead:
+		return StatusWantToRead
+	case OverrideReading:
+		return StatusReading
+	case OverridePaused:
+		return StatusPaused
+	case OverrideDidNotFinish:
+		return StatusDidNotFinish
 	case OverrideFinished:
 		return StatusFinished
 	case OverrideUnread:

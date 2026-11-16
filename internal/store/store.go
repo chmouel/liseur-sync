@@ -1135,9 +1135,13 @@ const (
 type ReadingStatus string
 
 const (
-	ReadingStatusFinished  ReadingStatus = "finished"
-	ReadingStatusUnread    ReadingStatus = "unread"
-	ReadingStatusAutomatic ReadingStatus = "automatic"
+	ReadingStatusWantToRead   ReadingStatus = "want_to_read"
+	ReadingStatusReading      ReadingStatus = "reading"
+	ReadingStatusPaused       ReadingStatus = "paused"
+	ReadingStatusDidNotFinish ReadingStatus = "did_not_finish"
+	ReadingStatusFinished     ReadingStatus = "finished"
+	ReadingStatusUnread       ReadingStatus = "unread"
+	ReadingStatusAutomatic    ReadingStatus = "automatic"
 )
 
 // Coverage reports whether the recording a position was mapped from
@@ -1199,7 +1203,7 @@ func (o Op) Validate() error {
 		return fmt.Errorf("%w: unknown op kind %q", ErrInvalidInput, o.Kind)
 	case o.Kind == OpKindStatus:
 		switch o.ReadingStatus {
-		case ReadingStatusFinished, ReadingStatusUnread, ReadingStatusAutomatic:
+		case ReadingStatusFinished, ReadingStatusUnread, ReadingStatusAutomatic, ReadingStatusWantToRead, ReadingStatusReading, ReadingStatusPaused, ReadingStatusDidNotFinish:
 		default:
 			return fmt.Errorf("%w: reading_status required on a status op", ErrInvalidInput)
 		}

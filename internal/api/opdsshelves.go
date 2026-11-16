@@ -57,6 +57,9 @@ func byLastRead(a, b shelfBook) bool {
 }
 
 var opdsShelves = []opdsShelf{
+	{slug: "want-to-read", title: "Want to read", keep: func(st shelfState) bool { return st.resolved() == reading.StatusWantToRead }},
+	{slug: "paused", title: "Paused", keep: func(st shelfState) bool { return st.resolved() == reading.StatusPaused }},
+	{slug: "did-not-finish", title: "Did not finish", keep: func(st shelfState) bool { return st.resolved() == reading.StatusDidNotFinish }},
 	{
 		slug: "reading", title: "Currently reading",
 		keep: func(st shelfState) bool { return st.started() },

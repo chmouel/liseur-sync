@@ -4424,12 +4424,15 @@ components:
             stored but never answers a position query: it is not a move.
         reading_status:
           type: string
-          enum: [finished, unread, automatic]
+          enum: [finished, unread, automatic, want_to_read, reading, paused, did_not_finish]
           description: |
             Present exactly when `kind` is `status`, and required then.
             `finished` is the reader saying the book is read at whatever
             position; `unread` puts it back on the pile; `automatic`
             withdraws an earlier choice, so the position decides again.
+            `want_to_read`, `reading`, `paused` and `did_not_finish` are
+            explicit choices that remain in effect until another act.
+            Reading or opening a book does not clear them.
             Sending it on a position op, or sending an empty string, is
             refused.
             A status act is idempotent on the whole payload like any
@@ -4603,7 +4606,7 @@ components:
           description: Latest position regardless of window; 0 when none is known.
         status:
           type: string
-          enum: [finished, reading, unread, ready_to_read]
+          enum: [finished, reading, unread, ready_to_read, want_to_read, paused, did_not_finish]
           description: |
             The work's status, resolved by the one rule of ADR-0066: the
             newest status act's choice if the reader made one, else the

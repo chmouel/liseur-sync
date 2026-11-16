@@ -4,6 +4,7 @@ package webui_test
 
 import (
 	"bytes"
+	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -813,5 +814,47 @@ func TestLibraryShelvesUseTheResolutionRule(t *testing.T) {
 	}
 	if _, page := f.get(t, "/ui/books/"+ids["low"], f.cookie); !strings.Contains(page, ">Finished<") {
 		t.Errorf("a book marked read at 0.4 is not shown as finished:\n%s", page)
+	}
+}
+
+func TestExtendedStatusFiltersAndSelection(t *testing.T) {
+	f := newBooksFixture(t)
+	now := time.Now().UTC()
+	for _, status := range []store.ReadingStatus{store.ReadingStatusWantToRead, store.ReadingStatusReading, store.ReadingStatusPaused, store.ReadingStatusDidNotFinish} {
+		name := string(status)
+		book := f.addBook(t, name, bytes.Repeat([]byte(name), 50))
+		work := "w-" + name
+		if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", book,
+			store.Work{ID: work, UserID: "u1", Title: name, CreatedAt: now}, nil, nil, true, now); err != nil {
+			t.Fatal(err)
+		}
+		statusOn(t, f, work, "act-"+name, status, 0, now)
+		_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter="+name, f.cookie)
+		if !strings.Contains(grid(page), ">"+name+"<") {
+			t.Errorf("%s missing from its filter", name)
+		}
+		_, page = f.get(t, "/ui/books/"+book, f.cookie)
+		if !strings.Contains(page, `value="`+name+`" selected`) {
+			t.Errorf("%s is not selected on details page", name)
+		}
+	}
+}
+
+func TestExtendedStatusFilterSearchesBeyondCatalogPage(t *testing.T) {
+	f := newBooksFixture(t)
+	now := time.Now().UTC()
+	book := f.addBook(t, "wanted-old", bytes.Repeat([]byte("wanted"), 50))
+	if _, err := f.st.ResolveCatalogBookWork(t.Context(), "u1", book,
+		store.Work{ID: "wanted-work", UserID: "u1", Title: "wanted-old", CreatedAt: now}, nil, nil, true, now); err != nil {
+		t.Fatal(err)
+	}
+	statusOn(t, f, "wanted-work", "wanted-act", store.ReadingStatusWantToRead, 0, now)
+	for i := 0; i < 30; i++ {
+		name := fmt.Sprintf("new-book-%02d", i)
+		f.addBook(t, name, bytes.Repeat([]byte(name), 50))
+	}
+	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=want_to_read", f.cookie)
+	if !strings.Contains(grid(page), ">wanted-old<") {
+		t.Fatal("status filter omitted a book beyond the first catalog page")
 	}
 }

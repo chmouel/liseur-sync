@@ -40,6 +40,16 @@ func (s *Server) handleBookReadingStatus(
 	case "read":
 	case "unread":
 		status, notice = store.ReadingStatusUnread, "book marked as unread"
+	case "want_to_read":
+		status, notice = store.ReadingStatusWantToRead, "marked want to read"
+	case "reading":
+		status, notice = store.ReadingStatusReading, "marked reading"
+	case "paused":
+		status, notice = store.ReadingStatusPaused, "reading paused"
+	case "did_not_finish":
+		status, notice = store.ReadingStatusDidNotFinish, "marked did not finish"
+	case "automatic":
+		status, notice = store.ReadingStatusAutomatic, "automatic status restored"
 	default:
 		s.readingStatusDone(w, r, bookID, "", "invalid reading status")
 		return

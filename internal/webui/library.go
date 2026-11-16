@@ -37,11 +37,14 @@ import (
 // "Downloaded" seen from the other end of the sync: on a server, the
 // question is not whether the file came down but whether it is up.
 const (
-	filterAll      = "all"
-	filterReading  = "reading"
-	filterUnread   = "unread"
-	filterFinished = "finished"
-	filterHere     = "here"
+	filterAll          = "all"
+	filterWantToRead   = "want_to_read"
+	filterPaused       = "paused"
+	filterDidNotFinish = "did_not_finish"
+	filterReading      = "reading"
+	filterUnread       = "unread"
+	filterFinished     = "finished"
+	filterHere         = "here"
 	// filterAudio is books with an audiobook that plays against them
 	// (ADR-0057): a catalog question, answered from the catalog half.
 	filterAudio = "audio"
@@ -415,7 +418,8 @@ func (s *Server) libraryRows(
 	works []store.WorkSummary, links bookLinks, readings map[string]store.WorkReading,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryRow, []LibraryEntry, string, error) {
-	if v.Filter == filterReading || v.Filter == filterFinished || v.Sort == sortLastRead {
+	if v.Filter == filterReading || v.Filter == filterFinished || v.Filter == filterWantToRead ||
+		v.Filter == filterPaused || v.Filter == filterDidNotFinish || v.Sort == sortLastRead {
 		rows := s.readingRows(r, userID, v, works, links, readings, loc)
 		if !v.groupedGrid() {
 			return rows, nil, "", nil
@@ -591,6 +595,8 @@ func resolveReading(readings map[string]store.WorkReading, workID string) readin
 // counts can never disagree about it.
 func keepRow(row LibraryRow, filter string) bool {
 	switch filter {
+	case filterWantToRead, filterPaused, filterDidNotFinish:
+		return string(row.resolved()) == filter
 	case filterReading:
 		return row.Started()
 	case filterFinished:
@@ -709,6 +715,8 @@ func normalizeFilter(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "":
 		return filterHere
+	case filterWantToRead, filterPaused, filterDidNotFinish:
+		return strings.ToLower(strings.TrimSpace(raw))
 	case filterReading:
 		return filterReading
 	case filterUnread:
@@ -791,6 +799,9 @@ func libraryChips(folder, filter, sortBy, dir string) []FilterChip {
 	defs := []struct{ key, label string }{
 		{filterAll, "All"},
 		{filterReading, "Reading"},
+		{filterWantToRead, "Want to read"},
+		{filterPaused, "Paused"},
+		{filterDidNotFinish, "Did not finish"},
 		{filterUnread, "Unread"},
 		{filterFinished, "Finished"},
 		{filterHere, "On this server"},

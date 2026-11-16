@@ -404,4 +404,24 @@ func testStatusOrderingAcrossDevices(t *testing.T, open OpenFunc) {
 	if got, resolved := choice("withdrawn"); got != store.ReadingStatusAutomatic || resolved != reading.StatusReading {
 		t.Fatalf("automatic did not withdraw the choice: choice=%q status=%q", got, resolved)
 	}
+	for _, status := range []store.ReadingStatus{
+		store.ReadingStatusWantToRead, store.ReadingStatusReading,
+		store.ReadingStatusPaused, store.ReadingStatusDidNotFinish,
+	} {
+		id := "act-" + string(status)
+		if got := push("tablet", id, store.OpKindStatus, status, t0); got != "applied" {
+			t.Fatalf("%s: %s", status, got)
+		}
+		push("phone", "pos-"+string(status), "", "", t0)
+		if got, resolved := choice(id); got != status || string(resolved) != string(status) {
+			t.Fatalf("position changed %s: choice=%q status=%q", status, got, resolved)
+		}
+		if got := push("tablet", id, store.OpKindStatus, status, t0); got != "duplicate" {
+			t.Fatalf("%s replay: %s", status, got)
+		}
+	}
+	push("phone", "last-auto", store.OpKindStatus, store.ReadingStatusAutomatic, t0)
+	if got, resolved := choice("last automatic"); got != store.ReadingStatusAutomatic || resolved != reading.StatusReading {
+		t.Fatalf("automatic did not withdraw extended choice: choice=%q status=%q", got, resolved)
+	}
 }

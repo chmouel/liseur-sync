@@ -70,6 +70,10 @@ func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
 	read, digest := f.publishAs(t, "r", "Read", []byte("read bytes"))
 	back, backDigest := f.publishAs(t, "u", "Backonthepile", []byte("pile bytes"))
 	withdrawn, withdrawnDigest := f.publishAs(t, "w", "Withdrawn", []byte("withdrawn bytes"))
+	wantBook, wantDigest := f.publishAs(t, "want", "Wanted", []byte("wanted bytes"))
+	pausedBook, pausedDigest := f.publishAs(t, "paused", "Paused", []byte("paused bytes"))
+	dnfBook, dnfDigest := f.publishAs(t, "dnf", "Abandoned", []byte("abandoned bytes"))
+	readingBook, readingDigest := f.publishAs(t, "reading", "Explicit reading", []byte("reading bytes"))
 	tok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead, store.ScopeSync)
 
 	push := func(opID, workID, sha string, progression float64, status string) {
@@ -106,6 +110,12 @@ func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
 	push("with-pos", withdrawnWork, withdrawnDigest, 0.2, "")
 	push("with-act", withdrawnWork, withdrawnDigest, 0.2, "finished")
 	push("with-auto", withdrawnWork, withdrawnDigest, 0.2, "automatic")
+	push("want-act", resolve(wantBook), wantDigest, 0, "want_to_read")
+	pausedWork := resolve(pausedBook)
+	push("paused-act", pausedWork, pausedDigest, 0, "paused")
+	push("paused-pos", pausedWork, pausedDigest, 0.99, "")
+	push("dnf-act", resolve(dnfBook), dnfDigest, 0, "did_not_finish")
+	push("reading-act", resolve(readingBook), readingDigest, 0, "reading")
 
 	readTok := f.mintToken(t, f.user.ID, store.ScopeLibraryRead)
 	titles := func(shelf string) []string {
@@ -122,9 +132,12 @@ func TestOPDSShelvesReadTheExplicitChoice(t *testing.T) {
 		return got
 	}
 	for shelf, want := range map[string]string{
-		"reading":   "Withdrawn",
-		"unread":    "Backonthepile",
-		"last-read": "Read Withdrawn",
+		"reading":        "Explicit reading Withdrawn",
+		"unread":         "Backonthepile",
+		"last-read":      "Explicit reading Read Withdrawn",
+		"want-to-read":   "Wanted",
+		"paused":         "Paused",
+		"did-not-finish": "Abandoned",
 	} {
 		if got := strings.Join(titles(shelf), " "); got != want {
 			t.Errorf("%s = %q, want %q", shelf, got, want)
