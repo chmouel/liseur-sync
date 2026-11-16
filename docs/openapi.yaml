@@ -3398,7 +3398,7 @@ paths:
         - name: shelf
           in: path
           required: true
-          schema: { type: string, enum: [reading, unread, last-read, alphabetical] }
+          schema: { type: string, enum: [reading, want-to-read, paused, did-not-finish, unread, last-read, alphabetical] }
         - name: offset
           in: query
           schema: { type: integer, minimum: 0 }
