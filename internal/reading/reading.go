@@ -23,11 +23,19 @@ const (
 )
 
 // UnreadShelf reports whether a status belongs on the shelf of books the
-// reader is not in the middle of: the explicit choice and the derived
-// no-position result share the shelf, and only the wire value differs.
+// reader is not in the middle of: the explicit choices to read it later
+// or to put it back, and the derived no-position result, share the shelf,
+// and only the wire value differs. A paused or unfinished book is not on
+// it: the reader is in the middle of a book they put down, or gave up on.
 func (s Status) UnreadShelf() bool {
-	return s == StatusUnread || s == StatusReadyToRead
+	return s == StatusWantToRead || s == StatusUnread || s == StatusReadyToRead
 }
+
+// NextUp reports whether a book in this state may be offered as the next
+// thing to open: one being read, or one waiting on the unread shelf. A
+// paused book is a deliberate "not now" and an unfinished one a "never",
+// so neither is ever offered.
+func (s Status) NextUp() bool { return s == StatusReading || s.UnreadShelf() }
 
 // Override is what the reader said about a book, carried by the newest
 // status act. The empty value is "they never said anything".

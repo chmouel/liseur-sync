@@ -70,6 +70,46 @@ func TestWorkStatusResolvesTheOneRule(t *testing.T) {
 			wantStatus: reading.StatusFinished,
 			wantCovers: true,
 		},
+		{
+			// ADR-0067: the newer choices reach the snapshot too, so a
+			// server-only statistics row and the shelf agree.
+			name:       "explicit want to read",
+			position:   store.Op{Progression: 0.4},
+			reading:    store.WorkReading{HasPosition: true, Progression: 0.4, Choice: store.ReadingStatusWantToRead},
+			wantStatus: reading.StatusWantToRead,
+			wantCovers: true,
+		},
+		{
+			name:       "explicit reading before any position",
+			position:   store.Op{},
+			reading:    store.WorkReading{Choice: store.ReadingStatusReading},
+			wantStatus: reading.StatusReading,
+			wantCovers: true,
+		},
+		{
+			// Paused at 0.99: the position would say finished, the
+			// reader says otherwise, and the snapshot must not count
+			// this work as read.
+			name:       "paused above the threshold is not finished",
+			position:   store.Op{Progression: 0.99},
+			reading:    store.WorkReading{HasPosition: true, Progression: 0.99, Choice: store.ReadingStatusPaused},
+			wantStatus: reading.StatusPaused,
+			wantCovers: true,
+		},
+		{
+			name:       "did not finish above the threshold is not finished",
+			position:   store.Op{Progression: 0.99},
+			reading:    store.WorkReading{HasPosition: true, Progression: 0.99, Choice: store.ReadingStatusDidNotFinish},
+			wantStatus: reading.StatusDidNotFinish,
+			wantCovers: true,
+		},
+		{
+			name:       "automatic hands a new choice back to the position",
+			position:   store.Op{Progression: 0.5},
+			reading:    store.WorkReading{HasPosition: true, Progression: 0.5, Choice: store.ReadingStatusAutomatic},
+			wantStatus: reading.StatusReading,
+			wantCovers: true,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

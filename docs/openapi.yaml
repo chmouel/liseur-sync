@@ -4427,17 +4427,42 @@ components:
           enum: [finished, unread, automatic, want_to_read, reading, paused, did_not_finish]
           description: |
             Present exactly when `kind` is `status`, and required then.
-            `finished` is the reader saying the book is read at whatever
-            position; `unread` puts it back on the pile; `automatic`
-            withdraws an earlier choice, so the position decides again.
-            `want_to_read`, `reading`, `paused` and `did_not_finish` are
-            explicit choices that remain in effect until another act.
-            Reading or opening a book does not clear them.
+            No other value is accepted: an unknown one is `400`,
+            `code: bad_value`, and refuses the whole batch rather than
+            storing a neighbouring status.
+
+            Resolution order, unchanged from ADR-0066 and extended by
+            ADR-0067: the newest status act by `seq` decides first, and
+            the newest position op only decides when the choice is
+            `automatic` or there never was one. `finished` says the book
+            is read at whatever position; `unread` puts it back on the
+            pile; `automatic` withdraws an earlier choice, so the
+            position decides again. `want_to_read`, `reading`, `paused`
+            and `did_not_finish` are explicit choices that remain in
+            effect until another act; reading or opening a book does not
+            clear them. A partial-coverage position never finishes a book
+            on its own, but an explicit `finished` still does.
+
             Sending it on a position op, or sending an empty string, is
-            refused.
-            A status act is idempotent on the whole payload like any
-            other op, so derive its `op_id` from the status revision it
-            records, not from the position revision.
+            refused. A status act is idempotent on the whole payload like
+            any other op, so derive its `op_id` from the status revision
+            it records, not from the position revision.
+
+            Which shelf a resolved value belongs on is decided once, for
+            every surface: `want_to_read` is unstarted and shares the
+            unread shelf with `unread` and the derived `ready_to_read`;
+            `reading` is the book being read, and the one offered next
+            even before it has a position; `paused` and `did_not_finish`
+            have a shelf of their own and are never offered as next up;
+            `finished` is on the finished shelf only.
+
+            Rollout: the four newer choices widen the enum without a
+            migration, but a released client cannot parse them, so client
+            support ships before this server emits them for a reader, and
+            a client must never write back a substitute status for one it
+            cannot read. An older server refuses such a write with `400`
+            on the whole batch and appends nothing, so the refusal costs
+            the reader a retry rather than the choice they made.
         coverage:
           type: string
           enum: [full, partial]
@@ -4608,14 +4633,17 @@ components:
           type: string
           enum: [finished, reading, unread, ready_to_read, want_to_read, paused, did_not_finish]
           description: |
-            The work's status, resolved by the one rule of ADR-0066: the
-            newest status act's choice if the reader made one, else the
-            newest position against 0.97 unless `covers_narrative` is
-            false. It is not derived from `current_progression` alone, so
-            a book marked read at 0.4 is finished here. `unread` is the
-            reader's explicit choice and `ready_to_read` the derived
-            no-position result: they share a shelf but are not the same
-            fact, so a client holding a choice can tell them apart. Not
+            The work's status, resolved by the one rule of ADR-0066 and
+            ADR-0067: the newest status act's choice if the reader made
+            one, else the newest position against 0.97 unless
+            `covers_narrative` is false. It is not derived from
+            `current_progression` alone, so a book marked read at 0.4 is
+            finished here, and one marked paused at 0.99 is paused rather
+            than finished. `unread` is the reader's explicit choice and
+            `ready_to_read` the derived no-position result: they share a
+            shelf but are not the same fact, so a client holding a choice
+            can tell them apart. `want_to_read` shares that shelf too;
+            `paused` and `did_not_finish` are on shelves of their own. Not
             additive across an overlap merge: a device takes the
             server's.
         covers_narrative:

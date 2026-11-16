@@ -419,9 +419,25 @@ func testStatusOrderingAcrossDevices(t *testing.T, open OpenFunc) {
 		if got := push("tablet", id, store.OpKindStatus, status, t0); got != "duplicate" {
 			t.Fatalf("%s replay: %s", status, got)
 		}
-	}
-	push("phone", "last-auto", store.OpKindStatus, store.ReadingStatusAutomatic, t0)
-	if got, resolved := choice("last automatic"); got != store.ReadingStatusAutomatic || resolved != reading.StatusReading {
-		t.Fatalf("automatic did not withdraw extended choice: choice=%q status=%q", got, resolved)
+		// The same id with a different choice is a conflict, not an
+		// overwrite and not a second act.
+		other := store.ReadingStatusPaused
+		if status == other {
+			other = store.ReadingStatusFinished
+		}
+		if got := push("tablet", id, store.OpKindStatus, other, t0); got != "conflict" {
+			t.Fatalf("%s changed in place: %s", status, got)
+		}
+		if got, _ := choice("after conflict"); got != status {
+			t.Fatalf("a conflicting act replaced %s: %q", status, got)
+		}
+		// And every one of them is withdrawn by automatic, not just
+		// the one ADR-0066 shipped.
+		if got := push("phone", "auto-"+string(status), store.OpKindStatus, store.ReadingStatusAutomatic, t0); got != "applied" {
+			t.Fatalf("automatic after %s: %s", status, got)
+		}
+		if got, resolved := choice("automatic after " + string(status)); got != store.ReadingStatusAutomatic || resolved != reading.StatusReading {
+			t.Fatalf("automatic did not withdraw %s: choice=%q status=%q", status, got, resolved)
+		}
 	}
 }
