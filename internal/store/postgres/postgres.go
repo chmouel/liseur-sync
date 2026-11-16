@@ -135,6 +135,23 @@ func nullStr(p *string) sql.NullString {
 	return sql.NullString{String: *p, Valid: true}
 }
 
+// optStr is nullStr for a column whose zero value means absent.
+func optStr[T ~string](v T) *string {
+	if v == "" {
+		return nil
+	}
+	s := string(v)
+	return &s
+}
+
+// derefStr is the read side of a nullable text column.
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
 // The compiler, not a reviewer, is what keeps the two backends in step
 // with the interface.
 var _ store.Store = (*Store)(nil)

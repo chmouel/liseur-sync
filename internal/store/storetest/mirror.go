@@ -75,6 +75,24 @@ func testMirrorCandidates(t *testing.T, open OpenFunc) {
 		t.Fatalf("timestamps lost: %+v", c.Latest)
 	}
 
+	// A status act is not a move: the newest place a peer may be told
+	// about is still the newest position, whatever sits above it in the
+	// log (ADR-0066).
+	if _, err := s.AppendOps(ctx, u.ID, "phone", []store.Op{{
+		OpID: "act", WorkID: w.ID, ClientTS: time.Now(), Progression: 0.55,
+		Origin: store.OriginNative, Kind: store.OpKindStatus,
+		ReadingStatus: store.ReadingStatusUnread,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.MirrorCandidates(ctx, u.ID, time.Now().Add(-time.Hour), 100)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("candidates: %+v %v", got, err)
+	}
+	if latest := got[0].Latest; latest.OpID != "op-2" || !latest.IsPosition() {
+		t.Fatalf("a status act was offered as the position to mirror: %+v", latest)
+	}
+
 	// The window is the cost control: a library read years ago is not
 	// asked about every five minutes.
 	got, err = s.MirrorCandidates(ctx, u.ID, time.Now().Add(time.Hour), 100)

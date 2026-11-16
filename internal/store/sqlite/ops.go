@@ -95,11 +95,13 @@ func (s *Store) appendOpsTx(ctx context.Context, tx *sql.Tx, userID, deviceID st
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO ops (user_id, seq, op_id, work_id, edition_sha, device_id,
 			                  client_ts, progression, locator_json, foreign_pos,
-			                  origin, origin_alias, received_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			                  origin, origin_alias, received_at, kind, reading_status, coverage)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			userID, seq, o.OpID, o.WorkID, nullStr(o.EditionSHA), deviceID,
 			formatTime(o.ClientTS), o.Progression, o.LocatorJSON,
-			nullStr(o.ForeignPos), string(o.Origin), nullStr(o.OriginAlias), now)
+			nullStr(o.ForeignPos), string(o.Origin), nullStr(o.OriginAlias), now,
+			string(store.StoredKind(o.Kind)), nullStr(optStr(o.ReadingStatus)),
+			nullStr(optStr(o.Coverage)))
 		if err != nil {
 			return nil, err
 		}
@@ -139,20 +141,26 @@ func (s *Store) AppendKosyncOp(ctx context.Context, userID, partialMD5, deviceID
 // one for the same op_id.
 func (s *Store) sameOp(ctx context.Context, tx *sql.Tx, userID string, o store.Op, deviceID string) (bool, error) {
 	var (
-		workID, devID, clientTS, origin string
-		edSHA, fpos, oalias             sql.NullString
-		prog                            float64
-		locator                         []byte
+		workID, devID, clientTS, origin, kind string
+		edSHA, fpos, oalias, status           sql.NullString
+		coverage                              sql.NullString
+		prog                                  float64
+		locator                               []byte
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT work_id, edition_sha, device_id, client_ts, progression, locator_json, foreign_pos, origin, origin_alias
+		`SELECT work_id, edition_sha, device_id, client_ts, progression, locator_json, foreign_pos, origin, origin_alias,
+		        kind, reading_status, coverage
 		 FROM ops WHERE user_id = ? AND op_id = ?`, userID, o.OpID).
-		Scan(&workID, &edSHA, &devID, &clientTS, &prog, &locator, &fpos, &origin, &oalias)
+		Scan(&workID, &edSHA, &devID, &clientTS, &prog, &locator, &fpos, &origin, &oalias,
+			&kind, &status, &coverage)
 	if err != nil {
 		return false, err
 	}
 	if workID != o.WorkID || devID != deviceID || prog != o.Progression ||
-		clientTS != formatTime(o.ClientTS) || origin != string(o.Origin) {
+		clientTS != formatTime(o.ClientTS) || origin != string(o.Origin) ||
+		kind != string(store.StoredKind(o.Kind)) ||
+		status.String != string(o.ReadingStatus) || status.Valid != (o.ReadingStatus != "") ||
+		coverage.String != string(o.Coverage) || coverage.Valid != (o.Coverage != "") {
 		return false, nil
 	}
 	if (edSHA.Valid != (o.EditionSHA != nil)) || (edSHA.Valid && edSHA.String != *o.EditionSHA) {
@@ -171,7 +179,8 @@ func (s *Store) sameOp(ctx context.Context, tx *sql.Tx, userID string, o store.O
 }
 
 const opCols = `user_id, seq, op_id, work_id, edition_sha, device_id, client_ts,
-                progression, locator_json, foreign_pos, origin, origin_alias, received_at`
+                progression, locator_json, foreign_pos, origin, origin_alias, received_at,
+                kind, reading_status, coverage`
 
 // Ownership groups survive edition and legacy-alias splits. Equal
 // progressions retain the first report rather than moving on every echo.
@@ -187,7 +196,7 @@ const aboveFurthestFloor = `seq > (SELECT w.furthest_floor FROM works w
 	WHERE w.user_id = ops.user_id AND w.id = ops.work_id)`
 
 func furthestOpsTx(ctx context.Context, tx *sql.Tx, userID, workID string) ([]store.Op, error) {
-	where := `user_id = ?`
+	where := `user_id = ? AND kind = 'position'`
 	args := []any{userID}
 	if workID != "" {
 		where += ` AND work_id = ?`
@@ -269,10 +278,12 @@ func (s *Store) Changes(ctx context.Context, userID string, since int64, limit i
 	return page, err
 }
 
-// Positions returns the most recent ops for a work (newest first).
+// Positions returns the most recent position ops for a work (newest
+// first). A status act is not a move, so it is not here; it travels in
+// changes and heads (ADR-0066).
 func (s *Store) Positions(ctx context.Context, userID, workID string, limit int) ([]store.Op, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND work_id = ? ORDER BY seq DESC LIMIT ?`,
+		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND work_id = ? AND kind = 'position' ORDER BY seq DESC LIMIT ?`,
 		userID, workID, limit)
 	if err != nil {
 		return nil, err
@@ -297,7 +308,7 @@ func (s *Store) PositionSnapshot(ctx context.Context, userID, workID string, lim
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx,
-		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND work_id = ? ORDER BY seq DESC LIMIT ?`,
+		`SELECT `+opCols+` FROM ops WHERE user_id = ? AND work_id = ? AND kind = 'position' ORDER BY seq DESC LIMIT ?`,
 		userID, workID, limit)
 	if err != nil {
 		return snapshot, err
@@ -329,8 +340,11 @@ func (s *Store) PositionSnapshot(ctx context.Context, userID, workID string, lim
 	return snapshot, err
 }
 
-// HeadsFor returns the newest op per (work, device) plus the snapshot
-// high-water mark, all from one read transaction.
+// HeadsFor returns the newest op of each kind per (work, device) plus
+// the snapshot high-water mark, all from one read transaction. The kinds
+// are separate heads on purpose: a status act is not a move, so letting
+// one hide a device's newest position would leave a resync without the
+// place that device is at (ADR-0066).
 func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -346,8 +360,9 @@ func (s *Store) HeadsFor(ctx context.Context, userID string) (store.Heads, error
 		`SELECT `+opCols+` FROM ops o
 		 WHERE user_id = ? AND seq = (
 		     SELECT MAX(seq) FROM ops o2
-		     WHERE o2.user_id = o.user_id AND o2.work_id = o.work_id AND o2.device_id = o.device_id)
-		 ORDER BY work_id, device_id`, userID)
+		     WHERE o2.user_id = o.user_id AND o2.work_id = o.work_id
+		       AND o2.device_id = o.device_id AND o2.kind = o.kind)
+		 ORDER BY work_id, device_id, kind`, userID)
 	if err != nil {
 		return h, err
 	}
@@ -479,8 +494,9 @@ func (s *Store) PendingInferenceOps(ctx context.Context, userID string) ([]store
 }
 
 // Compact reduces ops older than the cutoff to daily
-// last-op-per-(work, device) snapshots, preserving every (work, device)
-// head and each ownership group's furthest op, regardless of age.
+// last-op-per-(work, device, kind) snapshots, preserving every
+// (work, device) head of each kind and each ownership group's furthest
+// op, regardless of age.
 // The horizon is the greatest seq any compaction has deleted; replacing
 // an older retained peak must not lower it. Clients with since < horizon get
 // resync_required. seq is never renumbered.
@@ -502,19 +518,21 @@ func (s *Store) Compact(ctx context.Context, userID string, olderThan time.Time)
                  WHERE kd.user_id = ops.user_id AND ops.device_id = 'kosync:' || kd.device_slot
                    AND kd.measured_sessions_from IS NOT NULL AND ops.received_at >= kd.measured_sessions_from))
 		 AND seq NOT IN (
-		     -- keep daily last-op snapshots
+		     -- keep daily last-op snapshots, one per kind: the day's last
+		     -- position and the day's last choice are different facts
 		     SELECT MAX(seq) FROM ops o2
 		     WHERE o2.user_id = ops.user_id AND o2.received_at < ?
-		     GROUP BY o2.work_id, o2.device_id, substr(o2.received_at, 1, 10))
+		     GROUP BY o2.work_id, o2.device_id, o2.kind, substr(o2.received_at, 1, 10))
 		 AND seq NOT IN (
-		     -- keep heads per (work, device)
+		     -- keep heads per (work, device, kind)
 		     SELECT MAX(seq) FROM ops o3
 		     WHERE o3.user_id = ops.user_id
-		     GROUP BY o3.work_id, o3.device_id)
+		     GROUP BY o3.work_id, o3.device_id, o3.kind)
 		 AND seq NOT IN (
 		     SELECT seq FROM (
 		         SELECT seq, `+furthestRank+` AS furthest_rank FROM ops
 		         WHERE user_id = ? AND progression >= 0 AND progression <= 1
+		           AND kind = 'position'
 		           AND `+aboveFurthestFloor+`
 		     ) ranked WHERE furthest_rank = 1)
 		 RETURNING seq`, userID, cut, cut, userID)

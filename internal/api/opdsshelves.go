@@ -9,12 +9,9 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
-
-// finishedProgression is where a book counts as read to the end. It is
-// the web library's threshold, so the two never disagree about a book.
-const finishedProgression = 0.999
 
 // opdsShelf is one personal view of the library, offered from the root
 // feed. Unlike the folder feeds it depends on the reader's own position
@@ -27,13 +24,24 @@ type opdsShelf struct {
 	less func(a, b shelfBook) bool
 }
 
+// shelfState is one book as this reader stands in it: the resolved
+// status (ADR-0066), and how far they got.
 type shelfState struct {
+	status      reading.Status
 	progression *float64
 	lastActive  time.Time
 }
 
-func (st shelfState) started() bool {
-	return st.progression != nil && *st.progression > 0
+func (st shelfState) started() bool { return st.status == reading.StatusReading }
+
+// resolved is the book's status, with a book nobody has read at all —
+// there is no work behind it, so nothing resolved one — counted as not
+// started.
+func (st shelfState) resolved() reading.Status {
+	if st.status == "" {
+		return reading.StatusReadyToRead
+	}
+	return st.status
 }
 
 type shelfBook struct {
@@ -51,18 +59,18 @@ func byLastRead(a, b shelfBook) bool {
 var opdsShelves = []opdsShelf{
 	{
 		slug: "reading", title: "Currently reading",
-		keep: func(st shelfState) bool {
-			return st.started() && *st.progression < finishedProgression
-		},
+		keep: func(st shelfState) bool { return st.started() },
 		less: byLastRead,
 	},
 	{
 		slug: "unread", title: "Unread",
-		keep: func(st shelfState) bool { return !st.started() },
+		keep: func(st shelfState) bool { return st.resolved().UnreadShelf() },
 	},
 	{
 		slug: "last-read", title: "By last read",
-		keep: shelfState.started,
+		keep: func(st shelfState) bool {
+			return st.resolved() == reading.StatusReading || st.resolved() == reading.StatusFinished
+		},
 		less: byLastRead,
 	},
 	{
@@ -100,22 +108,24 @@ func opdsShelfFacets() []opdsLink {
 }
 
 // readerBookStates maps each catalog book to this reader's newest
-// position in it. A book with no entry has never been opened.
+// position in it and the status that resolves to. A book with no entry
+// has never been opened.
 func (s *Server) readerBookStates(r *http.Request, userID string) (map[string]shelfState, error) {
 	works, err := s.St.ListWorks(r.Context(), userID)
 	if err != nil {
 		return nil, err
 	}
+	readings, err := s.St.WorkReadings(r.Context(), userID, nil)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]shelfState)
 	for _, ws := range works {
-		if ws.Progression == nil {
-			continue
-		}
 		ids, err := s.St.WorkBookIDs(r.Context(), userID, ws.Work.ID)
 		if err != nil {
 			return nil, err
 		}
-		st := shelfState{progression: ws.Progression}
+		st := shelfState{progression: ws.Progression, status: readings[ws.Work.ID].Resolve()}
 		if ws.LastActive != nil {
 			st.lastActive = *ws.LastActive
 		}

@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/chmouel/liseur-sync/internal/reading"
 )
 
 // Common sentinel errors.
@@ -1118,7 +1120,38 @@ func DecideWorkResolution(ids []Identifier, matches map[string]string, confirmed
 	return result
 }
 
-// Op is one position operation in the append-only per-user log.
+// OpKind tells a position from an explicit reading-status act
+// (ADR-0066). Both live in the same append-only log, and only position
+// ops answer a position query.
+type OpKind string
+
+const (
+	OpKindPosition OpKind = "position"
+	OpKindStatus   OpKind = "status"
+)
+
+// ReadingStatus is what a status act says. Automatic withdraws an
+// earlier choice, so the position decides again.
+type ReadingStatus string
+
+const (
+	ReadingStatusFinished  ReadingStatus = "finished"
+	ReadingStatusUnread    ReadingStatus = "unread"
+	ReadingStatusAutomatic ReadingStatus = "automatic"
+)
+
+// Coverage reports whether the recording a position was mapped from
+// covers the whole narrative. Empty means unknown, which is every
+// ebook position and every position recorded before ADR-0066.
+type Coverage string
+
+const (
+	CoverageFull    Coverage = "full"
+	CoveragePartial Coverage = "partial"
+)
+
+// Op is one operation in the append-only per-user log: a position, or
+// an explicit reading-status act riding beside the positions.
 type Op struct {
 	UserID      string
 	Seq         int64
@@ -1133,6 +1166,77 @@ type Op struct {
 	Origin      Origin
 	OriginAlias *string
 	ReceivedAt  time.Time
+	// Kind is empty for a position op, which is how every op written
+	// before ADR-0066 reads back.
+	Kind OpKind
+	// ReadingStatus is set exactly when Kind is [OpKindStatus].
+	ReadingStatus ReadingStatus
+	// Coverage is set on a position op only, and only by a writer
+	// that knows the recording's span.
+	Coverage Coverage
+}
+
+// IsPosition reports whether the op may answer a position query.
+func (o Op) IsPosition() bool { return StoredKind(o.Kind) == OpKindPosition }
+
+// StoredKind is the kind an op is written and compared as: an op that
+// names none is a position op, which is what the column defaults to.
+// Every writer that predates ADR-0066 names none.
+func StoredKind(k OpKind) OpKind {
+	if k == "" {
+		return OpKindPosition
+	}
+	return k
+}
+
+// Validate enforces the shape ADR-0066 gives an op: one of two kinds,
+// a reading status present exactly on a status act, and coverage only
+// on a position. A status act carries the sender's own progression,
+// and a status act is not a move.
+func (o Op) Validate() error {
+	switch {
+	case o.Kind != "" && o.Kind != OpKindPosition && o.Kind != OpKindStatus:
+		return fmt.Errorf("%w: unknown op kind %q", ErrInvalidInput, o.Kind)
+	case o.Kind == OpKindStatus:
+		switch o.ReadingStatus {
+		case ReadingStatusFinished, ReadingStatusUnread, ReadingStatusAutomatic:
+		default:
+			return fmt.Errorf("%w: reading_status required on a status op", ErrInvalidInput)
+		}
+		if o.Coverage != "" {
+			return fmt.Errorf("%w: coverage belongs to a position op", ErrInvalidInput)
+		}
+	case o.ReadingStatus != "":
+		return fmt.Errorf("%w: reading_status belongs to a status op", ErrInvalidInput)
+	case o.Coverage != "" && o.Coverage != CoverageFull && o.Coverage != CoveragePartial:
+		return fmt.Errorf("%w: unknown coverage %q", ErrInvalidInput, o.Coverage)
+	}
+	return nil
+}
+
+// WorkReading is one work's newest status act and newest position,
+// which is everything the resolution rule needs.
+type WorkReading struct {
+	WorkID string
+	// Choice is the reading status of the newest status act, empty
+	// when the reader never made one.
+	Choice ReadingStatus
+	// Progression and Coverage come from the newest position op.
+	// HasPosition is false for a work whose only op is a status act.
+	HasPosition bool
+	Progression float64
+	Coverage    Coverage
+}
+
+// Resolve applies the one resolution rule (ADR-0066) to these facts.
+// Every server surface asks this, so a book cannot be finished on one
+// page and half-read on another.
+func (r WorkReading) Resolve() reading.Status {
+	var position *float64
+	if r.HasPosition {
+		position = &r.Progression
+	}
+	return reading.Resolve(reading.Override(r.Choice), position, r.Coverage == CoveragePartial)
 }
 
 // Session is one reading session fact.
@@ -1267,8 +1371,12 @@ type StatsSnapshot struct {
 	Rollups   []SessionRollup
 	Works     []Work
 	Positions map[string]Op
-	Editions  map[string]Edition
-	Archived  map[string]ArchivedSession
+	// Readings carries each work's explicit status act beside its
+	// newest position, so the aggregate resolves a status the same way
+	// every other surface does (ADR-0066).
+	Readings map[string]WorkReading
+	Editions map[string]Edition
+	Archived map[string]ArchivedSession
 }
 
 type OpResult struct {
@@ -2025,6 +2133,12 @@ type Store interface {
 	Changes(ctx context.Context, userID string, since int64, limit int) (ChangesPage, error)
 	Positions(ctx context.Context, userID, workID string, limit int) ([]Op, error)
 	PositionSnapshot(ctx context.Context, userID, workID string, limit int) (PositionSnapshot, error)
+	// WorkReadings returns, per work, the newest status act and the
+	// newest position — the two facts the resolution rule needs
+	// (ADR-0066), read in one transaction so they cannot disagree.
+	// Work ids that are not this user's are simply absent from the
+	// map. An empty workIDs reads every work of the account.
+	WorkReadings(ctx context.Context, userID string, workIDs []string) (map[string]WorkReading, error)
 	PendingInferenceOps(ctx context.Context, userID string) ([]Op, error)
 	HeadsFor(ctx context.Context, userID string) (Heads, error)
 	CompactionHorizon(ctx context.Context, userID string) (int64, error)

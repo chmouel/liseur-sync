@@ -20,6 +20,13 @@ func TestReaderAudioLifecycle(t *testing.T) {
 	runNodeTests(t, "readeraudio.test.mjs")
 }
 
+// TestReaderStatusHelpers runs the node unit tests for what the reader
+// adds to a position beside the place itself (ADR-0066): the recording's
+// coverage, and the act that takes back an unread choice.
+func TestReaderStatusHelpers(t *testing.T) {
+	runNodeTests(t, "readerstatus.test.mjs")
+}
+
 // TestReaderNarration runs the node unit tests for the audiobook
 // sentence highlight (static/reader-narration.js): how a chapter's text
 // is counted, split into sentences and kept in step with the narrator.

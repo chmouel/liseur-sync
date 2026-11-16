@@ -1,6 +1,10 @@
 package webui
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/chmouel/liseur-sync/internal/reading"
+)
 
 // Books: the browser side of the catalog — pick a folder, look at what
 // is in it, read it or take a copy.
@@ -53,7 +57,11 @@ type BookView struct {
 	// nothing to download until the file comes back.
 	Present bool
 	CanRead bool
-	Finished bool
+	// Status is the reader's reading state, resolved once (ADR-0066).
+	// The page renders every state label from it: a book marked unread
+	// keeps the position it was at, and saying "Reading 99%" over that
+	// would contradict the shelf it is on.
+	Status reading.Status
 	// Progression is the reader's newest known position for this book.
 	// Nil means the reader has not opened it on any synced device.
 	Progression *float64
@@ -135,13 +143,16 @@ templ bookBody(prefix, csrf string, b BookView) {
 				<p class="byline">{ b.Byline }</p>
 			}
 			<div class="reading-state">
-				if b.Finished {
+				if b.Status == reading.StatusFinished {
 					<span class="tag done">Finished</span>
-				} else if b.Progression != nil && *b.Progression > 0 {
+				} else if b.Status == reading.StatusReading && b.Progression != nil {
 					<span class="tag">Reading { pct(*b.Progression) }</span>
 					@progressBar("bar", *b.Progression)
 				} else {
 					<span class="tag">Unread</span>
+					if b.Progression != nil && *b.Progression > 0 {
+						<span class="muted">left at { pct(*b.Progression) }</span>
+					}
 				}
 			</div>
 			<div class="cta">
@@ -154,7 +165,7 @@ templ bookBody(prefix, csrf string, b BookView) {
 						Listen
 					</a>
 				}
-				@markBookButton(prefix, csrf, b.ID, b.Finished)
+				@markBookButton(prefix, csrf, b.ID, b.Status == reading.StatusFinished)
 				if b.Present {
 					<a class="btn" href={ prefix + "books/" + b.ID + "/download" }>Download</a>
 					if b.Offline {
@@ -331,6 +342,11 @@ templ bookBody(prefix, csrf string, b BookView) {
 // when there is none yet. The player is the browser's own <audio>;
 // book-audio.js resumes it from the reading position and files where
 // the listener got to.
+//
+// data-reading-choice says the newest act on this work is an explicit
+// unread (ADR-0066): listening again withdraws that choice, and the
+// player can only withdraw a choice it was told about when the page was
+// served.
 templ bookListen(prefix, csrf string, b BookView) {
 	<section
 		id="listen"
@@ -343,6 +359,9 @@ templ bookListen(prefix, csrf string, b BookView) {
 			data-token-url={ prefix + "reader/token" }
 			data-csrf={ csrf }
 			data-edition={ b.SHA256 }
+			if b.Status == reading.StatusUnread {
+				data-reading-choice="unread"
+			}
 			data-duration={ strconv.FormatFloat(b.Audio.Seconds, 'f', -1, 64) }
 			data-title={ orPlaceholder(b.Title) }
 			data-artist={ b.Byline }

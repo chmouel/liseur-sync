@@ -20,6 +20,32 @@ import {
   setActiveAccount, storagePartition,
 } from "./offline-storage.js";
 
+// coverageOf is what a position mapped from this recording reports about
+// it (ADR-0066). A partial recording keeps its 0.998 cap, and the
+// server's completion threshold is 0.97 — below that cap — so coverage
+// is what stops a partial recording finishing the ebook.
+export function coverageOf(mapping) {
+  if (!mapping) return null;
+  return mapping.full_narrative ? "full" : "partial";
+}
+
+// withdrawal builds the act that takes back an explicit unread choice
+// when the listener starts listening again (ADR-0066). Its id is derived
+// from the position it rides beside, so a push replayed byte for byte
+// repeats the same act instead of adding a second one.
+export function withdrawal(op, choice) {
+  if (choice !== "unread") return null;
+  return {
+    op_id: "unread:" + op.op_id,
+    work_id: op.work_id,
+    client_ts: op.client_ts,
+    progression: op.progression,
+    kind: "status",
+    reading_status: "automatic",
+    ...(op.edition_sha ? { edition_sha: op.edition_sha } : {}),
+  };
+}
+
 const SYNC_EVERY_MS = 30000;
 const RATE_KEY = "liseur.listen.rate";
 
@@ -115,6 +141,9 @@ function player(section) {
   let leftover = null;
   let checkpointedAt = 0;
   let unsent = [];
+  // withdrawn says this visit already took back the unread choice it was
+  // served with. A push that did not land leaves it owed.
+  let withdrawn = false;
 
   // The reader's queue (offline-sync.js): a finished sitting is written
   // to this browser's outbox before anything is sent, and checkpointed
@@ -192,17 +221,30 @@ function player(section) {
         const at = await resp.json();
         if (!Number.isFinite(at.progression) || !at.locator) return;
         const edition = section.dataset.edition;
+        // The recording's span travels with the position: the server's
+        // completion threshold is 0.97 and the 0.998 cap a partial
+        // recording keeps sits above it, so coverage is what stops a
+        // partial recording finishing the ebook (ADR-0066).
+        const coverage = coverageOf(mapping);
         const op = {
           op_id: uuid(), work_id: workID, client_ts: new Date().toISOString(),
           progression: at.progression, locator: at.locator,
           ...(edition ? { edition_sha: edition } : {}),
+          ...(coverage ? { coverage } : {}),
         };
+        // Listening again takes back an explicit unread, once per visit:
+        // the act and the position are one batch, so the choice is never
+        // withdrawn without the position that resumes it.
+        const act = withdrawn ? null : withdrawal(op, section.dataset.readingChoice);
         const pushed = await api("v1/ops", {
           method: "POST", keepalive,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ops: [op] }),
+          body: JSON.stringify({ ops: act ? [op, act] : [op] }),
         });
-        if (pushed.ok) lastSynced = t;
+        if (pushed.ok) {
+          lastSynced = t;
+          if (act) withdrawn = true;
+        }
       } catch {
         // Offline or expired: the next tick tries again from wherever
         // playback has got to by then.

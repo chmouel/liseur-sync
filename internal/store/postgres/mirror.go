@@ -19,8 +19,10 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		     SELECT o.*
 		       FROM ops o
 		      WHERE o.user_id = ?
+		        AND o.kind = 'position'
 		        AND o.seq = (SELECT MAX(seq) FROM ops m
-		                       WHERE m.user_id = o.user_id AND m.work_id = o.work_id)
+		                       WHERE m.user_id = o.user_id AND m.work_id = o.work_id
+		                         AND m.kind = 'position')
 		        AND o.received_at >= ?
 		   ),
 		   candidates AS (
@@ -68,13 +70,18 @@ func (s *Store) MirrorCandidates(ctx context.Context, userID string, since time.
 		var c store.MirrorCandidate
 		var o store.Op
 		var origin string
+		var kind, status, coverage *string
 		if err := rows.Scan(&c.Document, &c.Title, &c.RelativePath, &c.SizeBytes, &c.RootPath,
 			&o.UserID, &o.Seq, &o.OpID, &o.WorkID,
 			&o.EditionSHA, &o.DeviceID, &o.ClientTS, &o.Progression, &o.LocatorJSON,
-			&o.ForeignPos, &origin, &o.OriginAlias, &o.ReceivedAt); err != nil {
+			&o.ForeignPos, &origin, &o.OriginAlias, &o.ReceivedAt,
+			&kind, &status, &coverage); err != nil {
 			return nil, err
 		}
 		o.Origin = store.Origin(origin)
+		o.Kind = store.OpKind(derefStr(kind))
+		o.ReadingStatus = store.ReadingStatus(derefStr(status))
+		o.Coverage = store.Coverage(derefStr(coverage))
 		c.WorkID, c.Latest = o.WorkID, o
 		out = append(out, c)
 	}

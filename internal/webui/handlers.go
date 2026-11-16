@@ -12,6 +12,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/insights"
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -89,24 +90,17 @@ func (s *Server) handleInsights(w http.ResponseWriter, r *http.Request, a store.
 		Render(r.Context(), w)
 }
 
-// finishedProgression is where a progression stops being "reading". It
-// is library.go's threshold, spelled here so the two cannot drift: a
-// book the library calls finished must not be a book the statistics
-// call half-read.
-const finishedProgression = finished
-
 // booksFinished counts the works read in this span that are now done.
 //
 // It is deliberately not "finished during this span": the server has no
 // flag saying when a book crossed the line, only where each work stands
-// now (an op at or past [finishedProgression], which is what the
-// library's own "mark as read" writes). So this answers the question it
+// now (its resolved status, ADR-0066). So this answers the question it
 // can answer honestly — you read from these in this span, and these
 // ones are finished — rather than inventing a date for the last page.
 func booksFinished(works []insights.Work) int {
 	n := 0
 	for _, w := range works {
-		if w.CurrentProgression >= finishedProgression {
+		if w.Status == reading.StatusFinished {
 			n++
 		}
 	}
@@ -133,7 +127,7 @@ func byBook(works []insights.Work) []BookStatRow {
 			Duration:    readingMinutes(w.TotalActiveMinutes),
 			Sittings:    sittings(w.Sessions),
 			Progression: w.CurrentProgression,
-			Finished:    w.CurrentProgression >= finishedProgression,
+			Finished:    w.Status == reading.StatusFinished,
 		})
 	}
 	return rows

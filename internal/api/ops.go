@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -27,6 +28,11 @@ type opReqJSON struct {
 	Progression *float64        `json:"progression"`
 	Locator     json.RawMessage `json:"locator"`
 	ForeignPos  *string         `json:"foreign_pos"`
+	// Kind is absent for a position op and "status" for an explicit
+	// reading-status act (ADR-0066). Nothing else is accepted.
+	Kind          *string `json:"kind"`
+	ReadingStatus *string `json:"reading_status"`
+	Coverage      *string `json:"coverage"`
 }
 
 // HandlePushOps implements POST /v1/ops — batch, idempotent on op_id.
@@ -95,7 +101,7 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 			refuse(errCodeTimeInFuture, "client_ts in the future", 0)
 			return
 		}
-		ops[i] = store.Op{
+		op := store.Op{
 			OpID:        in.OpID,
 			WorkID:      in.WorkID,
 			EditionSHA:  in.EditionSHA,
@@ -105,6 +111,58 @@ func (s *Server) HandlePushOps(w http.ResponseWriter, r *http.Request) {
 			ForeignPos:  in.ForeignPos,
 			Origin:      store.OriginNative,
 		}
+		if in.Kind != nil {
+			// Only "status" is a value a client may name. An empty
+			// string and an explicit "position" are refused rather than
+			// read as absent: the store normalises an *absent* kind for
+			// every writer that predates ADR-0066, and a client that
+			// spells a field out must mean what it says.
+			if *in.Kind != string(store.OpKindStatus) {
+				refuse(errCodeBadValue, `kind is "status" or absent`, 0)
+				return
+			}
+			op.Kind = store.OpKindStatus
+		}
+		if in.ReadingStatus != nil {
+			switch store.ReadingStatus(*in.ReadingStatus) {
+			case store.ReadingStatusFinished, store.ReadingStatusUnread, store.ReadingStatusAutomatic:
+			default:
+				refuse(errCodeBadValue, "reading_status must be finished, unread or automatic", 0)
+				return
+			}
+			if op.Kind != store.OpKindStatus {
+				refuse(errCodeBadValue, "reading_status belongs to a status op", 0)
+				return
+			}
+			op.ReadingStatus = store.ReadingStatus(*in.ReadingStatus)
+		}
+		if in.Coverage != nil {
+			switch store.Coverage(*in.Coverage) {
+			case store.CoverageFull, store.CoveragePartial:
+			default:
+				refuse(errCodeBadValue, "coverage must be full or partial", 0)
+				return
+			}
+			if op.Kind == store.OpKindStatus {
+				refuse(errCodeBadValue, "coverage belongs to a position op", 0)
+				return
+			}
+			op.Coverage = store.Coverage(*in.Coverage)
+		}
+		if op.Kind == store.OpKindStatus && op.ReadingStatus == "" {
+			refuse(errCodeMissingField, "reading_status required on a status op", 0)
+			return
+		}
+		// One shape rule for both kinds (ADR-0066): a status act names
+		// a reading status and is refused without one, and coverage
+		// belongs to a position. The checks above are the wire's; this
+		// is the invariant every writer shares.
+		if err := op.Validate(); err != nil {
+			what := strings.TrimPrefix(err.Error(), store.ErrInvalidInput.Error()+": ")
+			refuse(errCodeBadValue, what, 0)
+			return
+		}
+		ops[i] = op
 	}
 
 	results, err := s.St.AppendOps(r.Context(), tok.UserID, tok.DeviceID, ops)
@@ -220,8 +278,11 @@ func (s *Server) HandlePositions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// HandleHeads implements GET /v1/heads — newest op per (work, device)
-// plus an atomic snapshot seq. The resync recovery protocol.
+// HandleHeads implements GET /v1/heads — the newest op of each kind per
+// (work, device), plus an atomic snapshot seq. The resync recovery
+// protocol. A position and a status act are separate heads: the act is
+// not a move, so it cannot stand in for the place this device is at
+// (ADR-0066).
 func (s *Server) HandleHeads(w http.ResponseWriter, r *http.Request) {
 	tok, _ := auth.TokenFrom(r)
 	h, err := s.St.HeadsFor(r.Context(), tok.UserID)

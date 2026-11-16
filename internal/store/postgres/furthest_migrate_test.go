@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/storetest"
 )
 
@@ -38,20 +37,34 @@ func TestFurthestUpgradePreservesReading(t *testing.T) {
 	}
 	u := storetest.MkUser(t, s, "existing-reader")
 	w := storetest.MkWork(t, s, u, "w1", "abc123")
-	if _, err := s.AppendOps(ctx, u.ID, "phone", []store.Op{
-		{OpID: "peak", WorkID: w.ID, Progression: 0.7, ClientTS: time.Now(), Origin: store.OriginNative},
-		{OpID: "current", WorkID: w.ID, Progression: 0.31, ClientTS: time.Now(), Origin: store.OriginNative},
-	}); err != nil {
+	// The ops are written with the columns this schema has: today's
+	// AppendOps names the kind column, which is a later migration.
+	for i, reading := range []struct {
+		opID string
+		prog float64
+	}{{"peak", 0.7}, {"current", 0.31}} {
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT INTO ops (user_id, seq, op_id, work_id, device_id, client_ts,
+			                  progression, origin, received_at)
+			 VALUES ($1, $2, $3, $4, 'phone', $5, $6, 'native', $5)`,
+			u.ID, i+1, reading.opID, w.ID, time.Now().UTC(), reading.prog); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO seq_counters (user_id, next_seq) VALUES ($1, 3)
+		 ON CONFLICT (user_id) DO UPDATE SET next_seq = 3`, u.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Read through Positions: today's snapshot also reads the furthest
-	// floor a later migration adds (ADR-0054), which this schema lacks.
-	before, err := s.Positions(ctx, u.ID, w.ID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// floor a later migration adds (ADR-0054) and the op kind (ADR-0066),
+	// which this schema lacks, so the read happens after Migrate.
 	for range 2 {
 		if err := s.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		before, err := s.Positions(ctx, u.ID, w.ID, 1)
+		if err != nil {
 			t.Fatal(err)
 		}
 		after, err := s.PositionSnapshot(ctx, u.ID, w.ID, 1)

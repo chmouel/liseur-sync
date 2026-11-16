@@ -4402,6 +4402,38 @@ components:
         foreign_pos:
           type: string
           description: Engine-native position string from another protocol (CRe xpointer), stored and replayed verbatim
+        kind:
+          type: string
+          enum: [status]
+          description: |
+            Absent for a position op and `status` for an explicit reading
+            status act; no other value is accepted (ADR-0066), and an
+            explicit empty string is refused rather than read as absent.
+            A status act carries the sender's own `progression`, which is
+            stored but never answers a position query: it is not a move.
+        reading_status:
+          type: string
+          enum: [finished, unread, automatic]
+          description: |
+            Present exactly when `kind` is `status`, and required then.
+            `finished` is the reader saying the book is read at whatever
+            position; `unread` puts it back on the pile; `automatic`
+            withdraws an earlier choice, so the position decides again.
+            Sending it on a position op, or sending an empty string, is
+            refused.
+            A status act is idempotent on the whole payload like any
+            other op, so derive its `op_id` from the status revision it
+            records, not from the position revision.
+        coverage:
+          type: string
+          enum: [full, partial]
+          description: |
+            Optional on a position op: whether the recording the position
+            was mapped from covers the whole narrative. Absent means
+            unknown, which is every ebook position and every position
+            recorded before ADR-0066. A `partial` position never finishes
+            the book automatically. Sending it on a status act, or
+            sending an empty string, is refused.
     Op:
       allOf:
         - $ref: "#/components/schemas/OpInput"
@@ -4409,7 +4441,10 @@ components:
           properties:
             seq: { type: integer, description: Server-assigned per-user monotonic sequence }
             device_id: { type: string }
-            origin: { type: string, enum: [native, kosync, audiobookshelf] }
+            origin:
+              type: string
+              enum: [native, kosync, koplugin, inferred, audiobook, audiobookshelf]
+              description: Which surface recorded the op. Clients accept values they do not know.
             origin_alias:
               type: string
               description: "Source identifier for edition-less records, preserving ownership when a work is split."
@@ -4544,7 +4579,7 @@ components:
             Zero without measured duration or with unknown legacy pace.
     InsightsWork:
       type: object
-      required: [work_id, sessions, total_active_minutes, total_pages, current_progression, eta_seconds, last_read_at]
+      required: [work_id, sessions, total_active_minutes, total_pages, current_progression, eta_seconds, last_read_at, status, covers_narrative]
       properties:
         work_id: { type: string }
         title: { type: string, description: Absent when unknown }
@@ -4555,6 +4590,27 @@ components:
         current_progression:
           type: number
           description: Latest position regardless of window; 0 when none is known.
+        status:
+          type: string
+          enum: [finished, reading, unread, ready_to_read]
+          description: |
+            The work's status, resolved by the one rule of ADR-0066: the
+            newest status act's choice if the reader made one, else the
+            newest position against 0.97 unless `covers_narrative` is
+            false. It is not derived from `current_progression` alone, so
+            a book marked read at 0.4 is finished here. `unread` is the
+            reader's explicit choice and `ready_to_read` the derived
+            no-position result: they share a shelf but are not the same
+            fact, so a client holding a choice can tell them apart. Not
+            additive across an overlap merge: a device takes the
+            server's.
+        covers_narrative:
+          type: boolean
+          description: |
+            Whether the newest position came from a recording that covers
+            the whole book. False for a partial audiobook, which is why
+            such a position never finishes the book automatically. True
+            when no position recorded a coverage.
         eta_seconds:
           type: [number, "null"]
           description: |
@@ -4715,8 +4771,9 @@ components:
           type: array
           description: |
             Same row shape as server works, but current_progression is 0,
-            eta_seconds is null and first_read_day is absent because
-            overlap has no positions or history of its own.
+            status is ready_to_read, covers_narrative is true, eta_seconds
+            is null and first_read_day is absent because overlap has no
+            positions, choices or history of its own.
           items: { $ref: "#/components/schemas/InsightsWork" }
         days:
           type: array

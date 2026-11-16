@@ -150,10 +150,15 @@ func (s *Server) bookView(r *http.Request, u *store.User, bookID string) (BookVi
 	}
 	v.CanRead = bookReadable(book)
 	if link, err := s.St.UserBookWork(r.Context(), readerID(u), book.ID); err == nil {
-		if ops, err := s.St.Positions(r.Context(), readerID(u), link.WorkID, 1); err == nil && len(ops) > 0 {
-			v.Progression = &ops[0].Progression
-			v.Finished = ops[0].Progression >= finished
+		readings, err := s.St.WorkReadings(r.Context(), readerID(u), []string{link.WorkID})
+		if err != nil {
+			readings = nil
 		}
+		rd := readings[link.WorkID]
+		if rd.HasPosition {
+			v.Progression = &rd.Progression
+		}
+		v.Status = rd.Resolve()
 	}
 	// Retiring a missing row is the one write this page offers, and
 	// only where it would stick: a Calibre folder's metadata.db is

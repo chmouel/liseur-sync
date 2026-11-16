@@ -48,6 +48,7 @@ import {
   removeOfflineOutbox,
   retryOfflineOutbox,
   discardOfflineOutbox,
+  queueOfflineAct,
   queueOfflineAnnotation,
   removeOfflineAnnotation,
   restoreOfflineAnnotation,
@@ -74,6 +75,7 @@ const cfg = {
   detached: el.dataset.detached === "1",
   offline: el.dataset.offline === "1",
   promptTemplate: el.dataset.promptTemplate || "",
+  readingChoice: el.dataset.readingChoice || "",
   handed: null,
 };
 const annotationsEnabled = false;
@@ -2619,6 +2621,46 @@ async function recoverRefusal(resp, op) {
   retryOp = { key: retryOp.key, op: bare };
 }
 
+// pendingCoverage is what the pushed position says about the recording
+// it came from (ADR-0066). A page the reader turned is an ebook position
+// and carries nothing; a position worked out from the audiobook mapping
+// says whether that recording spans the whole narrative, because the
+// 0.998 cap a partial recording keeps is above the 0.97 threshold and
+// would otherwise finish the ebook.
+function pendingCoverage(locator) {
+  const mapping = audioInfo?.mapping;
+  if (!mapping) return null;
+  const progression = locator?.locations?.totalProgression;
+  const fromAudio = audioSyncLocator
+    ? true
+    : finite(audioLastSyncedProg) && finite(progression) && progression === audioLastSyncedProg;
+  if (!fromAudio) return null;
+  return mapping.full_narrative ? "full" : "partial";
+}
+
+// readingChoiceWithdrawn says this page already sent the act that takes
+// back an explicit unread, which it can only do because the server named
+// that choice when it served the page (ADR-0066). A page that never saw
+// the choice withdraws nothing: only the reader resuming the book may
+// clear it, never an arbitrary position arriving from somewhere else.
+let readingChoiceWithdrawn = false;
+
+// withdrawalAct is that act, built beside the position it travels with.
+// Its id is derived from the position's, so a push replayed byte for
+// byte repeats the same act rather than adding a second one.
+function withdrawalAct(op) {
+  if (cfg.readingChoice !== "unread" || readingChoiceWithdrawn) return null;
+  return {
+    op_id: "unread:" + op.op_id,
+    work_id: op.work_id,
+    client_ts: op.client_ts,
+    progression: op.progression,
+    kind: "status",
+    reading_status: "automatic",
+    ...(op.edition_sha ? { edition_sha: op.edition_sha } : {}),
+  };
+}
+
 async function pushPosition() {
   if (!workID || (!here && !audioSyncLocator) || !readingDirty || restoring) return;
   const stamp = snapshot();
@@ -2645,6 +2687,7 @@ async function pushPosition() {
     locator.locations?.totalProgression +
     "@" +
     edition;
+  const coverage = pendingCoverage(locator);
   const op =
     retryOp && retryOp.key === key
       ? retryOp.op
@@ -2658,8 +2701,10 @@ async function pushPosition() {
           // how every op read before this, and the other client treats
           // it as an edition nobody vouched for.
           ...(edition ? { edition_sha: edition } : {}),
+          ...(coverage ? { coverage } : {}),
         };
   retryOp = { key, op };
+  const act = withdrawalAct(op);
   catchup.wrote(op);
   if (cfg.offline || (durableSync && offlineContext)) {
     try {
@@ -2674,6 +2719,20 @@ async function pushPosition() {
       const saving = positionStorageFlight.then(save);
       positionStorageFlight = saving.catch(() => {});
       await saving;
+      // The withdrawal is a second op, so it is a second queue record,
+      // written before anything drains and only once per page.
+      if (act) {
+        // Only a stored withdrawal counts. Claiming it after a refused
+        // write would leave the position queued without the act that
+        // withdraws the choice, and the flag would stop the next write
+        // from trying again.
+        try {
+          await queueOfflineAct({ ...context, bookID: cfg.bookID, op: act });
+          readingChoiceWithdrawn = true;
+        } catch {
+          // Kept owed: the next successful write carries it.
+        }
+      }
       if (leaving && context === offlineContext) readingCoordinator?.leave();
       if (!current(stamp)) return;
       furthest = mergeFurthest(furthest, [{ ...op, device_id: context.deviceID }], workID, furthestFloor);
@@ -2713,7 +2772,7 @@ async function pushPosition() {
     // keepalive lets the final flush outlive the page: without it a
     // position pushed from beforeunload is cancelled mid-flight.
     keepalive: true,
-    body: JSON.stringify({ ops: [op] }),
+    body: JSON.stringify({ ops: act ? [op, act] : [op] }),
   });
   try {
     const resp = await request;
@@ -2732,6 +2791,7 @@ async function pushPosition() {
       return;
     }
     if (!positionAcknowledged(out, op)) return;
+    if (act) readingChoiceWithdrawn = true;
     catchup.settled(op);
     // Only this op's own outcome may clear it: a slower response
     // arriving after the reader has moved on must not discard the op

@@ -186,6 +186,15 @@ func nullStr(p *string) sql.NullString {
 	return sql.NullString{String: *p, Valid: true}
 }
 
+// optStr is nullStr for a column whose zero value means absent.
+func optStr[T ~string](v T) *string {
+	if v == "" {
+		return nil
+	}
+	s := string(v)
+	return &s
+}
+
 func isUniqueErr(err error) bool {
 	return err != nil && (errors.Is(err, store.ErrConflict) ||
 		// modernc.org/sqlite wraps constraint errors; match on message.
@@ -265,14 +274,18 @@ func scanToken(row interface{ Scan(...any) error }) (store.Token, error) {
 // scanOp scans one row of the ops table.
 func scanOp(row interface{ Scan(...any) error }) (store.Op, error) {
 	var o store.Op
-	var editionSHA, foreignPos, originAlias sql.NullString
-	var clientTS, receivedAt string
+	var editionSHA, foreignPos, originAlias, status, coverage sql.NullString
+	var clientTS, receivedAt, kind string
 	err := row.Scan(&o.UserID, &o.Seq, &o.OpID, &o.WorkID, &editionSHA,
 		&o.DeviceID, &clientTS, &o.Progression, &o.LocatorJSON,
-		&foreignPos, &o.Origin, &originAlias, &receivedAt)
+		&foreignPos, &o.Origin, &originAlias, &receivedAt,
+		&kind, &status, &coverage)
 	if err != nil {
 		return o, err
 	}
+	o.Kind = store.OpKind(kind)
+	o.ReadingStatus = store.ReadingStatus(status.String)
+	o.Coverage = store.Coverage(coverage.String)
 	if editionSHA.Valid {
 		o.EditionSHA = &editionSHA.String
 	}

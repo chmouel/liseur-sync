@@ -75,10 +75,11 @@ func rowEntries(rows []LibraryRow) []LibraryEntry {
 // a stable shelf cursor without repeating a series across pages.
 func (s *Server) groupedCatalogEntries(
 	r *http.Request, userID string, v LibraryView, rows []LibraryRow,
+	readings map[string]store.WorkReading,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryEntry, error) {
 	groups, byVolume, err := s.librarySeriesForRows(
-		r, userID, v.Selected, v.Filter, rows, byBook, loc)
+		r, userID, v.Selected, v.Filter, rows, readings, byBook, loc)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +110,11 @@ func (s *Server) groupedCatalogEntries(
 // side is already complete in memory.
 func (s *Server) groupedReadingEntries(
 	r *http.Request, userID string, v LibraryView, rows []LibraryRow,
+	readings map[string]store.WorkReading,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryEntry, error) {
 	groups, byVolume, err := s.librarySeriesForRows(
-		r, userID, v.Selected, v.Filter, rows, byBook, loc)
+		r, userID, v.Selected, v.Filter, rows, readings, byBook, loc)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +150,7 @@ func (s *Server) groupedReadingEntries(
 
 func (s *Server) librarySeriesForRows(
 	r *http.Request, userID, folderID, filter string, seeds []LibraryRow,
+	readings map[string]store.WorkReading,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) (map[string]*LibrarySeries, map[string]*LibrarySeries, error) {
 	bookIDs := make([]string, 0, len(seeds))
@@ -188,6 +191,7 @@ func (s *Server) librarySeriesForRows(
 			row.WorkID = ws.Work.ID
 			row.Progression = ws.Progression
 			row.Pending = ws.Pending
+			row.Status = resolveReading(readings, ws.Work.ID)
 			if row.Author == "" {
 				row.Author = ws.Work.Author
 			}

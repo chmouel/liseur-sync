@@ -29,10 +29,15 @@ func scanToken(row interface{ Scan(...any) error }) (store.Token, error) {
 func scanOp(row interface{ Scan(...any) error }) (store.Op, error) {
 	var o store.Op
 	var origin string
+	var kind, status, coverage *string
 	err := row.Scan(&o.UserID, &o.Seq, &o.OpID, &o.WorkID, &o.EditionSHA,
 		&o.DeviceID, &o.ClientTS, &o.Progression, &o.LocatorJSON,
-		&o.ForeignPos, &origin, &o.OriginAlias, &o.ReceivedAt)
+		&o.ForeignPos, &origin, &o.OriginAlias, &o.ReceivedAt,
+		&kind, &status, &coverage)
 	o.Origin = store.Origin(origin)
+	o.Kind = store.OpKind(derefStr(kind))
+	o.ReadingStatus = store.ReadingStatus(derefStr(status))
+	o.Coverage = store.Coverage(derefStr(coverage))
 	return o, err
 }
 

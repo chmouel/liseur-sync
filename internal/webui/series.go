@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/metadata"
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -118,6 +119,7 @@ type SeriesVolume struct {
 	// position is the unformatted number, for finding gaps.
 	position    *float64
 	Progression *float64
+	Status      reading.Status
 	WorkID      string
 	CanRead     bool
 	CanGet      bool
@@ -125,13 +127,9 @@ type SeriesVolume struct {
 
 // Started and Finished mirror LibraryRow's, so the shelf and the library
 // agree about what a half-read book looks like.
-func (v SeriesVolume) Started() bool {
-	return v.Progression != nil && *v.Progression > 0 && *v.Progression < finished
-}
+func (v SeriesVolume) Started() bool { return v.Status == reading.StatusReading }
 
-func (v SeriesVolume) Finished() bool {
-	return v.Progression != nil && *v.Progression >= finished
-}
+func (v SeriesVolume) Finished() bool { return v.Status == reading.StatusFinished }
 
 // Percent is the progress as whole percent, for the bar and its label.
 func (v SeriesVolume) Percent() int {
@@ -206,6 +204,7 @@ func (s *Server) handleSeriesShelf(
 		}
 		if p, ok := progress[b.ID]; ok {
 			vol.Progression = p.Progression
+			vol.Status = p.Status
 			vol.WorkID = p.WorkID
 		}
 		v.Volumes = append(v.Volumes, vol)
@@ -235,6 +234,7 @@ func (s *Server) handleSeriesShelf(
 type bookProgress struct {
 	WorkID      string
 	Progression *float64
+	Status      reading.Status
 }
 
 // readerProgress maps catalog books to the caller's own reading state.
@@ -251,6 +251,10 @@ func (s *Server) readerProgress(
 	if err != nil {
 		return out
 	}
+	readings, err := s.St.WorkReadings(r.Context(), u.ID, nil)
+	if err != nil {
+		return out
+	}
 	wanted := make(map[string]bool, len(bookIDs))
 	for _, id := range bookIDs {
 		wanted[id] = true
@@ -264,6 +268,7 @@ func (s *Server) readerProgress(
 			if wanted[id] {
 				out[id] = bookProgress{
 					WorkID: ws.Work.ID, Progression: ws.Progression,
+					Status: resolveReading(readings, ws.Work.ID),
 				}
 				break
 			}

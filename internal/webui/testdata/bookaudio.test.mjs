@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bookAt } from '../static/book-audio.js';
+import { bookAt, coverageOf, withdrawal } from '../static/book-audio.js';
 
 const mapping = {
   segments: [
@@ -26,4 +26,30 @@ test('the end stays short of finished unless the mapping is the full narrative',
 test('outside every segment there is no answer', () => {
   assert.ok(Number.isNaN(bookAt(mapping, 200)));
   assert.ok(Number.isNaN(bookAt(null, 10)));
+});
+
+test('a position mapped from a recording reports whether it spans the book', () => {
+  assert.equal(coverageOf(mapping), 'partial');
+  assert.equal(coverageOf({ ...mapping, full_narrative: true }), 'full');
+  assert.equal(coverageOf(null), null);
+});
+
+test('listening again sends the act that takes back an unread choice', () => {
+  const op = {
+    op_id: 'p-1', work_id: 'w-1', client_ts: '2026-01-01T00:00:00Z',
+    progression: 0.3, coverage: 'partial', edition_sha: 'sha',
+  };
+  assert.equal(withdrawal(op, ''), null);
+  assert.equal(withdrawal(op, 'finished'), null);
+  const act = withdrawal(op, 'unread');
+  assert.equal(act.kind, 'status');
+  assert.equal(act.reading_status, 'automatic');
+  assert.equal(act.work_id, 'w-1');
+  assert.equal(act.progression, 0.3);
+  assert.equal(act.edition_sha, 'sha');
+  assert.equal(act.locator, undefined);
+  // The id is derived from the position, so a replayed push repeats the
+  // same act rather than adding a second one.
+  assert.equal(withdrawal(op, 'unread').op_id, act.op_id);
+  assert.equal(act.op_id, 'unread:p-1');
 });

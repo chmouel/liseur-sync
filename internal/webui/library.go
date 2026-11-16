@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chmouel/liseur-sync/internal/reading"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -62,11 +63,6 @@ const (
 	sortDirAsc  = "asc"
 )
 
-// finished is where a progression stops being "reading". It is not 1.0
-// because no reader ever lands exactly on the last byte: back matter,
-// an index and a colophon all sit past the point a book is over.
-const finished = 0.999
-
 // LibraryRow is one entry on the wall: a book, a work, or — most often —
 // both, since a book that has been opened is one row and not two.
 //
@@ -83,6 +79,10 @@ type LibraryRow struct {
 	Added       string
 	LastActive  string
 	Progression *float64
+	// Status is the resolved reading state (ADR-0066): the reader's
+	// explicit choice if they made one, else what the position and the
+	// recording's coverage say. It is what the chips filter on.
+	Status reading.Status
 	// Pending marks a work whose device has sent progress this server
 	// has not yet reconciled.
 	Pending bool
@@ -104,13 +104,19 @@ type LibraryRow struct {
 
 // Started reports a row somebody has begun and not finished — the rows
 // the continue-reading hero and the Reading chip are made of.
-func (r LibraryRow) Started() bool {
-	return r.Progression != nil && *r.Progression > 0 && *r.Progression < finished
-}
+func (r LibraryRow) Started() bool { return r.resolved() == reading.StatusReading }
 
-// Finished reports a row read to the end.
-func (r LibraryRow) Finished() bool {
-	return r.Progression != nil && *r.Progression >= finished
+// Finished reports a row read to the end, by choice or by position.
+func (r LibraryRow) Finished() bool { return r.resolved() == reading.StatusFinished }
+
+// resolved is the row's status, with a book nobody has read at all —
+// there is no work behind it, so nothing resolved one — counted as not
+// started.
+func (r LibraryRow) resolved() reading.Status {
+	if r.Status == "" {
+		return reading.StatusReadyToRead
+	}
+	return r.Status
 }
 
 // href is where the cover goes. Carrying on reading is what somebody
@@ -274,6 +280,11 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		return
 	}
 	links := s.workBookIDs(r.Context(), u.ID, works)
+	readings, err := s.St.WorkReadings(r.Context(), u.ID, nil)
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	byBook := make(map[string]store.WorkSummary, len(works))
 	for _, ws := range works {
 		if id := links.active[ws.Work.ID]; id != "" {
@@ -281,7 +292,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		}
 	}
 
-	rows, entries, next, err := s.libraryRows(r, u.ID, v, works, links, byBook, loc)
+	rows, entries, next, err := s.libraryRows(r, u.ID, v, works, links, readings, byBook, loc)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -291,7 +302,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	if next != "" {
 		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
-	v.Hero = s.libraryHero(r, u.ID, works, links, loc)
+	v.Hero = s.libraryHero(r, u.ID, works, links, readings, loc)
 
 	// An htmx continuation asks for more of one list, not for the page
 	// around it: answering with the whole document would append a second
@@ -401,16 +412,16 @@ type bookLinks struct {
 // book you are in the middle of.
 func (s *Server) libraryRows(
 	r *http.Request, userID string, v LibraryView,
-	works []store.WorkSummary, links bookLinks,
+	works []store.WorkSummary, links bookLinks, readings map[string]store.WorkReading,
 	byBook map[string]store.WorkSummary, loc *time.Location,
 ) ([]LibraryRow, []LibraryEntry, string, error) {
 	if v.Filter == filterReading || v.Filter == filterFinished || v.Sort == sortLastRead {
-		rows := s.readingRows(r, userID, v, works, links, loc)
+		rows := s.readingRows(r, userID, v, works, links, readings, loc)
 		if !v.groupedGrid() {
 			return rows, nil, "", nil
 		}
 		entries, err := s.groupedReadingEntries(
-			r, userID, v, rows, byBook, loc)
+			r, userID, v, rows, readings, byBook, loc)
 		return rows, entries, "", err
 	}
 
@@ -441,6 +452,7 @@ func (s *Server) libraryRows(
 			row.WorkID = ws.Work.ID
 			row.Progression = ws.Progression
 			row.Pending = ws.Pending
+			row.Status = resolveReading(readings, ws.Work.ID)
 			if ws.Work.Author != "" && row.Author == "" {
 				row.Author = ws.Work.Author
 			}
@@ -461,7 +473,7 @@ func (s *Server) libraryRows(
 	var entries []LibraryEntry
 	if v.groupedGrid() {
 		entries, err = s.groupedCatalogEntries(
-			r, userID, v, raw, byBook, loc)
+			r, userID, v, raw, readings, byBook, loc)
 		if err != nil {
 			return nil, nil, "", err
 		}
@@ -474,7 +486,7 @@ func (s *Server) libraryRows(
 	// opened. Repeating them on every page would be the alternative,
 	// and it would be a bug.
 	if v.Filter == filterAll && r.URL.Query().Get("cursor") == "" {
-		orphans := orphanRows(works, links, loc)
+		orphans := orphanRows(works, links, readings, loc)
 		rows = append(orphans, rows...)
 		if v.groupedGrid() {
 			entries = append(rowEntries(orphans), entries...)
@@ -492,11 +504,12 @@ func (v LibraryView) groupedGrid() bool {
 // newest read first.
 func (s *Server) readingRows(
 	r *http.Request, userID string, v LibraryView,
-	works []store.WorkSummary, links bookLinks, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, readings map[string]store.WorkReading,
+	loc *time.Location,
 ) []LibraryRow {
 	rows := make([]LibraryRow, 0, len(works))
 	for _, ws := range works {
-		row := workRowOf(ws, links.active[ws.Work.ID], loc)
+		row := workRowOf(ws, links.active[ws.Work.ID], readings, loc)
 		row.Bookless = !links.mapped[ws.Work.ID]
 		if !catalogFilter(v.Filter) && !keepRow(row, v.Filter) {
 			continue
@@ -530,14 +543,15 @@ func (s *Server) readingRows(
 // text tiles, because there is no cover to show and inventing one would
 // be pretending the file is here.
 func orphanRows(
-	works []store.WorkSummary, links bookLinks, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, readings map[string]store.WorkReading,
+	loc *time.Location,
 ) []LibraryRow {
 	rows := make([]LibraryRow, 0)
 	for _, ws := range works {
 		if links.active[ws.Work.ID] != "" {
 			continue
 		}
-		row := workRowOf(ws, "", loc)
+		row := workRowOf(ws, "", readings, loc)
 		row.Bookless = !links.mapped[ws.Work.ID]
 		rows = append(rows, row)
 	}
@@ -547,7 +561,9 @@ func orphanRows(
 	return rows
 }
 
-func workRowOf(ws store.WorkSummary, bookID string, loc *time.Location) LibraryRow {
+func workRowOf(
+	ws store.WorkSummary, bookID string, readings map[string]store.WorkReading, loc *time.Location,
+) LibraryRow {
 	row := LibraryRow{
 		BookID:      bookID,
 		WorkID:      ws.Work.ID,
@@ -555,12 +571,20 @@ func workRowOf(ws store.WorkSummary, bookID string, loc *time.Location) LibraryR
 		Author:      ws.Work.Author,
 		Progression: ws.Progression,
 		Pending:     ws.Pending,
+		Status:      resolveReading(readings, ws.Work.ID),
 	}
 	if ws.LastActive != nil {
 		row.LastActive = ws.LastActive.In(loc).Format("Jan 2")
 		row.lastActiveAt = ws.LastActive.Unix()
 	}
 	return row
+}
+
+// resolveReading is the one resolution rule (ADR-0066), applied to the
+// store's answer for one work. A work with no reading at all resolves to
+// not started.
+func resolveReading(readings map[string]store.WorkReading, workID string) reading.Status {
+	return readings[workID].Resolve()
 }
 
 // keepRow is what each chip means, in one place, so the grid and the
@@ -572,7 +596,7 @@ func keepRow(row LibraryRow, filter string) bool {
 	case filterFinished:
 		return row.Finished()
 	case filterUnread:
-		return row.Progression == nil || *row.Progression <= 0
+		return row.resolved().UnreadShelf()
 	case filterHere:
 		return row.CanGet || row.CanRead
 	case filterAudio:
@@ -616,7 +640,8 @@ func (s *Server) markLibraryAudio(ctx context.Context, userID string, rows []Lib
 // view of the list below it.
 func (s *Server) libraryHero(
 	r *http.Request, userID string,
-	works []store.WorkSummary, links bookLinks, loc *time.Location,
+	works []store.WorkSummary, links bookLinks, readings map[string]store.WorkReading,
+	loc *time.Location,
 ) *LibraryRow {
 	best := LibraryRow{}
 	found := false
@@ -625,7 +650,7 @@ func (s *Server) libraryHero(
 		if bookID == "" || ws.LastActive == nil {
 			continue
 		}
-		row := workRowOf(ws, bookID, loc)
+		row := workRowOf(ws, bookID, readings, loc)
 		if !row.Started() {
 			continue
 		}

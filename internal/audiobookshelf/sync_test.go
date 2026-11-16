@@ -609,3 +609,29 @@ func TestPushUsesIntraChapterLocatorAndClosesOpenSessions(t *testing.T) {
 		t.Fatalf("closedSessions = %v, want [sess-android sess-web] (never other:sess-bob)", f.closedSessions)
 	}
 }
+
+// TestFinishedAtTheSharedThreshold: 0.97 is where a position alone
+// finishes a book (ADR-0066), so a full recording at 0.98 is over on
+// both sides — pushed as finished, and recognised as finished on the
+// next pass instead of being pushed again.
+func TestFinishedAtTheSharedThreshold(t *testing.T) {
+	titles := []string{"Chapter 1", "Chapter 2", "Chapter 3"}
+	f := newABSFixture(t, titles, titles)
+	l := f.link(t)
+	now := time.Now().Add(-time.Minute).Truncate(time.Millisecond)
+	f.read(t, l, .98, now)
+	f.remote(now.Add(-time.Second), .5, false)
+	if rep := f.pass(t); rep.Pushed != 1 || rep.Pulled != 0 {
+		t.Fatalf("pass: %+v", rep)
+	}
+	f.mu.Lock()
+	pushed := f.progress
+	f.mu.Unlock()
+	if pushed == nil || !pushed.IsFinished {
+		t.Fatalf("a book at 0.98 was pushed as unfinished: %+v", pushed)
+	}
+	before := f.patches
+	if rep := f.pass(t); rep.Pushed != 0 || f.patches != before {
+		t.Fatalf("the finished mark was not recognised as agreed: %+v patches=%d", rep, f.patches)
+	}
+}
