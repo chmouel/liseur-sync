@@ -518,6 +518,14 @@ The history limit applies only to `ops`, and both arrays share a snapshot.
 Response operations include `origin_alias` when recorded, so clients can
 retain distinct edition-less ownership groups rather than combining their
 maxima. This provenance is response-only; native writers do not assign it.
+`/v1/works/{id}/positions` also carries a `status` array holding the work's
+newest reading-status act, an empty array when the reader never made one.
+A status act decides whether a book is finished or unread regardless of the
+position its `progression` field carries, so a client seeding a book should
+read `status` in the same request and keep the choice: resuming an unread
+book means sending an `automatic` act beside the position, and a client that
+never learned the choice cannot withdraw it. `ops` never contains a status
+act, because a status act is not a move.
 Operations imported from Audiobookshelf have `origin: "audiobookshelf"`,
 the linked ebook edition, and a Readium locator. Clients should accept
 new origin values without rejecting the operation.
