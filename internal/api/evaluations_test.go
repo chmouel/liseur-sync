@@ -86,6 +86,42 @@ func TestEvaluationRoutes(t *testing.T) {
 	}
 }
 
+func TestEvaluationRejectsMalformedUTF8(t *testing.T) {
+	ts, st := testServer(t)
+	token, work := annotationTestUser(t, ts.URL, st, "u1", "alice")
+	url := ts.URL + "/v1/works/" + work + "/evaluation"
+	if code, out := post(t, url, token, map[string]any{
+		"write_id": "original", "writer_id": "phone", "revision": 1, "field": "review", "value": "Original",
+	}); code != http.StatusOK {
+		t.Fatalf("initial write: %d %v", code, out)
+	}
+	body := `{"write_id":"invalid","writer_id":"phone","revision":2,"field":"review","value":"` + string([]byte{0xff}) + `"}`
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed UTF-8: got %d, want 400", resp.StatusCode)
+	}
+	code, out := get(t, url, token)
+	fields := out["fields"].([]any)
+	if code != http.StatusOK || len(fields) != 1 || fields[0].(map[string]any)["value"] != "Original" {
+		t.Fatalf("invalid review changed the stored value: %d %v", code, out)
+	}
+	if code, out := post(t, url, token, map[string]any{
+		"write_id": "invalid", "writer_id": "phone", "revision": 2, "field": "review", "value": "Valid � review",
+	}); code != http.StatusOK {
+		t.Fatalf("valid replacement character or rejected write ID: %d %v", code, out)
+	}
+}
+
 func TestEvaluationRetryAfterDeviceChange(t *testing.T) {
 	ts, st := testServer(t)
 	first, work := annotationTestUser(t, ts.URL, st, "u1", "alice")

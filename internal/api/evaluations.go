@@ -47,7 +47,7 @@ func (s *Server) HandleWriteEvaluation(w http.ResponseWriter, r *http.Request) {
 	case "review":
 		if string(body.Value) != "null" {
 			var review string
-			if json.Unmarshal(body.Value, &review) != nil || !utf8.ValidString(review) || strings.ContainsRune(review, 0) || len(review) > 8192 || strings.TrimSpace(review) == "" {
+			if !utf8.Valid(body.Value) || json.Unmarshal(body.Value, &review) != nil || strings.ContainsRune(review, 0) || len(review) > 8192 || strings.TrimSpace(review) == "" {
 				writeError(w, http.StatusBadRequest, "review must be non-empty UTF-8, at most 8192 bytes, or null")
 				return
 			}
