@@ -1696,6 +1696,12 @@ func SplitWorkTranslationCursor(c string) (at time.Time, key string, ok bool) {
 // All methods take a userID; cross-user access is impossible by
 // construction.
 type Store interface {
+	// Evaluation values are canonical JSON. Null is a permanent deletion marker.
+	// Reusing a write ID with different content is ErrIDMismatch; replay never
+	// changes a newer field. Fields are independent and ordered by server receipt.
+	WriteEvaluation(ctx context.Context, userID, workID string, item EvaluationWrite) error
+	ReadEvaluation(ctx context.Context, userID, workID string) ([]EvaluationField, error)
+
 	// Lifecycle.
 	Migrate(ctx context.Context) error
 	Close() error

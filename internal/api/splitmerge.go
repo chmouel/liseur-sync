@@ -85,6 +85,10 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "work not found")
 			return
 		}
+		if err == store.ErrEvaluationMergeConflict {
+			writeError(w, http.StatusConflict, "save a new rating or review before merging these works")
+			return
+		}
 		if err == store.ErrConflict {
 			writeError(w, http.StatusConflict, "work with compacted history cannot be merged")
 			return

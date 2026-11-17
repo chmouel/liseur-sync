@@ -603,6 +603,9 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	// a content hash, so either text answers it — and the survivor's
 	// stays; the moved rows are stamped beyond anything the user holds
 	// so a pull cursor on the survivor discovers them.
+	if err := moveWorkEvaluationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
+		return err
+	}
 	if err := moveWorkTranslationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
 		return err
 	}

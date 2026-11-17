@@ -558,7 +558,9 @@ func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
 		  WHERE pending = 0
 		    AND NOT EXISTS (SELECT 1 FROM user_book_works m
 		                     WHERE m.user_id = works.user_id AND m.work_id = works.id)
-		    AND NOT EXISTS (SELECT 1 FROM ops o
+		    AND NOT EXISTS (SELECT 1 FROM work_evaluations e
+ WHERE e.user_id = works.user_id AND e.work_id = works.id)
+ AND NOT EXISTS (SELECT 1 FROM ops o
 		                     WHERE o.user_id = works.user_id AND o.work_id = works.id)
 		    AND NOT EXISTS (SELECT 1 FROM sessions s
 		                     WHERE s.user_id = works.user_id AND s.work_id = works.id)

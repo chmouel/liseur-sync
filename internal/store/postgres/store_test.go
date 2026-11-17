@@ -37,6 +37,7 @@ func TestStore(t *testing.T) {
 func reset(t *testing.T, s *Store) {
 	t.Helper()
 	tables := []string{
+		"evaluation_receipts", "work_evaluations",
 		"book_languages", "book_tags", "tags",
 		"book_contributors", "contributors",
 		"book_series_override_items", "book_series_overrides",
@@ -54,6 +55,24 @@ func reset(t *testing.T, s *Store) {
 	for _, tbl := range tables {
 		if _, err := s.db.ExecContext(context.Background(),
 			`DROP TABLE IF EXISTS `+tbl+` CASCADE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestResetAllowsRepeatedEvaluationMigrations(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	for range 2 {
+		reset(t, s)
+		if err := s.Migrate(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
