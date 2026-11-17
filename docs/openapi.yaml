@@ -5163,10 +5163,21 @@ components:
         field: { type: string, enum: [rating, review] }
         value:
           description: Rating is an integer from 2 to 10 in half-star units (9 means 4.5 stars). Review is nonblank UTF-8 text, at most 8192 bytes, without NUL. Null removes either field.
-          oneOf:
-            - { type: "null" }
-            - { type: integer, minimum: 2, maximum: 10 }
-            - { type: string, minLength: 1, maxLength: 8192 }
+      oneOf:
+        - required: [field]
+          properties:
+            field: { const: rating }
+            value:
+              oneOf:
+                - { type: "null" }
+                - { type: integer, minimum: 2, maximum: 10 }
+        - required: [field]
+          properties:
+            field: { const: review }
+            value:
+              oneOf:
+                - { type: "null" }
+                - { type: string, minLength: 1, maxLength: 8192 }
 
     WorkTranslationInput:
       type: object
