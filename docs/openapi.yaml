@@ -877,7 +877,10 @@ paths:
         Moves aliases, editions, operations, and raw sessions into the
         target work. A source work with compacted session rollups cannot
         be merged because those aggregates no longer retain session
-        provenance.
+        provenance. Evaluation heads superseded by higher revisions from the
+        same writer in either work are excluded. If every head for a field is
+        superseded, the merge returns 409 without changing either work; save
+        a fresh choice for that field before retrying.
       security: [{ deviceToken: [] }]  # requires sync scope
       requestBody:
         required: true
@@ -899,7 +902,7 @@ paths:
                 properties: { work_id: { type: string } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error", description: "Source work has compacted history" }
+        "409": { $ref: "#/components/responses/Error", description: "Source work has compacted history, or evaluation heads require a fresh choice" }
 
   /v1/ops:
     post:
@@ -1353,6 +1356,76 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Annotation" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /v1/works/{id}/evaluation:
+    get:
+      tags: [sync]
+      summary: Read private rating and review fields
+      operationId: readEvaluation
+      description: Fields are private to the authenticated account and independent of catalog metadata. Null values are retained deletion markers.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Current fields, including removals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fields]
+                properties:
+                  fields:
+                    type: array
+                    maxItems: 2
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/EvaluationValue" }
+                        - type: object
+                          required: [updated_at]
+                          properties:
+                            updated_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [sync]
+      summary: Set or remove a private rating or review
+      operationId: writeEvaluation
+      description: |
+        Writes from different writers replace only the named field in server
+        receipt order. An older revision from the same writer is acknowledged
+        without replacing a newer revision, including after a work merge.
+        Work merges exclude heads superseded by a higher revision from the
+        same writer in either work's receipts, then select by receipt time.
+        A merge with no eligible head for a recorded field returns 409.
+        Replaying an accepted ID never changes a newer choice. Reusing an ID
+        with different content or provenance returns 409. Identical retries
+        remain idempotent after a device-token change for the same account.
+        Receipts retain fingerprints and provenance, not old review text. Null
+        removes the field until another deliberate write. Requires sync scope.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvaluationWrite" }
+      responses:
+        "200":
+          description: Applied or already accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [applied] }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 
   /v1/works/{id}/translations:
     post:
@@ -5064,6 +5137,37 @@ components:
         server:
           allOf: [{ $ref: "#/components/schemas/Annotation" }]
           description: The server's current copy, carried on a conflict.
+    EvaluationWrite:
+      allOf:
+        - { $ref: "#/components/schemas/EvaluationValue" }
+        - type: object
+          required: [writer_id, revision]
+          properties:
+            writer_id:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: Stable installation identity, excluded from device backups and transfers and independent of the authentication device token. Nonblank and without NUL.
+            revision:
+              type: integer
+              format: int64
+              minimum: 1
+              maximum: 9007199254740991
+              description: Persisted monotonically increasing local edit revision shared across all copies and retained entries from this writer.
+
+    EvaluationValue:
+      type: object
+      required: [write_id, field, value]
+      properties:
+        write_id: { type: string, minLength: 1, maxLength: 64 }
+        field: { type: string, enum: [rating, review] }
+        value:
+          description: Rating is an integer from 2 to 10 in half-star units (9 means 4.5 stars). Review is nonblank UTF-8 text, at most 8192 bytes, without NUL. Null removes either field.
+          oneOf:
+            - { type: "null" }
+            - { type: integer, minimum: 2, maximum: 10 }
+            - { type: string, minLength: 1, maxLength: 8192 }
+
     WorkTranslationInput:
       type: object
       required: [key, translation]

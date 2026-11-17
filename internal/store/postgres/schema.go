@@ -906,6 +906,31 @@ DROP INDEX IF EXISTS ops_furthest;
 CREATE INDEX ops_furthest ON ops(user_id, work_id, edition_sha, origin_alias, kind, progression DESC, seq);
 `
 
+const workEvaluations = `
+CREATE TABLE work_evaluations (
+ user_id TEXT NOT NULL,
+ work_id TEXT NOT NULL,
+ field TEXT NOT NULL CHECK (field IN ('rating', 'review')),
+ value TEXT NOT NULL,
+ write_id TEXT NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY (user_id, work_id, field),
+ FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE TABLE evaluation_receipts (
+ user_id TEXT NOT NULL,
+ write_id TEXT NOT NULL,
+ work_id TEXT NOT NULL,
+ fingerprint TEXT NOT NULL,
+ writer_id TEXT NOT NULL,
+ field TEXT NOT NULL CHECK (field IN ('rating', 'review')),
+ revision BIGINT NOT NULL CHECK (revision > 0),
+ PRIMARY KEY (user_id, write_id),
+ FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX evaluation_receipts_revision ON evaluation_receipts(user_id, work_id, writer_id, field, revision);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -924,6 +949,7 @@ var migrations = []string{
 	watchedFolderAudiobooks,
 	crosspointSessions,
 	opKinds,
+	workEvaluations,
 }
 
 // migrationsThrough returns the migrations up to but not including the

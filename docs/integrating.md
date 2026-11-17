@@ -1960,3 +1960,51 @@ reading is invented to fill missing events.
 - Credential traffic requires HTTPS; on
   plain HTTP the server answers 403 unless the instance explicitly sets
   `insecure_http`.
+
+## Private ratings and reviews
+
+`GET /v1/works/{id}/evaluation` returns `fields`, with at most one
+`rating` and one `review`. Each carries `field`, `value`, `write_id` and
+server `updated_at`. Both routes require the `sync` scope and expose only
+the authenticated account’s data. Catalog and OPDS responses never include
+these fields.
+
+Set a field with `POST /v1/works/{id}/evaluation`, for example:
+
+```json
+{"write_id":"device-work-rating-revision","writer_id":"installation-id","revision":42,"field":"rating","value":9}
+```
+
+Ratings use integer half-star units from 2 to 10 (1 to 5 stars). A review
+is nonblank UTF-8 text of at most 8192 bytes, without NUL. Send `null` to
+remove either field; a missing field leaves the other unchanged. Reviews
+are plain text. Nothing publishes them or prompts on completion.
+
+Generate an ID from stored writer, work, field and local revision, persist
+the exact request before sending, and replay it until acknowledged. A new ID
+from a different writer wins in server receipt order for that field; a
+duplicate never rewrites a later edit. Set `writer_id` to a stable
+installation identity (nonblank, at most 64 bytes, without NUL), independent
+of its authentication token. Exclude that identity from device backups and
+transfers so restored devices author new writes in separate namespaces; keep
+pending requests unchanged. Persist a positive `revision` (at most
+9007199254740991) that increases across every local edit, including all
+copies and retained entries. A request whose revision is below an accepted
+revision for the same writer, work and field is acknowledged without
+changing the field. Receipts follow work merges, so this also covers an
+older request first arriving after a merge. Changed content or provenance
+under an accepted ID returns 409. Identical retries remain idempotent when
+reconnecting with a different device token for the same account. Receipts
+keep fingerprints, writer IDs, fields and revisions; removed review bodies
+are not retained. Pull after settling retries. Keep newer unsent local edits
+until they have been delivered, then adopt the current server fields. Empty
+`fields` means no choice has ever been recorded, while a null value is a
+removal that offline clients must retain.
+
+Evaluations belong to a work, survive catalog file removal, and follow a
+work merge. A merge excludes any head superseded by a higher revision from
+the same writer in either work's receipts, then chooses the remaining head
+by server receipt time. If every head for a field is superseded, the merge
+returns 409 without changing either work: save a fresh choice for that
+field before retrying. An explicit work deletion removes evaluations and
+their receipts. They have no effect on positions, sessions or reading status.

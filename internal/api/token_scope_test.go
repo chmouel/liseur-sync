@@ -170,6 +170,8 @@ var registeredRouteGates = map[string]routeGate{
 	"GET /v1/annotations/changes":        gateSync,
 	"DELETE /v1/annotations/{id}":        gateSync,
 	"GET /v1/works/{id}/annotations":     gateSync,
+	"GET /v1/works/{id}/evaluation":      gateSync,
+	"POST /v1/works/{id}/evaluation":     gateSync,
 	"POST /v1/works/{id}/translations":   gateSync,
 	"GET /v1/works/{id}/translations":    gateSync,
 	"DELETE /v1/works/{id}/translations": gateSync,
