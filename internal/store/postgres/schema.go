@@ -967,6 +967,59 @@ CREATE TABLE work_cover_overrides (
 );
 `
 
+// vocabularySync is the Vocabulary Builder (ADR-0068); see the SQLite
+// copy for what a word and a review are.
+const vocabularySync = `
+ALTER TABLE seq_counters ADD COLUMN next_vocabulary_seq BIGINT NOT NULL DEFAULT 1;
+
+CREATE TABLE vocabulary_words (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ language TEXT NOT NULL,
+ normalized TEXT NOT NULL,
+ seq BIGINT NOT NULL,
+ rev BIGINT NOT NULL,
+ generation BIGINT NOT NULL DEFAULT 1,
+ word TEXT NOT NULL,
+ definition TEXT,
+ translation_language TEXT,
+ notes TEXT NOT NULL DEFAULT '',
+ definition_edited BOOLEAN NOT NULL DEFAULT FALSE,
+ definition_updated_at TIMESTAMPTZ,
+ notes_updated_at TIMESTAMPTZ,
+ added_at TIMESTAMPTZ NOT NULL,
+ baseline_due_at TIMESTAMPTZ,
+ baseline_reviewed_at TIMESTAMPTZ,
+ baseline_streak INTEGER NOT NULL DEFAULT 0,
+ baseline_interval_minutes INTEGER NOT NULL DEFAULT 0,
+ baseline_repetitions INTEGER NOT NULL DEFAULT 0,
+ occurrences_json JSONB NOT NULL DEFAULT '[]',
+ device_id TEXT NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ deleted_at TIMESTAMPTZ,
+ PRIMARY KEY (user_id, language, normalized)
+);
+CREATE INDEX vocabulary_words_seq ON vocabulary_words(user_id, seq);
+
+CREATE TABLE vocabulary_reviews (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ review_id TEXT NOT NULL,
+ language TEXT NOT NULL,
+ normalized TEXT NOT NULL,
+ word_generation BIGINT NOT NULL DEFAULT 1,
+ seq BIGINT NOT NULL,
+ rating TEXT NOT NULL,
+ reviewed_at TIMESTAMPTZ NOT NULL,
+ interval_minutes INTEGER NOT NULL,
+ due_at TIMESTAMPTZ NOT NULL,
+ device_id TEXT NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ deleted_at TIMESTAMPTZ,
+ PRIMARY KEY (user_id, review_id)
+);
+CREATE INDEX vocabulary_reviews_seq ON vocabulary_reviews(user_id, seq);
+CREATE INDEX vocabulary_reviews_word ON vocabulary_reviews(user_id, language, normalized, word_generation);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -987,6 +1040,7 @@ var migrations = []string{
 	opKinds,
 	workEvaluations,
 	workMetadataOverrides,
+	vocabularySync,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1017,6 +1071,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"crosspointSessions":       crosspointSessions,
 		"opKinds":                  opKinds,
 		"workMetadataOverrides":    workMetadataOverrides,
+		"vocabularySync":           vocabularySync,
 	}
 	want, ok := named[name]
 	if !ok {

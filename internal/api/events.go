@@ -64,7 +64,7 @@ func (p EventsPolicy) orDefault() EventsPolicy {
 func liveTopicsFor(scopes store.ScopeSet) []store.Topic {
 	var out []store.Topic
 	if scopes.Allows(store.ScopeSync) {
-		out = append(out, store.TopicPositions, store.TopicAnnotations)
+		out = append(out, store.TopicPositions, store.TopicAnnotations, store.TopicVocabulary)
 	}
 	if scopes.Allows(store.ScopeReadInsights) {
 		out = append(out, store.TopicInsights)

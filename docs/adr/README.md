@@ -91,6 +91,7 @@ loose ends that must come before any of it, are in
 | [0065](0065-opds-2.md) | OPDS 2.0 | Now | Accepted; implemented | JSON feeds under `/opds/v2` from the same loaders as 1.2: navigation and a Newest group at the root, `/new` for syncing, templated search, series positions and subjects, audiobook acquisition links under both folder grants, and an Authentication Document as the body of every 401 |
 | [0066](0066-explicit-reading-status.md) | An explicit reading status, carried beside the position | Now | Accepted; implemented | Status acts ride the position log as their own kind, resolve before the position, order by server sequence, and one rule (0.97, with recording coverage) decides finished, reading or unread for the library, the shelves, the statistics and the clients |
 | [0067](0067-richer-reading-status.md) | Additional explicit reading choices | Now | Accepted; server implemented; client pending | Want to read, reading, paused and did not finish join the wire enum without a migration, each on its own shelf, never offered as next up when paused or given up; clients must learn the values before a server emits them |
+| [0068](0068-vocabulary-sync.md) | Vocabulary Builder words and their reviews sync | Now | Accepted; implemented | Words are compare-and-set documents with a generation that bumps on resurrection, reviews are immutable events bound to a word generation, one per-user feed carries both, and clients derive the schedule from the events |
 
 ## Convention
 

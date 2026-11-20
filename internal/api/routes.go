@@ -397,6 +397,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("GET /v1/annotations/changes", syncH(s.HandleAnnotationChanges))
 	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))
 	mux.Handle("GET /v1/works/{id}/annotations", syncH(s.HandleWorkAnnotations))
+	// Vocabulary Builder words and their review progresses (ADR-0068):
+	// per-user reading state on their own seq counter, tombstones
+	// included, travelling with the sync scope.
+	mux.Handle("GET /v1/vocabulary/changes", syncH(s.HandleVocabularyChanges))
+	mux.Handle("POST /v1/vocabulary/words", syncH(s.HandlePushVocabularyWords))
+	mux.Handle("POST /v1/vocabulary/reviews", syncH(s.HandlePushVocabularyReviews))
 	// The sentence translation cache (ADR-0052): reading state the
 	// account keeps so a second device does not pay for the first
 	// one's translations. Push is an idempotent LWW upsert, pull a

@@ -252,9 +252,10 @@ paths:
       summary: Subscribe to live reading-state invalidations
       description: |
         Opens an authenticated Server-Sent Events stream for this account.
-        The `sync` scope permits `positions` and `annotations`;
-        `read-insights` permits `insights`. A credential with no eligible
-        topic is refused. Reader tokens do not need insight authority.
+        The `sync` scope permits `positions`, `annotations` and
+        `vocabulary`; `read-insights` permits `insights`. A credential with
+        no eligible topic is refused. Reader tokens do not need insight
+        authority.
 
         Registration precedes an opening invalidation of all permitted
         topics. Later invalidations coalesce topics by union. There is no
@@ -282,7 +283,7 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
-              example: "retry: 5000\n\nevent: invalidate\ndata: {\"topics\":[\"positions\",\"annotations\"]}\n\n: ping\n\n"
+              example: "retry: 5000\n\nevent: invalidate\ndata: {\"topics\":[\"positions\",\"annotations\",\"vocabulary\"]}\n\n: ping\n\n"
         "401": { $ref: "#/components/responses/Error", description: "Missing, invalid, revoked or expired token" }
         "403": { $ref: "#/components/responses/Error", description: "No eligible topic, or HTTPS required" }
         "429":
@@ -1356,6 +1357,127 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/Annotation" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /v1/vocabulary/words:
+    post:
+      tags: [sync]
+      summary: Push a batch of vocabulary words
+      description: |
+        Vocabulary Builder words (ADR-0068) are per-user reading state on
+        their own seq counter, beside — never shared with — the op and
+        annotation ones. Each word is keyed by `(language, normalized)` and
+        carries a `rev`, and every write is a compare-and-set against it. A
+        create sends `base_rev: 0`; an edit sends the rev it read. A
+        byte-identical retry of the last write is `duplicate` and
+        acknowledged with the stored rev, generation and seq; any other
+        stale `base_rev` is a per-item `conflict` carrying the server's
+        copy. Deleting (`deleted: true`) with the current rev writes a
+        tombstone and, in the same transaction, tombstones every live
+        review for the word with a fresh seq each. A create onto a tombstone
+        (base rev matching it) resurrects the word and bumps its
+        `generation`; a review written against an older generation is
+        refused. The batch is never atomic: one bad item fails alone. Only
+        malformed JSON, an empty or oversized batch (400), or a body larger
+        than any legal batch could need (413) is refused whole. `device_id`
+        is taken from the token.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [words]
+              properties:
+                words:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/VocabularyWordInput" }
+      responses:
+        "200":
+          description: Per-item results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/VocabularyWordResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
+  /v1/vocabulary/reviews:
+    post:
+      tags: [sync]
+      summary: Push a batch of vocabulary reviews
+      description: |
+        A review is one review event for a word, keyed by a client-chosen
+        `review_id`. A new review must name a live word at the generation it
+        was written against; a stale generation is a per-item `invalid`. An
+        identical retry is `duplicate`; a different payload for the same
+        `review_id` is `conflict`. `deleted: true` undoes a review as a
+        tombstone. The batch is never atomic: one bad item fails alone.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reviews]
+              properties:
+                reviews:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/VocabularyReviewInput" }
+      responses:
+        "200":
+          description: Per-item results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/VocabularyReviewResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
+  /v1/vocabulary/changes:
+    get:
+      tags: [sync]
+      summary: Delta-sync vocabulary words and reviews after a seq
+      description: |
+        The vocabulary feed is *state*, not history: words and reviews share
+        one per-user seq counter, separate from the op and annotation logs.
+        An edit or delete moves the record to the head with its current
+        content; tombstones are included. Words and reviews are returned in
+        separate arrays, each in seq order; splice them by `seq`. A page
+        stops at `limit` items or a response byte budget, always emitting at
+        least one. Advance `next_cursor` to resume.
+      security: [{ deviceToken: [] }]  # requires sync scope
+      parameters:
+        - { name: since, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 500 } }
+      responses:
+        "200":
+          description: Page of words and reviews with the new high-water mark
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  words:
+                    type: array
+                    items: { $ref: "#/components/schemas/VocabularyWord" }
+                  reviews:
+                    type: array
+                    items: { $ref: "#/components/schemas/VocabularyReview" }
+                  high_water: { type: integer }
+                  next_cursor: { type: integer }
+                  has_more: { type: boolean }
 
   /v1/works/{id}/evaluation:
     get:
@@ -5318,6 +5440,139 @@ components:
         server:
           allOf: [{ $ref: "#/components/schemas/Annotation" }]
           description: The server's current copy, carried on a conflict.
+    VocabularyOccurrenceInput:
+      type: object
+      required: [occurrence_key, last_seen_at, encounters]
+      properties:
+        occurrence_key: { type: string, minLength: 1, maxLength: 128, description: "Unique within the word" }
+        work_id: { type: string, maxLength: 128 }
+        book_title: { type: string, maxLength: 1024 }
+        location_key: { type: string, maxLength: 128 }
+        locator:
+          description: Any JSON reader-native anchor, opaque to the server and replayed verbatim, at most 16 KiB.
+        sentence: { type: string, maxLength: 4096 }
+        sentence_edited: { type: boolean }
+        sentence_updated_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        encounters: { type: integer, minimum: 1, maximum: 1000000 }
+    VocabularyOccurrence:
+      allOf:
+        - { $ref: "#/components/schemas/VocabularyOccurrenceInput" }
+    VocabularyBaseline:
+      type: object
+      description: |
+        The review schedule a word carried when it was imported, before this
+        account reviewed it here.
+      required: [due_at, repetitions]
+      properties:
+        due_at: { type: string, format: date-time }
+        reviewed_at: { type: string, format: date-time }
+        streak: { type: integer, minimum: 0, maximum: 14 }
+        interval_minutes: { type: integer, minimum: 0, maximum: 10000000 }
+        repetitions: { type: integer, minimum: 1, maximum: 1000000 }
+    VocabularyWordInput:
+      type: object
+      required: [language, normalized, base_rev]
+      properties:
+        language: { type: string, minLength: 1, maxLength: 80 }
+        normalized: { type: string, minLength: 1, maxLength: 512, description: "The normalised fold key, never changed; identity of the word" }
+        base_rev: { type: integer, minimum: 0, description: "0 to create, the rev read to edit; matching the tombstone rev resurrects" }
+        deleted: { type: boolean, description: "A tombstone write; only language, normalized and base_rev are read" }
+        word: { type: string, maxLength: 512, description: "Required on a live write" }
+        definition: { type: string, maxLength: 24576 }
+        translation_language: { type: string, maxLength: 80 }
+        notes: { type: string, maxLength: 12288 }
+        definition_edited: { type: boolean }
+        definition_updated_at: { type: string, format: date-time }
+        notes_updated_at: { type: string, format: date-time }
+        added_at: { type: string, format: date-time }
+        imported_baseline: { $ref: "#/components/schemas/VocabularyBaseline" }
+        occurrences:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/VocabularyOccurrenceInput" }
+    VocabularyWord:
+      type: object
+      description: |
+        One word as the server holds it. A tombstone carries `language`,
+        `normalized`, `rev`, `seq`, `generation`, `updated_at`, `deleted` and
+        `deleted_at` and nothing else.
+      required: [language, normalized, rev, generation]
+      properties:
+        language: { type: string }
+        normalized: { type: string }
+        word: { type: string }
+        definition: { type: string }
+        translation_language: { type: string }
+        notes: { type: string }
+        definition_edited: { type: boolean }
+        definition_updated_at: { type: string, format: date-time }
+        notes_updated_at: { type: string, format: date-time }
+        added_at: { type: string, format: date-time }
+        imported_baseline: { $ref: "#/components/schemas/VocabularyBaseline" }
+        occurrences:
+          type: array
+          items: { $ref: "#/components/schemas/VocabularyOccurrence" }
+        rev: { type: integer }
+        generation: { type: integer, description: "Bumped on every resurrection; a review pins it" }
+        seq: { type: integer }
+        device_id: { type: string }
+        updated_at: { type: string, format: date-time }
+        deleted: { type: boolean }
+        deleted_at: { type: string, format: date-time }
+    VocabularyWordResult:
+      type: object
+      properties:
+        language: { type: string }
+        normalized: { type: string }
+        status: { type: string, enum: [applied, duplicate, conflict, invalid] }
+        rev: { type: integer, description: "When applied or duplicate" }
+        generation: { type: integer, description: "When applied or duplicate" }
+        seq: { type: integer, description: "When applied or duplicate" }
+        reason: { type: string, description: "When invalid" }
+        server:
+          allOf: [{ $ref: "#/components/schemas/VocabularyWord" }]
+          description: The server's current copy, carried on a conflict.
+    VocabularyReviewInput:
+      type: object
+      required: [review_id, language, normalized, word_generation]
+      properties:
+        review_id: { type: string, minLength: 1, maxLength: 64, description: "Client-generated idempotency key" }
+        language: { type: string, minLength: 1, maxLength: 80 }
+        normalized: { type: string, minLength: 1, maxLength: 512 }
+        word_generation: { type: integer, minimum: 1, description: "The word generation the review was written against" }
+        deleted: { type: boolean, description: "Undo the review as a tombstone" }
+        rating: { type: string, enum: [AGAIN, HARD, GOOD, EASY] }
+        reviewed_at: { type: string, format: date-time }
+        interval_minutes: { type: integer, minimum: 0, maximum: 10000000 }
+        due_at: { type: string, format: date-time, description: "May be any future time; not capped" }
+    VocabularyReview:
+      type: object
+      description: |
+        One review event as the server holds it. A tombstone carries
+        `review_id`, `language`, `normalized`, `word_generation`, `seq`,
+        `updated_at`, `deleted` and `deleted_at`.
+      properties:
+        review_id: { type: string }
+        language: { type: string }
+        normalized: { type: string }
+        word_generation: { type: integer }
+        seq: { type: integer }
+        rating: { type: string, enum: [AGAIN, HARD, GOOD, EASY] }
+        reviewed_at: { type: string, format: date-time }
+        interval_minutes: { type: integer }
+        due_at: { type: string, format: date-time }
+        device_id: { type: string }
+        updated_at: { type: string, format: date-time }
+        deleted: { type: boolean }
+        deleted_at: { type: string, format: date-time }
+    VocabularyReviewResult:
+      type: object
+      properties:
+        review_id: { type: string }
+        status: { type: string, enum: [applied, duplicate, conflict, invalid] }
+        seq: { type: integer, description: "When applied or duplicate" }
+        reason: { type: string, description: "When invalid" }
     EvaluationWrite:
       allOf:
         - { $ref: "#/components/schemas/EvaluationValue" }
