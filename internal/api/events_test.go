@@ -240,8 +240,8 @@ func TestEventsOpensWithAnInvalidationAndFollowsCommits(t *testing.T) {
 	}
 	// Every connection opens with one, so a client that was offline
 	// needs no cursor and no special case.
-	if got := s.next(t, 5*time.Second); len(got) != 2 ||
-		got[0] != "positions" || got[1] != "annotations" {
+	if got := s.next(t, 5*time.Second); len(got) != 3 ||
+		got[0] != "positions" || got[1] != "annotations" || got[2] != "vocabulary" {
 		t.Fatalf("initial invalidation named %v", got)
 	}
 
@@ -490,7 +490,7 @@ func TestEventsFlushThroughSubpathProxy(t *testing.T) {
 		t.Fatalf("proxied connect: %d", resp.StatusCode)
 	}
 	s := &stream{resp: resp, br: bufio.NewReader(resp.Body)}
-	if topics := s.next(t, time.Second); len(topics) != 2 {
+	if topics := s.next(t, time.Second); len(topics) != 3 {
 		t.Fatalf("proxied opening topics: %v", topics)
 	}
 	for {

@@ -17,6 +17,9 @@ const (
 	// TopicInsights covers reading sessions, which have no feed of
 	// their own: a client answers by asking for the statistics again.
 	TopicInsights Topic = "insights"
+	// TopicVocabulary covers the Vocabulary Builder feed — words and
+	// their review progresses, tombstones included.
+	TopicVocabulary Topic = "vocabulary"
 )
 
 // ChangeNotifier is told, after a commit, that a user's reading state
@@ -79,6 +82,28 @@ func AnyOpApplied(results []OpResult) bool {
 // AnyAnnotationApplied is the same question for annotation results,
 // which share the vocabulary but not the type.
 func AnyAnnotationApplied(results []AnnotationResult) bool {
+	for _, r := range results {
+		if r.Status == "applied" {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyVocabularyWordApplied reports whether a batch of vocabulary word
+// results contains a write that landed.
+func AnyVocabularyWordApplied(results []VocabularyWordResult) bool {
+	for _, r := range results {
+		if r.Status == "applied" {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyVocabularyReviewApplied is the same question for vocabulary
+// review results.
+func AnyVocabularyReviewApplied(results []VocabularyReviewResult) bool {
 	for _, r := range results {
 		if r.Status == "applied" {
 			return true

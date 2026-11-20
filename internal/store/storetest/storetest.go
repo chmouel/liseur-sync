@@ -364,6 +364,7 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("ConcurrentAnnotationPushMonotonicSeq", func(t *testing.T) {
 		testConcurrentAnnotationPush(t, open)
 	})
+	t.Run("Vocabulary", func(t *testing.T) { testVocabulary(t, open) })
 	t.Run("WorkTranslationsUpsert", func(t *testing.T) { testWorkTranslationsUpsert(t, open) })
 	t.Run("WorkTranslationsScoping", func(t *testing.T) { testWorkTranslationsScoping(t, open) })
 	t.Run("WorkTranslationsPaging", func(t *testing.T) { testWorkTranslationsPaging(t, open) })

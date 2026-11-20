@@ -145,6 +145,14 @@ type Config struct {
 		TranslationMaxValueBytes int   `toml:"translation_max_value_bytes"` // default 8 KiB
 		TranslationMaxPull       int   `toml:"translation_max_pull"`        // default 500
 		TranslationBudgetBytes   int64 `toml:"translation_budget_bytes"`    // default 32 MiB
+
+		// Vocabulary Builder bounds. VocabularyMaxWords caps the account's
+		// live words, enforced inside the write transaction as
+		// AnnotationMaxPerWork is; the two batch bounds cap one request's
+		// item count.
+		VocabularyMaxWords       int `toml:"vocabulary_max_words"`        // default 50000
+		VocabularyMaxBatch       int `toml:"vocabulary_max_batch"`        // default 100
+		VocabularyReviewMaxBatch int `toml:"vocabulary_review_max_batch"` // default 500
 	} `toml:"ops"`
 
 	PairingCodeTTLMin int `toml:"pairing_code_ttl_min"` // default 15
@@ -584,6 +592,9 @@ func Default() Config {
 	c.Ops.TranslationMaxValueBytes = 8 << 10
 	c.Ops.TranslationMaxPull = 500
 	c.Ops.TranslationBudgetBytes = 32 << 20
+	c.Ops.VocabularyMaxWords = 50000
+	c.Ops.VocabularyMaxBatch = 100
+	c.Ops.VocabularyReviewMaxBatch = 500
 	c.PairingCodeTTLMin = 15
 	c.WebSessionTTLDays = 180
 	c.Mirror.Name = "peer"
@@ -781,6 +792,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Ops.AnnotationRetentionDays < 1 {
 		return fmt.Errorf("ops.annotation_retention_days must be >= 1")
+	}
+	if c.Ops.VocabularyMaxWords < 1 {
+		return fmt.Errorf("ops.vocabulary_max_words must be >= 1")
+	}
+	if c.Ops.VocabularyMaxBatch < 1 {
+		return fmt.Errorf("ops.vocabulary_max_batch must be >= 1")
+	}
+	if c.Ops.VocabularyReviewMaxBatch < 1 {
+		return fmt.Errorf("ops.vocabulary_review_max_batch must be >= 1")
 	}
 	if c.Ops.SettingsMaxPerAccount < 1 {
 		return fmt.Errorf("ops.settings_max_per_account must be >= 1")

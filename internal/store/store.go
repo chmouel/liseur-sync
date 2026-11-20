@@ -1630,6 +1630,216 @@ type AnnotationChangesPage struct {
 }
 
 // ---------------------------------------------------------------------
+// Vocabulary Builder (ADR-0068)
+// ---------------------------------------------------------------------
+
+// VocabularyOccurrence is one place in the library a word was seen. It
+// is part of a word's payload, not a record of its own: editing a
+// sentence is a write to the word and moves the word to the head of
+// the feed.
+type VocabularyOccurrence struct {
+	OccurrenceKey     string          `json:"occurrence_key"`
+	WorkID            *string         `json:"work_id,omitempty"`
+	BookTitle         string          `json:"book_title,omitempty"`
+	LocationKey       string          `json:"location_key,omitempty"`
+	LocatorJSON       json.RawMessage `json:"locator,omitempty"`
+	Sentence          *string         `json:"sentence,omitempty"`
+	SentenceEdited    bool            `json:"sentence_edited,omitempty"`
+	SentenceUpdatedAt *time.Time      `json:"sentence_updated_at,omitempty"`
+	LastSeenAt        time.Time       `json:"last_seen_at"`
+	Encounters        int             `json:"encounters"`
+}
+
+// VocabularyBaseline is an imported spaced-repetition schedule: the
+// review state a word carried when it was added, before this account
+// had reviewed it here. It travels with the word, not the review feed.
+type VocabularyBaseline struct {
+	DueAt           time.Time
+	ReviewedAt      *time.Time
+	Streak          int
+	IntervalMinutes int
+	Repetitions     int
+}
+
+// VocabularyWord is one per-user vocabulary entry, keyed by
+// (language, normalized). It carries a rev for compare-and-set, a
+// per-user vocabulary seq for the delta feed, and a generation that
+// bumps on every resurrection — a review written against an older
+// generation is stale and refused.
+type VocabularyWord struct {
+	UserID              string
+	Language            string
+	Normalized          string
+	Seq                 int64
+	Rev                 int64
+	Generation          int64
+	Word                string
+	Definition          *string
+	TranslationLanguage *string
+	Notes               string
+	DefinitionEdited    bool
+	DefinitionUpdatedAt *time.Time
+	NotesUpdatedAt      *time.Time
+	AddedAt             time.Time
+	Baseline            *VocabularyBaseline
+	Occurrences         []VocabularyOccurrence
+	OccurrencesJSON     []byte // canonical JSON as stored
+	DeviceID            string
+	UpdatedAt           time.Time
+	DeletedAt           *time.Time
+}
+
+// Deleted reports whether the word is a tombstone.
+func (w VocabularyWord) Deleted() bool { return w.DeletedAt != nil }
+
+// VocabularyWordWrite is one item of a batched word push. BaseRev is
+// the rev the client last saw; 0 means create. OccurrencesJSON is the
+// canonical JSON of the occurrences array.
+type VocabularyWordWrite struct {
+	Language            string
+	Normalized          string
+	BaseRev             int64
+	Deleted             bool
+	Word                string
+	Definition          *string
+	TranslationLanguage *string
+	Notes               string
+	DefinitionEdited    bool
+	DefinitionUpdatedAt *time.Time
+	NotesUpdatedAt      *time.Time
+	AddedAt             time.Time
+	Baseline            *VocabularyBaseline
+	OccurrencesJSON     []byte
+}
+
+// VocabularyWordResult is the per-item outcome of a word write.
+type VocabularyWordResult struct {
+	Language   string
+	Normalized string
+	Status     string // "applied" | "duplicate" | "conflict" | "invalid"
+	Rev        int64
+	Generation int64
+	Seq        int64
+	Reason     string
+	Server     *VocabularyWord
+}
+
+// VocabularyReview is one review event for a word. ReviewID is a
+// client-generated idempotency key; word_generation pins the review to
+// the word generation it was written against. A delete is a tombstone.
+type VocabularyReview struct {
+	UserID          string
+	ReviewID        string
+	Language        string
+	Normalized      string
+	WordGeneration  int64
+	Seq             int64
+	Rating          string
+	ReviewedAt      time.Time
+	IntervalMinutes int
+	DueAt           time.Time
+	DeviceID        string
+	UpdatedAt       time.Time
+	DeletedAt       *time.Time
+}
+
+// Deleted reports whether the review is a tombstone.
+func (r VocabularyReview) Deleted() bool { return r.DeletedAt != nil }
+
+// VocabularyReviewWrite is one item of a batched review push.
+type VocabularyReviewWrite struct {
+	ReviewID        string
+	Language        string
+	Normalized      string
+	WordGeneration  int64
+	Deleted         bool
+	Rating          string
+	ReviewedAt      time.Time
+	IntervalMinutes int
+	DueAt           time.Time
+}
+
+// VocabularyReviewResult is the per-item outcome of a review write.
+type VocabularyReviewResult struct {
+	ReviewID string
+	Status   string // "applied" | "duplicate" | "conflict" | "invalid"
+	Seq      int64
+	Reason   string
+}
+
+// VocabularyChangesPage is one page of the vocabulary delta feed: words
+// and reviews interleaved by seq, tombstones included.
+type VocabularyChangesPage struct {
+	Words      []VocabularyWord
+	Reviews    []VocabularyReview
+	HighWater  int64
+	NextCursor int64
+	HasMore    bool
+}
+
+// SameVocabularyWordPayload reports whether an incoming write is
+// byte-identical to a stored word's content — the retry comparison.
+func SameVocabularyWordPayload(stored VocabularyWord, w VocabularyWordWrite, deviceID string) bool {
+	if stored.Deleted() {
+		return false
+	}
+	if stored.Word != w.Word || stored.Notes != w.Notes ||
+		stored.DefinitionEdited != w.DefinitionEdited ||
+		stored.DeviceID != deviceID {
+		return false
+	}
+	if !equalOptionalString(stored.Definition, w.Definition) ||
+		!equalOptionalString(stored.TranslationLanguage, w.TranslationLanguage) {
+		return false
+	}
+	if !equalTimePtr(stored.DefinitionUpdatedAt, w.DefinitionUpdatedAt) ||
+		!equalTimePtr(stored.NotesUpdatedAt, w.NotesUpdatedAt) ||
+		!stored.AddedAt.UTC().Truncate(time.Microsecond).Equal(w.AddedAt.UTC().Truncate(time.Microsecond)) {
+		return false
+	}
+	if string(stored.OccurrencesJSON) != string(w.OccurrencesJSON) {
+		return false
+	}
+	return equalVocabularyBaseline(stored.Baseline, w.Baseline)
+}
+
+// SameVocabularyReviewPayload reports whether an incoming review write
+// matches a stored one. A retry compares the payload only; whether the
+// stored row is already a tombstone is handled by the caller.
+func SameVocabularyReviewPayload(stored VocabularyReview, w VocabularyReviewWrite) bool {
+	if stored.Language != w.Language || stored.Normalized != w.Normalized ||
+		stored.WordGeneration != w.WordGeneration || stored.Rating != w.Rating ||
+		stored.IntervalMinutes != w.IntervalMinutes {
+		return false
+	}
+	return stored.ReviewedAt.UTC().Truncate(time.Microsecond).Equal(w.ReviewedAt.UTC().Truncate(time.Microsecond)) &&
+		stored.DueAt.UTC().Truncate(time.Microsecond).Equal(w.DueAt.UTC().Truncate(time.Microsecond))
+}
+
+func equalTimePtr(a, b *time.Time) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return a.UTC().Truncate(time.Microsecond).Equal(b.UTC().Truncate(time.Microsecond))
+}
+
+func equalVocabularyBaseline(a, b *VocabularyBaseline) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	return a.Streak == b.Streak && a.IntervalMinutes == b.IntervalMinutes &&
+		a.Repetitions == b.Repetitions &&
+		equalTimePtr(a.ReviewedAt, b.ReviewedAt) &&
+		a.DueAt.UTC().Truncate(time.Microsecond).Equal(b.DueAt.UTC().Truncate(time.Microsecond))
+}
+
+// ---------------------------------------------------------------------
 // Work translations (ADR-0052)
 // ---------------------------------------------------------------------
 
@@ -2223,6 +2433,24 @@ type Store interface {
 	// offline longer than the window that pushes it again creates a
 	// new record, rev starting over at 1.
 	SweepAnnotationTombstones(ctx context.Context, userID string, olderThan time.Time) (int64, error)
+
+	// Vocabulary Builder (ADR-0068): per-user words and their review
+	// progresses. Both feeds share one per-user vocabulary seq counter,
+	// beside the op and annotation counters. A word delete tombstones
+	// the word and, in the same transaction, tombstones every live
+	// review for it with fresh seqs, so a synced device observes both.
+	// A review pins the word generation it was written against; a
+	// resurrection bumps the generation and makes older reviews stale.
+	//
+	// PushVocabularyWords and PushVocabularyReviews are never atomic:
+	// one result per item, one bad item fails alone. maxLiveWords caps
+	// the account's live words, enforced inside the write transaction.
+	PushVocabularyWords(ctx context.Context, userID, deviceID string, items []VocabularyWordWrite, maxLiveWords int) ([]VocabularyWordResult, error)
+	PushVocabularyReviews(ctx context.Context, userID, deviceID string, items []VocabularyReviewWrite) ([]VocabularyReviewResult, error)
+	// VocabularyChanges returns words and reviews with seq > since, in
+	// seq order, tombstones included. When maxBytes > 0 the page also
+	// stops at a byte budget, always emitting at least one item.
+	VocabularyChanges(ctx context.Context, userID string, since int64, limit int, maxBytes int) (VocabularyChangesPage, error)
 
 	// Work translations (ADR-0052): the per-user, per-work sentence
 	// translation cache. Keys are opaque client content hashes; the

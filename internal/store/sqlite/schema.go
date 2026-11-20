@@ -1398,6 +1398,62 @@ CREATE TABLE work_cover_overrides (
 );
 `
 
+// vocabularySync is the Vocabulary Builder (ADR-0068): per-user words
+// keyed by (language, normalized), each carrying a rev for
+// compare-and-set and a generation that bumps on resurrection, plus the
+// review events for those words. Both share a vocabulary seq counter
+// beside — never shared with — the op and annotation counters.
+const vocabularySync = `
+ALTER TABLE seq_counters ADD COLUMN next_vocabulary_seq INTEGER NOT NULL DEFAULT 1;
+
+CREATE TABLE vocabulary_words (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ language TEXT NOT NULL,
+ normalized TEXT NOT NULL,
+ seq INTEGER NOT NULL,
+ rev INTEGER NOT NULL,
+ generation INTEGER NOT NULL DEFAULT 1,
+ word TEXT NOT NULL,
+ definition TEXT,
+ translation_language TEXT,
+ notes TEXT NOT NULL DEFAULT '',
+ definition_edited INTEGER NOT NULL DEFAULT 0,
+ definition_updated_at TEXT,
+ notes_updated_at TEXT,
+ added_at TEXT NOT NULL,
+ baseline_due_at TEXT,
+ baseline_reviewed_at TEXT,
+ baseline_streak INTEGER NOT NULL DEFAULT 0,
+ baseline_interval_minutes INTEGER NOT NULL DEFAULT 0,
+ baseline_repetitions INTEGER NOT NULL DEFAULT 0,
+ occurrences_json BLOB NOT NULL DEFAULT '[]',
+ device_id TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ deleted_at TEXT,
+ PRIMARY KEY (user_id, language, normalized)
+);
+CREATE INDEX vocabulary_words_seq ON vocabulary_words(user_id, seq);
+
+CREATE TABLE vocabulary_reviews (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ review_id TEXT NOT NULL,
+ language TEXT NOT NULL,
+ normalized TEXT NOT NULL,
+ word_generation INTEGER NOT NULL DEFAULT 1,
+ seq INTEGER NOT NULL,
+ rating TEXT NOT NULL,
+ reviewed_at TEXT NOT NULL,
+ interval_minutes INTEGER NOT NULL,
+ due_at TEXT NOT NULL,
+ device_id TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
+ deleted_at TEXT,
+ PRIMARY KEY (user_id, review_id)
+);
+CREATE INDEX vocabulary_reviews_seq ON vocabulary_reviews(user_id, seq);
+CREATE INDEX vocabulary_reviews_word ON vocabulary_reviews(user_id, language, normalized, word_generation);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1420,6 +1476,7 @@ var migrations = []string{
 	opKinds,
 	workEvaluations,
 	workMetadataOverrides,
+	vocabularySync,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1451,6 +1508,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"crosspointSessions":       crosspointSessions,
 		"opKinds":                  opKinds,
 		"workMetadataOverrides":    workMetadataOverrides,
+		"vocabularySync":           vocabularySync,
 	}
 	want, ok := named[name]
 	if !ok {

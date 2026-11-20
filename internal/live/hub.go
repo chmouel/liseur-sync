@@ -33,6 +33,7 @@ var known = []store.Topic{
 	store.TopicPositions,
 	store.TopicAnnotations,
 	store.TopicInsights,
+	store.TopicVocabulary,
 }
 
 func bit(t store.Topic) topics {

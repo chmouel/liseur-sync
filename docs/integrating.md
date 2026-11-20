@@ -714,13 +714,14 @@ the credential in the `Authorization` header, never in the URL.
 
 ```text
 event: invalidate
-data: {"topics":["positions","annotations"]}
+data: {"topics":["positions","annotations","vocabulary"]}
 
 ```
 
-The `sync` scope permits `positions` and `annotations`; `read-insights`
-permits `insights`. A token with no permitted topic gets `403`. Web reader
-tokens keep their existing scopes and receive no insights.
+The `sync` scope permits `positions`, `annotations` and `vocabulary`;
+`read-insights` permits `insights`. A token with no permitted topic gets
+`403`. Web reader tokens keep their existing scopes and receive no
+insights.
 
 The server registers the subscriber before sending an opening
 invalidation for its permitted topics. A write before registration is
@@ -853,6 +854,94 @@ feed no longer mentions and the live set does not contain is gone.
 
 Positions and annotations never mix: `/v1/changes` stays ops-only, and
 annotation writes do not move the op high-water.
+
+## Vocabulary Builder
+
+Words and their review progresses sync too (ADR-0068), on a vocabulary
+seq counter of their own — separate from both the op log and the
+annotation feed. A word is keyed by `(language, normalized)` and carries
+a server-held `rev`; a review is keyed by a client-chosen `review_id`.
+Both need only the `sync` scope, and `device_id` comes from your token.
+
+A word write is the same rev dance as an annotation. A create sends
+`base_rev: 0`; an edit sends the rev you read; a byte-identical retry is
+acknowledged as `duplicate` with the stored rev, generation and seq, and
+any other stale rev is a per-item `conflict` carrying the server copy.
+The word itself carries its occurrences (where it was seen) and an
+optional `imported_baseline` — the review schedule it had before this
+account reviewed it here — as part of its payload:
+
+```json
+POST /v1/vocabulary/words
+{
+  "words": [{
+    "language": "en",
+    "normalized": "ephemeral",
+    "base_rev": 0,
+    "word": "ephemeral",
+    "definition": "lasting a very short time",
+    "added_at": "2026-07-13T10:00:00Z",
+    "imported_baseline": {
+      "due_at": "2026-07-20T10:00:00Z", "streak": 3,
+      "interval_minutes": 1440, "repetitions": 2
+    },
+    "occurrences": [{
+      "occurrence_key": "occ-1",
+      "work_id": "…", "book_title": "…", "location_key": "chapter-3",
+      "locator": { "href": "ch3.xhtml" },
+      "sentence": "the sea was calm",
+      "last_seen_at": "2026-07-13T10:00:00Z", "encounters": 2
+    }]
+  }]
+}
+-> { "results": [{ "language": "en", "normalized": "ephemeral",
+                   "status": "applied", "rev": 1, "generation": 1, "seq": 7 }] }
+```
+
+Deleting a word (`"deleted": true` with the current rev) writes a
+tombstone and, in the same transaction, tombstones every live review for
+it with a fresh seq each, so a synced device observes both leave on the
+feed. A create onto the tombstone — base rev matching it — resurrects the
+word and bumps its `generation`.
+
+Reviews record spaced-repetition outcomes and pin the generation they
+were written against:
+
+```json
+POST /v1/vocabulary/reviews
+{
+  "reviews": [{
+    "review_id": "…", "language": "en", "normalized": "ephemeral",
+    "word_generation": 1, "rating": "GOOD",
+    "reviewed_at": "2026-07-13T10:00:00Z",
+    "interval_minutes": 1440, "due_at": "2026-07-14T10:00:00Z"
+  }]
+}
+-> { "results": [{ "review_id": "…", "status": "applied", "seq": 9 }] }
+```
+
+`rating` is `AGAIN`, `HARD`, `GOOD` or `EASY`. A new review must name a
+live word at its current generation; a review against a dead or older
+generation is a per-item `invalid` (a stale device should refresh the
+word first). `"deleted": true` undoes a review as a tombstone. Both
+batches are never atomic: one bad item fails alone; only malformed JSON,
+an empty or oversized batch (`400`) or an oversized body (`413`) is
+refused whole.
+
+Pull the interleaved feed with a cursor on the vocabulary counter:
+
+```
+GET /v1/vocabulary/changes?since=<cursor>&limit=200
+-> { "words": [...], "reviews": [...], "high_water": 42,
+     "next_cursor": 42, "has_more": false }
+```
+
+The feed is *state*, not history: an edit or delete moves the record to
+the head with its current content. Words and reviews arrive in separate
+arrays, each in seq order; splice them by `seq`. A page stops at `limit`
+items or a response byte budget, always emitting at least one; advance
+`next_cursor` to resume. Tombstones carry identity, seq and when, and
+nothing else.
 
 ## Sentence translations
 
