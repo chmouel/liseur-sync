@@ -385,6 +385,14 @@ func (s *Server) Routes() *http.ServeMux {
 	// positions, and the reader token already carries what they need.
 	mux.Handle("GET /v1/works/{id}/evaluation", syncH(s.HandleReadEvaluation))
 	mux.Handle("POST /v1/works/{id}/evaluation", syncH(s.HandleWriteEvaluation))
+	// A reader's own title, author, description and cover for a work: the
+	// same shape as an evaluation, one row per field, and a chosen image
+	// the account carries rather than the folder.
+	mux.Handle("GET /v1/works/{id}/metadata", syncH(s.HandleReadWorkMetadata))
+	mux.Handle("POST /v1/works/{id}/metadata", syncH(s.HandleWriteWorkMetadata))
+	mux.Handle("GET /v1/works/{id}/cover", syncH(s.HandleGetWorkCover))
+	mux.Handle("PUT /v1/works/{id}/cover", syncH(s.HandlePutWorkCover))
+	mux.Handle("DELETE /v1/works/{id}/cover", syncH(s.HandleDeleteWorkCover))
 	mux.Handle("POST /v1/annotations", syncH(s.HandlePushAnnotations))
 	mux.Handle("GET /v1/annotations/changes", syncH(s.HandleAnnotationChanges))
 	mux.Handle("DELETE /v1/annotations/{id}", syncH(s.HandleDeleteAnnotation))

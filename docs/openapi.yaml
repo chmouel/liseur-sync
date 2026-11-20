@@ -1427,6 +1427,187 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
 
+  /v1/works/{id}/metadata:
+    get:
+      tags: [sync]
+      summary: Read the account's own metadata overrides for a work
+      operationId: readWorkMetadata
+      description: |
+        Overrides are private to the authenticated account and never change
+        the shared catalog row: a title, an author, a description and a chosen
+        cover are opinion about a work, held per account beside its reading
+        state. They survive the catalog file's removal and follow a work
+        merge.
+
+        `fields` carries one entry per overridden field and never a removal:
+        clearing a field deletes the row. `cover` is absent when no cover
+        choice was ever recorded, and carries `sha256: null` for the tombstone
+        a delete leaves behind — those two are different answers, and a client
+        that has the second one should stop asking.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Current overrides
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [fields]
+                properties:
+                  fields:
+                    type: array
+                    maxItems: 3
+                    items: { $ref: "#/components/schemas/WorkMetadataField" }
+                  cover: { $ref: "#/components/schemas/WorkCoverChoice" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [sync]
+      summary: Set or clear one metadata override
+      operationId: writeWorkMetadata
+      description: |
+        Writes from different writers replace only the named field in server
+        receipt order. An older revision from the same writer is acknowledged
+        without replacing a newer revision, including after a work merge.
+        Work merges exclude heads superseded by a higher revision from the
+        same writer in either work's receipts, then select by receipt time.
+        A merge with no eligible head for a recorded field returns `409`.
+        Replaying an accepted ID never changes a newer choice, and reusing an
+        ID with different content or provenance returns `409`.
+
+        `null` clears the field; a string is the new value, and `""` is a
+        value somebody typed rather than a clear. Values are UTF-8 without
+        NUL, at most 512 bytes for `title` and `author` and 16384 for
+        `description`. Requires sync scope.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkMetadataWrite" }
+      responses:
+        "200":
+          description: Applied or already accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [applied] }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+
+  /v1/works/{id}/cover:
+    get:
+      tags: [sync]
+      summary: Fetch the account's own cover for a work
+      operationId: readWorkCover
+      description: |
+        The chosen cover, re-encoded as a bounded JPEG whatever was uploaded.
+        The bytes are immutable under the `ETag` — the digest of the rendered
+        image — so a revalidation answers `304`. `private` because the image
+        belongs to one account and no proxy may share it.
+
+        A work with no chosen cover, a tombstoned one, and a work this account
+        does not have all answer `404`: the publication's own cover lives at
+        `/v1/books/{id}/cover`, which with no choice recorded is what a reader
+        should show.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: size
+          in: query
+          required: false
+          description: |
+            `full`, the default, is what was uploaded and rendered; the other
+            two are derived from it on demand. Any other value is rejected
+            rather than treated as the default.
+          schema: { type: string, enum: [thumbnail, full, icon], default: full }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: The rendered cover
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        "304": { description: The client's copy is current }
+        "400": { $ref: "#/components/responses/Error", description: "Unknown cover size" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error", description: "Unknown work, or no chosen cover" }
+    put:
+      tags: [sync]
+      summary: Choose a cover for a work
+      operationId: putWorkCover
+      description: |
+        Sends an image as the request body — raw bytes, not a multipart form
+        — and stores the JPEG it renders to at `full` size. The render is
+        bounded (40 megapixels decoded, 1000 pixels on the long edge), so a
+        stored cover costs the same whatever a client sent. An empty body is
+        `400`, an image this server cannot decode is `400`, and a body past
+        the 16 MiB source cap is `413`. Requires sync scope.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: The rendered image was stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, sha256, updated_at]
+                properties:
+                  status: { type: string, enum: [applied] }
+                  sha256: { type: string, description: Hex digest of the stored JPEG; the `ETag` of the read. }
+                  updated_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [sync]
+      summary: Stop using a chosen cover for a work
+      operationId: deleteWorkCover
+      description: |
+        Removes the stored image and leaves a tombstone, so the account's
+        answer is "I use none" rather than "I never chose" — a distinction a
+        merge and a later pull both keep. The publication's own cover is the
+        catalog's business and is untouched. A work this account does not
+        have answers `404`. Requires sync scope.
+      security: [{ deviceToken: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The choice was recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, updated_at]
+                properties:
+                  status: { type: string, enum: [deleted] }
+                  updated_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+
   /v1/works/{id}/translations:
     post:
       tags: [sync]
@@ -5178,6 +5359,53 @@ components:
               oneOf:
                 - { type: "null" }
                 - { type: string, minLength: 1, maxLength: 8192 }
+
+    WorkMetadataField:
+      type: object
+      required: [field, value, write_id, updated_at]
+      properties:
+        field: { type: string, enum: [title, author, description] }
+        value:
+          type: string
+          description: The override as the account wrote it. An empty string is a value, not a removal; a removed field has no entry here at all.
+        write_id: { type: string, minLength: 1, maxLength: 64 }
+        updated_at: { type: string, format: date-time }
+
+    WorkCoverChoice:
+      type: object
+      description: |
+        The account's cover for this work. `sha256: null` is the tombstone a
+        delete leaves behind; the whole object is absent when no choice was
+        ever recorded.
+      required: [sha256, updated_at]
+      properties:
+        sha256:
+          type: [string, "null"]
+          description: Hex digest of the stored JPEG, which is also its `ETag`. Null after a delete.
+        updated_at: { type: string, format: date-time }
+
+    WorkMetadataWrite:
+      type: object
+      required: [write_id, field, value, writer_id, revision]
+      properties:
+        write_id: { type: string, minLength: 1, maxLength: 64 }
+        field: { type: string, enum: [title, author, description] }
+        value:
+          description: The new value, or null to clear the field. Text is UTF-8 without NUL, at most 512 bytes for `title` and `author` and 16384 for `description`.
+          oneOf:
+            - { type: "null" }
+            - type: string
+        writer_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Stable installation identity, as on an evaluation. Nonblank and without NUL.
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: Persisted monotonically increasing local edit revision, as on an evaluation.
 
     WorkTranslationInput:
       type: object

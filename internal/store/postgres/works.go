@@ -559,6 +559,14 @@ func (s *Store) MergeWorks(ctx context.Context, userID, fromWorkID, intoWorkID s
 	if err := moveWorkEvaluationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
 		return err
 	}
+	// A reader's own title, author, description and cover follow the same
+	// way: an override is opinion about a work, not about a row.
+	if err := moveWorkMetadataOverridesTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
+		return err
+	}
+	if err := moveWorkCoverOverrideTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
+		return err
+	}
 	if err := moveWorkTranslationsTx(ctx, tx, userID, fromWorkID, intoWorkID); err != nil {
 		return err
 	}

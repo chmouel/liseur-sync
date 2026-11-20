@@ -1702,6 +1702,21 @@ type Store interface {
 	WriteEvaluation(ctx context.Context, userID, workID string, item EvaluationWrite) error
 	ReadEvaluation(ctx context.Context, userID, workID string) ([]EvaluationField, error)
 
+	// Metadata overrides are a reader's own title, author, description and
+	// cover for one work. Values are canonical JSON: null unsets a field, so
+	// a cleared field leaves no row behind. Reusing a write ID with
+	// different content is ErrIDMismatch and never rewrites a newer field.
+	WriteWorkMetadata(ctx context.Context, userID, workID string, item WorkMetadataWrite) error
+	ReadWorkMetadata(ctx context.Context, userID, workID string) (WorkMetadata, error)
+	// PutWorkCover stores an already-rendered image and returns the stamp
+	// the row carries. DeleteWorkCover leaves a tombstone rather than no
+	// row, so a reader's "no cover" is a decision a merge cannot undo;
+	// WorkCover answers ErrNotFound for it exactly as for a cover that
+	// never existed.
+	PutWorkCover(ctx context.Context, userID, workID, sha256 string, data []byte) (time.Time, error)
+	DeleteWorkCover(ctx context.Context, userID, workID string) (time.Time, error)
+	WorkCover(ctx context.Context, userID, workID string) (WorkCoverOverride, error)
+
 	// Lifecycle.
 	Migrate(ctx context.Context) error
 	Close() error

@@ -552,6 +552,9 @@ func purgeUnseenTx(
 	return count, nil
 }
 
+// collectEmptyWorksTx removes a work nothing refers to any more: no mapping,
+// no reading state, no override. A cover tombstone is not a reference — it
+// says the reader chose none, not that the work still matters.
 func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx,
 		`DELETE FROM works
@@ -560,6 +563,10 @@ func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
 		                     WHERE m.user_id = works.user_id AND m.work_id = works.id)
 		    AND NOT EXISTS (SELECT 1 FROM work_evaluations e
  WHERE e.user_id = works.user_id AND e.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM work_metadata_overrides o
+ WHERE o.user_id = works.user_id AND o.work_id = works.id)
+		    AND NOT EXISTS (SELECT 1 FROM work_cover_overrides c
+ WHERE c.user_id = works.user_id AND c.work_id = works.id AND c.sha256 IS NOT NULL)
  AND NOT EXISTS (SELECT 1 FROM ops o
 		                     WHERE o.user_id = works.user_id AND o.work_id = works.id)
 		    AND NOT EXISTS (SELECT 1 FROM sessions s
