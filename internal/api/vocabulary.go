@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
@@ -368,12 +368,8 @@ func (s *Server) validateVocabularyWordWrite(in vocabularyWordWriteJSON) (store.
 			return out, "occurrence locator too large"
 		}
 		if len(o.Locator) > 0 && string(o.Locator) != "null" {
-			nul, ok := locatorJSONNUL(o.Locator)
-			if !ok {
-				return out, "occurrence locator is not valid JSON"
-			}
-			if nul {
-				return out, "occurrence locator contains NUL"
+			if reason := locatorJSONReason(o.Locator); reason != "" {
+				return out, reason
 			}
 		}
 		if reason := vocabOptionalTextReason("sentence", o.Sentence, 4096); reason != "" {
@@ -440,24 +436,87 @@ func strPtr(s string) *string {
 	return &s
 }
 
-// locatorJSONNUL reports whether any string token in raw carries a NUL
-// byte. Tokens are walked rather than a decoded value because decoding
-// into map[string]any drops duplicate keys, hiding a shadowed NUL. ok is
-// false when raw is not valid JSON.
-func locatorJSONNUL(raw []byte) (nul, ok bool) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			return false, true
+// locatorJSONReason validates raw locator JSON before it is stored as
+// JSONB. It scans every raw string literal (keys, values, and shadowed
+// duplicates alike) so NUL escapes and unpaired UTF-16 surrogates —
+// both accepted by encoding/json but rejected by PostgreSQL JSONB — fail
+// as per-item invalid instead of aborting the batch.
+func locatorJSONReason(raw []byte) string {
+	if !json.Valid(raw) {
+		return "occurrence locator is not valid JSON"
+	}
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		b := raw[i]
+		if !inString {
+			if b == '"' {
+				inString = true
+			}
+			continue
 		}
-		if err != nil {
-			return false, false
+		if b == 0 {
+			return "occurrence locator contains NUL"
 		}
-		if s, isString := tok.(string); isString && strings.IndexByte(s, 0) >= 0 {
-			return true, true
+		if b == '"' {
+			inString = false
+			continue
+		}
+		if b != '\\' {
+			continue
+		}
+		i++
+		if i >= len(raw) {
+			return "occurrence locator is not valid JSON"
+		}
+		if raw[i] != 'u' {
+			continue
+		}
+		r, ok := parseHex4(raw[i+1:])
+		if !ok {
+			return "occurrence locator is not valid JSON"
+		}
+		i += 4
+		if r == 0 {
+			return "occurrence locator contains NUL"
+		}
+		if utf16.IsSurrogate(r) {
+			if r >= 0xDC00 {
+				return "occurrence locator contains unpaired surrogate"
+			}
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return "occurrence locator contains unpaired surrogate"
+			}
+			r2, ok := parseHex4(raw[i+3:])
+			if !ok || r2 < 0xDC00 || r2 > 0xDFFF {
+				return "occurrence locator contains unpaired surrogate"
+			}
+			i += 6
 		}
 	}
+	return ""
+}
+
+func parseHex4(b []byte) (rune, bool) {
+	if len(b) < 4 {
+		return 0, false
+	}
+	var r rune
+	for j := 0; j < 4; j++ {
+		c := b[j]
+		var v rune
+		switch {
+		case c >= '0' && c <= '9':
+			v = rune(c - '0')
+		case c >= 'a' && c <= 'f':
+			v = rune(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			v = rune(c-'A') + 10
+		default:
+			return 0, false
+		}
+		r = r<<4 | v
+	}
+	return r, true
 }
 
 // vocabularyWordMaxRequestBytes sizes the word push body cap from the
