@@ -931,6 +931,42 @@ CREATE TABLE evaluation_receipts (
 CREATE INDEX evaluation_receipts_revision ON evaluation_receipts(user_id, work_id, writer_id, field, revision);
 `
 
+// workMetadataOverrides is the SQLite copy's migration: a reader's own
+// title, author, description and cover for a work.
+const workMetadataOverrides = `
+CREATE TABLE work_metadata_overrides (
+ user_id TEXT NOT NULL,
+ work_id TEXT NOT NULL,
+ field TEXT NOT NULL CHECK (field IN ('title', 'author', 'description')),
+ value TEXT NOT NULL,
+ write_id TEXT NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY (user_id, work_id, field),
+ FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE TABLE metadata_override_receipts (
+ user_id TEXT NOT NULL,
+ write_id TEXT NOT NULL,
+ work_id TEXT NOT NULL,
+ fingerprint TEXT NOT NULL,
+ writer_id TEXT NOT NULL,
+ field TEXT NOT NULL CHECK (field IN ('title', 'author', 'description')),
+ revision BIGINT NOT NULL CHECK (revision > 0),
+ PRIMARY KEY (user_id, write_id),
+ FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+CREATE INDEX metadata_override_receipts_revision ON metadata_override_receipts(user_id, work_id, writer_id, field, revision);
+CREATE TABLE work_cover_overrides (
+ user_id TEXT NOT NULL,
+ work_id TEXT NOT NULL,
+ sha256 TEXT,
+ data BYTEA,
+ updated_at TIMESTAMPTZ NOT NULL,
+ PRIMARY KEY (user_id, work_id),
+ FOREIGN KEY (user_id, work_id) REFERENCES works(user_id, id) ON DELETE CASCADE
+);
+`
+
 // migrations is append-only, for the reason the SQLite copy gives.
 var migrations = []string{
 	schema, claimRevisions, folderUploads, folderAccess, annotationSync,
@@ -950,6 +986,7 @@ var migrations = []string{
 	crosspointSessions,
 	opKinds,
 	workEvaluations,
+	workMetadataOverrides,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -979,6 +1016,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"watchedFolderAudiobooks":  watchedFolderAudiobooks,
 		"crosspointSessions":       crosspointSessions,
 		"opKinds":                  opKinds,
+		"workMetadataOverrides":    workMetadataOverrides,
 	}
 	want, ok := named[name]
 	if !ok {

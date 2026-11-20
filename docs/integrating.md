@@ -2008,3 +2008,60 @@ by server receipt time. If every head for a field is superseded, the merge
 returns 409 without changing either work: save a fresh choice for that
 field before retrying. An explicit work deletion removes evaluations and
 their receipts. They have no effect on positions, sessions or reading status.
+
+## Private metadata and cover overrides
+
+`GET /v1/works/{id}/metadata` returns the account’s own `title`, `author`
+and `description` for a work, plus whether it has chosen a cover:
+
+```json
+{
+  "fields": [
+    {"field": "title", "value": "Dune", "write_id": "…", "updated_at": "…"}
+  ],
+  "cover": {"sha256": "…", "updated_at": "…"}
+}
+```
+
+Overrides are private to the account and never change the shared catalog
+row. `fields` has at most one entry per field and never a removed one.
+`cover` is absent when no cover choice was ever recorded, and carries
+`"sha256": null` for the tombstone a delete leaves behind — that is a
+different answer from "never chose", and a client that has it should stop
+asking. Both routes require the `sync` scope, and a work the account does
+not have is a 404.
+
+Set a field with `POST /v1/works/{id}/metadata`, in the same shape as an
+evaluation:
+
+```json
+{"write_id":"device-work-title-revision","writer_id":"installation-id","revision":42,"field":"title","value":"Dune"}
+```
+
+`field` is `title`, `author` or `description`. Values are UTF-8 without NUL,
+at most 512 bytes for `title` and `author` and 16384 for `description`.
+`null` clears the field, which removes the row; `""` is a value somebody
+typed and is kept. The write-id, `writer_id`, `revision`, superseding and
+idempotency rules are exactly the ones above for ratings and reviews:
+replay a persisted request until acknowledged, let a newer revision from
+the same writer win, and expect 409 for a reused ID with different content.
+An identical retry is always safe, after a merge too.
+
+Choose a cover with `PUT /v1/works/{id}/cover`, sending the image as the raw
+request body (not multipart). The server re-encodes it as a JPEG at `full`
+size and answers `{"status":"applied","sha256":"…","updated_at":"…"}`. An
+empty body or an image it cannot decode is a 400, and a body over 16 MiB is
+a 413. `GET /v1/works/{id}/cover` returns that JPEG with
+`Content-Type: image/jpeg` and an `ETag` of its digest, so a client that
+sends `If-None-Match` gets a 304; `?size=` accepts `full` (the default),
+`thumbnail` and `icon`, derived on demand from the stored image. A work
+with no chosen cover answers 404 — show `/v1/books/{id}/cover` instead, and
+that is exactly what the tombstone tells you to keep doing after a delete.
+`DELETE /v1/works/{id}/cover` removes the image and answers
+`{"status":"deleted","updated_at":"…"}`; the choice itself is kept.
+
+Overrides follow the work: they survive the catalog file’s removal and
+move to the survivor on a merge. The cover is the survivor’s when both
+works had one; otherwise the source’s moves over, tombstone included. A
+merge whose eligible heads are all superseded returns 409 without changing
+either work, as an evaluation merge does.

@@ -25,6 +25,14 @@ const anyReader = ""
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("Evaluations", func(t *testing.T) { testEvaluations(t, open) })
+	t.Run("WorkMetadata", func(t *testing.T) { testWorkMetadata(t, open) })
+	t.Run("WorkCover", func(t *testing.T) { testWorkCover(t, open) })
+	t.Run("WorkMetadataFollowsWorks", func(t *testing.T) {
+		testWorkMetadataFollowsWorks(t, open)
+	})
+	t.Run("WorkMetadataSurvivesCatalogRemoval", func(t *testing.T) {
+		testWorkMetadataSurvivesCatalogRemoval(t, open)
+	})
 	t.Run("CrossPointSessions", func(t *testing.T) { testCrossPointSessions(t, open) })
 	t.Run("CrossPointArchivedRetryAfterWorkDeletion", func(t *testing.T) { testCrossPointArchivedRetryAfterWorkDeletion(t, open) })
 	t.Run("CrossPointInferenceCutoff", func(t *testing.T) { testCrossPointInferenceCutoff(t, open) })

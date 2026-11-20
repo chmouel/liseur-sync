@@ -89,6 +89,10 @@ func (s *Server) HandleMerge(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "save a new rating or review before merging these works")
 			return
 		}
+		if err == store.ErrMetadataMergeConflict {
+			writeError(w, http.StatusConflict, "rewrite the metadata override before merging these works")
+			return
+		}
 		if err == store.ErrConflict {
 			writeError(w, http.StatusConflict, "work with compacted history cannot be merged")
 			return
