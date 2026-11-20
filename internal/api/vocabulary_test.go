@@ -392,6 +392,52 @@ func TestVocabularyLocatorNULDuplicateKeys(t *testing.T) {
 	}
 }
 
+func TestVocabularyLocatorUnpairedSurrogates(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	// Unpaired UTF-16 surrogates are accepted by encoding/json (replaced
+	// with U+FFFD on decode) but rejected by PostgreSQL JSONB when the raw
+	// bytes are stored. Every bad item must fail alone while valid neighbors
+	// (including a valid surrogate pair) still land.
+	loneHigh := `{"language":"en","normalized":"surr-high","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"text":"\ud800"},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	loneLow := `{"language":"en","normalized":"surr-low","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"text":"\udc00"},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	shadowedKey := `{"language":"en","normalized":"surr-shadow-key","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"nested":{"\ud800":"x"},"nested":{}},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	shadowedValue := `{"language":"en","normalized":"surr-shadow-val","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"nested":{"v":"\ud800","v":"ok"}},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	validPair := `{"language":"en","normalized":"surr-valid","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"text":"\ud83d\ude00"},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+
+	body := []byte(`{"words":[` + loneHigh + `,` + loneLow + `,` + shadowedKey + `,` + shadowedValue + `,` + validPair + `]}`)
+	code, out := postRaw(t, ts.URL+"/v1/vocabulary/words", tok, body)
+	if code != http.StatusOK {
+		t.Fatalf("mixed surrogate batch: %d %v", code, out)
+	}
+	results := vocabResults(t, out)
+	for i := 0; i < 4; i++ {
+		r := results[i].(map[string]any)
+		if r["status"] != "invalid" || r["reason"] != "occurrence locator contains unpaired surrogate" {
+			t.Fatalf("unpaired surrogate item %d: %v", i, r)
+		}
+	}
+	if results[4].(map[string]any)["status"] != "applied" {
+		t.Fatalf("valid surrogate pair refused: %v", results[4])
+	}
+}
+
 func TestVocabularyInvalidUTF8(t *testing.T) {
 	ts, st := testServer(t)
 	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
