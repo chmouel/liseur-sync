@@ -38,6 +38,7 @@ func reset(t *testing.T, s *Store) {
 	t.Helper()
 	tables := []string{
 		"evaluation_receipts", "work_evaluations",
+		"metadata_override_receipts", "work_metadata_overrides", "work_cover_overrides",
 		"book_languages", "book_tags", "tags",
 		"book_contributors", "contributors",
 		"book_series_override_items", "book_series_overrides",

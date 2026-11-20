@@ -46,10 +46,6 @@ func (s *Store) WriteWorkMetadata(ctx context.Context, userID, workID string, it
 		if superseded {
 			return nil
 		}
-		if item.Value == "null" {
-			_, err = tx.ExecContext(ctx, `DELETE FROM work_metadata_overrides WHERE user_id = ? AND work_id = ? AND field = ?`, userID, workID, item.Field)
-			return err
-		}
 		stamped, err := stampWorkTranslationTx(ctx, tx, userID, time.Now())
 		if err != nil {
 			return err
@@ -69,7 +65,7 @@ func (s *Store) ReadWorkMetadata(ctx context.Context, userID, workID string) (st
 		return store.WorkMetadata{}, err
 	}
 	result := store.WorkMetadata{Fields: []store.WorkMetadataField{}}
-	rows, err := s.db.QueryContext(ctx, `SELECT field, value, write_id, updated_at FROM work_metadata_overrides WHERE user_id = ? AND work_id = ? ORDER BY field`, userID, workID)
+	rows, err := s.db.QueryContext(ctx, `SELECT field, value, write_id, updated_at FROM work_metadata_overrides WHERE user_id = ? AND work_id = ? AND value != 'null' ORDER BY field`, userID, workID)
 	if err != nil {
 		return store.WorkMetadata{}, err
 	}

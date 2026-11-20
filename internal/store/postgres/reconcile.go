@@ -560,7 +560,7 @@ func collectEmptyWorksTx(ctx context.Context, tx *sql.Tx) error {
 		    AND NOT EXISTS (SELECT 1 FROM work_evaluations e
  WHERE e.user_id = works.user_id AND e.work_id = works.id)
 		    AND NOT EXISTS (SELECT 1 FROM work_metadata_overrides o
- WHERE o.user_id = works.user_id AND o.work_id = works.id)
+ WHERE o.user_id = works.user_id AND o.work_id = works.id AND o.value != 'null')
 		    AND NOT EXISTS (SELECT 1 FROM work_cover_overrides c
  WHERE c.user_id = works.user_id AND c.work_id = works.id AND c.sha256 IS NOT NULL)
  AND NOT EXISTS (SELECT 1 FROM ops o
