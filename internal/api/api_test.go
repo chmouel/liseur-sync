@@ -20,6 +20,13 @@ import (
 
 func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	t.Helper()
+	return testServerWithConfig(t, nil)
+}
+
+// testServerWithConfig is testServer with a chance to adjust the
+// configuration before the server is wired up.
+func testServerWithConfig(t *testing.T, tweak func(*config.Config)) (*httptest.Server, store.Store) {
+	t.Helper()
 	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +36,9 @@ func testServer(t *testing.T) (*httptest.Server, store.Store) {
 	}
 	cfg := config.Default()
 	cfg.InsecureHTTP = true // httptest is plain HTTP
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	srv := &Server{
 		St:           st,
 		Auth:         auth.NewService(st),

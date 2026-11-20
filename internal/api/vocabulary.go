@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,25 +18,25 @@ import (
 // vocabularyWordJSON is the wire shape of a vocabulary word. A tombstone
 // carries identity, rev, seq, generation and when, and nothing else.
 type vocabularyWordJSON struct {
-	Language            string                     `json:"language"`
-	Normalized          string                     `json:"normalized"`
-	Word                string                     `json:"word,omitempty"`
-	Definition          *string                    `json:"definition,omitempty"`
-	TranslationLanguage *string                    `json:"translation_language,omitempty"`
-	Notes               string                     `json:"notes,omitempty"`
-	DefinitionEdited    bool                       `json:"definition_edited,omitempty"`
-	DefinitionUpdatedAt string                     `json:"definition_updated_at,omitempty"`
-	NotesUpdatedAt      string                     `json:"notes_updated_at,omitempty"`
-	AddedAt             string                     `json:"added_at,omitempty"`
-	ImportedBaseline    *vocabularyBaselineJSON    `json:"imported_baseline,omitempty"`
-	Occurrences         []vocabularyOccurrenceJSON `json:"occurrences"`
-	Rev                 int64                      `json:"rev,omitempty"`
-	Generation          int64                      `json:"generation,omitempty"`
-	Seq                 int64                      `json:"seq,omitempty"`
-	DeviceID            string                     `json:"device_id,omitempty"`
-	UpdatedAt           string                     `json:"updated_at,omitempty"`
-	Deleted             bool                       `json:"deleted,omitempty"`
-	DeletedAt           string                     `json:"deleted_at,omitempty"`
+	Language            string                      `json:"language"`
+	Normalized          string                      `json:"normalized"`
+	Word                string                      `json:"word,omitempty"`
+	Definition          *string                     `json:"definition,omitempty"`
+	TranslationLanguage *string                     `json:"translation_language,omitempty"`
+	Notes               string                      `json:"notes,omitempty"`
+	DefinitionEdited    bool                        `json:"definition_edited,omitempty"`
+	DefinitionUpdatedAt string                      `json:"definition_updated_at,omitempty"`
+	NotesUpdatedAt      string                      `json:"notes_updated_at,omitempty"`
+	AddedAt             string                      `json:"added_at,omitempty"`
+	ImportedBaseline    *vocabularyBaselineJSON     `json:"imported_baseline,omitempty"`
+	Occurrences         *[]vocabularyOccurrenceJSON `json:"occurrences,omitempty"`
+	Rev                 int64                       `json:"rev,omitempty"`
+	Generation          int64                       `json:"generation,omitempty"`
+	Seq                 int64                       `json:"seq,omitempty"`
+	DeviceID            string                      `json:"device_id,omitempty"`
+	UpdatedAt           string                      `json:"updated_at,omitempty"`
+	Deleted             bool                        `json:"deleted,omitempty"`
+	DeletedAt           string                      `json:"deleted_at,omitempty"`
 }
 
 type vocabularyBaselineJSON struct {
@@ -111,7 +113,7 @@ func vocabularyWordToJSON(w store.VocabularyWord) vocabularyWordJSON {
 			out.ImportedBaseline.ReviewedAt = w.Baseline.ReviewedAt.UTC().Format(wireTimeFormat)
 		}
 	}
-	out.Occurrences = make([]vocabularyOccurrenceJSON, 0, len(w.Occurrences))
+	occ := make([]vocabularyOccurrenceJSON, 0, len(w.Occurrences))
 	for _, o := range w.Occurrences {
 		oj := vocabularyOccurrenceJSON{
 			OccurrenceKey:  o.OccurrenceKey,
@@ -131,8 +133,9 @@ func vocabularyWordToJSON(w store.VocabularyWord) vocabularyWordJSON {
 		if !o.LastSeenAt.IsZero() {
 			oj.LastSeenAt = o.LastSeenAt.UTC().Format(wireTimeFormat)
 		}
-		out.Occurrences = append(out.Occurrences, oj)
+		occ = append(occ, oj)
 	}
+	out.Occurrences = &occ
 	out.DeviceID = w.DeviceID
 	return out
 }
@@ -364,8 +367,14 @@ func (s *Server) validateVocabularyWordWrite(in vocabularyWordWriteJSON) (store.
 		if len(o.Locator) > vocabularyMaxLocatorBytes {
 			return out, "occurrence locator too large"
 		}
-		if len(o.Locator) > 0 && !json.Valid(o.Locator) {
-			return out, "occurrence locator is not valid JSON"
+		if len(o.Locator) > 0 && string(o.Locator) != "null" {
+			nul, ok := locatorJSONNUL(o.Locator)
+			if !ok {
+				return out, "occurrence locator is not valid JSON"
+			}
+			if nul {
+				return out, "occurrence locator contains NUL"
+			}
 		}
 		if reason := vocabOptionalTextReason("sentence", o.Sentence, 4096); reason != "" {
 			return out, reason
@@ -431,6 +440,70 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// locatorJSONNUL reports whether any string token in raw carries a NUL
+// byte. Tokens are walked rather than a decoded value because decoding
+// into map[string]any drops duplicate keys, hiding a shadowed NUL. ok is
+// false when raw is not valid JSON.
+func locatorJSONNUL(raw []byte) (nul, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return false, true
+		}
+		if err != nil {
+			return false, false
+		}
+		if s, isString := tok.(string); isString && strings.IndexByte(s, 0) >= 0 {
+			return true, true
+		}
+	}
+}
+
+// vocabularyWordMaxRequestBytes sizes the word push body cap from the
+// documented per-item cap and batch bound, so a batch every one of
+// whose items obeys the per-item cap always fits (see
+// annotationMaxRequestBytes).
+func (s *Server) vocabularyWordMaxRequestBytes() int64 {
+	const framing = 1024
+	perItem := int64(vocabularyMaxPerItemBytes) + framing
+	return int64(s.Cfg.Ops.VocabularyMaxBatch)*perItem + framing
+}
+
+// vocabularyReviewMaxRequestBytes is the review analogue, sized from the
+// same per-item cap the handler enforces so a legal review item is never
+// refused as a whole-request 413.
+func (s *Server) vocabularyReviewMaxRequestBytes() int64 {
+	const framing = 1024
+	perItem := int64(vocabularyMaxPerItemBytes) + 16
+	return int64(s.Cfg.Ops.VocabularyReviewMaxBatch)*perItem + framing
+}
+
+// decodeSingleJSONBody decodes one JSON value and rejects trailing
+// non-whitespace tokens, preserving 413 on a capped body.
+func decodeSingleJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
+	if err := dec.Decode(dst); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
+
 // validateVocabularyReviewWrite bounds one review push item at the edge.
 func (s *Server) validateVocabularyReviewWrite(in vocabularyReviewWriteJSON) (store.VocabularyReviewWrite, string) {
 	var out store.VocabularyReviewWrite
@@ -487,13 +560,7 @@ func (s *Server) HandlePushVocabularyWords(w http.ResponseWriter, r *http.Reques
 	var body struct {
 		Words []json.RawMessage `json:"words"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeSingleJSONBody(w, r, s.vocabularyWordMaxRequestBytes(), &body) {
 		return
 	}
 	if len(body.Words) == 0 {
@@ -524,6 +591,10 @@ func (s *Server) HandlePushVocabularyWords(w http.ResponseWriter, r *http.Reques
 	for i, raw := range body.Words {
 		if len(raw) > vocabularyMaxPerItemBytes {
 			out.Results[i] = item{Status: "invalid", Reason: "item too large"}
+			continue
+		}
+		if !utf8.Valid(raw) {
+			out.Results[i] = item{Status: "invalid", Reason: "invalid UTF-8"}
 			continue
 		}
 		var in vocabularyWordWriteJSON
@@ -566,13 +637,7 @@ func (s *Server) HandlePushVocabularyReviews(w http.ResponseWriter, r *http.Requ
 	var body struct {
 		Reviews []json.RawMessage `json:"reviews"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.Cfg.Ops.MaxBodyBytes)).Decode(&body); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeSingleJSONBody(w, r, s.vocabularyReviewMaxRequestBytes(), &body) {
 		return
 	}
 	if len(body.Reviews) == 0 {
@@ -599,6 +664,10 @@ func (s *Server) HandlePushVocabularyReviews(w http.ResponseWriter, r *http.Requ
 	for i, raw := range body.Reviews {
 		if len(raw) > vocabularyMaxPerItemBytes {
 			out.Results[i] = item{Status: "invalid", Reason: "item too large"}
+			continue
+		}
+		if !utf8.Valid(raw) {
+			out.Results[i] = item{Status: "invalid", Reason: "invalid UTF-8"}
 			continue
 		}
 		var in vocabularyReviewWriteJSON

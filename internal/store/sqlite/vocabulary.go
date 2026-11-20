@@ -199,6 +199,11 @@ func pushVocabularyWordTx(ctx context.Context, tx *sql.Tx, userID, deviceID stri
 		return tombstoneVocabularyWordTx(ctx, tx, userID, stored, now)
 	}
 
+	if !found && item.BaseRev != 0 {
+		r.Status = "conflict"
+		return r, nil
+	}
+
 	if found {
 		if stored.Rev == item.BaseRev+1 && store.SameVocabularyWordPayload(stored, item, deviceID) {
 			r.Status, r.Rev, r.Generation, r.Seq = "duplicate", stored.Rev, stored.Generation, stored.Seq
@@ -493,7 +498,7 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 			if err != nil {
 				return page, err
 			}
-			size = vocabularyWordSize(w)
+			size = store.VocabularyWordEncodedSize(w)
 			if maxBytes > 0 && emitted > 0 && used+size > maxBytes {
 				page.HasMore = true
 				break
@@ -506,7 +511,7 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 			if err != nil {
 				return page, err
 			}
-			size = 256
+			size = store.VocabularyReviewEncodedSize(r)
 			if maxBytes > 0 && emitted > 0 && used+size > maxBytes {
 				page.HasMore = true
 				break
@@ -525,17 +530,6 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 		}
 	}
 	return page, nil
-}
-
-func vocabularyWordSize(w store.VocabularyWord) int {
-	size := 256 + len(w.Word) + len(w.Notes) + len(w.OccurrencesJSON)
-	if w.Definition != nil {
-		size += len(*w.Definition)
-	}
-	if w.TranslationLanguage != nil {
-		size += len(*w.TranslationLanguage)
-	}
-	return size
 }
 
 func baselineDueAt(b *store.VocabularyBaseline) sql.NullString {

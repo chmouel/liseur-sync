@@ -1377,9 +1377,18 @@ paths:
         (base rev matching it) resurrects the word and bumps its
         `generation`; a review written against an older generation is
         refused. The batch is never atomic: one bad item fails alone. Only
-        malformed JSON, an empty or oversized batch (400), or a body larger
-        than any legal batch could need (413) is refused whole. `device_id`
-        is taken from the token.
+        malformed JSON, trailing data after the body, an empty or oversized
+        batch (400), or a body larger than any legal batch could need (413)
+        is refused whole. `device_id` is taken from the token.
+
+        Field `maxLength` values are UTF-8 byte limits, not runes, and each
+        serialized item (occurrences included) is capped at 64 KiB; an item
+        over that cap is a per-item `invalid`. A live write (not
+        `deleted: true`) must carry `word` and `added_at`; a tombstone reads
+        only `language`, `normalized` and `base_rev`. A live write with a
+        nonzero `base_rev` that names no existing word is a `conflict` with
+        no `server` copy. A byte-identical retry compares the occurrence
+        payload by decoded value, so a re-serialized `locator` still matches.
       security: [{ deviceToken: [] }]  # requires sync scope
       requestBody:
         required: true
@@ -1417,7 +1426,15 @@ paths:
         was written against; a stale generation is a per-item `invalid`. An
         identical retry is `duplicate`; a different payload for the same
         `review_id` is `conflict`. `deleted: true` undoes a review as a
-        tombstone. The batch is never atomic: one bad item fails alone.
+        tombstone. The batch is never atomic: one bad item fails alone; only
+        malformed JSON, trailing data after the body, an empty or oversized
+        batch (400), or an oversized body (413) is refused whole.
+
+        Field `maxLength` values are UTF-8 byte limits, not runes, and each
+        serialized item is capped at 64 KiB. A live review must carry
+        `rating` (one of `AGAIN`, `HARD`, `GOOD`, `EASY`), `reviewed_at` and
+        `due_at`; a tombstone reads only `review_id`, `language`,
+        `normalized`, `word_generation` and `deleted`.
       security: [{ deviceToken: [] }]  # requires sync scope
       requestBody:
         required: true
@@ -5478,14 +5495,14 @@ components:
         normalized: { type: string, minLength: 1, maxLength: 512, description: "The normalised fold key, never changed; identity of the word" }
         base_rev: { type: integer, minimum: 0, description: "0 to create, the rev read to edit; matching the tombstone rev resurrects" }
         deleted: { type: boolean, description: "A tombstone write; only language, normalized and base_rev are read" }
-        word: { type: string, maxLength: 512, description: "Required on a live write" }
+        word: { type: string, maxLength: 512, description: "Required on a live write; omitted on a tombstone" }
         definition: { type: string, maxLength: 24576 }
         translation_language: { type: string, maxLength: 80 }
         notes: { type: string, maxLength: 12288 }
         definition_edited: { type: boolean }
         definition_updated_at: { type: string, format: date-time }
         notes_updated_at: { type: string, format: date-time }
-        added_at: { type: string, format: date-time }
+        added_at: { type: string, format: date-time, description: "Required on a live write" }
         imported_baseline: { $ref: "#/components/schemas/VocabularyBaseline" }
         occurrences:
           type: array
@@ -5532,9 +5549,13 @@ components:
         reason: { type: string, description: "When invalid" }
         server:
           allOf: [{ $ref: "#/components/schemas/VocabularyWord" }]
-          description: The server's current copy, carried on a conflict.
+          description: The server's current copy, carried on a conflict against an existing word. A conflict for a nonzero `base_rev` on an absent word has no `server` copy.
     VocabularyReviewInput:
       type: object
+      description: |
+        A live review must carry `rating`, `reviewed_at` and `due_at`; a
+        `deleted: true` tombstone reads only its identity and
+        `word_generation`.
       required: [review_id, language, normalized, word_generation]
       properties:
         review_id: { type: string, minLength: 1, maxLength: 64, description: "Client-generated idempotency key" }
@@ -5542,10 +5563,10 @@ components:
         normalized: { type: string, minLength: 1, maxLength: 512 }
         word_generation: { type: integer, minimum: 1, description: "The word generation the review was written against" }
         deleted: { type: boolean, description: "Undo the review as a tombstone" }
-        rating: { type: string, enum: [AGAIN, HARD, GOOD, EASY] }
-        reviewed_at: { type: string, format: date-time }
+        rating: { type: string, enum: [AGAIN, HARD, GOOD, EASY], description: "Required on a live review" }
+        reviewed_at: { type: string, format: date-time, description: "Required on a live review" }
         interval_minutes: { type: integer, minimum: 0, maximum: 10000000 }
-        due_at: { type: string, format: date-time, description: "May be any future time; not capped" }
+        due_at: { type: string, format: date-time, description: "Required on a live review; may be any future time, not capped" }
     VocabularyReview:
       type: object
       description: |
