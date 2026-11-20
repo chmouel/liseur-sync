@@ -10,6 +10,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,9 +18,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/reading"
 )
@@ -1797,10 +1800,80 @@ func SameVocabularyWordPayload(stored VocabularyWord, w VocabularyWordWrite, dev
 		!stored.AddedAt.UTC().Truncate(time.Microsecond).Equal(w.AddedAt.UTC().Truncate(time.Microsecond)) {
 		return false
 	}
-	if string(stored.OccurrencesJSON) != string(w.OccurrencesJSON) {
+	if !sameVocabularyOccurrences(stored.OccurrencesJSON, w.OccurrencesJSON) {
 		return false
 	}
 	return equalVocabularyBaseline(stored.Baseline, w.Baseline)
+}
+
+// sameVocabularyOccurrences compares two occurrence payloads by decoded
+// value rather than by bytes: a jsonb column re-serializes whitespace and
+// object-key order, and a retry must still recognise its own write.
+func sameVocabularyOccurrences(a, b []byte) bool {
+	av, aok := decodeVocabularyJSON(a)
+	bv, bok := decodeVocabularyJSON(b)
+	if !aok || !bok {
+		return string(a) == string(b)
+	}
+	return equalVocabularyJSON(av, bv)
+}
+
+// decodeVocabularyJSON parses a payload with numbers kept exact. An empty
+// payload is treated as absent.
+func decodeVocabularyJSON(raw []byte) (any, bool) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, true
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
+func equalVocabularyJSON(a, b any) bool {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for k, v := range av {
+			other, ok := bv[k]
+			if !ok || !equalVocabularyJSON(v, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !equalVocabularyJSON(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case json.Number:
+		bv, ok := b.(json.Number)
+		if !ok {
+			return false
+		}
+		// Numeric value, not spelling: jsonb rewrites 1e2 as 100, and a
+		// float64 round-trip would lose large integers.
+		ra, aok := new(big.Rat).SetString(av.String())
+		rb, bok := new(big.Rat).SetString(bv.String())
+		if aok && bok {
+			return ra.Cmp(rb) == 0
+		}
+		return av.String() == bv.String()
+	default:
+		return a == b
+	}
 }
 
 // SameVocabularyReviewPayload reports whether an incoming review write
@@ -1837,6 +1910,64 @@ func equalVocabularyBaseline(a, b *VocabularyBaseline) bool {
 		a.Repetitions == b.Repetitions &&
 		equalTimePtr(a.ReviewedAt, b.ReviewedAt) &&
 		a.DueAt.UTC().Truncate(time.Microsecond).Equal(b.DueAt.UTC().Truncate(time.Microsecond))
+}
+
+// VocabularyWordEncodedSize is how many bytes a word occupies in a JSON
+// response body. Both backends share it so a feed page splits at the
+// same point on either.
+func VocabularyWordEncodedSize(w VocabularyWord) int {
+	const fixed = 768 // keys, rev, seq, generation, flags, timestamps, baseline
+	size := fixed + vocabularyJSONStringLen(w.Language) +
+		vocabularyJSONStringLen(w.Normalized) + vocabularyJSONStringLen(w.Word) +
+		vocabularyJSONStringLen(w.Notes) + vocabularyJSONStringLen(w.DeviceID)
+	if w.Definition != nil {
+		size += vocabularyJSONStringLen(*w.Definition)
+	}
+	if w.TranslationLanguage != nil {
+		size += vocabularyJSONStringLen(*w.TranslationLanguage)
+	}
+	return size + vocabularyOccurrencesEncodedSize(w)
+}
+
+// VocabularyReviewEncodedSize is the review analogue.
+func VocabularyReviewEncodedSize(r VocabularyReview) int {
+	const fixed = 384 // keys, seq, generation, interval, flags, timestamps
+	return fixed + vocabularyJSONStringLen(r.ReviewID) +
+		vocabularyJSONStringLen(r.Language) + vocabularyJSONStringLen(r.Normalized) +
+		vocabularyJSONStringLen(r.Rating)
+}
+
+// vocabularyOccurrencesEncodedSize re-marshals the decoded occurrences,
+// which is exact: that array is what the response carries, escapes and
+// all. A payload that did not decode falls back to its stored length.
+func vocabularyOccurrencesEncodedSize(w VocabularyWord) int {
+	if len(w.Occurrences) > 0 {
+		if b, err := json.Marshal(w.Occurrences); err == nil {
+			return len(b)
+		}
+	}
+	return len(w.OccurrencesJSON)
+}
+
+// vocabularyJSONStringLen counts the bytes s occupies inside a JSON
+// string, excluding the quotes, escaping as encoding/json does. Raw
+// byte length undercounts " and control characters, so an escape-heavy
+// page would slip past the budget.
+func vocabularyJSONStringLen(s string) int {
+	n := 0
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			n += 2
+		case r < 0x20:
+			n += 6 // \u00XX
+		case r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029':
+			n += 6 // HTML-safe escapes and the two JS line separators
+		default:
+			n += utf8.RuneLen(r)
+		}
+	}
+	return n
 }
 
 // ---------------------------------------------------------------------

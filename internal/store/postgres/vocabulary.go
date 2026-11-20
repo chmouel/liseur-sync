@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -37,6 +38,11 @@ func scanVocabularyWord(row interface{ Scan(...any) error }) (store.VocabularyWo
 		w.Baseline = &store.VocabularyBaseline{
 			DueAt: *baselineDueAt, ReviewedAt: baselineReviewedAt,
 			Streak: streak, IntervalMinutes: intervalMinutes, Repetitions: repetitions,
+		}
+	}
+	if len(w.OccurrencesJSON) > 0 {
+		if err := json.Unmarshal(w.OccurrencesJSON, &w.Occurrences); err != nil {
+			return w, err
 		}
 	}
 	return w, nil
@@ -139,6 +145,11 @@ func pushVocabularyWordTx(ctx context.Context, tx *sql.Tx, userID, deviceID stri
 			return r, nil
 		}
 		return tombstoneVocabularyWordTx(ctx, tx, userID, stored, now)
+	}
+
+	if !found && item.BaseRev != 0 {
+		r.Status = "conflict"
+		return r, nil
 	}
 
 	if found {
@@ -424,7 +435,7 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 			if err != nil {
 				return page, err
 			}
-			size = vocabularyWordSize(w)
+			size = store.VocabularyWordEncodedSize(w)
 			if maxBytes > 0 && emitted > 0 && used+size > maxBytes {
 				page.HasMore = true
 				break
@@ -437,7 +448,7 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 			if err != nil {
 				return page, err
 			}
-			size = 256
+			size = store.VocabularyReviewEncodedSize(r)
 			if maxBytes > 0 && emitted > 0 && used+size > maxBytes {
 				page.HasMore = true
 				break
@@ -456,17 +467,6 @@ func (s *Store) VocabularyChanges(ctx context.Context, userID string, since int6
 		}
 	}
 	return page, nil
-}
-
-func vocabularyWordSize(w store.VocabularyWord) int {
-	size := 256 + len(w.Word) + len(w.Notes) + len(w.OccurrencesJSON)
-	if w.Definition != nil {
-		size += len(*w.Definition)
-	}
-	if w.TranslationLanguage != nil {
-		size += len(*w.TranslationLanguage)
-	}
-	return size
 }
 
 func baselineDueAt(b *store.VocabularyBaseline) *time.Time {

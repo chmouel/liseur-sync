@@ -1,12 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -66,6 +69,25 @@ func pushWords(t *testing.T, ts, tok string, items ...map[string]any) (int, map[
 func pushReviews(t *testing.T, ts, tok string, items ...map[string]any) (int, map[string]any) {
 	t.Helper()
 	return post(t, ts+"/v1/vocabulary/reviews", tok, map[string]any{"reviews": items})
+}
+
+// postRaw sends a body verbatim, so a test can drive bytes that
+// json.Marshal would rewrite (invalid UTF-8) or trailing tokens.
+func postRaw(t *testing.T, url, token string, body []byte) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
 }
 
 func vocabResults(t *testing.T, out map[string]any) []any {
@@ -260,9 +282,11 @@ func TestVocabularyBounds(t *testing.T) {
 		t.Fatalf("neighbor of huge item: %v", results[1])
 	}
 
-	// A body larger than any legal batch could need is a 413.
+	// A body larger than any legal batch could need is a 413, but a
+	// single oversized item under the raised word body cap is a
+	// per-item invalid, not a whole-request rejection.
 	giant := vocabWordItem("en", "giant", 0)
-	giant["notes"] = strings.Repeat("q", (1<<20)+4096)
+	giant["notes"] = strings.Repeat("q", 7<<20)
 	if code, _ := pushWords(t, ts.URL, tok, giant); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("giant body: %d", code)
 	}
@@ -286,8 +310,209 @@ func TestVocabularyLiveEvent(t *testing.T) {
 	}
 
 	// A duplicate changes no row and stays silent.
-	if code, _ := pushWords(t, f.ts.URL, token, vocabWordItem("en", "watched", 0)); code != 200 {
-		t.Fatalf("retry push: %d", code)
+	code, out = pushWords(t, f.ts.URL, token, vocabWordItem("en", "watched", 0))
+	if code != 200 || vocabResults(t, out)[0].(map[string]any)["status"] != "duplicate" {
+		t.Fatalf("retry push: %d %v", code, out)
 	}
 	s.silent(t, 300*time.Millisecond)
+}
+
+func TestVocabularyLocatorNUL(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	// A NUL inside a nested locator value, one inside an object key, and
+	// a valid neighbor: the bad items fail alone, HTTP 200.
+	badValue := vocabWordItem("en", "nul-value", 0)
+	badValue["occurrences"] = []map[string]any{{
+		"occurrence_key": "occ-1",
+		"locator":        map[string]any{"nested": map[string]any{"v": "\x00"}},
+		"last_seen_at":   "2025-06-01T10:00:00Z",
+		"encounters":     1,
+	}}
+	badKey := vocabWordItem("en", "nul-key", 0)
+	badKey["occurrences"] = []map[string]any{{
+		"occurrence_key": "occ-1",
+		"locator":        map[string]any{"nested": map[string]any{"\x00": "x"}},
+		"last_seen_at":   "2025-06-01T10:00:00Z",
+		"encounters":     1,
+	}}
+	good := vocabWordItem("en", "fine", 0)
+
+	code, out := pushWords(t, ts.URL, tok, badValue, badKey, good)
+	if code != 200 {
+		t.Fatalf("mixed NUL batch: %d %v", code, out)
+	}
+	results := vocabResults(t, out)
+	for i := 0; i < 2; i++ {
+		r := results[i].(map[string]any)
+		if r["status"] != "invalid" || r["reason"] != "occurrence locator contains NUL" {
+			t.Fatalf("NUL locator item %d: %v", i, r)
+		}
+	}
+	if results[2].(map[string]any)["status"] != "applied" {
+		t.Fatalf("valid neighbor refused: %v", results[2])
+	}
+}
+
+func TestVocabularyLocatorNULDuplicateKeys(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	// Duplicate keys are legal JSON and a decoded map keeps only the last
+	// one, so the shadowed NUL in each of these locators survives only to
+	// a token walk. The neighbor still lands.
+	shadowedValue := `{"language":"en","normalized":"nul-shadow-value","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"nested":{"v":"\u0000","v":"ok"}},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	shadowedKey := `{"language":"en","normalized":"nul-shadow-key","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[` +
+		`{"occurrence_key":"occ-1","locator":{"nested":{"\u0000":"x"},"nested":{}},` +
+		`"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]}`
+	good, err := json.Marshal(vocabWordItem("en", "fine", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"words":[` + shadowedValue + `,` + shadowedKey + `,` + string(good) + `]}`)
+	code, out := postRaw(t, ts.URL+"/v1/vocabulary/words", tok, body)
+	if code != http.StatusOK {
+		t.Fatalf("mixed NUL batch: %d %v", code, out)
+	}
+	results := vocabResults(t, out)
+	for i := 0; i < 2; i++ {
+		r := results[i].(map[string]any)
+		if r["status"] != "invalid" || r["reason"] != "occurrence locator contains NUL" {
+			t.Fatalf("shadowed NUL locator item %d: %v", i, r)
+		}
+	}
+	if results[2].(map[string]any)["status"] != "applied" {
+		t.Fatalf("valid neighbor refused: %v", results[2])
+	}
+}
+
+func TestVocabularyInvalidUTF8(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	item := []byte(`{"language":"en","normalized":"bad","base_rev":0,"word":"a`)
+	item = append(item, 0xff)
+	item = append(item, []byte(`b","added_at":"2025-06-01T10:00:00Z","occurrences":[]}`)...)
+	body := append([]byte(`{"words":[`), item...)
+	body = append(body, []byte(`]}`)...)
+
+	code, out := postRaw(t, ts.URL+"/v1/vocabulary/words", tok, body)
+	if code != 200 {
+		t.Fatalf("invalid UTF-8 body: %d %v", code, out)
+	}
+	res := vocabResults(t, out)[0].(map[string]any)
+	if res["status"] != "invalid" || res["reason"] != "invalid UTF-8" {
+		t.Fatalf("invalid UTF-8 item: %v", res)
+	}
+}
+
+func TestVocabularyTrailingTokens(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	item := []byte(`{"language":"en","normalized":"w","base_rev":0,` +
+		`"word":"w","added_at":"2025-06-01T10:00:00Z","occurrences":[]}`)
+	words := append([]byte(`{"words":[`), item...)
+	words = append(words, []byte(`]} {"extra":true}`)...)
+	if code, _ := postRaw(t, ts.URL+"/v1/vocabulary/words", tok, words); code != http.StatusBadRequest {
+		t.Fatalf("word trailing token: %d", code)
+	}
+
+	review := []byte(`{"review_id":"r1","language":"en","normalized":"w",` +
+		`"word_generation":1,"rating":"GOOD","reviewed_at":"2025-06-01T10:00:00Z",` +
+		`"interval_minutes":10,"due_at":"2025-06-11T10:00:00Z"}`)
+	reviews := append([]byte(`{"reviews":[`), review...)
+	reviews = append(reviews, []byte(`]} junk`)...)
+	if code, _ := postRaw(t, ts.URL+"/v1/vocabulary/reviews", tok, reviews); code != http.StatusBadRequest {
+		t.Fatalf("review trailing token: %d", code)
+	}
+}
+
+func TestVocabularyReviewBodyCap(t *testing.T) {
+	ts, st := testServerWithConfig(t, func(c *config.Config) { c.Ops.VocabularyReviewMaxBatch = 1 })
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	if code, out := pushWords(t, ts.URL, tok, vocabWordItem("en", "w", 0)); code != http.StatusOK {
+		t.Fatalf("create word: %d %v", code, out)
+	}
+
+	// JSON allows whitespace between tokens, so a legal item can be far
+	// larger than its fields: the body cap must follow the per-item cap.
+	item := `{"review_id":"r1",` + strings.Repeat(" ", 7000) +
+		`"language":"en","normalized":"w","word_generation":1,"rating":"GOOD",` +
+		`"reviewed_at":"2025-06-01T10:00:00Z","interval_minutes":10,` +
+		`"due_at":"2025-06-11T10:00:00Z"}`
+	body := []byte(`{"reviews":[` + item + `]}`)
+	if len(body) < 7000 {
+		t.Fatalf("test body too small: %d", len(body))
+	}
+
+	code, out := postRaw(t, ts.URL+"/v1/vocabulary/reviews", tok, body)
+	if code != http.StatusOK {
+		t.Fatalf("padded review body: %d %v", code, out)
+	}
+	if st := vocabResults(t, out)[0].(map[string]any)["status"]; st != "applied" {
+		t.Fatalf("padded review status: %v", st)
+	}
+}
+
+func TestVocabularyWordJSONShape(t *testing.T) {
+	ts, st := testServer(t)
+	tok := vocabToken(t, st, "u1", "alice", store.ScopeSync)
+
+	// A live word with no occurrences still emits "occurrences": [].
+	item := vocabWordItem("en", "empty-occ", 0)
+	item["occurrences"] = []any{}
+	if code, out := pushWords(t, ts.URL, tok, item); code != 200 {
+		t.Fatalf("create: %d %v", code, out)
+	}
+	code, out := get(t, ts.URL+"/v1/vocabulary/changes?since=0", tok)
+	if code != 200 {
+		t.Fatalf("changes: %d %v", code, out)
+	}
+	words := out["words"].([]any)
+	live := words[len(words)-1].(map[string]any)
+	occs, ok := live["occurrences"].([]any)
+	if !ok || len(occs) != 0 {
+		t.Fatalf("live word occurrences: %v", live)
+	}
+
+	// A tombstone omits occurrences entirely (no null) and carries only
+	// its identity and bookkeeping.
+	del := vocabWordItem("en", "empty-occ", 1)
+	del["deleted"] = true
+	if code, out := pushWords(t, ts.URL, tok, del); code != 200 {
+		t.Fatalf("delete: %d %v", code, out)
+	}
+	code, out = get(t, ts.URL+"/v1/vocabulary/changes?since=0", tok)
+	if code != 200 {
+		t.Fatalf("changes after delete: %d %v", code, out)
+	}
+	words = out["words"].([]any)
+	tomb := words[len(words)-1].(map[string]any)
+	for _, k := range []string{"word", "notes", "definition", "added_at", "occurrences"} {
+		if _, ok := tomb[k]; ok {
+			t.Fatalf("tombstone carries %q: %v", k, tomb)
+		}
+	}
+	want := map[string]bool{
+		"language": true, "normalized": true, "rev": true, "generation": true,
+		"seq": true, "updated_at": true, "deleted": true, "deleted_at": true,
+	}
+	for k := range tomb {
+		if !want[k] {
+			t.Fatalf("unexpected tombstone key %q: %v", k, tomb)
+		}
+	}
+	for k := range want {
+		if _, ok := tomb[k]; !ok {
+			t.Fatalf("tombstone missing %q: %v", k, tomb)
+		}
+	}
 }

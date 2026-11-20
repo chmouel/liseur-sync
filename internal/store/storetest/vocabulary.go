@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,6 +62,11 @@ func testVocabulary(t *testing.T, open OpenFunc) {
 	t.Run("WordLimit", func(t *testing.T) { testVocabularyWordLimit(t, open) })
 	t.Run("ChangesPagination", func(t *testing.T) { testVocabularyChangesPagination(t, open) })
 	t.Run("ChangesByteBudget", func(t *testing.T) { testVocabularyChangesByteBudget(t, open) })
+	t.Run("OccurrencesRoundTrip", func(t *testing.T) { testVocabularyOccurrencesRoundTrip(t, open) })
+	t.Run("OccurrencesRetry", func(t *testing.T) { testVocabularyOccurrencesRetry(t, open) })
+	t.Run("AbsentBaseRev", func(t *testing.T) { testVocabularyAbsentBaseRev(t, open) })
+	t.Run("EscapeHeavyByteBudget", func(t *testing.T) { testVocabularyEscapeByteBudget(t, open) })
+	t.Run("HTMLByteBudget", func(t *testing.T) { testVocabularyHTMLByteBudget(t, open) })
 	t.Run("ConcurrentUpdates", func(t *testing.T) { testVocabularyConcurrentUpdates(t, open) })
 	t.Run("UserIsolation", func(t *testing.T) { testVocabularyUserIsolation(t, open) })
 }
@@ -422,5 +428,236 @@ func testVocabularyUserIsolation(t *testing.T, open OpenFunc) {
 	alicePage, err := s.VocabularyChanges(ctx, alice.ID, 0, 100, 0)
 	if err != nil || len(alicePage.Words) != 1 || alicePage.Words[0].UserID != alice.ID {
 		t.Fatalf("alice page: %+v %v", alicePage, err)
+	}
+}
+
+// vocabOccurrencesJSON carries a sentence, a locator and every field a
+// decoded occurrence should round-trip.
+func vocabOccurrencesJSON() []byte {
+	return []byte(`[{"occurrence_key":"occ-1","work_id":"work-1",` +
+		`"book_title":"A Memory Called Empire","location_key":"chapter-3",` +
+		`"locator":{"href":"ch3.xhtml","n":42,"nested":{"a":1,"b":[1,2,3]}},` +
+		`"sentence":"the sea was calm","last_seen_at":"2025-06-01T10:00:00Z",` +
+		`"encounters":2}]`)
+}
+
+func testVocabularyOccurrencesRoundTrip(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "vocab-occ")
+
+	create := vocabWordWrite("en", "occurrence", 0)
+	create.OccurrencesJSON = vocabOccurrencesJSON()
+	if r := pushVocabWord(t, s, u.ID, "d1", create); r.Status != "applied" {
+		t.Fatalf("create: %+v", r)
+	}
+
+	// The delta feed decodes the occurrences packet, sentence and
+	// locator included, not just stores its bytes.
+	page, err := s.VocabularyChanges(ctx, u.ID, 0, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Words) != 1 || len(page.Words[0].Occurrences) != 1 {
+		t.Fatalf("occurrences not decoded: %+v", page.Words)
+	}
+	occ := page.Words[0].Occurrences[0]
+	if occ.Sentence == nil || *occ.Sentence != "the sea was calm" ||
+		len(occ.LocatorJSON) == 0 || occ.Encounters != 2 {
+		t.Fatalf("occurrence payload: %+v", occ)
+	}
+
+	// A conflict's server copy carries the decoded occurrences too.
+	stale := create
+	stale.BaseRev = 0
+	stale.Word = "occurrences"
+	r := pushVocabWord(t, s, u.ID, "d1", stale)
+	if r.Status != "conflict" || r.Server == nil || len(r.Server.Occurrences) != 1 ||
+		r.Server.Occurrences[0].Sentence == nil || *r.Server.Occurrences[0].Sentence != "the sea was calm" {
+		t.Fatalf("conflict server occurrences: %+v", r)
+	}
+}
+
+func testVocabularyOccurrencesRetry(t *testing.T, open OpenFunc) {
+	s := open(t)
+	u := MkUser(t, s, "vocab-occ-retry")
+
+	create := vocabWordWrite("en", "retry", 0)
+	create.OccurrencesJSON = vocabOccurrencesJSON()
+	if r := pushVocabWord(t, s, u.ID, "d1", create); r.Status != "applied" {
+		t.Fatalf("create: %+v", r)
+	}
+	if r := pushVocabWord(t, s, u.ID, "d1", create); r.Status != "duplicate" {
+		t.Fatalf("identical retry: %+v", r)
+	}
+
+	// A retry whose occurrences differ only in whitespace and object-key
+	// order still matches: jsonb re-serializes both, and a byte compare
+	// would wrongly call this a duplicate miss.
+	retry := create
+	retry.OccurrencesJSON = []byte(`[ { "encounters" : 2, "sentence":"the sea was calm",` +
+		` "locator":{"nested":{"b":[1,2,3],"a":1},"n":42,"href":"ch3.xhtml"},` +
+		` "location_key":"chapter-3","book_title":"A Memory Called Empire","work_id":"work-1",` +
+		` "last_seen_at":"2025-06-01T10:00:00Z","occurrence_key":"occ-1"} ]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", retry); r.Status != "duplicate" {
+		t.Fatalf("canonical retry: %+v", r)
+	}
+
+	// A number is compared by value: jsonb rewrites 1e2 as 100, and a
+	// retry spelling it the other way is still the same payload.
+	expCreate := vocabWordWrite("en", "exponent", 0)
+	expCreate.OccurrencesJSON = []byte(`[{"occurrence_key":"occ-1",` +
+		`"locator":{"n":1e2},"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", expCreate); r.Status != "applied" {
+		t.Fatalf("exponent create: %+v", r)
+	}
+	expRetry := expCreate
+	expRetry.OccurrencesJSON = []byte(`[{"occurrence_key":"occ-1",` +
+		`"locator":{"n":100},"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", expRetry); r.Status != "duplicate" {
+		t.Fatalf("exponent retry: %+v", r)
+	}
+
+	// Two integers a float64 cannot tell apart are two payloads, so the
+	// second is a conflict, not a duplicate.
+	bigCreate := vocabWordWrite("en", "bigint", 0)
+	bigCreate.OccurrencesJSON = []byte(`[{"occurrence_key":"occ-1",` +
+		`"locator":{"n":9007199254740992},"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", bigCreate); r.Status != "applied" {
+		t.Fatalf("big int create: %+v", r)
+	}
+	bigRetry := bigCreate
+	bigRetry.OccurrencesJSON = []byte(`[{"occurrence_key":"occ-1",` +
+		`"locator":{"n":9007199254740993},"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", bigRetry); r.Status != "conflict" {
+		t.Fatalf("distinct large integers matched: %+v", r)
+	}
+}
+
+func testVocabularyAbsentBaseRev(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "vocab-ghost")
+
+	// A live write with a nonzero base_rev names a word the server does
+	// not have: a conflict, not a silent create at that rev.
+	w := vocabWordWrite("en", "ghost", 7)
+	r := pushVocabWord(t, s, u.ID, "d1", w)
+	if r.Status != "conflict" || r.Server != nil {
+		t.Fatalf("absent word with base_rev: %+v", r)
+	}
+	page, err := s.VocabularyChanges(ctx, u.ID, 0, 100, 0)
+	if err != nil || len(page.Words) != 0 {
+		t.Fatalf("absent word was inserted: %+v %v", page.Words, err)
+	}
+}
+
+func testVocabularyEscapeByteBudget(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "vocab-escape")
+
+	// Each word carries 400 control bytes: 400 raw bytes but 2400
+	// encoded, so a raw-length budget would pack four onto a page.
+	const n = 6
+	for i := 0; i < n; i++ {
+		w := vocabWordWrite("en", fmt.Sprintf("w-%d", i), 0)
+		w.Notes = strings.Repeat("\x01", 400)
+		if r := pushVocabWord(t, s, u.ID, "d1", w); r.Status != "applied" {
+			t.Fatalf("push %d: %+v", i, r)
+		}
+	}
+
+	seen, pages := 0, 0
+	since := int64(0)
+	for {
+		page, err := s.VocabularyChanges(ctx, u.ID, since, 100, 3000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages++
+		if len(page.Words) > 1 {
+			t.Fatalf("budget admitted %d escape-heavy words", len(page.Words))
+		}
+		for _, w := range page.Words {
+			if w.Seq <= since {
+				t.Fatalf("out of order: seq %d after cursor %d", w.Seq, since)
+			}
+			since = w.Seq
+			seen++
+		}
+		if !page.HasMore {
+			if page.NextCursor != page.HighWater {
+				t.Fatalf("next cursor %d, high water %d", page.NextCursor, page.HighWater)
+			}
+			break
+		}
+		if page.NextCursor != since {
+			t.Fatalf("next cursor %d, last emitted %d", page.NextCursor, since)
+		}
+	}
+	if seen != n {
+		t.Fatalf("feed lost records: %d of %d", seen, n)
+	}
+	if pages < 2 {
+		t.Fatalf("escape-heavy budget did not split pages: %d", pages)
+	}
+}
+
+func testVocabularyHTMLByteBudget(t *testing.T, open OpenFunc) {
+	s := open(t)
+	ctx := context.Background()
+	u := MkUser(t, s, "vocab-html")
+
+	// Each word carries 300 bytes of <, > and &, which encoding/json
+	// writes as six-byte \uXXXX escapes: 1800 encoded for 300 raw, so a
+	// raw-length budget would pack two onto a page.
+	const n = 5
+	for i := 0; i < n; i++ {
+		w := vocabWordWrite("en", fmt.Sprintf("w-%d", i), 0)
+		w.Notes = strings.Repeat("<>&", 100)
+		if r := pushVocabWord(t, s, u.ID, "d1", w); r.Status != "applied" {
+			t.Fatalf("push %d: %+v", i, r)
+		}
+	}
+
+	seen, pages := 0, 0
+	since := int64(0)
+	for {
+		page, err := s.VocabularyChanges(ctx, u.ID, since, 100, 3000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages++
+		if len(page.Words) != 1 {
+			t.Fatalf("budget admitted %d HTML-escaped words", len(page.Words))
+		}
+		used := 0
+		for _, w := range page.Words {
+			if w.Seq <= since {
+				t.Fatalf("out of order: seq %d after cursor %d", w.Seq, since)
+			}
+			used += store.VocabularyWordEncodedSize(w)
+			since = w.Seq
+			seen++
+		}
+		if used > 3000 {
+			t.Fatalf("page exceeded the budget: %d bytes", used)
+		}
+		if !page.HasMore {
+			if page.NextCursor != page.HighWater {
+				t.Fatalf("next cursor %d, high water %d", page.NextCursor, page.HighWater)
+			}
+			break
+		}
+		if page.NextCursor != since {
+			t.Fatalf("next cursor %d, last emitted %d", page.NextCursor, since)
+		}
+	}
+	if seen != n {
+		t.Fatalf("feed lost records: %d of %d", seen, n)
+	}
+	if pages < 2 {
+		t.Fatalf("HTML-escaped budget did not split pages: %d", pages)
 	}
 }
