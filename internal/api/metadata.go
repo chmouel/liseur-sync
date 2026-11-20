@@ -183,19 +183,19 @@ func (s *Server) HandleGetWorkCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	image := chosen.Data
+	etag := `"` + chosen.SHA256 + `"`
 	if size != cover.SizeFull {
 		if image, err = cover.Render(chosen.Data, size, cover.DefaultLimits()); err != nil {
 			writeError(w, http.StatusInternalServerError, "cover rendering failed")
 			return
 		}
+		sum := sha256.Sum256(image)
+		etag = `"` + hex.EncodeToString(sum[:]) + `"`
 	}
 	w.Header().Set("Content-Type", cover.MediaType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// The bytes are immutable under this digest, so a revalidation is a
-	// 304 and never a re-render; `private` because the image is the
-	// reader's own and no proxy may share it.
-	w.Header().Set("ETag", `"`+chosen.SHA256+`"`)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, no-cache")
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(image))
 }
 

@@ -284,7 +284,7 @@ func TestWorkCoverRoutes(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); got != "image/jpeg" {
 		t.Fatalf("Content-Type = %q", got)
 	}
-	if got := resp.Header.Get("Cache-Control"); got != "private, max-age=3600" {
+	if got := resp.Header.Get("Cache-Control"); got != "private, no-cache" {
 		t.Fatalf("Cache-Control = %q", got)
 	}
 	if got := resp.Header.Get("ETag"); got != `"`+digest+`"` {
@@ -301,15 +301,23 @@ func TestWorkCoverRoutes(t *testing.T) {
 		t.Fatalf("the cover was not re-rendered: %dx%d", config.Width, config.Height)
 	}
 
-	// Revalidation is a 304 with no body, and another size is a smaller
-	// image under the same digest.
+	// Revalidation is a 304 with no body, and another size carries its own
+	// validator so the full-size ETag does not short-circuit a thumbnail fetch.
 	resp, revalidated := workCoverRequest(t, http.MethodGet, url, token, `"`+digest+`"`, nil)
 	if resp.StatusCode != http.StatusNotModified || len(revalidated) != 0 {
 		t.Fatalf("revalidation: %d, %d bytes", resp.StatusCode, len(revalidated))
 	}
-	resp, thumbnail := workCoverRequest(t, http.MethodGet, url+"?size=thumbnail", token, "", nil)
+	resp, thumbnail := workCoverRequest(t, http.MethodGet, url+"?size=thumbnail", token, `"`+digest+`"`, nil)
 	if resp.StatusCode != http.StatusOK || len(thumbnail) == 0 || len(thumbnail) >= len(body) {
 		t.Fatalf("thumbnail: %d, %d bytes", resp.StatusCode, len(thumbnail))
+	}
+	thumbETag := resp.Header.Get("ETag")
+	if thumbETag == "" || thumbETag == `"`+digest+`"` {
+		t.Fatalf("thumbnail ETag = %q, want distinct validator", thumbETag)
+	}
+	resp, thumbRevalidated := workCoverRequest(t, http.MethodGet, url+"?size=thumbnail", token, thumbETag, nil)
+	if resp.StatusCode != http.StatusNotModified || len(thumbRevalidated) != 0 {
+		t.Fatalf("thumbnail revalidation: %d, %d bytes", resp.StatusCode, len(thumbRevalidated))
 	}
 	if code, _ := get(t, url+"?size=enormous", token); code != http.StatusBadRequest {
 		t.Fatalf("unknown size: %d, want 400", code)

@@ -345,4 +345,64 @@ func testWorkMetadataSurvivesCatalogRemoval(t *testing.T, open OpenFunc) {
 	if _, err := s.WorkByID(ctx, u.ID, gone.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a cover tombstone kept a work alive: %v", err)
 	}
+
+	testWorkMetadataMergeResetHeads(t, s)
+}
+
+func testWorkMetadataMergeResetHeads(t *testing.T, s store.Store) {
+	ctx := context.Background()
+	u := MkUser(t, s, "metadata-reset-merge")
+
+	// Case 1: a later clear from another writer beats an older value on the source work.
+	target := MkWork(t, s, u, "dune-target-work", "dune-target")
+	source := MkWork(t, s, u, "dune-source-work", "dune-source")
+	if err := s.WriteWorkMetadata(ctx, u.ID, source.ID, store.WorkMetadataWrite{
+		ID: "s-set", WriterID: "writer-a", Revision: 1, Field: store.MetadataTitle, Value: `"Old Title"`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteWorkMetadata(ctx, u.ID, target.ID, store.WorkMetadataWrite{
+		ID: "t-set", WriterID: "writer-b", Revision: 1, Field: store.MetadataTitle, Value: `"Newer Title"`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteWorkMetadata(ctx, u.ID, target.ID, store.WorkMetadataWrite{
+		ID: "t-clear", WriterID: "writer-b", Revision: 2, Field: store.MetadataTitle, Value: "null",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MergeWorks(ctx, u.ID, source.ID, target.ID); err != nil {
+		t.Fatalf("merge with newer clear on target: %v", err)
+	}
+	got, err := s.ReadWorkMetadata(ctx, u.ID, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Fields) != 0 {
+		t.Fatalf("expected cleared title to win merge, got %+v", got.Fields)
+	}
+
+	// Case 2: a higher-revision clear from the same writer merges without conflict.
+	target2 := MkWork(t, s, u, "found-target-work", "found-target")
+	source2 := MkWork(t, s, u, "found-source-work", "found-source")
+	if err := s.WriteWorkMetadata(ctx, u.ID, source2.ID, store.WorkMetadataWrite{
+		ID: "same-rev1", WriterID: "writer-c", Revision: 1, Field: store.MetadataAuthor, Value: `"Asimov"`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteWorkMetadata(ctx, u.ID, target2.ID, store.WorkMetadataWrite{
+		ID: "same-rev2", WriterID: "writer-c", Revision: 2, Field: store.MetadataAuthor, Value: "null",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MergeWorks(ctx, u.ID, source2.ID, target2.ID); err != nil {
+		t.Fatalf("merge with same-writer higher-revision clear: %v", err)
+	}
+	got2, err := s.ReadWorkMetadata(ctx, u.ID, target2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got2.Fields) != 0 {
+		t.Fatalf("expected cleared author to win merge, got %+v", got2.Fields)
+	}
 }
