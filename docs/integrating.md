@@ -2083,7 +2083,8 @@ That document names the authorization server, whose metadata is at
 
 `tools/list` returns only the tools the connection's scopes allow, and
 each tool returns `structuredContent` alongside its text. Every tool is
-read-only.
+read-only. Highlights in `mcp:reading` and example sentences in
+`mcp:vocabulary` may contain book excerpts independently of `mcp:text`.
 
 `get_reading_calendar` returns a decimal-string `stats_revision`; combine
 calendar chunks only when their revisions and timezones match.
@@ -2096,8 +2097,8 @@ fraction. `find_mentions` takes a name and its other forms together,
 matches whole words ignoring case and accents, and with
 `up_to_current` limits that search to the saved position, which can be
 an estimate. The text scope lets the assistant request passages from any
-part of the granted book. Book text is
-returned as a quotation, never as instructions, and is limited per call
+part of the granted book. Book text is returned with a notice identifying
+it as quoted material, and is limited per call
 and per connection per hour; past the hourly limit a text tool returns
 an error until the window moves on.
 Chapter titles count against the text allowance. A chapter listing may

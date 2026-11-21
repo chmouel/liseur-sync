@@ -41,7 +41,7 @@ var Scopes = []ScopeInfo{
 	{ScopeLibrary, "Your library", "Search the books you have access to and read their titles, authors and series."},
 	{ScopeReading, "Your reading", "See what you are reading, where you are in each book, and your highlights, notes and bookmarks."},
 	{ScopeInsights, "Your statistics", "See your reading time, pace, streaks and calendar."},
-	{ScopeVocabulary, "Your vocabulary", "See the words you looked up and their review state."},
+	{ScopeVocabulary, "Your vocabulary", "See saved words, definitions, notes and example sentences."},
 	{ScopeText, "Book text", "Read passages from your books: chapters, the text around your position or a highlight, and every place a name appears."},
 }
 
