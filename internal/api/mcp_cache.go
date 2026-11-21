@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/chmouel/liseur-sync/internal/booktext"
 )
@@ -27,6 +28,7 @@ type BookTextCache struct {
 type bookTextEntry struct {
 	digest string
 	book   *booktext.Book
+	weight int
 }
 
 // NewBookTextCache returns a cache bounded to limit bytes of text, or
@@ -50,7 +52,11 @@ func (c *BookTextCache) get(digest string) (*booktext.Book, bool) {
 }
 
 func (c *BookTextCache) put(digest string, b *booktext.Book) {
-	if b.Bytes() > c.limit {
+	weight := int(unsafe.Sizeof(*b)) + cap(b.Chapters)*int(unsafe.Sizeof(booktext.Chapter{}))
+	for _, chapter := range b.Chapters {
+		weight += len(chapter.Href) + len(chapter.Title) + len(chapter.Text)
+	}
+	if weight > c.limit {
 		return
 	}
 	c.mu.Lock()
@@ -58,14 +64,14 @@ func (c *BookTextCache) put(digest string, b *booktext.Book) {
 	if _, ok := c.entries[digest]; ok {
 		return
 	}
-	c.entries[digest] = c.order.PushFront(&bookTextEntry{digest: digest, book: b})
-	c.bytes += b.Bytes()
+	c.entries[digest] = c.order.PushFront(&bookTextEntry{digest: digest, book: b, weight: weight})
+	c.bytes += weight
 	for c.bytes > c.limit {
 		el := c.order.Back()
 		e := el.Value.(*bookTextEntry)
 		c.order.Remove(el)
 		delete(c.entries, e.digest)
-		c.bytes -= e.book.Bytes()
+		c.bytes -= e.weight
 	}
 }
 
