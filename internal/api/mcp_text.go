@@ -33,28 +33,32 @@ const (
 	maxWindowBytes  = 1 << 20
 )
 
-var bookTextScan = make(chan struct{}, 1)
+var bookTextWork = make(chan struct{}, 1)
 
-func scanBookText(ctx context.Context, book *booktext.Book, terms []string, words bool, stop *booktext.Position, limit int) ([]booktext.Hit, bool, error) {
+func acquireBookTextWork(ctx context.Context) error {
 	select {
-	case bookTextScan <- struct{}{}:
-		defer func() { <-bookTextScan }()
+	case bookTextWork <- struct{}{}:
 	case <-ctx.Done():
-		return nil, false, ctx.Err()
+		return ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		<-bookTextWork
+		return err
 	}
-	hits, more := book.Find(ctx, terms, words, 0, stop, limit)
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
+	return nil
+}
+
+func callWithBookTextWork(ctx context.Context, raw json.RawMessage, call func(context.Context, json.RawMessage) (any, error)) (any, error) {
+	if err := acquireBookTextWork(ctx); err != nil {
+		return nil, err
 	}
-	return hits, more, nil
+	defer func() { <-bookTextWork }()
+	return call(ctx, raw)
 }
 
 func (m *mcpService) textTools() []mcp.Tool {
 	bookID := strProp("Book ID from search_library, get_book or a reading-status listing.", maxIDLen)
-	return []mcp.Tool{
+	tools := []mcp.Tool{
 		{
 			Name: "list_chapters", Title: "List a book's chapters", Scope: oauth.ScopeText,
 			Description: "The chapters of a book in reading order, with titles, lengths in bytes and where each starts and ends as a fraction of the book.",
@@ -116,6 +120,13 @@ func (m *mcpService) textTools() []mcp.Tool {
 			Call: m.findMentions,
 		},
 	}
+	for i := range tools {
+		call := tools[i].Call
+		tools[i].Call = func(ctx context.Context, raw json.RawMessage) (any, error) {
+			return callWithBookTextWork(ctx, raw, call)
+		}
+	}
+	return tools
 }
 
 // bookText loads the extracted text of a book the caller's folder
@@ -624,8 +635,8 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 	if err != nil {
 		return nil, err
 	}
-	hits, more, err := scanBookText(ctx, t, []string{term}, false, nil, limit)
-	if err != nil {
+	hits, more := t.Find(ctx, []string{term}, false, 0, nil, limit)
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	results := []map[string]any{}
@@ -738,8 +749,8 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		}
 		out["stop_located_by"] = pl.by
 	}
-	hits, capped, err := scanBookText(ctx, t, terms, true, stop, maxMentionScan)
-	if err != nil {
+	hits, capped := t.Find(ctx, terms, true, 0, stop, maxMentionScan)
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if skip > len(hits) {

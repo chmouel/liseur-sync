@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -614,6 +615,58 @@ func TestMCPReadAtRejectsTruncatedPosition(t *testing.T) {
 	f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "progression": 0.2})
 	if _, msg := f.call(t, access, "read_at", map[string]any{"book_id": bookID, "progression": 0.9}); !strings.Contains(msg, "beyond the extracted") {
 		t.Fatalf("truncated position: %q", msg)
+	}
+}
+
+func TestMCPTextCallsWaitBeforeLoadingBooks(t *testing.T) {
+	f := newFolderFixture(t)
+	f.srv.BookTexts = NewBookTextCache(0)
+	firstID, firstSHA := f.writeBook(t, "first.epub", chapterEPUBWithText(t, "First story."))
+	secondID, secondSHA := f.writeBook(t, "second.epub", chapterEPUBWithText(t, "Second story."))
+	f.enableMCP(t, nil)
+	service := f.srv.newMCPService()
+	var call func(context.Context, json.RawMessage) (any, error)
+	for _, tool := range service.textTools() {
+		if tool.Name == "search_text" {
+			call = tool.Call
+		}
+	}
+	if call == nil {
+		t.Fatal("search tool missing")
+	}
+	ctx := oauth.WithAccess(t.Context(), store.OAuthAccess{UserID: f.user.ID, GrantID: "grant"})
+	if err := acquireBookTextWork(ctx); err != nil {
+		t.Fatal(err)
+	}
+	release := sync.OnceFunc(func() { <-bookTextWork })
+	defer release()
+	started := make(chan struct{}, 2)
+	done := make(chan error, 2)
+	for _, id := range []string{firstID, secondID} {
+		raw, err := json.Marshal(map[string]any{"book_id": id, "query": "story"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { started <- struct{}{}; _, err := call(ctx, raw); done <- err }()
+	}
+	<-started
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("search ran while text work was blocked: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if _, ok := f.srv.BookTexts.get(firstSHA); ok {
+		t.Fatal("first book loaded while blocked")
+	}
+	if _, ok := f.srv.BookTexts.get(secondSHA); ok {
+		t.Fatal("second book loaded while blocked")
+	}
+	release()
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
