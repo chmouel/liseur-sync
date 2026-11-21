@@ -115,14 +115,14 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, r store.OAuthCodeRedempti
 	if err != nil {
 		return store.OAuthGrant{}, err
 	}
+	if clientID != r.ClientID || redirectURI != r.RedirectURI || challenge != r.CodeChallenge ||
+		(r.Resource != "" && r.Resource != resource) {
+		return store.OAuthGrant{}, store.ErrNotFound
+	}
 	if used != nil {
 		return store.OAuthGrant{}, revokeSpentCode(ctx, tx, r.SHA256, now)
 	}
 	if !now.Before(expires) {
-		return store.OAuthGrant{}, store.ErrNotFound
-	}
-	if clientID != r.ClientID || redirectURI != r.RedirectURI || challenge != r.CodeChallenge ||
-		(r.Resource != "" && r.Resource != resource) {
 		return store.OAuthGrant{}, store.ErrNotFound
 	}
 	// A concurrent use that got there first leaves nothing to update,

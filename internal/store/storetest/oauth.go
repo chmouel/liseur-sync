@@ -272,12 +272,13 @@ func testOAuthCodeExchangeIsOneTransaction(t *testing.T, open OpenFunc) {
 	// A request that differs from the code it presents spends nothing,
 	// so the code still works for the client it was issued to.
 	mkOAuthTestCode(t, s, client, "code-mismatch", u.ID, now)
-	for name, mutate := range map[string]func(*store.OAuthCodeRedemption){
+	mismatches := map[string]func(*store.OAuthCodeRedemption){
 		"client":    func(r *store.OAuthCodeRedemption) { r.ClientID = "lsc_somebody_else" },
 		"redirect":  func(r *store.OAuthCodeRedemption) { r.RedirectURI = "https://client.example/other" },
 		"challenge": func(r *store.OAuthCodeRedemption) { r.CodeChallenge = "not-the-challenge" },
 		"resource":  func(r *store.OAuthCodeRedemption) { r.Resource = "https://other.example/mcp" },
-	} {
+	}
+	for name, mutate := range mismatches {
 		r := testRedemption(client, "code-mismatch", "grant-"+name, name, now)
 		mutate(&r)
 		if g, err := s.ExchangeOAuthCode(ctx, r, now); !errors.Is(err, store.ErrNotFound) {
@@ -298,6 +299,16 @@ func testOAuthCodeExchangeIsOneTransaction(t *testing.T, open OpenFunc) {
 	}
 	if _, err := s.OAuthAccess(ctx, "r1-access", now); err != nil {
 		t.Fatalf("grant from a code: %v", err)
+	}
+	for name, mutate := range mismatches {
+		r := testRedemption(client, "code-replay", "grant-replay-"+name, "replay-"+name, now)
+		mutate(&r)
+		if _, err := s.ExchangeOAuthCode(ctx, r, now); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("%s mismatch replay: %v", name, err)
+		}
+		if _, err := s.OAuthAccess(ctx, "r1-access", now); err != nil {
+			t.Fatalf("%s mismatch revoked the grant: %v", name, err)
+		}
 	}
 	if _, err := testExchangeCode(ctx, s, client, "code-replay", "grant-replay-2", "r2", now); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("code replay: %v", err)
