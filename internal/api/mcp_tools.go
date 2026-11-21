@@ -899,7 +899,7 @@ func (m *mcpService) listVocabulary(ctx context.Context, raw json.RawMessage) (a
 	userID := mcpUser(ctx)
 	out := []map[string]any{}
 	for len(out) < limit {
-		page, err := m.s.St.VocabularyChanges(ctx, userID, since, limit, 1<<20)
+		page, err := m.s.St.VocabularyChanges(ctx, userID, since, limit-len(out), 1<<20)
 		if err != nil {
 			return nil, err
 		}
