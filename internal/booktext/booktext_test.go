@@ -203,6 +203,20 @@ func TestLocateRepeatedQuoteNearEnd(t *testing.T) {
 	}
 }
 
+func TestLocateQuoteAcrossParagraphs(t *testing.T) {
+	text := "Bob left.\nLater that day\nBob returned."
+	b := &Book{Chapters: []Chapter{{Href: "chapter.xhtml", Text: text}}}
+	start := 0.0
+	_, off, exact, ok := b.Locate("chapter.xhtml", &start, "Later that day", "Bob")
+	if !ok || !exact || off != strings.LastIndex(text, "Bob") {
+		t.Fatalf("paragraph anchor: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+	_, off, exact, ok = b.Locate("chapter.xhtml", &start, "", "day Bob")
+	if !ok || !exact || off != strings.Index(text, "day") {
+		t.Fatalf("cross-paragraph quote: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+}
+
 func TestLocate(t *testing.T) {
 	b := testBook()
 	half := 0.5

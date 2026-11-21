@@ -173,13 +173,14 @@ func (b *Book) Locate(href string, resProg *float64, before, highlight string) (
 		guess = snapBack(c.Text, int(min(max(*resProg, 0), 1)*float64(len(c.Text))))
 	}
 	if h := collapse(highlight); h != "" {
+		text := strings.ReplaceAll(c.Text, "\n", " ")
 		if prefix := collapse(before); prefix != "" {
 			startOfHighlight := len(prefix) + 1
-			if start := nearestIndex(c.Text, prefix+" "+h, guess-startOfHighlight); start >= 0 {
+			if start := nearestIndex(text, prefix+" "+h, guess-startOfHighlight); start >= 0 {
 				return ch, start + startOfHighlight, true, true
 			}
 		}
-		if start := nearestIndex(c.Text, h, guess); start >= 0 {
+		if start := nearestIndex(text, h, guess); start >= 0 {
 			return ch, start, true, true
 		}
 	}
