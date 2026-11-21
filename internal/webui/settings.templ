@@ -129,6 +129,60 @@ templ settingsProfileBody(prefix string, u userCtx, csrf string, v settingsView)
 			<button type="submit" class="primary">Change password</button>
 		</form>
 	</section>
+	<section class="card settings-card">
+		<h2>Export library</h2>
+		<p class="muted">Export your book list and reading status as a CSV file to preview, copy, or download.</p>
+		// The export is a link to a file first and a preview second:
+		// with no script it downloads, and the module only turns it
+		// into a dialog with the same text in it.
+		<a
+			class="btn csvbtn"
+			href={ prefix + "library.csv?filter=all" }
+			data-csv-open="csv-dialog"
+			aria-haspopup="dialog"
+			aria-controls="csv-dialog"
+		>
+			<span class="csv-icon" aria-hidden="true">@uiIcon("Export")</span>
+			<span>Export as CSV</span>
+		</a>
+	</section>
+	@csvDialog(prefix, "library.csv?filter=all")
+}
+
+// csvDialog is the export's preview: the file itself, in a box big enough
+// to read, with the two things somebody opens a CSV to do to it — copy it
+// here, or take it away.
+//
+// The text arrives from the module rather than baked into the page, so a
+// reader who never opens this dialog never pays for the whole shelf being
+// serialized twice. Without the module the textarea stays a promise and
+// the Download link below it is still the real thing.
+templ csvDialog(prefix, exportURL string) {
+	<dialog id="csv-dialog" class="folder-dialog csv-dialog" aria-labelledby="csv-dialog-title">
+		<div class="dialog-head">
+			<div>
+				<h2 id="csv-dialog-title">Export as CSV</h2>
+				<p class="csv-hint" data-csv-hint>One row per book across your library.</p>
+			</div>
+			<form method="dialog">
+				<button type="submit" class="dialog-close" aria-label="Close">✕</button>
+			</form>
+		</div>
+		<textarea
+			id="csv-text"
+			class="csv-text"
+			placeholder="Loading…"
+			readonly
+			spellcheck="false"
+			rows="14"
+			aria-label="The CSV file"
+		></textarea>
+		<div class="csv-actions">
+			<button type="button" class="btn" data-csv-copy disabled>Copy</button>
+			<a class="btn" href={ prefix + exportURL } download="library.csv">Download</a>
+			<span class="muted csv-status" data-csv-status role="status"></span>
+		</div>
+	</dialog>
 }
 
 templ settingsAdminBody(prefix string, csrf string, v settingsView) {

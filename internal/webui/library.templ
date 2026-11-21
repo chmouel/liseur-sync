@@ -54,20 +54,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 			}
 			@sortPicker(prefix, v)
 			@viewToggle(prefix, csrf, v.Back, v.View)
-			// The export is a link to a file first and a preview second:
-			// with no script it downloads, and the module only turns it
-			// into a dialog with the same text in it.
-			<a
-				class="btn csvbtn"
-				href={ prefix + v.ExportURL }
-				data-csv-open="csv-dialog"
-				aria-haspopup="dialog"
-				aria-controls="csv-dialog"
-				title="Export this shelf as a CSV file"
-			>
-				<span class="csv-icon" aria-hidden="true">@uiIcon("Export")</span>
-				<span>CSV</span>
-			</a>
 			if v.CanUpload {
 				<button
 					type="button"
@@ -183,43 +169,6 @@ templ libraryBody(prefix, csrf string, admin bool, v LibraryView) {
 	if v.CanUpload {
 		@uploadDialog(prefix, csrf, v.Selected)
 	}
-	@csvDialog(prefix, v)
-}
-
-// csvDialog is the export's preview: the file itself, in a box big enough
-// to read, with the two things somebody opens a CSV to do to it — copy it
-// here, or take it away.
-//
-// The text arrives from the module rather than baked into the page, so a
-// reader who never opens this dialog never pays for the whole shelf being
-// serialized twice. Without the module the textarea stays a promise and
-// the Download link below it is still the real thing.
-templ csvDialog(prefix string, v LibraryView) {
-	<dialog id="csv-dialog" class="folder-dialog csv-dialog" aria-labelledby="csv-dialog-title">
-		<div class="dialog-head">
-			<div>
-				<h2 id="csv-dialog-title">Export as CSV</h2>
-				<p class="csv-hint" data-csv-hint>One row per book, as the shelf is filtered right now.</p>
-			</div>
-			<form method="dialog">
-				<button type="submit" class="dialog-close" aria-label="Close">✕</button>
-			</form>
-		</div>
-		<textarea
-			id="csv-text"
-			class="csv-text"
-			placeholder="Loading…"
-			readonly
-			spellcheck="false"
-			rows="14"
-			aria-label="The CSV file"
-		></textarea>
-		<div class="csv-actions">
-			<button type="button" class="btn" data-csv-copy disabled>Copy</button>
-			<a class="btn" href={ prefix + v.ExportURL } download="library.csv">Download</a>
-			<span class="muted csv-status" data-csv-status role="status"></span>
-		</div>
-	</dialog>
 }
 
 // sortPicker orders the shelf. Choosing a field resets the direction to
