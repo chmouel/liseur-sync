@@ -125,19 +125,22 @@ func refusePrivateDial(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// Protocol-assignment ranges are refused conservatively, including their
+// globally reachable exceptions.
 var nonPublicPrefixes = func() []netip.Prefix {
 	var out []netip.Prefix
 	for _, p := range []string{
 		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24",
-		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
-		"64:ff9b::/96", "64:ff9b:1::/48", "2001:db8::/32", "2002::/16", "fc00::/7", "fec0::/10",
+		"192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"64:ff9b::/96", "64:ff9b:1::/48", "100::/63", "2001::/23", "2001:db8::/32",
+		"2002::/16", "3fff::/20", "5f00::/16", "fc00::/7", "fec0::/10",
 	} {
 		out = append(out, netip.MustParsePrefix(p))
 	}
 	return out
 }()
 
-// PublicAddr reports whether ip is a globally routable unicast address.
+// PublicAddr reports whether ip is allowed as a public metadata destination.
 func PublicAddr(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
