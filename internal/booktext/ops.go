@@ -184,29 +184,17 @@ func (b *Book) Locate(href string, resProg *float64, before, highlight string) (
 }
 
 func nearestIndex(s, sub string, guess int) int {
-	best := -1
-	for at := 0; at < len(s); {
-		i := strings.Index(s[at:], sub)
-		if i < 0 {
-			break
-		}
-		start := at + i
-		if best < 0 || abs(start-guess) < abs(best-guess) {
-			best = start
-		}
-		if start >= guess {
-			break
-		}
-		at = start + 1
+	guess = min(max(guess, 0), len(s))
+	end := guess + min(len(sub), len(s)-guess)
+	left := strings.LastIndex(s[:end], sub)
+	if left == guess {
+		return left
 	}
-	return best
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
+	right := strings.Index(s[guess:], sub)
+	if right < 0 || (left >= 0 && guess-left <= right) {
+		return left
 	}
-	return x
+	return guess + right
 }
 
 // folded is a chapter's text lowercased, stripped of diacritics, with
