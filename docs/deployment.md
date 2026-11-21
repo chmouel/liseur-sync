@@ -1033,7 +1033,8 @@ that under **Settings → Administration → AI assistants**:
 - **Allow an application by its metadata URL** does the same for any
   other client that publishes a Client ID Metadata Document. The
   server fetches only URLs allowlisted here, only over HTTPS from a
-  public address, with no redirects.
+  public address, with no redirects. Special-purpose IP ranges are
+  refused, including protocol ranges with publicly routed exceptions.
 - **Register an application by hand** issues a client ID, and a secret
   for a confidential client, for clients that cannot publish a
   document. The secret is shown once.
