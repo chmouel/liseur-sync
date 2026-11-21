@@ -96,10 +96,16 @@ func (b *textBudget) remaining(key string, now time.Time) (int64, time.Time) {
 	return max(b.perHour-w.used, 0), w.start.Add(time.Hour)
 }
 
-func (b *textBudget) charge(key string, n int, now time.Time) {
+func (b *textBudget) charge(key string, n int, now time.Time) (bool, time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.window(key, now).used += int64(n)
+	w := b.window(key, now)
+	reset := w.start.Add(time.Hour)
+	if int64(n) > b.perHour-w.used {
+		return false, reset
+	}
+	w.used += int64(n)
+	return true, reset
 }
 
 func (b *textBudget) window(key string, now time.Time) *budgetWindow {
