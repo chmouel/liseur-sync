@@ -222,7 +222,7 @@ func TestMCPWorkStatsRespectReadingScope(t *testing.T) {
 	_, resolved := f.resolveBook(t, bookID, f.token)
 	resp, body := f.postRaw(t, "/v1/ops", f.token, `{"ops":[
 		{"op_id":"position","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
-		 "client_ts":"2024-01-01T12:00:00Z","progression":0.4},
+		 "client_ts":"2024-01-01T12:00:00Z","progression":0.4,"coverage":"partial"},
 		{"op_id":"status","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
 		 "client_ts":"2024-01-01T12:01:00Z","progression":0.4,"kind":"status","reading_status":"paused"}]}`)
 	if resp.StatusCode != http.StatusOK {
@@ -255,12 +255,12 @@ func TestMCPWorkStatsRespectReadingScope(t *testing.T) {
 				if work["sessions"] != float64(1) || work["total_active_minutes"] != float64(60) {
 					t.Fatalf("missing statistics: %v", work)
 				}
-				for _, key := range []string{"current_progression", "status", "eta_seconds"} {
+				for _, key := range []string{"current_progression", "status", "eta_seconds", "covers_narrative"} {
 					if _, ok := work[key]; ok != tc.readingAllowed {
 						t.Fatalf("%s present=%v, reading allowed=%v: %v", key, ok, tc.readingAllowed, work)
 					}
 				}
-				if tc.readingAllowed && (work["current_progression"] != 0.4 || work["status"] != "paused" || work["eta_seconds"] == nil) {
+				if tc.readingAllowed && (work["current_progression"] != 0.4 || work["status"] != "paused" || work["eta_seconds"] == nil || work["covers_narrative"] != false) {
 					t.Fatalf("wrong reading fields: %v", work)
 				}
 			}
