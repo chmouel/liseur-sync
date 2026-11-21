@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
+	"github.com/chmouel/liseur-sync/internal/booktext"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
@@ -442,6 +443,61 @@ func TestMCPReadsAtAKOReaderPosition(t *testing.T) {
 	out := f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "at": "current", "before": 0, "after": 7})
 	if out["located_by"] != "kosync_xpath" || out["text"] != "Ishmael" {
 		t.Fatalf("read_at: %v", out)
+	}
+
+	collisionFolder := store.Folder{ID: store.NewID(), Name: "Collision", RootPath: t.TempDir(), Kind: store.FolderPlain}
+	if err := f.st.CreateFolder(t.Context(), collisionFolder); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := f.st.ReconcileFolder(t.Context(), collisionFolder.ID, []store.ObservedBook{{
+		RelativePath: "other.epub", OriginalFilename: "other.epub", MediaType: "application/epub+zip",
+		SizeBytes: 1, MTime: now, ContentSHA256: "different-sha", PartialMD5: book.PartialMD5, Title: "Other",
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), f.other.ID, collisionFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "at": "current"}); out["located_by"] != "kosync_xpath" {
+		t.Fatalf("collision outside the reader's folders: %v", out)
+	}
+	if err := f.st.AssignUserFolder(t.Context(), f.user.ID, collisionFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "at": "current"}); out["located_by"] != "book_fraction" {
+		t.Fatalf("ambiguous fingerprint: %v", out)
+	}
+	if err := f.st.UnassignUserFolder(t.Context(), f.user.ID, collisionFolder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "at": "current"}); out["located_by"] != "kosync_xpath" {
+		t.Fatalf("removed collision: %v", out)
+	}
+}
+
+func TestMCPLocatorNeedsEditionProof(t *testing.T) {
+	text := &booktext.Book{Chapters: []booktext.Chapter{{
+		Href: "chapter.xhtml", Text: "Ishmael found Ahab", StartProg: 0, EndProg: 1,
+	}}}
+	book := store.CatalogBook{ContentSHA256: "edition"}
+	locator := []byte(`{"href":"chapter.xhtml","text":{"highlight":"Ahab"}}`)
+	correct, other := "edition", "other"
+	for _, tc := range []struct {
+		name    string
+		edition *string
+		want    string
+	}{
+		{"matching edition", &correct, "anchor"},
+		{"different edition", &other, "book_fraction"},
+		{"unknown edition", nil, "book_fraction"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pl := (&mcpService{}).locate(t.Context(), book, text, tc.edition, locator, 0.25, nil)
+			if pl.by != tc.want {
+				t.Fatalf("location: %+v", pl)
+			}
+		})
 	}
 }
 

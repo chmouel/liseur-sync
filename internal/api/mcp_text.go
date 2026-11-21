@@ -319,7 +319,7 @@ type storedLocator struct {
 // XPath when it came from KOReader on this same file, and otherwise
 // from its whole-book progression.
 func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktext.Book, edition *string, locator []byte, progression float64, kosync *store.Op) place {
-	if len(locator) > 0 && (edition == nil || *edition == b.ContentSHA256) {
+	if len(locator) > 0 && edition != nil && *edition == b.ContentSHA256 {
 		var l storedLocator
 		if json.Unmarshal(locator, &l) == nil && l.Href != "" {
 			if ch, off, exact, ok := t.Locate(l.Href, l.Locations.Progression, l.Text.Before, l.Text.Highlight); ok {
@@ -333,14 +333,17 @@ func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktex
 	}
 	if kosync != nil && kosync.Origin == store.OriginKosync && kosync.ForeignPos != nil &&
 		kosync.OriginAlias != nil && b.PartialMD5 != "" && *kosync.OriginAlias == "partial-md5:"+b.PartialMD5 {
-		if loc, err := m.kosyncLocator(ctx, b, *kosync.ForeignPos); err == nil {
-			prog := loc.Progression
-			if ch, off, exact, ok := t.Locate(loc.Href, &prog, loc.Anchor.Before, loc.Anchor.Highlight); ok {
-				by := "chapter_fraction"
-				if exact {
-					by = "kosync_xpath"
+		edition, err := m.s.St.CatalogBookByPartialMD5(ctx, mcpUser(ctx), b.PartialMD5)
+		if err == nil && edition.ContentSHA256 == b.ContentSHA256 {
+			if loc, err := m.kosyncLocator(ctx, b, *kosync.ForeignPos); err == nil {
+				prog := loc.Progression
+				if ch, off, exact, ok := t.Locate(loc.Href, &prog, loc.Anchor.Before, loc.Anchor.Highlight); ok {
+					by := "chapter_fraction"
+					if exact {
+						by = "kosync_xpath"
+					}
+					return place{ch, off, by}
 				}
-				return place{ch, off, by}
 			}
 		}
 	}
