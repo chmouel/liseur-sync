@@ -202,13 +202,15 @@ func (s *Server) oauthFail(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	msg := "The request could not be checked. Try connecting again from the assistant."
+	status := http.StatusBadRequest
 	if ae != nil {
 		msg = ae.Description
 	} else {
 		slog.ErrorContext(r.Context(), "oauth authorize failed", "error", err)
+		status = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(status)
 	oauthErrorPage(relPrefix(r.URL.Path), uiCtx(r, nil), msg).Render(r.Context(), w)
 }
 

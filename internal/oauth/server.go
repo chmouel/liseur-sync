@@ -131,6 +131,8 @@ func (c Client) Host() string {
 // ErrUnknownClient is returned for a client_id nobody allowed.
 var ErrUnknownClient = errors.New("this application is not allowed on this server")
 
+var errInvalidClientMetadata = errors.New("the application's metadata could not be verified")
+
 func validClientID(id string) bool {
 	return id != "" && len(id) <= maxClientIDBytes && utf8.ValidString(id) && !strings.ContainsRune(id, 0)
 }
@@ -154,7 +156,7 @@ func (s *Server) ResolveClient(ctx context.Context, clientID string) (Client, er
 	if row.Kind == store.OAuthClientMetadata {
 		doc, err := s.Fetcher.Fetch(ctx, row.ID, row.Generation)
 		if err != nil {
-			return Client{}, fmt.Errorf("the application's metadata could not be verified: %w", err)
+			return Client{}, fmt.Errorf("%w: %w", errInvalidClientMetadata, err)
 		}
 		c.RedirectURIs = doc.RedirectURIs
 		if doc.ClientName != "" {
@@ -226,7 +228,13 @@ func (s *Server) ParseAuthorize(ctx context.Context, q url.Values) (*AuthorizeRe
 	}
 	client, err := s.ResolveClient(ctx, q.Get("client_id"))
 	if err != nil {
-		return nil, &AuthorizeError{Code: "unauthorized_client", Description: err.Error()}
+		if errors.Is(err, ErrUnknownClient) {
+			return nil, &AuthorizeError{Code: "unauthorized_client", Description: ErrUnknownClient.Error()}
+		}
+		if errors.Is(err, errInvalidClientMetadata) {
+			return nil, &AuthorizeError{Code: "unauthorized_client", Description: errInvalidClientMetadata.Error()}
+		}
+		return nil, err
 	}
 	redirect := q.Get("redirect_uri")
 	if redirect == "" || !slices.Contains(client.RedirectURIs, redirect) {
