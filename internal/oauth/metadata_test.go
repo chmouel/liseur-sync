@@ -118,6 +118,22 @@ func TestMetadataURLRejectsInvalidAuthorityAndQuery(t *testing.T) {
 	if err := ValidateRedirectURI("https://:443/callback"); err == nil {
 		t.Fatal("accepted redirect without hostname")
 	}
+	if err := ValidateRedirectURI("https://client.example/callback?value=\xff"); err == nil {
+		t.Fatal("accepted redirect with invalid UTF-8")
+	}
+}
+
+func TestClientNameValidation(t *testing.T) {
+	for _, name := range []string{"", "Lecteur 📚", strings.Repeat("é", 81)} {
+		if err := ValidateClientName(name); err != nil {
+			t.Errorf("valid name %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"bad\x00name", "bad\xffname", strings.Repeat("a", 80) + "\x00"} {
+		if err := ValidateClientName(name); err == nil {
+			t.Errorf("accepted invalid name %q", name)
+		}
+	}
 }
 
 func TestMetadataURLLength(t *testing.T) {

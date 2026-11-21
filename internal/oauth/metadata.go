@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // ChatGPTMetadataURL is the Client ID Metadata Document ChatGPT
@@ -292,7 +293,18 @@ func validateMetadata(doc *ClientMetadata, docURL string) error {
 			return err
 		}
 	}
+	if err := ValidateClientName(doc.ClientName); err != nil {
+		return err
+	}
 	doc.ClientName = clampName(doc.ClientName)
+	return nil
+}
+
+// ValidateClientName checks that a client name can be stored as text.
+func ValidateClientName(name string) error {
+	if !utf8.ValidString(name) || strings.ContainsRune(name, 0) {
+		return errors.New("client name contains invalid text")
+	}
 	return nil
 }
 
@@ -309,7 +321,7 @@ func clampName(name string) string {
 // never allowed, and comparison later is by exact string.
 func ValidateRedirectURI(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.Hostname() == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
+	if err != nil || !utf8.ValidString(raw) || u.Host == "" || u.Hostname() == "" || u.Fragment != "" || u.User != nil || u.String() != raw {
 		return fmt.Errorf("redirect URI %q is not a plain absolute URL", raw)
 	}
 	switch u.Scheme {
