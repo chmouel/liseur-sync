@@ -936,13 +936,12 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .librarycontrols .upload-btn { padding: .34rem .65rem; font-size: .84rem; margin-left: .35rem; }
 .librarycontrols .upload-btn .upload-icon { display: inline-flex; color: var(--muted); }
 .librarycontrols .upload-btn .ui-icon { width: .95rem; height: .95rem; }
-/* The CSV export sits beside Upload: it is the shelf going the other way. */
-.librarycontrols .csvbtn {
-	display: inline-flex; align-items: center; gap: .3rem;
-	padding: .34rem .65rem; font-size: .84rem; margin-left: .35rem;
+.csvbtn {
+	display: inline-flex; align-items: center; gap: .35rem;
+	padding: .38rem .75rem; font-size: .875rem;
 }
-.librarycontrols .csvbtn .csv-icon { display: inline-flex; color: var(--muted); }
-.librarycontrols .csvbtn .ui-icon { width: .95rem; height: .95rem; }
+.csvbtn .csv-icon { display: inline-flex; color: var(--muted); }
+.csvbtn .ui-icon { width: .95rem; height: .95rem; }
 .librarycontrols .refreshbtn {
 	background: none; border: 0; color: var(--muted); padding: .4rem;
 }
@@ -3221,7 +3220,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	.librarycontrols select,
 	.librarycontrols input[type="search"],
 	.librarycontrols .upload-btn,
-	.librarycontrols .csvbtn,
+	.csvbtn,
 	.folderselect-wrap select,
 	.spanpick select { min-height: 44px; padding-block: .5rem; }
 	.iconbtn { width: 44px; height: 44px; }

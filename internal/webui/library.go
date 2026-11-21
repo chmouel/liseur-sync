@@ -195,10 +195,6 @@ type LibraryView struct {
 	Problem string
 	View    string
 	Back    string
-	// ExportURL is this same shelf as a CSV file: the folder, the chip
-	// and the ordering travel with it, so what is exported is what is
-	// on screen rather than a default view of everything.
-	ExportURL string
 	// CanUpload is the selected folder taking uploads, which is the
 	// only thing that puts the send-a-book form on the page. It is the
 	// administrator's decision (ADR-0023), read back rather than
@@ -281,7 +277,6 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		}
 	}
 	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, "")
-	v.ExportURL = libraryCSVURL(v.Selected, v.Filter, v.Sort, v.Dir)
 	v.Chips = libraryChips(v.Selected, v.Filter, v.Sort, v.Dir)
 	v.DirURL = libraryURL(v.Selected, v.Filter, v.Sort, otherDir(v.Dir), "")
 
@@ -804,13 +799,6 @@ func dirArrow(current string) string {
 // asks for more of what is on screen rather than more of the default.
 func libraryURL(folder, filter, sortBy, dir, cursor string) string {
 	return libraryHref("library", folder, filter, sortBy, dir, cursor)
-}
-
-// libraryCSVURL is [libraryURL] spelled for the export: the same folder,
-// chip and ordering, without the cursor, because an export is the whole
-// list rather than the page someone happened to be on.
-func libraryCSVURL(folder, filter, sortBy, dir string) string {
-	return libraryHref("library.csv", folder, filter, sortBy, dir, "")
 }
 
 func libraryHref(base, folder, filter, sortBy, dir, cursor string) string {

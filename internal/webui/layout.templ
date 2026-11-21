@@ -46,6 +46,8 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 			}
 			if u.Section == "library" {
 				<script type="module" src={ prefix + "static/library-refresh.js" } defer></script>
+			}
+			if u.Section == "settings" {
 				<script type="module" src={ prefix + "static/library-csv.js" } defer></script>
 			}
 		</head>

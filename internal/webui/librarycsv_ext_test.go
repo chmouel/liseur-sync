@@ -226,23 +226,23 @@ func TestTheExportCarriesWhatTheReadingHalfKnows(t *testing.T) {
 	}
 }
 
-// TestTheLibraryOffersTheExportDialog pins the wiring between the button,
-// the dialog and the module: the button is a link to the file, so the
-// export still works with no script at all.
-func TestTheLibraryOffersTheExportDialog(t *testing.T) {
+// TestSettingsOffersTheExportDialog pins the wiring between the button,
+// the dialog and the module on the settings page: the button is a link
+// to the file, so the export still works with no script at all.
+func TestSettingsOffersTheExportDialog(t *testing.T) {
 	f := newBooksFixture(t)
-	_, page := f.get(t, "/ui/library?folder="+f.folder+"&filter=all", f.cookie)
+	_, page := f.get(t, "/ui/settings", f.cookie)
 
 	for _, want := range []string{
 		`data-csv-open="csv-dialog"`,
 		`id="csv-dialog"`,
-		`library.csv?filter=all&amp;folder=` + f.folder,
+		`library.csv?filter=all`,
 		`download="library.csv"`,
 		`data-csv-copy`,
 		`library-csv.js`,
 	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("the library page is missing %q", want)
+			t.Errorf("the settings page is missing %q", want)
 		}
 	}
 }
