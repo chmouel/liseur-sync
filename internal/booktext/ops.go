@@ -170,39 +170,36 @@ func (b *Book) Locate(href string, resProg *float64, before, highlight string) (
 		guess = snapBack(c.Text, int(min(max(*resProg, 0), 1)*float64(len(c.Text))))
 	}
 	if h := collapse(highlight); h != "" {
-		quote := h
-		if bq := collapse(before); bq != "" {
-			quote = bq + " " + h
-		}
-		for _, q := range []string{quote, h} {
-			if hits := allIndexes(c.Text, q); len(hits) > 0 {
-				best := hits[0]
-				for _, h := range hits {
-					if abs(h-guess) < abs(best-guess) {
-						best = h
-					}
-				}
-				if q == quote && q != h {
-					best += len(quote) - len(h)
-				}
-				return ch, best, true, true
+		if prefix := collapse(before); prefix != "" {
+			startOfHighlight := len(prefix) + 1
+			if start := nearestIndex(c.Text, prefix+" "+h, guess-startOfHighlight); start >= 0 {
+				return ch, start + startOfHighlight, true, true
 			}
+		}
+		if start := nearestIndex(c.Text, h, guess); start >= 0 {
+			return ch, start, true, true
 		}
 	}
 	return ch, guess, false, true
 }
 
-func allIndexes(s, sub string) []int {
-	var out []int
-	for at := 0; len(out) < 64; {
+func nearestIndex(s, sub string, guess int) int {
+	best := -1
+	for at := 0; at < len(s); {
 		i := strings.Index(s[at:], sub)
 		if i < 0 {
 			break
 		}
-		out = append(out, at+i)
-		at += i + 1
+		start := at + i
+		if best < 0 || abs(start-guess) < abs(best-guess) {
+			best = start
+		}
+		if start >= guess {
+			break
+		}
+		at = start + 1
 	}
-	return out
+	return best
 }
 
 func abs(x int) int {

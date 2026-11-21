@@ -129,6 +129,18 @@ func TestReadCoversChapterWithoutGaps(t *testing.T) {
 	}
 }
 
+func TestLocateRepeatedQuoteNearEnd(t *testing.T) {
+	text := strings.Repeat("dit Émile. ", 100)
+	b := &Book{Chapters: []Chapter{{Href: "one.xhtml", Text: text}}}
+	end := 1.0
+	for _, before := range []string{"", "dit"} {
+		_, off, exact, ok := b.Locate("one.xhtml", &end, before, "Émile")
+		if !ok || !exact || off != strings.LastIndex(text, "Émile") {
+			t.Fatalf("before=%q: offset %d exact=%v ok=%v", before, off, exact, ok)
+		}
+	}
+}
+
 func TestLocate(t *testing.T) {
 	b := testBook()
 	half := 0.5
