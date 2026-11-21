@@ -109,6 +109,7 @@ type Client struct {
 	Name         string
 	RedirectURIs []string
 	Confidential bool
+	generation   string
 	secretSHA256 string
 }
 
@@ -144,9 +145,9 @@ func (s *Server) ResolveClient(ctx context.Context, clientID string) (Client, er
 		return Client{}, err
 	}
 	c := Client{ID: row.ID, Kind: row.Kind, Name: row.Name, RedirectURIs: row.RedirectURIs,
-		Confidential: row.SecretSHA256 != "", secretSHA256: row.SecretSHA256}
+		Confidential: row.SecretSHA256 != "", generation: row.Generation, secretSHA256: row.SecretSHA256}
 	if row.Kind == store.OAuthClientMetadata {
-		doc, err := s.Fetcher.Fetch(ctx, row.ID)
+		doc, err := s.Fetcher.Fetch(ctx, row.ID, row.Generation)
 		if err != nil {
 			return Client{}, fmt.Errorf("the application's metadata could not be verified: %w", err)
 		}
@@ -328,7 +329,7 @@ func (s *Server) Deny(req *AuthorizeRequest) string {
 // Approve issues a single-use code for the scopes the reader kept and
 // returns where to send the browser. granted must be a subset of what
 // was requested; an empty set is a refusal.
-func (s *Server) Approve(ctx context.Context, req *AuthorizeRequest, userID string, granted []string) (string, error) {
+func (s *Server) Approve(ctx context.Context, req *AuthorizeRequest, userID, sessionID string, granted []string) (string, error) {
 	var scopes []string
 	for _, sc := range req.Scopes {
 		if slices.Contains(granted, sc) {
@@ -345,11 +346,11 @@ func (s *Server) Approve(ctx context.Context, req *AuthorizeRequest, userID stri
 	code := codePrefix + secret
 	now := s.now().UTC()
 	if err := s.st.CreateOAuthCode(ctx, store.OAuthCode{
-		SHA256: auth.HashSecret(code), UserID: userID, ClientID: req.Client.ID,
+		SHA256: auth.HashSecret(code), UserID: userID, ClientID: req.Client.ID, ClientGeneration: req.Client.generation,
 		ClientName: req.Client.Name, RedirectURI: req.RedirectURI,
 		CodeChallenge: req.CodeChallenge, Resource: req.Resource, Scopes: scopes,
 		CreatedAt: now, ExpiresAt: now.Add(codeTTL),
-	}); err != nil {
+	}, sessionID); err != nil {
 		return "", err
 	}
 	return s.redirectWith(req, url.Values{"code": {code}}), nil

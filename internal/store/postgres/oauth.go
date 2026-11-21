@@ -16,22 +16,22 @@ func (s *Store) CreateOAuthClient(ctx context.Context, c store.OAuthClient) erro
 		secret = &c.SecretSHA256
 	}
 	_, err := s.db.ExecContext(ctx,
-		q(`INSERT INTO oauth_clients (id, kind, name, redirect_uris, secret_sha256, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`),
-		c.ID, c.Kind, c.Name, strings.Join(c.RedirectURIs, "\n"), secret, c.CreatedAt.UTC())
+		q(`INSERT INTO oauth_clients (id, generation, kind, name, redirect_uris, secret_sha256, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`),
+		c.ID, store.NewID(), c.Kind, c.Name, strings.Join(c.RedirectURIs, "\n"), secret, c.CreatedAt.UTC())
 	if isUniqueErr(err) {
 		return store.ErrConflict
 	}
 	return err
 }
 
-const oauthClientColumns = `id, kind, name, redirect_uris, secret_sha256, created_at`
+const oauthClientColumns = `id, generation, kind, name, redirect_uris, secret_sha256, created_at`
 
 func scanOAuthClient(row interface{ Scan(...any) error }) (store.OAuthClient, error) {
 	var c store.OAuthClient
 	var uris string
 	var secret sql.NullString
-	if err := row.Scan(&c.ID, &c.Kind, &c.Name, &uris, &secret, &c.CreatedAt); err != nil {
+	if err := row.Scan(&c.ID, &c.Generation, &c.Kind, &c.Name, &uris, &secret, &c.CreatedAt); err != nil {
 		return c, err
 	}
 	c.RedirectURIs = splitLines(uris)
@@ -79,17 +79,51 @@ func (s *Store) DeleteOAuthClient(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) CreateOAuthCode(ctx context.Context, c store.OAuthCode) error {
-	_, err := s.db.ExecContext(ctx,
-		q(`INSERT INTO oauth_codes (sha256, user_id, client_id, client_name, redirect_uri,
-		   code_challenge, resource, scopes, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+func (s *Store) CreateOAuthCode(ctx context.Context, c store.OAuthCode, sessionID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists int
+	err = tx.QueryRowContext(ctx, q(`SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL FOR NO KEY UPDATE`), c.UserID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var expires time.Time
+	err = tx.QueryRowContext(ctx, q(`SELECT expires_at FROM auth_sessions WHERE id = ? AND user_id = ? AND kind = 'web'
+		AND revoked_at IS NULL FOR UPDATE`), sessionID, c.UserID).Scan(&expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var clientExists int
+	err = tx.QueryRowContext(ctx, q(`SELECT 1 FROM oauth_clients WHERE id = ? AND generation = ? FOR KEY SHARE`), c.ClientID, c.ClientGeneration).Scan(&clientExists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !time.Now().UTC().Before(expires) {
+		return store.ErrNotFound
+	}
+	_, err = tx.ExecContext(ctx, q(`INSERT INTO oauth_codes (sha256, user_id, client_id, client_name, redirect_uri,
+		code_challenge, resource, scopes, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		c.SHA256, c.UserID, c.ClientID, c.ClientName, c.RedirectURI, c.CodeChallenge,
 		c.Resource, strings.Join(c.Scopes, " "), c.CreatedAt.UTC(), c.ExpiresAt.UTC())
 	if isUniqueErr(err) {
 		return store.ErrConflict
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ExchangeOAuthCode(ctx context.Context, r store.OAuthCodeRedemption, now time.Time) (store.OAuthGrant, error) {

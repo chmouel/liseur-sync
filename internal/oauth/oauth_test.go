@@ -35,11 +35,12 @@ func challenge(v string) string {
 }
 
 type fixture struct {
-	srv    *oauth.Server
-	st     store.Store
-	user   store.User
-	now    time.Time
-	secret string
+	srv       *oauth.Server
+	st        store.Store
+	user      store.User
+	now       time.Time
+	secret    string
+	sessionID string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -58,6 +59,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{st: st, srv: oauth.New(st, cfg), now: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)}
 	f.srv.SetClock(func() time.Time { return f.now })
 	f.user = storetest.MkUser(t, st, "reader")
+	f.sessionID = storetest.MkOAuthSession(t, st, f.user.ID, "consent", f.now)
 	ctx := context.Background()
 	if err := st.CreateOAuthClient(ctx, store.OAuthClient{
 		ID: "lsc_public", Kind: store.OAuthClientRegistered, Name: "Public",
@@ -93,7 +95,7 @@ func (f *fixture) code(t *testing.T, client string, scopes ...string) string {
 	if len(scopes) == 0 {
 		scopes = req.Scopes
 	}
-	to, err := f.srv.Approve(context.Background(), req, f.user.ID, scopes)
+	to, err := f.srv.Approve(context.Background(), req, f.user.ID, f.sessionID, scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +324,7 @@ func TestParseAuthorize(t *testing.T) {
 	if err != nil || len(req.Scopes) != len(oauth.Scopes) || req.Resource != resource {
 		t.Fatalf("defaults: %+v %v", req, err)
 	}
-	to, _ := f.srv.Approve(ctx, req, f.user.ID, nil)
+	to, _ := f.srv.Approve(ctx, req, f.user.ID, f.sessionID, nil)
 	if !strings.Contains(to, "error=access_denied") {
 		t.Fatalf("approving nothing is a refusal: %s", to)
 	}
@@ -417,6 +419,45 @@ func TestMetadataClient(t *testing.T) {
 		if _, err := f.srv.ResolveClient(ctx, other); err == nil {
 			t.Errorf("%s accepted", path)
 		}
+	}
+}
+
+func TestMetadataRegistrationGenerationAcrossFetchers(t *testing.T) {
+	f := newFixture(t)
+	var doc map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(doc)
+	}))
+	defer srv.Close()
+	id := srv.URL + "/client.json"
+	client := store.OAuthClient{ID: id, Kind: store.OAuthClientMetadata, Name: "client", CreatedAt: f.now}
+	if err := f.st.CreateOAuthClient(t.Context(), client); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.MCP.Enabled = true
+	cfg.MCP.PublicURL = publicURL
+	other := oauth.New(f.st, cfg)
+	f.srv.Fetcher.Client = srv.Client()
+	other.Fetcher.Client = srv.Client()
+	doc = map[string]any{"client_id": id, "redirect_uris": []string{"https://old.example/callback"}, "token_endpoint_auth_method": "none"}
+	for _, server := range []*oauth.Server{f.srv, other} {
+		resolved, err := server.ResolveClient(t.Context(), id)
+		if err != nil || resolved.RedirectURIs[0] != "https://old.example/callback" {
+			t.Fatalf("old metadata: %+v %v", resolved, err)
+		}
+	}
+	if err := f.st.DeleteOAuthClient(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.CreateOAuthClient(t.Context(), client); err != nil {
+		t.Fatal(err)
+	}
+	doc = map[string]any{"client_id": id, "redirect_uris": []string{"https://new.example/callback"}, "token_endpoint_auth_method": "none"}
+	resolved, err := other.ResolveClient(t.Context(), id)
+	if err != nil || resolved.RedirectURIs[0] != "https://new.example/callback" {
+		t.Fatalf("new metadata: %+v %v", resolved, err)
 	}
 }
 
