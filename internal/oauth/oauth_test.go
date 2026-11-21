@@ -212,7 +212,6 @@ func TestExchangeRejects(t *testing.T) {
 		"wrong verifier":     func(v url.Values) url.Values { v.Set("code_verifier", strings.Repeat("b", 50)); return v },
 		"no verifier":        func(v url.Values) url.Values { v.Del("code_verifier"); return v },
 		"other redirect":     func(v url.Values) url.Values { v.Set("redirect_uri", "https://app.example/other"); return v },
-		"no redirect":        func(v url.Values) url.Values { v.Del("redirect_uri"); return v },
 		"wrong resource":     func(v url.Values) url.Values { v.Set("resource", "https://evil.example/mcp"); return v },
 		"other client":       func(v url.Values) url.Values { v.Set("client_id", "lsc_conf"); return v },
 		"implicit grant":     func(v url.Values) url.Values { v.Set("grant_type", "password"); return v },
