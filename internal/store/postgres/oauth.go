@@ -137,10 +137,13 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, r store.OAuthCodeRedempti
 	var expires time.Time
 	var used *time.Time
 	var codeGrant sql.NullString
+	// Client deletion locks the client before cascading to codes. Take the
+	// same order before updating a code or inserting its grant.
 	err = tx.QueryRowContext(ctx,
-		q(`SELECT user_id, client_id, client_name, redirect_uri, code_challenge, resource,
-		        scopes, expires_at, used_at, grant_id
-		   FROM oauth_codes WHERE sha256 = ?`), r.SHA256).
+		q(`SELECT c.user_id, c.client_id, c.client_name, c.redirect_uri, c.code_challenge, c.resource,
+		        c.scopes, c.expires_at, c.used_at, c.grant_id
+		   FROM oauth_codes c JOIN oauth_clients client ON client.id = c.client_id
+		   WHERE c.sha256 = ? AND c.client_id = ? FOR KEY SHARE OF client`), r.SHA256, r.ClientID).
 		Scan(&userID, &clientID, &clientName, &redirectURI, &challenge, &resource,
 			&scopes, &expires, &used, &codeGrant)
 	if errors.Is(err, sql.ErrNoRows) {
