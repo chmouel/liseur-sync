@@ -1863,17 +1863,55 @@ func equalVocabularyJSON(a, b any) bool {
 		if !ok {
 			return false
 		}
-		// Numeric value, not spelling: jsonb rewrites 1e2 as 100, and a
-		// float64 round-trip would lose large integers.
-		ra, aok := new(big.Rat).SetString(av.String())
-		rb, bok := new(big.Rat).SetString(bv.String())
+		// Numeric value, not spelling: a retry may spell 1e2 as 100, and a
+		// float64 round-trip would lose large integers. The comparison never
+		// expands the exponent, so 1e999999 costs as little as 1.
+		na, aok := normalizeJSONNumber(av.String())
+		nb, bok := normalizeJSONNumber(bv.String())
 		if aok && bok {
-			return ra.Cmp(rb) == 0
+			return na == nb
 		}
 		return av.String() == bv.String()
 	default:
 		return a == b
 	}
+}
+
+// normalizedNumber is a JSON number as sign, significant digits with no
+// leading or trailing zeros, and the power of ten applied to them. Zero
+// is the empty digit string with no sign and no exponent.
+type normalizedNumber struct {
+	neg    bool
+	digits string
+	exp    string
+}
+
+func normalizeJSONNumber(s string) (normalizedNumber, bool) {
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimPrefix(s, "-")
+	mant, expPart := s, "0"
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		mant, expPart = s[:i], s[i+1:]
+	}
+	intPart, frac, _ := strings.Cut(mant, ".")
+	exp, ok := new(big.Int).SetString(strings.TrimPrefix(expPart, "+"), 10)
+	if !ok || intPart == "" {
+		return normalizedNumber{}, false
+	}
+	digits := intPart + frac
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return normalizedNumber{}, false
+		}
+	}
+	exp.Sub(exp, big.NewInt(int64(len(frac))))
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return normalizedNumber{}, true
+	}
+	trimmed := strings.TrimRight(digits, "0")
+	exp.Add(exp, big.NewInt(int64(len(digits)-len(trimmed))))
+	return normalizedNumber{neg: neg, digits: trimmed, exp: exp.String()}, true
 }
 
 // SameVocabularyReviewPayload reports whether an incoming review write
