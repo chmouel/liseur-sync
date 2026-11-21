@@ -817,6 +817,30 @@ func TestMCPChapterTitlesCountTowardsTextLimits(t *testing.T) {
 	}
 }
 
+func TestMCPReadAtMultibyteWindowRespectsLimit(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, func(c *config.MCPConfig) {
+		c.TextBytesPerCall = 1024
+		c.TextBytesPerHour = 2048
+	})
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUBWithText(t, "éSECRET"+strings.Repeat("a", 2048)))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	resp, body := f.postRaw(t, "/v1/ops", f.token, `{"ops":[{
+		"op_id":"position","work_id":"`+resolved.WorkID+`","edition_sha":"`+sha+`",
+		"client_ts":"2024-01-01T12:00:00Z","progression":0.5,
+		"locator":{"href":"OEBPS/chapter1.xhtml","text":{"highlight":"SECRET"}}}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: %d %s", resp.StatusCode, body)
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText, oauth.ScopeReading)
+	out := f.mustCall(t, access, "read_at", map[string]any{
+		"book_id": bookID, "at": "current", "before": 1, "after": 1023,
+	})
+	if used := lenString(out["text"]) + lenString(out["chapter_title"]); used > 1024 {
+		t.Fatalf("read_at returned %d bytes of book text", used)
+	}
+}
+
 func lenString(v any) int {
 	s, _ := v.(string)
 	return len(s)
