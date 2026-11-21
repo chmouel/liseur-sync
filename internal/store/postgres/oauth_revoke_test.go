@@ -201,3 +201,82 @@ func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 		t.Fatalf("grant remained active: %v", err)
 	}
 }
+
+func TestOAuthRefreshReuseAfterGrantLockWait(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-refresh-lock")
+	now := time.Now().UTC()
+	client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateOAuthCode(ctx, store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	tokens := []store.OAuthToken{
+		{SHA256: "access", Kind: store.OAuthTokenAccess, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{SHA256: "refresh", Kind: store.OAuthTokenRefresh, CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+	}
+	if _, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: "code", ClientID: client.ID, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge", Resource: "resource", GrantID: "grant", Tokens: tokens}, now); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM oauth_grants WHERE id = 'grant' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.RotateOAuthRefresh(ctx, "refresh", client.ID, now, nil)
+		done <- err
+	}()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE OF g%' AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("refresh did not wait for grant lock: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE oauth_tokens SET used_at = $1 WHERE sha256 = 'refresh'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE oauth_grants SET revoked_at = $1 WHERE id = 'grant'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("replayed refresh after lock wait: %v", err)
+	}
+}
