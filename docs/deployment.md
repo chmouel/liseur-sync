@@ -1050,7 +1050,9 @@ been granted. Readers see and revoke their connections under
 connection on the admin page.
 
 Every tool is read-only; nothing an assistant does writes to the
-library, the reading state or the disk. Book text is limited per call
+library, the reading state or the disk. An assistant with book-text access
+can read any chapter, including beyond the reader's position; the server
+does not enforce a spoiler boundary. Book text is limited per call
 and per connection per hour by the two `text_bytes_*` settings, and
 each connection may make 120 requests a minute. Grants, refreshes,
 revocations and refused replays are logged with an `oauth:` prefix.

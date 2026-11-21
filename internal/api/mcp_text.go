@@ -107,7 +107,7 @@ func (m *mcpService) textTools() []mcp.Tool {
 		},
 		{
 			Name: "find_mentions", Title: "Follow a character or place through a book", Scope: oauth.ScopeText,
-			Description: "Every place a name occurs in a book, in reading order, with the text around it. Give a name and its other forms together (for example [\"Raskolnikov\", \"Rodya\", \"Rodion Romanovich\"]); they count as one. Matches whole words, ignoring case and accents. Also returns counts per chapter and the first and last occurrence. up_to_current (needs reading access) or up_to_progression stop the search at a place, to keep to what the reader has already read. book_truncated indicates missing later chapters; counts_truncated indicates incomplete counts.",
+			Description: "Every place a name occurs in a book, in reading order, with the text around it. Give a name and its other forms together (for example [\"Raskolnikov\", \"Rodya\", \"Rodion Romanovich\"]); they count as one. Matches whole words, ignoring case and accents. Also returns counts per chapter and the first and last occurrence. up_to_current (needs reading access) or up_to_progression limit this search to a position, which may be estimated. Other text tools can access the rest of the book. book_truncated indicates missing later chapters; counts_truncated indicates incomplete counts.",
 			InputSchema: objectSchema(map[string]any{
 				"book_id":           bookID,
 				"names":             map[string]any{"type": "array", "description": "A name and its other forms.", "items": strProp("A name.", maxNameBytes), "minItems": 1, "maxItems": maxMentionNames},

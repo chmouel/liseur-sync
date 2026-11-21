@@ -79,8 +79,10 @@ grants. No tool output names a filesystem path, a download link or a
 credential.
 
 Book text (`mcp:text`) is the whole of any book the reader may open.
-The server keeps no spoiler guard. `find_mentions` and `read_at` can
-stop at the reader's own position when the assistant asks. Text is extracted from the same EPUB index
+The server keeps no spoiler guard: the assistant can read any chapter.
+`find_mentions` can limit a search to a position, which may be estimated;
+`read_at` returns a window around a position that can include later text.
+Text is extracted from the same EPUB index
 the web reader uses, as plain text per reading-order resource, and
 cached per content digest. A place in the book is found in this order:
 the reader's Readium locator taken in this file, then a KOReader XPath

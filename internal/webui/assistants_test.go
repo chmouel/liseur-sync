@@ -146,6 +146,9 @@ func TestOAuthConsentFlow(t *testing.T) {
 	if strings.Contains(body, `value="mcp:reading"`) {
 		t.Fatal("consent offers a scope that was not requested")
 	}
+	if !strings.Contains(body, "including text beyond your reading position") {
+		t.Fatal("consent does not explain book-text access")
+	}
 	csrf := extractCSRF(t, body)
 	form, _ := url.ParseQuery(authorizeQuery(nil))
 	form.Set("decision", "allow")

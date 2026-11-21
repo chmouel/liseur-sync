@@ -159,6 +159,9 @@ func TestInitializeNegotiates(t *testing.T) {
 	if got := out["result"].(map[string]any)["protocolVersion"]; got != "2025-06-18" {
 		t.Fatalf("known version answered with %v", got)
 	}
+	if instructions, ok := out["result"].(map[string]any)["instructions"].(string); !ok || !strings.Contains(instructions, "including beyond the reader's position") {
+		t.Fatalf("missing book access guidance: %q", instructions)
+	}
 	_, out = post(t, s, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2099-01-01"}}`)
 	if got := out["result"].(map[string]any)["protocolVersion"]; got != protocolVersions[0] {
 		t.Fatalf("unknown version answered with %v", got)
