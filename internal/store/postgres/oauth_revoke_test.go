@@ -95,6 +95,81 @@ func TestRevokeAllDuringOAuthExchange(t *testing.T) {
 	}
 }
 
+func TestDeleteClientDuringOAuthExchange(t *testing.T) {
+	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
+	if dsn == "" {
+		t.Skip("LISEUR_PG_TEST_DSN not set")
+	}
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	reset(t, s)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	u := storetest.MkUser(t, s, "oauth-client-delete")
+	now := time.Now().UTC()
+	client := store.OAuthClient{ID: "client", Kind: store.OAuthClientRegistered, Name: "client", CreatedAt: now}
+	if err := s.CreateOAuthClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	client.Generation = storetest.MkOAuthClientGeneration(t, s, client.ID)
+	code := store.OAuthCode{SHA256: "code", UserID: u.ID, ClientID: client.ID, ClientGeneration: client.Generation,
+		ClientName: client.Name, RedirectURI: "https://client.example/cb", CodeChallenge: "challenge",
+		Resource: "resource", Scopes: []string{"mcp:library"}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+	if err := s.CreateOAuthCode(ctx, code, storetest.MkOAuthSession(t, s, u.ID, "code", now)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var pid int
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM oauth_clients WHERE id = 'client' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.ExchangeOAuthCode(ctx, store.OAuthCodeRedemption{SHA256: code.SHA256, ClientID: client.ID,
+			RedirectURI: code.RedirectURI, CodeChallenge: code.CodeChallenge, Resource: code.Resource, GrantID: "grant"}, now)
+		done <- err
+	}()
+	for {
+		var blocked bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			AND $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("exchange did not wait for the client: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_clients WHERE id = 'client'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("exchange after deletion: %v", err)
+	}
+}
+
 func TestHousekeepDuringOAuthRefreshRotation(t *testing.T) {
 	dsn := os.Getenv("LISEUR_PG_TEST_DSN")
 	if dsn == "" {
