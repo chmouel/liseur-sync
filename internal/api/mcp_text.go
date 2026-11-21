@@ -259,12 +259,15 @@ func (m *mcpService) bookOutline(ctx context.Context, raw json.RawMessage) (any,
 func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any, error) {
 	var in struct {
 		BookID   string `json:"book_id"`
-		Chapter  int    `json:"chapter"`
+		Chapter  *int   `json:"chapter"`
 		Cursor   string `json:"cursor"`
 		MaxBytes int    `json:"max_bytes"`
 	}
 	if err := mcp.DecodeArgs(raw, &in); err != nil {
 		return nil, err
+	}
+	if in.Chapter == nil {
+		return nil, mcp.Errorf("chapter is required")
 	}
 	start, err := offsetCursor(in.Cursor)
 	if err != nil {
@@ -284,14 +287,15 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 	if err != nil {
 		return nil, err
 	}
-	c, ok := t.Chapter(in.Chapter)
+	chapter := *in.Chapter
+	c, ok := t.Chapter(chapter)
 	if !ok {
 		return nil, mcp.Errorf("chapter must be between 0 and %d", len(t.Chapters)-1)
 	}
 	if start > len(c.Text) {
 		return nil, mcp.Errorf("invalid cursor")
 	}
-	p := t.Read(in.Chapter, start, allow)
+	p := t.Read(chapter, start, allow)
 	if p.End == p.Start && p.End < len(c.Text) {
 		return nil, mcp.Errorf("the book text allowance is too low to return the next character")
 	}
@@ -304,8 +308,8 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 	out["content_notice"] = textNotice
 	if p.End < len(c.Text) {
 		out["next_cursor"] = strconv.Itoa(p.End)
-	} else if in.Chapter+1 < len(t.Chapters) {
-		out["next_chapter"] = in.Chapter + 1
+	} else if chapter+1 < len(t.Chapters) {
+		out["next_chapter"] = chapter + 1
 	}
 	return out, nil
 }
