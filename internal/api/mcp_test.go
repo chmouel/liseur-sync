@@ -794,6 +794,11 @@ func TestMCPLocatorNeedsEditionProof(t *testing.T) {
 	if _, err := (&mcpService{}).locate(t.Context(), book, text, &other, locator, nil, nil); err == nil {
 		t.Fatal("unresolvable locator without progression accepted")
 	}
+	fallback := 0.75
+	pl, err := (&mcpService{}).locate(t.Context(), book, text, &correct, []byte(`{"href":"chapter.xhtml","text":{"highlight":"missing"}}`), &fallback, nil)
+	if err != nil || pl.by != "book_fraction" || pl.off == 0 {
+		t.Fatalf("missing anchor fallback: %+v %v", pl, err)
+	}
 	zero := 0.0
 	if _, err := (&mcpService{}).locate(t.Context(), book, text, &other, locator, &zero, nil); err != nil {
 		t.Fatalf("explicit zero: %v", err)

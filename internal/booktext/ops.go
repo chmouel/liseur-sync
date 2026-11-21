@@ -183,6 +183,9 @@ func (b *Book) Locate(href string, resProg *float64, before, highlight string) (
 			return ch, start, true, true
 		}
 	}
+	if resProg == nil {
+		return 0, 0, false, false
+	}
 	return ch, guess, false, true
 }
 
