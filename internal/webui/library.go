@@ -103,6 +103,10 @@ type LibraryRow struct {
 	HasAudio bool
 	// lastActiveAt is the unformatted time, kept for sorting only.
 	lastActiveAt int64
+	// addedAt is the catalog's unformatted creation time, for the CSV
+	// export: the formatted Added above is "Jan 2, 2006", which is the
+	// right thing to read on a card and the wrong thing in a table.
+	addedAt time.Time
 }
 
 // Started reports a row somebody has begun and not finished — the rows
@@ -191,6 +195,10 @@ type LibraryView struct {
 	Problem string
 	View    string
 	Back    string
+	// ExportURL is this same shelf as a CSV file: the folder, the chip
+	// and the ordering travel with it, so what is exported is what is
+	// on screen rather than a default view of everything.
+	ExportURL string
 	// CanUpload is the selected folder taking uploads, which is the
 	// only thing that puts the send-a-book form on the page. It is the
 	// administrator's decision (ADR-0023), read back rather than
@@ -273,29 +281,18 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 		}
 	}
 	v.Back = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, "")
+	v.ExportURL = libraryCSVURL(v.Selected, v.Filter, v.Sort, v.Dir)
 	v.Chips = libraryChips(v.Selected, v.Filter, v.Sort, v.Dir)
 	v.DirURL = libraryURL(v.Selected, v.Filter, v.Sort, otherDir(v.Dir), "")
 
-	loc := userLoc(u)
-	works, err := s.St.ListWorks(r.Context(), u.ID)
+	src, err := s.librarySource(r, u)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
-	}
-	links := s.workBookIDs(r.Context(), u.ID, works)
-	readings, err := s.St.WorkReadings(r.Context(), u.ID, nil)
-	if err != nil {
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	byBook := make(map[string]store.WorkSummary, len(works))
-	for _, ws := range works {
-		if id := links.active[ws.Work.ID]; id != "" {
-			byBook[id] = ws
-		}
 	}
 
-	rows, entries, next, err := s.libraryRows(r, u.ID, v, works, links, readings, byBook, loc)
+	rows, entries, next, err := s.libraryRows(
+		r, u.ID, v, src.works, src.links, src.readings, src.byBook, src.loc)
 	if err != nil {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
@@ -305,7 +302,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 	if next != "" {
 		v.NextURL = libraryURL(v.Selected, v.Filter, v.Sort, v.Dir, next)
 	}
-	v.Hero = s.libraryHero(r, u.ID, works, links, readings, loc)
+	v.Hero = s.libraryHero(r, u.ID, src.works, src.links, src.readings, src.loc)
 
 	// An htmx continuation asks for more of one list, not for the page
 	// around it: answering with the whole document would append a second
@@ -322,6 +319,39 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request, a store.A
 // watching more folders than this has a navigation problem no <select>
 // solves, and the list is read on every render.
 const folderPickerLimit = 200
+
+// librarySource is the reading half of the union, read once and handed
+// to [Server.libraryRows]: the page draws one slice of it and the CSV
+// export draws all of it, and neither should be paying for it twice.
+type librarySource struct {
+	works    []store.WorkSummary
+	links    bookLinks
+	readings map[string]store.WorkReading
+	byBook   map[string]store.WorkSummary
+	loc      *time.Location
+}
+
+func (s *Server) librarySource(r *http.Request, u *store.User) (librarySource, error) {
+	loc := userLoc(u)
+	works, err := s.St.ListWorks(r.Context(), u.ID)
+	if err != nil {
+		return librarySource{}, err
+	}
+	links := s.workBookIDs(r.Context(), u.ID, works)
+	readings, err := s.St.WorkReadings(r.Context(), u.ID, nil)
+	if err != nil {
+		return librarySource{}, err
+	}
+	byBook := make(map[string]store.WorkSummary, len(works))
+	for _, ws := range works {
+		if id := links.active[ws.Work.ID]; id != "" {
+			byBook[id] = ws
+		}
+	}
+	return librarySource{
+		works: works, links: links, readings: readings, byBook: byBook, loc: loc,
+	}, nil
+}
 
 // workBookIDs maps each of the caller's works to the catalog book it was
 // resolved from, where there is one.
@@ -442,10 +472,11 @@ func (s *Server) libraryRows(
 	raw := make([]LibraryRow, 0, len(books))
 	for _, b := range books {
 		row := LibraryRow{
-			BookID: b.ID,
-			Title:  b.Title,
-			Author: credit(authors[b.ID]),
-			Added:  b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			BookID:  b.ID,
+			Title:   b.Title,
+			Author:  credit(authors[b.ID]),
+			Added:   b.CreatedAt.In(loc).Format("Jan 2, 2006"),
+			addedAt: b.CreatedAt,
 			// The row already holds the book, so what it can do is read
 			// off it rather than asked for: one file, one media type,
 			// and a status that says whether a scan can still find it.
@@ -696,6 +727,7 @@ func (s *Server) markLibraryReadable(r *http.Request, userID string, rows []Libr
 		}
 		rows[i].CanGet = book.Status == store.BookActive
 		rows[i].CanRead = bookReadable(book)
+		rows[i].addedAt = book.CreatedAt
 	}
 	return rows
 }
@@ -771,6 +803,17 @@ func dirArrow(current string) string {
 // shelf is something you can send to somebody and an htmx continuation
 // asks for more of what is on screen rather than more of the default.
 func libraryURL(folder, filter, sortBy, dir, cursor string) string {
+	return libraryHref("library", folder, filter, sortBy, dir, cursor)
+}
+
+// libraryCSVURL is [libraryURL] spelled for the export: the same folder,
+// chip and ordering, without the cursor, because an export is the whole
+// list rather than the page someone happened to be on.
+func libraryCSVURL(folder, filter, sortBy, dir string) string {
+	return libraryHref("library.csv", folder, filter, sortBy, dir, "")
+}
+
+func libraryHref(base, folder, filter, sortBy, dir, cursor string) string {
 	q := url.Values{}
 	if folder != "" {
 		q.Set("folder", folder)
@@ -790,9 +833,9 @@ func libraryURL(folder, filter, sortBy, dir, cursor string) string {
 		q.Set("cursor", cursor)
 	}
 	if len(q) == 0 {
-		return "library"
+		return base
 	}
-	return "library?" + q.Encode()
+	return base + "?" + q.Encode()
 }
 
 func libraryChips(folder, filter, sortBy, dir string) []FilterChip {

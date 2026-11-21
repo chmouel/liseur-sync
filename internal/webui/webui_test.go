@@ -907,6 +907,7 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/settings",
 		"/ui/settings?section=devices", "/ui/settings?section=admin",
 		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
+		"/ui/library.csv",
 		"/ui/search", "/ui/audiobookshelf",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {

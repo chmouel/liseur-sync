@@ -301,6 +301,10 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 	mux.Handle("GET /ui/setup", sec(s.handleSetupPage))
 	mux.Handle("POST /ui/setup", sec(s.rateLimited(s.handleSetup)))
 	mux.Handle("GET /ui/library", sec(s.requireAuth(s.handleLibrary)))
+	// The shelf as a file. It is a GET with the page's own query string
+	// and no CSRF token, because it changes nothing: it is the same
+	// rows, read the same way, written as text instead of markup.
+	mux.Handle("GET /ui/library.csv", sec(s.requireAuth(s.handleLibraryCSV)))
 	mux.Handle("GET /ui/works/{id}", sec(s.requireAuth(s.handleWork)))
 	mux.Handle("GET /ui/books/{id}", sec(s.requireAuth(s.handleBook)))
 	mux.Handle("GET /ui/books/{id}/download", sec(s.requireAuth(s.handleBookDownload)))

@@ -936,6 +936,13 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .librarycontrols .upload-btn { padding: .34rem .65rem; font-size: .84rem; margin-left: .35rem; }
 .librarycontrols .upload-btn .upload-icon { display: inline-flex; color: var(--muted); }
 .librarycontrols .upload-btn .ui-icon { width: .95rem; height: .95rem; }
+/* The CSV export sits beside Upload: it is the shelf going the other way. */
+.librarycontrols .csvbtn {
+	display: inline-flex; align-items: center; gap: .3rem;
+	padding: .34rem .65rem; font-size: .84rem; margin-left: .35rem;
+}
+.librarycontrols .csvbtn .csv-icon { display: inline-flex; color: var(--muted); }
+.librarycontrols .csvbtn .ui-icon { width: .95rem; height: .95rem; }
 .librarycontrols .refreshbtn {
 	background: none; border: 0; color: var(--muted); padding: .4rem;
 }
@@ -1062,6 +1069,24 @@ a.chip:hover { background: var(--primary); border-color: var(--primary); color: 
 .upload-dialog-actions {
 	display: flex; align-items: center; gap: 1rem; margin-top: .5rem; flex-wrap: wrap;
 }
+/* The CSV export dialog: a file, in a box big enough to read it in. The
+   textarea is monospaced and keeps its own scrollbars so a long title
+   wraps nowhere and the columns stay lined up. */
+.csv-dialog { width: min(48rem, calc(100% - 2rem)); max-width: 100%; }
+.csv-hint { margin: .2rem 0 0; font-size: .82rem; color: var(--muted); }
+.csv-text {
+	box-sizing: border-box; width: 100%; min-height: 12rem; max-height: 60vh;
+	margin: 0; padding: .7rem .8rem; resize: vertical;
+	background: var(--surface-1); color: var(--ink);
+	border: 1px solid var(--line); border-radius: var(--radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: .8rem; line-height: 1.5; white-space: pre; overflow: auto;
+}
+.csv-text:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.csv-actions {
+	display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .8rem;
+}
+.csv-status { font-size: .8rem; }
 
 /* ------------------------------------------------------------- the grid */
 
@@ -3196,6 +3221,7 @@ form.working :is(input, select, textarea, button) { pointer-events: none; }
 	.librarycontrols select,
 	.librarycontrols input[type="search"],
 	.librarycontrols .upload-btn,
+	.librarycontrols .csvbtn,
 	.folderselect-wrap select,
 	.spanpick select { min-height: 44px; padding-block: .5rem; }
 	.iconbtn { width: 44px; height: 44px; }

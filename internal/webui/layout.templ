@@ -46,6 +46,7 @@ templ layout(title string, prefix string, u userCtx, csrf string, body templ.Com
 			}
 			if u.Section == "library" {
 				<script type="module" src={ prefix + "static/library-refresh.js" } defer></script>
+				<script type="module" src={ prefix + "static/library-csv.js" } defer></script>
 			}
 		</head>
 		<body data-pwa-base={ pwaBase(prefix, u.Offline) } data-offline-account={ offlineAccount(u) }>
@@ -162,6 +163,8 @@ templ uiIcon(name string) {
 				<path d="M4 12h16M4 8v8M20 8v8"/>
 			case "Upload":
 				<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+			case "Export":
+				<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/>
 		}
 	</svg>
 }
