@@ -152,8 +152,8 @@ func PublicAddr(ip netip.Addr) bool {
 // must have: HTTPS, a path, and nothing that lets two spellings of one
 // client compare unequal.
 func ValidateMetadataURL(raw string) error {
-	if len(raw) > maxClientIDBytes {
-		return errors.New("client metadata URL is too long")
+	if !validClientID(raw) {
+		return errors.New("client metadata URL is invalid or too long")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||

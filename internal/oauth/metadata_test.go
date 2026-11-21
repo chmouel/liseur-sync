@@ -107,7 +107,7 @@ func TestMetadataWaiterCancellation(t *testing.T) {
 }
 
 func TestMetadataURLRejectsInvalidAuthorityAndQuery(t *testing.T) {
-	for _, value := range []string{"https://client.example/metadata?", "https://:443/metadata", "https://client.example/metadata#"} {
+	for _, value := range []string{"https://client.example/metadata?", "https://:443/metadata", "https://client.example/metadata#", "https://client.example/\xff"} {
 		if err := ValidateMetadataURL(value); err == nil {
 			t.Errorf("accepted %q", value)
 		}

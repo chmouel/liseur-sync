@@ -153,8 +153,11 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request) (Cli
 	} else {
 		id, secret = r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
 	}
+	if !validClientID(id) {
+		return invalid()
+	}
 	row, err := s.st.OAuthClient(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) || id == "" {
+	if errors.Is(err, store.ErrNotFound) {
 		return invalid()
 	}
 	if err != nil {

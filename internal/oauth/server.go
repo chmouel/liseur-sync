@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
@@ -130,11 +131,15 @@ func (c Client) Host() string {
 // ErrUnknownClient is returned for a client_id nobody allowed.
 var ErrUnknownClient = errors.New("this application is not allowed on this server")
 
+func validClientID(id string) bool {
+	return id != "" && len(id) <= maxClientIDBytes && utf8.ValidString(id) && !strings.ContainsRune(id, 0)
+}
+
 // ResolveClient looks a client up. A metadata client is trusted only
 // because an administrator allowlisted its exact URL; its redirect URIs
 // come from the document itself.
 func (s *Server) ResolveClient(ctx context.Context, clientID string) (Client, error) {
-	if clientID == "" || len(clientID) > maxClientIDBytes {
+	if !validClientID(clientID) {
 		return Client{}, ErrUnknownClient
 	}
 	row, err := s.st.OAuthClient(ctx, clientID)
