@@ -64,7 +64,7 @@ func (s *Server) handleLibraryCSV(
 			if len(page) < folderPickerLimit {
 				break
 			}
-			after = page[len(page)-1].ID
+			after = store.FolderCursor(page[len(page)-1])
 		}
 	}
 	v := LibraryView{
