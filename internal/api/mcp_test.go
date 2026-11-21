@@ -341,6 +341,19 @@ func TestMCPVocabularyRespectsLimitAcrossFilteredPages(t *testing.T) {
 	}
 }
 
+func TestMCPReadChapterRequiresIndex(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	access := f.assistantToken(t, f.user.ID)
+	for _, args := range []map[string]any{{"book_id": bookID}, {"book_id": bookID, "chapter": nil}} {
+		if _, msg := f.call(t, access, "read_chapter", args); !strings.Contains(msg, "chapter is required") {
+			t.Fatalf("arguments %v: %q", args, msg)
+		}
+	}
+	f.mustCall(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": 0})
+}
+
 func TestMCPReadsOnlyTheGrantedLibrary(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
