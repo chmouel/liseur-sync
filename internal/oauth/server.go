@@ -241,7 +241,8 @@ func (s *Server) ParseAuthorize(ctx context.Context, q url.Values) (*AuthorizeRe
 		return nil, fail("invalid_request", "PKCE with code_challenge_method=S256 is required")
 	}
 	req.CodeChallenge = q.Get("code_challenge")
-	if !validPKCE(req.CodeChallenge) {
+	decodedChallenge, challengeErr := base64.RawURLEncoding.Strict().DecodeString(req.CodeChallenge)
+	if len(req.CodeChallenge) != 43 || challengeErr != nil || len(decodedChallenge) != sha256.Size {
 		return nil, fail("invalid_request", "code_challenge is malformed")
 	}
 	req.Resource = q.Get("resource")
@@ -283,8 +284,7 @@ func parseScopes(raw string) ([]string, bool) {
 	return out, true
 }
 
-// validPKCE accepts a base64url SHA-256 challenge (43 characters), or
-// more generally the RFC 7636 verifier alphabet and length.
+// validPKCE checks the RFC 7636 verifier alphabet and length.
 func validPKCE(v string) bool {
 	if len(v) < 43 || len(v) > 128 {
 		return false
