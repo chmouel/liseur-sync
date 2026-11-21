@@ -30,6 +30,7 @@ const (
 	maxMentionNames = 10
 	maxNameBytes    = 100
 	snippetBytes    = 120
+	maxWindowBytes  = 1 << 20
 )
 
 func (m *mcpService) textTools() []mcp.Tool {
@@ -66,8 +67,8 @@ func (m *mcpService) textTools() []mcp.Tool {
 				"at":            enumProp("The reader's position.", "current", "furthest"),
 				"progression":   numProp("A fraction of the whole book.", 0, 1),
 				"annotation_id": strProp("An annotation from list_annotations.", maxIDLen),
-				"before":        intProp("Bytes of text before the place (default 1500).", 0, 1<<20),
-				"after":         intProp("Bytes of text from the place on (default 3000).", 0, 1<<20),
+				"before":        intProp("Bytes of text before the place (default 1500).", 0, maxWindowBytes),
+				"after":         intProp("Bytes of text from the place on (default 3000).", 0, maxWindowBytes),
 			}, "book_id"),
 			Call: m.readAt,
 		},
@@ -431,15 +432,15 @@ func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, erro
 	if in.After != nil {
 		after = *in.After
 	}
-	if before < 0 || after < 0 || before+after == 0 {
-		return nil, mcp.Errorf("before and after must be positive")
+	if before < 0 || before > maxWindowBytes || after < 0 || after > maxWindowBytes || before+after == 0 {
+		return nil, mcp.Errorf("before and after must be between 0 and %d bytes and cannot both be zero", maxWindowBytes)
 	}
 	allow, err := m.allowance(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if total := before + after; total > allow {
-		before = before * allow / total
+		before = int(int64(before) * int64(allow) / int64(total))
 		after = allow - before
 	}
 	userID := mcpUser(ctx)
