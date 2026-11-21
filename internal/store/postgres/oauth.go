@@ -241,13 +241,13 @@ func (s *Store) RotateOAuthRefresh(
 	var expires time.Time
 	var scopes string
 	err = tx.QueryRowContext(ctx,
-		q(`SELECT t.used_at, t.expires_at, g.id, g.user_id, g.client_id, g.client_name,
+		q(`SELECT g.id, g.user_id, g.client_id, g.client_name,
 		        g.scopes, g.resource, g.created_at, g.revoked_at, u.disabled_at
 		   FROM oauth_tokens t
 		   JOIN oauth_grants g ON g.id = t.grant_id
 		   JOIN users u ON u.id = g.user_id
 		  WHERE t.sha256 = ? AND t.kind = 'refresh' FOR UPDATE OF g`), sha256).
-		Scan(&used, &expires, &g.ID, &g.UserID, &g.ClientID, &g.ClientName,
+		Scan(&g.ID, &g.UserID, &g.ClientID, &g.ClientName,
 			&scopes, &g.Resource, &g.CreatedAt, &revoked, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return store.OAuthGrant{}, store.ErrNotFound
@@ -257,6 +257,13 @@ func (s *Store) RotateOAuthRefresh(
 	}
 	if g.ClientID != clientID {
 		return store.OAuthGrant{}, store.ErrNotFound
+	}
+	err = tx.QueryRowContext(ctx, q(`SELECT used_at, expires_at FROM oauth_tokens WHERE sha256 = ? AND kind = 'refresh'`), sha256).Scan(&used, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.OAuthGrant{}, store.ErrNotFound
+	}
+	if err != nil {
+		return g, err
 	}
 	if used != nil {
 		if _, err := tx.ExecContext(ctx,
