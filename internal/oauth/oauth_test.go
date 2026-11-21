@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -256,6 +257,71 @@ func TestCredentialsRemainBoundToOriginalResource(t *testing.T) {
 	}
 	if status, body := f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"lsc_public"}}); status != http.StatusOK {
 		t.Fatalf("original refresh spent: %d %v", status, body)
+	}
+}
+
+func TestBrowserNormalizedResource(t *testing.T) {
+	for _, tc := range []struct{ name, configured, normalized string }{
+		{"default-port", "https://Books.Example:443", "https://books.example"},
+		{"international-host", "https://b%C3%BCcher.example:08443", "https://xn--bcher-kva.example:8443"},
+		{"mapped-ipv6", "https://[::ffff:127.0.0.1]:443", "https://[::ffff:7f00:1]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			cfg := config.Default()
+			cfg.MCP.Enabled = true
+			cfg.MCP.PublicURL = tc.configured
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			f.srv = oauth.New(f.st, cfg)
+			f.srv.SetClock(func() time.Time { return f.now })
+			query := authorizeQuery("lsc_public")
+			base, err := url.Parse(tc.normalized)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrongScheme := (&url.URL{Scheme: "http", Host: base.Host, Path: "/mcp"}).String()
+			wrongPort := (&url.URL{Scheme: base.Scheme, Host: net.JoinHostPort(base.Hostname(), "12345"), Path: "/mcp"}).String()
+			for _, target := range []string{
+				"https://evil.example/mcp", tc.normalized + "/other", tc.normalized + "/mcp?x=1",
+				tc.normalized + "/mcp#", tc.normalized + "/%6dcp", "https://b%25C3%25BCcher.example:08443/mcp", wrongScheme, wrongPort,
+			} {
+				query.Set("resource", target)
+				_, err := f.srv.ParseAuthorize(t.Context(), query)
+				if ae, ok := err.(*oauth.AuthorizeError); !ok || ae.Code != "invalid_target" {
+					t.Fatalf("accepted unrelated resource %q: %v", target, err)
+				}
+			}
+			query.Set("resource", tc.normalized+"/mcp")
+			req, err := f.srv.ParseAuthorize(t.Context(), query)
+			if err != nil || req.Resource != tc.configured+"/mcp" {
+				t.Fatalf("normalized authorization: %+v %v", req, err)
+			}
+			to, err := f.srv.Approve(t.Context(), req, f.user.ID, f.sessionID, req.Scopes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			callback, err := url.Parse(to)
+			if err != nil || callback.Query().Get("iss") != tc.configured {
+				t.Fatalf("issuer in authorization response: %v", err)
+			}
+			form := exchange(callback.Query().Get("code"), "lsc_public")
+			form.Set("resource", tc.normalized+"/mcp")
+			status, body := f.token(form)
+			if status != http.StatusOK {
+				t.Fatalf("normalized exchange: %d %v", status, body["error"])
+			}
+			access, err := f.st.OAuthAccess(t.Context(), auth.HashSecret(body["access_token"].(string)), f.now)
+			if err != nil || access.Resource != tc.configured+"/mcp" {
+				t.Fatalf("stored audience: %+v %v", access, err)
+			}
+			status, body = f.token(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {body["refresh_token"].(string)},
+				"client_id": {"lsc_public"}, "resource": {tc.normalized + "/mcp"}})
+			if status != http.StatusOK {
+				t.Fatalf("normalized refresh: %d %v", status, body["error"])
+			}
+		})
 	}
 }
 

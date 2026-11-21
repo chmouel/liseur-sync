@@ -19,6 +19,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/chmouel/liseur-sync/internal/weborigin"
 )
 
 // Scope names. Every one of them is read-only.
@@ -259,19 +260,29 @@ func (s *Server) ParseAuthorize(ctx context.Context, q url.Values) (*AuthorizeRe
 	if len(req.CodeChallenge) != 43 || challengeErr != nil || len(decodedChallenge) != sha256.Size {
 		return nil, fail("invalid_request", "code_challenge is malformed")
 	}
-	req.Resource = q.Get("resource")
-	if req.Resource == "" {
-		req.Resource = s.resource
-	}
-	if req.Resource != s.resource {
+	if !s.acceptsResource(q.Get("resource")) {
 		return nil, fail("invalid_target", "this server only issues tokens for "+s.resource)
 	}
+	req.Resource = s.resource
 	scopes, ok := parseScopes(q.Get("scope"))
 	if !ok {
 		return nil, fail("invalid_scope", "unknown scope requested")
 	}
 	req.Scopes = scopes
 	return req, nil
+}
+
+func (s *Server) acceptsResource(raw string) bool {
+	if raw == "" || raw == s.resource {
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.EscapedPath() != "/mcp" || u.RawQuery != "" || u.ForceQuery ||
+		u.Fragment != "" || strings.Contains(raw, "#") {
+		return false
+	}
+	origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+	return weborigin.Same(origin, s.issuer)
 }
 
 // parseScopes keeps the scopes this server knows, in canonical order.
