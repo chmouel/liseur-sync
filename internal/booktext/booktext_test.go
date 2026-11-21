@@ -129,6 +129,22 @@ func TestReadCoversChapterWithoutGaps(t *testing.T) {
 	}
 }
 
+func TestNearestIndex(t *testing.T) {
+	for _, tc := range []struct {
+		text, quote string
+		guess, want int
+	}{
+		{"aaaaaa", "aaaa", 1, 1},
+		{"abc abc", "abc", 2, 0},
+		{"abc abc", "abc", 3, 4},
+		{"abc", "x", 1, -1},
+	} {
+		if got := nearestIndex(tc.text, tc.quote, tc.guess); got != tc.want {
+			t.Errorf("nearestIndex(%q, %q, %d) = %d, want %d", tc.text, tc.quote, tc.guess, got, tc.want)
+		}
+	}
+}
+
 func TestLocateRepeatedQuoteNearEnd(t *testing.T) {
 	text := strings.Repeat("dit Émile. ", 100)
 	b := &Book{Chapters: []Chapter{{Href: "one.xhtml", Text: text}}}
