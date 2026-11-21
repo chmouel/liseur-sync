@@ -405,6 +405,39 @@ func TestMCPBookTextIsBudgeted(t *testing.T) {
 	f.mustCall(t, fresh, "read_chapter", map[string]any{"book_id": bookID, "chapter": ch})
 }
 
+func TestMCPConcurrentBookTextBudget(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, func(c *config.MCPConfig) {
+		c.TextBytesPerCall = 1024
+		c.TextBytesPerHour = 2500
+	})
+	bookID, _ := f.writeBook(t, "long.epub", chapterEPUBWithText(t, strings.Repeat("Ishmael went to sea. ", 400)))
+	access := f.assistantToken(t, f.user.ID)
+	ch := f.chapterIndex(t, access, bookID, "Loomings")
+	const calls = 32
+	start := make(chan struct{})
+	results := make(chan int, calls)
+	for range calls {
+		go func() {
+			n := 0
+			defer func() { results <- n }()
+			<-start
+			out, errText := f.call(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": ch})
+			if errText == "" {
+				n = len(out["text"].(string))
+			}
+		}()
+	}
+	close(start)
+	total := 0
+	for range calls {
+		total += <-results
+	}
+	if total == 0 || total > 2500 {
+		t.Fatalf("concurrent calls returned %d bytes against an hourly budget of 2500", total)
+	}
+}
+
 func asJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)

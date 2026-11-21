@@ -164,9 +164,12 @@ func (m *mcpService) allowance(ctx context.Context) (int, error) {
 	return int(min(int64(m.perCall), left)), nil
 }
 
-func (m *mcpService) charge(ctx context.Context, n int) {
+func (m *mcpService) charge(ctx context.Context, n int) error {
 	a, _ := oauth.AccessFrom(ctx)
-	m.budget.charge(a.GrantID, n, m.now())
+	if ok, reset := m.budget.charge(a.GrantID, n, m.now()); !ok {
+		return mcp.Errorf("the hourly book text allowance is too low; it renews at %s", reset.UTC().Format(time.RFC3339))
+	}
+	return nil
 }
 
 func passageJSON(bookID string, p booktext.Passage) map[string]any {
@@ -223,7 +226,9 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 		list = append(list, entry)
 	}
 	if outline {
-		m.charge(ctx, used)
+		if err := m.charge(ctx, used); err != nil {
+			return nil, err
+		}
 	}
 	out := map[string]any{"book_id": b.ID, "title": b.Title, "chapters": list, "content_notice": textNotice}
 	if t.Truncated {
@@ -276,7 +281,9 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 		return nil, mcp.Errorf("invalid cursor")
 	}
 	p := t.Read(in.Chapter, start, allow)
-	m.charge(ctx, len(p.Text))
+	if err := m.charge(ctx, len(p.Text)); err != nil {
+		return nil, err
+	}
 	out := passageJSON(in.BookID, p)
 	out["chapter_length"] = len(c.Text)
 	out["content_notice"] = textNotice
@@ -473,7 +480,9 @@ func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, erro
 		extra["annotation_kind"] = string(ann.Kind)
 	}
 	p := t.Window(pl.ch, pl.off, before, after)
-	m.charge(ctx, len(p.Text))
+	if err := m.charge(ctx, len(p.Text)); err != nil {
+		return nil, err
+	}
 	out := passageJSON(b.ID, p)
 	out["located_by"] = pl.by
 	out["place_offset"] = pl.off
@@ -577,7 +586,9 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 		entry["progression"] = t.Progression(h.Chapter, h.Offset)
 		results = append(results, entry)
 	}
-	m.charge(ctx, used)
+	if err := m.charge(ctx, used); err != nil {
+		return nil, err
+	}
 	return map[string]any{"book_id": b.ID, "results": results, "more": more, "content_notice": textNotice}, nil
 }
 
@@ -707,7 +718,9 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 		entry["progression"] = t.Progression(h.Chapter, h.Offset)
 		occurrences = append(occurrences, entry)
 	}
-	m.charge(ctx, used)
+	if err := m.charge(ctx, used); err != nil {
+		return nil, err
+	}
 	out["occurrences"] = occurrences
 	if next < len(hits) {
 		out["next_cursor"] = strconv.Itoa(next)
