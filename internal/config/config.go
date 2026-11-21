@@ -1284,7 +1284,7 @@ func (c *Config) validateMCP() error {
 		return fmt.Errorf("mcp.public_url is required when mcp.enabled is true")
 	}
 	u, err := url.Parse(c.MCP.PublicURL)
-	if err != nil || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil || u.String() != c.MCP.PublicURL {
+	if err != nil || u.Host == "" || u.Hostname() == "" || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil || u.String() != c.MCP.PublicURL {
 		return fmt.Errorf("mcp.public_url must be a bare origin like https://books.example.com, got %q",
 			c.MCP.PublicURL)
 	}

@@ -90,7 +90,7 @@ func TestWebSessionLifetimeDefaultsAndValidation(t *testing.T) {
 }
 
 func TestMCPPublicURLIsBareOrigin(t *testing.T) {
-	for _, value := range []string{"https://books.example?", "https://books.example#", "https://books.example?x=1", "https://books.example#x"} {
+	for _, value := range []string{"https://:443", "https://books.example?", "https://books.example#", "https://books.example?x=1", "https://books.example#x"} {
 		cfg := Default()
 		cfg.MCP.Enabled = true
 		cfg.MCP.PublicURL = value
