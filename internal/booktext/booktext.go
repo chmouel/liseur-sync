@@ -241,7 +241,9 @@ func htmlText(doc []byte) (string, string) {
 	z := html.NewTokenizer(bytes.NewReader(doc))
 	var w textWriter
 	var heading strings.Builder
-	skip, inHeading, headingDone := 0, 0, false
+	var skipped []string
+	skipCounts := map[string]int{}
+	inHeading, headingDone := 0, false
 	for {
 		tt := z.Next()
 		if tt == html.SelfClosingTagToken {
@@ -254,15 +256,17 @@ func htmlText(doc []byte) (string, string) {
 			name, hasAttr := z.TagName()
 			tag := localName(name)
 			opens := tt == html.StartTagToken && !voidTags[tag]
-			if skip > 0 {
+			if len(skipped) > 0 {
 				if opens {
-					skip++
+					skipped = append(skipped, tag)
+					skipCounts[tag]++
 				}
 				continue
 			}
 			if skipTags[tag] || (hasAttr && hidden(z)) {
 				if opens {
-					skip = 1
+					skipped = append(skipped, tag)
+					skipCounts[tag]++
 				}
 				continue
 			}
@@ -282,12 +286,21 @@ func htmlText(doc []byte) (string, string) {
 				inHeading = 1
 			}
 		case html.EndTagToken:
-			if skip > 0 {
-				skip--
+			name, _ := z.TagName()
+			tag := localName(name)
+			if len(skipped) > 0 {
+				if skipCounts[tag] > 0 {
+					for i := len(skipped) - 1; i >= 0; i-- {
+						skipCounts[skipped[i]]--
+						if skipped[i] == tag {
+							skipped = skipped[:i]
+							break
+						}
+					}
+				}
 				continue
 			}
-			name, _ := z.TagName()
-			if blockTags[localName(name)] {
+			if blockTags[tag] {
 				w.newline()
 			}
 			if inHeading > 0 {
@@ -297,7 +310,7 @@ func htmlText(doc []byte) (string, string) {
 				}
 			}
 		case html.TextToken:
-			if skip > 0 {
+			if len(skipped) > 0 {
 				continue
 			}
 			t := string(z.Text())
