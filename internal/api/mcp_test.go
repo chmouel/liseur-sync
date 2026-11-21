@@ -726,6 +726,27 @@ func TestMCPConcurrentBookTextBudget(t *testing.T) {
 	}
 }
 
+func TestMCPReadChapterRefusesIncompleteCharacter(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, func(c *config.MCPConfig) {
+		c.TextBytesPerCall = 1024
+		c.TextBytesPerHour = 1025
+	})
+	prefix := "Loomings\nChapter one.\n"
+	body := strings.Repeat("a", 1024-len(prefix)) + "éclair"
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUBWithText(t, body))
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	chapter := f.chapterIndex(t, access, bookID, "Loomings")
+	first := f.mustCall(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": chapter})
+	if len(first["text"].(string)) != 1024 || first["next_cursor"] != "1024" {
+		t.Fatalf("first page: %v", first)
+	}
+	out, errText := f.call(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": chapter, "cursor": first["next_cursor"]})
+	if out != nil || !strings.Contains(errText, "allowance is too low") {
+		t.Fatalf("incomplete character: %v %q", out, errText)
+	}
+}
+
 func asJSON(v any) string {
 	raw, _ := json.Marshal(v)
 	return string(raw)

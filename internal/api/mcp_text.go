@@ -286,6 +286,9 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 		return nil, mcp.Errorf("invalid cursor")
 	}
 	p := t.Read(in.Chapter, start, allow)
+	if p.End == p.Start && p.End < len(c.Text) {
+		return nil, mcp.Errorf("the book text allowance is too low to return the next character")
+	}
 	if err := m.charge(ctx, len(p.Text)); err != nil {
 		return nil, err
 	}
