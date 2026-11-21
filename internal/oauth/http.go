@@ -205,7 +205,7 @@ func (s *Server) exchangeCode(w http.ResponseWriter, r *http.Request, client Cli
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request", Description: "code and code_verifier are required"})
 		return
 	}
-	if res := f.Get("resource"); res != "" && res != s.resource {
+	if !s.acceptsResource(f.Get("resource")) {
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_target"})
 		return
 	}
@@ -253,7 +253,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, client Client) 
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_request", Description: "refresh_token is required"})
 		return
 	}
-	if res := f.Get("resource"); res != "" && res != s.resource {
+	if !s.acceptsResource(f.Get("resource")) {
 		writeJSON(w, http.StatusBadRequest, tokenError{Error: "invalid_target"})
 		return
 	}

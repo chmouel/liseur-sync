@@ -14,8 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/netip"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -109,7 +107,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// with a token it obtained; the MCP spec asks servers to check
 	// Origin against DNS rebinding.
 	origins := r.Header.Values("Origin")
-	if len(origins) > 1 || len(origins) == 1 && !sameOrigin(origins[0], s.origin) {
+	if len(origins) > 1 || len(origins) == 1 && !weborigin.Same(origins[0], s.origin) {
 		http.Error(w, `{"error":"origin not allowed"}`, http.StatusForbidden)
 		return
 	}
@@ -212,53 +210,6 @@ func writeRPC(w http.ResponseWriter, status int, resp response) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-func sameOrigin(origin, want string) bool {
-	if strings.Contains(origin, "#") || strings.Contains(want, "#") {
-		return false
-	}
-	o, err := url.Parse(origin)
-	if err != nil || !bareOrigin(o) {
-		return false
-	}
-	w, err := url.Parse(want)
-	if err != nil || !bareOrigin(w) || !strings.EqualFold(o.Scheme, w.Scheme) {
-		return false
-	}
-	oHost, oValid := weborigin.Host(o.Hostname())
-	wHost, wValid := weborigin.Host(w.Hostname())
-	if !oValid || !wValid || !strings.EqualFold(oHost, wHost) {
-		return false
-	}
-	oPort, oOK := originPort(o)
-	wPort, wOK := originPort(w)
-	return oOK && wOK && oPort == wPort
-}
-
-func bareOrigin(u *url.URL) bool {
-	if strings.HasPrefix(u.Host, "[") {
-		ip, err := netip.ParseAddr(u.Hostname())
-		if err != nil || !ip.Is6() {
-			return false
-		}
-	} else if strings.Contains(u.Hostname(), ":") {
-		return false
-	}
-	return (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil &&
-		u.Path == "" && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.HasSuffix(u.Host, ":")
-}
-
-func originPort(u *url.URL) (int, bool) {
-	port := u.Port()
-	if port == "" {
-		if u.Scheme == "https" {
-			return 443, true
-		}
-		return 80, true
-	}
-	n, err := strconv.Atoi(port)
-	return n, err == nil && n >= 0 && n <= 65535
 }
 
 func (s *Server) dispatch(ctx context.Context, req request) (any, *rpcError) {
