@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chmouel/liseur-sync/internal/epub"
+	"github.com/chmouel/liseur-sync/internal/weborigin"
 )
 
 // Config is the server configuration, loaded from one TOML file with
@@ -1295,6 +1296,9 @@ func (c *Config) validateMCP() error {
 			return fmt.Errorf("mcp.public_url has an invalid IPv6 host")
 		}
 	} else if strings.Contains(u.Hostname(), ":") {
+		return fmt.Errorf("mcp.public_url has an invalid host")
+	}
+	if _, ok := weborigin.Host(u.Hostname()); !ok {
 		return fmt.Errorf("mcp.public_url has an invalid host")
 	}
 	if strings.HasSuffix(u.Host, ":") {
