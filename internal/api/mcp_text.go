@@ -708,6 +708,10 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 			after = min(after, stop.Offset-h.Offset)
 		}
 		p := t.Window(h.Chapter, h.Offset, half, after)
+		if end := h.Offset + h.Length; p.End < end {
+			p.End = end
+			p.Text = t.Chapters[h.Chapter].Text[p.Start:end]
+		}
 		if used+len(p.Text) > allow {
 			break
 		}
