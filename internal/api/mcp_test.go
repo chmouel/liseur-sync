@@ -351,6 +351,35 @@ func TestMCPReadsAroundTheReadersOwnPlaces(t *testing.T) {
 	}
 }
 
+func TestMCPReadAtBounds(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	maxInt := int(^uint(0) >> 1)
+	for _, tc := range []struct {
+		name          string
+		before, after int
+	}{
+		{"before over limit", maxWindowBytes + 1, 1},
+		{"after over limit", 1, maxWindowBytes + 1},
+		{"overflow", maxInt, maxInt},
+		{"negative", -1, 1},
+		{"both zero", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, errText := f.call(t, access, "read_at", map[string]any{
+				"book_id": bookID, "progression": 0.5, "before": tc.before, "after": tc.after,
+			}); errText == "" {
+				t.Fatal("invalid window accepted")
+			}
+		})
+	}
+	f.mustCall(t, access, "read_at", map[string]any{
+		"book_id": bookID, "progression": 0.5, "before": maxWindowBytes, "after": maxWindowBytes,
+	})
+}
+
 func TestMCPReadsAtAKOReaderPosition(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
