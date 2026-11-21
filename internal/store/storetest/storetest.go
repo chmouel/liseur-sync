@@ -25,6 +25,7 @@ const anyReader = ""
 // Run executes the full suite.
 func Run(t *testing.T, open OpenFunc) {
 	t.Run("Evaluations", func(t *testing.T) { testEvaluations(t, open) })
+	t.Run("WorkSummaryByID", func(t *testing.T) { testWorkSummaryByID(t, open) })
 	t.Run("WorkMetadata", func(t *testing.T) { testWorkMetadata(t, open) })
 	t.Run("WorkCover", func(t *testing.T) { testWorkCover(t, open) })
 	t.Run("WorkMetadataFollowsWorks", func(t *testing.T) {
