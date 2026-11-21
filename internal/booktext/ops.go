@@ -37,14 +37,17 @@ func (b *Book) Progression(ch, off int) float64 {
 }
 
 // AtProgression finds the chapter and offset of a whole-book fraction.
-func (b *Book) AtProgression(p float64) (int, int) {
+func (b *Book) AtProgression(p float64) (int, int, bool) {
 	p = min(max(p, 0), 1)
+	if b.Truncated && (b.unknownRange || len(b.Chapters) == 0 || p >= b.Chapters[len(b.Chapters)-1].EndProg) {
+		return 0, 0, false
+	}
 	for i, c := range b.Chapters {
 		if p < c.EndProg || i == len(b.Chapters)-1 {
-			return i, offsetIn(c, p)
+			return i, offsetIn(c, p), true
 		}
 	}
-	return 0, 0
+	return 0, 0, false
 }
 
 func offsetIn(c Chapter, p float64) int {

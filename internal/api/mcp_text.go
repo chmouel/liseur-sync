@@ -177,18 +177,23 @@ func (m *mcpService) charge(ctx context.Context, n int) error {
 	return nil
 }
 
-func passageJSON(bookID string, p booktext.Passage) map[string]any {
+func passageJSON(bookID string, t *booktext.Book, p booktext.Passage) map[string]any {
 	out := map[string]any{
 		"book_id": bookID, "chapter": p.Chapter, "start": p.Start, "end": p.End,
-		"progression": p.Progression, "text": p.Text,
+		"text": p.Text,
+	}
+	if t.ProgressionKnown() {
+		out["progression"] = p.Progression
 	}
 	return out
 }
 
-func chapterJSON(i int, c *booktext.Chapter) map[string]any {
+func chapterJSON(i int, t *booktext.Book, c *booktext.Chapter) map[string]any {
 	out := map[string]any{
 		"chapter": i, "length": len(c.Text),
-		"start_progression": c.StartProg, "end_progression": c.EndProg,
+	}
+	if t.ProgressionKnown() {
+		out["start_progression"], out["end_progression"] = c.StartProg, c.EndProg
 	}
 	return out
 }
@@ -221,7 +226,7 @@ func (m *mcpService) chapters(ctx context.Context, raw json.RawMessage, outline 
 	titlesTruncated := false
 	for i := range t.Chapters {
 		c := &t.Chapters[i]
-		entry := chapterJSON(i, c)
+		entry := chapterJSON(i, t, c)
 		n := addTextTitle(entry, "title", c.Title, allow-used)
 		used += n
 		if c.Title != "" && n == 0 {
@@ -299,7 +304,7 @@ func (m *mcpService) readChapter(ctx context.Context, raw json.RawMessage) (any,
 	if p.End == p.Start && p.End < len(c.Text) {
 		return nil, mcp.Errorf("the book text allowance is too low to return the next character")
 	}
-	out := passageJSON(in.BookID, p)
+	out := passageJSON(in.BookID, t, p)
 	used := len(p.Text) + addTextTitle(out, "chapter_title", p.Title, allow-len(p.Text))
 	if err := m.charge(ctx, used); err != nil {
 		return nil, err
@@ -336,7 +341,7 @@ type storedLocator struct {
 // locator when it was taken in this same file, through its KOReader
 // XPath when it came from KOReader on this same file, and otherwise
 // from its whole-book progression.
-func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktext.Book, edition *string, locator []byte, progression float64, kosync *store.Op) place {
+func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktext.Book, edition *string, locator []byte, progression *float64, kosync *store.Op) (place, error) {
 	if len(locator) > 0 && edition != nil && *edition == b.ContentSHA256 {
 		var l storedLocator
 		if json.Unmarshal(locator, &l) == nil && l.Href != "" {
@@ -345,7 +350,7 @@ func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktex
 				if exact {
 					by = "anchor"
 				}
-				return place{ch, off, by}
+				return place{ch, off, by}, nil
 			}
 		}
 	}
@@ -360,13 +365,19 @@ func (m *mcpService) locate(ctx context.Context, b store.CatalogBook, t *booktex
 					if exact {
 						by = "kosync_xpath"
 					}
-					return place{ch, off, by}
+					return place{ch, off, by}, nil
 				}
 			}
 		}
 	}
-	ch, off := t.AtProgression(progression)
-	return place{ch, off, "book_fraction"}
+	if progression == nil {
+		return place{}, mcp.Errorf("the position cannot be located in this edition")
+	}
+	ch, off, ok := t.AtProgression(*progression)
+	if !ok {
+		return place{}, mcp.Errorf("the requested position is beyond the extracted book text")
+	}
+	return place{ch, off, "book_fraction"}, nil
 }
 
 func (m *mcpService) kosyncLocator(ctx context.Context, b store.CatalogBook, xpath string) (xpointer.Locator, error) {
@@ -416,7 +427,8 @@ func (m *mcpService) readerPlace(ctx context.Context, userID string, b store.Cat
 	if op == nil {
 		return place{}, 0, mcp.Errorf("the reader has no position in this book")
 	}
-	return m.locate(ctx, b, t, op.EditionSHA, op.LocatorJSON, op.Progression, op), op.Progression, nil
+	pl, err := m.locate(ctx, b, t, op.EditionSHA, op.LocatorJSON, &op.Progression, op)
+	return pl, op.Progression, err
 }
 
 func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -473,7 +485,10 @@ func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, erro
 	extra := map[string]any{}
 	switch {
 	case in.Progression != nil:
-		ch, off := t.AtProgression(*in.Progression)
+		ch, off, ok := t.AtProgression(*in.Progression)
+		if !ok {
+			return nil, mcp.Errorf("the requested position is beyond the extracted book text")
+		}
 		pl = place{ch, off, "book_fraction"}
 	case in.At != "":
 		var prog float64
@@ -492,24 +507,23 @@ func (m *mcpService) readAt(ctx context.Context, raw json.RawMessage) (any, erro
 		if err != nil {
 			return nil, err
 		}
-		prog := 0.0
-		if ann.Progression != nil {
-			prog = *ann.Progression
-		} else if len(ann.LocatorJSON) == 0 {
-			return nil, mcp.Errorf("that annotation has no position")
+		pl, err = m.locate(ctx, b, t, ann.EditionSHA, ann.LocatorJSON, ann.Progression, nil)
+		if err != nil {
+			return nil, err
 		}
-		pl = m.locate(ctx, b, t, ann.EditionSHA, ann.LocatorJSON, prog, nil)
 		extra["annotation_kind"] = string(ann.Kind)
 	}
 	p := t.Window(pl.ch, pl.off, before, after)
-	out := passageJSON(b.ID, p)
+	out := passageJSON(b.ID, t, p)
 	used := len(p.Text) + addTextTitle(out, "chapter_title", p.Title, allow-len(p.Text))
 	if err := m.charge(ctx, used); err != nil {
 		return nil, err
 	}
 	out["located_by"] = pl.by
 	out["place_offset"] = pl.off
-	out["place_progression"] = t.Progression(pl.ch, pl.off)
+	if t.ProgressionKnown() {
+		out["place_progression"] = t.Progression(pl.ch, pl.off)
+	}
 	out["content_notice"] = textNotice
 	for k, v := range extra {
 		out[k] = v
@@ -598,16 +612,22 @@ func (m *mcpService) searchText(ctx context.Context, raw json.RawMessage) (any, 
 	used := 0
 	for _, h := range hits {
 		p := t.Window(h.Chapter, h.Offset, snippetBytes, h.Length+snippetBytes)
+		if end := h.Offset + h.Length; p.End < end {
+			p.End = end
+			p.Text = t.Chapters[h.Chapter].Text[p.Start:end]
+		}
 		if used+len(p.Text) > allow {
 			more = true
 			break
 		}
 		used += len(p.Text)
-		entry := passageJSON(b.ID, p)
+		entry := passageJSON(b.ID, t, p)
 		used += addTextTitle(entry, "chapter_title", p.Title, allow-used)
 		delete(entry, "book_id")
 		entry["offset"] = h.Offset
-		entry["progression"] = t.Progression(h.Chapter, h.Offset)
+		if t.ProgressionKnown() {
+			entry["progression"] = t.Progression(h.Chapter, h.Offset)
+		}
 		results = append(results, entry)
 	}
 	if err := m.charge(ctx, used); err != nil {
@@ -677,7 +697,11 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	case in.UpToProgression != nil:
 		stop = &booktext.Position{}
 		if *in.UpToProgression > 0 {
-			stop.Chapter, stop.Offset = t.AtProgression(*in.UpToProgression)
+			var ok bool
+			stop.Chapter, stop.Offset, ok = t.AtProgression(*in.UpToProgression)
+			if !ok {
+				return nil, mcp.Errorf("the requested position is beyond the extracted book text")
+			}
 		}
 	case in.UpToCurrent:
 		pl, _, err := m.readerPlace(ctx, userID, b, t, "current")
@@ -685,7 +709,9 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 			return nil, err
 		}
 		stop = &booktext.Position{Chapter: pl.ch, Offset: pl.off}
-		out["stopped_at_progression"] = t.Progression(pl.ch, pl.off)
+		if t.ProgressionKnown() {
+			out["stopped_at_progression"] = t.Progression(pl.ch, pl.off)
+		}
 		out["stop_located_by"] = pl.by
 	}
 	hits, capped := t.Find(terms, true, 0, stop, maxMentionScan)
@@ -714,7 +740,11 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 	}
 	if len(hits) > 0 {
 		at := func(h booktext.Hit) map[string]any {
-			return map[string]any{"chapter": h.Chapter, "offset": h.Offset, "progression": t.Progression(h.Chapter, h.Offset)}
+			position := map[string]any{"chapter": h.Chapter, "offset": h.Offset}
+			if t.ProgressionKnown() {
+				position["progression"] = t.Progression(h.Chapter, h.Offset)
+			}
+			return position
 		}
 		out["first"] = at(hits[0])
 		out["last"] = at(hits[len(hits)-1])
@@ -738,12 +768,14 @@ func (m *mcpService) findMentions(ctx context.Context, raw json.RawMessage) (any
 			break
 		}
 		used += len(p.Text)
-		entry := passageJSON(b.ID, p)
+		entry := passageJSON(b.ID, t, p)
 		used += addTextTitle(entry, "chapter_title", p.Title, allow-used)
 		delete(entry, "book_id")
 		entry["name"] = in.Names[h.Term]
 		entry["offset"] = h.Offset
-		entry["progression"] = t.Progression(h.Chapter, h.Offset)
+		if t.ProgressionKnown() {
+			entry["progression"] = t.Progression(h.Chapter, h.Offset)
+		}
 		occurrences = append(occurrences, entry)
 	}
 	out["occurrences"] = occurrences

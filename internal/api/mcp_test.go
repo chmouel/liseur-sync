@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -19,8 +20,11 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/booktext"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/epub"
 	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
+	"github.com/readium/go-toolkit/pkg/manifest"
+	readiumurl "github.com/readium/go-toolkit/pkg/util/url"
 )
 
 const (
@@ -283,6 +287,25 @@ func TestMCPStatsSummaryDateOrder(t *testing.T) {
 	f.mustCall(t, access, "get_stats_summary", map[string]any{"from": "2024-02-01", "to": "2024-02-01"})
 }
 
+func TestMCPReadingStatusLastReadMatchesListing(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	_, resolved := f.resolveBook(t, bookID, f.token)
+	resp, body := f.postRaw(t, "/v1/ops", f.token, `{"ops":[
+		{"op_id":"offline-position","work_id":"`+resolved.WorkID+`","client_ts":"2020-01-01T00:00:00Z","progression":0.4},
+		{"op_id":"status-update","work_id":"`+resolved.WorkID+`","client_ts":"2020-01-02T00:00:00Z","progression":0.4,"kind":"status","reading_status":"paused"}]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: %d %s", resp.StatusCode, body)
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeReading)
+	list := f.mustCall(t, access, "get_reading_status", map[string]any{})["works"].([]any)
+	one := f.mustCall(t, access, "get_reading_status", map[string]any{"work_id": resolved.WorkID})
+	if len(list) != 1 || list[0].(map[string]any)["last_read_at"] == nil || one["last_read_at"] != list[0].(map[string]any)["last_read_at"] {
+		t.Fatalf("list %v, single %v", list, one)
+	}
+}
+
 func TestMCPCalendarReportsSnapshotRevision(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
@@ -338,6 +361,42 @@ func TestMCPVocabularyRespectsLimitAcrossFilteredPages(t *testing.T) {
 	got = second["words"].([]any)
 	if len(got) != 1 || got[0].(map[string]any)["word"] != "three" || second["next_cursor"] != nil {
 		t.Fatalf("second page: %v", second)
+	}
+}
+
+func TestMCPVocabularyBoundsReviewScan(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	now := time.Now().UTC()
+	_, err := f.st.PushVocabularyWords(t.Context(), f.user.ID, "device", []store.VocabularyWordWrite{{
+		Language: "en", Normalized: "word", Word: "word", AddedAt: now, OccurrencesJSON: []byte("[]"),
+	}}, 50000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reviews []store.VocabularyReviewWrite
+	for i := range 40 {
+		reviews = append(reviews, store.VocabularyReviewWrite{ReviewID: fmt.Sprintf("review-%d", i), Language: "en", Normalized: "word", WordGeneration: 1, Rating: "GOOD", ReviewedAt: now, IntervalMinutes: 10, DueAt: now.Add(time.Hour)})
+	}
+	results, err := f.st.PushVocabularyReviews(t.Context(), f.user.ID, "device", reviews)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range results {
+		if r.Status != "applied" {
+			t.Fatalf("review: %+v", r)
+		}
+	}
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeVocabulary)
+	first := f.mustCall(t, access, "list_vocabulary", map[string]any{"limit": 1})
+	cursor := first["next_cursor"].(string)
+	second := f.mustCall(t, access, "list_vocabulary", map[string]any{"limit": 1, "cursor": cursor})
+	if len(second["words"].([]any)) != 0 || second["next_cursor"] == nil {
+		t.Fatalf("bounded scan: %v", second)
+	}
+	third := f.mustCall(t, access, "list_vocabulary", map[string]any{"limit": 1, "cursor": second["next_cursor"]})
+	if len(third["words"].([]any)) != 0 || third["next_cursor"] != nil {
+		t.Fatalf("end of feed: %v", third)
 	}
 }
 
@@ -520,6 +579,65 @@ func TestMCPReadAtBounds(t *testing.T) {
 	})
 }
 
+func TestMCPReadAtRejectsTruncatedPosition(t *testing.T) {
+	f := newFolderFixture(t)
+	f.srv.BookTexts = NewBookTextCache(0)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	f.srv.BookTexts.put(sha, &booktext.Book{Truncated: true, Chapters: []booktext.Chapter{{Href: "one.xhtml", Text: "early text", StartProg: 0, EndProg: 0.4}}})
+	f.enableMCP(t, nil)
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	f.mustCall(t, access, "read_at", map[string]any{"book_id": bookID, "progression": 0.2})
+	if _, msg := f.call(t, access, "read_at", map[string]any{"book_id": bookID, "progression": 0.9}); !strings.Contains(msg, "beyond the extracted") {
+		t.Fatalf("truncated position: %q", msg)
+	}
+}
+
+func TestMCPTruncatedUnknownProgressionIsOmitted(t *testing.T) {
+	href := func(name string) manifest.HREF { return manifest.NewHREF(readiumurl.MustURLFromString(name)) }
+	idx := &epub.Index{Entries: map[string]epub.IndexEntry{"one.xhtml": {}, "two.xhtml": {}}}
+	idx.Manifest.ReadingOrder = manifest.LinkList{{Href: href("one.xhtml")}, {Href: href("two.xhtml")}}
+	book, err := booktext.Extract(context.Background(), idx, func(name string) ([]byte, error) {
+		if name == "one.xhtml" {
+			return []byte("<p>early text here</p>"), nil
+		}
+		return []byte(strings.Repeat("x", booktext.MaxBookBytes)), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFolderFixture(t)
+	f.srv.BookTexts = NewBookTextCache(0)
+	bookID, sha := f.writeBook(t, "moby.epub", chapterEPUB(t))
+	f.srv.BookTexts.put(sha, book)
+	f.enableMCP(t, nil)
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	chapters := f.mustCall(t, access, "list_chapters", map[string]any{"book_id": bookID})["chapters"].([]any)
+	chapter := chapters[0].(map[string]any)
+	if chapter["start_progression"] != nil || chapter["end_progression"] != nil {
+		t.Fatalf("chapter: %v", chapter)
+	}
+	passage := f.mustCall(t, access, "read_chapter", map[string]any{"book_id": bookID, "chapter": 0})
+	if passage["progression"] != nil {
+		t.Fatalf("passage: %v", passage)
+	}
+	matches := f.mustCall(t, access, "search_text", map[string]any{"book_id": bookID, "query": "early"})["results"].([]any)
+	if len(matches) != 1 || matches[0].(map[string]any)["progression"] != nil {
+		t.Fatalf("matches: %v", matches)
+	}
+}
+
+func TestMCPSearchIncludesWholeMatch(t *testing.T) {
+	f := newFolderFixture(t)
+	f.enableMCP(t, nil)
+	bookID, _ := f.writeBook(t, "search.epub", chapterEPUBWithText(t, "Mary Jane-"+strings.Repeat("x", 800)))
+	access := f.assistantToken(t, f.user.ID, oauth.ScopeText)
+	result := f.mustCall(t, access, "search_text", map[string]any{"book_id": bookID, "query": "Mary Jane"})
+	hits := result["results"].([]any)
+	if len(hits) != 1 || !strings.Contains(hits[0].(map[string]any)["text"].(string), "Mary Jane") {
+		t.Fatalf("search match: %v", result)
+	}
+}
+
 func TestMCPMentionAtReadingBoundary(t *testing.T) {
 	f := newFolderFixture(t)
 	f.enableMCP(t, nil)
@@ -617,11 +735,22 @@ func TestMCPLocatorNeedsEditionProof(t *testing.T) {
 		{"unknown edition", nil, "book_fraction"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pl := (&mcpService{}).locate(t.Context(), book, text, tc.edition, locator, 0.25, nil)
+			progression := 0.25
+			pl, err := (&mcpService{}).locate(t.Context(), book, text, tc.edition, locator, &progression, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if pl.by != tc.want {
 				t.Fatalf("location: %+v", pl)
 			}
 		})
+	}
+	if _, err := (&mcpService{}).locate(t.Context(), book, text, &other, locator, nil, nil); err == nil {
+		t.Fatal("unresolvable locator without progression accepted")
+	}
+	zero := 0.0
+	if _, err := (&mcpService{}).locate(t.Context(), book, text, &other, locator, &zero, nil); err != nil {
+		t.Fatalf("explicit zero: %v", err)
 	}
 }
 
