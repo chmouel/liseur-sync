@@ -31,6 +31,7 @@ templ devicesBody(prefix string, u userCtx, csrf string, view string, toks []sto
 		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesEReaders), "E-readers", view == settingsDevicesEReaders)
 		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesApps), "Apps", view == settingsDevicesApps)
 		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesOPDS), "OPDS", view == settingsDevicesOPDS)
+		@settingsAdminTab(settingsDevicesHref(prefix, settingsDevicesAssistants), "AI assistants", view == settingsDevicesAssistants)
 	</nav>
 	if flash.Secret != "" {
 		<div class="card secret">

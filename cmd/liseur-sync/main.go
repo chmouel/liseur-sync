@@ -31,6 +31,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/content"
 	"github.com/chmouel/liseur-sync/internal/live"
 	"github.com/chmouel/liseur-sync/internal/mirror"
+	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/postgres"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
@@ -240,6 +241,17 @@ func cmdServe(args []string) error {
 		},
 		Koplugin: &koplugin.Server{St: st},
 	}
+	// Assistants (ADR-0069). The token endpoint gets its own budget:
+	// sharing the login limiter would let a chatty assistant lock its
+	// reader out of the login form.
+	var oauthSrv *oauth.Server
+	if cfg.MCP.Enabled {
+		oauthSrv = oauth.New(st, cfg)
+		apiSrv.OAuth = oauthSrv
+		apiSrv.OAuthLimiter = auth.NewRateLimiter(60, time.Minute)
+		apiSrv.MCPLimiter = auth.NewRateLimiter(120, time.Minute)
+		apiSrv.BookTexts = api.NewBookTextCache(0)
+	}
 	// One background worker, not five. The watcher runs a pass over
 	// every folder at startup, whenever a tree changes, and on a slow
 	// safety timer; a pass is idempotent and holds no state, so there is
@@ -258,6 +270,7 @@ func cmdServe(args []string) error {
 	// be written into a watched folder.
 	apiSrv.WebUI = &webui.Server{
 		St: st, Auth: auth.NewService(st), Cfg: cfg, ConfigPath: *cfgPath,
+		OAuth:           oauthSrv,
 		LoginLimiter:    loginLimiter,
 		Downloads:       apiSrv,
 		Covers:          apiSrv,

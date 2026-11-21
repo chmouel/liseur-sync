@@ -12,6 +12,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -902,13 +903,21 @@ func TestCrossUserIsolation(t *testing.T) {
 // session-cookie-bearing route accepted the credential over plain
 // HTTP even when insecure_http was false.
 func TestSecureTransportOnAllUIRoutes(t *testing.T) {
-	ts, _ := testServerCfg(t, func(c *config.Config) { c.InsecureHTTP = false }, nil)
+	// The assistant routes only exist with the feature on, so the run
+	// that checks them enables it.
+	ts, _ := testServerCfg(t, func(c *config.Config) {
+		c.InsecureHTTP = false
+		c.MCP.Enabled = true
+		c.MCP.PublicURL = "https://books.example"
+	}, func(s *Server) {
+		s.OAuth = oauth.New(s.St, s.Cfg)
+	})
 	for _, p := range []string{
 		"/ui/", "/ui/login", "/ui/setup", "/ui/library", "/ui/settings",
 		"/ui/settings?section=devices", "/ui/settings?section=admin",
 		"/ui/library", "/ui/books/x", "/ui/books/x/download", "/ui/books/x/read",
 		"/ui/library.csv",
-		"/ui/search", "/ui/audiobookshelf",
+		"/ui/search", "/ui/audiobookshelf", "/ui/oauth/authorize",
 	} {
 		if code, _ := page(t, ts, nil, p); code != http.StatusForbidden {
 			t.Errorf("GET %s over plain HTTP: want 403, got %d", p, code)
@@ -931,6 +940,9 @@ func TestSecureTransportOnAllUIRoutes(t *testing.T) {
 		"/ui/reader/token",
 		"/ui/preferences",
 		"/ui/library/scan",
+		"/ui/oauth/authorize", "/ui/oauth/grants/g1/revoke",
+		"/ui/admin/oauth/chatgpt", "/ui/admin/oauth/clients",
+		"/ui/admin/oauth/clients/delete", "/ui/admin/oauth/grants/g1/revoke",
 	} {
 		if code, _ := postForm(t, ts, nil, p, url.Values{}); code != http.StatusForbidden {
 			t.Errorf("POST %s over plain HTTP: want 403, got %d", p, code)

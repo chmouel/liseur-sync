@@ -14,6 +14,7 @@ import (
 
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
 	"github.com/chmouel/liseur-sync/internal/store/sqlite"
 )
@@ -45,6 +46,10 @@ func testServerWithConfig(t *testing.T, tweak func(*config.Config)) (*httptest.S
 		Cfg:          cfg,
 		LoginLimiter: auth.NewRateLimiter(100, time.Minute),
 		OPDSLimiter:  auth.NewRateLimiter(100, time.Minute),
+	}
+	if cfg.MCP.Enabled {
+		srv.OAuth = oauth.New(st, cfg)
+		srv.OAuthLimiter = auth.NewRateLimiter(100, time.Minute)
 	}
 	ts := httptest.NewServer(srv.Routes())
 	t.Cleanup(ts.Close)

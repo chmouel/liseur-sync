@@ -15,6 +15,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/audiobookshelf"
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
+	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -84,6 +85,10 @@ type Server struct {
 	// Mount fills in defaults when they are nil.
 	AdminReauthUserLimiter *auth.RateLimiter
 	AdminReauthIPLimiter   *auth.RateLimiter
+	// OAuth is the assistant endpoint's authorization server
+	// (ADR-0069). Nil when [mcp] is off: the consent page is a 404 and
+	// the settings pages say the feature is disabled.
+	OAuth *oauth.Server
 	// newSecret is an entropy-failure test hook. Production leaves it nil
 	// and generateSecret uses auth.NewSecret.
 	newSecret func() (string, error)
@@ -422,6 +427,28 @@ func (s *Server) Mount(mux *http.ServeMux, secure func(http.Handler) http.Handle
 		sec(s.requireAdmin(s.handleAdminSetFolderUploads)))
 	mux.Handle("POST /ui/admin/folders/{id}/delete",
 		sec(s.requireAdmin(s.handleAdminDeleteFolder)))
+	// Assistants (ADR-0069). The consent GET resolves its session by
+	// hand: an assistant's link arrives cross-site without the cookie.
+	// With the feature off these routes do not exist, so the POST is a
+	// 404 rather than a login redirect.
+	if s.OAuth != nil {
+		mux.Handle("GET /ui/oauth/authorize", sec(s.handleOAuthAuthorize))
+		mux.Handle("POST /ui/oauth/authorize", sec(s.requireAuth(s.handleOAuthDecision)))
+	} else {
+		// With the feature off the consent endpoint does not exist, and
+		// that includes its POST: the /ui/ GET catch-all would otherwise
+		// answer it with a 405.
+		mux.Handle("POST /ui/oauth/authorize", sec(http.HandlerFunc(http.NotFound)))
+	}
+	mux.Handle("POST /ui/oauth/grants/{id}/revoke", sec(s.requireAuth(s.handleRevokeOAuthGrant)))
+	mux.Handle("POST /ui/admin/oauth/chatgpt",
+		sec(s.requireAdminAction("oauth.chatgpt", s.handleAdminChatGPT)))
+	mux.Handle("POST /ui/admin/oauth/clients",
+		sec(s.requireAdminAction("oauth.client.create", s.handleAdminCreateOAuthClient)))
+	mux.Handle("POST /ui/admin/oauth/clients/delete",
+		sec(s.requireAdminAction("oauth.client.delete", s.handleAdminDeleteOAuthClient)))
+	mux.Handle("POST /ui/admin/oauth/grants/{id}/revoke",
+		sec(s.requireAdminAction("oauth.grant.revoke", s.handleAdminRevokeOAuthGrant)))
 	mux.Handle("POST /ui/admin/invites", sec(s.requireAdmin(s.handleCreateInvite)))
 	mux.Handle("POST /ui/admin/invites/{id}/revoke", sec(s.requireAdmin(s.handleRevokeInvite)))
 }
@@ -505,7 +532,8 @@ func (s *Server) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 			if !s.LoginLimiter.Allow(auth.ClientRateKey(r, s.Cfg)) {
 				w.Header().Set("Retry-After", "60")
 				w.WriteHeader(http.StatusTooManyRequests)
-				loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "too many attempts, try again later").
+				loginPage(relPrefix(r.URL.Path), uiCtx(r, nil), "too many attempts, try again later",
+					oauthNext(r.FormValue("next"))).
 					Render(r.Context(), w)
 				return
 			}
@@ -529,10 +557,11 @@ func passwordBusy(w http.ResponseWriter) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	prefix := relPrefix(r.URL.Path)
 	username, password := r.FormValue("username"), r.FormValue("password")
+	next := oauthNext(r.FormValue("next"))
 	release := auth.BeginPasswordRequest()
 	if release == nil {
 		passwordBusy(w)
-		loginPage(prefix, uiCtx(r, nil), errPasswordBusy).Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), errPasswordBusy, next).Render(r.Context(), w)
 		return
 	}
 	defer release()
@@ -541,16 +570,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Same work as a real check, so an unknown username cannot be
 		// told apart from a wrong password by response time.
 		auth.CheckDummyPassword(password)
-		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "invalid credentials", next).Render(r.Context(), w)
 		return
 	}
 	ok, err := auth.CheckPassword(password, u.Argon2Hash)
 	if err != nil || !ok {
-		loginPage(prefix, uiCtx(r, nil), "invalid credentials").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "invalid credentials", next).Render(r.Context(), w)
 		return
 	}
 	if err := s.startSession(w, r, u); err != nil {
-		loginPage(prefix, uiCtx(r, nil), "internal error").Render(r.Context(), w)
+		loginPage(prefix, uiCtx(r, nil), "internal error", next).Render(r.Context(), w)
+		return
+	}
+	if next != "" {
+		redirectRel(w, next, http.StatusSeeOther)
 		return
 	}
 	redirectRel(w, "./", http.StatusSeeOther)

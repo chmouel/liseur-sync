@@ -104,6 +104,99 @@ func UnknownWork(kind, id string, index int, workID string) error {
 // (for the UI) before Housekeep deletes them.
 const TokenPurgeGrace = 30 * 24 * time.Hour
 
+// OAuth client kinds (ADR-0069). A metadata client is identified by
+// the HTTPS URL of its Client ID Metadata Document, which the admin
+// allowlisted; a registered client was created by an admin with fixed
+// redirect URIs and, if confidential, a hashed secret.
+const (
+	OAuthClientMetadata   = "metadata"
+	OAuthClientRegistered = "registered"
+)
+
+// OAuth token kinds.
+const (
+	OAuthTokenAccess  = "access"
+	OAuthTokenRefresh = "refresh"
+)
+
+// OAuthTouchInterval throttles last-used writes on an OAuth grant.
+const OAuthTouchInterval = 5 * time.Minute
+
+type OAuthClient struct {
+	ID           string
+	Kind         string
+	Name         string
+	RedirectURIs []string
+	// SecretSHA256 is set only for a confidential registered client.
+	SecretSHA256 string
+	CreatedAt    time.Time
+}
+
+type OAuthCode struct {
+	SHA256        string
+	UserID        string
+	ClientID      string
+	ClientName    string
+	RedirectURI   string
+	CodeChallenge string
+	Resource      string
+	Scopes        []string
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
+}
+
+// OAuthCodeRedemption is a token request against an authorization code.
+// The code row is matched against these fields inside the transaction
+// that spends it, so a request that does not match never consumes a
+// code.
+type OAuthCodeRedemption struct {
+	SHA256   string
+	ClientID string
+	// RedirectURI and CodeChallenge are what the request presented;
+	// the challenge is the S256 digest of the verifier, taken here so
+	// the store never sees a verifier.
+	RedirectURI   string
+	CodeChallenge string
+	// Resource is the RFC 8707 resource the request named. Empty means
+	// it named none and the code's own resource stands.
+	Resource string
+	// GrantID and Tokens describe what the redemption should leave
+	// behind; the grant's user, client, scopes and resource come from
+	// the code, and its CreatedAt is the exchange time.
+	GrantID string
+	Tokens  []OAuthToken
+}
+
+type OAuthGrant struct {
+	ID         string
+	UserID     string
+	UserName   string
+	ClientID   string
+	ClientName string
+	Scopes     []string
+	Resource   string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+}
+
+type OAuthToken struct {
+	SHA256    string
+	Kind      string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// OAuthAccess is what a live access token proves.
+type OAuthAccess struct {
+	GrantID   string
+	UserID    string
+	ClientID  string
+	Scopes    []string
+	Resource  string
+	ExpiresAt time.Time
+}
+
 // Scope is a token scope.
 type Scope string
 
@@ -2534,11 +2627,50 @@ type Store interface {
 	SetUserPassword(ctx context.Context, userID, argon2Hash, keepSessionID string) error
 	// RevokeAllUserCredentials revokes, in one transaction, every way
 	// the account can authenticate: API tokens, kosync device slots,
-	// koplugin capabilities, auth sessions, and unredeemed pairing
-	// codes. The pairing codes are the reason this is one method rather
-	// than five calls — a code left behind mints a fresh device slot
-	// minutes after the operator was told everything was gone.
+	// koplugin capabilities, auth sessions, OAuth grants and the
+	// unspent authorization codes that would mint a new one, and
+	// unredeemed pairing codes. The codes are the reason this is one
+	// method rather than a handful of calls — a code left behind mints a
+	// fresh credential minutes after the operator was told everything
+	// was gone.
 	RevokeAllUserCredentials(ctx context.Context, userID string, at time.Time) error
+
+	// OAuth (ADR-0069). The assistant endpoint's credentials live in
+	// their own tables, so no lookup over tokens can ever accept one.
+	CreateOAuthClient(ctx context.Context, c OAuthClient) error
+	OAuthClient(ctx context.Context, id string) (OAuthClient, error)
+	ListOAuthClients(ctx context.Context) ([]OAuthClient, error)
+	// DeleteOAuthClient removes a client and, by cascade, every grant
+	// and token issued to it.
+	DeleteOAuthClient(ctx context.Context, id string) error
+	CreateOAuthCode(ctx context.Context, c OAuthCode) error
+	// ExchangeOAuthCode spends an authorization code and stores the
+	// grant, its first access and refresh tokens and the code's
+	// back-reference to it, all in one transaction. An unknown, expired
+	// or non-matching code is ErrNotFound and writes nothing. A code
+	// already spent is ErrConflict, and the grant it produced is
+	// revoked in that same transaction (RFC 9700 §4.5: a replayed code
+	// means it leaked). One transaction is the point: split in two, a
+	// replay in the gap revokes nothing while the original exchange
+	// still gets a live grant.
+	ExchangeOAuthCode(ctx context.Context, r OAuthCodeRedemption, now time.Time) (OAuthGrant, error)
+	// OAuthAccess resolves a live access token. A token that is
+	// expired, revoked through its grant, or held by a disabled account
+	// is ErrNotFound.
+	OAuthAccess(ctx context.Context, sha256 string, now time.Time) (OAuthAccess, error)
+	// RotateOAuthRefresh spends a refresh token issued to clientID and
+	// stores its replacements. A refresh token presented twice is
+	// ErrConflict and revokes the whole grant; anything else that is not
+	// a live refresh token for clientID is ErrNotFound.
+	RotateOAuthRefresh(ctx context.Context, sha256, clientID string, now time.Time, tokens []OAuthToken) (OAuthGrant, error)
+	// TouchOAuthGrant records use, at most once per OAuthTouchInterval.
+	TouchOAuthGrant(ctx context.Context, grantID string, at time.Time) error
+	// ListOAuthGrants lists one account's grants, or every grant when
+	// userID is empty (admin).
+	ListOAuthGrants(ctx context.Context, userID string) ([]OAuthGrant, error)
+	// RevokeOAuthGrant revokes a grant. A non-empty userID bounds it to
+	// that account's own grants.
+	RevokeOAuthGrant(ctx context.Context, userID, grantID string, at time.Time) error
 
 	// Invites (admin).
 	CreateInvite(ctx context.Context, inv Invite) error

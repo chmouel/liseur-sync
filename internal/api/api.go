@@ -14,6 +14,7 @@ import (
 	"github.com/chmouel/liseur-sync/internal/auth"
 	"github.com/chmouel/liseur-sync/internal/config"
 	"github.com/chmouel/liseur-sync/internal/live"
+	"github.com/chmouel/liseur-sync/internal/oauth"
 	"github.com/chmouel/liseur-sync/internal/store"
 )
 
@@ -43,6 +44,16 @@ type Server struct {
 	// not an error: every request then opens and parses the archive, which
 	// is slow but correct.
 	PublicationIndexes *PublicationIndexCache
+	// OAuth is the authorization server in front of /mcp (ADR-0069). Nil
+	// leaves /mcp and every OAuth route unregistered, so they 404.
+	OAuth *oauth.Server
+	// OAuthLimiter rate-limits the token endpoint per client IP.
+	OAuthLimiter *auth.RateLimiter
+	// MCPLimiter rate-limits /mcp per grant.
+	MCPLimiter *auth.RateLimiter
+	// BookTexts caches the text the assistant tools extract from a
+	// publication. Nil gets a default-sized cache.
+	BookTexts *BookTextCache
 	// Ingest writes an uploaded publication into a folder and asks for
 	// a pass (ADR-0023). Nil disables the upload route, which then
 	// reports 503: a server with no watcher has nothing to reconcile

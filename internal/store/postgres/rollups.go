@@ -422,6 +422,21 @@ func (s *Store) Housekeep(ctx context.Context, now time.Time) error {
 		                       OR (revoked_at IS NOT NULL AND revoked_at < ?)`), grace, grace); err != nil {
 		return err
 	}
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		// A spent code is kept a day so a late replay still revokes its grant.
+		{`DELETE FROM oauth_codes WHERE expires_at < ?`, []any{now.Add(-24 * time.Hour)}},
+		{`DELETE FROM oauth_tokens WHERE expires_at < ?`, []any{now}},
+		{`DELETE FROM oauth_grants WHERE (revoked_at IS NOT NULL AND revoked_at < ?)
+		    OR (created_at < ? AND NOT EXISTS (
+		        SELECT 1 FROM oauth_tokens t WHERE t.grant_id = oauth_grants.id))`, []any{grace, grace}},
+	} {
+		if _, err := tx.ExecContext(ctx, q(stmt.sql), stmt.args...); err != nil {
+			return err
+		}
+	}
 	// A device with no token left can never sign in as itself again, so
 	// nothing could ever read its settings back.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM device_settings WHERE NOT EXISTS (

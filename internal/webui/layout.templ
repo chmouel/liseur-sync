@@ -211,17 +211,23 @@ templ forbiddenBody(prefix string) {
 
 // loginPage is the unauthenticated entry point, rendered at /ui/login
 // (or re-rendered from POST /ui/login on bad credentials).
-templ loginPage(prefix string, u userCtx, errMsg string) {
-	@layout("Sign in", prefix, u, "", loginBody(prefix, errMsg))
+templ loginPage(prefix string, u userCtx, errMsg string, next string) {
+	@layout("Sign in", prefix, u, "", loginBody(prefix, errMsg, next))
 }
 
-templ loginBody(prefix string, errMsg string) {
+templ loginBody(prefix string, errMsg string, next string) {
 	@authFrame(prefix) {
 		<h1>Sign in</h1>
+		if next != "" {
+			<p class="muted">Sign in to choose what the assistant may read.</p>
+		}
 		if errMsg != "" {
 			<p class="error" role="alert">{ errMsg }</p>
 		}
 		<form class="auth-form" method="post" action={ prefix + "login" }>
+			if next != "" {
+				<input type="hidden" name="next" value={ next }/>
+			}
 			<label>Username <input name="username" required autofocus autocomplete="username" autocapitalize="none" spellcheck="false"/></label>
 			<label>Password <input name="password" type="password" required autocomplete="current-password"/></label>
 			<button type="submit" class="auth-submit">Sign in <span aria-hidden="true">→</span></button>

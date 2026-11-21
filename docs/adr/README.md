@@ -92,6 +92,7 @@ loose ends that must come before any of it, are in
 | [0066](0066-explicit-reading-status.md) | An explicit reading status, carried beside the position | Now | Accepted; implemented | Status acts ride the position log as their own kind, resolve before the position, order by server sequence, and one rule (0.97, with recording coverage) decides finished, reading or unread for the library, the shelves, the statistics and the clients |
 | [0067](0067-richer-reading-status.md) | Additional explicit reading choices | Now | Accepted; server implemented; client pending | Want to read, reading, paused and did not finish join the wire enum without a migration, each on its own shelf, never offered as next up when paused or given up; clients must learn the values before a server emits them |
 | [0068](0068-vocabulary-sync.md) | Vocabulary Builder words and their reviews sync | Now | Accepted; implemented | Words are compare-and-set documents with a generation that bumps on resurrection, reviews are immutable events bound to a word generation, one per-user feed carries both, and clients derive the schedule from the events |
+| [0069](0069-mcp-for-assistants.md) | A read-only MCP endpoint for assistants | Now | Accepted; implemented | Off by default; OAuth 2.1 with PKCE S256, allowlisted client metadata documents or admin-registered clients and no open registration, audience-bound rotating tokens that work nowhere else, consent in the web UI, read-only scoped tools over the reader's own data, and book text bounded per call and per hour |
 
 ## Convention
 

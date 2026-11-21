@@ -193,7 +193,37 @@ type Config struct {
 	// to pin a listening position to a sentence: native folder audiobooks
 	// and Audiobookshelf alike, so it belongs to neither.
 	SpeechToText SpeechToTextConfig `toml:"speech_to_text"`
+
+	// MCP is the assistant endpoint (ADR-0069): a read-only Model
+	// Context Protocol server at /mcp behind a built-in OAuth
+	// authorization server. Off by default; when off, /mcp, /oauth/* and
+	// the OAuth metadata documents do not exist.
+	MCP MCPConfig `toml:"mcp"`
 }
+
+// MCPConfig configures the assistant endpoint.
+type MCPConfig struct {
+	Enabled bool `toml:"enabled"`
+	// PublicURL is the origin clients reach this server at, such as
+	// https://books.example.com. The OAuth issuer and the protected
+	// resource are derived from it and never from a request's Host
+	// header, so a forged Host cannot mint tokens for another audience.
+	PublicURL string `toml:"public_url"`
+	// AccessTokenTTL is how long an access token lives. Default 1h.
+	AccessTokenTTL Duration `toml:"access_token_ttl"`
+	// RefreshTokenTTL is how long an unused refresh token lives. Each
+	// refresh issues a new one. Default 720h (30 days).
+	RefreshTokenTTL Duration `toml:"refresh_token_ttl"`
+	// TextBytesPerCall caps the book text one tool call returns.
+	// Default 16 KiB.
+	TextBytesPerCall int `toml:"text_bytes_per_call"`
+	// TextBytesPerHour caps the book text one connected app reads in an
+	// hour. Default 1 MiB, about one novel.
+	TextBytesPerHour int64 `toml:"text_bytes_per_hour"`
+}
+
+// MCPResource is the protected resource identifier tokens are bound to.
+func (c Config) MCPResource() string { return c.MCP.PublicURL + "/mcp" }
 
 // SpeechToTextConfig is an OpenAI-compatible transcription endpoint. A
 // configured one receives short slices of a reader's audiobook.
@@ -611,6 +641,10 @@ func Default() Config {
 	c.SpeechToText.Enabled = true
 	c.SpeechToText.URL = defaultSTTURL
 	c.SpeechToText.Model = defaultSTTModel
+	c.MCP.AccessTokenTTL = Duration(time.Hour)
+	c.MCP.RefreshTokenTTL = Duration(30 * 24 * time.Hour)
+	c.MCP.TextBytesPerCall = 16 << 10
+	c.MCP.TextBytesPerHour = 1 << 20
 	return c
 }
 
@@ -631,7 +665,8 @@ func Default() Config {
 // LISEUR_ABS_ENABLED, LISEUR_ABS_BASE_URL, LISEUR_ABS_ACCOUNT,
 // LISEUR_ABS_API_KEY, LISEUR_ABS_POLL_INTERVAL, LISEUR_ABS_TIMEOUT,
 // LISEUR_ABS_SESSION_OVERLAP, LISEUR_ABS_ACTIVE_DAYS,
-// LISEUR_STT_ENABLED, LISEUR_STT_URL, LISEUR_STT_API_KEY, LISEUR_STT_MODEL.
+// LISEUR_STT_ENABLED, LISEUR_STT_URL, LISEUR_STT_API_KEY, LISEUR_STT_MODEL,
+// LISEUR_MCP_ENABLED, LISEUR_MCP_PUBLIC_URL.
 //
 // The mirror's credential is an environment variable on purpose: it
 // belongs beside the database URL in a deployment's .env rather than in
@@ -643,6 +678,8 @@ func (c *Config) applyEnv() {
 	setStr(&c.Content.CacheDir, "LISEUR_CACHE_DIR")
 	setStr(&c.ReaderOrigin, "LISEUR_READER_ORIGIN")
 	setBool(&c.InsecureHTTP, "LISEUR_INSECURE_HTTP")
+	setBool(&c.MCP.Enabled, "LISEUR_MCP_ENABLED")
+	setStr(&c.MCP.PublicURL, "LISEUR_MCP_PUBLIC_URL")
 	setList(&c.CORSAllowedOrigins, "LISEUR_CORS_ORIGINS")
 	setList(&c.TrustedProxies, "LISEUR_TRUSTED_PROXIES")
 	setList(&c.Content.FolderRoots, "LISEUR_FOLDER_ROOTS")
@@ -732,6 +769,9 @@ func (c *Config) ApplyMirrorEnvironment() {
 // Validate checks the config is coherent.
 func (c *Config) Validate() error {
 	if err := c.validateReaderOrigin(); err != nil {
+		return err
+	}
+	if err := c.validateMCP(); err != nil {
 		return err
 	}
 	switch c.Database.Driver {
@@ -1229,6 +1269,47 @@ func (c *Config) validateReaderOrigin() error {
 	// A reader origin equal to nothing in particular is fine; a reader
 	// origin the operator also listed by hand is not a conflict, it is
 	// the same permission stated twice.
+	return nil
+}
+
+// validateMCP insists on a bare public origin whenever the assistant
+// endpoint is on: it is the OAuth issuer and the token audience, and
+// both must be exact strings a client can compare.
+func (c *Config) validateMCP() error {
+	c.MCP.PublicURL = strings.TrimSuffix(strings.TrimSpace(c.MCP.PublicURL), "/")
+	if !c.MCP.Enabled {
+		return nil
+	}
+	if c.MCP.PublicURL == "" {
+		return fmt.Errorf("mcp.public_url is required when mcp.enabled is true")
+	}
+	u, err := url.Parse(c.MCP.PublicURL)
+	if err != nil || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return fmt.Errorf("mcp.public_url must be a bare origin like https://books.example.com, got %q",
+			c.MCP.PublicURL)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !c.InsecureHTTP {
+			return fmt.Errorf("mcp.public_url %q is http; set insecure_http = true if that is deliberate",
+				c.MCP.PublicURL)
+		}
+	default:
+		return fmt.Errorf("mcp.public_url must be http or https, got %q", u.Scheme)
+	}
+	if time.Duration(c.MCP.AccessTokenTTL) < time.Minute || time.Duration(c.MCP.AccessTokenTTL) > 24*time.Hour {
+		return fmt.Errorf("mcp.access_token_ttl must be between 1m and 24h")
+	}
+	if time.Duration(c.MCP.RefreshTokenTTL) < time.Hour || time.Duration(c.MCP.RefreshTokenTTL) > 90*24*time.Hour {
+		return fmt.Errorf("mcp.refresh_token_ttl must be between 1h and 2160h")
+	}
+	if c.MCP.TextBytesPerCall < 1024 || c.MCP.TextBytesPerCall > 256<<10 {
+		return fmt.Errorf("mcp.text_bytes_per_call must be between 1024 and 262144")
+	}
+	if c.MCP.TextBytesPerHour < int64(c.MCP.TextBytesPerCall) {
+		return fmt.Errorf("mcp.text_bytes_per_hour must be at least mcp.text_bytes_per_call")
+	}
 	return nil
 }
 

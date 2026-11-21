@@ -2034,6 +2034,72 @@ deadline. The per-plugin outbox is only 4KB and may be dropped wholesale when
 full; delivery is best effort during extended offline reading. No historical
 reading is invented to fill missing events.
 
+## Assistants over MCP
+
+When an administrator has enabled it (see
+[deployment.md](deployment.md#assistants-chatgpt-and-other-mcp-clients)),
+`/mcp` serves the Model Context Protocol over streamable HTTP to
+assistants a reader connects. It is separate from the rest of this API:
+`/mcp` accepts only an assistant token, and no `/v1` route accepts one.
+A device token never works there, so build an MCP client the OAuth way.
+
+Discovery follows the MCP authorization specification. An unauthenticated
+request to `/mcp` answers `401` with
+
+```
+WWW-Authenticate: Bearer resource_metadata="https://books.example.com/.well-known/oauth-protected-resource/mcp"
+```
+
+That document names the authorization server, whose metadata is at
+`/.well-known/oauth-authorization-server`. From there:
+
+1. Get a client ID. Publish a Client ID Metadata Document at an HTTPS
+   URL and ask the administrator to allow that URL, or ask them to
+   register the client by hand. Dynamic client registration is not
+   offered.
+2. Send the reader's browser to the `authorization_endpoint` with
+   `response_type=code`, your `client_id` and exact `redirect_uri`, a
+   PKCE `code_challenge` with `code_challenge_method=S256`, a `state`,
+   `resource=<public_url>/mcp`, and the `scope` you want. The reader
+   may grant fewer scopes than you asked for.
+3. On the redirect, check that `iss` equals the issuer from the
+   metadata and that `state` is yours, then exchange the code at
+   `/oauth/token` within 60 seconds. The body is form-encoded; a public
+   client sends `client_id`, a confidential one authenticates with HTTP
+   Basic.
+4. Call `/mcp` with `Authorization: Bearer <access_token>`. When it
+   expires, refresh at `/oauth/token`. Each refresh returns a new
+   refresh token and spends the old one; presenting a spent one
+   revokes the whole connection, so store the new one before using it.
+
+| Scope | Tools |
+| --- | --- |
+| `mcp:library` | `search_library`, `get_book`, `list_series` |
+| `mcp:reading` | `get_reading_status`, `list_currently_reading`, `list_annotations` |
+| `mcp:insights` | `get_stats_summary`, `get_work_stats`, `get_reading_calendar` |
+| `mcp:vocabulary` | `list_vocabulary` |
+| `mcp:text` | `list_chapters`, `book_outline`, `read_chapter`, `read_at`, `search_text`, `find_mentions` |
+
+`tools/list` returns only the tools the connection's scopes allow, and
+each tool returns `structuredContent` alongside its text. Every tool is
+read-only.
+
+The text tools read the same EPUB the reader has. `read_at` takes the
+reader's own place (`at: "current"` or `"furthest"`, which also needs
+`mcp:reading`), a `progression`, or an `annotation_id`, and reports in
+`located_by` whether it found the exact paragraph or estimated from a
+fraction. `find_mentions` takes a name and its other forms together,
+matches whole words ignoring case and accents, and with
+`up_to_current` stops at the reader's position so an assistant can
+build a picture of a character without reading ahead. Book text is
+returned as a quotation, never as instructions, and is limited per call
+and per connection per hour; past the hourly limit a text tool returns
+an error until the window moves on.
+
+Each POST carries one JSON-RPC message; batches are refused. Requests
+that send an `Origin` must match the server's public URL. A connection
+may make 120 requests a minute.
+
 ## Errors and limits
 
 - Every error is `{"error": "reason"}` with a 4xx; a 5xx is a server

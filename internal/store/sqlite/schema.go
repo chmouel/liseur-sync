@@ -1454,6 +1454,60 @@ CREATE INDEX vocabulary_reviews_seq ON vocabulary_reviews(user_id, seq);
 CREATE INDEX vocabulary_reviews_word ON vocabulary_reviews(user_id, language, normalized, word_generation);
 `
 
+// oauthAssistants holds the assistant endpoint's OAuth credentials
+// (ADR-0069). Codes and tokens are stored as SHA-256 hashes. They live
+// apart from tokens on purpose: a lookup over tokens can never accept
+// an OAuth token, and the reverse holds too.
+const oauthAssistants = `
+CREATE TABLE oauth_clients (
+ id TEXT PRIMARY KEY,
+ kind TEXT NOT NULL CHECK (kind IN ('metadata', 'registered')),
+ name TEXT NOT NULL,
+ redirect_uris TEXT NOT NULL DEFAULT '',
+ secret_sha256 TEXT,
+ created_at TEXT NOT NULL
+);
+
+CREATE TABLE oauth_grants (
+ id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+ client_name TEXT NOT NULL,
+ scopes TEXT NOT NULL,
+ resource TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ last_used_at TEXT,
+ revoked_at TEXT
+);
+CREATE INDEX oauth_grants_user ON oauth_grants(user_id);
+CREATE INDEX oauth_grants_client ON oauth_grants(client_id);
+
+CREATE TABLE oauth_codes (
+ sha256 TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ client_id TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+ client_name TEXT NOT NULL,
+ redirect_uri TEXT NOT NULL,
+ code_challenge TEXT NOT NULL,
+ resource TEXT NOT NULL,
+ scopes TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ expires_at TEXT NOT NULL,
+ used_at TEXT,
+ grant_id TEXT
+);
+
+CREATE TABLE oauth_tokens (
+ sha256 TEXT PRIMARY KEY,
+ grant_id TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+ created_at TEXT NOT NULL,
+ expires_at TEXT NOT NULL,
+ used_at TEXT
+);
+CREATE INDEX oauth_tokens_grant ON oauth_tokens(grant_id);
+`
+
 // migrations is append-only: entry n is applied to a database that has
 // applied n-1 of them, so an entry that has shipped is never edited
 // again — the baseline included.
@@ -1477,6 +1531,7 @@ var migrations = []string{
 	workEvaluations,
 	workMetadataOverrides,
 	vocabularySync,
+	oauthAssistants,
 }
 
 // migrationsThrough returns the migrations up to but not including the
@@ -1509,6 +1564,7 @@ func migrationsThrough(name string) ([]string, bool) {
 		"opKinds":                  opKinds,
 		"workMetadataOverrides":    workMetadataOverrides,
 		"vocabularySync":           vocabularySync,
+		"oauthAssistants":          oauthAssistants,
 	}
 	want, ok := named[name]
 	if !ok {

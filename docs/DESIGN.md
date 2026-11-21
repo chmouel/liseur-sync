@@ -770,6 +770,31 @@ never executes or directly renders it as fetched; the reader's own script
 reassembles chapters into blob URLs it loads inside a sandboxed frame, and
 no script inside a book executes there either.
 
+### 8.6 Assistants
+
+`/mcp` lets an assistant such as ChatGPT read one reader's library,
+reading state, statistics, vocabulary and book text over the Model
+Context Protocol (ADR-0069). It is off unless `[mcp] enabled` is set,
+and when off none of its routes exist.
+
+The endpoint sits behind a built-in OAuth 2.1 authorization server:
+authorization code with PKCE `S256` only, no self-registration, tokens
+bound to the `<public_url>/mcp` resource, rotating refresh tokens whose
+reuse revokes the grant, and every secret hashed. These tokens are their
+own class: `/mcp` accepts nothing else and no other route accepts them.
+Consent is a web UI page behind the cookie login and its CSRF token.
+
+Tools are read-only and scoped (`mcp:library`, `mcp:reading`,
+`mcp:insights`, `mcp:vocabulary`, `mcp:text`). They run the same store
+reads as the native API with the grant's user ID, so reading state stays
+per user and the catalog stays bounded by folder grants. No output names
+a path or carries a link that holds a credential.
+
+Book text is untrusted input to a model. It is returned as plain text
+with a notice that it quotes the book, tool descriptions never contain
+book or folder metadata, and nothing a tool can do writes. Text is
+bounded per call and per grant per hour.
+
 
 ## 9. Folder catalog
 

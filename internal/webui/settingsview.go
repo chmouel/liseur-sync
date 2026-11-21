@@ -27,6 +27,7 @@ const (
 
 	settingsAdminAudiobookshelf = "audiobookshelf"
 	settingsAdminSpeechToText   = "speech-to-text"
+	settingsAdminAssistants     = "assistants"
 
 	// The Devices page is three pages, so each kind of credential has
 	// one place: the readers that pair with the server (KOReader,
@@ -36,6 +37,8 @@ const (
 	settingsDevicesEReaders = "e-readers"
 	settingsDevicesApps     = "apps"
 	settingsDevicesOPDS     = "opds"
+	// AI assistants connected over OAuth (ADR-0069).
+	settingsDevicesAssistants = "assistants"
 )
 
 const (
@@ -102,6 +105,8 @@ type settingsDevicesView struct {
 	Kosync   []store.KosyncDevice
 	Koplugin []store.KopluginDevice
 	Base     string
+
+	Assistants assistantsView
 }
 
 type settingsAdminView struct {
@@ -133,6 +138,7 @@ type settingsAdminView struct {
 
 	AudiobookshelfPanel audiobookshelfAdminView
 	SpeechToText        speechToTextAdminView
+	Assistants          adminAssistantsView
 }
 
 type mirrorView struct {
@@ -225,7 +231,7 @@ func settingsDevicesHref(prefix, view string) string {
 // devicesView turns whatever the query held into a view that exists.
 func devicesView(view string) string {
 	switch view {
-	case settingsDevicesApps, settingsDevicesOPDS:
+	case settingsDevicesApps, settingsDevicesOPDS, settingsDevicesAssistants:
 		return view
 	}
 	return settingsDevicesEReaders
@@ -388,7 +394,7 @@ func settingsSelection(r *http.Request) (section, view, userID string) {
 		view = r.URL.Query().Get("view")
 		switch view {
 		case settingsAdminUsers, settingsAdminFolders, settingsAdminMirror,
-			settingsAdminAudiobookshelf, settingsAdminSpeechToText:
+			settingsAdminAudiobookshelf, settingsAdminSpeechToText, settingsAdminAssistants:
 		case settingsAdminUser:
 			userID = r.URL.Query().Get("user")
 			if userID == "" {
@@ -461,6 +467,9 @@ func (s *Server) renderSettings(
 		currentView = devicesView(adminView)
 		view.Devices = s.settingsDevices(r, u)
 		view.Devices.View = currentView
+		if currentView == settingsDevicesAssistants {
+			view.Devices.Assistants = s.assistantsFor(r, u.ID)
+		}
 	case settingsAdmin:
 		if adminView == "" {
 			adminView = settingsAdminOverview
@@ -625,6 +634,12 @@ func (s *Server) settingsAdmin(
 		v.AudiobookshelfPanel = s.audiobookshelfView(users)
 	case settingsAdminSpeechToText:
 		v.SpeechToText = s.speechToTextView()
+	case settingsAdminAssistants:
+		view, err := s.adminAssistants(r)
+		if err != nil {
+			return err
+		}
+		v.Assistants = view
 	default:
 		counts, err := s.St.AdminCounts(r.Context())
 		if err != nil {

@@ -253,7 +253,7 @@ func (s *Server) unauthenticatedLanding(w http.ResponseWriter, r *http.Request) 
 		redirectRel(w, prefix+"setup", http.StatusSeeOther)
 		return
 	}
-	loginPage(prefix, uiCtx(r, nil), "").Render(r.Context(), w)
+	loginPage(prefix, uiCtx(r, nil), "", "").Render(r.Context(), w)
 }
 
 // minPasswordLength renders the policy into the setup form's minlength
