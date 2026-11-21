@@ -532,6 +532,19 @@ func testVocabularyOccurrencesRetry(t *testing.T, open OpenFunc) {
 	if r := pushVocabWord(t, s, u.ID, "d1", bigRetry); r.Status != "conflict" {
 		t.Fatalf("distinct large integers matched: %+v", r)
 	}
+
+	// Valid JSON numbers outside PostgreSQL's JSONB numeric range still
+	// round-trip and retry cleanly because occurrences are stored as raw
+	// JSON bytes (matching ops.locator_json and annotations.locator_json).
+	hugeExp := vocabWordWrite("en", "huge-exp", 0)
+	hugeExp.OccurrencesJSON = []byte(`[{"occurrence_key":"occ-1",` +
+		`"locator":{"n":1e200000},"last_seen_at":"2025-06-01T10:00:00Z","encounters":1}]`)
+	if r := pushVocabWord(t, s, u.ID, "d1", hugeExp); r.Status != "applied" {
+		t.Fatalf("huge exponent create: %+v", r)
+	}
+	if r := pushVocabWord(t, s, u.ID, "d1", hugeExp); r.Status != "duplicate" {
+		t.Fatalf("huge exponent retry: %+v", r)
+	}
 }
 
 func testVocabularyAbsentBaseRev(t *testing.T, open OpenFunc) {

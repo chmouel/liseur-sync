@@ -992,7 +992,7 @@ CREATE TABLE vocabulary_words (
  baseline_streak INTEGER NOT NULL DEFAULT 0,
  baseline_interval_minutes INTEGER NOT NULL DEFAULT 0,
  baseline_repetitions INTEGER NOT NULL DEFAULT 0,
- occurrences_json JSONB NOT NULL DEFAULT '[]',
+ occurrences_json BYTEA NOT NULL DEFAULT '[]'::bytea,
  device_id TEXT NOT NULL,
  updated_at TIMESTAMPTZ NOT NULL,
  deleted_at TIMESTAMPTZ,

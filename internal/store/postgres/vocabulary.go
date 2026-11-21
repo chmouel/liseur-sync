@@ -195,20 +195,20 @@ func pushVocabularyWordTx(ctx context.Context, tx *sql.Tx, userID, deviceID stri
 	if !found {
 		_, err = tx.ExecContext(ctx, q(
 			`INSERT INTO vocabulary_words (`+vocabularyWordCols+`)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, NULL)`),
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`),
 			userID, item.Language, item.Normalized, seq, rev, generation, item.Word,
 			item.Definition, item.TranslationLanguage, item.Notes,
 			item.DefinitionEdited, item.DefinitionUpdatedAt, item.NotesUpdatedAt,
 			item.AddedAt, baselineDueAt(item.Baseline), baselineReviewedAt(item.Baseline),
 			baselineStreak(item.Baseline), baselineIntervalMinutes(item.Baseline),
-			baselineRepetitions(item.Baseline), string(occ), deviceID, now)
+			baselineRepetitions(item.Baseline), occ, deviceID, now)
 	} else {
 		_, err = tx.ExecContext(ctx, q(
 			`UPDATE vocabulary_words SET seq = ?, rev = ?, generation = ?, word = ?,
 			        definition = ?, translation_language = ?, notes = ?, definition_edited = ?,
 			        definition_updated_at = ?, notes_updated_at = ?, added_at = ?,
 			        baseline_due_at = ?, baseline_reviewed_at = ?, baseline_streak = ?,
-			        baseline_interval_minutes = ?, baseline_repetitions = ?, occurrences_json = ?::jsonb,
+			        baseline_interval_minutes = ?, baseline_repetitions = ?, occurrences_json = ?,
 			        device_id = ?, updated_at = ?, deleted_at = NULL
 			 WHERE user_id = ? AND language = ? AND normalized = ?`),
 			seq, rev, generation, item.Word, item.Definition,
@@ -216,7 +216,7 @@ func pushVocabularyWordTx(ctx context.Context, tx *sql.Tx, userID, deviceID stri
 			item.DefinitionUpdatedAt, item.NotesUpdatedAt, item.AddedAt,
 			baselineDueAt(item.Baseline), baselineReviewedAt(item.Baseline),
 			baselineStreak(item.Baseline), baselineIntervalMinutes(item.Baseline),
-			baselineRepetitions(item.Baseline), string(occ), deviceID, now,
+			baselineRepetitions(item.Baseline), occ, deviceID, now,
 			userID, item.Language, item.Normalized)
 	}
 	if err != nil {
@@ -240,7 +240,7 @@ func tombstoneVocabularyWordTx(ctx context.Context, tx *sql.Tx, userID string, s
 		        definition_edited = FALSE, definition_updated_at = NULL, notes_updated_at = NULL,
 		        baseline_due_at = NULL, baseline_reviewed_at = NULL, baseline_streak = 0,
 		        baseline_interval_minutes = 0, baseline_repetitions = 0,
-		        occurrences_json = '[]'::jsonb, device_id = '', updated_at = ?, deleted_at = ?
+		        occurrences_json = '[]'::bytea, device_id = '', updated_at = ?, deleted_at = ?
 		 WHERE user_id = ? AND language = ? AND normalized = ?`),
 		seq, now, now, userID, stored.Language, stored.Normalized); err != nil {
 		return r, err
