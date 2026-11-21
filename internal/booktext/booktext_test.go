@@ -281,6 +281,33 @@ func TestLocateRepeatedQuoteNearEnd(t *testing.T) {
 	}
 }
 
+func TestLocateMidWordQuoteContext(t *testing.T) {
+	text := "hello there. Later lo appears again."
+	b := &Book{Chapters: []Chapter{{Href: "chapter.xhtml", Text: text}}}
+	end := 1.0
+	_, off, exact, ok := b.Locate("chapter.xhtml", &end, "hel", "lo")
+	if !ok || !exact || off != strings.Index(text, "lo") {
+		t.Fatalf("mid-word anchor: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+	text = "préfix, puis pré fix"
+	b.Chapters[0].Text = text
+	start := 0.0
+	_, off, exact, ok = b.Locate("chapter.xhtml", &start, "pré", "fix")
+	if !ok || !exact || off != len("pré") {
+		t.Fatalf("unicode mid-word anchor: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+	_, off, exact, ok = b.Locate("chapter.xhtml", &start, "pré", " fix")
+	if !ok || !exact || off != strings.LastIndex(text, "fix") {
+		t.Fatalf("leading highlight whitespace: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+	text = "hello there. hel lo appears later."
+	b.Chapters[0].Text = text
+	_, off, exact, ok = b.Locate("chapter.xhtml", &end, "hel ", "lo")
+	if !ok || !exact || off != strings.LastIndex(text, "lo") {
+		t.Fatalf("spaced anchor: offset %d, exact %v, ok %v", off, exact, ok)
+	}
+}
+
 func TestLocateQuoteAcrossParagraphs(t *testing.T) {
 	text := "Bob left.\nLater that day\nBob returned."
 	b := &Book{Chapters: []Chapter{{Href: "chapter.xhtml", Text: text}}}

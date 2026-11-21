@@ -192,9 +192,22 @@ func (b *Book) Locate(href string, resProg *float64, before, highlight string) (
 	if h := collapse(highlight); h != "" {
 		text := strings.ReplaceAll(c.Text, "\n", " ")
 		if prefix := collapse(before); prefix != "" {
-			startOfHighlight := len(prefix) + 1
-			if start := nearestIndex(text, prefix+" "+h, guess-startOfHighlight); start >= 0 {
-				return ch, start + startOfHighlight, true, true
+			separators := []string{"", " "}
+			if strings.TrimRightFunc(before, unicode.IsSpace) != before || strings.TrimLeftFunc(highlight, unicode.IsSpace) != highlight {
+				separators = []string{" "}
+			}
+			best := -1
+			for _, separator := range separators {
+				startOfHighlight := len(prefix) + len(separator)
+				if start := nearestIndex(text, prefix+separator+h, guess-startOfHighlight); start >= 0 {
+					position := start + startOfHighlight
+					if best < 0 || abs(position-guess) < abs(best-guess) || (abs(position-guess) == abs(best-guess) && position < best) {
+						best = position
+					}
+				}
+			}
+			if best >= 0 {
+				return ch, best, true, true
 			}
 		}
 		if start := nearestIndex(text, h, guess); start >= 0 {
@@ -219,6 +232,13 @@ func nearestIndex(s, sub string, guess int) int {
 		return left
 	}
 	return guess + right
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // folded is a chapter's text lowercased, stripped of diacritics, with
